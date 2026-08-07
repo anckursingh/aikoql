@@ -1,0 +1,10 @@
+- generic [active] [ref=f3e1]:
+  - generic [ref=f3e2]:
+    - heading "Mnemosyne Graph" [level=2] [ref=f3e3]
+    - generic [ref=f3e4]:
+      - textbox "KOID hex or type (e.g. note)" [ref=f3e5]
+      - button "Explore" [ref=f3e6] [cursor=pointer]
+      - button "View All" [ref=f3e7] [cursor=pointer]
+    - paragraph [ref=f3e9]: Click a node to inspect it.Enter a KOID to center on a node.
+    - generic [ref=f3e10]: 3 nodes, 2 edges
+  - generic [ref=f3e11]: Person

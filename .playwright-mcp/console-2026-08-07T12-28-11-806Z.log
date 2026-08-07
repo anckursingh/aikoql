@@ -1,0 +1,3 @@
+[     164ms] ReferenceError: vis is not defined
+    at http://127.0.0.1:9091/ui:59:17
+[     207ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:9091/favicon.ico:0

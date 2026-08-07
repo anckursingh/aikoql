@@ -1,0 +1,13 @@
+[package]
+name = "mnemosyne-vector"
+description = "Mnemosyne Vector Engine: ANN indexes, text indexes, similarity search. Services around the kernel, never on the commit path."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mnemosyne-kernel = { path = "../../kernel" }
+hnsw = { package = "fast-hnsw", version = "1" }
+tantivy = "0.22"
+serde_json = "1"

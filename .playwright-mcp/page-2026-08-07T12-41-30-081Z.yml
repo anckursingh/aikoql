@@ -1,0 +1,19 @@
+- generic [ref=f4e1]:
+  - generic [ref=f4e2]:
+    - heading "Mnemosyne Graph 3 objects" [level=2] [ref=f4e3]:
+      - text: Mnemosyne Graph
+      - generic [ref=f4e4]: 3 objects
+    - generic [ref=f4e5]:
+      - textbox "KOID hex or type name..." [ref=f4e6]
+      - combobox [ref=f4e7]:
+        - option "All tenants" [selected]
+      - generic [ref=f4e8]:
+        - button "Search" [ref=f4e9] [cursor=pointer]
+        - button "View All" [ref=f4e10] [cursor=pointer]
+    - paragraph [ref=f4e25]: Click a node to inspect it.
+    - generic [ref=f4e13]:
+      - generic [ref=f4e14]: 3 nodes
+      - generic [ref=f4e15]: 0 edges
+  - generic [ref=f4e20]:
+    - generic [ref=f4e26]: Person (2)
+    - generic [ref=f4e28]: Project (1)

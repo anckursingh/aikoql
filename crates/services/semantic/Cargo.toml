@@ -1,0 +1,11 @@
+[package]
+name = "mnemosyne-semantic"
+description = "Mnemosyne Semantic Engine: embedding generation, summarization, classification. AI provider plugins, async via Scheduler."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mnemosyne-kernel = { path = "../../kernel" }
+mnemosyne-scheduler = { path = "../../engines/scheduler" }

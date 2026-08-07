@@ -1,0 +1,19 @@
+/target
+/.venv
+*.pyc
+__pycache__
+*.egg-info
+.pytest_cache
+*.redb
+*.redb.backup.*
+*.pdb
+**/*.rs.bk
+.idea/
+dist/
+build/
+*.whl
+.DS_Store
+# Mnemosyne runtime artifacts
+*.key
+*.backup.*/
+mnemosyne/

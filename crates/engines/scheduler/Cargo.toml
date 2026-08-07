@@ -1,0 +1,10 @@
+[package]
+name = "mnemosyne-scheduler"
+description = "Mnemosyne Scheduler Engine: background index maintenance, KE-driven async jobs. Services around the kernel, never on the commit path."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mnemosyne-kernel = { path = "../../kernel" }

@@ -1,0 +1,11 @@
+[package]
+name = "mnemosyne-reasoning"
+description = "Mnemosyne Reasoning Engine: rule execution over Knowledge Objects. Consumes KEs, fires rules, writes provenance-tagged claims."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mnemosyne-kernel = { path = "../../kernel" }
+mnemosyne-scheduler = { path = "../../engines/scheduler" }

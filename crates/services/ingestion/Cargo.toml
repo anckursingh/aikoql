@@ -1,0 +1,10 @@
+[package]
+name = "mnemosyne-ingestion"
+description = "Mnemosyne Document Ingestion Plugin SDK — extension point for PDF/OCR/etc."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mnemosyne-kernel = { path = "../../kernel" }

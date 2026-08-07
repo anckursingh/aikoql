@@ -1,0 +1,23 @@
+- generic [ref=f5e9]:
+  - generic [ref=f5e10]:
+    - heading "Mnemosyne Graph 1 objects" [level=2] [ref=f5e11]:
+      - text: Mnemosyne Graph
+      - generic [ref=f5e12]: 1 objects
+    - generic [ref=f5e13]:
+      - textbox "KOID hex or type name..." [ref=f5e14]
+      - combobox [ref=f5e15]:
+        - option "All tenants" [selected]
+        - option "acme"
+      - generic [ref=f5e16]:
+        - button "Search" [ref=f5e17] [cursor=pointer]
+        - button "View All" [ref=f5e18] [cursor=pointer]
+    - generic [ref=f5e19]:
+      - button "Inspector" [ref=f5e20] [cursor=pointer]
+      - button "AIKOQL" [ref=f5e21] [cursor=pointer]
+      - button "Schema" [ref=f5e22] [cursor=pointer]
+    - paragraph [ref=f5e25]: Click a node to inspect it.Double-click to re-center.
+    - generic [ref=f5e26]:
+      - generic [ref=f5e27]: 1 nodes
+      - generic [ref=f5e28] [cursor=pointer]: admin (admin)
+      - generic [ref=f5e29]: 0 edges
+  - generic [ref=f5e30]: Employee (1)

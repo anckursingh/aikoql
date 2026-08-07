@@ -1,0 +1,37 @@
+# Mnemosyne — The Knowledge Kernel for AI
+# Workspace root. Dependency DAG (enforced by review, CI lint to follow):
+#   api/adapters -> query -> planner -> kvm -> kernel -> storage
+# Increment 1 ships `mnemosyne-kernel`: KOM + commit pipeline + KS-ABI Class A.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/kernel",
+    "crates/engines/graph",
+    "crates/engines/vector",
+    "crates/engines/scheduler",
+    "crates/runtime",
+    "crates/compiler",
+    "crates/benchmarks",
+    "crates/services/reasoning",
+    "crates/services/semantic",
+    "crates/cluster/proxy",
+    "crates/services/api/mcp",
+    "crates/sdk/python",
+    "crates/services/ingestion",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/anckursingh/mnemosyne"
+
+[profile.dev]
+# Faster incremental builds for the conformance loop.
+debug = true
+opt-level = 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
