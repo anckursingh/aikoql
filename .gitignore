@@ -17,3 +17,5 @@ build/
 *.key
 *.backup.*/
 mnemosyne/
+.playwright-mcp/
+--version

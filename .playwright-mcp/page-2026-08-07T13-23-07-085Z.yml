@@ -1,6 +1,0 @@
-- generic [ref=f5e3]:
-  - heading "Mnemosyne" [level=2] [ref=f5e4]
-  - textbox "Username" [ref=f5e5]: admin
-  - textbox "Password" [ref=f5e6]: admin
-  - button "Sign In" [ref=f5e7] [cursor=pointer]
-  - generic [ref=f5e8]: "Default: admin / admin (full access)Read-only: user / user"
