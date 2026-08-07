@@ -73,7 +73,7 @@ pub use storage::store::{MemoryEngine, StorageEngine, WriteBatch};
 pub use storage::store_redb::RedbEngine;
 pub use transaction::kernel::{
     Clock, ComplianceReport, EventFilter, Evolved, Explanation, ForgetMode, Forgotten, Fusion,
-    Kernel, KnowledgeContext, Lineage, ManualClock, Proof, PropertyFilter, RememberRequest,
-    Remembered, ScoredKO, SimilarityQuery, Subject, SubscriptionRecord, SystemClock,
-    TransactionOp, VersionRecord,
+    Kernel, KnowledgeContext, Lineage, ManualClock, OfflineProof, Proof, PropertyFilter,
+    RememberRequest, Remembered, ScoredKO, SimilarityQuery, Subject, SubscriptionRecord,
+    SystemClock, TransactionOp, VersionRecord,
 };

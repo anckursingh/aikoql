@@ -134,6 +134,7 @@ impl IndexCoordinator {
                 Fusion::TextOnly => tscore,
                 Fusion::Weighted { wv, wt } => wv * vscore + wt * tscore,
                 Fusion::Rrf { .. } => 0.0, // computed below
+                Fusion::Exact => 0.0, // bypasses index entirely, computed via direct scan
             };
             merged.push(ScoredKO {
                 ko,

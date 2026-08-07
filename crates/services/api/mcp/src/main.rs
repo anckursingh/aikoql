@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 //! mnemosyne-mcp — MCP server for the Knowledge Kernel.
 //!
 //! Exposes the MRFC-0011 Class A syscalls as MCP tools over the stdio
@@ -8,8 +9,20 @@
 //! Logs go to stderr; stdout carries protocol frames only.
 //! Structured tracing via `tracing` with env-filter (`RUST_LOG`).
 
+mod api_rest;
 mod graph_ui;
+mod knowledge_runtime;
 mod shell;
+
+// ---------------------------------------------------------------------------
+// Shared types
+// ---------------------------------------------------------------------------
+
+pub(crate) struct HttpSession {
+    pub username: String,
+    pub roles: Vec<String>,
+    pub created: Instant,
+}
 
 use mnemosyne_graph::*;
 use mnemosyne_kernel::ir::*;
@@ -82,6 +95,131 @@ fn main() {
             run_audit(arg_after.unwrap_or("./mnemosyne.redb"));
             return;
         }
+        Some("import") => {
+            // import <source> <source-args...>
+            //   import postgres <conn_str> [--tenant NAME] [--table TABLE] [DB_PATH]
+            //   import sqlite <file.db> [--tenant NAME] [--table TABLE] [DB_PATH]
+            let ti_args: Vec<&str> = args.iter().skip(subcmd_idx.unwrap() + 2).map(String::as_str).collect();
+            if ti_args.is_empty() {
+                eprintln!("Usage: mnemosyne-mcp import <SOURCE> [ARGS...]");
+                eprintln!("Sources: postgres, sqlite, mongodb, neo4j");
+                eprintln!("  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [DB_PATH]");
+                eprintln!("  import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
+                eprintln!("  import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [DB_PATH]");
+                eprintln!("  import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [DB_PATH]");
+                std::process::exit(1);
+            }
+            match ti_args[0] {
+                "postgres" => {
+                    let mut conn_str: Option<&str> = None;
+                    let mut target_db = "./mnemosyne.redb";
+                    let mut tenant: Option<&str> = None;
+                    let mut table_filter: Option<&str> = None;
+                    let mut ti = 1;
+                    while ti < ti_args.len() {
+                        match ti_args[ti] {
+                            "--tenant" => { if ti + 1 < ti_args.len() { tenant = Some(ti_args[ti + 1]); ti += 2; } else { ti += 1; } }
+                            "--table" => { if ti + 1 < ti_args.len() { table_filter = Some(ti_args[ti + 1]); ti += 2; } else { ti += 1; } }
+                            _ if !ti_args[ti].starts_with("--") => {
+                                if conn_str.is_none() { conn_str = Some(ti_args[ti]); ti += 1; }
+                                else { target_db = ti_args[ti]; ti += 1; }
+                            }
+                            _ => { ti += 1; }
+                        }
+                    }
+                    let cs = conn_str.unwrap_or_else(|| {
+                        eprintln!("Usage: mnemosyne-mcp import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [DB_PATH]");
+                        std::process::exit(1);
+                    });
+                    run_pg_import(cs, target_db, tenant, table_filter);
+                }
+                "neo4j" => {
+                    let mut uri: Option<&str> = None;
+                    let mut user = "neo4j";
+                    let mut password = "password";
+                    let mut target_db = "./mnemosyne.redb";
+                    let mut tenant: Option<&str> = None;
+                    let mut label_filter: Option<&str> = None;
+                    let mut ni = 1;
+                    while ni < ti_args.len() {
+                        match ti_args[ni] {
+                            "--user" => { if ni + 1 < ti_args.len() { user = ti_args[ni + 1]; ni += 2; } else { ni += 1; } }
+                            "--password" => { if ni + 1 < ti_args.len() { password = ti_args[ni + 1]; ni += 2; } else { ni += 1; } }
+                            "--tenant" => { if ni + 1 < ti_args.len() { tenant = Some(ti_args[ni + 1]); ni += 2; } else { ni += 1; } }
+                            "--label" => { if ni + 1 < ti_args.len() { label_filter = Some(ti_args[ni + 1]); ni += 2; } else { ni += 1; } }
+                            _ if !ti_args[ni].starts_with("--") => {
+                                if uri.is_none() { uri = Some(ti_args[ni]); ni += 1; }
+                                else { target_db = ti_args[ni]; ni += 1; }
+                            }
+                            _ => { ni += 1; }
+                        }
+                    }
+                    let u = uri.unwrap_or_else(|| {
+                        eprintln!("Usage: mnemosyne-mcp import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [DB_PATH]");
+                        std::process::exit(1);
+                    });
+                    run_neo4j_import(u, user, password, target_db, tenant, label_filter);
+                }
+                "mongodb" => {
+                    let mut uri: Option<&str> = None;
+                    let mut database: Option<&str> = None;
+                    let mut target_db = "./mnemosyne.redb";
+                    let mut tenant: Option<&str> = None;
+                    let mut coll_filter: Option<&str> = None;
+                    let mut mi = 1;
+                    while mi < ti_args.len() {
+                        match ti_args[mi] {
+                            "--db" | "--database" => { if mi + 1 < ti_args.len() { database = Some(ti_args[mi + 1]); mi += 2; } else { mi += 1; } }
+                            "--tenant" => { if mi + 1 < ti_args.len() { tenant = Some(ti_args[mi + 1]); mi += 2; } else { mi += 1; } }
+                            "--collection" => { if mi + 1 < ti_args.len() { coll_filter = Some(ti_args[mi + 1]); mi += 2; } else { mi += 1; } }
+                            _ if !ti_args[mi].starts_with("--") => {
+                                if uri.is_none() { uri = Some(ti_args[mi]); mi += 1; }
+                                else if database.is_none() { database = Some(ti_args[mi]); mi += 1; }
+                                else { target_db = ti_args[mi]; mi += 1; }
+                            }
+                            _ => { mi += 1; }
+                        }
+                    }
+                    let u = uri.unwrap_or_else(|| {
+                        eprintln!("Usage: mnemosyne-mcp import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [DB_PATH]");
+                        std::process::exit(1);
+                    });
+                    let db = database.unwrap_or_else(|| {
+                        eprintln!("Missing --db <DATABASE_NAME>");
+                        std::process::exit(1);
+                    });
+                    run_mongo_import(u, db, target_db, tenant, coll_filter);
+                }
+                "sqlite" => {
+                    let mut source_file: Option<&str> = None;
+                    let mut target_db = "./mnemosyne.redb";
+                    let mut tenant: Option<&str> = None;
+                    let mut table_filter: Option<&str> = None;
+                    let mut si = 1;
+                    while si < ti_args.len() {
+                        match ti_args[si] {
+                            "--tenant" => { if si + 1 < ti_args.len() { tenant = Some(ti_args[si + 1]); si += 2; } else { si += 1; } }
+                            "--table" => { if si + 1 < ti_args.len() { table_filter = Some(ti_args[si + 1]); si += 2; } else { si += 1; } }
+                            _ if !ti_args[si].starts_with("--") => {
+                                if source_file.is_none() { source_file = Some(ti_args[si]); si += 1; }
+                                else { target_db = ti_args[si]; si += 1; }
+                            }
+                            _ => { si += 1; }
+                        }
+                    }
+                    let sf = source_file.unwrap_or_else(|| {
+                        eprintln!("Usage: mnemosyne-mcp import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
+                        std::process::exit(1);
+                    });
+                    run_sqlite_import(sf, target_db, tenant, table_filter);
+                }
+                other => {
+                    eprintln!("Unknown import source: {}. Supported: postgres, sqlite", other);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         Some("keygen") => {
             run_keygen(arg_after.unwrap_or("./mnemosyne.key"));
             return;
@@ -130,7 +268,8 @@ fn main() {
     if let Some(ref addr) = metrics_addr {
         let k = kernel.clone();
         let addr_clone = addr.clone();
-        std::thread::spawn(move || serve_metrics(k, &addr_clone));
+        let db_for_metrics = db_path.clone();
+        std::thread::spawn(move || serve_metrics(k, &addr_clone, &db_for_metrics));
         info!(addr = %addr, "metrics HTTP server started");
     }
 
@@ -192,6 +331,7 @@ fn print_usage() {
         "  restore BACKUP [DB]    Restore from a backup\n",
         "  audit [DB]             Print encryption compliance report\n",
         "  keygen [PATH]          Generate an encryption master key\n",
+        "  import <SOURCE> [ARGS]  Import from DB (postgres, sqlite, mongodb)\n",
         "\n",
         "Server options (serve mode):\n",
         "  --listen ADDR          TCP listen address (e.g., 127.0.0.1:9090)\n",
@@ -207,6 +347,7 @@ fn print_usage() {
         "  mnemosyne-mcp restore kb.redb.backup.12345    # Restore backup\n",
         "  mnemosyne-mcp audit                           # Compliance report\n",
         "  mnemosyne-mcp keygen ./master.key             # Generate key\n",
+        "  mnemosyne-mcp import 'host=localhost db=mydb'   # Import from PostgreSQL\n",
     ));
 }
 
@@ -284,6 +425,365 @@ fn run_audit(db_path: &str) {
             std::process::exit(1);
         }
     }
+}
+
+fn run_pg_import(conn_str: &str, target_db: &str, tenant: Option<&str>, table_filter: Option<&str>) {
+    use mnemosyne_postgres::PostgresConnector;
+
+    println!("Connecting to PostgreSQL...");
+    let mut connector = match PostgresConnector::connect(conn_str) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Connection failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    println!("Discovering schema...");
+    let schemas = match connector.introspect_all() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Schema discovery failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if schemas.is_empty() {
+        println!("No user tables found in the database.");
+        return;
+    }
+
+    println!("Found {} table(s):", schemas.len());
+    for s in &schemas {
+        println!("  {} ({} cols, ~{} rows)", s.name, s.columns.len(), s.row_count_estimate);
+    }
+    println!();
+
+    let engine = RedbEngine::open(target_db).expect("open target db");
+    let kernel = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let mut total_imported = 0usize;
+
+    for schema in &schemas {
+        if let Some(ref tf) = table_filter {
+            if schema.name != *tf {
+                continue;
+            }
+        }
+        println!("Importing {}...", schema.name);
+        match connector.import_table(schema, tenant) {
+            Ok(objects) => {
+                let count = objects.len();
+                for ko in objects {
+                    match kernel.remember(RememberRequest {
+                        context: Subject::new("pg-importer").into(),
+                        koid: Some(ko.koid),
+                        expected_version: Some(0),
+                        idempotency_key: Some(format!("pg-import-{}-{}", schema.name, ko.koid.to_hex())),
+                        metadata: ko.metadata,
+                        properties: ko.properties,
+                        semantic: None,
+                        relationships: vec![],
+                        security: Some(ko.security),
+                        extensions: ko.extensions,
+                        origin: Origin::Human,
+                        note: Some("imported from PostgreSQL".into()),
+                        referential_policy: ReferentialPolicy::Permissive,
+                    }) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("  Warning: failed to commit row: {}", e);
+                        }
+                    }
+                }
+                total_imported += count;
+                println!("  {} rows imported", count);
+            }
+            Err(e) => {
+                eprintln!("  Error importing {}: {}", schema.name, e);
+            }
+        }
+    }
+
+    println!();
+    println!("Import complete. {} total objects imported into {}", total_imported, target_db);
+}
+
+fn run_sqlite_import(source_file: &str, target_db: &str, tenant: Option<&str>, table_filter: Option<&str>) {
+    use mnemosyne_sqlite::SqliteConnector;
+
+    println!("Opening SQLite: {}", source_file);
+    let connector = match SqliteConnector::open(source_file) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Open failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    println!("Discovering schema...");
+    let schemas = match connector.introspect_all() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Schema discovery failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if schemas.is_empty() {
+        println!("No user tables found.");
+        return;
+    }
+
+    println!("Found {} table(s):", schemas.len());
+    for s in &schemas {
+        println!("  {} ({} cols, {} rows)", s.name, s.columns.len(), s.row_count);
+    }
+    println!();
+
+    let engine = RedbEngine::open(target_db).expect("open target db");
+    let kernel = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let mut total_imported = 0usize;
+
+    for schema in &schemas {
+        if let Some(ref tf) = table_filter {
+            if schema.name != *tf {
+                continue;
+            }
+        }
+        println!("Importing {}...", schema.name);
+        match connector.import_table(schema, tenant) {
+            Ok(objects) => {
+                let count = objects.len();
+                for ko in objects {
+                    let idem_key = format!("sqlite-import-{}-{}", schema.name, ko.koid.to_hex());
+                    match kernel.remember(RememberRequest {
+                        context: Subject::new("sqlite-importer").into(),
+                        koid: Some(ko.koid),
+                        expected_version: Some(0),
+                        idempotency_key: Some(idem_key),
+                        metadata: ko.metadata,
+                        properties: ko.properties,
+                        semantic: None,
+                        relationships: vec![],
+                        security: Some(ko.security),
+                        extensions: ko.extensions,
+                        origin: Origin::Human,
+                        note: Some("imported from SQLite".into()),
+                        referential_policy: ReferentialPolicy::Permissive,
+                    }) {
+                        Ok(_) => {}
+                        Err(e) => eprintln!("  Warning: failed to commit row: {}", e),
+                    }
+                }
+                total_imported += count;
+                println!("  {} rows imported", count);
+            }
+            Err(e) => {
+                eprintln!("  Error importing {}: {}", schema.name, e);
+            }
+        }
+    }
+
+    println!();
+    println!("Import complete. {} total objects imported into {}", total_imported, target_db);
+}
+
+fn run_mongo_import(uri: &str, database: &str, target_db: &str, tenant: Option<&str>, coll_filter: Option<&str>) {
+    use mnemosyne_mongodb::MongoConnector;
+
+    println!("Connecting to MongoDB: {}", uri);
+    let connector = match MongoConnector::connect(uri, database) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Connection failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    println!("Discovering collections in '{}'...", database);
+    let schemas = match connector.introspect_all() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Discovery failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    if schemas.is_empty() {
+        println!("No collections found.");
+        return;
+    }
+
+    println!("Found {} collection(s):", schemas.len());
+    for s in &schemas {
+        println!("  {} ({} docs, {} properties)", s.name, s.document_count, s.properties.len());
+        if s.properties.len() <= 15 {
+            println!("    props: {}", s.properties.join(", "));
+        }
+    }
+    println!();
+
+    let engine = RedbEngine::open(target_db).expect("open target db");
+    let kernel = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let mut total_imported = 0usize;
+
+    for schema in &schemas {
+        if let Some(ref cf) = coll_filter {
+            if schema.name != *cf {
+                continue;
+            }
+        }
+        println!("Importing {}...", schema.name);
+        match connector.import_collection(schema, tenant) {
+            Ok(objects) => {
+                let count = objects.len();
+                for ko in objects {
+                    let idem_key = format!("mongo-import-{}-{}", schema.name, ko.koid.to_hex());
+                    match kernel.remember(RememberRequest {
+                        context: Subject::new("mongo-importer").into(),
+                        koid: Some(ko.koid),
+                        expected_version: Some(0),
+                        idempotency_key: Some(idem_key),
+                        metadata: ko.metadata,
+                        properties: ko.properties,
+                        semantic: None,
+                        relationships: vec![],
+                        security: Some(ko.security),
+                        extensions: ko.extensions,
+                        origin: Origin::Human,
+                        note: Some("imported from MongoDB".into()),
+                        referential_policy: ReferentialPolicy::Permissive,
+                    }) {
+                        Ok(_) => {}
+                        Err(e) => eprintln!("  Warning: failed to commit doc: {}", e),
+                    }
+                }
+                total_imported += count;
+                println!("  {} documents imported", count);
+            }
+            Err(e) => {
+                eprintln!("  Error importing {}: {}", schema.name, e);
+            }
+        }
+    }
+
+    println!();
+    println!("Import complete. {} total documents imported into {}", total_imported, target_db);
+}
+
+fn run_neo4j_import(uri: &str, user: &str, password: &str, target_db: &str, tenant: Option<&str>, label_filter: Option<&str>) {
+    use mnemosyne_neo4j::Neo4jConnector;
+
+    println!("Connecting to Neo4j: {}", uri);
+    let connector = match Neo4jConnector::connect(uri, user, password) {
+        Ok(c) => c,
+        Err(e) => { eprintln!("Connection failed: {}", e); std::process::exit(1); }
+    };
+
+    println!("Discovering graph schema...");
+    let labels = match connector.list_labels() {
+        Ok(l) => l,
+        Err(e) => { eprintln!("Failed to list labels: {}", e); std::process::exit(1); }
+    };
+    let rel_types = connector.list_rel_types().unwrap_or_default();
+    println!("Labels: {} ({}), Relationship types: {} ({})",
+        labels.len(), labels.join(", "), rel_types.len(), rel_types.join(", "));
+    println!();
+
+    let engine = RedbEngine::open(target_db).expect("open target db");
+    let kernel = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let mut total_nodes = 0usize;
+    let mut total_rels = 0usize;
+
+    // Phase 1: import nodes, build elementId → KOID map.
+    let mut global_id_map: HashMap<String, KOID> = HashMap::new();
+    let filtered_labels: Vec<&str> = if let Some(lf) = label_filter {
+        labels.iter().filter(|l| l.as_str() == lf).map(String::as_str).collect()
+    } else {
+        labels.iter().map(String::as_str).collect()
+    };
+
+    for label in &filtered_labels {
+        println!("Importing nodes with label '{}'...", label);
+        match connector.import_nodes(label, tenant) {
+            Ok((objects, id_map)) => {
+                let count = objects.len();
+                for (elem_id, koid) in &id_map {
+                    global_id_map.insert(elem_id.clone(), *koid);
+                }
+                for ko in objects {
+                    let idem_key = format!("neo4j-node-{}-{}", label, ko.koid.to_hex());
+                    match kernel.remember(RememberRequest {
+                        context: Subject::new("neo4j-importer").into(),
+                        koid: Some(ko.koid), expected_version: Some(0),
+                        idempotency_key: Some(idem_key),
+                        metadata: ko.metadata, properties: ko.properties,
+                        semantic: None, relationships: vec![],
+                        security: Some(ko.security), extensions: ko.extensions,
+                        origin: Origin::Human,
+                        note: Some("imported from Neo4j".into()),
+                        referential_policy: ReferentialPolicy::Permissive,
+                    }) {
+                        Ok(_) => {}
+                        Err(e) => eprintln!("  Warning: commit failed: {}", e),
+                    }
+                }
+                total_nodes += count;
+                println!("  {} nodes imported", count);
+            }
+            Err(e) => eprintln!("  Error: {}", e),
+        }
+    }
+
+    // Phase 2: import relationships (only if we have nodes mapped).
+    if !global_id_map.is_empty() {
+        for rt in &rel_types {
+            println!("Importing relationships [{}]...", rt);
+            match connector.import_relationships(rt, &global_id_map) {
+                Ok(rels) => {
+                    let count = rels.len();
+                    // Update source nodes to include these relationships.
+                    let mut node_rels: HashMap<KOID, Vec<RelationshipRef>> = HashMap::new();
+                    for (rel, src_koid, _tgt_koid) in &rels {
+                        node_rels.entry(*src_koid).or_default().push(rel.clone());
+                    }
+                    for (koid, rels) in &node_rels {
+                        // Re-remember the source node with relationships attached.
+                        if let Ok(ko) = kernel.get(
+                            KnowledgeContext::from(Subject::new("neo4j-importer")),
+                            koid,
+                        ) {
+                            let mut updated = ko.clone();
+                            updated.relationships = rels.clone();
+                            let idem_key = format!("neo4j-rel-update-{}", koid.to_hex());
+                            let _ = kernel.remember(RememberRequest {
+                                context: Subject::new("neo4j-importer").into(),
+                                koid: Some(*koid),
+                                expected_version: Some(ko.version),
+                                idempotency_key: Some(idem_key),
+                                metadata: updated.metadata,
+                                properties: updated.properties,
+                                semantic: None,
+                                relationships: updated.relationships,
+                                security: Some(updated.security),
+                                extensions: updated.extensions,
+                                origin: Origin::Human,
+                                note: Some("Neo4j relationships attached".into()),
+                                referential_policy: ReferentialPolicy::Permissive,
+                            });
+                        }
+                    }
+                    total_rels += count;
+                    println!("  {} relationships imported", count);
+                }
+                Err(e) => eprintln!("  Error: {}", e),
+            }
+        }
+    }
+
+    println!();
+    println!("Import complete. {} nodes, {} relationships imported into {}",
+        total_nodes, total_rels, target_db);
 }
 
 fn run_keygen(path: &str) {
@@ -607,6 +1107,25 @@ fn call_tool(k: &Kernel, name: &str, args: &J, db_path: &str) -> ToolResult {
         "metrics" => tool_metrics(k),
         "audit_report" => tool_audit_report(k),
         "compliance_report" => tool_compliance_report(k),
+        "reason" => tool_reason(k, args),
+        "infer" => tool_infer(k, args),
+        "predict" => tool_predict(k, args),
+        "abi_version" => tool_abi_version(k),
+        "deploy_program" => tool_deploy_program(k, args),
+        "execute_program" => tool_execute_program(k, args),
+        "list_programs" => tool_list_programs(k, args),
+        "deploy_policy" => tool_deploy_policy(k, args),
+        "evaluate_policies" => tool_evaluate_policies(k, args),
+        "deploy_workflow" => tool_deploy_workflow(k, args),
+        "deploy_trigger" => tool_deploy_trigger(k, args),
+        "add_dependency" => tool_add_dependency(k, args),
+        "execute_workflow" => tool_execute_workflow(k, args),
+        "check_triggers" => tool_check_triggers(k),
+        "program_cache_stats" => tool_program_cache_stats(),
+        "discover_schema" => tool_discover_schema(k),
+        "health" => tool_health(k),
+        "agent_memory" => tool_agent_memory(k, args),
+        "batch" => tool_batch(k, args),
         _ => Err(format!("unknown tool: {}", name)),
     };
     match res {
@@ -1411,6 +1930,333 @@ fn tool_compliance_report(k: &Kernel) -> Result<J, String> {
     }))
 }
 
+fn tool_reason(k: &Kernel, args: &J) -> Result<J, String> {
+    let rule_type = args.get("type_name").and_then(|v| v.as_str()).ok_or("missing: type_name")?;
+    let rule_props = parse_properties(args)?;
+    let claims = k.reason(rule_type, rule_props).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "claims": claims.iter().map(|c| json!({
+            "type_name": c.metadata.type_name,
+            "property_count": c.properties.len(),
+            "origin": format!("{:?}", c.lifecycle.origin),
+        })).collect::<Vec<_>>(),
+        "count": claims.len(),
+    }))
+}
+
+fn tool_infer(k: &Kernel, args: &J) -> Result<J, String> {
+    let type_name = args.get("type_name").and_then(|v| v.as_str()).ok_or("missing: type_name")?;
+    let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
+    let results = k.infer(&subject_of(args), type_name, text).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "results": results.iter().map(|s| json!({
+            "koid": s.ko.koid.to_hex(),
+            "score": s.score,
+            "type_name": s.ko.metadata.type_name,
+        })).collect::<Vec<_>>(),
+        "count": results.len(),
+    }))
+}
+
+fn tool_predict(kernel: &Kernel, args: &J) -> Result<J, String> {
+    let type_name = args.get("type_name").and_then(|v| v.as_str()).ok_or("missing: type_name")?;
+    let props = parse_properties(args)?;
+    let top_k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+    let merged = kernel.predict(&subject_of(args), type_name, &props, top_k).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "predicted": merged.iter().map(|(key, val)| (key.clone(), value_to_json(val))).collect::<serde_json::Map<_,_>>(),
+    }))
+}
+
+fn tool_deploy_program(k: &Kernel, args: &J) -> Result<J, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let body = args.get("body").and_then(|v| v.as_str()).ok_or("missing: body")?;
+    let language = args.get("language").and_then(|v| v.as_str()).unwrap_or("AIKOQL");
+    let r = k.deploy_program(name, body, language, &subject_of(args))
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"koid": r.koid.to_hex(), "version": r.version, "name": name, "language": language}))
+}
+
+fn tool_execute_program(k: &Kernel, args: &J) -> Result<J, String> {
+    let hex = args.get("koid").and_then(|v| v.as_str()).ok_or("missing: koid")?;
+    let koid = KOID::from_hex(hex).map_err(|e| e.to_string())?;
+    let params: std::collections::BTreeMap<String, Value> = if let Some(p) = args.get("params").and_then(|v| v.as_object()) {
+        p.iter().map(|(k, v)| (k.clone(), json_to_value(v).unwrap_or(Value::Null))).collect()
+    } else { std::collections::BTreeMap::new() };
+    let subject = subject_of(args);
+    // Program execution uses the caller's identity for ACL checks on the target data.
+    // The program KO itself must be readable by the caller.
+    let exec_subject = Subject {
+        name: subject.name.clone(),
+        roles: subject.roles.clone(),
+    };
+
+    // Load program KO, substitute params, compile, execute.
+    let ko = k.get(KnowledgeContext::from(subject.clone()), &koid).map_err(|e| e.to_string())?;
+    if ko.metadata.type_name != "mnemosyne:program" {
+        return Err(format!("KO {} is not a program (type={})", hex, ko.metadata.type_name));
+    }
+    let body = match ko.properties.get("body") {
+        Some(Value::Text(s)) => s.clone(),
+        _ => return Err("program has no body property".into()),
+    };
+    let mut query = body;
+    for (key, val) in &params {
+        query = query.replace(&format!("{{{{{}}}}}", key), &value_to_string(val));
+    }
+    let plan = mnemosyne_compiler::parser::compile_with_subject(&query, &exec_subject.name)
+        .map_err(|e| format!("compile: {}", e))?;
+    let optimized = mnemosyne_compiler::planner::Planner::optimize(&plan);
+    let result = mnemosyne_runtime::Interpreter::execute(k, &optimized).map_err(|e| e.to_string())?;
+    match result {
+        mnemosyne_runtime::RowSet::Objects(kos) => Ok(json!({
+            "results": kos.iter().map(|ko| json!({
+                "koid": ko.koid.to_hex(), "type_name": ko.metadata.type_name, "version": ko.version,
+                "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+            })).collect::<Vec<_>>(), "count": kos.len()
+        })),
+        mnemosyne_runtime::RowSet::Scored(scored) => Ok(json!({
+            "results": scored.iter().map(|(koid, score, tn, ver)| json!({"koid": koid.to_hex(), "score": score, "type_name": tn, "version": ver})).collect::<Vec<_>>(), "count": scored.len()
+        })),
+        other => Ok(json!({"results": [], "debug": format!("{:?}", other)})),
+    }
+}
+
+fn tool_list_programs(k: &Kernel, args: &J) -> Result<J, String> {
+    let programs = k.list_programs(&subject_of(args)).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "programs": programs.iter().map(|p| json!({
+            "koid": p.koid.to_hex(),
+            "name": p.properties.get("name").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }).unwrap_or("?"),
+            "language": p.properties.get("language").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }).unwrap_or("?"),
+            "version": p.properties.get("version").and_then(|v| match v { Value::Int(i) => Some(*i), _ => None }).unwrap_or(0),
+            "lifecycle": p.lifecycle.state.to_string(),
+        })).collect::<Vec<_>>()
+    }))
+}
+
+fn tool_deploy_policy(k: &Kernel, args: &J) -> Result<J, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let effect = args.get("effect").and_then(|v| v.as_str()).ok_or("missing: effect")?;
+    let principal = args.get("principal").and_then(|v| v.as_str()).ok_or("missing: principal")?;
+    let action = args.get("action").and_then(|v| v.as_str()).ok_or("missing: action")?;
+    let resource = args.get("resource_type").and_then(|v| v.as_str()).ok_or("missing: resource_type")?;
+    let condition = args.get("condition").and_then(|v| v.as_str());
+    let r = k.deploy_policy(name, effect, principal, action, resource, condition, &subject_of(args))
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"koid": r.koid.to_hex(), "version": r.version, "name": name}))
+}
+
+fn tool_evaluate_policies(k: &Kernel, args: &J) -> Result<J, String> {
+    let principal = args.get("principal").and_then(|v| v.as_str()).ok_or("missing: principal")?;
+    let action_str = args.get("action").and_then(|v| v.as_str()).ok_or("missing: action")?;
+    let resource = args.get("resource_type").and_then(|v| v.as_str()).ok_or("missing: resource_type")?;
+    let action = match action_str {
+        "Read" => Action::Read, "Write" => Action::Write, "Admin" => Action::Admin,
+        "Evolve" => Action::Evolve, "Delete" => Action::Delete,
+        _ => return Err(format!("unknown action: {}", action_str)),
+    };
+    let result = k.evaluate_policies(principal, &action, resource, &subject_of(args))
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"allowed": result.is_none(), "reason": result.unwrap_or_else(|| "allowed".into())}))
+}
+
+fn tool_deploy_workflow(k: &Kernel, args: &J) -> Result<J, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let steps = args.get("steps").map(|s| s.to_string()).unwrap_or_else(|| "[]".into());
+    let r = k.deploy_workflow(name, &steps, &subject_of(args)).map_err(|e| e.to_string())?;
+    Ok(json!({"koid": r.koid.to_hex(), "version": r.version, "name": name}))
+}
+
+fn tool_deploy_trigger(k: &Kernel, args: &J) -> Result<J, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let event_kind = args.get("event_kind").and_then(|v| v.as_str()).ok_or("missing: event_kind")?;
+    let type_filter = args.get("type_filter").and_then(|v| v.as_str()).unwrap_or("*");
+    let program_koid = args.get("program_koid").and_then(|v| v.as_str()).ok_or("missing: program_koid")?;
+    let r = k.deploy_trigger(name, event_kind, type_filter, program_koid, &subject_of(args))
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"koid": r.koid.to_hex(), "version": r.version, "name": name}))
+}
+
+fn tool_add_dependency(k: &Kernel, args: &J) -> Result<J, String> {
+    let src_hex = args.get("source").and_then(|v| v.as_str()).ok_or("missing: source")?;
+    let tgt_hex = args.get("target").and_then(|v| v.as_str()).ok_or("missing: target")?;
+    let dep_type = args.get("dep_type").and_then(|v| v.as_str()).unwrap_or("uses");
+    let src = KOID::from_hex(src_hex).map_err(|e| e.to_string())?;
+    let tgt = KOID::from_hex(tgt_hex).map_err(|e| e.to_string())?;
+    let req = RelateRequest::new(&subject_of(args), src, tgt, &format!("DEPENDS_ON_{}", dep_type));
+    let r = k.relate(req).map_err(|e| e.to_string())?;
+    Ok(json!({"koid": r.koid.to_hex(), "version": r.version}))
+}
+
+// Global program cache shared across all requests.
+static PROGRAM_CACHE: std::sync::LazyLock<knowledge_runtime::ProgramCache> =
+    std::sync::LazyLock::new(knowledge_runtime::ProgramCache::new);
+
+fn tool_execute_workflow(k: &Kernel, args: &J) -> Result<J, String> {
+    let hex = args.get("koid").and_then(|v| v.as_str()).ok_or("missing: koid")?;
+    let koid = KOID::from_hex(hex).map_err(|e| e.to_string())?;
+    let logs = knowledge_runtime::execute_workflow(k, &koid, &subject_of(args), Some(&PROGRAM_CACHE))
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"logs": logs, "executed": true}))
+}
+
+fn tool_check_triggers(k: &Kernel) -> Result<J, String> {
+    let fired = knowledge_runtime::check_and_fire_triggers(k, 0)
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"water_mark": fired}))
+}
+
+#[allow(dead_code)]
+fn tool_execution_stats() -> Result<J, String> {
+    let s = knowledge_runtime::execution_stats();
+    Ok(json!({
+        "programs_executed": s.programs_executed,
+        "total_rows": s.total_rows_returned,
+        "total_time_ms": s.total_time_ms,
+        "avg_time_ms": if s.programs_executed > 0 { s.total_time_ms / s.programs_executed } else { 0 },
+        "cache_hits": s.cache_hits,
+        "cache_misses": s.cache_misses,
+        "cache_hit_rate": if s.cache_hits + s.cache_misses > 0 {
+            format!("{:.1}%", 100.0 * s.cache_hits as f64 / (s.cache_hits + s.cache_misses) as f64)
+        } else { "N/A".into() },
+    }))
+}
+
+fn tool_program_cache_stats() -> Result<J, String> {
+    Ok(json!({"cache_hits": PROGRAM_CACHE.stats()}))
+}
+
+// ---- Agent Experience Improvements (MRFC-0040) -------------------------
+
+fn tool_discover_schema(k: &Kernel) -> Result<J, String> {
+    let types = k.list_types().map_err(|e| e.to_string())?;
+    let heads = k.scan_heads().map_err(|e| e.to_string())?;
+    let subject = Subject { name: "schema-discovery".into(), roles: vec!["admin".into()] };
+    let mut type_info = serde_json::Map::new();
+    let mut type_counts: HashMap<String, usize> = HashMap::new();
+    for (koid, _ver, _ts, state) in &heads {
+        if *state == LifecycleState::Deleted { continue; }
+        if let Ok(ko) = k.get(KnowledgeContext::from(subject.clone()), koid) {
+            *type_counts.entry(ko.metadata.type_name.clone()).or_insert(0) += 1;
+        }
+    }
+    for t in &types {
+        type_info.insert(t.clone(), json!({"count": type_counts.get(t).copied().unwrap_or(0)}));
+    }
+    Ok(json!({"types": types, "type_info": type_info, "total_types": types.len()}))
+}
+
+fn tool_health(k: &Kernel) -> Result<J, String> {
+    let (seq, audit) = k.journal_head().unwrap_or((0, [0u8; 32]));
+    let heads = k.scan_heads().map(|h| h.len()).unwrap_or(0);
+    let ready = true;
+    Ok(json!({
+        "status": if ready { "healthy" } else { "degraded" },
+        "ready": ready,
+        "journal_seq": seq,
+        "object_count": heads,
+        "audit_hash": audit.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
+        "uptime_seconds": SERVER_START.get().map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0),
+    }))
+}
+
+fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> {
+    let agent_id = args.get("agent_id").and_then(|v| v.as_str()).ok_or("missing: agent_id")?;
+    let key = args.get("key").and_then(|v| v.as_str());
+    let value = args.get("value");
+    let ttl = args.get("ttl").and_then(|v| v.as_i64()).unwrap_or(3600);
+
+    // Write mode: store a memory.
+    if let (Some(mem_key), Some(mem_val)) = (key, value) {
+        let mut props = PropertyMap::new();
+        props.insert("agent_id".into(), Value::Text(agent_id.to_string()));
+        props.insert("key".into(), Value::Text(mem_key.to_string()));
+        props.insert("value".into(), json_to_value(mem_val).unwrap_or(Value::Null));
+        props.insert("ttl".into(), Value::Int(ttl));
+        let r = kernel.remember(RememberRequest {
+            context: subject_of(args).into(),
+            koid: None, expected_version: Some(0),
+            idempotency_key: Some(format!("agent-mem-{}-{}", agent_id, mem_key)),
+            metadata: Metadata { type_name: "mnemosyne:memory".into(), tenant: None, schema_version: 1, tags: vec!["agent-memory".into()] },
+            properties: props,
+            semantic: None, relationships: vec![],
+            security: Some(SecurityDescriptor { owner: agent_id.to_string(), acl: vec![], classification: None }),
+            extensions: ExtensionMap::new(), origin: Origin::Human,
+            note: Some(format!("Agent memory: {}", mem_key)),
+            referential_policy: ReferentialPolicy::Permissive,
+        }).map_err(|e| e.to_string())?;
+        return Ok(json!({"koid": r.koid.to_hex(), "stored": true}));
+    }
+
+    // Read mode: retrieve memories for this agent.
+    let subject = subject_of(args);
+    let all = kernel.scan_by_type(&subject, "mnemosyne:memory").map_err(|e| e.to_string())?;
+    let memories: Vec<J> = all.iter()
+        .filter(|ko| ko.properties.get("agent_id") == Some(&Value::Text(agent_id.to_string())))
+        .map(|ko| json!({
+            "koid": ko.koid.to_hex(),
+            "key": ko.properties.get("key").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }),
+            "value": ko.properties.get("value").map(|v| value_to_json(v)),
+            "ttl": ko.properties.get("ttl").and_then(|v| match v { Value::Int(i) => Some(i), _ => None }),
+        }))
+        .collect();
+    Ok(json!({"memories": memories, "count": memories.len()}))
+}
+
+fn tool_batch(k: &Kernel, args: &J) -> Result<J, String> {
+    let ops = args.get("operations").and_then(|v| v.as_array()).ok_or("missing: operations")?;
+    let mut results = Vec::new();
+    let mut koids: Vec<String> = Vec::new();
+    for op in ops {
+        let name = op.get("remember").or_else(|| op.get("relate")).or_else(|| op.get("forget"))
+            .map(|_| {
+                if op.get("remember").is_some() { "remember" }
+                else if op.get("relate").is_some() { "relate" }
+                else if op.get("forget").is_some() { "forget" }
+                else { "unknown" }
+            }).unwrap_or("unknown");
+        // Substitute $N references with previously returned KOIDs.
+        let op_str = op.to_string();
+        let mut resolved = op_str.clone();
+        for (i, koid) in koids.iter().enumerate() {
+            resolved = resolved.replace(&format!("${}.koid", i + 1), koid);
+        }
+        let resolved_op: J = serde_json::from_str(&resolved).unwrap_or(op.clone());
+        let r: Result<J, String> = match name {
+            "remember" => tool_remember(k, &resolved_op),
+            "relate" => tool_relate(k, &resolved_op),
+            "forget" => tool_forget(k, &resolved_op),
+            _ => Err(format!("unknown batch op: {}", name)),
+        };
+        match r {
+            Ok(result) => {
+                if let Some(koid) = result.get("koid").and_then(|v| v.as_str()) {
+                    koids.push(koid.to_string());
+                }
+                results.push(json!({"op": name, "ok": true, "result": result}));
+            }
+            Err(e) => {
+                results.push(json!({"op": name, "ok": false, "error": e}));
+            }
+        }
+    }
+    Ok(json!({"results": results, "count": results.len()}))
+}
+
+fn tool_abi_version(k: &Kernel) -> Result<J, String> {
+    let version = k.abi_version();
+    // Also export the full audit chain for offline verification.
+    let proof = k.prove_export().map_err(|e| e.to_string())?;
+    Ok(json!({
+        "abi_version": version,
+        "journal_seq": proof.journal_seq,
+        "head_audit_hash": proof.head_audit_hash.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
+        "event_count": proof.events.len(),
+        "audit_chain_exportable": true,
+    }))
+}
+
 fn tool_verify_backup(args: &J) -> Result<J, String> {
     let backup = args
         .get("backup")
@@ -1438,7 +2284,7 @@ fn tool_verify_backup(args: &J) -> Result<J, String> {
 // HTTP metrics server — minimal std-based HTTP/1.0 handler
 // ---------------------------------------------------------------------------
 
-fn serve_metrics(kernel: Arc<Kernel>, addr: &str) {
+fn serve_metrics(kernel: Arc<Kernel>, addr: &str, db_path: &Arc<String>) {
     let listener = match TcpListener::bind(addr) {
         Ok(l) => l,
         Err(e) => {
@@ -1452,17 +2298,12 @@ fn serve_metrics(kernel: Arc<Kernel>, addr: &str) {
             Ok(mut s) => {
                 let k = kernel.clone();
                 let sess = sessions.clone();
-                std::thread::spawn(move || handle_http(&mut s, &k, &sess));
+                let db = db_path.clone();
+                std::thread::spawn(move || handle_http(&mut s, &k, &sess, &db));
             }
             Err(_) => break,
         }
     }
-}
-
-struct HttpSession {
-    username: String,
-    roles: Vec<String>,
-    created: Instant,
 }
 
 /// Build graph JSON: { nodes: [...], edges: [...] }.
@@ -1948,7 +2789,7 @@ fn explain_endpoint(query: &str) -> Result<String, String> {
     }).to_string())
 }
 
-fn handle_http(stream: &mut TcpStream, k: &Kernel, sessions: &Mutex<HashMap<String, HttpSession>>) {
+fn handle_http(stream: &mut TcpStream, k: &Kernel, sessions: &Mutex<HashMap<String, HttpSession>>, db_path: &Arc<String>) {
     let mut buf = [0u8; 4096];
     let n = match stream.read(&mut buf) {
         Ok(0) => return,
@@ -1967,6 +2808,38 @@ fn handle_http(stream: &mut TcpStream, k: &Kernel, sessions: &Mutex<HashMap<Stri
 
     // Extract token from query string or Authorization header.
     let token = extract_token(path, &req);
+
+    // CORS preflight.
+    if method == "OPTIONS" {
+        let (status, ct, body) = api_rest::cors_preflight();
+        let mut resp = format!("HTTP/1.0 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n", status, ct, body.len());
+        for (k, v) in api_rest::cors_headers() {
+            resp.push_str(&format!("{}: {}\r\n", k, v));
+        }
+        resp.push_str("\r\n");
+        resp.push_str(&body);
+        let _ = stream.write_all(resp.as_bytes());
+        return;
+    }
+
+    // REST API v1 routes — handled separately, return early.
+    if path.starts_with("/api/v1/") {
+        // Extract token from Authorization header (in the full request, not body).
+        let token = req.lines()
+            .find(|l| l.starts_with("Authorization: Bearer "))
+            .map(|l| l.trim_start_matches("Authorization: Bearer ").trim().to_string());
+        let (status, ct, body) = api_rest::route_v1(
+            method, path, &body_str, k, db_path.as_str(), sessions, token,
+        );
+        let mut resp = format!("HTTP/1.0 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n", status, ct, body.len());
+        for (h, v) in api_rest::cors_headers() {
+            resp.push_str(&format!("{}: {}\r\n", h, v));
+        }
+        resp.push_str("\r\n");
+        resp.push_str(&body);
+        let _ = stream.write_all(resp.as_bytes());
+        return;
+    }
 
     let (status, content_type, body) = match path {
         "/ui" | "/" => {
@@ -2029,13 +2902,16 @@ fn handle_http(stream: &mut TcpStream, k: &Kernel, sessions: &Mutex<HashMap<Stri
         }
     };
 
-    let resp = format!(
-        "HTTP/1.0 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n{}",
-        status,
-        content_type,
-        body.len(),
-        body
+    let mut resp = format!(
+        "HTTP/1.0 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",
+        status, content_type, body.len(),
     );
+    // CORS headers on all responses.
+    for (k, v) in api_rest::cors_headers() {
+        resp.push_str(&format!("{}: {}\r\n", k, v));
+    }
+    resp.push_str("\r\n");
+    resp.push_str(&body);
     let _ = stream.write_all(resp.as_bytes());
 }
 
@@ -2145,7 +3021,26 @@ fn tools_list() -> J {
             {"name": "verify_backup", "description": "Verify a backup by opening it in a temporary kernel and checking journal + object count integrity.", "inputSchema": {"type": "object", "properties": {"backup": {"type": "string", "description": "Backup directory name"}}, "required": ["backup"]}},
             {"name": "metrics", "description": "Return database metrics: journal sequence, object counts, uptime.", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "audit_report", "description": "Generate a compliance audit report with full object inventory and audit chain hash.", "inputSchema": {"type": "object", "properties": {}}},
-            {"name": "compliance_report", "description": "Generate an encryption compliance report: policies, key inventory, audit events, compliance grade (A/C).", "inputSchema": {"type": "object", "properties": {}}}
+            {"name": "compliance_report", "description": "Generate an encryption compliance report: policies, key inventory, audit events, compliance grade (A/C).", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "reason", "description": "Execute a reasoning rule: find objects matching properties and produce provenance-tagged claims.", "inputSchema": {"type": "object", "properties": {"type_name": {"type": "string"}, "properties": {"type": "object"}}, "required": ["type_name"]}},
+            {"name": "infer", "description": "Infer similar knowledge: find objects textually similar to a query within a type.", "inputSchema": {"type": "object", "properties": {"type_name": {"type": "string"}, "text": {"type": "string"}}, "required": ["type_name"]}},
+            {"name": "predict", "description": "Predict properties for a target object based on top-k similar objects.", "inputSchema": {"type": "object", "properties": {"type_name": {"type": "string"}, "properties": {"type": "object"}, "k": {"type": "integer"}}, "required": ["type_name"]}},
+            {"name": "abi_version", "description": "Return ABI version and exportable audit chain for offline verification.", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "deploy_program", "description": "Deploy an AIKOQL program as a versioned Knowledge Object (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "body": {"type": "string"}, "language": {"type": "string"}}, "required": ["name", "body"]}},
+            {"name": "execute_program", "description": "Execute a deployed program KO by KOID with optional parameters.", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "params": {"type": "object"}}, "required": ["koid"]}},
+            {"name": "list_programs", "description": "List all deployed program Knowledge Objects.", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "deploy_policy", "description": "Deploy an RBAC policy as a versioned Knowledge Object (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "effect": {"type": "string"}, "principal": {"type": "string"}, "action": {"type": "string"}, "resource_type": {"type": "string"}, "condition": {"type": "string"}}, "required": ["name", "effect", "principal", "action", "resource_type"]}},
+            {"name": "evaluate_policies", "description": "Evaluate all Policy KOs for a (principal, action, resource) tuple.", "inputSchema": {"type": "object", "properties": {"principal": {"type": "string"}, "action": {"type": "string"}, "resource_type": {"type": "string"}}, "required": ["principal", "action", "resource_type"]}},
+            {"name": "deploy_workflow", "description": "Deploy a workflow (DAG of programs) as a versioned KO (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "steps": {"type": "array"}}, "required": ["name", "steps"]}},
+            {"name": "deploy_trigger", "description": "Deploy an event-condition-action trigger as a versioned KO (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "event_kind": {"type": "string"}, "type_filter": {"type": "string"}, "program_koid": {"type": "string"}}, "required": ["name", "event_kind", "program_koid"]}},
+            {"name": "add_dependency", "description": "Create a DEPENDS_ON relationship between two Active KOs (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"source": {"type": "string"}, "target": {"type": "string"}, "dep_type": {"type": "string"}}, "required": ["source", "target"]}},
+            {"name": "execute_workflow", "description": "Execute a Workflow KO by KOID — runs all program steps in order (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}}, "required": ["koid"]}},
+            {"name": "check_triggers", "description": "Check journal for matching Trigger KOs and fire them (MRFC-0030).", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "program_cache_stats", "description": "Return ProgramCache hit stats (MRFC-0030).", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "discover_schema", "description": "Discover all types and their properties in the database (MRFC-0040 agent experience).", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "health", "description": "Health check with readiness, journal seq, object count, uptime (MRFC-0040).", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "agent_memory", "description": "Store or retrieve agent memories with TTL. Write: agent_id + key + value. Read: agent_id only. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"agent_id": {"type": "string"}, "key": {"type": "string"}, "value": {}, "ttl": {"type": "integer"}}, "required": ["agent_id"]}},
+            {"name": "batch", "description": "Atomic batch of remember/relate/forget operations. Use $N.koid to reference previous results. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"operations": {"type": "array"}}, "required": ["operations"]}}
         ]
     })
 }

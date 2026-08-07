@@ -1,0 +1,11 @@
+[package]
+name = "mnemosyne-postgres"
+description = "PostgreSQL import connector — schema discovery, row-to-KO mapping, bulk import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mnemosyne-kernel = { path = "../../kernel" }
+postgres = "0.19"

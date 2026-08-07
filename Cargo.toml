@@ -19,6 +19,10 @@ members = [
     "crates/services/api/mcp",
     "crates/sdk/python",
     "crates/services/ingestion",
+    "crates/connectors/postgres",
+    "crates/connectors/sqlite",
+    "crates/connectors/mongodb",
+    "crates/connectors/neo4j",
 ]
 
 [workspace.package]

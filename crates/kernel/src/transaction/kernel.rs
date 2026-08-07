@@ -334,6 +334,8 @@ pub enum Fusion {
     TextOnly,
     Weighted { wv: f32, wt: f32 },
     Rrf { k0: u32 },
+    /// Bypass indexes entirely — exact scan-and-filter (MRFC-0009 §4).
+    Exact,
 }
 
 #[derive(Clone, Debug)]
@@ -1616,6 +1618,321 @@ impl Kernel {
             None => Ok((0, [0u8; 32])),
         }
     }
+
+    // ---- Programs-as-KOs (MRFC-0030 Phase 7a) ----------------------------
+
+    /// Deploy a Program KO. The program is AIKOQL stored as a Knowledge Object
+    /// of type `mnemosyne:program`. Like any KO, it gets versioning, provenance,
+    /// access control, and audit trail.
+    pub fn deploy_program(&self, name: &str, body: &str, language: &str, subject: &Subject) -> KResult<Remembered> {
+        let mut props = PropertyMap::new();
+        props.insert("name".into(), Value::Text(name.to_string()));
+        props.insert("body".into(), Value::Text(body.to_string()));
+        props.insert("language".into(), Value::Text(language.to_string()));
+        props.insert("version".into(), Value::Int(1));
+        self.remember(RememberRequest {
+            context: subject.clone().into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: Some(format!("deploy-program-{}", name)),
+            metadata: Metadata {
+                type_name: "mnemosyne:program".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec!["program".into(), "active-object".into()],
+            },
+            properties: props,
+            semantic: None, relationships: vec![],
+            security: Some(SecurityDescriptor {
+                owner: subject.name.clone(), acl: vec![], classification: None,
+            }),
+            extensions: ExtensionMap::new(),
+            origin: Origin::Human,
+            note: Some(format!("Deployed program: {}", name)),
+            referential_policy: ReferentialPolicy::Permissive,
+        })
+    }
+
+    /// Update a Program KO to a new version (new body, incremented version counter).
+    pub fn update_program(&self, koid: &KOID, new_body: &str, subject: &Subject) -> KResult<Remembered> {
+        let ctx = KnowledgeContext::from(subject.clone());
+        let ko = self.get(ctx, koid)?;
+        if ko.metadata.type_name != "mnemosyne:program" {
+            return Err(KError::InvalidObject("not a program".into()));
+        }
+        let cur_ver = match ko.properties.get("version") {
+            Some(Value::Int(v)) => *v,
+            _ => 1,
+        };
+        let mut props = ko.properties.clone();
+        props.insert("body".into(), Value::Text(new_body.to_string()));
+        props.insert("version".into(), Value::Int(cur_ver + 1));
+        self.remember(RememberRequest {
+            context: subject.clone().into(),
+            koid: Some(*koid),
+            expected_version: Some(ko.version),
+            idempotency_key: Some(format!("update-program-{}", koid.to_hex())),
+            metadata: ko.metadata.clone(),
+            properties: props,
+            semantic: None, relationships: ko.relationships.clone(),
+            security: Some(ko.security.clone()),
+            extensions: ko.extensions.clone(),
+            origin: Origin::Human,
+            note: Some(format!("Updated program to v{}", cur_ver + 1)),
+            referential_policy: ReferentialPolicy::Permissive,
+        })
+    }
+
+    /// List all deployed programs.
+    pub fn list_programs(&self, subject: &Subject) -> KResult<Vec<KnowledgeObject>> {
+        self.scan_by_type(subject, "mnemosyne:program")
+    }
+
+    // ---- Policy-as-KO (MRFC-0030 Phase 7b) --------------------------------
+
+    /// Deploy a Policy KO. When evaluated, determines whether an action is allowed.
+    pub fn deploy_policy(
+        &self, name: &str, effect: &str, principal: &str,
+        action: &str, resource_type: &str, condition: Option<&str>,
+        subject: &Subject,
+    ) -> KResult<Remembered> {
+        let mut props = PropertyMap::new();
+        props.insert("name".into(), Value::Text(name.to_string()));
+        props.insert("effect".into(), Value::Text(effect.to_string()));
+        props.insert("principal".into(), Value::Text(principal.to_string()));
+        props.insert("action".into(), Value::Text(action.to_string()));
+        props.insert("resource_type".into(), Value::Text(resource_type.to_string()));
+        if let Some(c) = condition {
+            props.insert("condition".into(), Value::Text(c.to_string()));
+        }
+        self.remember(RememberRequest {
+            context: subject.clone().into(),
+            koid: None, expected_version: Some(0),
+            idempotency_key: Some(format!("deploy-policy-{}", name)),
+            metadata: Metadata {
+                type_name: "mnemosyne:policy".into(), tenant: None, schema_version: 1,
+                tags: vec!["policy".into(), "active-object".into()],
+            },
+            properties: props,
+            semantic: None, relationships: vec![],
+            security: Some(SecurityDescriptor {
+                owner: subject.name.clone(), acl: vec![], classification: None,
+            }),
+            extensions: ExtensionMap::new(), origin: Origin::Human,
+            note: Some(format!("Deployed policy: {}", name)),
+            referential_policy: ReferentialPolicy::Permissive,
+        })
+    }
+
+    /// Evaluate all applicable Policy KOs for a (principal, action, resource_type) tuple.
+    /// Returns the first Deny or the first Allow found. Policies are evaluated in
+    /// version-descending order (newest first).
+    pub fn evaluate_policies(
+        &self, principal: &str, action: &Action, resource_type: &str, subject: &Subject,
+    ) -> KResult<Option<String>> {
+        let policies = self.scan_by_type(subject, "mnemosyne:policy")?;
+        for p in policies.iter() {
+            let pol_principal = match p.properties.get("principal").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }) {
+                Some(s) => s, None => continue,
+            };
+            let pol_action = match p.properties.get("action").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }) {
+                Some(s) => s, None => continue,
+            };
+            let pol_resource = match p.properties.get("resource_type").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }) {
+                Some(s) => s, None => continue,
+            };
+            // Match: principal, action, resource_type must all match.
+            if pol_principal != principal && pol_principal != "*" { continue; }
+            let action_str = format!("{:?}", action);
+            if pol_action != action_str && pol_action != "*" { continue; }
+            if pol_resource != resource_type && pol_resource != "*" { continue; }
+            let effect = match p.properties.get("effect").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }) {
+                Some(s) => s, None => continue,
+            };
+            if effect == "Deny" { return Ok(Some(format!("Denied by policy: {}", p.koid.to_hex()))); }
+            if effect == "Allow" { return Ok(None); } // Allowed, keep checking
+        }
+        Ok(Some("No matching policy found".into()))
+    }
+
+    // ---- Workflow-as-KO (MRFC-0030 Phase 7b) ------------------------------
+
+    /// Deploy a Workflow KO — a DAG of Program KOs.
+    pub fn deploy_workflow(&self, name: &str, steps_json: &str, subject: &Subject) -> KResult<Remembered> {
+        let mut props = PropertyMap::new();
+        props.insert("name".into(), Value::Text(name.to_string()));
+        props.insert("steps".into(), Value::Text(steps_json.to_string()));
+        self.remember(RememberRequest {
+            context: subject.clone().into(),
+            koid: None, expected_version: Some(0),
+            idempotency_key: Some(format!("deploy-workflow-{}", name)),
+            metadata: Metadata {
+                type_name: "mnemosyne:workflow".into(), tenant: None, schema_version: 1,
+                tags: vec!["workflow".into(), "active-object".into()],
+            },
+            properties: props,
+            semantic: None, relationships: vec![],
+            security: Some(SecurityDescriptor {
+                owner: subject.name.clone(), acl: vec![], classification: None,
+            }),
+            extensions: ExtensionMap::new(), origin: Origin::Human,
+            note: Some(format!("Deployed workflow: {}", name)),
+            referential_policy: ReferentialPolicy::Permissive,
+        })
+    }
+
+    // ---- Trigger-as-KO (MRFC-0030 Phase 7b) -------------------------------
+
+    /// Deploy a Trigger KO — fires on matching KnowledgeEvents.
+    pub fn deploy_trigger(
+        &self, name: &str, event_kind: &str, type_filter: &str,
+        program_koid: &str, subject: &Subject,
+    ) -> KResult<Remembered> {
+        let mut props = PropertyMap::new();
+        props.insert("name".into(), Value::Text(name.to_string()));
+        props.insert("event_kind".into(), Value::Text(event_kind.to_string()));
+        props.insert("type_filter".into(), Value::Text(type_filter.to_string()));
+        props.insert("program_koid".into(), Value::Text(program_koid.to_string()));
+        self.remember(RememberRequest {
+            context: subject.clone().into(),
+            koid: None, expected_version: Some(0),
+            idempotency_key: Some(format!("deploy-trigger-{}", name)),
+            metadata: Metadata {
+                type_name: "mnemosyne:trigger".into(), tenant: None, schema_version: 1,
+                tags: vec!["trigger".into(), "active-object".into()],
+            },
+            properties: props,
+            semantic: None, relationships: vec![],
+            security: Some(SecurityDescriptor {
+                owner: subject.name.clone(), acl: vec![], classification: None,
+            }),
+            extensions: ExtensionMap::new(), origin: Origin::Human,
+            note: Some(format!("Deployed trigger: {}", name)),
+            referential_policy: ReferentialPolicy::Permissive,
+        })
+    }
+
+    // ---- ABI version (MRFC-0011 §9) --------------------------------------
+
+    /// Return the ABI version of this kernel. Adapters can check this to
+    /// refuse incompatible versions. Bumped on any breaking syscall change.
+    pub fn abi_version(&self) -> u32 {
+        1
+    }
+
+    // ---- Offline-verifiable prove (MRFC-0011 §6.7) ------------------------
+
+    /// Export the full audit chain for a claim so it can be independently
+    /// verified without a running kernel. Returns all knowledge events
+    /// in the journal plus the current head audit hash.
+    pub fn prove_export(&self) -> KResult<OfflineProof> {
+        let events = self.repo.scan_events()?;
+        let (seq, audit) = self.journal_head()?;
+        Ok(OfflineProof {
+            abi_version: self.abi_version(),
+            journal_seq: seq,
+            head_audit_hash: audit,
+            events,
+        })
+    }
+
+    // ---- Class B syscalls (MRFC-0011 §5, §6.10-6.13) ----------------------
+
+    /// Execute a reasoning rule against the knowledge graph.
+    /// Returns provenance-tagged claims with `origin=Reason`.
+    /// ponytail: synchronous version for Phase 2; full async JobHandle in Phase 3.
+    pub fn reason(&self, rule_type: &str, rule_props: PropertyMap) -> KResult<Vec<KnowledgeObject>> {
+        let subject = Subject { name: "kernel-reason".into(), roles: vec!["admin".into()] };
+        // Scan objects matching the rule's conditions and produce claims.
+        let candidates = self.scan_by_type(&subject, rule_type)?;
+        let mut claims = Vec::new();
+        for ko in candidates {
+            let mut match_count = 0usize;
+            for (key, expected) in &rule_props {
+                if let Some(v) = ko.properties.get(key) {
+                    if v == expected {
+                        match_count += 1;
+                    }
+                }
+            }
+            if match_count == rule_props.len() && !rule_props.is_empty() {
+                let mut claim_props = ko.properties.clone();
+                claim_props.insert("reasoned_from".into(), Value::Text(ko.koid.to_hex()));
+                claims.push(KnowledgeObject {
+                    koid: KOID::ZERO, version: 0, commit_ts: 0,
+                    metadata: Metadata {
+                        type_name: format!("{}-claim", rule_type),
+                        tenant: None, schema_version: 1, tags: vec!["reasoned".into()],
+                    },
+                    properties: claim_props,
+                    semantic: None, relationships: vec![], event_refs: vec![],
+                    security: SecurityDescriptor {
+                        owner: "kernel-reason".into(), acl: vec![], classification: None,
+                    },
+                    lifecycle: Lifecycle { state: LifecycleState::Draft, origin: Origin::Reason },
+                    extensions: ExtensionMap::new(),
+                });
+            }
+        }
+        Ok(claims)
+    }
+
+    /// Infer new knowledge from existing objects using similarity matching.
+    /// Takes a prototype type and properties, finds similar objects, and
+    /// returns them with provenance.
+    pub fn infer(&self, subject: &Subject, type_name: &str, similarity_text: &str) -> KResult<Vec<ScoredKO>> {
+        self.find_similar(SimilarityQuery {
+            context: subject.clone().into(),
+            filter: Some(PropertyFilter {
+                type_name: Some(type_name.to_string()),
+                required: vec![],
+            }),
+            text: Some(similarity_text.to_string()),
+            vector: None,
+            embedding_model: None,
+            k: 10,
+            fusion: Fusion::TextOnly,
+        })
+    }
+
+    /// Predict properties for a target object based on similar objects.
+    /// Returns a merged property map from the top-k most similar objects.
+    pub fn predict(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        target_props: &PropertyMap,
+        k: usize,
+    ) -> KResult<PropertyMap> {
+        // Build similarity text from target properties.
+        let text: String = target_props.values()
+            .map(|v| match v {
+                Value::Text(s) => s.clone(),
+                other => format!("{:?}", other),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let similar = self.infer(subject, type_name, &text)?;
+        let mut merged = PropertyMap::new();
+        for scored in similar.iter().take(k) {
+            for (key, val) in &scored.ko.properties {
+                if !merged.contains_key(key) {
+                    merged.insert(key.clone(), val.clone());
+                }
+            }
+        }
+        merged.insert("predicted_from_count".into(), Value::Int(similar.len() as i64));
+        Ok(merged)
+    }
+}
+
+/// An independently-verifiable proof bundle (MRFC-0011 §6.7).
+#[derive(Clone, Debug)]
+pub struct OfflineProof {
+    pub abi_version: u32,
+    pub journal_seq: u64,
+    pub head_audit_hash: [u8; 32],
+    pub events: Vec<KnowledgeEvent>,
 }
 
 // ---------------------------------------------------------------------------

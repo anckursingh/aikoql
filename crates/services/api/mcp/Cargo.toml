@@ -11,6 +11,10 @@ mnemosyne-kernel = { path = "../../../kernel" }
 mnemosyne-graph = { path = "../../../engines/graph" }
 mnemosyne-runtime = { path = "../../../runtime" }
 mnemosyne-compiler = { path = "../../../compiler" }
+mnemosyne-postgres = { path = "../../../connectors/postgres" }
+mnemosyne-sqlite = { path = "../../../connectors/sqlite" }
+mnemosyne-mongodb = { path = "../../../connectors/mongodb" }
+mnemosyne-neo4j = { path = "../../../connectors/neo4j" }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
