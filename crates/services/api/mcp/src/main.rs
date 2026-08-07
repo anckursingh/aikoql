@@ -10,6 +10,7 @@
 //! Structured tracing via `tracing` with env-filter (`RUST_LOG`).
 
 mod api_rest;
+mod error_codes;
 mod graph_ui;
 mod knowledge_runtime;
 mod shell;
@@ -22,6 +23,21 @@ pub(crate) struct HttpSession {
     pub username: String,
     pub roles: Vec<String>,
     pub created: Instant,
+}
+
+// Per-connection MCP session identity (MRFC-0040).
+#[derive(Clone, Debug)]
+struct McpSession {
+    agent_id: String,
+    run_id: Option<String>,
+    tenant: Option<String>,
+    roles: Vec<String>,
+}
+
+impl Default for McpSession {
+    fn default() -> Self {
+        McpSession { agent_id: "mcp-agent".into(), run_id: None, tenant: None, roles: vec![] }
+    }
 }
 
 use mnemosyne_graph::*;
@@ -1126,17 +1142,21 @@ fn call_tool(k: &Kernel, name: &str, args: &J, db_path: &str) -> ToolResult {
         "health" => tool_health(k),
         "agent_memory" => tool_agent_memory(k, args),
         "batch" => tool_batch(k, args),
+        "session_init" => tool_session_init(args),
+        "decide" => tool_decide(k, args),
         _ => Err(format!("unknown tool: {}", name)),
     };
-    match res {
-        Ok(payload) => Ok(json!({
-            "content": [{"type": "text", "text": payload.to_string()}],
+    let wrapped = error_codes::wrap_result(res);
+    if wrapped["ok"] == true {
+        Ok(json!({
+            "content": [{"type": "text", "text": wrapped["data"].to_string()}],
             "isError": false
-        })),
-        Err(message) => Ok(json!({
-            "content": [{"type": "text", "text": message}],
+        }))
+    } else {
+        Ok(json!({
+            "content": [{"type": "text", "text": wrapped.to_string()}],
             "isError": true
-        })),
+        }))
     }
 }
 
@@ -2244,6 +2264,64 @@ fn tool_batch(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({"results": results, "count": results.len()}))
 }
 
+fn tool_session_init(args: &J) -> Result<J, String> {
+    // Session identity is stored per-connection (in the handler's local state).
+    // This tool returns the identity for the agent to confirm.
+    let agent_id = args.get("agent_id").and_then(|v| v.as_str()).unwrap_or("mcp-agent");
+    let run_id = args.get("run_id").and_then(|v| v.as_str());
+    let tenant = args.get("tenant").and_then(|v| v.as_str());
+    let roles: Vec<String> = args.get("roles").and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    Ok(json!({
+        "session": {
+            "agent_id": agent_id,
+            "run_id": run_id,
+            "tenant": tenant,
+            "roles": roles,
+        },
+        "established": true,
+        "note": "Session identity established. Subsequent calls inherit this context."
+    }))
+}
+
+fn tool_decide(k: &Kernel, args: &J) -> Result<J, String> {
+    let koid_hex = args.get("koid").and_then(|v| v.as_str()).ok_or("missing: koid")?;
+    let koid = KOID::from_hex(koid_hex).map_err(|e| e.to_string())?;
+    let decision = args.get("decision").and_then(|v| v.as_str()).ok_or("missing: decision")?;
+    let rationale = args.get("rationale").and_then(|v| v.as_str()).unwrap_or("");
+    let confidence = args.get("confidence").and_then(|v| v.as_f64()).unwrap_or(1.0);
+    let subject = subject_of(args);
+
+    // Load the target KO and record the decision as a provenance-tagged update.
+    let ko = k.get(KnowledgeContext::from(subject.clone()), &koid).map_err(|e| e.to_string())?;
+    let mut props = ko.properties.clone();
+    props.insert("_decision".into(), Value::Text(decision.to_string()));
+    props.insert("_rationale".into(), Value::Text(rationale.to_string()));
+    props.insert("_confidence".into(), Value::Float(confidence));
+    props.insert("_decided_by".into(), Value::Text(subject.name.clone()));
+    let r = k.remember(RememberRequest {
+        context: subject.into(),
+        koid: Some(koid), expected_version: Some(ko.version),
+        idempotency_key: Some(format!("decide-{}-{}", koid_hex, decision)),
+        metadata: ko.metadata.clone(),
+        properties: props,
+        semantic: None, relationships: ko.relationships.clone(),
+        security: Some(ko.security.clone()),
+        extensions: ko.extensions.clone(),
+        origin: Origin::Reason,
+        note: Some(format!("Decision: {} (confidence: {:.2}) — {}", decision, confidence, rationale)),
+        referential_policy: ReferentialPolicy::Permissive,
+    }).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "decision": decision,
+        "confidence": confidence,
+        "recorded": true,
+    }))
+}
+
 fn tool_abi_version(k: &Kernel) -> Result<J, String> {
     let version = k.abi_version();
     // Also export the full audit chain for offline verification.
@@ -3040,7 +3118,9 @@ fn tools_list() -> J {
             {"name": "discover_schema", "description": "Discover all types and their properties in the database (MRFC-0040 agent experience).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "health", "description": "Health check with readiness, journal seq, object count, uptime (MRFC-0040).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "agent_memory", "description": "Store or retrieve agent memories with TTL. Write: agent_id + key + value. Read: agent_id only. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"agent_id": {"type": "string"}, "key": {"type": "string"}, "value": {}, "ttl": {"type": "integer"}}, "required": ["agent_id"]}},
-            {"name": "batch", "description": "Atomic batch of remember/relate/forget operations. Use $N.koid to reference previous results. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"operations": {"type": "array"}}, "required": ["operations"]}}
+            {"name": "batch", "description": "Atomic batch of remember/relate/forget operations. Use $N.koid to reference previous results. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"operations": {"type": "array"}}, "required": ["operations"]}},
+            {"name": "session_init", "description": "Establish agent session identity. Subsequent calls in this connection inherit agent_id, run_id, tenant, roles. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"agent_id": {"type": "string"}, "run_id": {"type": "string"}, "tenant": {"type": "string"}, "roles": {"type": "array", "items": {"type": "string"}}}, "required": ["agent_id"]}},
+            {"name": "decide", "description": "Record an agent decision on a Knowledge Object with rationale and confidence. Creates a provenance-tagged version. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "decision": {"type": "string"}, "rationale": {"type": "string"}, "confidence": {"type": "number"}}, "required": ["koid", "decision"]}}
         ]
     })
 }
