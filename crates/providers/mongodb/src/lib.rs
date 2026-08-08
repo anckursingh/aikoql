@@ -86,7 +86,7 @@ impl MongoConnector {
                         type_name: schema.name.clone(),
                         tenant: tenant.map(String::from),
                         schema_version: 1,
-                        tags: vec!["imported".into(), "mongodb".into()],
+                        tags: vec!["imported".into(), "source:mongodb".into()],
                     },
                     properties: props,
                     semantic: None, relationships: vec![], event_refs: vec![],

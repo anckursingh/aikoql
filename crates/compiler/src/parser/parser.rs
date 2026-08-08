@@ -7,18 +7,56 @@ use super::lexer::{Lexer, Token};
 
 pub type ParseError = Diagnostic;
 
+/// Human-readable token name for error messages.
+fn token_name(t: &Token) -> String {
+    match t {
+        Token::Match => "MATCH".into(),
+        Token::Where => "WHERE".into(),
+        Token::And => "AND".into(),
+        Token::Or => "OR".into(),
+        Token::Return => "RETURN".into(),
+        Token::Similar => "SIMILAR".into(),
+        Token::To => "TO".into(),
+        Token::Traverse => "TRAVERSE".into(),
+        Token::Create => "CREATE".into(),
+        Token::Update => "UPDATE".into(),
+        Token::Delete => "DELETE".into(),
+        Token::Ingest => "INGEST".into(),
+        Token::Extract => "EXTRACT".into(),
+        Token::Tables => "TABLES".into(),
+        Token::Entities => "ENTITIES".into(),
+        Token::Build => "BUILD".into(),
+        Token::Relationships => "RELATIONSHIPS".into(),
+        Token::Commit => "COMMIT".into(),
+        Token::Explain => "EXPLAIN".into(),
+        Token::Eq => "==".into(),
+        Token::Neq => "!=".into(),
+        Token::Lt => "<".into(),
+        Token::Gt => ">".into(),
+        Token::Lte => "<=".into(),
+        Token::Gte => ">=".into(),
+        Token::LParen => "(".into(),
+        Token::RParen => ")".into(),
+        Token::Comma => ",".into(),
+        Token::Dot => ".".into(),
+        Token::Star => "*".into(),
+        Token::Ident(s) => format!("'{}'", s),
+        Token::StringLit(s) => format!("\"{}\"", s),
+        Token::Number(n) => n.to_string(),
+        Token::Eof => "end of input".into(),
+        Token::Error(e) => e.clone(),
+    }
+}
+
 // Local helpers that wrap diagnostics constructors with token formatting.
 fn unexpected(got: &Token, line: usize, col: usize) -> Diagnostic {
-    diagnostics::unexpected_token(&format!("{:?}", got), line, col)
+    diagnostics::unexpected_token(&token_name(got), line, col)
 }
 fn expected_err(desc: &str, got: &Token, line: usize, col: usize) -> Diagnostic {
-    diagnostics::expected_token(desc, &format!("{:?}", got), line, col)
+    diagnostics::expected_token(desc, &token_name(got), line, col)
 }
 fn eof_err(line: usize, col: usize) -> Diagnostic {
     diagnostics::unexpected_eof(line, col)
-}
-fn invalid_op(got: &Token, line: usize, col: usize) -> Diagnostic {
-    diagnostics::invalid_operator(&format!("{:?}", got), line, col)
 }
 
 // ---- Parser ----
@@ -33,9 +71,15 @@ impl Parser {
     pub fn new(source: &str) -> Self {
         let mut lexer = Lexer::new(source);
         let current = lexer.next_token();
-        Parser { lexer, current, line: 1, col: 1 }
+        let line = lexer.last_span.line;
+        let col = lexer.last_span.col;
+        Parser { lexer, current, line, col }
     }
-    fn advance(&mut self) { self.current = self.lexer.next_token(); }
+    fn advance(&mut self) {
+        self.current = self.lexer.next_token();
+        self.line = self.lexer.last_span.line;
+        self.col = self.lexer.last_span.col;
+    }
 
     fn expect(&mut self, expected: Token) -> Result<(), ParseError> {
         if std::mem::discriminant(&self.current) == std::mem::discriminant(&expected) {
@@ -100,7 +144,7 @@ impl Parser {
         let op = match &self.current {
             Token::Eq => "eq", Token::Neq => "neq", Token::Gt => "gt", Token::Lt => "lt",
             Token::Gte => "gte", Token::Lte => "lte",
-            _ => return Err(invalid_op(&self.current, self.line, self.col)),
+            _ => return Err(diagnostics::invalid_operator(&token_name(&self.current), self.line, self.col)),
         };
         self.advance();
         let val = self.parse_expr()?;
@@ -167,7 +211,13 @@ impl Parser {
         if let Token::Ident(_) = &self.current {
             loop {
                 let k = self.expect_ident("property name")?;
-                self.expect(Token::Eq)?;
+                // If the next token is another ident or comma (not ==), the user
+                // probably wrote "attr1, attr2" or "attributes name, ..." — missing values.
+                if !matches!(&self.current, Token::Eq) {
+                    return Err(expected_err("==", &self.current, self.line, self.col)
+                        .with_hint(format!("CREATE {} {} == <value>, ... — each property needs a value after ==", entity, k)));
+                }
+                self.expect(Token::Eq)?; // unreachable after the check above, kept for safety
                 props.push((k, self.parse_expr()?));
                 if !matches!(&self.current, Token::Comma) { break; }
                 self.advance();

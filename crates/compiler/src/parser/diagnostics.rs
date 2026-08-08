@@ -36,6 +36,8 @@ pub enum Code {
     UnknownProperty = 1031,
     /// Type mismatch in expression.
     TypeMismatch = 1032,
+    /// Referenced relationship is not defined in the ontology.
+    UnknownRelationship = 1033,
 }
 
 impl Code {
@@ -54,6 +56,7 @@ impl Code {
             Code::UnknownType => "unknown entity type",
             Code::UnknownProperty => "unknown property on entity",
             Code::TypeMismatch => "type mismatch in expression",
+            Code::UnknownRelationship => "unknown relationship for entity",
         }
     }
 }
@@ -90,7 +93,7 @@ impl Diagnostic {
             self.code, self.message, self.line, self.column
         );
         match &self.hint {
-            Some(h) => format!("{}. Did you mean: {}?", base, h),
+            Some(h) => format!("{}. Hint: {}", base, h),
             None => format!("{}.", base),
         }
     }
@@ -107,11 +110,11 @@ impl std::error::Error for Diagnostic {}
 // ---- Convenience constructors for parser use ----
 
 pub fn unexpected_token(got: &str, line: usize, col: usize) -> Diagnostic {
-    Diagnostic::new(Code::UnexpectedToken, format!("unexpected token '{}'", got), line, col)
+    Diagnostic::new(Code::UnexpectedToken, format!("unexpected {}", got), line, col)
 }
 
 pub fn expected_token(expected: &str, got: &str, line: usize, col: usize) -> Diagnostic {
-    Diagnostic::new(Code::ExpectedToken, format!("expected {}, got '{}'", expected, got), line, col)
+    Diagnostic::new(Code::ExpectedToken, format!("expected {}, got {}", expected, got), line, col)
 }
 
 pub fn unexpected_eof(line: usize, col: usize) -> Diagnostic {
@@ -119,7 +122,7 @@ pub fn unexpected_eof(line: usize, col: usize) -> Diagnostic {
 }
 
 pub fn invalid_operator(got: &str, line: usize, col: usize) -> Diagnostic {
-    Diagnostic::new(Code::InvalidOperator, format!("'{}' is not a valid comparison operator", got), line, col)
+    Diagnostic::new(Code::InvalidOperator, format!("{} is not a valid comparison operator", got), line, col)
         .with_hint("use == != < > <= >=")
 }
 
@@ -136,4 +139,9 @@ pub fn unknown_type(name: &str, line: usize, col: usize) -> Diagnostic {
 
 pub fn unknown_property(prop: &str, entity: &str, line: usize, col: usize) -> Diagnostic {
     Diagnostic::new(Code::UnknownProperty, format!("'{}' has no property '{}'", entity, prop), line, col)
+}
+
+pub fn unknown_relationship(rel: &str, entity: &str, line: usize, col: usize) -> Diagnostic {
+    Diagnostic::new(Code::UnknownRelationship, format!("'{}' has no relationship '{}'", entity, rel), line, col)
+        .with_hint(format!("register '{}' in the ontology for domain '{}'", rel, entity))
 }

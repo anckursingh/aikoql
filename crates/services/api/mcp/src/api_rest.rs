@@ -35,6 +35,7 @@ fn route_inner(
         ("GET", "/api/v1/metrics-info") => tool_metrics(k),
         ("GET", "/api/v1/audit") => tool_audit_report(k),
         ("GET", "/api/v1/backups") => tool_list_backups(),
+        ("POST", "/api/v1/discover-ontology") => tool_discover_ontology(k),
 
         ("GET", p) if p.starts_with("/api/v1/schema") => schema_endpoint(k).and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string())),
         ("GET", p) if p.starts_with("/api/v1/graph") => graph_api(k, path).and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string())),
@@ -69,6 +70,10 @@ fn route_inner(
         ("POST", "/api/v1/deploy-workflow") => { need_auth()?; tool_deploy_workflow(k, &args()) }
         ("POST", "/api/v1/deploy-trigger") => { need_auth()?; tool_deploy_trigger(k, &args()) }
         ("POST", "/api/v1/add-dependency") => { need_auth()?; tool_add_dependency(k, &args()) }
+        ("POST", "/api/v1/deploy-agent") => { need_auth()?; tool_deploy_agent(k, &args()) }
+        ("POST", "/api/v1/list-agents") => { need_auth()?; tool_list_agents(k, &args()) }
+        ("POST", "/api/v1/deploy-connector") => { need_auth()?; tool_deploy_connector(k, &args()) }
+        ("POST", "/api/v1/list-connectors") => { need_auth()?; tool_list_connectors(k, &args()) }
         ("POST", "/api/v1/execute-workflow") => { need_auth()?; tool_execute_workflow(k, &args()) }
         ("POST", "/api/v1/check-triggers") => { need_auth()?; tool_check_triggers(k) }
         ("POST", "/api/v1/reason") => { need_auth()?; tool_reason(k, &args()) }

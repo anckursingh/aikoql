@@ -129,25 +129,41 @@ impl Interpreter {
                 rel_type,
                 depth,
             } => {
-                let koid = KOID::from_hex(start_koid)
-                    .map_err(|e| KError::InvalidObject(format!("invalid koid: {}", e)))?;
-                let edges = kernel.outbound_edges(&koid, rel_type.as_deref())?;
-                // BFS traversal.
+                // Set-based Traverse: empty start_koid consumes input RowSet.
+                let start_koids: Vec<KOID> = if start_koid.is_empty() {
+                    match &input {
+                        RowSet::Objects(kos) => kos.iter().map(|ko| ko.koid).collect(),
+                        _ => return Err(KError::InvalidQuery(
+                            "set-based Traverse requires Object input from Scan".into()
+                        )),
+                    }
+                } else {
+                    vec![KOID::from_hex(start_koid)
+                        .map_err(|e| KError::InvalidObject(format!("invalid koid: {}", e)))?]
+                };
+
                 let mut results = Vec::new();
                 let mut visited = std::collections::HashSet::new();
                 let mut queue: std::collections::VecDeque<(KOID, usize)> =
                     std::collections::VecDeque::new();
-                visited.insert(koid);
-                // Collect depth-1 edges from start.
-                for (rt, target) in &edges {
-                    if visited.insert(*target) {
-                        results.push((*target, rt.clone(), 1usize));
-                        if *depth > 1 {
-                            queue.push_back((*target, 1));
+
+                for start in &start_koids {
+                    if !visited.insert(*start) {
+                        continue;
+                    }
+                    if let Ok(edges) = kernel.outbound_edges(start, rel_type.as_deref()) {
+                        for (rt, target) in &edges {
+                            if visited.insert(*target) {
+                                results.push((*target, rt.clone(), 1usize));
+                                if *depth > 1 {
+                                    queue.push_back((*target, 1));
+                                }
+                            }
                         }
                     }
                 }
-                // BFS deeper levels via outbound_edges.
+
+                // BFS deeper levels.
                 while let Some((cur, d)) = queue.pop_front() {
                     if d >= *depth {
                         continue;

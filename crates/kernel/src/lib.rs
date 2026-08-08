@@ -25,6 +25,7 @@ pub mod knowledge {
     pub mod codec;
     pub mod kom;
     pub mod notify;
+    pub mod ontology;
     pub mod scoring;
 }
 

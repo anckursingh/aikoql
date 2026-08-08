@@ -1,6 +1,8 @@
 # MRFC-0040: Agent Experience Improvements
 
-**Status:** Specification  
+**Status:** Complete — all 12 items implemented ✅  
+**Last updated:** 2026-08-08
+**Last updated:** 2026-08-08
 **Based on:** Real-world MCP integration testing + Aethel SDLC agent system analysis  
 **Target:** Make Mnemosyne the best database for AI agents to use programmatically
 
@@ -285,17 +287,19 @@ db = Agent.connect("localhost:9090")
 
 ## Prioritized Implementation
 
-| # | Improvement | Effort | Impact | Target |
-|---|---|---|---|---|
-| 1 | **Python MCP Client SDK** | Medium | 🔴 Critical | MRFC-0041 |
-| 2 | **Session/Agent Identity** | Small | 🔴 Critical | Immediately |
-| 3 | **Structured Error Codes** | Small | 🔴 Critical | Immediately |
-| 4 | **Batch Operations** | Medium | 🟠 High | Phase 1 |
-| 5 | **Schema Discovery as MCP Tool** | Small | 🟠 High | Immediately |
-| 6 | **Health/Ready Endpoint** | Small | 🟠 High | Immediately |
-| 7 | **Tool Discovery with JSON Schema** | Medium | 🟡 Medium | Phase 2 |
-| 8 | **Agent Memory Pattern** | Medium | 🟠 High | Phase 1 |
-| 9 | **Streaming Responses** | Large | 🟡 Medium | Phase 2 |
-| 10 | **Auto-Embedding** | Medium | 🟡 Medium | Phase 2 |
-| 11 | **Decision/Provenance Tool** | Small | 🟡 Medium | Phase 1 |
-| 12 | **Unified Python SDK** | Large | 🟠 High | Phase 2 |
+| # | Improvement | Effort | Impact | Status | Target |
+|---|---|---|---|---|---|
+| 1 | **Python MCP Client SDK** | Medium | 🔴 Critical | ✅ | Done (2026-08-08) |
+| 2 | **Session/Agent Identity** | Small | 🔴 Critical | ✅ | Done (2026-08-08) |
+| 3 | **Structured Error Codes** | Small | 🔴 Critical | ✅ | Done |
+| 4 | **Batch Operations** | Medium | 🟠 High | ✅ | Done |
+| 5 | **Schema Discovery as MCP Tool** | Small | 🟠 High | ✅ | Done |
+| 6 | **Health/Ready Endpoint** | Small | 🟠 High | ✅ | Done (2026-08-08) |
+| 7 | **Tool Discovery with JSON Schema** | Medium | 🟡 Medium | ✅ | Done |
+| 8 | **Agent Memory Pattern** | Medium | 🟠 High | ✅ | Done |
+| 9 | **Streaming Responses** | Large | 🟡 Medium | ✅ | Done (2026-08-08) |
+| 10 | **Auto-Embedding** | Medium | 🟡 Medium | ✅ | Done (2026-08-08) |
+| 11 | **Decision/Provenance Tool** | Small | 🟡 Medium | ✅ | Done |
+| 12 | **Unified Python SDK** | Large | 🟠 High | ✅ | Done (2026-08-08) |
+
+**Completed:** 12/12 ✅ — all MRFC-0040 items are now implemented.

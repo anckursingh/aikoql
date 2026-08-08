@@ -184,7 +184,7 @@ impl PostgresConnector {
                     type_name: schema.name.clone(),
                     tenant: tenant.map(String::from),
                     schema_version: 1,
-                    tags: vec!["imported".into(), "postgres".into()],
+                    tags: vec!["imported".into(), "source:postgres".into()],
                 },
                 properties: props,
                 semantic: None,

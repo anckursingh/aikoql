@@ -2,7 +2,16 @@
 # Copy this file to where you run mnemosyne-mcp, or override values via CLI flags.
 # CLI flags always take precedence over this config file.
 
+[storage]
+# Storage backend: "redb" (default) or "rocksdb" (requires --features storage-rocksdb).
+# redb: pure Rust, single-writer, ideal for development and single-agent workloads.
+# rocksdb: C++ LSM-tree, concurrent readers+writers, better for production workloads.
+backend = "redb"
+# Path to the database directory (redb uses a single file, rocksdb uses a directory).
+path = "./mnemosyne_data"
+
 [database]
+# Deprecated: use [storage] section above. Kept for backward compatibility.
 # Path to the redb database file. Default: ./mnemosyne.redb
 path = "./mnemosyne.redb"
 

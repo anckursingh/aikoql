@@ -172,7 +172,7 @@ impl Compiler {
         }
 
         let plan = IrPlan::new(ops).with_description("AIKOQL query".to_string());
-        plan.validate().map_err(|e| format!("invalid plan: {}", e))?;
+        plan.validate().map_err(|e| format!("AIKOQL1014: conflicting clauses — {}", e))?;
         Ok(plan)
     }
 }

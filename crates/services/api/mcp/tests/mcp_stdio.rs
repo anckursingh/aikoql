@@ -593,3 +593,141 @@ fn m08_aikoql_query_over_mcp() {
 
     let _ = std::fs::remove_file(&db);
 }
+
+// --- MRFC-0040 Agent Experience tests ---
+
+#[test]
+fn m09_session_identity_persistence() {
+    // Verify session/init establishes identity that subsequent calls inherit.
+    let db = tmp_db("session");
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "session-test", "version": "0"}}));
+    c.notify("notifications/initialized");
+
+    // Establish session identity via session/init method.
+    let sess = c.request("session/init", json!({
+        "agent_id": "pm-agent-7",
+        "run_id": "run-42",
+        "roles": ["admin", "reviewer"]
+    }));
+    assert_eq!(sess["session"]["agent_id"], "pm-agent-7");
+    assert_eq!(sess["session"]["run_id"], "run-42");
+    assert!(sess["established"].as_bool().unwrap());
+
+    // Create a KO without passing "subject" — session identity should be used.
+    let r = c.call_tool("remember", json!({
+        "type_name": "Task",
+        "properties": {"title": "Fix login bug", "priority": 1}
+    }));
+    let koid = r["koid"].as_str().unwrap().to_string();
+    assert!(!koid.is_empty());
+
+    // Verify the KO was created and is retrievable (session identity has access).
+    let ko = c.call_tool("get", json!({"koid": koid}));
+    assert_eq!(ko["properties"]["title"], "Fix login bug");
+    assert_eq!(ko["type_name"], "Task");
+
+    // Verify session_init tool also works (backward compat).
+    let sess2 = c.call_tool("session_init", json!({
+        "agent_id": "qa-agent-3",
+        "run_id": "run-99",
+        "roles": ["tester"]
+    }));
+    assert_eq!(sess2["session"]["agent_id"], "qa-agent-3");
+    assert_eq!(sess2["session"]["roles"][0], "tester");
+
+    // Now creates should use the new identity.
+    let r2 = c.call_tool("remember", json!({
+        "type_name": "Task",
+        "properties": {"title": "Verify login fix"}
+    }));
+    let koid2 = r2["koid"].as_str().unwrap();
+    let ko2 = c.call_tool("get", json!({"koid": koid2}));
+    assert_eq!(ko2["properties"]["title"], "Verify login fix");
+
+    let _ = std::fs::remove_file(&db);
+}
+
+#[test]
+fn m10_session_roles_merged_with_call_roles() {
+    // Verify session roles are merged with per-call roles.
+    let db = tmp_db("session_roles");
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "roles-test", "version": "0"}}));
+    c.notify("notifications/initialized");
+
+    c.request("session/init", json!({
+        "agent_id": "pm-agent-7",
+        "roles": ["admin"]
+    }));
+
+    // Create a KO — session roles should be applied.
+    let r = c.call_tool("remember", json!({
+        "type_name": "Task",
+        "properties": {"title": "Test role merge"}
+    }));
+    let koid = r["koid"].as_str().unwrap();
+
+    // The KO is accessible (session identity with admin role was used).
+    let ko = c.call_tool("get", json!({"koid": koid}));
+    assert_eq!(ko["properties"]["title"], "Test role merge");
+
+    let _ = std::fs::remove_file(&db);
+}
+
+// --- MRFC-0040 Streaming tests ---
+
+#[test]
+fn m11_aikoql_stream_over_mcp() {
+    // Verify aikoql/stream delivers results in chunks via notifications.
+    let db = tmp_db("stream");
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "stream-test", "version": "0"}}));
+    c.notify("notifications/initialized");
+
+    // Create 150 objects to ensure 2+ chunks (chunk_size=100).
+    for i in 0..150 {
+        c.call_tool("remember", json!({
+            "subject": "alice",
+            "type_name": "Item",
+            "properties": {"idx": i, "label": format!("item-{}", i)}
+        }));
+    }
+
+    // Stream query: request returns first chunk, remaining come as notifications.
+    let first = c.request("aikoql/stream", json!({
+        "query": "MATCH Item RETURN *",
+        "subject": "alice"
+    }));
+    assert_eq!(first["chunk"], 0);
+    assert!(first["total_chunks"].as_u64().unwrap() >= 2, "expected 2+ chunks for 150 items");
+    let stream_id = first["stream_id"].as_str().unwrap().to_string();
+    let first_results = first["results"].as_array().unwrap();
+    assert!(!first_results.is_empty());
+
+    // Collect remaining chunks from notification frames.
+    let mut all_results: Vec<J> = first_results.clone();
+    let remaining_chunks = first["total_chunks"].as_u64().unwrap() as usize - 1;
+    let notes = c.wait_for_notifications(remaining_chunks);
+    for note in &notes {
+        let params = &note["params"];
+        assert_eq!(params["stream_id"].as_str().unwrap(), stream_id);
+        if let Some(results) = params["results"].as_array() {
+            for r in results {
+                all_results.push(r.clone());
+            }
+        }
+        if params.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+            break;
+        }
+    }
+
+    assert_eq!(all_results.len(), 150);
+    // Verify unique KOIDs.
+    let koids: std::collections::HashSet<String> = all_results.iter()
+        .map(|r| r["koid"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(koids.len(), 150);
+
+    let _ = std::fs::remove_file(&db);
+}

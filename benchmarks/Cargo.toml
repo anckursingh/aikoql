@@ -7,9 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-mnemosyne-kernel = { path = "../kernel" }
-mnemosyne-vector = { path = "../engines/vector" }
-mnemosyne-scheduler = { path = "../engines/scheduler" }
+mnemosyne-kernel = { path = "../crates/kernel" }
+mnemosyne-vector = { path = "../crates/engines/vector" }
+mnemosyne-scheduler = { path = "../crates/engines/scheduler" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

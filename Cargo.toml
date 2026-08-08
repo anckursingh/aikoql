@@ -1,7 +1,7 @@
-# Mnemosyne — The Knowledge Kernel for AI
-# Workspace root. Dependency DAG (enforced by review, CI lint to follow):
-#   api/adapters -> query -> planner -> kvm -> kernel -> storage
-# Increment 1 ships `mnemosyne-kernel`: KOM + commit pipeline + KS-ABI Class A.
+# Mnemosyne — Agent-first Knowledge Database (MRFC-0040)
+# Architecture: foundation → knowledge → kernel → storage
+# Dependency DAG: providers → kernel, engines → kernel, compiler → kernel → storage
+# All crates depend on mnemosyne-kernel (types + storage + security + transaction).
 
 [workspace]
 resolver = "2"
@@ -10,19 +10,21 @@ members = [
     "crates/engines/graph",
     "crates/engines/vector",
     "crates/engines/scheduler",
+    "crates/engines/semantic",
+    "crates/engines/reasoning",
     "crates/runtime",
     "crates/compiler",
-    "crates/benchmarks",
-    "crates/services/reasoning",
-    "crates/services/semantic",
+    "benchmarks",
     "crates/cluster/proxy",
     "crates/services/api/mcp",
     "crates/sdk/python",
-    "crates/services/ingestion",
-    "crates/connectors/postgres",
-    "crates/connectors/sqlite",
-    "crates/connectors/mongodb",
-    "crates/connectors/neo4j",
+    "crates/ingestion",
+    "crates/providers/sdk",
+    "crates/providers/postgres",
+    "crates/providers/sqlite",
+    "crates/providers/mongodb",
+    "crates/providers/neo4j",
+    "crates/storage/rocksdb",
 ]
 
 [workspace.package]

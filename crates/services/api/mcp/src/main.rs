@@ -12,6 +12,7 @@
 mod api_rest;
 mod error_codes;
 mod graph_ui;
+mod studio;
 mod knowledge_runtime;
 mod shell;
 
@@ -42,17 +43,22 @@ impl Default for McpSession {
 
 use mnemosyne_graph::*;
 use mnemosyne_kernel::ir::*;
+use mnemosyne_kernel::knowledge::ontology::{discover_ontology, OntologyDef, OntologyRegistry, ONTOLOGY_TYPE};
+use mnemosyne_kernel::lifecycle::schema::SchemaRegistry;
 use mnemosyne_kernel::*;
 use serde_json::{json, Value as J};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Instant;
 use tracing::{error, info, info_span, warn};
 
 static SERVER_START: OnceLock<Instant> = OnceLock::new();
+static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
+static STREAM_ID: AtomicU64 = AtomicU64::new(0);
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
@@ -280,12 +286,55 @@ fn main() {
     let db_path = Arc::new(db_path);
     SERVER_START.set(Instant::now()).ok();
 
+    // Load ontology from stored Ontology KOs (MRFC-0041).
+    // Prefer manually-curated ontologies over auto-discovered ones.
+    // If multiple exist, pick the latest non-discovered, fall back to discovered.
+    let ontology: Arc<OntologyRegistry> = {
+        let subj = Subject::with_roles("system", &["admin"]);
+        match kernel.scan_by_type(&subj, ONTOLOGY_TYPE) {
+            Ok(kos) if !kos.is_empty() => {
+                let manual: Vec<_> = kos.iter()
+                    .filter(|ko| !ko.metadata.tags.contains(&"auto-discovered".to_string()))
+                    .collect();
+                let candidate = if !manual.is_empty() {
+                    // Prefer the latest manually-created ontology.
+                    manual.into_iter().max_by_key(|ko| ko.commit_ts).unwrap()
+                } else {
+                    // Fall back to latest auto-discovered.
+                    kos.iter().max_by_key(|ko| ko.commit_ts).unwrap()
+                };
+                match OntologyDef::from_ko(candidate) {
+                    Ok(def) => {
+                        let source = if candidate.metadata.tags.contains(&"auto-discovered".to_string()) {
+                            "auto-discovered"
+                        } else { "manual" };
+                        info!(namespace = %def.namespace, version = %def.version,
+                              classes = def.classes.len(),
+                              mappings = def.mappings.len(),
+                              source = source,
+                              "ontology loaded");
+                        Arc::new(OntologyRegistry::new(def).expect("load ontology"))
+                    }
+                    Err(e) => {
+                        info!(error = %e, "ontology KO found but failed to decode — using empty registry");
+                        Arc::new(OntologyRegistry::empty())
+                    }
+                }
+            }
+            _ => {
+                info!("no ontology KO found — using empty registry");
+                Arc::new(OntologyRegistry::empty())
+            }
+        }
+    };
+
     // Optional HTTP metrics endpoint for Prometheus + Kubernetes probes.
     if let Some(ref addr) = metrics_addr {
         let k = kernel.clone();
+        let ont = ontology.clone();
         let addr_clone = addr.clone();
         let db_for_metrics = db_path.clone();
-        std::thread::spawn(move || serve_metrics(k, &addr_clone, &db_for_metrics));
+        std::thread::spawn(move || serve_metrics(k, ont, &addr_clone, &db_for_metrics));
         info!(addr = %addr, "metrics HTTP server started");
     }
 
@@ -309,6 +358,7 @@ fn main() {
         let stdout = Arc::new(Mutex::new(std::io::stdout()));
         let mut sub_ids: HashSet<String> = HashSet::new();
         let mut rate_limits: HashMap<String, u64> = HashMap::new();
+        let mut session = McpSession::default();
         const RATE_LIMIT: u64 = 1000;
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {
@@ -325,7 +375,7 @@ fn main() {
                     continue;
                 }
             };
-            handle_message(&kernel, &mut sub_ids, &stdout, &mut rate_limits, RATE_LIMIT, &db_path, msg);
+            handle_message(&kernel, &mut sub_ids, &stdout, &mut rate_limits, RATE_LIMIT, &db_path, &mut session, msg);
         }
     }
 }
@@ -829,11 +879,13 @@ fn run_keygen(path: &str) {
 /// set and rate limit counters.
 fn handle_tcp_client(kernel: &Arc<Kernel>, stream: TcpStream, db_path: Arc<String>) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+    ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
     info!(%peer, "client connected");
     let reader = BufReader::new(stream.try_clone().expect("clone stream"));
     let writer = Arc::new(Mutex::new(stream));
     let mut sub_ids: HashSet<String> = HashSet::new();
     let mut rate_limits: HashMap<String, u64> = HashMap::new();
+    let mut session = McpSession::default();
     const RATE_LIMIT: u64 = 1000;
     for line in reader.lines() {
         let line = match line {
@@ -849,8 +901,9 @@ fn handle_tcp_client(kernel: &Arc<Kernel>, stream: TcpStream, db_path: Arc<Strin
                 continue;
             }
         };
-        handle_message(kernel, &mut sub_ids, &writer, &mut rate_limits, RATE_LIMIT, &db_path, msg);
+        handle_message(kernel, &mut sub_ids, &writer, &mut rate_limits, RATE_LIMIT, &db_path, &mut session, msg);
     }
+    ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
     info!(%peer, "client disconnected");
 }
 
@@ -861,6 +914,7 @@ fn handle_message(
     rate_limits: &mut HashMap<String, u64>,
     rate_limit_max: u64,
     db_path: &Arc<String>,
+    session: &mut McpSession,
     msg: J,
 ) {
     let id = msg.get("id").cloned();
@@ -905,6 +959,82 @@ fn handle_message(
                 write_frame(&mut *out, json!({"jsonrpc":"2.0","id":id,"result":{}}));
             }
         }
+        "aikoql/stream" => {
+            drop(out); // release lock during query execution
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let query = params.get("query").and_then(|q| q.as_str()).unwrap_or("");
+            let subject = params.get("subject").and_then(|s| s.as_str()).unwrap_or("stream-user");
+            let result = execute_stream_query(k, query, subject);
+            let mut out = stdout.lock().unwrap();
+            match result {
+                Ok((chunks, stream_id)) => {
+                    let total = chunks.len();
+                    // Send first chunk as the JSON-RPC response.
+                    if let Some(id) = id.clone() {
+                        let first = if total > 0 { &chunks[0] } else { &json!([]) };
+                        write_frame(&mut *out, json!({
+                            "jsonrpc":"2.0","id":id,"result":{
+                                "stream_id": stream_id,
+                                "chunk": 0,
+                                "total_chunks": total,
+                                "results": first
+                            }
+                        }));
+                    }
+                    // Stream remaining chunks as notification frames from a background thread.
+                    if total > 1 {
+                        let out_arc = stdout.clone();
+                        let sid = stream_id.clone();
+                        let remaining: Vec<J> = chunks.into_iter().skip(1).collect();
+                        std::thread::spawn(move || {
+                            let n = remaining.len();
+                            for (i, chunk) in remaining.into_iter().enumerate() {
+                                let chunk_idx = i + 1;
+                                let done = chunk_idx == n;
+                                let mut w = out_arc.lock().unwrap();
+                                write_frame(&mut *w, json!({
+                                    "jsonrpc":"2.0",
+                                    "method":"notifications/notify",
+                                    "params": {
+                                        "stream_id": sid,
+                                        "chunk": chunk_idx,
+                                        "done": done,
+                                        "results": chunk
+                                    }
+                                }));
+                            }
+                        });
+                    }
+                }
+                Err(e) => {
+                    if let Some(id) = id {
+                        write_frame(&mut *out, err_frame(&id, -32603, &e));
+                    }
+                }
+            }
+        }
+        "session/init" => {
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            session.agent_id = params.get("agent_id").and_then(|v| v.as_str()).unwrap_or("mcp-agent").into();
+            session.run_id = params.get("run_id").and_then(|v| v.as_str()).map(String::from);
+            session.tenant = params.get("tenant").and_then(|v| v.as_str()).map(String::from);
+            session.roles = params.get("roles").and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let resp = json!({
+                "session": {
+                    "agent_id": session.agent_id,
+                    "run_id": session.run_id,
+                    "tenant": session.tenant,
+                    "roles": session.roles,
+                },
+                "established": true,
+                "note": "Session identity established. Subsequent tool calls inherit this context."
+            });
+            if let Some(id) = id {
+                write_frame(&mut *out, json!({"jsonrpc":"2.0","id":id,"result":resp}));
+            }
+        }
         "tools/list" => {
             if let Some(id) = id {
                 write_frame(&mut *out, json!({"jsonrpc":"2.0","id":id,"result":tools_list()}));
@@ -919,8 +1049,9 @@ fn handle_message(
                 .unwrap_or("")
                 .to_string();
             let args = params.get("arguments").cloned().unwrap_or(J::Null);
+            let args = inject_session(&args, session);
             let span = info_span!("tool_call", tool = %name);
-            let result = span.in_scope(|| call_tool(k, &name, &args, db_path.as_ref()));
+            let result = span.in_scope(|| call_tool(k, &name, &args, db_path.as_ref(), session));
             if result.is_err() {
                 error!(tool = %name, "tool call failed");
             }
@@ -1099,7 +1230,7 @@ fn err_frame(id: &J, code: i64, message: &str) -> J {
 
 type ToolResult = Result<J, (i64, String)>;
 
-fn call_tool(k: &Kernel, name: &str, args: &J, db_path: &str) -> ToolResult {
+fn call_tool(k: &Kernel, name: &str, args: &J, db_path: &str, session: &mut McpSession) -> ToolResult {
     let res = match name {
         "remember" => tool_remember(k, args),
         "forget" => tool_forget(k, args),
@@ -1138,11 +1269,16 @@ fn call_tool(k: &Kernel, name: &str, args: &J, db_path: &str) -> ToolResult {
         "execute_workflow" => tool_execute_workflow(k, args),
         "check_triggers" => tool_check_triggers(k),
         "program_cache_stats" => tool_program_cache_stats(),
+        "deploy_agent" => tool_deploy_agent(k, args),
+        "list_agents" => tool_list_agents(k, args),
+        "deploy_connector" => tool_deploy_connector(k, args),
+        "list_connectors" => tool_list_connectors(k, args),
         "discover_schema" => tool_discover_schema(k),
+        "discover_ontology" => tool_discover_ontology(k),
         "health" => tool_health(k),
         "agent_memory" => tool_agent_memory(k, args),
         "batch" => tool_batch(k, args),
-        "session_init" => tool_session_init(args),
+        "session_init" => tool_session_init(args, session),
         "decide" => tool_decide(k, args),
         _ => Err(format!("unknown tool: {}", name)),
     };
@@ -1182,6 +1318,18 @@ fn subject_of(args: &J) -> Subject {
         name: name.into(),
         roles,
     }
+}
+
+/// Inject session identity into args if not overridden per-call (MRFC-0040).
+fn inject_session(args: &J, session: &McpSession) -> J {
+    let mut a = args.clone();
+    if a.get("subject").is_none() {
+        a["subject"] = json!(session.agent_id);
+    }
+    if a.get("roles").is_none() && !session.roles.is_empty() {
+        a["roles"] = json!(session.roles);
+    }
+    a
 }
 
 fn koid_of(args: &J) -> Result<KOID, String> {
@@ -1417,6 +1565,23 @@ fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     };
     req.properties = parse_properties(args)?;
     req.semantic = parse_semantic(args)?;
+    // Parse optional relationships array.
+    if let Some(rels) = args.get("relationships").and_then(|r| r.as_array()) {
+        for rel in rels {
+            if let (Some(rt), Some(target_hex)) = (
+                rel.get("rel_type").and_then(|v| v.as_str()),
+                rel.get("target").and_then(|v| v.as_str()),
+            ) {
+                if let Ok(target) = KOID::from_hex(target_hex) {
+                    req.relationships.push(RelationshipRef {
+                        rel_type: rt.into(),
+                        target,
+                        direction: mnemosyne_kernel::knowledge::kom::Direction::Outbound,
+                    });
+                }
+            }
+        }
+    }
     req.origin = parse_origin(args);
     req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
     req.expected_version = args.get("expected_version").and_then(|v| v.as_u64());
@@ -1424,12 +1589,21 @@ fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
         .get("idempotency_key")
         .and_then(|v| v.as_str())
         .map(String::from);
+    let embed_requested = args.get("embed").and_then(|v| v.as_bool()).unwrap_or(false);
     let r = k.remember(req).map_err(|e| e.to_string())?;
-    Ok(json!({
+    let mut resp = json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
         "commit_ts": r.commit_ts
-    }))
+    });
+    if embed_requested {
+        resp["embed"] = json!({
+            "requested": true,
+            "status": "pending",
+            "note": "SemanticEngine will enrich this KO asynchronously. Use get() to check for embeddings."
+        });
+    }
+    Ok(resp)
 }
 
 fn tool_forget(k: &Kernel, args: &J) -> Result<J, String> {
@@ -1807,6 +1981,36 @@ fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
     }
 }
 
+/// Execute an AIKOQL query and chunk the results for streaming (MRFC-0040 #5).
+/// Returns (chunks, stream_id). Chunk 0 is sent as the JSON-RPC response;
+/// remaining chunks are sent as notification frames.
+fn execute_stream_query(k: &Kernel, query: &str, subject: &str) -> Result<(Vec<J>, String), String> {
+    let raw = mnemosyne_compiler::parser::compile_with_subject(query, subject).map_err(|e| e.to_string())?;
+    let plan = mnemosyne_compiler::planner::Planner::optimize(&raw);
+    let result = mnemosyne_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
+
+    let rows: Vec<J> = match result {
+        mnemosyne_runtime::RowSet::Objects(kos) => kos.iter().map(|ko| json!({
+            "koid": ko.koid.to_hex(),
+            "type_name": ko.metadata.type_name,
+            "version": ko.version,
+            "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+        })).collect(),
+        mnemosyne_runtime::RowSet::Scored(scored) => scored.iter().map(|(koid, score, tn, ver)| json!({
+            "koid": koid.to_hex(),
+            "score": score,
+            "type_name": tn,
+            "version": ver
+        })).collect(),
+        _ => vec![],
+    };
+
+    const CHUNK_SIZE: usize = 100;
+    let chunks: Vec<J> = rows.chunks(CHUNK_SIZE).map(|c| json!(c)).collect();
+    let stream_id = format!("stream-{}", STREAM_ID.fetch_add(1, Ordering::Relaxed));
+    Ok((chunks, stream_id))
+}
+
 fn compiler_expr_to_value(e: &mnemosyne_compiler::parser::ast::Expr) -> Value {
     match e {
         mnemosyne_compiler::parser::ast::Expr::String(s) => Value::Text(s.clone()),
@@ -2147,6 +2351,56 @@ fn tool_program_cache_stats() -> Result<J, String> {
     Ok(json!({"cache_hits": PROGRAM_CACHE.stats()}))
 }
 
+// ---- Agent KO (MRFC-0030 Phase 7c) ---------------------------------------
+
+fn tool_deploy_agent(k: &Kernel, args: &J) -> Result<J, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+    let skills = args.get("skills").and_then(|v| v.as_array()).map(|a| serde_json::to_string(a).unwrap_or_default()).unwrap_or_else(|| "[]".into());
+    let tools = args.get("tools").and_then(|v| v.as_array()).map(|a| serde_json::to_string(a).unwrap_or_default()).unwrap_or_else(|| "[]".into());
+    let policies = args.get("policies").and_then(|v| v.as_array()).map(|a| serde_json::to_string(a).unwrap_or_default()).unwrap_or_else(|| "[]".into());
+    let r = k.deploy_agent(name, prompt, &skills, &tools, &policies, &subject_of(args))
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"koid": r.koid.to_hex(), "version": r.version, "name": name}))
+}
+
+fn tool_list_agents(k: &Kernel, args: &J) -> Result<J, String> {
+    let agents = k.list_agents(&subject_of(args)).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "agents": agents.iter().map(|a| json!({
+            "koid": a.koid.to_hex(),
+            "name": a.properties.get("name").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }).unwrap_or("?"),
+            "prompt": a.properties.get("prompt").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }).unwrap_or(""),
+            "version": a.properties.get("version").and_then(|v| match v { Value::Int(i) => Some(*i), _ => None }).unwrap_or(0),
+            "lifecycle": a.lifecycle.state.to_string(),
+        })).collect::<Vec<_>>()
+    }))
+}
+
+// ---- Connector KO (MRFC-0030 Phase 7b) -----------------------------------
+
+fn tool_deploy_connector(k: &Kernel, args: &J) -> Result<J, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let plugin = args.get("plugin").and_then(|v| v.as_str()).ok_or("missing: plugin")?;
+    let config = args.get("config").and_then(|v| v.as_object()).map(|o| serde_json::to_string(o).unwrap_or_default()).unwrap_or_else(|| "{}".into());
+    let mapping = args.get("mapping").and_then(|v| v.as_array()).map(|a| serde_json::to_string(a).unwrap_or_default()).unwrap_or_else(|| "[]".into());
+    let r = k.deploy_connector(name, plugin, &config, &mapping, &subject_of(args))
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"koid": r.koid.to_hex(), "version": r.version, "name": name}))
+}
+
+fn tool_list_connectors(k: &Kernel, args: &J) -> Result<J, String> {
+    let connectors = k.list_connectors(&subject_of(args)).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "connectors": connectors.iter().map(|c| json!({
+            "koid": c.koid.to_hex(),
+            "name": c.properties.get("name").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }).unwrap_or("?"),
+            "plugin": c.properties.get("plugin").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }).unwrap_or("?"),
+            "lifecycle": c.lifecycle.state.to_string(),
+        })).collect::<Vec<_>>()
+    }))
+}
+
 // ---- Agent Experience Improvements (MRFC-0040) -------------------------
 
 fn tool_discover_schema(k: &Kernel) -> Result<J, String> {
@@ -2167,15 +2421,59 @@ fn tool_discover_schema(k: &Kernel) -> Result<J, String> {
     Ok(json!({"types": types, "type_info": type_info, "total_types": types.len()}))
 }
 
+/// Discover an ontology from all stored Knowledge Objects (MRFC-0041).
+fn tool_discover_ontology(k: &Kernel) -> Result<J, String> {
+    let subject = Subject { name: "ontology-discovery".into(), roles: vec!["admin".into()] };
+    let heads = k.scan_heads().map_err(|e| e.to_string())?;
+    let mut kos: Vec<KnowledgeObject> = Vec::new();
+    for (koid, _ver, _ts, state) in &heads {
+        if *state == LifecycleState::Deleted { continue; }
+        if let Ok(ko) = k.get(KnowledgeContext::from(subject.clone()), koid) {
+            kos.push(ko);
+        }
+    }
+    let def = discover_ontology(&kos);
+    // Auto-save as an Ontology KO.
+    let props = def.to_property_map();
+    let r = k.remember(RememberRequest {
+        context: subject.into(),
+        koid: None, expected_version: Some(0),
+        idempotency_key: Some("auto-discovered-ontology".into()),
+        metadata: Metadata { type_name: ONTOLOGY_TYPE.into(), tenant: None, schema_version: 1, tags: vec!["auto-discovered".into()] },
+        properties: props,
+        semantic: None, relationships: vec![],
+        security: Some(SecurityDescriptor { owner: "system".into(), acl: vec![], classification: None }),
+        extensions: ExtensionMap::new(), origin: Origin::System,
+        note: Some("Auto-discovered from stored Knowledge Objects".into()),
+        referential_policy: ReferentialPolicy::default(),
+    }).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "saved": true,
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "namespace": def.namespace,
+        "classes": def.classes.len(),
+        "relationships": def.relationships.len(),
+        "mappings": def.mappings.len(),
+        "types_discovered": def.classes.keys().cloned().collect::<Vec<_>>(),
+    }))
+}
+
 fn tool_health(k: &Kernel) -> Result<J, String> {
     let (seq, audit) = k.journal_head().unwrap_or((0, [0u8; 32]));
     let heads = k.scan_heads().map(|h| h.len()).unwrap_or(0);
     let ready = true;
+    // Single-node: journal is always current, so lag is 0.
+    let journal_lag_ms: u64 = 0;
+    let connections = ACTIVE_CONNECTIONS.load(Ordering::Relaxed);
+    let max_connections = if connections > 0 { connections } else { 1 };
     Ok(json!({
         "status": if ready { "healthy" } else { "degraded" },
         "ready": ready,
         "journal_seq": seq,
+        "journal_lag_ms": journal_lag_ms,
         "object_count": heads,
+        "connection_pool": format!("{}/{}", connections, max_connections),
         "audit_hash": audit.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
         "uptime_seconds": SERVER_START.get().map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0),
     }))
@@ -2264,24 +2562,23 @@ fn tool_batch(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({"results": results, "count": results.len()}))
 }
 
-fn tool_session_init(args: &J) -> Result<J, String> {
-    // Session identity is stored per-connection (in the handler's local state).
-    // This tool returns the identity for the agent to confirm.
-    let agent_id = args.get("agent_id").and_then(|v| v.as_str()).unwrap_or("mcp-agent");
-    let run_id = args.get("run_id").and_then(|v| v.as_str());
-    let tenant = args.get("tenant").and_then(|v| v.as_str());
-    let roles: Vec<String> = args.get("roles").and_then(|v| v.as_array())
+fn tool_session_init(args: &J, session: &mut McpSession) -> Result<J, String> {
+    // Store session identity for subsequent tool calls (MRFC-0040).
+    session.agent_id = args.get("agent_id").and_then(|v| v.as_str()).unwrap_or("mcp-agent").into();
+    session.run_id = args.get("run_id").and_then(|v| v.as_str()).map(String::from);
+    session.tenant = args.get("tenant").and_then(|v| v.as_str()).map(String::from);
+    session.roles = args.get("roles").and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
         .unwrap_or_default();
     Ok(json!({
         "session": {
-            "agent_id": agent_id,
-            "run_id": run_id,
-            "tenant": tenant,
-            "roles": roles,
+            "agent_id": session.agent_id,
+            "run_id": session.run_id,
+            "tenant": session.tenant,
+            "roles": session.roles,
         },
         "established": true,
-        "note": "Session identity established. Subsequent calls inherit this context."
+        "note": "Session identity established. Subsequent tool calls in this connection inherit this context."
     }))
 }
 
@@ -2362,7 +2659,7 @@ fn tool_verify_backup(args: &J) -> Result<J, String> {
 // HTTP metrics server — minimal std-based HTTP/1.0 handler
 // ---------------------------------------------------------------------------
 
-fn serve_metrics(kernel: Arc<Kernel>, addr: &str, db_path: &Arc<String>) {
+fn serve_metrics(kernel: Arc<Kernel>, ontology: Arc<OntologyRegistry>, addr: &str, db_path: &Arc<String>) {
     let listener = match TcpListener::bind(addr) {
         Ok(l) => l,
         Err(e) => {
@@ -2377,7 +2674,8 @@ fn serve_metrics(kernel: Arc<Kernel>, addr: &str, db_path: &Arc<String>) {
                 let k = kernel.clone();
                 let sess = sessions.clone();
                 let db = db_path.clone();
-                std::thread::spawn(move || handle_http(&mut s, &k, &sess, &db));
+                let ont = ontology.clone();
+                std::thread::spawn(move || handle_http(&mut s, &k, &sess, &db, &ont));
             }
             Err(_) => break,
         }
@@ -2390,6 +2688,7 @@ fn serve_metrics(kernel: Arc<Kernel>, addr: &str, db_path: &Arc<String>) {
 fn graph_api(k: &Kernel, path: &str) -> Result<String, String> {
     let mut center_koid: Option<KOID> = None;
     let mut detail = false;
+    let mut type_filter: Option<String> = None;
 
     // Parse query string (ponytail: manual parsing, no url crate dep).
     if let Some(qs) = path.split_once('?').map(|(_, q)| q) {
@@ -2401,6 +2700,9 @@ fn graph_api(k: &Kernel, path: &str) -> Result<String, String> {
                     }
                     "detail" => {
                         detail = v == "1" || v == "true";
+                    }
+                    "type" => {
+                        type_filter = Some(v.to_string());
                     }
                     _ => {}
                 }
@@ -2426,17 +2728,24 @@ fn graph_api(k: &Kernel, path: &str) -> Result<String, String> {
     let mut edges_done: HashSet<(String, String)> = HashSet::new(); // to avoid duplicate edges
     let mut edge_counts: HashMap<String, usize> = HashMap::new();
 
-    // Collect all heads (non-deleted), optionally filtered by tenant.
+    // Collect all heads (non-deleted), optionally filtered by tenant and type.
     let mut head_koids: Vec<KOID> = Vec::new();
     for (koid, _ver, _ts, state) in &heads {
         if *state == LifecycleState::Deleted {
             continue;
         }
+        let ko = match k.get(browser_ctx.clone(), koid) {
+            Ok(ko) => ko,
+            Err(_) => continue,
+        };
         if let Some(ref tf) = tenant_filter {
-            if let Ok(ko) = k.get(browser_ctx.clone(), koid) {
-                if ko.metadata.tenant.as_deref() != Some(tf.as_str()) {
-                    continue;
-                }
+            if ko.metadata.tenant.as_deref() != Some(tf.as_str()) {
+                continue;
+            }
+        }
+        if let Some(ref tf) = type_filter {
+            if ko.metadata.type_name != *tf {
+                continue;
             }
         }
         head_koids.push(*koid);
@@ -2722,7 +3031,7 @@ fn validate_token(token: Option<&str>, sessions: &Mutex<HashMap<String, HttpSess
     Some(Subject { name: sess.username.clone(), roles: sess.roles.clone() })
 }
 
-fn aikoql_endpoint(k: &Kernel, query: &str, subject: &Subject, tenant: Option<&str>) -> Result<String, String> {
+fn aikoql_endpoint(k: &Kernel, query: &str, subject: &Subject, tenant: Option<&str>, ontology: &OntologyRegistry) -> Result<String, String> {
     if query.trim().is_empty() {
         return Err("empty query".into());
     }
@@ -2749,30 +3058,42 @@ fn aikoql_endpoint(k: &Kernel, query: &str, subject: &Subject, tenant: Option<&s
         return Ok(json!({"created": r.koid.to_hex(), "version": r.version, "commit_ts": r.commit_ts}).to_string());
     }
 
-    // Query: MATCH, TRAVERSE, etc.
-    let plan = mnemosyne_compiler::parser::compile_with_subject(query, &subject.name)
-        .map_err(|e| e.to_string())?;
-    let result = mnemosyne_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
-    match result {
-        mnemosyne_runtime::RowSet::Objects(kos) => Ok(json!({
-            "results": kos.iter().map(|ko| json!({
-                "koid": ko.koid.to_hex(),
-                "type_name": ko.metadata.type_name,
-                "version": ko.version,
-                "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
-            })).collect::<Vec<_>>()
-        }).to_string()),
-        mnemosyne_runtime::RowSet::Scored(scored) => Ok(json!({
-            "results": scored.iter().map(|(koid, score, tn, ver)| json!({
-                "koid": koid.to_hex(), "score": score, "type_name": tn, "version": ver
-            })).collect::<Vec<_>>()
-        }).to_string()),
-        mnemosyne_runtime::RowSet::Traversal(hits) => Ok(json!({
-            "results": hits.iter().map(|(koid, rt, depth)| json!({
-                "koid": koid.to_hex(), "rel_type": rt, "depth": depth
-            })).collect::<Vec<_>>()
-        }).to_string()),
+    // Query: MATCH, TRAVERSE, etc. — ontology-aware compilation.
+    let schema = SchemaRegistry::new(); // ponytail: empty registry; ontology handles resolution
+    let plans = mnemosyne_compiler::parser::compile_with_ontology(
+        query, &subject.name, &schema, Some(ontology),
+    ).map_err(|e| e.to_string())?;
+    // Execute all plans and merge results.
+    let mut all_kos: Vec<serde_json::Value> = Vec::new();
+    for plan in &plans {
+        match mnemosyne_runtime::Interpreter::execute(k, plan).map_err(|e| e.to_string())? {
+            mnemosyne_runtime::RowSet::Objects(kos) => {
+                for ko in kos {
+                    all_kos.push(json!({
+                        "koid": ko.koid.to_hex(),
+                        "type_name": ko.metadata.type_name,
+                        "version": ko.version,
+                        "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+                    }));
+                }
+            }
+            mnemosyne_runtime::RowSet::Scored(scored) => {
+                for (koid, score, tn, ver) in scored {
+                    all_kos.push(json!({
+                        "koid": koid.to_hex(), "score": score, "type_name": tn, "version": ver
+                    }));
+                }
+            }
+            mnemosyne_runtime::RowSet::Traversal(hits) => {
+                for (koid, rt, depth) in hits {
+                    all_kos.push(json!({
+                        "koid": koid.to_hex(), "rel_type": rt, "depth": depth
+                    }));
+                }
+            }
+        }
     }
+    Ok(json!({"results": all_kos}).to_string())
 }
 
 fn parse_query_param(path: &str, key: &str) -> String {
@@ -2867,7 +3188,7 @@ fn explain_endpoint(query: &str) -> Result<String, String> {
     }).to_string())
 }
 
-fn handle_http(stream: &mut TcpStream, k: &Kernel, sessions: &Mutex<HashMap<String, HttpSession>>, db_path: &Arc<String>) {
+fn handle_http(stream: &mut TcpStream, k: &Kernel, sessions: &Mutex<HashMap<String, HttpSession>>, db_path: &Arc<String>, ontology: &OntologyRegistry) {
     let mut buf = [0u8; 4096];
     let n = match stream.read(&mut buf) {
         Ok(0) => return,
@@ -2882,6 +3203,8 @@ fn handle_http(stream: &mut TcpStream, k: &Kernel, sessions: &Mutex<HashMap<Stri
     }
     let method = parts[0];
     let path = parts[1];
+    // Strip query string for routing — extracted separately via extract_token.
+    let route = path.split('?').next().unwrap_or(path);
     let body_str = req.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
 
     // Extract token from query string or Authorization header.
@@ -2901,13 +3224,9 @@ fn handle_http(stream: &mut TcpStream, k: &Kernel, sessions: &Mutex<HashMap<Stri
     }
 
     // REST API v1 routes — handled separately, return early.
-    if path.starts_with("/api/v1/") {
-        // Extract token from Authorization header (in the full request, not body).
-        let token = req.lines()
-            .find(|l| l.starts_with("Authorization: Bearer "))
-            .map(|l| l.trim_start_matches("Authorization: Bearer ").trim().to_string());
+    if route.starts_with("/api/v1/") {
         let (status, ct, body) = api_rest::route_v1(
-            method, path, &body_str, k, db_path.as_str(), sessions, token,
+            method, path, &body_str, k, db_path.as_str(), sessions, token.clone(),
         );
         let mut resp = format!("HTTP/1.0 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n", status, ct, body.len());
         for (h, v) in api_rest::cors_headers() {
@@ -2919,9 +3238,12 @@ fn handle_http(stream: &mut TcpStream, k: &Kernel, sessions: &Mutex<HashMap<Stri
         return;
     }
 
-    let (status, content_type, body) = match path {
+    let (status, content_type, body) = match route {
         "/ui" | "/" => {
             ("200 OK", "text/html; charset=utf-8", graph_ui::GRAPH_UI_HTML.to_string())
+        }
+        "/studio" => {
+            ("200 OK", "text/html; charset=utf-8", studio::STUDIO_HTML.to_string())
         }
         "/health" => {
             let uptime = SERVER_START.get().map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0);
@@ -2938,38 +3260,38 @@ fn handle_http(stream: &mut TcpStream, k: &Kernel, sessions: &Mutex<HashMap<Stri
                 Err(e) => ("401 Unauthorized", "application/json", json!({"error": e}).to_string()),
             }
         }
-        p if p.starts_with("/api/graph") => {
-            let body = graph_api(k, p);
+        _p if route.starts_with("/api/graph") => {
+            let body = graph_api(k, path);
             match body {
                 Ok(b) => ("200 OK", "application/json", b),
                 Err(e) => ("500 Internal Server Error", "text/plain", e),
             }
         }
-        p if p.starts_with("/api/schema") => {
+        _p if route.starts_with("/api/schema") => {
             match schema_endpoint(k) {
                 Ok(b) => ("200 OK", "application/json", b),
                 Err(e) => ("500 Internal Server Error", "application/json", json!({"error": e, "code": "INTERNAL"}).to_string()),
             }
         }
-        p if p.starts_with("/api/explain") => {
-            let query = parse_query_param(p, "query");
+        _p if route.starts_with("/api/explain") => {
+            let query = parse_query_param(path, "query");
             match explain_endpoint(&query) {
                 Ok(b) => ("200 OK", "application/json", b),
                 Err(e) => ("400 Bad Request", "application/json", json!({"error": e, "code": "PARSE_ERROR"}).to_string()),
             }
         }
-        p if p.starts_with("/api/aikoql") => {
+        _p if route.starts_with("/api/aikoql") => {
             let session = validate_token(token.as_deref(), sessions);
             if session.is_none() {
                 ("401 Unauthorized", "application/json", json!({"error": "login required"}).to_string())
             } else {
-                let query = parse_query_param(p, "query");
+                let query = parse_query_param(path, "query");
                 let tenant = {
-                    let t = parse_query_param(p, "tenant");
+                    let t = parse_query_param(path, "tenant");
                     if t.is_empty() { None } else { Some(t) }
                 };
                 let tenant_deref = tenant.as_deref();
-                match aikoql_endpoint(k, &query, &session.unwrap(), tenant_deref) {
+                match aikoql_endpoint(k, &query, &session.unwrap(), tenant_deref, ontology) {
                     Ok(b) => ("200 OK", "application/json", b),
                     Err(e) => ("400 Bad Request", "application/json", json!({"error": e}).to_string()),
                 }
@@ -3078,7 +3400,7 @@ fn tools_list() -> J {
     let koid = json!({"type": "string", "description": "32-char hex KOID"});
     json!({
         "tools": [
-            {"name": "remember", "description": "Commit a knowledge object (or new version) with provenance. Returns KOID+version.", "inputSchema": {"type": "object", "properties": {"subject": subj, "type_name": {"type": "string"}, "koid": koid, "properties": {"type": "object"}, "semantic": {"type": "object"}, "expected_version": {"type": "integer"}, "idempotency_key": {"type": "string"}, "note": {"type": "string"}}, "required": ["type_name"]}},
+            {"name": "remember", "description": "Commit a knowledge object (or new version) with provenance. Set embed:true for auto-embedding via SemanticEngine (MRFC-0040). Returns KOID+version.", "inputSchema": {"type": "object", "properties": {"subject": subj, "type_name": {"type": "string"}, "koid": koid, "properties": {"type": "object"}, "semantic": {"type": "object"}, "embed": {"type": "boolean", "description": "Request auto-embedding via configured AI provider (MRFC-0040)"}, "expected_version": {"type": "integer"}, "idempotency_key": {"type": "string"}, "note": {"type": "string"}}, "required": ["type_name"]}},
             {"name": "forget", "description": "Tombstone or legally erase a knowledge object (audit-preserving).", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "mode": {"type": "string", "enum": ["tombstone", "erase"]}}, "required": ["koid"]}},
             {"name": "evolve", "description": "Transition a knowledge object along its lifecycle (draft->active->verified->archived->deleted).", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "to": {"type": "string"}}, "required": ["koid", "to"]}},
             {"name": "verify", "description": "Check whether a subject may perform an action on an object.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "action": {"type": "string"}}, "required": ["koid", "action"]}},
@@ -3115,8 +3437,13 @@ fn tools_list() -> J {
             {"name": "execute_workflow", "description": "Execute a Workflow KO by KOID — runs all program steps in order (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}}, "required": ["koid"]}},
             {"name": "check_triggers", "description": "Check journal for matching Trigger KOs and fire them (MRFC-0030).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "program_cache_stats", "description": "Return ProgramCache hit stats (MRFC-0030).", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "deploy_agent", "description": "Deploy an AI agent as a versioned Knowledge Object with prompt, skills, tools, policies (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "prompt": {"type": "string"}, "skills": {"type": "array"}, "tools": {"type": "array"}, "policies": {"type": "array"}}, "required": ["name"]}},
+            {"name": "list_agents", "description": "List all deployed agent Knowledge Objects (MRFC-0030).", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "deploy_connector", "description": "Deploy an external system connector as a versioned Knowledge Object (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "plugin": {"type": "string"}, "config": {"type": "object"}, "mapping": {"type": "array"}}, "required": ["name", "plugin"]}},
+            {"name": "list_connectors", "description": "List all deployed connector Knowledge Objects (MRFC-0030).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "discover_schema", "description": "Discover all types and their properties in the database (MRFC-0040 agent experience).", "inputSchema": {"type": "object", "properties": {}}},
-            {"name": "health", "description": "Health check with readiness, journal seq, object count, uptime (MRFC-0040).", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "discover_ontology", "description": "Auto-discover an ontology from all stored Knowledge Objects: classes, properties, relationships, and source mappings (MRFC-0041). Saves the ontology as an Ontology KO.", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "health", "description": "Health check with readiness, journal seq, journal lag, object count, connection pool, uptime (MRFC-0040).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "agent_memory", "description": "Store or retrieve agent memories with TTL. Write: agent_id + key + value. Read: agent_id only. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"agent_id": {"type": "string"}, "key": {"type": "string"}, "value": {}, "ttl": {"type": "integer"}}, "required": ["agent_id"]}},
             {"name": "batch", "description": "Atomic batch of remember/relate/forget operations. Use $N.koid to reference previous results. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"operations": {"type": "array"}}, "required": ["operations"]}},
             {"name": "session_init", "description": "Establish agent session identity. Subsequent calls in this connection inherit agent_id, run_id, tenant, roles. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"agent_id": {"type": "string"}, "run_id": {"type": "string"}, "tenant": {"type": "string"}, "roles": {"type": "array", "items": {"type": "string"}}}, "required": ["agent_id"]}},

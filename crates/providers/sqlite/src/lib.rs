@@ -189,7 +189,7 @@ impl SqliteConnector {
                     type_name: schema.name.clone(),
                     tenant: tenant.map(String::from),
                     schema_version: 1,
-                    tags: vec!["imported".into(), "sqlite".into()],
+                    tags: vec!["imported".into(), "source:sqlite".into()],
                 },
                 properties: props,
                 semantic: None,

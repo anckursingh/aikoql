@@ -1812,6 +1812,84 @@ impl Kernel {
         })
     }
 
+    // ---- Agent KO (MRFC-0030 Phase 7c) ------------------------------------
+
+    /// Deploy an Agent KO — an AI agent definition with prompt, skills, tools, policies.
+    pub fn deploy_agent(
+        &self, name: &str, prompt: &str, skills_json: &str,
+        tools_json: &str, policies_json: &str, subject: &Subject,
+    ) -> KResult<Remembered> {
+        let mut props = PropertyMap::new();
+        props.insert("name".into(), Value::Text(name.to_string()));
+        props.insert("prompt".into(), Value::Text(prompt.to_string()));
+        props.insert("skills".into(), Value::Text(skills_json.to_string()));
+        props.insert("tools".into(), Value::Text(tools_json.to_string()));
+        props.insert("policies".into(), Value::Text(policies_json.to_string()));
+        props.insert("version".into(), Value::Int(1));
+        self.remember(RememberRequest {
+            context: subject.clone().into(),
+            koid: None, expected_version: Some(0),
+            idempotency_key: Some(format!("deploy-agent-{}", name)),
+            metadata: Metadata {
+                type_name: "mnemosyne:agent".into(),
+                tenant: None, schema_version: 1,
+                tags: vec!["agent".into(), "active-object".into()],
+            },
+            properties: props,
+            semantic: None, relationships: vec![],
+            security: Some(SecurityDescriptor {
+                owner: subject.name.clone(), acl: vec![], classification: None,
+            }),
+            extensions: ExtensionMap::new(),
+            origin: Origin::Human,
+            note: Some(format!("Deployed agent: {}", name)),
+            referential_policy: ReferentialPolicy::Permissive,
+        })
+    }
+
+    /// List all deployed agents.
+    pub fn list_agents(&self, subject: &Subject) -> KResult<Vec<KnowledgeObject>> {
+        self.scan_by_type(subject, "mnemosyne:agent")
+    }
+
+    // ---- Connector KO (MRFC-0030 Phase 7b) --------------------------------
+
+    /// Deploy a Connector KO — external system import/export as a KO.
+    pub fn deploy_connector(
+        &self, name: &str, plugin: &str, config_json: &str,
+        mapping_json: &str, subject: &Subject,
+    ) -> KResult<Remembered> {
+        let mut props = PropertyMap::new();
+        props.insert("name".into(), Value::Text(name.to_string()));
+        props.insert("plugin".into(), Value::Text(plugin.to_string()));
+        props.insert("config".into(), Value::Text(config_json.to_string()));
+        props.insert("mapping".into(), Value::Text(mapping_json.to_string()));
+        self.remember(RememberRequest {
+            context: subject.clone().into(),
+            koid: None, expected_version: Some(0),
+            idempotency_key: Some(format!("deploy-connector-{}", name)),
+            metadata: Metadata {
+                type_name: "mnemosyne:connector".into(),
+                tenant: None, schema_version: 1,
+                tags: vec!["connector".into(), "active-object".into()],
+            },
+            properties: props,
+            semantic: None, relationships: vec![],
+            security: Some(SecurityDescriptor {
+                owner: subject.name.clone(), acl: vec![], classification: None,
+            }),
+            extensions: ExtensionMap::new(),
+            origin: Origin::Human,
+            note: Some(format!("Deployed connector: {}", name)),
+            referential_policy: ReferentialPolicy::Permissive,
+        })
+    }
+
+    /// List all deployed connectors.
+    pub fn list_connectors(&self, subject: &Subject) -> KResult<Vec<KnowledgeObject>> {
+        self.scan_by_type(subject, "mnemosyne:connector")
+    }
+
     // ---- ABI version (MRFC-0011 §9) --------------------------------------
 
     /// Return the ABI version of this kernel. Adapters can check this to

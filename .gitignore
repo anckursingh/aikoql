@@ -16,6 +16,6 @@ build/
 # Mnemosyne runtime artifacts
 *.key
 *.backup.*/
-mnemosyne/
+/mnemosyne/
 .playwright-mcp/
 --version

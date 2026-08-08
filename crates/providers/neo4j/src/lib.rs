@@ -175,7 +175,7 @@ impl Neo4jConnector {
                         type_name: label.to_string(),
                         tenant: tenant.map(String::from),
                         schema_version: 1,
-                        tags: vec!["imported".into(), "neo4j".into()],
+                        tags: vec!["imported".into(), "source:neo4j".into()],
                     },
                     properties: props,
                     semantic: None, relationships: vec![], event_refs: vec![],

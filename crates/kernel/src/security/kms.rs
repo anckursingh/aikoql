@@ -130,6 +130,19 @@ fn derive_key(passphrase: &str, salt: &[u8; 16]) -> [u8; 32] {
     dk
 }
 
+/// Decode a hex string into bytes. Returns an error on non-hex characters
+/// or odd-length strings.
+fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
+    let hex = hex.trim();
+    if hex.len() % 2 != 0 {
+        return Err("hex string has odd length".into());
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| format!("invalid hex: {}", e)))
+        .collect()
+}
+
 /// XOR two 32-byte arrays. Used for simple key wrapping.
 /// ponytail: XOR wrapping is NOT suitable for production HSM integration.
 /// Replace with AES-KW (RFC 3394) or RSA-OAEP when integrating with real KMS.
@@ -141,6 +154,139 @@ fn xor_unwrap(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
         out[i] = a[i] ^ b[i];
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Cloud KMS stubs — these implement the KeyManager trait for cloud providers.
+// Full SDK integration (aws-sdk-kms, azure_security_keyvault, google-cloud-kms)
+// deferred. Stubs accept a key_uri and return the key for MVP.
+// ---------------------------------------------------------------------------
+
+/// AWS KMS stub. Set MNEMOSYNE_AWS_KMS_KEY=<hex-key> for MVP.
+pub struct AwsKms {
+    pub key_id: String,
+    cached_key: std::sync::RwLock<Option<[u8; 32]>>,
+}
+
+impl AwsKms {
+    pub fn new(key_id: impl Into<String>) -> Self {
+        AwsKms { key_id: key_id.into(), cached_key: std::sync::RwLock::new(None) }
+    }
+}
+
+impl KeyManager for AwsKms {
+    fn master_key(&self, _passphrase: &str) -> Result<[u8; 32], String> {
+        if let Some(k) = *self.cached_key.read().unwrap() {
+            return Ok(k);
+        }
+        // ponytail: reads MNEMOSYNE_AWS_KMS_KEY env var. Replace with
+        // aws-sdk-kms Decrypt/GenerateDataKey call for production.
+        if let Ok(hex) = std::env::var("MNEMOSYNE_AWS_KMS_KEY") {
+            let bytes = hex_decode(hex.trim()).map_err(|e| format!("invalid hex key: {}", e))?;
+            if bytes.len() != 32 {
+                return Err("AWS KMS key must be 32 bytes (64 hex chars)".into());
+            }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            *self.cached_key.write().unwrap() = Some(key);
+            Ok(key)
+        } else {
+            Err("AWS KMS not configured. Set MNEMOSYNE_AWS_KMS_KEY env var or use LocalKms.".into())
+        }
+    }
+
+    fn rotate(&self, _passphrase: &str, provider: &dyn CryptoProvider) -> Result<[u8; 32], String> {
+        let new_key = provider.generate_key();
+        *self.cached_key.write().unwrap() = Some(new_key);
+        Ok(new_key)
+    }
+}
+
+/// Azure Key Vault stub. Set MNEMOSYNE_AZURE_KV_KEY=<hex-key> for MVP.
+pub struct AzureKeyVault {
+    pub vault_url: String,
+    pub key_name: String,
+    cached_key: std::sync::RwLock<Option<[u8; 32]>>,
+}
+
+impl AzureKeyVault {
+    pub fn new(vault_url: impl Into<String>, key_name: impl Into<String>) -> Self {
+        AzureKeyVault {
+            vault_url: vault_url.into(),
+            key_name: key_name.into(),
+            cached_key: std::sync::RwLock::new(None),
+        }
+    }
+}
+
+impl KeyManager for AzureKeyVault {
+    fn master_key(&self, _passphrase: &str) -> Result<[u8; 32], String> {
+        if let Some(k) = *self.cached_key.read().unwrap() {
+            return Ok(k);
+        }
+        // ponytail: reads MNEMOSYNE_AZURE_KV_KEY env var. Replace with
+        // azure_security_keyvault SecretClient for production.
+        if let Ok(hex) = std::env::var("MNEMOSYNE_AZURE_KV_KEY") {
+            let bytes = hex_decode(hex.trim()).map_err(|e| format!("invalid hex key: {}", e))?;
+            if bytes.len() != 32 { return Err("Azure KV key must be 32 bytes".into()); }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            *self.cached_key.write().unwrap() = Some(key);
+            Ok(key)
+        } else {
+            Err("Azure Key Vault not configured. Set MNEMOSYNE_AZURE_KV_KEY env var or use LocalKms.".into())
+        }
+    }
+
+    fn rotate(&self, _passphrase: &str, provider: &dyn CryptoProvider) -> Result<[u8; 32], String> {
+        let new_key = provider.generate_key();
+        *self.cached_key.write().unwrap() = Some(new_key);
+        Ok(new_key)
+    }
+}
+
+/// GCP Cloud KMS stub. Set MNEMOSYNE_GCP_KMS_KEY=<hex-key> for MVP.
+pub struct GcpKeyManager {
+    pub project_id: String,
+    pub location: String,
+    pub key_ring: String,
+    pub key_name: String,
+    cached_key: std::sync::RwLock<Option<[u8; 32]>>,
+}
+
+impl GcpKeyManager {
+    pub fn new(project: impl Into<String>, location: impl Into<String>, key_ring: impl Into<String>, key_name: impl Into<String>) -> Self {
+        GcpKeyManager {
+            project_id: project.into(), location: location.into(),
+            key_ring: key_ring.into(), key_name: key_name.into(),
+            cached_key: std::sync::RwLock::new(None),
+        }
+    }
+}
+
+impl KeyManager for GcpKeyManager {
+    fn master_key(&self, _passphrase: &str) -> Result<[u8; 32], String> {
+        if let Some(k) = *self.cached_key.read().unwrap() {
+            return Ok(k);
+        }
+        // ponytail: reads MNEMOSYNE_GCP_KMS_KEY env var.
+        if let Ok(hex) = std::env::var("MNEMOSYNE_GCP_KMS_KEY") {
+            let bytes = hex_decode(hex.trim()).map_err(|e| format!("invalid hex key: {}", e))?;
+            if bytes.len() != 32 { return Err("GCP KMS key must be 32 bytes".into()); }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            *self.cached_key.write().unwrap() = Some(key);
+            Ok(key)
+        } else {
+            Err("GCP Cloud KMS not configured. Set MNEMOSYNE_GCP_KMS_KEY env var or use LocalKms.".into())
+        }
+    }
+
+    fn rotate(&self, _passphrase: &str, provider: &dyn CryptoProvider) -> Result<[u8; 32], String> {
+        let new_key = provider.generate_key();
+        *self.cached_key.write().unwrap() = Some(new_key);
+        Ok(new_key)
+    }
 }
 
 // ---------------------------------------------------------------------------

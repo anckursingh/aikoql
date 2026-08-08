@@ -18,6 +18,9 @@ rand = "0.8"
 [dev-dependencies]
 mnemosyne-vector = { path = "../engines/vector" }
 mnemosyne-scheduler = { path = "../engines/scheduler" }
+mnemosyne-graph = { path = "../engines/graph" }
+mnemosyne-compiler = { path = "../compiler" }
+mnemosyne-runtime = { path = "../runtime" }
 proptest = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 

@@ -57,6 +57,8 @@ pub struct Lexer {
     pos: usize,
     line: usize,
     col: usize,
+    /// Span of the most recently returned token.
+    pub last_span: Span,
 }
 
 impl Lexer {
@@ -66,6 +68,7 @@ impl Lexer {
             pos: 0,
             line: 1,
             col: 1,
+            last_span: Span { line: 1, col: 1 },
         }
     }
 
@@ -176,7 +179,7 @@ impl Lexer {
 
     pub fn next_token(&mut self) -> Token {
         self.skip_whitespace();
-        let span = self.span();
+        self.last_span = self.span();
         match self.advance() {
             None => Token::Eof,
             Some(c) if c.is_alphabetic() || c == '_' => self.read_word(c),
@@ -219,7 +222,7 @@ impl Lexer {
             Some(',') => Token::Comma,
             Some('.') => Token::Dot,
             Some('*') => Token::Star,
-            Some(other) => Token::Error(format!("unexpected character '{}' at {}:{}", other, span.line, span.col)),
+            Some(other) => Token::Error(format!("unexpected character '{}'", other)),
         }
     }
 }

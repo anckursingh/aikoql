@@ -154,10 +154,10 @@ impl IrPlan {
                         "Scan at position {}: only one Scan allowed", i
                     )))
                 }
-                IrOp::Traverse { .. } if seen_scan => {
-                    return Err(KError::InvalidQuery(
-                        "Traverse after Scan: use one or the other".into(),
-                    ))
+                IrOp::Traverse { .. } => {
+                    // Set-based Traverse after Scan is valid — empty start_koid
+                    // consumes the input RowSet. Standalone Traverse (first op) with
+                    // explicit start_koid is also valid.
                 }
                 IrOp::Filter { .. } if !seen_scan => {
                     return Err(KError::InvalidQuery(format!(
