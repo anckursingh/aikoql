@@ -11,7 +11,7 @@ import copy
 import json
 from typing import Any, Iterator, Optional
 
-from mnemosyne import Mnemosyne
+from mnemosyne._mnemosyne import Mnemosyne
 
 
 class MnemosyneLangGraphSaver:

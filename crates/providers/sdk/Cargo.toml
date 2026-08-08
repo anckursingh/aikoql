@@ -1,0 +1,10 @@
+[package]
+name = "mnemosyne-provider-sdk"
+description = "Provider SDK for Mnemosyne — trait-based interface for external data system connectors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mnemosyne-kernel = { path = "../../kernel" }

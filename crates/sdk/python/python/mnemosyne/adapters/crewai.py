@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from mnemosyne import Mnemosyne
+from mnemosyne._mnemosyne import Mnemosyne
 
 
 class MnemosyneCrewAIMemory:
