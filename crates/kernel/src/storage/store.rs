@@ -37,12 +37,34 @@ impl WriteBatch {
     }
 }
 
+/// Backend-native constraint support (MRFC-0060 Phase C7).
+///
+/// A backend declares `true` ONLY for constraints it enforces natively with
+/// semantics equivalent to the kernel evaluator; the kernel then skips its
+/// in-process check for that class. All-false (the default) = kernel
+/// enforcement — current behavior of every backend.
+///
+/// `check` covers domain + check constraints. `unique` covers uniqueness.
+/// `not_null` covers required + nullable property checks.
+/// `foreign_key` is omitted — no FK constraint exists in the KOM today.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConstraintCapabilities {
+    pub unique: bool,
+    pub check: bool,
+    pub not_null: bool,
+}
+
 pub trait StorageEngine: Send + Sync {
     fn get(&self, key: &[u8]) -> KResult<Option<Vec<u8>>>;
     /// Prefix scan, sorted ascending by key.
     fn scan(&self, prefix: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>>;
     /// Atomically apply the batch (all-or-nothing).
     fn write_batch(&self, batch: &WriteBatch) -> KResult<()>;
+    /// Native constraint support declared by this backend.
+    /// Default: none — kernel enforces all constraints in-process.
+    fn constraint_capabilities(&self) -> ConstraintCapabilities {
+        ConstraintCapabilities::default()
+    }
 }
 
 /// In-memory engine: deterministic, fast, and the reference implementation

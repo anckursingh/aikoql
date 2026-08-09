@@ -1009,3 +1009,1411 @@ fn t26_reopen_recovers_journal_head_and_continues_chain() {
     assert!(proof.chain_valid);
     assert_eq!(proof.events, 2);
 }
+
+// ---------------------------------------------------------------------------
+// MRFC-0060 Phase C2: uniqueness constraints
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t06m_unique_constraint_prevents_duplicate() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type));
+    let mut r1 = RememberRequest::create(alice(), meta("User"));
+    r1.properties
+        .insert("email".into(), Value::Text("dup@b.com".into()));
+    assert!(k.remember(r1).is_ok());
+
+    // Same email → rejected
+    let mut r2 = RememberRequest::create(alice(), meta("User"));
+    r2.properties
+        .insert("email".into(), Value::Text("dup@b.com".into()));
+    let err = k.remember(r2).unwrap_err();
+    assert!(matches!(err, KError::InvalidSchema(_)));
+}
+
+#[test]
+fn t06n_composite_unique_enforced() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Org", 1).unique(&["tenant", "slug"], UniquenessScope::Type));
+    let mut r1 = RememberRequest::create(alice(), meta("Org"));
+    r1.properties
+        .insert("tenant".into(), Value::Text("t1".into()));
+    r1.properties
+        .insert("slug".into(), Value::Text("acme".into()));
+    assert!(k.remember(r1).is_ok());
+
+    // Same tenant + same slug → rejected
+    let mut r2 = RememberRequest::create(alice(), meta("Org"));
+    r2.properties
+        .insert("tenant".into(), Value::Text("t1".into()));
+    r2.properties
+        .insert("slug".into(), Value::Text("acme".into()));
+    assert!(k.remember(r2).is_err());
+
+    // Same tenant + different slug → ok
+    let mut r3 = RememberRequest::create(alice(), meta("Org"));
+    r3.properties
+        .insert("tenant".into(), Value::Text("t1".into()));
+    r3.properties
+        .insert("slug".into(), Value::Text("beta".into()));
+    assert!(k.remember(r3).is_ok());
+}
+
+#[test]
+fn t06o_unique_update_same_value_does_not_conflict_with_self() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("User", 1).unique(&["name"], UniquenessScope::Type));
+    let mut r1 = RememberRequest::create(alice(), meta("User"));
+    r1.properties
+        .insert("name".into(), Value::Text("Alice".into()));
+    let res = k.remember(r1).unwrap();
+
+    // Update same KO with same name → ok (not a conflict with itself)
+    let mut r2 = RememberRequest::update(alice(), res.koid, meta("User"));
+    r2.expected_version = Some(res.version);
+    r2.properties
+        .insert("name".into(), Value::Text("Alice".into()));
+    assert!(k.remember(r2).is_ok());
+}
+
+// ---- MRFC-0060 Phase C3: cardinality + ontology relationship enforcement ----
+
+#[test]
+fn t06p_cardinality_1to1_prevents_duplicate_target() {
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    // Register ontology: Person worksAt Organization (1:1)
+    let mut classes = BTreeMap::new();
+    classes.insert(
+        "Person".into(),
+        ClassDef {
+            name: "Person".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    classes.insert(
+        "Organization".into(),
+        ClassDef {
+            name: "Organization".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    let mut relationships = BTreeMap::new();
+    relationships.insert(
+        "worksAt".into(),
+        RelDef {
+            name: "worksAt".into(),
+            domain: Some("Person".into()),
+            range: Some("Organization".into()),
+            cardinality: Some(Cardinality::OneToOne),
+            max_count: None,
+        },
+    );
+    let ontology = OntologyDef {
+        namespace: "test".into(),
+        version: "1".into(),
+        classes,
+        relationships,
+        property_defs: BTreeMap::new(),
+        mappings: vec![],
+    };
+    k.register_ontology(OntologyRegistry::new(ontology).expect("valid ontology"));
+
+    // Create target Organization
+    let org = k
+        .remember(RememberRequest::create(alice(), meta("Organization")))
+        .unwrap();
+
+    // First Person → worksAt → Org (ok)
+    let mut r1 = RememberRequest::create(alice(), meta("Person"));
+    r1.referential_policy = ReferentialPolicy::Enforced;
+    r1.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: org.koid,
+        direction: Direction::Outbound,
+    });
+    assert!(k.remember(r1).is_ok());
+
+    // Second Person → worksAt → same Org (cardinality violation)
+    let mut r2 = RememberRequest::create(alice(), meta("Person"));
+    r2.referential_policy = ReferentialPolicy::Enforced;
+    r2.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: org.koid,
+        direction: Direction::Outbound,
+    });
+    let err = k.remember(r2).unwrap_err();
+    assert!(matches!(err, KError::InvalidObject(_)));
+}
+
+#[test]
+fn t06q_domain_mismatch_rejected_under_enforced() {
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    // Ontology: "worksAt" domain=Person
+    let mut classes = BTreeMap::new();
+    classes.insert(
+        "Person".into(),
+        ClassDef {
+            name: "Person".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    classes.insert(
+        "Document".into(),
+        ClassDef {
+            name: "Document".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    let mut relationships = BTreeMap::new();
+    relationships.insert(
+        "worksAt".into(),
+        RelDef {
+            name: "worksAt".into(),
+            domain: Some("Person".into()),
+            range: None,
+            cardinality: None,
+            max_count: None,
+        },
+    );
+    let ontology = OntologyDef {
+        namespace: "test".into(),
+        version: "1".into(),
+        classes,
+        relationships,
+        property_defs: BTreeMap::new(),
+        mappings: vec![],
+    };
+    k.register_ontology(OntologyRegistry::new(ontology).expect("valid ontology"));
+
+    // A Document cannot have a "worksAt" relationship (domain mismatch)
+    let mut r = RememberRequest::create(alice(), meta("Document"));
+    r.referential_policy = ReferentialPolicy::Enforced;
+    r.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: KOID::ZERO,
+        direction: Direction::Outbound,
+    });
+    let err = k.remember(r).unwrap_err();
+    assert!(matches!(err, KError::InvalidObject(_)));
+}
+
+#[test]
+fn t06r_range_mismatch_rejected_under_enforced() {
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    // Ontology: "worksAt" range=Organization
+    let mut classes = BTreeMap::new();
+    classes.insert(
+        "Person".into(),
+        ClassDef {
+            name: "Person".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    classes.insert(
+        "Organization".into(),
+        ClassDef {
+            name: "Organization".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    classes.insert(
+        "Document".into(),
+        ClassDef {
+            name: "Document".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    let mut relationships = BTreeMap::new();
+    relationships.insert(
+        "worksAt".into(),
+        RelDef {
+            name: "worksAt".into(),
+            domain: Some("Person".into()),
+            range: Some("Organization".into()),
+            cardinality: None,
+            max_count: None,
+        },
+    );
+    let ontology = OntologyDef {
+        namespace: "test".into(),
+        version: "1".into(),
+        classes,
+        relationships,
+        property_defs: BTreeMap::new(),
+        mappings: vec![],
+    };
+    k.register_ontology(OntologyRegistry::new(ontology).expect("valid ontology"));
+
+    // Create a Document as target (wrong type for range=Organization)
+    let doc = k
+        .remember(RememberRequest::create(alice(), meta("Document")))
+        .unwrap();
+
+    // Person → worksAt → Document (range mismatch: Document ≠ Organization)
+    let mut r = RememberRequest::create(alice(), meta("Person"));
+    r.referential_policy = ReferentialPolicy::Enforced;
+    r.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: doc.koid,
+        direction: Direction::Outbound,
+    });
+    let err = k.remember(r).unwrap_err();
+    assert!(matches!(err, KError::InvalidObject(_)));
+}
+
+#[test]
+fn t06s_permissive_policy_skips_ontology_checks() {
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    // Same 1:1 ontology as t06p
+    let mut classes = BTreeMap::new();
+    classes.insert(
+        "Person".into(),
+        ClassDef {
+            name: "Person".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    classes.insert(
+        "Organization".into(),
+        ClassDef {
+            name: "Organization".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    let mut relationships = BTreeMap::new();
+    relationships.insert(
+        "worksAt".into(),
+        RelDef {
+            name: "worksAt".into(),
+            domain: Some("Person".into()),
+            range: Some("Organization".into()),
+            cardinality: Some(Cardinality::OneToOne),
+            max_count: None,
+        },
+    );
+    let ontology = OntologyDef {
+        namespace: "test".into(),
+        version: "1".into(),
+        classes,
+        relationships,
+        property_defs: BTreeMap::new(),
+        mappings: vec![],
+    };
+    k.register_ontology(OntologyRegistry::new(ontology).expect("valid ontology"));
+
+    let org = k
+        .remember(RememberRequest::create(alice(), meta("Organization")))
+        .unwrap();
+
+    // Both use Permissive (default) — ontology checks are skipped
+    let mut r1 = RememberRequest::create(alice(), meta("Person"));
+    r1.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: org.koid,
+        direction: Direction::Outbound,
+    });
+    assert!(k.remember(r1).is_ok());
+
+    // Second Person → same Org also ok under Permissive
+    let mut r2 = RememberRequest::create(alice(), meta("Person"));
+    r2.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: org.koid,
+        direction: Direction::Outbound,
+    });
+    assert!(k.remember(r2).is_ok());
+}
+
+// ---- MRFC-0060 Phase C3: enhanced cardinality (bidirectional, max_count, transact) ----
+
+#[test]
+fn t06t_one_to_many_inbound_exclusivity() {
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    let mut classes = BTreeMap::new();
+    classes.insert(
+        "Employee".into(),
+        ClassDef {
+            name: "Employee".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    classes.insert(
+        "Department".into(),
+        ClassDef {
+            name: "Department".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    let mut relationships = BTreeMap::new();
+    relationships.insert(
+        "belongsTo".into(),
+        RelDef {
+            name: "belongsTo".into(),
+            domain: Some("Employee".into()),
+            range: Some("Department".into()),
+            cardinality: Some(Cardinality::OneToMany),
+            max_count: None,
+        },
+    );
+    let ontology = OntologyDef {
+        namespace: "test".into(),
+        version: "1".into(),
+        classes,
+        relationships,
+        property_defs: BTreeMap::new(),
+        mappings: vec![],
+    };
+    k.register_ontology(OntologyRegistry::new(ontology).expect("valid ontology"));
+
+    let dept = k
+        .remember(RememberRequest::create(alice(), meta("Department")))
+        .unwrap();
+
+    // First Employee → belongsTo → Department (ok)
+    let mut r1 = RememberRequest::create(alice(), meta("Employee"));
+    r1.referential_policy = ReferentialPolicy::Enforced;
+    r1.relationships.push(RelationshipRef {
+        rel_type: "belongsTo".into(),
+        target: dept.koid,
+        direction: Direction::Outbound,
+    });
+    assert!(k.remember(r1).is_ok());
+
+    // Second Employee → belongsTo → same Department (rejected — 1:N inbound exclusivity)
+    let mut r2 = RememberRequest::create(alice(), meta("Employee"));
+    r2.referential_policy = ReferentialPolicy::Enforced;
+    r2.relationships.push(RelationshipRef {
+        rel_type: "belongsTo".into(),
+        target: dept.koid,
+        direction: Direction::Outbound,
+    });
+    let err = k.remember(r2).unwrap_err();
+    assert!(matches!(err, KError::InvalidObject(_)));
+}
+
+#[test]
+fn t06u_max_count_enforced() {
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    let mut classes = BTreeMap::new();
+    classes.insert(
+        "Person".into(),
+        ClassDef {
+            name: "Person".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    classes.insert(
+        "Project".into(),
+        ClassDef {
+            name: "Project".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    let mut relationships = BTreeMap::new();
+    relationships.insert(
+        "memberOf".into(),
+        RelDef {
+            name: "memberOf".into(),
+            domain: Some("Person".into()),
+            range: Some("Project".into()),
+            cardinality: Some(Cardinality::ManyToMany),
+            max_count: Some(2),
+        },
+    );
+    let ontology = OntologyDef {
+        namespace: "test".into(),
+        version: "1".into(),
+        classes,
+        relationships,
+        property_defs: BTreeMap::new(),
+        mappings: vec![],
+    };
+    k.register_ontology(OntologyRegistry::new(ontology).expect("valid ontology"));
+
+    let p1 = k
+        .remember(RememberRequest::create(alice(), meta("Project")))
+        .unwrap();
+    let p2 = k
+        .remember(RememberRequest::create(alice(), meta("Project")))
+        .unwrap();
+    let p3 = k
+        .remember(RememberRequest::create(alice(), meta("Project")))
+        .unwrap();
+
+    // 3 memberOf relationships in one request → rejected (max 2)
+    let mut r = RememberRequest::create(alice(), meta("Person"));
+    r.referential_policy = ReferentialPolicy::Enforced;
+    r.relationships.push(RelationshipRef {
+        rel_type: "memberOf".into(),
+        target: p1.koid,
+        direction: Direction::Outbound,
+    });
+    r.relationships.push(RelationshipRef {
+        rel_type: "memberOf".into(),
+        target: p2.koid,
+        direction: Direction::Outbound,
+    });
+    r.relationships.push(RelationshipRef {
+        rel_type: "memberOf".into(),
+        target: p3.koid,
+        direction: Direction::Outbound,
+    });
+    let err = k.remember(r).unwrap_err();
+    assert!(matches!(err, KError::InvalidObject(_)));
+}
+
+#[test]
+fn t06v_max_count_within_limit_passes() {
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    let mut classes = BTreeMap::new();
+    classes.insert(
+        "Person".into(),
+        ClassDef {
+            name: "Person".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    classes.insert(
+        "Project".into(),
+        ClassDef {
+            name: "Project".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    let mut relationships = BTreeMap::new();
+    relationships.insert(
+        "memberOf".into(),
+        RelDef {
+            name: "memberOf".into(),
+            domain: Some("Person".into()),
+            range: Some("Project".into()),
+            cardinality: Some(Cardinality::ManyToMany),
+            max_count: Some(2),
+        },
+    );
+    let ontology = OntologyDef {
+        namespace: "test".into(),
+        version: "1".into(),
+        classes,
+        relationships,
+        property_defs: BTreeMap::new(),
+        mappings: vec![],
+    };
+    k.register_ontology(OntologyRegistry::new(ontology).expect("valid ontology"));
+
+    let p1 = k
+        .remember(RememberRequest::create(alice(), meta("Project")))
+        .unwrap();
+    let p2 = k
+        .remember(RememberRequest::create(alice(), meta("Project")))
+        .unwrap();
+
+    // 2 memberOf relationships → ok (exactly at limit)
+    let mut r = RememberRequest::create(alice(), meta("Person"));
+    r.referential_policy = ReferentialPolicy::Enforced;
+    r.relationships.push(RelationshipRef {
+        rel_type: "memberOf".into(),
+        target: p1.koid,
+        direction: Direction::Outbound,
+    });
+    r.relationships.push(RelationshipRef {
+        rel_type: "memberOf".into(),
+        target: p2.koid,
+        direction: Direction::Outbound,
+    });
+    assert!(k.remember(r).is_ok());
+}
+
+#[test]
+fn t06w_one_to_one_outbound_source_side() {
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    let mut classes = BTreeMap::new();
+    classes.insert(
+        "Person".into(),
+        ClassDef {
+            name: "Person".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    classes.insert(
+        "Organization".into(),
+        ClassDef {
+            name: "Organization".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    let mut relationships = BTreeMap::new();
+    relationships.insert(
+        "worksAt".into(),
+        RelDef {
+            name: "worksAt".into(),
+            domain: Some("Person".into()),
+            range: Some("Organization".into()),
+            cardinality: Some(Cardinality::OneToOne),
+            max_count: None,
+        },
+    );
+    let ontology = OntologyDef {
+        namespace: "test".into(),
+        version: "1".into(),
+        classes,
+        relationships,
+        property_defs: BTreeMap::new(),
+        mappings: vec![],
+    };
+    k.register_ontology(OntologyRegistry::new(ontology).expect("valid ontology"));
+
+    let org1 = k
+        .remember(RememberRequest::create(alice(), meta("Organization")))
+        .unwrap();
+    let org2 = k
+        .remember(RememberRequest::create(alice(), meta("Organization")))
+        .unwrap();
+
+    // One Person with two worksAt → rejected (1:1 outbound)
+    let mut r = RememberRequest::create(alice(), meta("Person"));
+    r.referential_policy = ReferentialPolicy::Enforced;
+    r.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: org1.koid,
+        direction: Direction::Outbound,
+    });
+    r.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: org2.koid,
+        direction: Direction::Outbound,
+    });
+    let err = k.remember(r).unwrap_err();
+    assert!(matches!(err, KError::InvalidObject(_)));
+}
+
+#[test]
+fn t06x_transact_cardinality_inbound_across_batch() {
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    let mut classes = BTreeMap::new();
+    classes.insert(
+        "Employee".into(),
+        ClassDef {
+            name: "Employee".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    classes.insert(
+        "Department".into(),
+        ClassDef {
+            name: "Department".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    let mut relationships = BTreeMap::new();
+    relationships.insert(
+        "belongsTo".into(),
+        RelDef {
+            name: "belongsTo".into(),
+            domain: Some("Employee".into()),
+            range: Some("Department".into()),
+            cardinality: Some(Cardinality::OneToMany),
+            max_count: None,
+        },
+    );
+    k.register_ontology(
+        OntologyRegistry::new(OntologyDef {
+            namespace: "test".into(),
+            version: "1".into(),
+            classes,
+            relationships,
+            property_defs: BTreeMap::new(),
+            mappings: vec![],
+        })
+        .expect("valid ontology"),
+    );
+
+    // Create Department + two Employees in one transact
+    let dept_koid = KOID::from_bytes([1u8; 16]);
+    let emp1_koid = KOID::from_bytes([2u8; 16]);
+    let emp2_koid = KOID::from_bytes([3u8; 16]);
+
+    let mut r_dept = RememberRequest::create(alice(), meta("Department"));
+    r_dept.koid = Some(dept_koid);
+    r_dept.referential_policy = ReferentialPolicy::Enforced;
+
+    let mut r1 = RememberRequest::create(alice(), meta("Employee"));
+    r1.koid = Some(emp1_koid);
+    r1.referential_policy = ReferentialPolicy::Enforced;
+    r1.relationships.push(RelationshipRef {
+        rel_type: "belongsTo".into(),
+        target: dept_koid,
+        direction: Direction::Outbound,
+    });
+
+    let mut r2 = RememberRequest::create(alice(), meta("Employee"));
+    r2.koid = Some(emp2_koid);
+    r2.referential_policy = ReferentialPolicy::Enforced;
+    r2.relationships.push(RelationshipRef {
+        rel_type: "belongsTo".into(),
+        target: dept_koid,
+        direction: Direction::Outbound,
+    });
+
+    // Both employees target same department → inbound cardinality violated intra-batch
+    let err = k
+        .transact(vec![
+            TransactionOp::new(alice(), r_dept),
+            TransactionOp::new(alice(), r1),
+            TransactionOp::new(alice(), r2),
+        ])
+        .unwrap_err();
+    assert!(matches!(err, KError::InvalidObject(_)));
+}
+
+#[test]
+fn t06y_transact_range_check_within_batch() {
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    let mut classes = BTreeMap::new();
+    classes.insert(
+        "Person".into(),
+        ClassDef {
+            name: "Person".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    classes.insert(
+        "Organization".into(),
+        ClassDef {
+            name: "Organization".into(),
+            parent: None,
+            description: None,
+        },
+    );
+    let mut relationships = BTreeMap::new();
+    relationships.insert(
+        "worksAt".into(),
+        RelDef {
+            name: "worksAt".into(),
+            domain: Some("Person".into()),
+            range: Some("Organization".into()),
+            cardinality: None,
+            max_count: None,
+        },
+    );
+    k.register_ontology(
+        OntologyRegistry::new(OntologyDef {
+            namespace: "test".into(),
+            version: "1".into(),
+            classes,
+            relationships,
+            property_defs: BTreeMap::new(),
+            mappings: vec![],
+        })
+        .expect("valid ontology"),
+    );
+
+    let org_koid = KOID::from_bytes([10u8; 16]);
+    let person_koid = KOID::from_bytes([20u8; 16]);
+
+    // Create both Organization and Person in one batch; Person targets Org
+    let mut r_org = RememberRequest::create(alice(), meta("Organization"));
+    r_org.koid = Some(org_koid);
+    r_org.referential_policy = ReferentialPolicy::Enforced;
+
+    let mut r_person = RememberRequest::create(alice(), meta("Person"));
+    r_person.koid = Some(person_koid);
+    r_person.referential_policy = ReferentialPolicy::Enforced;
+    r_person.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: org_koid,
+        direction: Direction::Outbound,
+    });
+
+    // Range check resolves target type from within-batch → should pass
+    let results = k
+        .transact(vec![
+            TransactionOp::new(alice(), r_org),
+            TransactionOp::new(alice(), r_person),
+        ])
+        .unwrap();
+    assert_eq!(results.len(), 2);
+}
+
+// ---- MRFC-0060 Phase C5: transaction-aware constraints ----
+
+#[test]
+fn t06z_deferred_unique_intra_batch_conflict() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type));
+
+    let mut r1 = RememberRequest::create(alice(), meta("User"));
+    r1.properties
+        .insert("email".into(), Value::Text("dup@b.com".into()));
+    let mut r2 = RememberRequest::create(alice(), meta("User"));
+    r2.properties
+        .insert("email".into(), Value::Text("dup@b.com".into()));
+
+    // Both in one batch → deferred uniqueness catches intra-batch conflict
+    let err = k
+        .transact(vec![
+            TransactionOp::new(alice(), r1),
+            TransactionOp::new(alice(), r2),
+        ])
+        .unwrap_err();
+    assert!(matches!(err, KError::InvalidSchema(_)));
+    let msg = format!("{}", err);
+    assert!(msg.contains("deferred") && msg.contains("within batch"));
+}
+
+#[test]
+fn t06za_deferred_unique_storage_conflict() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type));
+
+    // Commit one first
+    let mut r1 = RememberRequest::create(alice(), meta("User"));
+    r1.properties
+        .insert("email".into(), Value::Text("exists@b.com".into()));
+    k.remember(r1).unwrap();
+
+    // Then try another with same email in transact → deferred catches storage conflict
+    let mut r2 = RememberRequest::create(alice(), meta("User"));
+    r2.properties
+        .insert("email".into(), Value::Text("exists@b.com".into()));
+    let err = k
+        .transact(vec![TransactionOp::new(alice(), r2)])
+        .unwrap_err();
+    assert!(matches!(err, KError::InvalidSchema(_)));
+    assert!(format!("{}", err).contains("already exists"));
+}
+
+#[test]
+fn t06zb_deferred_check_constraint_in_transact() {
+    let (k, _c) = mk();
+    k.register_schema(
+        Schema::new("Event", 1)
+            .property("start_date", "Text")
+            .property("end_date", "Text")
+            .check_deferred(
+                "end_ge_start",
+                CheckExpression::Compare {
+                    op: CompareOp::Gte,
+                    left: Box::new(CheckExpression::Property("end_date".into())),
+                    right: Box::new(CheckExpression::Property("start_date".into())),
+                },
+            ),
+    );
+
+    let mut r1 = RememberRequest::create(alice(), meta("Event"));
+    r1.properties
+        .insert("start_date".into(), Value::Text("2024-06-01".into()));
+    r1.properties
+        .insert("end_date".into(), Value::Text("2024-01-01".into())); // end < start → violation
+
+    let err = k
+        .transact(vec![TransactionOp::new(alice(), r1)])
+        .unwrap_err();
+    assert!(matches!(err, KError::InvalidSchema(_)));
+    assert!(format!("{}", err).contains("end_ge_start"));
+}
+
+#[test]
+fn t06zc_deferred_unique_passes_when_no_conflict() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type));
+
+    let mut r1 = RememberRequest::create(alice(), meta("User"));
+    r1.properties
+        .insert("email".into(), Value::Text("a@b.com".into()));
+    let mut r2 = RememberRequest::create(alice(), meta("User"));
+    r2.properties
+        .insert("email".into(), Value::Text("b@c.com".into()));
+
+    // Different emails → no conflict
+    let results = k
+        .transact(vec![
+            TransactionOp::new(alice(), r1),
+            TransactionOp::new(alice(), r2),
+        ])
+        .unwrap();
+    assert_eq!(results.len(), 2);
+}
+
+#[test]
+fn t06zd_immediate_unique_still_fails_fast_in_transact() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type));
+
+    // Commit one first
+    let mut r1 = RememberRequest::create(alice(), meta("User"));
+    r1.properties
+        .insert("email".into(), Value::Text("immediate@b.com".into()));
+    k.remember(r1).unwrap();
+
+    // transact with same email → immediate constraint fails fast (not deferred)
+    let mut r2 = RememberRequest::create(alice(), meta("User"));
+    r2.properties
+        .insert("email".into(), Value::Text("immediate@b.com".into()));
+    let err = k
+        .transact(vec![TransactionOp::new(alice(), r2)])
+        .unwrap_err();
+    assert!(matches!(err, KError::InvalidSchema(_)));
+    // Immediate violation message does NOT mention "deferred"
+    assert!(!format!("{}", err).contains("deferred"));
+}
+
+// --- MRFC-0060 Phase C6: Constraint Dependency Graph ---
+
+#[test]
+fn t06ze_write_set_filters_unaffected_check_constraints() {
+    // A check constraint on "end_date >= start_date" references only those two
+    // properties. Updating an unrelated property ("title") should skip the
+    // constraint evaluation entirely via write-set filtering.
+    let (k, _c) = mk();
+    k.register_schema(
+        Schema::new("Event", 1)
+            .property("title", "Text")
+            .property("start_date", "Text")
+            .property("end_date", "Text")
+            .check(
+                "end_ge_start",
+                CheckExpression::Compare {
+                    op: CompareOp::Gte,
+                    left: Box::new(CheckExpression::Property("end_date".into())),
+                    right: Box::new(CheckExpression::Property("start_date".into())),
+                },
+            ),
+    );
+
+    let mut r1 = RememberRequest::create(alice(), meta("Event"));
+    r1.properties
+        .insert("title".into(), Value::Text("Conf".into()));
+    r1.properties
+        .insert("start_date".into(), Value::Text("2024-06-01".into()));
+    r1.properties
+        .insert("end_date".into(), Value::Text("2024-06-30".into()));
+    let rem = k.remember(r1).unwrap();
+
+    // Update only "title" — include all properties but only change title.
+    // write-set = {"title"}, which doesn't intersect {"end_date", "start_date"}.
+    let mut r2 = RememberRequest::update(alice(), rem.koid, meta("Event"));
+    r2.expected_version = Some(rem.version);
+    r2.properties
+        .insert("title".into(), Value::Text("NewTitle".into()));
+    r2.properties
+        .insert("start_date".into(), Value::Text("2024-06-01".into()));
+    r2.properties
+        .insert("end_date".into(), Value::Text("2024-06-30".into()));
+    let rem2 = k.remember(r2).unwrap();
+    assert_eq!(rem2.version, rem.version + 1);
+}
+
+#[test]
+fn t06zf_update_no_property_change_skim_passes() {
+    // Skim optimization: empty write-set on update → zero constraint overhead.
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).property("name", "Text").check(
+        "name_not_empty",
+        CheckExpression::Compare {
+            op: CompareOp::Neq,
+            left: Box::new(CheckExpression::Property("name".into())),
+            right: Box::new(CheckExpression::Literal(Value::Text("".into()))),
+        },
+    ));
+
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("ValidName".into()));
+    let rem = k.remember(r1).unwrap();
+
+    // Update with identical properties — write-set is empty → skim.
+    let mut r2 = RememberRequest::update(alice(), rem.koid, meta("Item"));
+    r2.expected_version = Some(rem.version);
+    r2.properties
+        .insert("name".into(), Value::Text("ValidName".into()));
+    let rem2 = k.remember(r2).unwrap();
+    assert_eq!(rem2.version, rem.version + 1);
+}
+
+// --- MRFC-0060 Phase C7: Connector Pushdown conformance --------------------
+
+/// Wraps MemoryEngine to override constraint capabilities.
+struct CapableEngine {
+    inner: MemoryEngine,
+    caps: ConstraintCapabilities,
+}
+impl CapableEngine {
+    fn new(caps: ConstraintCapabilities) -> Self {
+        CapableEngine {
+            inner: MemoryEngine::new(),
+            caps,
+        }
+    }
+}
+impl StorageEngine for CapableEngine {
+    fn get(&self, key: &[u8]) -> KResult<Option<Vec<u8>>> {
+        self.inner.get(key)
+    }
+    fn scan(&self, prefix: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        self.inner.scan(prefix)
+    }
+    fn write_batch(&self, batch: &WriteBatch) -> KResult<()> {
+        self.inner.write_batch(batch)
+    }
+    fn constraint_capabilities(&self) -> ConstraintCapabilities {
+        self.caps
+    }
+}
+
+#[test]
+fn t06zg_check_pushdown_skips_kernel_evaluation() {
+    // Backend claims `check: true` — kernel skips check constraint evaluation.
+    let caps = ConstraintCapabilities {
+        check: true,
+        unique: false,
+        not_null: false,
+    };
+    let engine = Arc::new(CapableEngine::new(caps));
+    let clock = Arc::new(ManualClock::new(1000));
+    let k = Kernel::open(engine, clock.clone(), 42).unwrap();
+
+    // Register a schema with a check constraint that would normally reject.
+    k.register_schema(Schema::new("Item", 1).property("qty", "Int").check(
+        "qty_positive",
+        CheckExpression::Compare {
+            op: CompareOp::Gt,
+            left: Box::new(CheckExpression::Property("qty".into())),
+            right: Box::new(CheckExpression::Literal(Value::Int(0))),
+        },
+    ));
+
+    // qty=-5 violates qty > 0, but kernel trusts backend → write succeeds.
+    let mut r = RememberRequest::create(alice(), meta("Item"));
+    r.properties.insert("qty".into(), Value::Int(-5));
+    let result = k.remember(r);
+    assert!(
+        result.is_ok(),
+        "kernel should trust backend and skip check; got {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn t06zh_default_capabilities_still_enforce() {
+    // Default MemoryEngine (all-false) still enforces everything.
+    let (k, _) = mk();
+    k.register_schema(Schema::new("Item", 1).property("qty", "Int").check(
+        "qty_positive",
+        CheckExpression::Compare {
+            op: CompareOp::Gt,
+            left: Box::new(CheckExpression::Property("qty".into())),
+            right: Box::new(CheckExpression::Literal(Value::Int(0))),
+        },
+    ));
+
+    let mut r = RememberRequest::create(alice(), meta("Item"));
+    r.properties.insert("qty".into(), Value::Int(-5));
+    let result = k.remember(r);
+    assert!(
+        result.is_err(),
+        "default engine should enforce check constraints"
+    );
+}
+
+#[test]
+fn t06zi_not_null_pushdown_skips_required_check() {
+    // Backend claims `not_null: true` — kernel skips required property checks.
+    let caps = ConstraintCapabilities {
+        check: false,
+        unique: false,
+        not_null: true,
+    };
+    let engine = Arc::new(CapableEngine::new(caps));
+    let clock = Arc::new(ManualClock::new(1000));
+    let k = Kernel::open(engine, clock.clone(), 42).unwrap();
+
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+
+    // Missing required "name" — kernel trusts backend's NOT NULL enforcement.
+    let r = RememberRequest::create(alice(), meta("Item"));
+    let result = k.remember(r);
+    assert!(
+        result.is_ok(),
+        "kernel should skip required check; got {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn t06zj_unique_pushdown_skips_immediate_uniqueness_in_transact() {
+    // Backend claims `unique: true` — kernel skips immediate uniqueness check in transact.
+    let caps = ConstraintCapabilities {
+        check: false,
+        unique: true,
+        not_null: false,
+    };
+    let engine = Arc::new(CapableEngine::new(caps));
+    let clock = Arc::new(ManualClock::new(1000));
+    let k = Kernel::open(engine, clock.clone(), 42).unwrap();
+
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type));
+
+    // First object with email X.
+    let mut r1 = RememberRequest::create(alice(), meta("User"));
+    r1.properties
+        .insert("email".into(), Value::Text("dup@x.com".into()));
+    let op1 = TransactionOp::new(alice(), r1);
+
+    // Second object with same email X — would conflict but backend handles it.
+    let mut r2 = RememberRequest::create(alice(), meta("User"));
+    r2.properties
+        .insert("email".into(), Value::Text("dup@x.com".into()));
+    let op2 = TransactionOp::new(alice(), r2);
+
+    let result = k.transact(vec![op1, op2]);
+    assert!(
+        result.is_ok(),
+        "kernel should trust backend uniqueness; got {:?}",
+        result.err()
+    );
+}
+
+// --- C8: constraint inference ---
+
+#[test]
+fn t06zk_inference_discovers_uniqueness_candidate() {
+    let (k, _clock) = mk();
+    k.register_schema(Schema::new("User", 1).property("email", "Text"));
+
+    // Create 3 users with distinct emails.
+    let mut r1 = RememberRequest::create(alice(), meta("User"));
+    r1.properties
+        .insert("email".into(), Value::Text("a@b.com".into()));
+    k.remember(r1).unwrap();
+
+    let mut r2 = RememberRequest::create(alice(), meta("User"));
+    r2.properties
+        .insert("email".into(), Value::Text("c@d.com".into()));
+    k.remember(r2).unwrap();
+
+    let mut r3 = RememberRequest::create(alice(), meta("User"));
+    r3.properties
+        .insert("email".into(), Value::Text("e@f.com".into()));
+    k.remember(r3).unwrap();
+
+    let candidates = k.infer_constraints(&alice(), "User").unwrap();
+    let unique = candidates
+        .iter()
+        .find(|c| c.constraint_desc.contains("UNIQUE"));
+    assert!(unique.is_some(), "should infer UNIQUE(email)");
+    let u = unique.unwrap();
+    assert_eq!(u.type_name, "User");
+    assert_eq!(u.confidence, 1.0);
+    assert_eq!(u.violations, 0);
+}
+
+#[test]
+fn t06zl_inference_never_auto_enforces() {
+    // AC-18: inferred constraints must never auto-promote to ENFORCED.
+    let (k, _clock) = mk();
+    k.register_schema(Schema::new("Item", 1).property("value", "Int"));
+
+    // Create items with duplicate values (would violate UNIQUE).
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties.insert("value".into(), Value::Int(42));
+    k.remember(r1).unwrap();
+
+    let mut r2 = RememberRequest::create(alice(), meta("Item"));
+    r2.properties.insert("value".into(), Value::Int(42));
+    k.remember(r2).unwrap();
+
+    // Inference shows duplicates...
+    let candidates = k.infer_constraints(&alice(), "Item").unwrap();
+    let unique = candidates
+        .iter()
+        .find(|c| c.constraint_desc.contains("UNIQUE"));
+    assert!(unique.is_some());
+    assert!(unique.unwrap().violations > 0);
+
+    // ...but writes still succeed because nothing was auto-registered.
+    let mut r3 = RememberRequest::create(alice(), meta("Item"));
+    r3.properties.insert("value".into(), Value::Int(42));
+    let result = k.remember(r3);
+    assert!(
+        result.is_ok(),
+        "AC-18 violated: inference auto-enforced a constraint; got {:?}",
+        result.err()
+    );
+}
+
+// --- C9 Programmable Constraints ---
+
+#[test]
+fn t06zm_arithmetic_check_constraint_enforced() {
+    // Register schema with arithmetic check: @total == @price * @quantity
+    let (k, _clock) = mk();
+    let schema = Schema::new("Order", 1)
+        .property("total", "Int")
+        .property("price", "Int")
+        .property("quantity", "Int")
+        .check(
+            "total_eq_price_times_qty",
+            CheckExpression::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(CheckExpression::Property("total".into())),
+                right: Box::new(CheckExpression::Arith(
+                    Box::new(CheckExpression::Property("price".into())),
+                    ArithOp::Mul,
+                    Box::new(CheckExpression::Property("quantity".into())),
+                )),
+            },
+        );
+    k.register_schema(schema);
+
+    // Valid: total == price * quantity
+    let mut r1 = RememberRequest::create(alice(), meta("Order"));
+    r1.properties.insert("total".into(), Value::Int(100));
+    r1.properties.insert("price".into(), Value::Int(20));
+    r1.properties.insert("quantity".into(), Value::Int(5));
+    assert!(k.remember(r1).is_ok());
+
+    // Invalid: total != price * quantity → constraint violation
+    let mut r2 = RememberRequest::create(alice(), meta("Order"));
+    r2.properties.insert("total".into(), Value::Int(999));
+    r2.properties.insert("price".into(), Value::Int(20));
+    r2.properties.insert("quantity".into(), Value::Int(5));
+    let result = k.remember(r2);
+    assert!(result.is_err());
+    let err = format!("{:?}", result.unwrap_err());
+    assert!(err.contains("total_eq_price_times_qty"));
+}
+
+#[test]
+fn t06zn_conditional_if_constraint() {
+    // IF @status == "active" THEN @email != NULL ELSE true
+    let (k, _clock) = mk();
+    let schema = Schema::new("User", 1)
+        .property("status", "Text")
+        .nullable_property("email", "Text")
+        .check(
+            "active_requires_email",
+            CheckExpression::If(
+                Box::new(CheckExpression::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(CheckExpression::Property("status".into())),
+                    right: Box::new(CheckExpression::Literal(Value::Text("active".into()))),
+                }),
+                Box::new(CheckExpression::Compare {
+                    op: CompareOp::Neq,
+                    left: Box::new(CheckExpression::Property("email".into())),
+                    right: Box::new(CheckExpression::Literal(Value::Null)),
+                }),
+                Box::new(CheckExpression::Literal(Value::Bool(true))),
+            ),
+        );
+    k.register_schema(schema);
+
+    // Active with email → ok
+    let mut r1 = RememberRequest::create(alice(), meta("User"));
+    r1.properties
+        .insert("status".into(), Value::Text("active".into()));
+    r1.properties
+        .insert("email".into(), Value::Text("u@x.com".into()));
+    assert!(k.remember(r1).is_ok());
+
+    // Active with null → violated
+    let mut r2 = RememberRequest::create(alice(), meta("User"));
+    r2.properties
+        .insert("status".into(), Value::Text("active".into()));
+    r2.properties.insert("email".into(), Value::Null);
+    let result = k.remember(r2);
+    assert!(result.is_err());
+
+    // Inactive with null → ok (else branch)
+    let mut r3 = RememberRequest::create(alice(), meta("User"));
+    r3.properties
+        .insert("status".into(), Value::Text("inactive".into()));
+    r3.properties.insert("email".into(), Value::Null);
+    assert!(k.remember(r3).is_ok());
+}
+
+// ── AC-05: UniquenessScope enforcement ──
+
+fn meta_tenant(t: &str, tenant: &str) -> Metadata {
+    Metadata {
+        type_name: t.into(),
+        tenant: Some(tenant.into()),
+        schema_version: 1,
+        tags: vec![],
+    }
+}
+
+#[test]
+fn t06zo_tenant_scoped_unique_allows_same_value_different_tenants() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Tenant));
+
+    // t1 owns email
+    let mut r1 = RememberRequest::create(alice(), meta_tenant("User", "t1"));
+    r1.properties
+        .insert("email".into(), Value::Text("x@y.com".into()));
+    assert!(k.remember(r1).is_ok());
+
+    // t2 can use the same email — different tenant
+    let mut r2 = RememberRequest::create(alice(), meta_tenant("User", "t2"));
+    r2.properties
+        .insert("email".into(), Value::Text("x@y.com".into()));
+    assert!(k.remember(r2).is_ok());
+}
+
+#[test]
+fn t06zp_tenant_scoped_unique_rejects_same_tenant() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Tenant));
+
+    let mut r1 = RememberRequest::create(alice(), meta_tenant("User", "t1"));
+    r1.properties
+        .insert("email".into(), Value::Text("x@y.com".into()));
+    assert!(k.remember(r1).is_ok());
+
+    // Same tenant + same email → rejected
+    let mut r2 = RememberRequest::create(alice(), meta_tenant("User", "t1"));
+    r2.properties
+        .insert("email".into(), Value::Text("x@y.com".into()));
+    let err = k.remember(r2).unwrap_err();
+    assert!(matches!(err, KError::InvalidSchema(_)));
+}
+
+#[test]
+fn t06zq_global_unique_rejects_across_types() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Alpha", 1).unique(&["code"], UniquenessScope::Global));
+    k.register_schema(Schema::new("Beta", 1).unique(&["code"], UniquenessScope::Global));
+
+    // Alpha owns code
+    let mut r1 = RememberRequest::create(alice(), meta("Alpha"));
+    r1.properties
+        .insert("code".into(), Value::Text("GLOBAL-1".into()));
+    assert!(k.remember(r1).is_ok());
+
+    // Beta with same code → rejected (global scope crosses types)
+    let mut r2 = RememberRequest::create(alice(), meta("Beta"));
+    r2.properties
+        .insert("code".into(), Value::Text("GLOBAL-1".into()));
+    let err = k.remember(r2).unwrap_err();
+    assert!(matches!(err, KError::InvalidSchema(_)));
+}
+
+// ── AC-22: schema migration validation ──
+
+#[test]
+fn t06zr_migration_detects_violations() {
+    let (k, _c) = mk();
+    // Register relaxed schema v1: no constraints on price
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"));
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties.insert("price".into(), Value::Int(-5));
+    assert!(k.remember(r1).is_ok());
+
+    // Propose stricter schema v2: price >= 0 via check constraint
+    let v2 = Schema::new("Item", 2).property("price", "Int").check(
+        "price_non_negative",
+        CheckExpression::Compare {
+            op: CompareOp::Gte,
+            left: Box::new(CheckExpression::Property("price".into())),
+            right: Box::new(CheckExpression::Literal(Value::Int(0))),
+        },
+    );
+    let violations = k.validate_schema_migration(&alice(), &v2).unwrap();
+    assert!(!violations.is_empty());
+    // Violation should carry the KOID
+    assert!(violations.iter().any(|v| v.koid.is_some()));
+}
+
+#[test]
+fn t06zs_migration_passes_clean_data() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"));
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties.insert("price".into(), Value::Int(42));
+    assert!(k.remember(r1).is_ok());
+
+    // v2 requires price >= 0 — existing data is fine
+    let v2 = Schema::new("Item", 2).property("price", "Int").check(
+        "price_non_negative",
+        CheckExpression::Compare {
+            op: CompareOp::Gte,
+            left: Box::new(CheckExpression::Property("price".into())),
+            right: Box::new(CheckExpression::Literal(Value::Int(0))),
+        },
+    );
+    let violations = k.validate_schema_migration(&alice(), &v2).unwrap();
+    assert!(violations.is_empty());
+}
+
+// ── AC-17: provenance-required properties ──
+
+#[test]
+fn t06zu_provenance_required_rejects_missing_source() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Fact", 1).provenance_required_property("claim", "Text"));
+    // No semantic source → rejected
+    let mut r = RememberRequest::create(alice(), meta("Fact"));
+    r.properties
+        .insert("claim".into(), Value::Text("sky is blue".into()));
+    let err = k.remember(r).unwrap_err();
+    assert!(matches!(err, KError::InvalidSchema(_)));
+}
+
+#[test]
+fn t06zv_provenance_required_accepts_sourced() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Fact", 1).provenance_required_property("claim", "Text"));
+    let mut r = RememberRequest::create(alice(), meta("Fact"));
+    r.properties
+        .insert("claim".into(), Value::Text("sky is blue".into()));
+    r.semantic = Some(SemanticBlock {
+        embedding_model: None,
+        embedding: None,
+        confidence: None,
+        source: Some("sec-filing".into()),
+        summary: None,
+    });
+    assert!(k.remember(r).is_ok());
+}

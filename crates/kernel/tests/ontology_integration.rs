@@ -91,6 +91,7 @@ fn enterprise_ontology() -> OntologyRegistry {
             domain: Some("Employee".into()),
             range: Some("Department".into()),
             cardinality: Some(Cardinality::OneToMany),
+            max_count: None,
         },
     );
 
@@ -101,6 +102,7 @@ fn enterprise_ontology() -> OntologyRegistry {
             name: "name".into(),
             value_type: "Text".into(),
             required: true,
+            nullable: false,
         },
     );
     property_defs.insert(
@@ -109,6 +111,7 @@ fn enterprise_ontology() -> OntologyRegistry {
             name: "dept".into(),
             value_type: "Text".into(),
             required: false,
+            nullable: false,
         },
     );
 

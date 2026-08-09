@@ -66,6 +66,9 @@ pub struct RelDef {
     /// Target class (range).
     pub range: Option<String>,
     pub cardinality: Option<Cardinality>,
+    /// Maximum outbound relationships allowed from source (MRFC-0060 Phase C3).
+    /// `None` = unlimited. Enforced alongside cardinality at write time.
+    pub max_count: Option<u32>,
 }
 
 /// A typed property definition within an ontology class.
@@ -75,6 +78,9 @@ pub struct PropertyDef {
     /// Mnemosyne value type: "Text", "Int", "Float", "Bool", "DateTime", "Json".
     pub value_type: String,
     pub required: bool,
+    /// When `true`, a Null value is accepted for this property.
+    /// When `false`, any write must provide a non-Null value of `value_type`.
+    pub nullable: bool,
 }
 
 /// Maps a physical data source element to an ontology class with property
@@ -164,6 +170,9 @@ impl OntologyDef {
             if let Some(ref card) = rd.cardinality {
                 rm.insert("cardinality".into(), Value::Text(card.as_str().into()));
             }
+            if let Some(max) = rd.max_count {
+                rm.insert("max_count".into(), Value::Int(max as i64));
+            }
             rels_list.push(Value::Map(rm));
         }
         m.insert("relationships".into(), Value::List(rels_list));
@@ -242,6 +251,10 @@ impl OntologyDef {
                     let range = map_get_str(rm, "range").map(String::from);
                     let cardinality =
                         map_get_str(rm, "cardinality").and_then(Cardinality::from_str);
+                    let max_count = match rm.get("max_count") {
+                        Some(Value::Int(n)) if *n > 0 => Some(*n as u32),
+                        _ => None,
+                    };
                     relationships.insert(
                         name.clone(),
                         RelDef {
@@ -249,6 +262,7 @@ impl OntologyDef {
                             domain,
                             range,
                             cardinality,
+                            max_count,
                         },
                     );
                 }
@@ -272,6 +286,7 @@ impl OntologyDef {
                             name,
                             value_type,
                             required,
+                            nullable: false,
                         },
                     );
                 }
@@ -598,6 +613,7 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
                     name: prop_name.clone(),
                     value_type: vt.clone(),
                     required: false,
+                    nullable: false,
                 });
         }
         mappings.push(MappingEntry {
@@ -617,6 +633,7 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
                 domain: Some(src_type.clone()),
                 range: None,
                 cardinality: Some(Cardinality::OneToMany),
+                max_count: None,
             });
     }
 
@@ -707,6 +724,7 @@ mod tests {
                 domain: Some("Employee".into()),
                 range: Some("Department".into()),
                 cardinality: Some(Cardinality::OneToMany),
+                max_count: None,
             },
         );
 
@@ -717,6 +735,7 @@ mod tests {
                 name: "id".into(),
                 value_type: "Text".into(),
                 required: true,
+                nullable: false,
             },
         );
         property_defs.insert(
@@ -725,6 +744,7 @@ mod tests {
                 name: "dept".into(),
                 value_type: "Text".into(),
                 required: false,
+                nullable: false,
             },
         );
 
@@ -786,6 +806,42 @@ mod tests {
         let mut ko = ko;
         ko.properties = props.clone();
         let def2 = OntologyDef::from_ko(&ko).unwrap();
+        assert_eq!(def, def2);
+    }
+
+    #[test]
+    fn max_count_round_trips_through_property_map() {
+        // Prove max_count survives serialization round-trip.
+        let mut classes = std::collections::BTreeMap::new();
+        classes.insert(
+            "A".into(),
+            ClassDef {
+                name: "A".into(),
+                parent: None,
+                description: None,
+            },
+        );
+        let mut relationships = std::collections::BTreeMap::new();
+        relationships.insert(
+            "r".into(),
+            RelDef {
+                name: "r".into(),
+                domain: None,
+                range: None,
+                cardinality: Some(Cardinality::ManyToMany),
+                max_count: Some(5),
+            },
+        );
+        let def = OntologyDef {
+            namespace: "test".into(),
+            version: "1".into(),
+            classes,
+            relationships,
+            property_defs: std::collections::BTreeMap::new(),
+            mappings: vec![],
+        };
+        let props = def.to_property_map();
+        let def2 = OntologyDef::from_property_map(&props).unwrap();
         assert_eq!(def, def2);
     }
 
@@ -1154,6 +1210,7 @@ mod tests {
                 domain: None,
                 range: None,
                 cardinality: None,
+                max_count: None,
             },
         );
         let def = OntologyDef {

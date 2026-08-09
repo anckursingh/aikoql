@@ -13,6 +13,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
+use regex::Regex;
+
 // ---------------------------------------------------------------------------
 // Referential integrity policy (MRFC-0001 §7)
 // ---------------------------------------------------------------------------
@@ -24,6 +26,8 @@ pub enum ReferentialPolicy {
     /// Relationship targets are not validated; dangling refs are allowed.
     #[default]
     Permissive,
+    /// Full ontology enforcement: domain, range, and cardinality checks (MRFC-0060 C3).
+    Enforced,
 }
 
 impl ReferentialPolicy {
@@ -31,12 +35,14 @@ impl ReferentialPolicy {
         match self {
             ReferentialPolicy::Strict => 0,
             ReferentialPolicy::Permissive => 1,
+            ReferentialPolicy::Enforced => 2,
         }
     }
     pub fn from_tag(t: u8) -> Option<Self> {
         match t {
             0 => Some(ReferentialPolicy::Strict),
             1 => Some(ReferentialPolicy::Permissive),
+            2 => Some(ReferentialPolicy::Enforced),
             _ => None,
         }
     }
@@ -164,6 +170,120 @@ pub enum Value {
 }
 
 pub type PropertyMap = BTreeMap<String, Value>;
+
+// ---------------------------------------------------------------------------
+// Value type introspection (MRFC-0060 Phase C1)
+// ---------------------------------------------------------------------------
+
+impl Value {
+    /// Return the Mnemosyne type name for this value.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Null => "Null",
+            Value::Bool(_) => "Bool",
+            Value::Int(_) => "Int",
+            Value::Float(_) => "Float",
+            Value::Text(_) => "Text",
+            Value::Bytes(_) => "Bytes",
+            Value::List(_) => "List",
+            Value::Map(_) => "Map",
+        }
+    }
+
+    /// Validate this value against a declared schema property type.
+    /// Returns `Ok(())` if the value matches the expected type, or if the
+    /// value is Null and the property is nullable.
+    pub fn type_check(&self, prop: &SchemaProperty) -> Result<(), String> {
+        match self {
+            Value::Null => {
+                if prop.nullable {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "property '{}' is not nullable but got Null",
+                        prop.name
+                    ))
+                }
+            }
+            Value::Bool(_) => {
+                if prop.value_type == "Bool" {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "property '{}' type mismatch: expected {}, got Bool",
+                        prop.name, prop.value_type
+                    ))
+                }
+            }
+            Value::Int(_) => {
+                if prop.value_type == "Int" {
+                    Ok(())
+                } else if prop.value_type == "Float" {
+                    // Int → Float is a widening conversion, accept it
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "property '{}' type mismatch: expected {}, got Int",
+                        prop.name, prop.value_type
+                    ))
+                }
+            }
+            Value::Float(_) => {
+                if prop.value_type == "Float" {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "property '{}' type mismatch: expected {}, got Float",
+                        prop.name, prop.value_type
+                    ))
+                }
+            }
+            Value::Text(_) => {
+                if prop.value_type == "Text"
+                    || prop.value_type == "DateTime"
+                    || prop.value_type == "Json"
+                {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "property '{}' type mismatch: expected {}, got Text",
+                        prop.name, prop.value_type
+                    ))
+                }
+            }
+            Value::Bytes(_) => {
+                if prop.value_type == "Bytes" {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "property '{}' type mismatch: expected {}, got Bytes",
+                        prop.name, prop.value_type
+                    ))
+                }
+            }
+            Value::List(_) => {
+                if prop.value_type == "List" {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "property '{}' type mismatch: expected {}, got List",
+                        prop.name, prop.value_type
+                    ))
+                }
+            }
+            Value::Map(_) => {
+                if prop.value_type == "Map" || prop.value_type == "Json" {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "property '{}' type mismatch: expected {}, got Map",
+                        prop.name, prop.value_type
+                    ))
+                }
+            }
+        }
+    }
+}
 
 /// Unknown extension fields MUST survive round-trip serialization (MRFC-0001 req 9).
 pub type ExtensionMap = BTreeMap<String, Value>;
@@ -526,7 +646,11 @@ impl KnowledgeObject {
     /// Validate this KO against a registered schema. Makes `KError::InvalidSchema`
     /// reachable and enforces type/version/required-property/unknown-core-field
     /// invariants.
-    pub fn validate_against(&self, schema: &Schema) -> KResult<()> {
+    /// When `skip_not_null` is true, the required-properties loop is skipped
+    /// (backend enforces NOT NULL). Type-name/version/closed-world checks
+    /// still run — they're structural, not constraint-level.
+    /// MRFC-0060 Phase C7.
+    pub fn validate_against(&self, schema: &Schema, skip_not_null: bool) -> KResult<()> {
         schema.ensure_allowed_includes_required();
         if self.metadata.type_name != schema.type_name {
             return Err(KError::InvalidSchema(format!(
@@ -540,12 +664,14 @@ impl KnowledgeObject {
                 schema.schema_version, self.metadata.schema_version
             )));
         }
-        for req in &schema.required_properties {
-            if !self.properties.contains_key(req) {
-                return Err(KError::InvalidSchema(format!(
-                    "missing required property: '{}'",
-                    req
-                )));
+        if !skip_not_null {
+            for req in &schema.required_properties {
+                if !self.properties.contains_key(req) {
+                    return Err(KError::InvalidSchema(format!(
+                        "missing required property: '{}'",
+                        req
+                    )));
+                }
             }
         }
         if let Some(allowed) = &schema.allowed_properties {
@@ -570,7 +696,7 @@ impl KnowledgeObject {
 /// This is the Increment-1 subset: type, version, required property keys, and
 /// optional closed-world allowed-property set. Future increments add property
 /// types, relationship cardinality, and semantic constraints.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Schema {
     pub type_name: String,
     pub schema_version: u32,
@@ -579,6 +705,257 @@ pub struct Schema {
     /// treated as an unknown core field and rejected (MRFC-0001 §10).
     /// If `None`, unknown core properties are allowed (open-world default).
     pub allowed_properties: Option<HashSet<String>>,
+    /// Typed property definitions. When non-empty, each property value is
+    /// type-checked against its declared type during `SchemaRegistry::validate()`.
+    /// MRFC-0060 Phase C1 — property type system.
+    pub properties: Vec<SchemaProperty>,
+    /// Uniqueness constraints (MRFC-0060 Phase C2).
+    pub unique_constraints: Vec<UniqueConstraint>,
+    /// Cross-property check constraints (MRFC-0060 Phase C4).
+    pub check_constraints: Vec<CheckConstraint>,
+}
+
+/// A typed property definition within a schema (MRFC-0060 Phase C1).
+/// Separate from the ontology's `PropertyDef` — schema properties are the
+/// enforced subset of what the ontology discovers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SchemaProperty {
+    pub name: String,
+    /// Expected Mnemosyne value type: "Text", "Int", "Float", "Bool", "Bytes", "List", "Map".
+    pub value_type: String,
+    /// If true, the property must be present in every write.
+    pub required: bool,
+    /// If true, a Null value is accepted for this property.
+    /// If false, any write of this property must carry a non-Null value of `value_type`.
+    pub nullable: bool,
+    /// If true, the property value must come from a trusted source (SemanticBlock.source).
+    pub provenance_required: bool,
+    /// Domain constraints applied to this property's value (MRFC-0060 Phase C4).
+    pub domain_constraints: Vec<DomainConstraint>,
+}
+
+/// Uniqueness scope (MRFC-0060 Phase C2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UniquenessScope {
+    /// Value must be unique within the type (same type_name).
+    Type,
+    /// Value must be unique within the tenant (all types in same tenant).
+    Tenant,
+    /// Value must be globally unique (all tenants and types).
+    Global,
+}
+
+/// A uniqueness constraint on one or more properties (MRFC-0060 Phase C2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UniqueConstraint {
+    /// Property names forming the unique key. Composite if len > 1.
+    pub properties: Vec<String>,
+    /// Scope of uniqueness enforcement.
+    pub scope: UniquenessScope,
+    /// When to evaluate this constraint (MRFC-0060 Phase C5).
+    pub timing: ConstraintTiming,
+}
+
+// ---------------------------------------------------------------------------
+// Domain + Check constraints (MRFC-0060 Phase C4)
+// ---------------------------------------------------------------------------
+
+/// Per-property value domain constraint.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DomainConstraint {
+    /// Numeric range [min, max] for Int/Float properties.
+    Range { min: Option<f64>, max: Option<f64> },
+    /// Glob-style pattern: `*` matches any sequence, `?` matches one char.
+    Pattern(String),
+    /// Length bounds for Text (chars) or Bytes.
+    Length {
+        min: Option<usize>,
+        max: Option<usize>,
+    },
+    /// Value must be one of these exact values.
+    Enum(Vec<Value>),
+    /// Named format: "email", "url", "uuid", "date", "datetime".
+    Format(String),
+}
+
+/// When a constraint is evaluated (MRFC-0060 Phase C5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ConstraintTiming {
+    /// Evaluated at write time (per-statement).
+    #[default]
+    Immediate,
+    /// Evaluated at commit time (end of transaction).
+    Deferred,
+}
+
+/// A named check constraint with a boolean predicate expression.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CheckConstraint {
+    pub name: String,
+    pub predicate: CheckExpression,
+    /// When to evaluate this constraint (MRFC-0060 Phase C5).
+    pub timing: ConstraintTiming,
+}
+
+/// Severity of a constraint violation (MRFC-0060 Phase C5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViolationSeverity {
+    Error,
+    Warning,
+}
+
+/// A single constraint violation (MRFC-0060 Phase C5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConstraintViolation {
+    pub constraint_name: String,
+    pub message: String,
+    pub severity: ViolationSeverity,
+    /// Commit timestamp when the violation was detected, 0 if immediate/pre-commit.
+    pub timestamp: u64,
+    /// KOID of the object that caused the violation, when attributable.
+    pub koid: Option<KOID>,
+}
+
+impl ConstraintViolation {
+    pub fn error(name: &str, msg: &str) -> Self {
+        ConstraintViolation {
+            constraint_name: name.into(),
+            message: msg.into(),
+            severity: ViolationSeverity::Error,
+            timestamp: 0,
+            koid: None,
+        }
+    }
+
+    pub fn warning(name: &str, msg: &str) -> Self {
+        ConstraintViolation {
+            constraint_name: name.into(),
+            message: msg.into(),
+            severity: ViolationSeverity::Warning,
+            timestamp: 0,
+            koid: None,
+        }
+    }
+
+    /// Set the koid on this violation (builder-style).
+    pub fn with_koid(mut self, koid: KOID) -> Self {
+        self.koid = Some(koid);
+        self
+    }
+}
+
+/// Result of a constraint evaluation pass (MRFC-0060 Phase C5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConstraintResult {
+    pub valid: bool,
+    pub violations: Vec<ConstraintViolation>,
+    pub warnings: Vec<ConstraintViolation>,
+}
+
+impl ConstraintResult {
+    pub fn ok() -> Self {
+        ConstraintResult {
+            valid: true,
+            violations: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    pub fn fail(name: &str, msg: &str) -> Self {
+        ConstraintResult {
+            valid: false,
+            violations: vec![ConstraintViolation::error(name, msg)],
+            warnings: Vec::new(),
+        }
+    }
+
+    /// Merge another result's violations and warnings into this one.
+    pub fn merge(&mut self, other: &ConstraintResult) {
+        if !other.valid {
+            self.valid = false;
+        }
+        self.violations.extend(other.violations.clone());
+        self.warnings.extend(other.warnings.clone());
+    }
+
+    /// Convert all errors and warnings into a single KError message.
+    pub fn into_kresult(self) -> KResult<()> {
+        if self.valid && self.warnings.is_empty() {
+            return Ok(());
+        }
+        let mut parts: Vec<String> = Vec::new();
+        for v in &self.violations {
+            parts.push(format!("[{}] {}", v.constraint_name, v.message));
+        }
+        for w in &self.warnings {
+            parts.push(format!("[WARN:{}] {}", w.constraint_name, w.message));
+        }
+        Err(KError::InvalidSchema(parts.join("; ")))
+    }
+}
+
+/// A discovered constraint candidate from data inference (MRFC-0060 Phase C8).
+/// Never auto-promoted to ENFORCED — caller reviews and manually registers
+/// constraints via `register_schema()`.
+#[derive(Clone, Debug)]
+pub struct InferenceCandidate {
+    /// Type this constraint applies to.
+    pub type_name: String,
+    /// Human-readable: "UNIQUE(email)", "NOT NULL age", "CHECK age BETWEEN 0 AND 150".
+    pub constraint_desc: String,
+    /// 0.0–1.0: 1.0 = no violations found in scanned data.
+    pub confidence: f64,
+    /// Total rows scanned.
+    pub total_rows: usize,
+    /// Number of rows that would violate this constraint.
+    pub violations: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CheckExpression {
+    /// Reference to a property value: `@name`.
+    Property(String),
+    /// A literal value.
+    Literal(Value),
+    /// Binary comparison: `left op right`.
+    Compare {
+        op: CompareOp,
+        left: Box<CheckExpression>,
+        right: Box<CheckExpression>,
+    },
+    /// Logical AND.
+    And(Box<CheckExpression>, Box<CheckExpression>),
+    /// Logical OR.
+    Or(Box<CheckExpression>, Box<CheckExpression>),
+    /// Logical NOT.
+    Not(Box<CheckExpression>),
+    /// Arithmetic: left op right. Evaluates to a Value (MRFC-0060 Phase C9).
+    Arith(Box<CheckExpression>, ArithOp, Box<CheckExpression>),
+    /// Conditional: if condition is truthy, evaluate then branch, else else branch (C9).
+    If(
+        Box<CheckExpression>,
+        Box<CheckExpression>,
+        Box<CheckExpression>,
+    ),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompareOp {
+    Eq,
+    Neq,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+}
+
+/// Arithmetic operators for `CheckExpression::Arith` (MRFC-0060 Phase C9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
 }
 
 impl Schema {
@@ -588,6 +965,9 @@ impl Schema {
             schema_version,
             required_properties: Vec::new(),
             allowed_properties: None,
+            properties: Vec::new(),
+            unique_constraints: Vec::new(),
+            check_constraints: Vec::new(),
         }
     }
 
@@ -605,6 +985,114 @@ impl Schema {
         self
     }
 
+    /// Add a typed property definition (MRFC-0060 Phase C1).
+    pub fn property(mut self, name: &str, value_type: &str) -> Self {
+        self.properties.push(SchemaProperty {
+            name: name.into(),
+            value_type: value_type.into(),
+            required: false,
+            nullable: false,
+            provenance_required: false,
+            domain_constraints: Vec::new(),
+        });
+        self
+    }
+
+    /// Add a typed property that is also required.
+    pub fn required_property(mut self, name: &str, value_type: &str) -> Self {
+        self.required_properties.push(name.into());
+        self.properties.push(SchemaProperty {
+            name: name.into(),
+            value_type: value_type.into(),
+            required: true,
+            nullable: false,
+            provenance_required: false,
+            domain_constraints: Vec::new(),
+        });
+        self
+    }
+
+    /// Add a typed property that allows Null values.
+    pub fn nullable_property(mut self, name: &str, value_type: &str) -> Self {
+        self.properties.push(SchemaProperty {
+            name: name.into(),
+            value_type: value_type.into(),
+            required: false,
+            nullable: true,
+            provenance_required: false,
+            domain_constraints: Vec::new(),
+        });
+        self
+    }
+
+    /// Add a required, non-nullable property whose value must come from a trusted
+    /// source (SemanticBlock.source must be present).  MRFC-0060 AC-17.
+    pub fn provenance_required_property(mut self, name: &str, value_type: &str) -> Self {
+        self.required_properties.push(name.into());
+        self.properties.push(SchemaProperty {
+            name: name.into(),
+            value_type: value_type.into(),
+            required: true,
+            nullable: false,
+            provenance_required: true,
+            domain_constraints: Vec::new(),
+        });
+        self
+    }
+
+    /// Add a uniqueness constraint (MRFC-0060 Phase C2).
+    pub fn unique(mut self, properties: &[&str], scope: UniquenessScope) -> Self {
+        self.unique_constraints.push(UniqueConstraint {
+            properties: properties.iter().map(|s| s.to_string()).collect(),
+            scope,
+            timing: ConstraintTiming::Immediate,
+        });
+        self
+    }
+
+    /// Add a uniqueness constraint evaluated at commit time (MRFC-0060 Phase C5).
+    pub fn unique_deferred(mut self, properties: &[&str], scope: UniquenessScope) -> Self {
+        self.unique_constraints.push(UniqueConstraint {
+            properties: properties.iter().map(|s| s.to_string()).collect(),
+            scope,
+            timing: ConstraintTiming::Deferred,
+        });
+        self
+    }
+
+    /// Add a domain constraint to the most recently added property (MRFC-0060 Phase C4).
+    pub fn domain_constraint(mut self, constraint: DomainConstraint) -> Self {
+        if let Some(last) = self.properties.last_mut() {
+            last.domain_constraints.push(constraint);
+        }
+        self
+    }
+
+    /// Add a cross-property check constraint evaluated immediately (MRFC-0060 Phase C4).
+    pub fn check(mut self, name: &str, predicate: CheckExpression) -> Self {
+        self.check_constraints.push(CheckConstraint {
+            name: name.into(),
+            predicate,
+            timing: ConstraintTiming::Immediate,
+        });
+        self
+    }
+
+    /// Add a cross-property check constraint evaluated at commit time (MRFC-0060 Phase C5).
+    pub fn check_deferred(mut self, name: &str, predicate: CheckExpression) -> Self {
+        self.check_constraints.push(CheckConstraint {
+            name: name.into(),
+            predicate,
+            timing: ConstraintTiming::Deferred,
+        });
+        self
+    }
+
+    /// Look up a property definition by name.
+    pub fn find_property(&self, name: &str) -> Option<&SchemaProperty> {
+        self.properties.iter().find(|p| p.name == name)
+    }
+
     fn ensure_allowed_includes_required(&self) {
         if let Some(allowed) = &self.allowed_properties {
             for req in &self.required_properties {
@@ -615,6 +1103,711 @@ impl Schema {
                 );
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Domain constraint validation (MRFC-0060 Phase C4)
+// ---------------------------------------------------------------------------
+
+impl DomainConstraint {
+    /// Validate a property value against this domain constraint.
+    pub fn validate(&self, value: &Value) -> Result<(), String> {
+        match self {
+            DomainConstraint::Range { min, max } => {
+                let n = match value {
+                    Value::Int(i) => *i as f64,
+                    Value::Float(f) => *f,
+                    other => {
+                        return Err(format!(
+                            "Range constraint requires numeric value, got {}",
+                            other.type_name()
+                        ));
+                    }
+                };
+                if let Some(min) = min {
+                    if n < *min {
+                        return Err(format!("value {} is below minimum {}", n, min));
+                    }
+                }
+                if let Some(max) = max {
+                    if n > *max {
+                        return Err(format!("value {} exceeds maximum {}", n, max));
+                    }
+                }
+                Ok(())
+            }
+            DomainConstraint::Pattern(pattern) => match value {
+                Value::Text(s) => {
+                    let re = Regex::new(pattern)
+                        .map_err(|e| format!("invalid regex pattern '{}': {}", pattern, e))?;
+                    if re.is_match(s) {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "value '{}' does not match pattern '{}'",
+                            s, pattern
+                        ))
+                    }
+                }
+                other => Err(format!(
+                    "Pattern constraint requires Text value, got {}",
+                    other.type_name()
+                )),
+            },
+            DomainConstraint::Length { min, max } => {
+                let len = match value {
+                    Value::Text(s) => s.len(),
+                    Value::Bytes(b) => b.len(),
+                    other => {
+                        return Err(format!(
+                            "Length constraint requires Text or Bytes, got {}",
+                            other.type_name()
+                        ));
+                    }
+                };
+                if let Some(min) = min {
+                    if len < *min {
+                        return Err(format!("length {} is below minimum {}", len, min));
+                    }
+                }
+                if let Some(max) = max {
+                    if len > *max {
+                        return Err(format!("length {} exceeds maximum {}", len, max));
+                    }
+                }
+                Ok(())
+            }
+            DomainConstraint::Enum(values) => {
+                if values.contains(value) {
+                    Ok(())
+                } else {
+                    Err("value is not one of the allowed enum values".into())
+                }
+            }
+            DomainConstraint::Format(format) => validate_format(format, value),
+        }
+    }
+}
+
+fn validate_format(format: &str, value: &Value) -> Result<(), String> {
+    let s = match value {
+        Value::Text(s) => s.as_str(),
+        other => {
+            return Err(format!(
+                "Format constraint requires Text, got {}",
+                other.type_name()
+            ));
+        }
+    };
+    match format {
+        "email" => {
+            // RFC 5321 simplified: local@domain
+            let re = Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap();
+            if re.is_match(s) {
+                Ok(())
+            } else {
+                Err(format!("'{}' is not a valid email", s))
+            }
+        }
+        "url" => {
+            let re = Regex::new(r"^https?://[a-zA-Z0-9.-]+(:\d+)?(/[^\s]*)?$").unwrap();
+            if re.is_match(s) {
+                Ok(())
+            } else {
+                Err(format!("'{}' is not a valid URL", s))
+            }
+        }
+        "uuid" => {
+            let re = Regex::new(
+                r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            )
+            .unwrap();
+            if re.is_match(s) {
+                Ok(())
+            } else {
+                Err(format!("'{}' is not a valid UUID", s))
+            }
+        }
+        "date" => {
+            // YYYY-MM-DD with valid month (01-12) and day (01-31).
+            let re = Regex::new(r"^(\d{4})-(\d{2})-(\d{2})$").unwrap();
+            if let Some(caps) = re.captures(s) {
+                let month: u32 = caps[2].parse().unwrap_or(0);
+                let day: u32 = caps[3].parse().unwrap_or(0);
+                if month >= 1 && month <= 12 && day >= 1 && day <= 31 {
+                    return Ok(());
+                }
+            }
+            Err(format!("'{}' is not a valid date (YYYY-MM-DD)", s))
+        }
+        "datetime" => {
+            // ISO 8601: YYYY-MM-DDTHH:MM:SS[.fff][Z|±HH:MM]
+            let re =
+                Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
+                    .unwrap();
+            if re.is_match(s) {
+                Ok(())
+            } else {
+                Err(format!("'{}' is not a valid datetime (ISO 8601)", s))
+            }
+        }
+        _ => Err(format!("unknown format: '{}'", format)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Check expression evaluation (MRFC-0060 Phase C4)
+// ---------------------------------------------------------------------------
+
+impl CheckExpression {
+    /// Evaluate this expression against a property map, returning a boolean result.
+    pub fn evaluate(&self, props: &PropertyMap) -> Result<bool, String> {
+        match self {
+            CheckExpression::Property(name) => props
+                .get(name)
+                .map(is_truthy)
+                .ok_or_else(|| format!("property '{}' not found", name)),
+            CheckExpression::Literal(v) => Ok(is_truthy(v)),
+            CheckExpression::Compare { op, left, right } => {
+                let l = left.eval_value(props)?;
+                let r = right.eval_value(props)?;
+                compare_values(*op, &l, &r)
+            }
+            CheckExpression::And(l, r) => Ok(l.evaluate(props)? && r.evaluate(props)?),
+            CheckExpression::Or(l, r) => Ok(l.evaluate(props)? || r.evaluate(props)?),
+            CheckExpression::Not(e) => Ok(!e.evaluate(props)?),
+            CheckExpression::Arith(..) => {
+                let v = self.eval_value(props)?;
+                Ok(is_truthy(&v))
+            }
+            CheckExpression::If(cond, then_expr, else_expr) => {
+                if cond.evaluate(props)? {
+                    then_expr.evaluate(props)
+                } else {
+                    else_expr.evaluate(props)
+                }
+            }
+        }
+    }
+
+    /// Return all property names referenced in this expression tree.
+    /// Used by C6 write-set filtering to skip unaffected check constraints.
+    pub fn referenced_properties(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        self.collect_refs(&mut out);
+        out
+    }
+
+    fn collect_refs<'a>(&'a self, out: &mut Vec<&'a str>) {
+        match self {
+            CheckExpression::Property(name) => out.push(name),
+            CheckExpression::Literal(_) => {}
+            CheckExpression::Compare { left, right, .. } => {
+                left.collect_refs(out);
+                right.collect_refs(out);
+            }
+            CheckExpression::And(l, r) | CheckExpression::Or(l, r) => {
+                l.collect_refs(out);
+                r.collect_refs(out);
+            }
+            CheckExpression::Not(inner) => inner.collect_refs(out),
+            CheckExpression::Arith(l, _, r) => {
+                l.collect_refs(out);
+                r.collect_refs(out);
+            }
+            CheckExpression::If(cond, then_expr, else_expr) => {
+                cond.collect_refs(out);
+                then_expr.collect_refs(out);
+                else_expr.collect_refs(out);
+            }
+        }
+    }
+
+    /// Evaluate to a Value (for comparison operands and arithmetic).
+    fn eval_value(&self, props: &PropertyMap) -> Result<Value, String> {
+        match self {
+            CheckExpression::Property(name) => props
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("property '{}' not found", name)),
+            CheckExpression::Literal(v) => Ok(v.clone()),
+            CheckExpression::Arith(_, op, _) => {
+                // Extract operands via recursive matching for borrowck.
+                let (left, right) = match self {
+                    CheckExpression::Arith(l, _, r) => (l, r),
+                    _ => unreachable!(),
+                };
+                let l = left.eval_value(props)?;
+                let r = right.eval_value(props)?;
+                arith_values(*op, &l, &r)
+            }
+            CheckExpression::If(_, _, _) => {
+                let (cond, then_expr, else_expr) = match self {
+                    CheckExpression::If(c, t, e) => (c, t, e),
+                    _ => unreachable!(),
+                };
+                if cond.evaluate(props)? {
+                    then_expr.eval_value(props)
+                } else {
+                    else_expr.eval_value(props)
+                }
+            }
+            _ => Err("expected value expression, got logical or comparison".into()),
+        }
+    }
+}
+
+/// Arithmetic evaluation: apply `op` to two `Value`s (MRFC-0060 Phase C9).
+fn arith_values(op: ArithOp, left: &Value, right: &Value) -> Result<Value, String> {
+    match op {
+        ArithOp::Add => match (left, right) {
+            (Value::Int(l), Value::Int(r)) => Ok(Value::Int(l + r)),
+            (Value::Int(l), Value::Float(r)) => Ok(Value::Float(*l as f64 + r)),
+            (Value::Float(l), Value::Int(r)) => Ok(Value::Float(l + *r as f64)),
+            (Value::Float(l), Value::Float(r)) => Ok(Value::Float(l + r)),
+            (Value::Text(l), Value::Text(r)) => Ok(Value::Text(format!("{}{}", l, r))),
+            _ => Err(format!(
+                "cannot add {:?} and {:?}",
+                left.type_name(),
+                right.type_name()
+            )),
+        },
+        ArithOp::Sub => match (left, right) {
+            (Value::Int(l), Value::Int(r)) => Ok(Value::Int(l - r)),
+            (Value::Int(l), Value::Float(r)) => Ok(Value::Float(*l as f64 - r)),
+            (Value::Float(l), Value::Int(r)) => Ok(Value::Float(l - *r as f64)),
+            (Value::Float(l), Value::Float(r)) => Ok(Value::Float(l - r)),
+            _ => Err(format!(
+                "cannot subtract {:?} and {:?}",
+                left.type_name(),
+                right.type_name()
+            )),
+        },
+        ArithOp::Mul => match (left, right) {
+            (Value::Int(l), Value::Int(r)) => Ok(Value::Int(l * r)),
+            (Value::Int(l), Value::Float(r)) => Ok(Value::Float(*l as f64 * r)),
+            (Value::Float(l), Value::Int(r)) => Ok(Value::Float(l * *r as f64)),
+            (Value::Float(l), Value::Float(r)) => Ok(Value::Float(l * r)),
+            _ => Err(format!(
+                "cannot multiply {:?} and {:?}",
+                left.type_name(),
+                right.type_name()
+            )),
+        },
+        ArithOp::Div => {
+            // Check for division by zero before matching types.
+            let is_div_zero = match right {
+                Value::Int(0) => true,
+                Value::Float(f) if *f == 0.0 => true,
+                _ => false,
+            };
+            if is_div_zero {
+                return Err("division by zero".into());
+            }
+            match (left, right) {
+                (Value::Int(l), Value::Int(r)) => Ok(Value::Int(l / r)),
+                (Value::Int(l), Value::Float(r)) => Ok(Value::Float(*l as f64 / r)),
+                (Value::Float(l), Value::Int(r)) => Ok(Value::Float(l / *r as f64)),
+                (Value::Float(l), Value::Float(r)) => Ok(Value::Float(l / r)),
+                _ => Err(format!(
+                    "cannot divide {:?} and {:?}",
+                    left.type_name(),
+                    right.type_name()
+                )),
+            }
+        }
+    }
+}
+
+fn is_truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Int(0) => false,
+        Value::Int(_) => true,
+        Value::Float(f) if *f == 0.0 => false,
+        Value::Float(_) => true,
+        Value::Text(s) => !s.is_empty(),
+        Value::Bytes(b) => !b.is_empty(),
+        Value::List(l) => !l.is_empty(),
+        Value::Map(m) => !m.is_empty(),
+    }
+}
+
+fn compare_values(op: CompareOp, left: &Value, right: &Value) -> Result<bool, String> {
+    match op {
+        CompareOp::Eq => Ok(left == right),
+        CompareOp::Neq => Ok(left != right),
+        CompareOp::Lt | CompareOp::Lte | CompareOp::Gt | CompareOp::Gte => match (left, right) {
+            (Value::Int(l), Value::Int(r)) => compare_ordered(op, *l, *r),
+            (Value::Int(l), Value::Float(r)) => compare_ordered(op, *l as f64, *r),
+            (Value::Float(l), Value::Int(r)) => compare_ordered(op, *l, *r as f64),
+            (Value::Float(l), Value::Float(r)) => compare_ordered(op, *l, *r),
+            (Value::Text(l), Value::Text(r)) => compare_ordered(op, l.as_str(), r.as_str()),
+            _ => Err(format!(
+                "cannot compare {} with {}",
+                left.type_name(),
+                right.type_name()
+            )),
+        },
+    }
+}
+
+fn compare_ordered<T: PartialOrd>(op: CompareOp, l: T, r: T) -> Result<bool, String> {
+    match op {
+        CompareOp::Lt => Ok(l < r),
+        CompareOp::Lte => Ok(l <= r),
+        CompareOp::Gt => Ok(l > r),
+        CompareOp::Gte => Ok(l >= r),
+        _ => unreachable!(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Expression string parser (MRFC-0060 Phase C4)
+// ---------------------------------------------------------------------------
+
+/// Token produced by the expression tokenizer.
+#[derive(Debug, Clone, PartialEq)]
+enum Tok {
+    Ident(String),
+    Str(String),
+    Int(i64),
+    Float(f64),
+    EqEq,
+    NotEq,
+    LtEq,
+    GtEq,
+    Lt,
+    Gt,
+    LParen,
+    RParen,
+    At,
+}
+
+struct Parser {
+    tokens: Vec<Tok>,
+    pos: usize,
+}
+
+impl Parser {
+    fn peek(&self) -> Option<&Tok> {
+        self.tokens.get(self.pos)
+    }
+
+    fn next(&mut self) -> Result<Tok, String> {
+        self.tokens
+            .get(self.pos)
+            .cloned()
+            .ok_or_else(|| "unexpected end of expression".into())
+            .map(|t| {
+                self.pos += 1;
+                t
+            })
+    }
+
+    fn eat_kw(&mut self, kw: &str) -> bool {
+        if let Some(Tok::Ident(s)) = self.peek() {
+            if s.eq_ignore_ascii_case(kw) {
+                self.pos += 1;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn eat_op(&mut self) -> Option<CompareOp> {
+        match self.peek()? {
+            Tok::EqEq => {
+                self.pos += 1;
+                Some(CompareOp::Eq)
+            }
+            Tok::NotEq => {
+                self.pos += 1;
+                Some(CompareOp::Neq)
+            }
+            Tok::LtEq => {
+                self.pos += 1;
+                Some(CompareOp::Lte)
+            }
+            Tok::GtEq => {
+                self.pos += 1;
+                Some(CompareOp::Gte)
+            }
+            Tok::Lt => {
+                self.pos += 1;
+                Some(CompareOp::Lt)
+            }
+            Tok::Gt => {
+                self.pos += 1;
+                Some(CompareOp::Gt)
+            }
+            _ => None,
+        }
+    }
+
+    // expr = or_expr
+    fn parse_expr(&mut self) -> Result<CheckExpression, String> {
+        self.parse_or()
+    }
+
+    // or_expr = and_expr ("OR" and_expr)*
+    fn parse_or(&mut self) -> Result<CheckExpression, String> {
+        let mut left = self.parse_and()?;
+        while self.eat_kw("OR") {
+            let right = self.parse_and()?;
+            left = CheckExpression::Or(Box::new(left), Box::new(right));
+        }
+        Ok(left)
+    }
+
+    // and_expr = not_expr ("AND" not_expr)*
+    fn parse_and(&mut self) -> Result<CheckExpression, String> {
+        let mut left = self.parse_not()?;
+        while self.eat_kw("AND") {
+            let right = self.parse_not()?;
+            left = CheckExpression::And(Box::new(left), Box::new(right));
+        }
+        Ok(left)
+    }
+
+    // not_expr = "NOT" not_expr | comparison
+    fn parse_not(&mut self) -> Result<CheckExpression, String> {
+        if self.eat_kw("NOT") {
+            let inner = self.parse_not()?;
+            return Ok(CheckExpression::Not(Box::new(inner)));
+        }
+        self.parse_comparison()
+    }
+
+    // comparison = value (cmp_op value)?
+    fn parse_comparison(&mut self) -> Result<CheckExpression, String> {
+        let left = self.parse_value()?;
+        if let Some(op) = self.eat_op() {
+            let right = self.parse_value()?;
+            return Ok(CheckExpression::Compare {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            });
+        }
+        Ok(left)
+    }
+
+    // value = "(" expr ")" | "@" identifier | literal | identifier
+    fn parse_value(&mut self) -> Result<CheckExpression, String> {
+        // "@property" syntax
+        if matches!(self.peek(), Some(Tok::At)) {
+            self.pos += 1; // skip @
+            let name = match self.next()? {
+                Tok::Ident(s) => s,
+                t => return Err(format!("expected property name after '@', got {:?}", t)),
+            };
+            return Ok(CheckExpression::Property(name));
+        }
+        match self.next()? {
+            Tok::LParen => {
+                let expr = self.parse_expr()?;
+                match self.next()? {
+                    Tok::RParen => Ok(expr),
+                    t => Err(format!("expected ')', got {:?}", t)),
+                }
+            }
+            Tok::Ident(s) => {
+                // Keywords as literal values
+                match s.to_uppercase().as_str() {
+                    "TRUE" => return Ok(CheckExpression::Literal(Value::Bool(true))),
+                    "FALSE" => return Ok(CheckExpression::Literal(Value::Bool(false))),
+                    "NULL" => return Ok(CheckExpression::Literal(Value::Null)),
+                    _ => {}
+                }
+                Ok(CheckExpression::Property(s))
+            }
+            Tok::Str(s) => Ok(CheckExpression::Literal(Value::Text(s))),
+            Tok::Int(n) => Ok(CheckExpression::Literal(Value::Int(n))),
+            Tok::Float(f) => Ok(CheckExpression::Literal(Value::Float(f))),
+            t => Err(format!("unexpected token: {:?}", t)),
+        }
+    }
+}
+
+/// Tokenize an expression string.
+fn tokenize(input: &str) -> Result<Vec<Tok>, String> {
+    let mut tokens = Vec::new();
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let c = chars[i];
+        // Whitespace
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+        // Two-character operators (and single = as Eq alias)
+        if i + 1 < chars.len() {
+            let two: String = chars[i..=i + 1].iter().collect();
+            match two.as_str() {
+                "==" => {
+                    tokens.push(Tok::EqEq);
+                    i += 2;
+                    continue;
+                }
+                "!=" => {
+                    tokens.push(Tok::NotEq);
+                    i += 2;
+                    continue;
+                }
+                "<=" => {
+                    tokens.push(Tok::LtEq);
+                    i += 2;
+                    continue;
+                }
+                ">=" => {
+                    tokens.push(Tok::GtEq);
+                    i += 2;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        // Single '=' as equality alias
+        if c == '=' {
+            tokens.push(Tok::EqEq);
+            i += 1;
+            continue;
+        }
+        // Single-character tokens
+        match c {
+            '(' => {
+                tokens.push(Tok::LParen);
+                i += 1;
+                continue;
+            }
+            ')' => {
+                tokens.push(Tok::RParen);
+                i += 1;
+                continue;
+            }
+            '<' => {
+                tokens.push(Tok::Lt);
+                i += 1;
+                continue;
+            }
+            '>' => {
+                tokens.push(Tok::Gt);
+                i += 1;
+                continue;
+            }
+            '@' => {
+                tokens.push(Tok::At);
+                i += 1;
+                continue;
+            }
+            '"' | '\'' => {
+                let quote = c;
+                i += 1; // skip opening quote
+                let start = i;
+                while i < chars.len() && chars[i] != quote {
+                    if chars[i] == '\\' && i + 1 < chars.len() {
+                        i += 1; // skip escape
+                    }
+                    i += 1;
+                }
+                if i >= chars.len() {
+                    return Err("unterminated string literal".into());
+                }
+                let s: String = chars[start..i].iter().collect();
+                // Unescape basic sequences
+                let s = s
+                    .replace("\\\"", "\"")
+                    .replace("\\'", "'")
+                    .replace("\\\\", "\\");
+                tokens.push(Tok::Str(s));
+                i += 1; // skip closing quote
+                continue;
+            }
+            _ => {}
+        }
+        // Number literals
+        if c == '-' || c.is_ascii_digit() {
+            let start = i;
+            if c == '-' {
+                i += 1;
+            }
+            let mut is_float = false;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i < chars.len() && chars[i] == '.' {
+                is_float = true;
+                i += 1;
+                while i < chars.len() && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
+            }
+            let num_str: String = chars[start..i].iter().collect();
+            if is_float {
+                let val: f64 = num_str
+                    .parse()
+                    .map_err(|_| format!("invalid float: {}", num_str))?;
+                tokens.push(Tok::Float(val));
+            } else {
+                let val: i64 = num_str
+                    .parse()
+                    .map_err(|_| format!("invalid integer: {}", num_str))?;
+                tokens.push(Tok::Int(val));
+            }
+            continue;
+        }
+        // Identifiers
+        if c.is_alphabetic() || c == '_' {
+            let start = i;
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            tokens.push(Tok::Ident(ident));
+            continue;
+        }
+        return Err(format!("unexpected character: '{}' at position {}", c, i));
+    }
+    Ok(tokens)
+}
+
+impl CheckExpression {
+    /// Parse an expression string into a `CheckExpression` AST.
+    ///
+    /// Grammar:
+    /// ```text
+    /// expr     = or_expr
+    /// or_expr  = and_expr ("OR" and_expr)*
+    /// and_expr = not_expr ("AND" not_expr)*
+    /// not_expr = "NOT" not_expr | comparison
+    /// comparison = value (cmp_op value)?
+    /// value    = "(" expr ")" | "@" identifier | literal | identifier
+    /// literal  = STRING | NUMBER | "true" | "false" | "null"
+    /// cmp_op   = "==" | "!=" | "<=" | ">=" | "<" | ">"
+    /// ```
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let expr = CheckExpression::parse("end_date >= start_date").unwrap();
+    /// let expr = CheckExpression::parse("age >= 18 AND age <= 120").unwrap();
+    /// let expr = CheckExpression::parse("NOT (status = \"deleted\")").unwrap();
+    /// ```
+    pub fn parse(input: &str) -> Result<CheckExpression, String> {
+        let tokens = tokenize(input)?;
+        let mut parser = Parser { tokens, pos: 0 };
+        let expr = parser.parse_expr()?;
+        if parser.pos < parser.tokens.len() {
+            return Err(format!(
+                "unexpected token after expression: {:?}",
+                parser.tokens[parser.pos]
+            ));
+        }
+        Ok(expr)
     }
 }
 
@@ -945,7 +2138,7 @@ mod tests {
         );
         let schema = Schema::new("claim", 1);
         assert!(matches!(
-            ko.validate_against(&schema),
+            ko.validate_against(&schema, false),
             Err(KError::InvalidSchema(_))
         ));
     }
@@ -968,7 +2161,7 @@ mod tests {
         );
         let schema = Schema::new("fact", 2);
         assert!(matches!(
-            ko.validate_against(&schema),
+            ko.validate_against(&schema, false),
             Err(KError::InvalidSchema(_))
         ));
     }
@@ -995,12 +2188,12 @@ mod tests {
             .insert("extra".into(), Value::Text("surprise".into()));
         let schema = Schema::new("fact", 1).require("title").allow("title");
         assert!(matches!(
-            ko.validate_against(&schema),
+            ko.validate_against(&schema, false),
             Err(KError::InvalidSchema(_))
         ));
 
         ko.properties.remove("extra");
-        assert!(ko.validate_against(&schema).is_ok());
+        assert!(ko.validate_against(&schema, false).is_ok());
     }
 
     #[test]
@@ -1022,6 +2215,525 @@ mod tests {
         ko.properties
             .insert("anything".into(), Value::Text("goes".into()));
         let schema = Schema::new("fact", 1);
-        assert!(ko.validate_against(&schema).is_ok());
+        assert!(ko.validate_against(&schema, false).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // MRFC-0060 Phase C1: Property type system
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn value_type_name_returns_correct_names() {
+        assert_eq!(Value::Null.type_name(), "Null");
+        assert_eq!(Value::Bool(true).type_name(), "Bool");
+        assert_eq!(Value::Int(42).type_name(), "Int");
+        assert_eq!(Value::Float(3.14).type_name(), "Float");
+        assert_eq!(Value::Text("hi".into()).type_name(), "Text");
+        assert_eq!(Value::Bytes(vec![1, 2, 3]).type_name(), "Bytes");
+        assert_eq!(Value::List(vec![]).type_name(), "List");
+        assert_eq!(Value::Map(BTreeMap::new()).type_name(), "Map");
+    }
+
+    fn prop(name: &str, vt: &str) -> SchemaProperty {
+        SchemaProperty {
+            name: name.into(),
+            value_type: vt.into(),
+            required: false,
+            nullable: false,
+            provenance_required: false,
+            domain_constraints: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn type_check_passes_for_matching_types() {
+        assert!(Value::Bool(true).type_check(&prop("flag", "Bool")).is_ok());
+        assert!(Value::Int(42).type_check(&prop("count", "Int")).is_ok());
+        assert!(Value::Float(3.14)
+            .type_check(&prop("score", "Float"))
+            .is_ok());
+        assert!(Value::Text("hi".into())
+            .type_check(&prop("name", "Text"))
+            .is_ok());
+        assert!(Value::Bytes(vec![1])
+            .type_check(&prop("blob", "Bytes"))
+            .is_ok());
+        assert!(Value::List(vec![])
+            .type_check(&prop("items", "List"))
+            .is_ok());
+        assert!(Value::Map(BTreeMap::new())
+            .type_check(&prop("meta", "Map"))
+            .is_ok());
+    }
+
+    #[test]
+    fn type_check_rejects_type_mismatch() {
+        let err = Value::Bool(true)
+            .type_check(&prop("count", "Int"))
+            .unwrap_err();
+        assert!(err.contains("type mismatch"));
+        assert!(err.contains("count"));
+    }
+
+    #[test]
+    fn type_check_int_widens_to_float() {
+        assert!(Value::Int(42).type_check(&prop("score", "Float")).is_ok());
+    }
+
+    #[test]
+    fn type_check_text_accepted_as_datetime_and_json() {
+        assert!(Value::Text("2024-01-01".into())
+            .type_check(&prop("ts", "DateTime"))
+            .is_ok());
+        assert!(Value::Text("{\"a\":1}".into())
+            .type_check(&prop("data", "Json"))
+            .is_ok());
+    }
+
+    #[test]
+    fn type_check_null_passes_when_nullable() {
+        let p = SchemaProperty {
+            name: "comment".into(),
+            value_type: "Text".into(),
+            required: false,
+            nullable: true,
+            provenance_required: false,
+            domain_constraints: Vec::new(),
+        };
+        assert!(Value::Null.type_check(&p).is_ok());
+    }
+
+    #[test]
+    fn type_check_null_fails_when_not_nullable() {
+        let err = Value::Null.type_check(&prop("name", "Text")).unwrap_err();
+        assert!(err.contains("not nullable"));
+    }
+
+    #[test]
+    fn schema_builder_property_adds_typed_property() {
+        let s = Schema::new("Person", 1)
+            .property("name", "Text")
+            .required_property("age", "Int")
+            .nullable_property("nickname", "Text");
+        assert_eq!(s.properties.len(), 3);
+        assert!(s.find_property("age").unwrap().required);
+        assert!(s.find_property("nickname").unwrap().nullable);
+        assert!(!s.find_property("name").unwrap().required);
+    }
+
+    #[test]
+    fn schema_find_property_returns_none_for_missing() {
+        let s = Schema::new("Empty", 1);
+        assert!(s.find_property("nope").is_none());
+    }
+
+    #[test]
+    fn schema_unique_adds_constraint() {
+        let s = Schema::new("User", 1)
+            .unique(&["email"], UniquenessScope::Type)
+            .unique(&["tenant_id", "username"], UniquenessScope::Tenant);
+        assert_eq!(s.unique_constraints.len(), 2);
+        assert_eq!(s.unique_constraints[0].properties, vec!["email"]);
+        assert_eq!(s.unique_constraints[0].scope, UniquenessScope::Type);
+        assert_eq!(
+            s.unique_constraints[1].properties,
+            vec!["tenant_id", "username"]
+        );
+        assert_eq!(s.unique_constraints[1].scope, UniquenessScope::Tenant);
+    }
+
+    // --- MRFC-0060 Phase C4: domain constraints ---
+
+    #[test]
+    fn domain_range_rejects_below_min() {
+        let dc = DomainConstraint::Range {
+            min: Some(0.0),
+            max: None,
+        };
+        assert!(dc.validate(&Value::Int(-5)).is_err());
+        assert!(dc.validate(&Value::Int(0)).is_ok());
+    }
+
+    #[test]
+    fn domain_range_rejects_above_max() {
+        let dc = DomainConstraint::Range {
+            min: None,
+            max: Some(100.0),
+        };
+        assert!(dc.validate(&Value::Float(101.0)).is_err());
+        assert!(dc.validate(&Value::Float(99.9)).is_ok());
+    }
+
+    #[test]
+    fn domain_length_enforces_min_max() {
+        let dc = DomainConstraint::Length {
+            min: Some(3),
+            max: Some(10),
+        };
+        assert!(dc.validate(&Value::Text("ab".into())).is_err());
+        assert!(dc.validate(&Value::Text("abc".into())).is_ok());
+        assert!(dc.validate(&Value::Text("abcdefghij".into())).is_ok());
+        assert!(dc.validate(&Value::Text("abcdefghijk".into())).is_err());
+    }
+
+    #[test]
+    fn domain_enum_rejects_unknown_value() {
+        let dc = DomainConstraint::Enum(vec![Value::Text("a".into()), Value::Text("b".into())]);
+        assert!(dc.validate(&Value::Text("a".into())).is_ok());
+        assert!(dc.validate(&Value::Text("c".into())).is_err());
+    }
+
+    #[test]
+    fn domain_pattern_regex_matching() {
+        let dc = DomainConstraint::Pattern(r"\.txt$".into());
+        assert!(dc.validate(&Value::Text("file.txt".into())).is_ok());
+        assert!(dc.validate(&Value::Text("file.md".into())).is_err());
+    }
+
+    #[test]
+    fn domain_format_email() {
+        let dc = DomainConstraint::Format("email".into());
+        assert!(dc.validate(&Value::Text("a@b.com".into())).is_ok());
+        assert!(dc.validate(&Value::Text("not-an-email".into())).is_err());
+    }
+
+    // --- MRFC-0060 Phase C4: check expression evaluation ---
+
+    #[test]
+    fn check_expr_end_date_ge_start_date() {
+        use CheckExpression::*;
+        // end_date >= start_date
+        let expr = Compare {
+            op: CompareOp::Gte,
+            left: Box::new(Property("end_date".into())),
+            right: Box::new(Property("start_date".into())),
+        };
+        let mut props = PropertyMap::new();
+        props.insert("start_date".into(), Value::Text("2024-01-01".into()));
+        props.insert("end_date".into(), Value::Text("2024-12-31".into()));
+        assert!(expr.evaluate(&props).unwrap());
+        // Flipped — should fail
+        props.insert("end_date".into(), Value::Text("2023-01-01".into()));
+        assert!(!expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn check_expr_and_or_not() {
+        use CheckExpression::*;
+        // (age >= 18) AND (age <= 120)
+        let expr = And(
+            Box::new(Compare {
+                op: CompareOp::Gte,
+                left: Box::new(Property("age".into())),
+                right: Box::new(Literal(Value::Int(18))),
+            }),
+            Box::new(Compare {
+                op: CompareOp::Lte,
+                left: Box::new(Property("age".into())),
+                right: Box::new(Literal(Value::Int(120))),
+            }),
+        );
+        let mut props = PropertyMap::new();
+        props.insert("age".into(), Value::Int(25));
+        assert!(expr.evaluate(&props).unwrap());
+        props.insert("age".into(), Value::Int(150));
+        assert!(!expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn check_expr_not() {
+        use CheckExpression::*;
+        // NOT (status = "deleted")
+        let expr = Not(Box::new(Compare {
+            op: CompareOp::Eq,
+            left: Box::new(Property("status".into())),
+            right: Box::new(Literal(Value::Text("deleted".into()))),
+        }));
+        let mut props = PropertyMap::new();
+        props.insert("status".into(), Value::Text("active".into()));
+        assert!(expr.evaluate(&props).unwrap());
+        props.insert("status".into(), Value::Text("deleted".into()));
+        assert!(!expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn schema_domain_constraint_builder() {
+        let s = Schema::new("Product", 1)
+            .property("price", "Float")
+            .domain_constraint(DomainConstraint::Range {
+                min: Some(0.0),
+                max: Some(9999.99),
+            })
+            .check(
+                "price_positive",
+                CheckExpression::Compare {
+                    op: CompareOp::Gte,
+                    left: Box::new(CheckExpression::Property("price".into())),
+                    right: Box::new(CheckExpression::Literal(Value::Float(0.0))),
+                },
+            );
+        assert_eq!(s.properties[0].domain_constraints.len(), 1);
+        assert_eq!(s.check_constraints.len(), 1);
+        assert_eq!(s.check_constraints[0].name, "price_positive");
+    }
+
+    // --- MRFC-0060 Phase C4: expression parser ---
+
+    #[test]
+    fn parse_simple_comparison() {
+        let expr = CheckExpression::parse("end_date >= start_date").unwrap();
+        let mut props = PropertyMap::new();
+        props.insert("start_date".into(), Value::Text("2024-01-01".into()));
+        props.insert("end_date".into(), Value::Text("2024-12-31".into()));
+        assert!(expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn parse_and_or_precedence() {
+        // "age >= 18 AND age <= 120" — AND binds tighter than OR
+        let expr = CheckExpression::parse("age >= 18 AND age <= 120").unwrap();
+        let mut props = PropertyMap::new();
+        props.insert("age".into(), Value::Int(25));
+        assert!(expr.evaluate(&props).unwrap());
+        props.insert("age".into(), Value::Int(5));
+        assert!(!expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn parse_not_expression() {
+        let expr = CheckExpression::parse("NOT (status == \"deleted\")").unwrap();
+        let mut props = PropertyMap::new();
+        props.insert("status".into(), Value::Text("active".into()));
+        assert!(expr.evaluate(&props).unwrap());
+        props.insert("status".into(), Value::Text("deleted".into()));
+        assert!(!expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn parse_or_expression() {
+        let expr = CheckExpression::parse("role == \"admin\" OR role == \"superadmin\"").unwrap();
+        let mut props = PropertyMap::new();
+        props.insert("role".into(), Value::Text("admin".into()));
+        assert!(expr.evaluate(&props).unwrap());
+        props.insert("role".into(), Value::Text("user".into()));
+        assert!(!expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn parse_at_prefix_property() {
+        let expr = CheckExpression::parse("@price >= 0").unwrap();
+        let mut props = PropertyMap::new();
+        props.insert("price".into(), Value::Float(9.99));
+        assert!(expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn parse_literals_true_false_null() {
+        let expr = CheckExpression::parse("active == true").unwrap();
+        let mut props = PropertyMap::new();
+        props.insert("active".into(), Value::Bool(true));
+        assert!(expr.evaluate(&props).unwrap());
+        props.insert("active".into(), Value::Bool(false));
+        assert!(!expr.evaluate(&props).unwrap());
+    }
+
+    // --- Enhanced format validation tests ---
+
+    #[test]
+    fn domain_format_email_rejects_invalid() {
+        let dc = DomainConstraint::Format("email".into());
+        assert!(dc.validate(&Value::Text("user@example.com".into())).is_ok());
+        assert!(dc.validate(&Value::Text("not-an-email".into())).is_err());
+        assert!(dc
+            .validate(&Value::Text("@missing-local.com".into()))
+            .is_err());
+    }
+
+    #[test]
+    fn domain_format_url_rejects_invalid() {
+        let dc = DomainConstraint::Format("url".into());
+        assert!(dc
+            .validate(&Value::Text("https://example.com/path".into()))
+            .is_ok());
+        assert!(dc
+            .validate(&Value::Text("http://localhost:8080".into()))
+            .is_ok());
+        assert!(dc.validate(&Value::Text("not-a-url".into())).is_err());
+    }
+
+    #[test]
+    fn domain_format_uuid_rejects_invalid() {
+        let dc = DomainConstraint::Format("uuid".into());
+        assert!(dc
+            .validate(&Value::Text("550e8400-e29b-41d4-a716-446655440000".into()))
+            .is_ok());
+        assert!(dc.validate(&Value::Text("not-a-uuid".into())).is_err());
+    }
+
+    #[test]
+    fn domain_format_date_rejects_bad_month() {
+        let dc = DomainConstraint::Format("date".into());
+        assert!(dc.validate(&Value::Text("2024-06-15".into())).is_ok());
+        assert!(dc.validate(&Value::Text("2024-13-01".into())).is_err()); // month 13
+    }
+
+    #[test]
+    fn domain_format_datetime_rejects_malformed() {
+        let dc = DomainConstraint::Format("datetime".into());
+        assert!(dc
+            .validate(&Value::Text("2024-06-15T14:30:00Z".into()))
+            .is_ok());
+        assert!(dc
+            .validate(&Value::Text("2024-06-15T14:30:00+05:30".into()))
+            .is_ok());
+        assert!(dc.validate(&Value::Text("not-a-datetime".into())).is_err());
+    }
+
+    // --- C9 programmable constraint tests ---
+
+    #[test]
+    fn c9_arithmetic_in_comparison() {
+        // @total == @price * @quantity
+        let expr = CheckExpression::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(CheckExpression::Property("total".into())),
+            right: Box::new(CheckExpression::Arith(
+                Box::new(CheckExpression::Property("price".into())),
+                ArithOp::Mul,
+                Box::new(CheckExpression::Property("quantity".into())),
+            )),
+        };
+        let mut props = PropertyMap::new();
+        props.insert("total".into(), Value::Int(100));
+        props.insert("price".into(), Value::Int(20));
+        props.insert("quantity".into(), Value::Int(5));
+        assert!(expr.evaluate(&props).unwrap());
+
+        props.insert("total".into(), Value::Int(99));
+        assert!(!expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn c9_arithmetic_add_and_compare() {
+        // @a + @b > 10
+        let expr = CheckExpression::Compare {
+            op: CompareOp::Gt,
+            left: Box::new(CheckExpression::Arith(
+                Box::new(CheckExpression::Property("a".into())),
+                ArithOp::Add,
+                Box::new(CheckExpression::Property("b".into())),
+            )),
+            right: Box::new(CheckExpression::Literal(Value::Int(10))),
+        };
+        let mut props = PropertyMap::new();
+        props.insert("a".into(), Value::Int(7));
+        props.insert("b".into(), Value::Int(5));
+        assert!(expr.evaluate(&props).unwrap());
+
+        props.insert("a".into(), Value::Int(3));
+        assert!(!expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn c9_conditional_if() {
+        // IF @status == "active" THEN @email != NULL ELSE true
+        use CheckExpression::*;
+        let expr = If(
+            Box::new(Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Property("status".into())),
+                right: Box::new(Literal(Value::Text("active".into()))),
+            }),
+            Box::new(Compare {
+                op: CompareOp::Neq,
+                left: Box::new(Property("email".into())),
+                right: Box::new(Literal(Value::Null)),
+            }),
+            Box::new(Literal(Value::Bool(true))),
+        );
+
+        // Active with email → passes
+        let mut props = PropertyMap::new();
+        props.insert("status".into(), Value::Text("active".into()));
+        props.insert("email".into(), Value::Text("u@x.com".into()));
+        assert!(expr.evaluate(&props).unwrap());
+
+        // Active with null email → fails
+        props.insert("email".into(), Value::Null);
+        assert!(!expr.evaluate(&props).unwrap());
+
+        // Inactive with null email → passes (else branch)
+        props.insert("status".into(), Value::Text("inactive".into()));
+        assert!(expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn c9_div_by_zero_error() {
+        // @a / 0
+        let expr = CheckExpression::Arith(
+            Box::new(CheckExpression::Property("a".into())),
+            ArithOp::Div,
+            Box::new(CheckExpression::Literal(Value::Int(0))),
+        );
+        let mut props = PropertyMap::new();
+        props.insert("a".into(), Value::Int(42));
+        let result = expr.evaluate(&props);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("division by zero"));
+    }
+
+    #[test]
+    fn c9_int_float_widening() {
+        // @int_val + @float_val → Float
+        let expr = CheckExpression::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(CheckExpression::Arith(
+                Box::new(CheckExpression::Property("int_val".into())),
+                ArithOp::Add,
+                Box::new(CheckExpression::Property("float_val".into())),
+            )),
+            right: Box::new(CheckExpression::Literal(Value::Float(7.5))),
+        };
+        let mut props = PropertyMap::new();
+        props.insert("int_val".into(), Value::Int(5));
+        props.insert("float_val".into(), Value::Float(2.5));
+        assert!(expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn c9_text_concatenation() {
+        // @first + @last == "JohnDoe"
+        let expr = CheckExpression::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(CheckExpression::Arith(
+                Box::new(CheckExpression::Property("first".into())),
+                ArithOp::Add,
+                Box::new(CheckExpression::Property("last".into())),
+            )),
+            right: Box::new(CheckExpression::Literal(Value::Text("JohnDoe".into()))),
+        };
+        let mut props = PropertyMap::new();
+        props.insert("first".into(), Value::Text("John".into()));
+        props.insert("last".into(), Value::Text("Doe".into()));
+        assert!(expr.evaluate(&props).unwrap());
+    }
+
+    #[test]
+    fn c9_collect_refs_includes_arith_and_if() {
+        use CheckExpression::*;
+        let expr = If(
+            Box::new(Property("status".into())),
+            Box::new(Arith(
+                Box::new(Property("a".into())),
+                ArithOp::Add,
+                Box::new(Property("b".into())),
+            )),
+            Box::new(Property("fallback".into())),
+        );
+        let mut refs = Vec::new();
+        expr.collect_refs(&mut refs);
+        refs.sort();
+        // status, a, b, fallback — all collected recursively
+        assert_eq!(refs, vec!["a", "b", "fallback", "status"]);
     }
 }

@@ -65,12 +65,15 @@ pub use index::{
     VectorIndex,
 };
 pub use knowledge::kom::{
-    fnv1a64, AclEntry, Action, Direction, Effect, EventKind, EventRef, ExtensionMap, IdGen, KError,
-    KResult, KnowledgeEntity, KnowledgeEvent, KnowledgeObject, Lifecycle, LifecycleState, Metadata,
-    Origin, PropertyMap, ReferentialPolicy, RelationshipRef, Schema, SecurityDescriptor,
-    SemanticBlock, Value, KOID, KOID_LEN,
+    fnv1a64, AclEntry, Action, ArithOp, CheckExpression, CompareOp, ConstraintResult,
+    ConstraintViolation, Direction, Effect, EventKind, EventRef, ExtensionMap, IdGen,
+    InferenceCandidate, KError, KResult, KnowledgeEntity, KnowledgeEvent, KnowledgeObject,
+    Lifecycle, LifecycleState, Metadata, Origin, PropertyMap, ReferentialPolicy, RelationshipRef,
+    Schema, SecurityDescriptor, SemanticBlock, UniquenessScope, Value, ViolationSeverity, KOID,
+    KOID_LEN,
 };
-pub use storage::store::{MemoryEngine, StorageEngine, WriteBatch};
+pub use knowledge::ontology::{Cardinality, ClassDef, OntologyDef, OntologyRegistry, RelDef};
+pub use storage::store::{ConstraintCapabilities, MemoryEngine, StorageEngine, WriteBatch};
 pub use storage::store_redb::RedbEngine;
 pub use transaction::kernel::{
     Clock, ComplianceReport, EventFilter, Evolved, Explanation, ForgetMode, Forgotten, Fusion,

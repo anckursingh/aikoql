@@ -27,7 +27,12 @@ fn evidence(source: &str, confidence: f32) -> Evidence {
     }
 }
 
-fn class_proposal(name: &str, parent: Option<&str>, confidence: f32, source: &str) -> ClassProposal {
+fn class_proposal(
+    name: &str,
+    parent: Option<&str>,
+    confidence: f32,
+    source: &str,
+) -> ClassProposal {
     ClassProposal {
         name: name.into(),
         parent: parent.map(|s| s.into()),
@@ -101,8 +106,18 @@ fn postgres_proposal() -> OntologyProposal {
             prop_proposal("gst_rate", "Product", "Decimal", "pg:products", 0.9),
         ],
         relationships: vec![
-            rel_proposal("placed_by", Some("Order"), Some("Customer"), "pg:orders.customer_id"),
-            rel_proposal("contains", Some("Order"), Some("OrderItem"), "pg:order_items.order_id"),
+            rel_proposal(
+                "placed_by",
+                Some("Order"),
+                Some("Customer"),
+                "pg:orders.customer_id",
+            ),
+            rel_proposal(
+                "contains",
+                Some("Order"),
+                Some("OrderItem"),
+                "pg:order_items.order_id",
+            ),
         ],
     }
 }
@@ -118,15 +133,48 @@ fn mongo_proposal() -> OntologyProposal {
         properties: vec![
             prop_proposal("name", "Supplier", "Text", "mongo:suppliers", 0.95),
             prop_proposal("gstin", "Supplier", "Text", "mongo:suppliers", 0.95),
-            prop_proposal("bank", "Supplier", "Text", "mongo:suppliers.bank_account", 0.8),
-            prop_proposal("account_no", "Supplier", "Text", "mongo:suppliers.bank_account", 0.8),
-            prop_proposal("order_number", "PurchaseOrder", "Text", "mongo:purchase_orders", 0.9),
-            prop_proposal("taxable_amount", "PurchaseOrder", "Decimal", "mongo:purchase_orders", 0.9),
-            prop_proposal("total_amount", "PurchaseOrder", "Decimal", "mongo:purchase_orders", 0.9),
+            prop_proposal(
+                "bank",
+                "Supplier",
+                "Text",
+                "mongo:suppliers.bank_account",
+                0.8,
+            ),
+            prop_proposal(
+                "account_no",
+                "Supplier",
+                "Text",
+                "mongo:suppliers.bank_account",
+                0.8,
+            ),
+            prop_proposal(
+                "order_number",
+                "PurchaseOrder",
+                "Text",
+                "mongo:purchase_orders",
+                0.9,
+            ),
+            prop_proposal(
+                "taxable_amount",
+                "PurchaseOrder",
+                "Decimal",
+                "mongo:purchase_orders",
+                0.9,
+            ),
+            prop_proposal(
+                "total_amount",
+                "PurchaseOrder",
+                "Decimal",
+                "mongo:purchase_orders",
+                0.9,
+            ),
         ],
-        relationships: vec![
-            rel_proposal("placed_by", Some("PurchaseOrder"), Some("Supplier"), "mongo:supplier_name"),
-        ],
+        relationships: vec![rel_proposal(
+            "placed_by",
+            Some("PurchaseOrder"),
+            Some("Supplier"),
+            "mongo:supplier_name",
+        )],
     }
 }
 
@@ -146,15 +194,31 @@ fn sqlite_proposal() -> OntologyProposal {
             prop_proposal("invoice_number", "Invoice", "Text", "sqlite:invoices", 1.0),
             prop_proposal("issue_date", "Invoice", "Date", "sqlite:invoices", 1.0),
             prop_proposal("payment_status", "Invoice", "Text", "sqlite:invoices", 0.9),
-            prop_proposal("taxable_amount", "Invoice", "Decimal", "sqlite:invoices", 1.0),
+            prop_proposal(
+                "taxable_amount",
+                "Invoice",
+                "Decimal",
+                "sqlite:invoices",
+                1.0,
+            ),
             prop_proposal("total_amount", "Invoice", "Decimal", "sqlite:invoices", 1.0),
             prop_proposal("description", "LineItem", "Text", "sqlite:line_items", 1.0),
             prop_proposal("hsn_code", "LineItem", "Text", "sqlite:line_items", 0.9),
             prop_proposal("rate", "LineItem", "Decimal", "sqlite:line_items", 1.0),
         ],
         relationships: vec![
-            rel_proposal("issued_to", Some("Invoice"), Some("Contact"), "sqlite:invoices.contact_id"),
-            rel_proposal("has_item", Some("Invoice"), Some("LineItem"), "sqlite:line_items.invoice_id"),
+            rel_proposal(
+                "issued_to",
+                Some("Invoice"),
+                Some("Contact"),
+                "sqlite:invoices.contact_id",
+            ),
+            rel_proposal(
+                "has_item",
+                Some("Invoice"),
+                Some("LineItem"),
+                "sqlite:line_items.invoice_id",
+            ),
         ],
     }
 }
@@ -183,9 +247,24 @@ fn neo4j_proposal() -> OntologyProposal {
         ],
         relationships: vec![
             rel_proposal("ISSUED", Some("Supplier"), Some("Invoice"), "neo4j:ISSUED"),
-            rel_proposal("BILLED_TO", Some("Invoice"), Some("Customer"), "neo4j:BILLED_TO"),
-            rel_proposal("INCLUDES", Some("Invoice"), Some("Product"), "neo4j:INCLUDES"),
-            rel_proposal("SUPPLIES", Some("Supplier"), Some("Product"), "neo4j:SUPPLIES"),
+            rel_proposal(
+                "BILLED_TO",
+                Some("Invoice"),
+                Some("Customer"),
+                "neo4j:BILLED_TO",
+            ),
+            rel_proposal(
+                "INCLUDES",
+                Some("Invoice"),
+                Some("Product"),
+                "neo4j:INCLUDES",
+            ),
+            rel_proposal(
+                "SUPPLIES",
+                Some("Supplier"),
+                Some("Product"),
+                "neo4j:SUPPLIES",
+            ),
         ],
     }
 }
@@ -218,9 +297,24 @@ fn document_proposal() -> OntologyProposal {
             prop_proposal("ifsc", "BankAccount", "Text", "doc:IFSC", 0.7),
         ],
         relationships: vec![
-            rel_proposal("issued_by", Some("Invoice"), Some("Organization"), "doc:seller"),
-            rel_proposal("billed_to", Some("Invoice"), Some("Organization"), "doc:buyer"),
-            rel_proposal("includes", Some("Invoice"), Some("Product"), "doc:line items"),
+            rel_proposal(
+                "issued_by",
+                Some("Invoice"),
+                Some("Organization"),
+                "doc:seller",
+            ),
+            rel_proposal(
+                "billed_to",
+                Some("Invoice"),
+                Some("Organization"),
+                "doc:buyer",
+            ),
+            rel_proposal(
+                "includes",
+                Some("Invoice"),
+                Some("Product"),
+                "doc:line items",
+            ),
         ],
     }
 }
@@ -270,14 +364,26 @@ fn merge_dedupes_duplicate_classes() {
 
     // Organization appears as a direct class in document_proposal and as parent
     // of Customer/Supplier/Contact in DB proposals. Verify it exists exactly once.
-    let org_count = merged.classes.iter().filter(|c| c.name == "Organization").count();
+    let org_count = merged
+        .classes
+        .iter()
+        .filter(|c| c.name == "Organization")
+        .count();
     assert_eq!(org_count, 1, "Organization should be deduplicated");
 
     // Invoice appears in document, sqlite, and neo4j proposals.
-    let inv_count = merged.classes.iter().filter(|c| c.name == "Invoice").count();
+    let inv_count = merged
+        .classes
+        .iter()
+        .filter(|c| c.name == "Invoice")
+        .count();
     assert_eq!(inv_count, 1, "Invoice should be deduplicated");
     let inv = merged.classes.iter().find(|c| c.name == "Invoice").unwrap();
-    assert!(inv.signal_count >= 3, "Invoice signal_count from 3 sources, got {}", inv.signal_count);
+    assert!(
+        inv.signal_count >= 3,
+        "Invoice signal_count from 3 sources, got {}",
+        inv.signal_count
+    );
 }
 
 #[test]
@@ -287,7 +393,11 @@ fn merge_averages_confidences() {
 
     // Both propose Invoice — confidence should be averaged.
     let inv = merged.classes.iter().find(|c| c.name == "Invoice").unwrap();
-    assert!(inv.confidence > 0.89 && inv.confidence < 1.0, "confidence should average, got {}", inv.confidence);
+    assert!(
+        inv.confidence > 0.89 && inv.confidence < 1.0,
+        "confidence should average, got {}",
+        inv.confidence
+    );
     assert!(inv.signal_count >= 2);
 }
 
@@ -315,17 +425,48 @@ fn merge_produces_complete_ontology_picture() {
     let merged = merge_proposals(&sources);
 
     let class_names: Vec<&str> = merged.classes.iter().map(|c| c.name.as_str()).collect();
-    for expected in &["Organization", "Invoice", "Product", "Customer", "Supplier", "Order", "Contact"] {
-        assert!(class_names.contains(expected), "missing class: {}", expected);
+    for expected in &[
+        "Organization",
+        "Invoice",
+        "Product",
+        "Customer",
+        "Supplier",
+        "Order",
+        "Contact",
+    ] {
+        assert!(
+            class_names.contains(expected),
+            "missing class: {}",
+            expected
+        );
     }
 
     let prop_names: Vec<&str> = merged.properties.iter().map(|p| p.name.as_str()).collect();
-    for expected in &["name", "gstin", "invoice_number", "taxable_amount", "total_amount", "hsn_code"] {
-        assert!(prop_names.contains(expected), "missing property: {}", expected);
+    for expected in &[
+        "name",
+        "gstin",
+        "invoice_number",
+        "taxable_amount",
+        "total_amount",
+        "hsn_code",
+    ] {
+        assert!(
+            prop_names.contains(expected),
+            "missing property: {}",
+            expected
+        );
     }
 
-    let rel_names: Vec<&str> = merged.relationships.iter().map(|r| r.name.as_str()).collect();
+    let rel_names: Vec<&str> = merged
+        .relationships
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
     for expected in &["ISSUED", "BILLED_TO", "SUPPLIES", "issued_to", "placed_by"] {
-        assert!(rel_names.contains(expected), "missing relationship: {}", expected);
+        assert!(
+            rel_names.contains(expected),
+            "missing relationship: {}",
+            expected
+        );
     }
 }

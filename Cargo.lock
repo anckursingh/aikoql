@@ -1897,6 +1897,7 @@ dependencies = [
  "proptest",
  "rand 0.8.7",
  "redb",
+ "regex",
  "sha2 0.10.9",
  "tokio",
 ]

@@ -280,6 +280,10 @@ impl KnowledgeRepository {
         self.engine.as_ref()
     }
 
+    pub(crate) fn constraint_capabilities(&self) -> crate::storage::store::ConstraintCapabilities {
+        self.engine.constraint_capabilities()
+    }
+
     pub fn write_batch(&self, batch: &WriteBatch) -> KResult<()> {
         self.engine().write_batch(batch)
     }

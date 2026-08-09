@@ -397,7 +397,7 @@ mod tests {
         let widget = &objects[0];
         assert_eq!(widget.metadata.type_name, "items");
         assert_eq!(widget.metadata.tenant, Some("test-tenant".into()));
-        assert!(widget.metadata.tags.contains(&"sqlite".into()));
+        assert!(widget.metadata.tags.contains(&"source:sqlite".into()));
         assert_eq!(
             widget.properties.get("label"),
             Some(&Value::Text("Widget".into()))

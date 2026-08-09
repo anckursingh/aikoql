@@ -13,6 +13,8 @@ use crate::event::EventManager;
 use crate::index::coordinator::IndexCoordinator;
 use crate::knowledge::codec::{self, Enc};
 use crate::knowledge::kom::*;
+use crate::knowledge::ontology::{Cardinality, OntologyRegistry};
+use crate::lifecycle::constraint::{ConstraintEvaluator, InferenceEngine};
 use crate::lifecycle::schema::SchemaRegistry;
 use crate::object::ObjectManager;
 use crate::relationship::RelationshipManager;
@@ -22,7 +24,7 @@ use crate::security::envelope::Envelope;
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
 use crate::security::tenant::TenantManager;
 use crate::storage::repository::KnowledgeRepository;
-use crate::storage::store::{StorageEngine, WriteBatch};
+use crate::storage::store::{ConstraintCapabilities, StorageEngine, WriteBatch};
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 
@@ -122,6 +124,51 @@ fn audit_hash_of(
     e.str(actor);
     e.opt_str(note);
     sha256(&e.buf)
+}
+
+/// Check whether a uniqueness conflict exists in storage, respecting `UniquenessScope`.
+/// MRFC-0060 AC-05: scope-aware lookup used by `check_uniqueness` and `evaluate_deferred`.
+fn uniqueness_conflict(
+    objects: &ObjectManager,
+    scope: crate::kom::UniquenessScope,
+    tenant: Option<&str>,
+    type_name: &str,
+    pairs: &[(String, crate::kom::Value)],
+    exclude_koid: &crate::kom::KOID,
+) -> bool {
+    let Ok(heads) = objects.scan_heads() else {
+        return false;
+    };
+    for (hkoid, _version, _ts, state) in &heads {
+        if hkoid == exclude_koid {
+            continue;
+        }
+        if *state == LifecycleState::Deleted {
+            continue;
+        }
+        let Ok(Some(existing)) = objects.get(hkoid) else {
+            continue;
+        };
+        // Scope-aware matching (MRFC-0060 AC-05).
+        let in_scope = match scope {
+            crate::kom::UniquenessScope::Type => existing.metadata.type_name == type_name,
+            crate::kom::UniquenessScope::Tenant => match tenant {
+                Some(t) => existing.metadata.tenant.as_deref() == Some(t),
+                None => false, // un-tenanted: no Tenant-scope conflicts
+            },
+            crate::kom::UniquenessScope::Global => true,
+        };
+        if !in_scope {
+            continue;
+        }
+        let all_match = pairs
+            .iter()
+            .all(|(pn, pv)| existing.properties.get(pn.as_str()) == Some(pv));
+        if all_match {
+            return true;
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -453,6 +500,10 @@ pub struct Kernel {
     auth: Arc<RwLock<AuthManager>>,
     indexes: Arc<RwLock<Option<Arc<IndexCoordinator>>>>,
     schemas: Arc<RwLock<SchemaRegistry>>,
+    ontologies: Arc<RwLock<OntologyRegistry>>,
+    constraint_eval: ConstraintEvaluator,
+    /// Backend-native constraint capabilities snapshot at open time (C7).
+    constraint_caps: ConstraintCapabilities,
     relationships: Arc<RelationshipManager>,
     objects: Arc<ObjectManager>,
     /// Optional 32-byte HMAC-SHA256 key for at-rest version signatures.
@@ -478,6 +529,7 @@ impl Kernel {
         let auth = AuthManager::load(&repo)?;
         let relationships = Arc::new(RelationshipManager::new(repo.clone()));
         let objects = Arc::new(ObjectManager::new(repo.clone()));
+        let constraint_caps = repo.constraint_capabilities();
         Ok(Kernel {
             repo,
             clock,
@@ -488,6 +540,9 @@ impl Kernel {
             auth: Arc::new(RwLock::new(auth)),
             indexes: Arc::new(RwLock::new(Some(IndexCoordinator::new()))),
             schemas: Arc::new(RwLock::new(SchemaRegistry::new())),
+            ontologies: Arc::new(RwLock::new(OntologyRegistry::empty())),
+            constraint_eval: ConstraintEvaluator::new(),
+            constraint_caps,
             relationships,
             objects,
             signing_key: None,
@@ -577,6 +632,9 @@ impl Kernel {
             auth: self.auth.clone(),
             indexes: self.indexes.clone(),
             schemas: self.schemas.clone(),
+            ontologies: self.ontologies.clone(),
+            constraint_eval: self.constraint_eval.clone(),
+            constraint_caps: self.constraint_caps,
             relationships: self.relationships.clone(),
             objects: self.objects.clone(),
             signing_key: self.signing_key,
@@ -595,6 +653,50 @@ impl Kernel {
     /// Schemas are currently in-memory only (MRFC-0001 Increment-1).
     pub fn register_schema(&self, schema: Schema) {
         self.schemas.write().unwrap().register(schema);
+    }
+
+    /// Register an ontology for relationship validation (MRFC-0060 Phase C3).
+    pub fn register_ontology(&self, registry: OntologyRegistry) {
+        *self.ontologies.write().unwrap() = registry;
+    }
+
+    /// Validate that existing data satisfies a proposed new schema (MRFC-0060 AC-22).
+    ///
+    /// Scans all committed objects of `new_schema.type_name` and runs every
+    /// constraint (domain, check, unique) against each one.  Returns violations
+    /// keyed by KOID so the caller can decide whether to proceed with the migration.
+    pub fn validate_schema_migration(
+        &self,
+        _subject: &Subject,
+        new_schema: &Schema,
+    ) -> KResult<Vec<crate::kom::ConstraintViolation>> {
+        let mut violations: Vec<crate::kom::ConstraintViolation> = Vec::new();
+        let heads = self.objects.scan_heads()?;
+        for (hkoid, _version, _ts, state) in &heads {
+            if *state == crate::kom::LifecycleState::Deleted {
+                continue;
+            }
+            let Some(existing) = self.objects.get(hkoid)? else {
+                continue;
+            };
+            if existing.metadata.type_name != new_schema.type_name {
+                continue;
+            }
+            let result = self.constraint_eval.evaluate_full(
+                new_schema,
+                &existing.properties,
+                None,
+                Some(*hkoid),
+                None,
+            );
+            for v in result.violations {
+                violations.push(v);
+            }
+            for w in result.warnings {
+                violations.push(w);
+            }
+        }
+        Ok(violations)
     }
 
     /// Version payload access for index maintenance (internal; bypasses ACL).
@@ -808,6 +910,24 @@ impl Kernel {
             });
         }
         let creating = head.is_none();
+        // MRFC-0060 Phase C6: compute write-set for incremental constraint evaluation.
+        let write_set: Option<HashSet<String>> = if creating {
+            None // evaluate all constraints for creates
+        } else {
+            let head_props = &head.as_ref().unwrap().properties;
+            let mut changed = HashSet::new();
+            for k in req.properties.keys() {
+                if head_props.get(k) != req.properties.get(k) {
+                    changed.insert(k.clone());
+                }
+            }
+            for k in head_props.keys() {
+                if !req.properties.contains_key(k) {
+                    changed.insert(k.clone());
+                }
+            }
+            Some(changed)
+        };
         let security = if creating {
             let s = req.security.clone().unwrap_or_else(|| SecurityDescriptor {
                 owner: req.context.subject.name.clone(),
@@ -862,7 +982,110 @@ impl Kernel {
                 }),
             extensions: req.extensions.clone(),
         };
-        self.schemas.read().unwrap().validate(&ko)?;
+        {
+            let schemas = self.schemas.read().unwrap();
+            schemas.validate(&ko, self.constraint_caps.not_null)?;
+            // MRFC-0060 Phase C4/C5/C7: domain + check constraint evaluation (skip if backend native)
+            if !self.constraint_caps.check {
+                if let Some(schema) = schemas.get(&ko.metadata.type_name) {
+                    self.constraint_eval
+                        .evaluate_full(
+                            schema,
+                            &ko.properties,
+                            write_set.as_ref(),
+                            Some(ko.koid),
+                            ko.semantic.as_ref().and_then(|s| s.source.as_deref()),
+                        )
+                        .into_kresult()?;
+                }
+            }
+        }
+        // MRFC-0060 Phase C2/C7: uniqueness check — skip if backend enforces unique natively
+        if !self.constraint_caps.unique {
+            let objects = &self.objects;
+            self.schemas.read().unwrap().check_uniqueness(
+                &ko,
+                |scope, tenant, type_name, pairs, exclude_koid| {
+                    uniqueness_conflict(objects, scope, tenant, type_name, pairs, exclude_koid)
+                },
+                false, // remember() checks all constraints including deferred
+                write_set.as_ref(),
+            )?;
+        }
+        // MRFC-0060 Phase C3: ontology relationship validation.
+        if req.referential_policy == ReferentialPolicy::Enforced {
+            let ont = self.ontologies.read().unwrap();
+            let mut req_rel_counts: HashMap<String, u32> = HashMap::new();
+            for rel in &req.relationships {
+                *req_rel_counts.entry(rel.rel_type.clone()).or_insert(0) += 1;
+            }
+            let mut checked_outbound: HashSet<String> = HashSet::new();
+            for rel in &req.relationships {
+                if let Some(rel_def) = ont.definition().relationships.get(&rel.rel_type) {
+                    // Domain: source type must match (with subclass support).
+                    if let Some(ref domain) = rel_def.domain {
+                        if req.metadata.type_name != *domain
+                            && !ont.is_subclass_of(&req.metadata.type_name, domain)
+                        {
+                            return Err(KError::InvalidObject(format!(
+                                "relationship '{}' domain mismatch: '{}' is not a '{}'",
+                                rel.rel_type, req.metadata.type_name, domain
+                            )));
+                        }
+                    }
+                    // Range: target type must match (with subclass support).
+                    if let Some(ref range) = rel_def.range {
+                        if let Some(target_ko) = self.head_object(&rel.target)? {
+                            if target_ko.metadata.type_name != *range
+                                && !ont.is_subclass_of(&target_ko.metadata.type_name, range)
+                            {
+                                return Err(KError::InvalidObject(format!(
+                                    "relationship '{}' range mismatch: target '{}' is not a '{}'",
+                                    rel.rel_type, target_ko.metadata.type_name, range
+                                )));
+                            }
+                        }
+                    }
+                    let is_one_to_one = rel_def.cardinality == Some(Cardinality::OneToOne);
+                    let is_one_to_many = rel_def.cardinality == Some(Cardinality::OneToMany);
+
+                    // 1:1 and 1:N: each target can only be referenced once for
+                    // this relationship type (inbound exclusivity).
+                    if is_one_to_one || is_one_to_many {
+                        let inbound = self
+                            .relationships
+                            .inbound(&rel.target, Some(&rel.rel_type))?;
+                        if inbound.iter().any(|(_, src)| src != &koid) {
+                            return Err(KError::InvalidObject(format!(
+                                "cardinality violated: target {} already has '{}' from another source",
+                                rel.target, rel.rel_type
+                            )));
+                        }
+                    }
+
+                    // Outbound-side checks: run once per unique rel_type.
+                    if checked_outbound.insert(rel.rel_type.clone()) {
+                        let req_count = *req_rel_counts.get(&rel.rel_type).unwrap_or(&0);
+                        // 1:1: source can only emit one relationship of this type.
+                        if is_one_to_one && req_count > 1 {
+                            return Err(KError::InvalidObject(format!(
+                                "1:1 cardinality violated: {} '{}' relationships in request (max 1)",
+                                req_count, rel.rel_type
+                            )));
+                        }
+                        // User-defined max_count on outbound relationships.
+                        if let Some(max) = rel_def.max_count {
+                            if req_count > max {
+                                return Err(KError::InvalidObject(format!(
+                                    "max_count cardinality violated: {} '{}' relationships (max {})",
+                                    req_count, rel.rel_type, max
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Enforce tenant quota on creation (Phase 5 multi-tenancy).
         if creating {
             self.tenants.check_create(req.context.tenant.as_deref())?;
@@ -983,6 +1206,14 @@ impl Kernel {
         // Set of KOIDs that will exist after the batch (for referential checks).
         let new_koids: HashSet<KOID> = resolved.iter().map(|r| r.koid).collect();
 
+        // MRFC-0060 Phase C3: batch tracking for range + cardinality checks.
+        let batch_types: HashMap<KOID, String> = resolved
+            .iter()
+            .map(|r| (r.koid, r.op.request.metadata.type_name.clone()))
+            .collect();
+        let mut batch_inbound: HashMap<(KOID, String), HashSet<KOID>> = HashMap::new();
+        let mut txn_state = crate::lifecycle::constraint::TransactionConstraintState::new();
+
         // Phase 2: authorize, validate referential integrity, build object versions.
         let mut pending = Vec::with_capacity(resolved.len());
         for r in &resolved {
@@ -1044,7 +1275,178 @@ impl Kernel {
                     }),
                 extensions: req.extensions.clone(),
             };
-            self.schemas.read().unwrap().validate(&ko)?;
+            // MRFC-0060 Phase C6: write-set for incremental constraint evaluation.
+            let tx_write_set: Option<HashSet<String>> = if r.creating {
+                None
+            } else {
+                let head_props = &r.head.as_ref().unwrap().properties;
+                let mut changed = HashSet::new();
+                for k in req.properties.keys() {
+                    if head_props.get(k) != req.properties.get(k) {
+                        changed.insert(k.clone());
+                    }
+                }
+                for k in head_props.keys() {
+                    if !req.properties.contains_key(k) {
+                        changed.insert(k.clone());
+                    }
+                }
+                Some(changed)
+            };
+            {
+                let schemas = self.schemas.read().unwrap();
+                schemas.validate(&ko, self.constraint_caps.not_null)?;
+                // MRFC-0060 Phase C7: skip check constraint eval if backend native
+                if !self.constraint_caps.check {
+                    if let Some(schema) = schemas.get(&ko.metadata.type_name) {
+                        self.constraint_eval.evaluate(
+                            schema,
+                            &ko.properties,
+                            tx_write_set.as_ref(),
+                        )?;
+                    }
+                }
+            }
+            // MRFC-0060 Phase C5: immediate uniqueness check + deferred constraint collection.
+            {
+                let schemas = self.schemas.read().unwrap();
+                let objects = &self.objects;
+                // MRFC-0060 Phase C7: skip immediate uniqueness check if backend native.
+                // Deferred unique constraints are always evaluated in-kernel.
+                if !self.constraint_caps.unique {
+                    schemas.check_uniqueness(
+                        &ko,
+                        |scope, tenant, type_name, pairs, exclude_koid| {
+                            uniqueness_conflict(
+                                objects,
+                                scope,
+                                tenant,
+                                type_name,
+                                pairs,
+                                exclude_koid,
+                            )
+                        },
+                        true, // skip deferred — collected below
+                        tx_write_set.as_ref(),
+                    )?;
+                }
+                // Deferred constraints are never pushed down (StorageEngine has no txn handles).
+                for (ci, pairs, scope) in schemas.collect_deferred_unique(&ko) {
+                    txn_state.record_unique(
+                        &ko.metadata.type_name,
+                        ci,
+                        pairs,
+                        ko.koid,
+                        scope,
+                        ko.metadata.tenant.clone(),
+                    );
+                }
+                if let Some(schema) = schemas.get(&ko.metadata.type_name) {
+                    for (ci, cc) in schema.check_constraints.iter().enumerate() {
+                        if cc.timing == ConstraintTiming::Deferred {
+                            // C6: skip deferred checks unaffected by write-set
+                            if !crate::lifecycle::constraint::check_affected_by_write_set(
+                                cc,
+                                tx_write_set.as_ref(),
+                            ) {
+                                continue;
+                            }
+                            txn_state.record_check(
+                                &ko.metadata.type_name,
+                                ci,
+                                ko.koid,
+                                ko.properties.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+            // MRFC-0060 Phase C3: ontology relationship validation.
+            if req.referential_policy == ReferentialPolicy::Enforced {
+                let ont = self.ontologies.read().unwrap();
+                let mut req_rel_counts: HashMap<String, u32> = HashMap::new();
+                for rel in &req.relationships {
+                    *req_rel_counts.entry(rel.rel_type.clone()).or_insert(0) += 1;
+                }
+                let mut checked_outbound: HashSet<String> = HashSet::new();
+                for rel in &req.relationships {
+                    if let Some(rel_def) = ont.definition().relationships.get(&rel.rel_type) {
+                        // Domain check.
+                        if let Some(ref domain) = rel_def.domain {
+                            if req.metadata.type_name != *domain
+                                && !ont.is_subclass_of(&req.metadata.type_name, domain)
+                            {
+                                return Err(KError::InvalidObject(format!(
+                                    "relationship '{}' domain mismatch: '{}' is not a '{}'",
+                                    rel.rel_type, req.metadata.type_name, domain
+                                )));
+                            }
+                        }
+                        // Range check: resolve within-batch or from storage.
+                        if let Some(ref range) = rel_def.range {
+                            let target_type = if new_koids.contains(&rel.target) {
+                                batch_types.get(&rel.target).cloned()
+                            } else {
+                                self.head_object(&rel.target)?
+                                    .map(|ko| ko.metadata.type_name)
+                            };
+                            if let Some(ref tt) = target_type {
+                                if tt != range && !ont.is_subclass_of(tt, range) {
+                                    return Err(KError::InvalidObject(format!(
+                                        "relationship '{}' range mismatch: target '{}' is not a '{}'",
+                                        rel.rel_type, tt, range
+                                    )));
+                                }
+                            }
+                        }
+                        let is_one_to_one = rel_def.cardinality == Some(Cardinality::OneToOne);
+                        let is_one_to_many = rel_def.cardinality == Some(Cardinality::OneToMany);
+
+                        // 1:1 and 1:N: inbound exclusivity across storage + batch.
+                        if is_one_to_one || is_one_to_many {
+                            let inbound = self
+                                .relationships
+                                .inbound(&rel.target, Some(&rel.rel_type))?;
+                            let stored_conflict = inbound.iter().any(|(_, src)| src != &r.koid);
+                            let batch_conflict = batch_inbound
+                                .get(&(rel.target, rel.rel_type.clone()))
+                                .map(|sources| sources.iter().any(|s| s != &r.koid))
+                                .unwrap_or(false);
+                            if stored_conflict || batch_conflict {
+                                return Err(KError::InvalidObject(format!(
+                                    "cardinality violated: target {} already has '{}' from another source",
+                                    rel.target, rel.rel_type
+                                )));
+                            }
+                        }
+
+                        // Outbound-side checks: run once per unique rel_type per op.
+                        if checked_outbound.insert(rel.rel_type.clone()) {
+                            let req_count = *req_rel_counts.get(&rel.rel_type).unwrap_or(&0);
+                            if is_one_to_one && req_count > 1 {
+                                return Err(KError::InvalidObject(format!(
+                                    "1:1 cardinality violated: {} '{}' relationships in request (max 1)",
+                                    req_count, rel.rel_type
+                                )));
+                            }
+                            if let Some(max) = rel_def.max_count {
+                                if req_count > max {
+                                    return Err(KError::InvalidObject(format!(
+                                        "max_count cardinality violated: {} '{}' relationships (max {})",
+                                        req_count, rel.rel_type, max
+                                    )));
+                                }
+                            }
+                        }
+
+                        // Track this relationship for intra-batch cardinality.
+                        batch_inbound
+                            .entry((rel.target, rel.rel_type.clone()))
+                            .or_default()
+                            .insert(r.koid);
+                    }
+                }
+            }
             let kind = match (&req.origin, r.creating) {
                 (Origin::Reason, _) | (Origin::SemanticEnrichment, _) => EventKind::ClaimAsserted,
                 (_, true) => EventKind::Created,
@@ -1059,6 +1461,21 @@ impl Kernel {
                 r.op.context.subject.name.clone(),
                 req.note.clone(),
             ));
+        }
+
+        // MRFC-0060 Phase C5: deferred constraint evaluation before commit.
+        if !txn_state.is_empty() {
+            let schemas = self.schemas.read().unwrap();
+            let objects = &self.objects;
+            let result = self.constraint_eval.evaluate_deferred(
+                &txn_state,
+                &schemas,
+                |scope, tenant, type_name, pairs, exclude_koid| {
+                    uniqueness_conflict(objects, scope, tenant, type_name, pairs, exclude_koid)
+                },
+                0, // pre-commit — timestamp assigned in Phase 3
+            );
+            result.into_kresult()?;
         }
 
         // Phase 3: assign one commit timestamp and sequential event sequence numbers.
@@ -1406,6 +1823,25 @@ impl Kernel {
             }
         }
         Ok(types.into_iter().collect())
+    }
+
+    /// Scan all objects of `type_name` and return inferred constraint candidates
+    /// (MRFC-0060 Phase C8). Installs no constraints — caller reviews and manually
+    /// registers constraints via `register_schema()`.
+    pub fn infer_constraints(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+    ) -> KResult<Vec<InferenceCandidate>> {
+        let schemas = self.schemas.read().unwrap();
+        let schema = match schemas.get(type_name) {
+            Some(s) => s.clone(),
+            None => return Ok(Vec::new()),
+        };
+        drop(schemas); // release lock before scan
+        let kos = self.scan_by_type(subject, type_name)?;
+        let engine = InferenceEngine::new();
+        Ok(engine.infer(&schema, &kos))
     }
 
     // ---- relationship index queries ---------------------------------------

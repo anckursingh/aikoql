@@ -1018,15 +1018,15 @@ fn m15_document_compile_pipeline() {
     assert!(!koid.is_empty());
 
     // Compile the document.
-    let result = c.call_tool(
-        "document_compile",
-        json!({"koid": koid}),
-    );
+    let result = c.call_tool("document_compile", json!({"koid": koid}));
 
     // Verify IR: entities discovered.
     let ir = &result["ir"];
     let entities = ir["entities"].as_array().unwrap();
-    assert!(!entities.is_empty(), "IR should discover entities from invoice text");
+    assert!(
+        !entities.is_empty(),
+        "IR should discover entities from invoice text"
+    );
 
     // Verify entities contain invoice-related names.
     let entity_names: Vec<&str> = entities
@@ -1034,7 +1034,9 @@ fn m15_document_compile_pipeline() {
         .map(|e| e["name"].as_str().unwrap())
         .collect();
     assert!(
-        entity_names.iter().any(|n| n.contains("Om") || n.contains("Building")),
+        entity_names
+            .iter()
+            .any(|n| n.contains("Om") || n.contains("Building")),
         "should find 'Om Building Materials' in entities: {:?}",
         entity_names
     );
@@ -1060,13 +1062,19 @@ fn m15_document_compile_pipeline() {
     // Verify commit plan has actions.
     let plan = &result["commit_plan"];
     let actions = plan["actions"].as_array().unwrap();
-    assert!(!actions.is_empty(), "commit plan must have at least one action");
+    assert!(
+        !actions.is_empty(),
+        "commit plan must have at least one action"
+    );
     let plan_stats = &plan["stats"];
     assert!(plan_stats["total_actions"].as_u64().unwrap() > 0);
 
     // Verify embedded chunks.
     let chunks = result["embedded_chunks"].as_array().unwrap();
-    assert!(!chunks.is_empty(), "should produce at least one embedded chunk");
+    assert!(
+        !chunks.is_empty(),
+        "should produce at least one embedded chunk"
+    );
     // Each chunk must have an embedding vector.
     for chunk in chunks {
         let emb = chunk["embedding"].as_array().unwrap();
@@ -1077,10 +1085,8 @@ fn m15_document_compile_pipeline() {
     let trail = &result["evidence_trail"];
     let nodes = trail["nodes"].as_array().unwrap();
     assert!(!nodes.is_empty(), "evidence trail must have nodes");
-    let phases: std::collections::HashSet<&str> = nodes
-        .iter()
-        .map(|n| n["phase"].as_str().unwrap())
-        .collect();
+    let phases: std::collections::HashSet<&str> =
+        nodes.iter().map(|n| n["phase"].as_str().unwrap()).collect();
     assert!(phases.contains("D4-semantic-ir"));
     assert!(phases.contains("D5-ontology"));
     assert!(phases.contains("D6-resolution"));
