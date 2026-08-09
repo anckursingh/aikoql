@@ -81,7 +81,9 @@ fn cover_match_traverse() {
 fn cover_match_all_clauses() {
     let m = match parser::parse(
         r#"MATCH Person WHERE x == "y" SIMILAR TO "q" TRAVERSE knows RETURN explain"#,
-    ).unwrap() {
+    )
+    .unwrap()
+    {
         Statement::Match(m) => m,
         _ => panic!(),
     };
@@ -144,10 +146,13 @@ fn cover_predicate_simple() {
         Statement::Match(m) => m,
         _ => panic!(),
     };
-    assert_eq!(m.predicates[0], Predicate::Eq {
-        property: "x".into(),
-        value: Expr::String("y".into()),
-    });
+    assert_eq!(
+        m.predicates[0],
+        Predicate::Eq {
+            property: "x".into(),
+            value: Expr::String("y".into()),
+        }
+    );
 }
 
 #[test]
@@ -172,9 +177,9 @@ fn cover_predicate_or() {
 fn cover_predicate_nested_and_or() {
     // WHERE a == "1" AND b == "2" OR c == "3"
     // Parses as: (a==1 AND b==2) OR c==3
-    let m = match parser::parse(
-        r#"MATCH Person WHERE a == "1" AND b == "2" OR c == "3" RETURN *"#,
-    ).unwrap() {
+    let m = match parser::parse(r#"MATCH Person WHERE a == "1" AND b == "2" OR c == "3" RETURN *"#)
+        .unwrap()
+    {
         Statement::Match(m) => m,
         _ => panic!(),
     };
@@ -326,11 +331,10 @@ fn cover_update_single_prop() {
 
 #[test]
 fn cover_update_multi_prop() {
-    let u =
-        match parser::parse(r#"UPDATE Person "abc" name == "Bob", age == 25"#).unwrap() {
-            Statement::Update(u) => u,
-            _ => panic!(),
-        };
+    let u = match parser::parse(r#"UPDATE Person "abc" name == "Bob", age == 25"#).unwrap() {
+        Statement::Update(u) => u,
+        _ => panic!(),
+    };
     assert_eq!(u.properties.len(), 2);
 }
 
@@ -352,7 +356,9 @@ fn cover_ingest_minimal() {
 fn cover_ingest_full() {
     let i = match parser::parse(
         r#"INGEST "file.pdf" EXTRACT tables EXTRACT entities BUILD relationships COMMIT"#,
-    ).unwrap() {
+    )
+    .unwrap()
+    {
         Statement::Ingest(i) => i,
         _ => panic!(),
     };

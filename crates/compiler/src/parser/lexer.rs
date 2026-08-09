@@ -26,17 +26,17 @@ pub enum Token {
     Commit,
     Explain,
     // Symbols
-    Eq,       // ==
-    Neq,      // !=
-    Lt,       // <
-    Gt,       // >
-    Lte,      // <=
-    Gte,      // >=
-    LParen,   // (
-    RParen,   // )
-    Comma,    // ,
-    Dot,      // .
-    Star,     // *
+    Eq,     // ==
+    Neq,    // !=
+    Lt,     // <
+    Gt,     // >
+    Lte,    // <=
+    Gte,    // >=
+    LParen, // (
+    RParen, // )
+    Comma,  // ,
+    Dot,    // .
+    Star,   // *
     // Literals
     Ident(String),
     StringLit(String),

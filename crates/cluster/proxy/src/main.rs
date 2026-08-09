@@ -17,8 +17,18 @@ use std::time::Duration;
 
 const WRITE_TOOLS: &[&str] = &["remember", "forget", "evolve", "relate"];
 const READ_TOOLS: &[&str] = &[
-    "get", "find_similar", "trace", "explain", "prove", "aikoql", "traverse",
-    "eval_recall", "eval_staleness", "eval_contradictions", "verify", "metrics",
+    "get",
+    "find_similar",
+    "trace",
+    "explain",
+    "prove",
+    "aikoql",
+    "traverse",
+    "eval_recall",
+    "eval_staleness",
+    "eval_contradictions",
+    "verify",
+    "metrics",
 ];
 const MAX_RETRIES: usize = 3;
 
@@ -33,7 +43,10 @@ struct Shard {
 
 impl Shard {
     fn new(addr: &str) -> Self {
-        Shard { addr: addr.into(), conn: Mutex::new(None) }
+        Shard {
+            addr: addr.into(),
+            conn: Mutex::new(None),
+        }
     }
 
     /// Send a JSON-RPC request and return the response. Retries with reconnect
@@ -72,7 +85,9 @@ impl Shard {
 
         let mut reader = BufReader::new(&*stream);
         let mut line = String::new();
-        reader.read_line(&mut line).map_err(|e| format!("read: {}", e))?;
+        reader
+            .read_line(&mut line)
+            .map_err(|e| format!("read: {}", e))?;
 
         serde_json::from_str(line.trim()).map_err(|e| format!("parse: {}", e))
     }
@@ -94,7 +109,10 @@ fn extract_koid(_tool_name: &str, args: &J) -> String {
         .and_then(|v| v.as_str())
         .map(String::from)
         .unwrap_or_else(|| {
-            let subj = args.get("subject").and_then(|s| s.as_str()).unwrap_or("default");
+            let subj = args
+                .get("subject")
+                .and_then(|s| s.as_str())
+                .unwrap_or("default");
             let mut h = DefaultHasher::new();
             subj.hash(&mut h);
             format!("{:x}", h.finish())
@@ -123,7 +141,9 @@ fn route_tool_call(msg: &J, tool_name: &str, args: &J, shards: &[Arc<Shard>]) ->
             if let Some(result) = resp.get("result") {
                 if let Some(content) = result.get("content") {
                     if let Some(text) = content[0].get("text") {
-                        if let Ok(payload) = serde_json::from_str::<J>(text.as_str().unwrap_or("{}")) {
+                        if let Ok(payload) =
+                            serde_json::from_str::<J>(text.as_str().unwrap_or("{}"))
+                        {
                             if let Some(arr) = payload.get("results").and_then(|r| r.as_array()) {
                                 all_results.extend(arr.iter().cloned());
                             }
@@ -237,7 +257,10 @@ fn main() {
     }
 
     let shards: Arc<Vec<Arc<Shard>>> = Arc::new(
-        shard_addrs.iter().map(|a| Arc::new(Shard::new(a))).collect(),
+        shard_addrs
+            .iter()
+            .map(|a| Arc::new(Shard::new(a)))
+            .collect(),
     );
     eprintln!(
         "Proxy listening on {}, {} shards: {:?}",

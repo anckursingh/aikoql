@@ -68,10 +68,9 @@ fn golden_match_hybrid() {
 
 #[test]
 fn golden_match_multi_filter() {
-    let stmt = parser::parse(
-        r#"MATCH Person WHERE company == "Visa" AND city == "Amsterdam" RETURN *"#,
-    )
-    .unwrap();
+    let stmt =
+        parser::parse(r#"MATCH Person WHERE company == "Visa" AND city == "Amsterdam" RETURN *"#)
+            .unwrap();
     let m = as_match(&stmt);
     assert_eq!(m.predicates.len(), 2);
     // AND flattens into two Eq predicates.
@@ -149,18 +148,57 @@ fn golden_ingest() {
 fn golden_match_field_projection() {
     let stmt = parser::parse(r#"MATCH Person RETURN name, company"#).unwrap();
     let m = as_match(&stmt);
-    assert_eq!(m.projection, Projection::Fields(vec!["name".into(), "company".into()]));
+    assert_eq!(
+        m.projection,
+        Projection::Fields(vec!["name".into(), "company".into()])
+    );
 }
 
 #[test]
 fn golden_all_operators() {
     let cases = vec![
-        ("MATCH Person WHERE a == \"x\" RETURN *", Predicate::Eq { property: "a".into(), value: Expr::String("x".into()) }),
-        ("MATCH Person WHERE a != \"x\" RETURN *", Predicate::Neq { property: "a".into(), value: Expr::String("x".into()) }),
-        ("MATCH Person WHERE a > 5 RETURN *", Predicate::Gt { property: "a".into(), value: Expr::Number(5.0) }),
-        ("MATCH Person WHERE a < 5 RETURN *", Predicate::Lt { property: "a".into(), value: Expr::Number(5.0) }),
-        ("MATCH Person WHERE a >= 5 RETURN *", Predicate::Gte { property: "a".into(), value: Expr::Number(5.0) }),
-        ("MATCH Person WHERE a <= 5 RETURN *", Predicate::Lte { property: "a".into(), value: Expr::Number(5.0) }),
+        (
+            "MATCH Person WHERE a == \"x\" RETURN *",
+            Predicate::Eq {
+                property: "a".into(),
+                value: Expr::String("x".into()),
+            },
+        ),
+        (
+            "MATCH Person WHERE a != \"x\" RETURN *",
+            Predicate::Neq {
+                property: "a".into(),
+                value: Expr::String("x".into()),
+            },
+        ),
+        (
+            "MATCH Person WHERE a > 5 RETURN *",
+            Predicate::Gt {
+                property: "a".into(),
+                value: Expr::Number(5.0),
+            },
+        ),
+        (
+            "MATCH Person WHERE a < 5 RETURN *",
+            Predicate::Lt {
+                property: "a".into(),
+                value: Expr::Number(5.0),
+            },
+        ),
+        (
+            "MATCH Person WHERE a >= 5 RETURN *",
+            Predicate::Gte {
+                property: "a".into(),
+                value: Expr::Number(5.0),
+            },
+        ),
+        (
+            "MATCH Person WHERE a <= 5 RETURN *",
+            Predicate::Lte {
+                property: "a".into(),
+                value: Expr::Number(5.0),
+            },
+        ),
     ];
     for (src, expected) in cases {
         let stmt = parser::parse(src).unwrap();

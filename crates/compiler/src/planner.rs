@@ -34,9 +34,7 @@ impl Planner {
             {
                 let mut merged = p1.clone();
                 merged.extend(p2.clone());
-                ops[i] = IrOp::Filter {
-                    predicates: merged,
-                };
+                ops[i] = IrOp::Filter { predicates: merged };
                 ops.remove(i + 1);
             } else {
                 i += 1;
@@ -106,16 +104,36 @@ mod tests {
     #[test]
     fn dedup_consecutive_scans_on_same_type() {
         let plan = IrPlan::new(vec![
-            IrOp::Scan { type_name: "Employee".into(), subject: "a".into() },
-            IrOp::Filter { predicates: vec![Predicate::eq("dept", mnemosyne_kernel::Value::Text("Eng".into()))] },
-            IrOp::Scan { type_name: "Employee".into(), subject: "b".into() },
-            IrOp::Filter { predicates: vec![Predicate::eq("salary", mnemosyne_kernel::Value::Int(100000))] },
+            IrOp::Scan {
+                type_name: "Employee".into(),
+                subject: "a".into(),
+            },
+            IrOp::Filter {
+                predicates: vec![Predicate::eq(
+                    "dept",
+                    mnemosyne_kernel::Value::Text("Eng".into()),
+                )],
+            },
+            IrOp::Scan {
+                type_name: "Employee".into(),
+                subject: "b".into(),
+            },
+            IrOp::Filter {
+                predicates: vec![Predicate::eq(
+                    "salary",
+                    mnemosyne_kernel::Value::Int(100000),
+                )],
+            },
         ]);
         let opt = Planner::optimize(&plan);
         // Duplicate Scan removed → Scan + Filter + Filter = 3 ops
         assert_eq!(opt.operators.len(), 3);
         // Verify only 1 Scan remains
-        let scan_count = opt.operators.iter().filter(|op| matches!(op, IrOp::Scan { .. })).count();
+        let scan_count = opt
+            .operators
+            .iter()
+            .filter(|op| matches!(op, IrOp::Scan { .. }))
+            .count();
         assert_eq!(scan_count, 1);
     }
 

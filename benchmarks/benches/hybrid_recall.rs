@@ -37,60 +37,64 @@ fn bench_hybrid_recall(c: &mut Criterion) {
                 source: Some("bench".into()),
                 summary: None,
             };
-            kernel.remember(RememberRequest {
-                context: (&alice).into(),
-                koid: None,
-                expected_version: Some(0),
-                idempotency_key: None,
-                metadata: Metadata {
-                    type_name: "doc".into(),
-                    tenant: None,
-                    schema_version: 1,
-                    tags: vec![],
-                },
-                properties: props,
-                semantic: Some(semantic),
-                relationships: vec![],
-                security: None,
-                extensions: ExtensionMap::new(),
-                origin: Origin::Human,
-                note: None,
-                referential_policy: ReferentialPolicy::default(),
-            })
-            .unwrap();
+            kernel
+                .remember(RememberRequest {
+                    context: (&alice).into(),
+                    koid: None,
+                    expected_version: Some(0),
+                    idempotency_key: None,
+                    metadata: Metadata {
+                        type_name: "doc".into(),
+                        tenant: None,
+                        schema_version: 1,
+                        tags: vec![],
+                    },
+                    properties: props,
+                    semantic: Some(semantic),
+                    relationships: vec![],
+                    security: None,
+                    extensions: ExtensionMap::new(),
+                    origin: Origin::Human,
+                    note: None,
+                    referential_policy: ReferentialPolicy::default(),
+                })
+                .unwrap();
         }
 
         // Warm up: run find_similar once.
         let qv: Vec<f32> = (0..128).map(|i| (i as f32).sin()).collect();
-        kernel.find_similar(SimilarityQuery {
-            context: (&alice).into(),
-            filter: Some(PropertyFilter {
-                type_name: Some("doc".into()),
-                required: vec![],
-            }),
-            text: Some("document".into()),
-            vector: Some(qv.clone()),
-            embedding_model: Some("bench".into()),
-            k: 10,
-            fusion: Fusion::Rrf { k0: 60 },
-        }).unwrap();
+        kernel
+            .find_similar(SimilarityQuery {
+                context: (&alice).into(),
+                filter: Some(PropertyFilter {
+                    type_name: Some("doc".into()),
+                    required: vec![],
+                }),
+                text: Some("document".into()),
+                vector: Some(qv.clone()),
+                embedding_model: Some("bench".into()),
+                k: 10,
+                fusion: Fusion::Rrf { k0: 60 },
+            })
+            .unwrap();
 
         group.bench_function(format!("n={}", n), |b| {
             b.iter(|| {
                 black_box(
-                    kernel.find_similar(SimilarityQuery {
-                        context: (&alice).into(),
-                        filter: Some(PropertyFilter {
-                            type_name: Some("doc".into()),
-                            required: vec![],
-                        }),
-                        text: Some("document".into()),
-                        vector: Some(qv.clone()),
-                        embedding_model: Some("bench".into()),
-                        k: 10,
-                        fusion: Fusion::Rrf { k0: 60 },
-                    })
-                    .unwrap(),
+                    kernel
+                        .find_similar(SimilarityQuery {
+                            context: (&alice).into(),
+                            filter: Some(PropertyFilter {
+                                type_name: Some("doc".into()),
+                                required: vec![],
+                            }),
+                            text: Some("document".into()),
+                            vector: Some(qv.clone()),
+                            embedding_model: Some("bench".into()),
+                            k: 10,
+                            fusion: Fusion::Rrf { k0: 60 },
+                        })
+                        .unwrap(),
                 )
             })
         });

@@ -25,11 +25,7 @@ impl KeyRotationJob {
     /// `envelope` — the envelope whose KEK will be rotated.
     /// `passphrase` — passed to the KMS for key derivation.
     /// `interval_secs` — how often to rotate (e.g., 86400 = daily).
-    pub fn new(
-        envelope: Arc<Envelope>,
-        passphrase: String,
-        interval_secs: u64,
-    ) -> Self {
+    pub fn new(envelope: Arc<Envelope>, passphrase: String, interval_secs: u64) -> Self {
         KeyRotationJob {
             interval: Duration::from_secs(interval_secs),
             handle: Mutex::new(None),

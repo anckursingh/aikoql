@@ -50,5 +50,4 @@ impl ObjectManager {
     pub fn scan_versions(&self, koid: &KOID) -> KResult<Vec<(u64, KnowledgeObject)>> {
         self.repo.scan_object_versions(koid)
     }
-
 }

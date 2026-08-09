@@ -259,7 +259,7 @@ mod tests {
         idx.upsert(a, "text-embed-3", &[0.0, 1.0, 0.0]);
         idx.upsert(a, "bge-m3", &[0.9, 0.1, 0.0]); // overwrite bge-m3 entry
         assert_eq!(idx.len(), 2); // two distinct (koid, model) pairs
-        // Search without model filter: returns the KOID once (best score per KOID).
+                                  // Search without model filter: returns the KOID once (best score per KOID).
         let all = idx.search(&[1.0, 0.0, 0.0], 10, None);
         assert!(!all.is_empty());
         // Search with model filter.

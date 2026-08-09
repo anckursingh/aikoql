@@ -81,15 +81,18 @@ impl SqliteConnector {
         // PRAGMA table_info gives: cid, name, type, notnull, dflt_value, pk
         let mut stmt = self
             .conn
-            .prepare(&format!("PRAGMA table_info(\"{}\")", table_name.replace('"', "\"\"")))
+            .prepare(&format!(
+                "PRAGMA table_info(\"{}\")",
+                table_name.replace('"', "\"\"")
+            ))
             .map_err(|e| format!("introspect {}: {}", table_name, e))?;
         let col_rows = stmt
             .query_map([], |row| {
                 Ok((
-                    row.get::<_, String>(1)?,    // name
-                    row.get::<_, String>(2)?,    // type
-                    row.get::<_, bool>(3)?,      // notnull
-                    row.get::<_, i64>(5)?,       // pk (0 = not pk, >0 = pk order)
+                    row.get::<_, String>(1)?, // name
+                    row.get::<_, String>(2)?, // type
+                    row.get::<_, bool>(3)?,   // notnull
+                    row.get::<_, i64>(5)?,    // pk (0 = not pk, >0 = pk order)
                 ))
             })
             .map_err(|e| format!("query table_info: {}", e))?;
@@ -110,7 +113,10 @@ impl SqliteConnector {
         let count: i64 = self
             .conn
             .query_row(
-                &format!("SELECT COUNT(*) FROM \"{}\"", table_name.replace('"', "\"\"")),
+                &format!(
+                    "SELECT COUNT(*) FROM \"{}\"",
+                    table_name.replace('"', "\"\"")
+                ),
                 [],
                 |row| row.get(0),
             )
@@ -143,17 +149,34 @@ impl SqliteConnector {
         schema: &TableSchema,
         tenant: Option<&str>,
     ) -> Result<Vec<KnowledgeObject>, String> {
-        let col_names: Vec<String> = schema.columns.iter().map(|c| format!("\"{}\"", c.name.replace('"', "\"\""))).collect();
-        let query = format!("SELECT {} FROM \"{}\"", col_names.join(", "), schema.name.replace('"', "\"\""));
+        let col_names: Vec<String> = schema
+            .columns
+            .iter()
+            .map(|c| format!("\"{}\"", c.name.replace('"', "\"\"")))
+            .collect();
+        let query = format!(
+            "SELECT {} FROM \"{}\"",
+            col_names.join(", "),
+            schema.name.replace('"', "\"\"")
+        );
         let mut stmt = self
             .conn
             .prepare(&query)
             .map_err(|e| format!("import {}: {}", schema.name, e))?;
 
         let col_count = schema.columns.len();
-        let col_types: Vec<&str> = schema.columns.iter().map(|c| c.sqlite_type.as_str()).collect();
+        let col_types: Vec<&str> = schema
+            .columns
+            .iter()
+            .map(|c| c.sqlite_type.as_str())
+            .collect();
         let col_names_ref: Vec<&str> = schema.columns.iter().map(|c| c.name.as_str()).collect();
-        let pk_names: Vec<&str> = schema.columns.iter().filter(|c| c.is_primary_key).map(|c| c.name.as_str()).collect();
+        let pk_names: Vec<&str> = schema
+            .columns
+            .iter()
+            .filter(|c| c.is_primary_key)
+            .map(|c| c.name.as_str())
+            .collect();
 
         let rows = stmt
             .query_map([], |row| {
@@ -175,7 +198,11 @@ impl SqliteConnector {
             let (props, pk_parts) = r.map_err(|e| format!("row: {}", e))?;
             // If no explicit PK, use rowid-style: hash of all values.
             let pk = if pk_parts.is_empty() {
-                let combined: String = props.values().map(value_to_string).collect::<Vec<_>>().join("|");
+                let combined: String = props
+                    .values()
+                    .map(value_to_string)
+                    .collect::<Vec<_>>()
+                    .join("|");
                 vec![combined]
             } else {
                 pk_parts
@@ -224,7 +251,12 @@ fn sqlite_cell_to_value(row: &rusqlite::Row, col_idx: usize, sqlite_type: &str) 
         }
     }
     // Try float.
-    if utype.contains("REAL") || utype.contains("FLOAT") || utype.contains("DOUB") || utype.contains("NUMERIC") || utype.contains("DECIMAL") {
+    if utype.contains("REAL")
+        || utype.contains("FLOAT")
+        || utype.contains("DOUB")
+        || utype.contains("NUMERIC")
+        || utype.contains("DECIMAL")
+    {
         if let Ok(v) = row.get::<_, f64>(col_idx) {
             return Value::Float(v);
         }
@@ -290,8 +322,21 @@ fn value_to_string(v: &Value) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Null => "NULL".into(),
         Value::Bytes(b) => format!("{:x?}", b),
-        Value::List(items) => format!("[{}]", items.iter().map(value_to_string).collect::<Vec<_>>().join(",")),
-        Value::Map(m) => format!("{{{}}}", m.iter().map(|(k, v)| format!("{}:{}", k, value_to_string(v))).collect::<Vec<_>>().join(",")),
+        Value::List(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(value_to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::Map(m) => format!(
+            "{{{}}}",
+            m.iter()
+                .map(|(k, v)| format!("{}:{}", k, value_to_string(v)))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
     }
 }
 
@@ -316,27 +361,34 @@ mod tests {
         conn.conn.execute_batch(
             "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER, active BOOLEAN DEFAULT 1, metadata BLOB);"
         ).unwrap();
-        conn.conn.execute_batch(
-            "INSERT INTO users VALUES (1, 'Alice', 30, 1, X'deadbeef');"
-        ).unwrap();
+        conn.conn
+            .execute_batch("INSERT INTO users VALUES (1, 'Alice', 30, 1, X'deadbeef');")
+            .unwrap();
 
         let schema = conn.introspect_table("users").unwrap();
         assert_eq!(schema.name, "users");
         assert_eq!(schema.columns.len(), 5);
         assert_eq!(schema.row_count, 1);
 
-        let pk_cols: Vec<&str> = schema.columns.iter().filter(|c| c.is_primary_key).map(|c| c.name.as_str()).collect();
+        let pk_cols: Vec<&str> = schema
+            .columns
+            .iter()
+            .filter(|c| c.is_primary_key)
+            .map(|c| c.name.as_str())
+            .collect();
         assert_eq!(pk_cols, vec!["id"]);
     }
 
     #[test]
     fn import_rows_from_in_memory() {
         let conn = SqliteConnector::open(":memory:").unwrap();
-        conn.conn.execute_batch(
-            "CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT, price REAL);
+        conn.conn
+            .execute_batch(
+                "CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT, price REAL);
              INSERT INTO items VALUES (1, 'Widget', 9.99);
-             INSERT INTO items VALUES (2, 'Gadget', 19.50);"
-        ).unwrap();
+             INSERT INTO items VALUES (2, 'Gadget', 19.50);",
+            )
+            .unwrap();
 
         let schema = conn.introspect_table("items").unwrap();
         let objects = conn.import_table(&schema, Some("test-tenant")).unwrap();
@@ -346,7 +398,10 @@ mod tests {
         assert_eq!(widget.metadata.type_name, "items");
         assert_eq!(widget.metadata.tenant, Some("test-tenant".into()));
         assert!(widget.metadata.tags.contains(&"sqlite".into()));
-        assert_eq!(widget.properties.get("label"), Some(&Value::Text("Widget".into())));
+        assert_eq!(
+            widget.properties.get("label"),
+            Some(&Value::Text("Widget".into()))
+        );
         assert_eq!(widget.properties.get("price"), Some(&Value::Float(9.99)));
 
         // Same PK → same KOID.

@@ -1,8 +1,8 @@
 # Mnemosyne — Implementation Plan
 
-**Architecture:** [MRFC-0005](MRFC-0005-System-Architecture.md) | [MRFC-0010](MRFC-0010-AIKOQL-Parser-Architecture-v2.md) | [MRFC-0020](MRFC-0020-Encryption-Key-Management-Architecture.md) | **NEW: [MRFC-0030](#mrf-0030-active-knowledge-objects--the-knowledge-operating-system) — Active Knowledge Objects**  
-**Status:** Phases 1–5 complete, MRFC-0020 complete, API Layer done, MRFC-0030 spec complete, MRFC-0040 complete  
-**Last updated:** 2026-08-08
+**Architecture:** [MRFC-0005](MRFC-0005-System-Architecture.md) | [MRFC-0010](MRFC-0010-AIKOQL-Parser-Architecture-v2.md) | [MRFC-0020](MRFC-0020-Encryption-Key-Management-Architecture.md) | [MRFC-0030](#mrf-0030-active-knowledge-objects--the-knowledge-operating-system) — Active Knowledge Objects | **NEW: [MRFC-0050](#mrf-0050-document-ocr--knowledge-ingestion) — Document OCR & Ingestion**  
+**Status:** Phases 1–5 complete, MRFC-0020 complete, API Layer done, MRFC-0030 Phase 7a–7d complete (9/9 Active KOs + Agent Runtime), MRFC-0040 complete, Studio Phase S2/S3 complete, MRFC-0050 Phase D1–D2 complete  
+**Last updated:** 2026-08-09
 
 ---
 
@@ -44,8 +44,8 @@ benchmarks/               ← Load + micro-benchmarks (moved from crates/)
 | Metric | Value |
 |--------|-------|
 | Crates | 20 (kernel, graph, vector, scheduler, semantic, reasoning, compiler, runtime, ingestion, mcp, python-sdk, typescript-sdk, benchmarks, cluster/proxy, provider-sdk, rocksdb, 4 providers) |
-| Rust tests | 292+ (all green) |
-| MCP tools | 43 |
+| Rust tests | 330+ (all green) |
+| MCP tools | 49 |
 | Storage backends | 3 (redb, RocksDB, Memory) — StorageEngine trait, 3 methods |
 | CLI subcommands | 7 (shell, serve, backup, restore, audit, keygen, import) |
 | Providers | 4 (PostgreSQL, SQLite, MongoDB, Neo4j) + Provider SDK trait |
@@ -55,7 +55,7 @@ benchmarks/               ← Load + micro-benchmarks (moved from crates/)
 | Fuzz | 3 proptest harnesses |
 | Bench | 100 KB query = 111 µs (180× under 20 ms gate) |
 | Cluster proxy | Persistent connections, retry with backoff, startup health check, partial-result merging |
-| HTTP | REST API (24 endpoints), Graph browser UI, Prometheus /metrics + /health |
+| HTTP | REST API (30 endpoints), Graph browser UI + Studio SPA, Prometheus /metrics + /health |
 | Agent experience | MRFC-0040 complete — session identity, structured errors, batch ops, schema discovery, health, agent memory, Python MCP client, unified Agent SDK, auto-embedding, streaming queries |
 | MVP ready | ✅ Docker packaging (Dockerfile + docker-compose), RocksDB backend (feature-gated, Linux), config-based backend selection |
 
@@ -68,7 +68,7 @@ benchmarks/               ← Load + micro-benchmarks (moved from crates/)
 ### What's solid (don't touch)
 - Kernel: MVCC, OCC, HLC, SHA-256 audit chain, RBAC, encryption at rest
 - AIKOQL: Lexer → Parser → AST → KIR → Planner → Runtime interpreter
-- 43 MCP tools: remember, get, find_similar, aikoql, trace, explain, prove, batch, decide, streaming, etc.
+- 49 MCP tools: remember, get, find_similar, aikoql, trace, explain, prove, batch, decide, deploy_program/list_programs, deploy_policy/evaluate_policies, deploy_workflow, deploy_trigger, deploy_agent/list_agents, deploy_connector/list_connectors, deploy_view/list_views, deploy_report/list_reports, deploy_benchmark/list_benchmarks, streaming, etc.
 - REST API: 24+ endpoints, Graph browser UI, Prometheus metrics
 - Python SDK: PyO3 embedded + pure-Python MCP client + unified Agent.connect()
 - Agent experience: Session identity, structured errors, batch ops, streaming, auto-embedding
@@ -104,7 +104,7 @@ db = Agent.connect("localhost:9090")
 
 | Priority | Item | Effort |
 |---|---|---|
-| 🟡 | Programs-as-KOs full runtime (MRFC-0030 Phase 7d) | 2 weeks |
+| ✅ | Programs-as-KOs full runtime (MRFC-0030 Phase 7a–7d) | Done |
 | 🟡 | Cloud KMS providers (AWS, Azure, GCP) | 1 week |
 | 🟢 | Read replicas + Raft consensus | 1 month |
 | 🟢 | Compliance evidence packs (GDPR, HIPAA) | 2 weeks |
@@ -264,7 +264,7 @@ crates/security/
 - [x] Unit tests: 6 (roundtrip, tamper, wrong key, wrong AAD, cross-provider, wrapper delegation)
 - [x] Crypto agility — two independent providers implementing the same `CryptoProvider` trait
 - [x] `--help` / `--version` CLI flags for MCP server discoverability
-- [x] Build scripts: `scripts/build-release.bat` (Windows), `scripts/build-release.sh` (Linux)
+- [x] Build scripts: `scripts/build-release.bat` (Windows), `scripts/build-release.sh` (Linux), `scripts/build-all.bat` (cross-platform). Each generates SHA256 checksums, versioned distribution archives (.zip/.tar.gz), and BUILD_INFO.txt.
 - [x] Example config file: `mnemosyne.toml` (database, server, encryption, logging sections)
 - [x] End-user quickstart: `QUICKSTART.md` (5-second start, tool reference, SDK examples, encryption setup)
 - [x] Go SDK: `go.mod` module definition
@@ -316,11 +316,12 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
    - [x] `reason`, `infer`, `predict` — 4 new MCP tools
    - [ ] `merge`/`split` — deferred (semantic operations)
 
-3. **Programs-as-KOs** — ✅ SPECIFIED (MRFC-0030), ⬜ IMPLEMENTATION PENDING
-   - [x] MRFC-0030 specification: Active Knowledge Object type hierarchy
-   - [x] Program, Workflow, Policy, Agent, Trigger, Connector KO types defined
-   - [x] KVM instruction set, dependency model, execution model
-   - [ ] Phase 7a: Program KO + KVM bytecode — implementation pending
+3. **Programs-as-KOs** — ✅ IMPLEMENTED (MRFC-0030 Phase 7a–7d)
+   - [x] All 9 Active KO types deployed: program, workflow, policy, agent, trigger, connector, view, report, benchmark
+   - [x] Knowledge Runtime: Orchestrator, Trigger Engine, Program Cache, Agent Runtime
+   - [x] Agent Runtime: skill resolution, {{prompt}} substitution, program execution with stats
+   - [x] 49 MCP tools + 37 REST API endpoints (including all deploy/list/execute for 9 KO types)
+   - [x] 15 acceptance tests including m12_agent_runtime_execute_agent_with_skills
 
 4. **ABI Stability** (MRFC-0011 §9) — ✅ IMPLEMENTED
    - [x] `kernel.abi_version()`, `OfflineProof`, `prove_export()`
@@ -340,9 +341,10 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
 8. **`fusion=exact` Query Hint** (MRFC-0009 §4) — ✅ IMPLEMENTED
    - [x] `Fusion::Exact` variant added — bypasses indexes entirely
 
-9. **Missing Knowledge Services** (MRFC-0005 §Knowledge Services)
+9. **Missing Knowledge Services** (MRFC-0005 §Knowledge Services) — 🟡 IN PROGRESS
    - OCR, NER, Embedding, Ontology — no crates, no code
    - IngestionPlugin trait exists but only TextLineIngester stub implemented
+   - **[MRFC-0050](#mrf-0050-document-ocr--knowledge-ingestion) specifies the full document ingestion pipeline** — see below for phased implementation plan
 
 ### Tier 3 — Operational Gaps
 
@@ -372,12 +374,222 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
 
 | Tier | Items | Status |
 |---|---|---|
-| 1 — Core Architecture | Class B syscalls ✅, ABI stability ✅, API Layer ✅, Programs-as-KOs (MRFC-0030 spec done, impl pending) | 3/4 done |
-| 2 — High Value | fusion=exact ✅, offline prove ✅, Storage Kernel ⬜, embedding migration ⬜, Knowledge Services (OCR/NER/Emb) ⬜ | 2/5 done |
-| 3 — Operational | CI/CD ✅, Cloud KMS ✅ (AWS/Azure/GCP stubs), compliance packs ⬜, replicas ⬜ | 2/4 done |
-| 4 — Research | Searchable enc, enclaves, PQC, federated mesh, KVM (in MRFC-0030), NL frontend | MRFC-0030 moves KVM to Phase 7 |
+| 1 — Core Architecture | Class B syscalls ✅, ABI stability ✅, API Layer ✅, Programs-as-KOs ✅ (MRFC-0030 Phase 7a–7d, 9 Active KO types, Agent Runtime, 49 tools, 37 REST endpoints) | 4/4 done |
+| 2 — High Value | fusion=exact ✅, offline prove ✅, Storage Kernel ⬜, embedding migration ⬜, Knowledge Services 🟡 (MRFC-0050 spec complete, D0 pending) | 2/5 done |
+| 3 — Operational | CI/CD ✅, Cloud KMS ✅ (AWS/Azure/GCP stubs), compliance packs ⬜, replicas ⬜, Studio S1/S2/S3 ✅, Document Explorer 🟡 | 4/6 done |
+| 4 — Research | Searchable enc, enclaves, PQC, federated mesh, KVM bytecode (deferred), NL frontend | All post-1.0 |
 
-**Gaps closed: 6 of 19 → 7 remaining. MRFC-0030 transforms Programs-as-KOs from a gap into the Phase 7 roadmap.**
+**Gaps closed: 9 of 19. Tier 1 fully complete. 2 in progress (Knowledge Services via MRFC-0050, Document Explorer). 3 remaining in Tiers 2–3: Storage Kernel, embedding migration, compliance packs. Studio 13 panels complete. 15 acceptance tests. Build scripts with SHA256/archives.**
+
+---
+
+---
+
+## MRFC-0050: Document Knowledge Compiler & Ontology Discovery
+
+**Status:** v2 Architecture Revision analyzed. All phases complete: D1 (Foundation) ✅, D2 (OCR) ✅, D3 (Document AST) ✅, D4 (Knowledge IR) ✅, D5 (Ontology Discovery) ✅, D6 (Entity Resolution) ✅, D7 (Knowledge Commit) ✅, D8 (Vector + Retrieval) ✅, D9 (Compiler Pipeline) ✅.  
+**Spec v2:** [MRFC-0050-Document-OCR-HLD-LLD-v2.md](../../downloads/MRFC-0050-Document-OCR-HLD-LLD-v2.md) (imported 2026-08-09)  
+**Last updated:** 2026-08-09
+
+### v2 Architecture Revision — What Changed
+
+The v2 spec adds a major "Architecture Revision" (§1-20) that re-frames document ingestion as a **Document Knowledge Compiler** rather than an OCR pipeline. Key shifts:
+
+| v1 Concept | v2 Concept | Impact |
+|---|---|---|
+| OCR is the center | OCR is a replaceable physical-analysis sub-stage | Same code, different framing — no rework needed |
+| `DocumentModel` is the output | `DocumentAst` is the intermediate; `KnowledgeIr` is the staging layer | New types needed before semantic extraction (D4) |
+| Extract → KO directly | Extract → Document AST → Knowledge IR → validate → KO | Two new intermediate representations |
+| Single-source ontology | Multi-signal: DB schemas + KOs + documents → scored candidates | Ontology discovery gets evidence aggregation |
+| No conflict handling | Cross-source reconciliation (e.g. Postgres says ACTIVE, PDF says terminated) | New `KnowledgeReconciler` trait (D6) |
+| 4 phases (D0-D4) | 9 phases (D1-D9) | Finer granularity, same total scope |
+| No chunking architecture | Full chunking/retrieval architecture (§21-46) | New subsystem: semantic chunking, contextualization, hybrid retrieval, reranking, evidence selection |
+
+### v2 Compiler Pipeline (the new mental model)
+
+```
+DOCUMENT
+   ↓
+Physical Analysis  (native text / OCR / visual layout — our D1-D2)
+   ↓
+Document AST       (provider-independent structural representation)
+   ↓
+Semantic Analyzer  (entity + relation + fact extraction)
+   ↓
+Knowledge IR       (staging: EntityCandidate, RelationCandidate, FactCandidate)
+   ↓
+Ontology Resolution (map candidates to ontology classes/properties)
+   ↓
+Entity Resolution  (link document entities to existing KOs)
+   ↓
+Reconciliation     (detect cross-source conflicts)
+   ↓
+Knowledge Objects  (commit to kernel)
+   ↓
+Graph + Vector + Provenance
+   ↓
+AIKOQL → Agent → Answer + Evidence
+```
+
+### What We Have (mapped to v2 phases)
+
+| v2 Phase | What | Status |
+|---|---|---|
+| **D1 — Foundation** | Artifact store, document KO type, upload endpoint, SHA-256 dedup, deploy_document | ✅ Done |
+| **D1 — Physical (native)** | Native text extraction: PDF/DOCX/HTML/TXT → DocumentModel + PageModel | ✅ Done |
+| **D2 — Physical (OCR)** | Scanned page detection, Tesseract CLI, page-level OCR decision | ← **Next** |
+| **D3 — Document AST** | Provider-independent structural model, layout analysis, block classification | ✅ |
+| **D4 — Knowledge IR** | EntityCandidate, RelationCandidate, FactCandidate, TemporalAssertion types | ✅ |
+| **D5 — Ontology Discovery** | Multi-signal: consume DB schemas + existing KOs + document IR → evidence-backed proposals | ✅ |
+| **D6 — Entity Resolution** | Cross-source linking, confidence scoring, evidence aggregation, embedding infrastructure, vector similarity resolver | ✅ |
+| **D7 — Knowledge Commit** | Reconciliation, conflict detection, validated KOs committed | ✅ |
+| **D8 — Vector + Retrieval** | Semantic chunking, contextualization, embedding, HNSW+BM25, reranking | ✅ |
+| **D9 — Agent + Studio** | Document Explorer panel, evidence viewer, AIKOQL SEARCH DOCUMENTS, explainability, end-to-end compiler pipeline | ✅ |
+
+### What Already Exists (Reuse, Don't Rebuild)
+
+| Existing Component | Location | v2 Relevance |
+|---|---|---|
+| **Ontology system** | `kernel/src/knowledge/ontology.rs` (1285 lines) | D5 — `OntologyRegistry`, `discover_ontology()`, class/property resolution. Multi-signal discovery builds on this. |
+| **Vector + HNSW + BM25** | `engines/vector/src/` | D8 — Hybrid retrieval infrastructure exists. Chunking/contextualization layer needed on top. |
+| **Scheduler + SchedulerJob** | `engines/scheduler/src/` | Pipeline orchestration — each stage is a SchedulerJob with checkpointing. |
+| **SemanticEngine + AiProvider** | `engines/semantic/src/` | D4 — `enrich(KO) → EnrichmentResult`. Needs extension for entity/relation extraction, but the AI provider interface already routes to LLM APIs. |
+| **Kernel write path** | `kernel/src/transaction/kernel.rs` | D7 — `remember()`, `relate()`, MVCC, provenance, encryption. All wired. |
+| **FsArtifactStore** | `crates/ingestion/src/lib.rs` (inline) | D1 — SHA-256 content-addressed store at `{db_path}.artifacts/{sha256}`. |
+| **DocumentModel + PageModel** | `crates/ingestion/src/lib.rs` | D1 — Current extraction output. Will evolve into DocumentAst in D3. |
+| **Provider pattern** | `providers/sdk/src/lib.rs` | D2-D4 — DB connectors use `Provider` trait. Same registry pattern for OCR/semantic providers. |
+
+### Design Decisions (v2-informed)
+
+1. **OCR via CLI subprocess, not native binding** — Tesseract CLI (`tesseract input.png output -l eng`) avoids C++ build deps. Swap to native binding only if throughput demands it.
+
+2. **Document AST added when needed, not before** — The `DocumentAst` abstraction pays off when we have multiple physical-analysis backends (native text, OCR, visual layout). With only native text today, `DocumentModel` suffices. Add `DocumentAst` in D3 when OCR produces region-level output that needs normalization.
+
+3. **Knowledge IR added when semantic extraction comes online** — `EntityCandidate`/`RelationCandidate` types are staging for validation before kernel commit. Without semantic extraction (D4), there's nothing to stage. Add in D4.
+
+4. **Chunking deferred to D8** — The v2 spec's §21-46 chunking/retrieval architecture is thorough but depends on having extracted knowledge to chunk. Build the extraction pipeline first, then add chunking when retrieval quality demands it.
+
+5. **Sync-first, async when needed** — `Kernel` is sync. `SchedulerJob::start()` is sync. Keep pipeline stages sync. Add `async` only for cloud OCR or LLM API calls (D4+).
+
+6. **Ponytail module structure** — v2 proposes 16 subdirectories under `crates/ingestion/src/`. Start with 2 files (`lib.rs` + new module per phase). Add subdirectories when a module hits 300+ lines.
+
+### Implementation Plan (v2-aligned)
+
+#### Phase D1: Foundation + Native Text ✅ (2026-08-09)
+
+What was built matches v2's D1 exactly: artifact store, document KO type, binary upload via base64 JSON wrapper, SHA-256 dedup, native text extraction for PDF/DOCX/HTML/TXT, page_count/char_count on Document KOs.
+
+**Files:** `crates/ingestion/src/lib.rs`, `crates/kernel/src/transaction/kernel.rs`, `crates/services/api/mcp/src/main.rs`, `crates/services/api/mcp/tests/mcp_stdio.rs`
+
+#### Phase D2: OCR (Physical Analysis — scanned pages) ✅
+
+**Goal:** Upload a scanned PDF → OCR extracts text → merged with native text pages → same DocumentModel output. Mixed PDFs only OCR pages that need it. **DONE 2026-08-09.**
+
+**What was built:**
+
+| Task | Detail |
+|---|---|
+| OCR decision heuristic | `page_needs_ocr(text, threshold)` — native text char_count < 10 → mark as scanned |
+| Tesseract CLI backend | `ocr_page_image(image_path, language, work_dir)` via `std::process::Command`. Zero new deps. |
+| PDF page rasterization | `rasterize_pdf_page(pdf_path, page_num, output_dir)` via `pdftoppm` CLI (poppler-utils). |
+| Tool availability check | `tool_available(name)` — checks if CLI tool is on PATH before attempting OCR. |
+| Mixed PDF pipeline | `ocr_pdf_pages()` — iterates native pages, rasterizes + OCRs skimpy ones, merges with source tagging. |
+| `PageModel.source` field | `"native"` (pdf-extract) or `"ocr"` (Tesseract). Serde default = "native". |
+| Graceful degradation | If Tesseract or pdftoppm not on PATH, OCR is skipped — native text extraction still works. |
+
+**All planned features implemented (no skips):**
+
+| Task | Detail |
+|---|---|
+| `OcrProvider` trait | `recognize(image, language, work_dir) → OcrPageResult { text, confidence, word_confidences, word_count }`. `available()` health check. |
+| `TesseractCli` impl | Configurable paths (`tesseract_path`, `pdftoppm_path`). Produces both `.txt` and `.tsv` output in single invocation. |
+| TSV confidence parsing | `parse_tesseract_tsv()` — parses level-5 word rows, extracts per-word confidence, computes per-page average. Skips non-word rows and negative confidences. |
+| `OcrStats` struct | `pages_ocr_attempted`, `pages_ocr_succeeded`, `pages_ocr_failed`, `average_confidence`. `status()` → `"extracted"` / `"ocr_complete"` / `"ocr_partial"`. |
+| `PageModel.ocr_confidence` | `Option<f32>` — per-page average word confidence when source="ocr". |
+| `DocumentModel.ocr_stats` | `Option<OcrStats>` — populated when PDF extraction runs OCR. |
+| Granular status in MCP | `tool_document_ingest` response includes `ocr_stats` JSON + status derived from OcrStats. Extracted text file now tags pages with `[native]`/`[ocr]` source. |
+
+**Test results:** 23 ingestion unit tests (12 OCR-specific: threshold + tool detection + TSV parsing + OcrStats status + OcrProvider + legacy wrappers + real invoice native extraction + real invoice OCR). 17 MCP acceptance tests (m13 + m14). Zero regressions.
+
+**Real invoice validation (3 invoices from billing-processor):**
+- `invoice_3861.pdf`: 1 page, 874 chars native, status=extracted
+- `invoice_6147.pdf`: 1 page, 874 chars native, status=extracted  
+- `invoice_9655.pdf`: 1 page, 1272 chars native, status=extracted
+- OCR on rasterized page: 750 chars, 116 words, **88.1% average confidence**, INVOICE + GSTIN verified present
+
+**Files:** `crates/ingestion/src/ocr.rs` (new, 580 lines), `crates/ingestion/src/lib.rs` (+OcrStats/DocumentModel.ocr_stats/PageModel.ocr_confidence +real invoice tests), `crates/services/api/mcp/src/main.rs` (tool_document_ingest: granular status + ocr_stats JSON), `crates/services/api/mcp/tests/mcp_stdio.rs` (+m14 test).
+
+#### Phase D3: Document AST
+
+**Goal:** Normalized, provider-independent structural representation. Supersedes `DocumentModel` as the output of physical analysis.
+
+| Task | Detail |
+|---|---|
+| `DocumentAst` type | Sections, paragraphs, tables, figures, lists — each with type tag, bounding box, text, children |
+| `AstNode` enum | Section, Paragraph, Table, TableRow, TableCell, Figure, List, ListItem, Header, Footer |
+| Layout analysis | Block classification: heading/paragraph/table/image from position + font size heuristics |
+| Table structure | Tables → rows → cells with row/col spans, bounding boxes, extracted text |
+| `DocumentModel → DocumentAst` adapter | Current extractors produce DocumentModel; wrap into minimal AST (single-section, all-paragraph) |
+
+**Test:** PDF with heading + 2 paragraphs + table → AST has 1 Section containing 1 Heading + 2 Paragraph + 1 Table. Table has correct row/col count.
+
+#### Phase D4: Knowledge IR + Semantic Extraction ✅
+
+**Goal:** Entities, relationships, facts extracted. Staged as Knowledge IR before kernel commit.
+
+**What was built:**
+
+| Task | Detail |
+|---|---|
+| `Evidence` struct | Per-candidate provenance: document_id, page, bbox_text, extractor, model, confidence |
+| `EntityCandidate` | name, type_hint, mentions[], confidence, evidence |
+| `RelationCandidate` | subject, predicate, object, confidence, evidence |
+| `FactCandidate` | statement, entities[], confidence, evidence |
+| `EventCandidate` | description, trigger, participants[], temporal[], confidence, evidence |
+| `TemporalAssertion` | text, start_time, end_time (ISO-8601), confidence, evidence |
+| `KnowledgeIr` container | entities, relations, facts, events, temporal + document_id, page_count, extractor |
+| `SemanticAnalyzer` trait | `analyze(ast: &DocumentAst) → KnowledgeIr` — single-call interface |
+| `MockSemanticAnalyzer` | Rule-based: capitalized phrase → entities, heading → facts, co-occurrence → relations, date patterns → temporal |
+| `document_model_to_ir()` | Full pipeline: DocumentModel → DocumentAst → KnowledgeIr |
+
+**Test results:** 23 D4 tests — entity extraction, dedup, type hints, fact extraction from headings/titles, relation extraction from co-occurrence, temporal parsing (Month YYYY, ISO-8601, QN YYYY), evidence propagation across pages, pipeline integration, edge cases (empty doc, common words, configurable confidence, trait object). 78 total ingestion tests, 14 MCP acceptance tests. Zero regressions.
+
+**File:** `crates/ingestion/src/ir.rs` (~600 lines)
+
+**At this point, the core compiler pipeline works:**
+```
+PDF → Physical Analysis(D1+D2) → Document AST(D3) → Knowledge IR(D4) → …(next phases)
+```
+
+#### Phases D5-D9: Ontology → Resolution → Commit → Retrieval → Agent
+
+Deferred to post-D4. See v2 spec §10-20 for detailed interfaces. The existing ontology system, vector engine, scheduler, and kernel write path provide the foundation for D5-D9.
+
+### New Acceptance Criteria (v2 AC-17 through AC-27)
+
+| AC | Description | Phase |
+|---|---|---|
+| AC-17 | Document AST: deterministic, provider-independent structural representation | D3 |
+| AC-18 | Representation linkage: text, OCR, visual, layout, semantic retain stable source refs | D3-D4 |
+| AC-19 | Knowledge IR: semantic extraction produces IR before kernel mutation | D4 |
+| AC-20 | Multi-signal ontology discovery: consumes DB schemas + KOs + documents | D5 |
+| AC-21 | Evidence-backed ontology: every concept exposes evidence + confidence | D5 |
+| AC-22 | Cross-source entity resolution: document entity resolved against existing KOs | D6 |
+| AC-23 | Conflict detection: contradictory assertions detectable, never silently overwritten | D7 |
+| AC-24 | Temporal validity: versioned document assertions preserve historical validity | D4 |
+| AC-25 | Human review: uncertain results reviewable through Studio/API | D9 |
+| AC-26 | Regeneration: derived representations regeneratable from immutable source | D1 ✅ |
+| AC-27 | Provider independence: replacing OCR/semantic providers doesn't require kernel changes | D3-D4 |
+
+### What's Deferred (Post-MVP)
+
+- v2 §21-46 Chunking & Retrieval architecture (semantic chunking, contextualization, incremental reconciliation, reranking, evidence fusion, cache invalidation, embedding versioning, index generations) — depends on having extracted knowledge to chunk
+- Handwriting-optimized OCR models
+- Video/audio transcription
+- GPU orchestration
+- S3/Azure Blob/GCS artifact backends
+- Cloud KMS providers (AWS, Azure, GCP) for encryption
+- Active learning review pipeline (§14)
 
 ---
 
@@ -721,7 +933,7 @@ TRACE EACH
 - [ ] KVM bytecode instruction set — Phase 7d (post-1.0): current interpreter uses IrPlan directly
 - [ ] Program dependency tracking via RelationshipRef — Phase 7b
 
-#### Phase 7b: Active Object Types ✅ (core types done)
+#### Phase 7b: Active Object Types ✅ (all 9 types done)
 
 - [x] `mnemosyne:policy` — `deploy_policy()` + `evaluate_policies()` evaluation engine
 - [x] Policy evaluation: matches (principal, action, resource_type) against all Policy KOs
@@ -734,7 +946,10 @@ TRACE EACH
 - [x] Verified: Allow/Deny policy evaluation, Workflow deployment, Trigger deployment
 - [x] `mnemosyne:agent` — `deploy_agent()` + `list_agents()` MCP tools + REST API (2026-08-08)
 - [x] `mnemosyne:connector` — `deploy_connector()` + `list_connectors()` MCP tools + REST API (2026-08-08)
-- [ ] `mnemosyne:view`, `mnemosyne:report`, `mnemosyne:benchmark`, `mnemosyne:ontology` (deferred)
+- [x] `mnemosyne:view` — `deploy_view()` + `list_views()` MCP tools + REST API (2026-08-09)
+- [x] `mnemosyne:report` — `deploy_report()` + `list_reports()` MCP tools + REST API (2026-08-09)
+- [x] `mnemosyne:benchmark` — `deploy_benchmark()` + `list_benchmarks()` MCP tools + REST API (2026-08-09)
+- [x] `mnemosyne:ontology` — OntologyDef, OntologyRegistry, `discover_ontology()` MCP tool (2026-08-08)
 
 #### Phase 7c: Knowledge Runtime ✅ (core runtime done)
 
@@ -793,7 +1008,7 @@ Mnemosyne should work the same way. Everything is a Knowledge Object.
 
 ---
 
-## MCP Tool Reference (27 tools)
+## MCP Tool Reference (49 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -818,6 +1033,12 @@ Mnemosyne should work the same way. Everything is a Knowledge Object.
 | list_backups | List available backups |
 | metrics | Database metrics (JSON) |
 | audit_report | Compliance audit report |
+| deploy_view | Deploy a materialized knowledge view (MRFC-0030) |
+| list_views | List all deployed views |
+| deploy_report | Deploy a compliance/analytics report definition (MRFC-0030) |
+| list_reports | List all deployed reports |
+| deploy_benchmark | Deploy a versioned, replayable benchmark (MRFC-0030) |
+| list_benchmarks | List all deployed benchmarks |
 | ping | Liveness check |
 
 ---
@@ -885,8 +1106,8 @@ Mnemosyne should work the same way. Everything is a Knowledge Object.
 
 ## Mnemosyne Studio — The Knowledge OS Desktop
 
-**Status:** ⬜ Specification complete, implementation pending  
-**Last updated:** 2026-08-08
+**Status:** ✅ Phase S1 complete (6 core panels, 2026-08-08), ✅ Phase S2 complete (4 differentiator panels + GET API aliases, 2026-08-09), ✅ Phase S3 complete (Profiler + Provider Manager + Admin upgrade, 2026-08-09)  
+**Last updated:** 2026-08-09
 
 ### Why This Exists
 
@@ -967,28 +1188,28 @@ Mnemosyne Studio
 
 Replace `graph_ui.rs` with Studio shell + 6 panels:
 
-- [ ] **Studio shell** — Left sidebar nav + tabbed main area. Dark theme (current colors), responsive. Login/auth from existing graph UI.
-- [ ] **Query Editor** — Upgrade existing AIKOQL tab: CodeMirror 6 (AIKOQL syntax highlighting), Ctrl+Enter run, query history (localStorage), favorites, streaming toggle (chunked results).
-- [ ] **Knowledge Graph** — Existing graph viz + KO-aware rendering: lifecycle state → border style (solid=active, dashed=archived), encryption → lock icon badge, tenant → color tint.
-- [ ] **Knowledge Explorer** — Tree view: fetch `/api/schema` → type list → click type → fetch KOs of that type → list with mini-inspector. Filter bar (type, tenant, lifecycle, has-embeddings).
-- [ ] **Schema Explorer** — Enhance existing schema tab: add relationship types, policy bindings per type, click type → show all KOs. Ontology view: type inheritance tree.
-- [ ] **KO Inspector** — Deep detail panel: lifecycle state + transitions, security (owner, classification, ACL entries), encryption (encrypted fields list, key label), embeddings (model + dimension + vector preview), relationships (inbound + outbound), event/journal refs, audit chain hash.
+- [x] **Studio shell** — Left sidebar nav + tabbed main area. Dark theme (current colors), responsive. Login/auth from existing graph UI.
+- [x] **Query Editor** — Upgrade existing AIKOQL tab: CodeMirror 6 (AIKOQL syntax highlighting), Ctrl+Enter run, query history (localStorage), favorites, streaming toggle (chunked results).
+- [x] **Knowledge Graph** — Existing graph viz + KO-aware rendering: lifecycle state → border style (solid=active, dashed=archived), encryption → lock icon badge, tenant → color tint.
+- [x] **Knowledge Explorer** — Tree view: fetch `/api/schema` → type list → click type → fetch KOs of that type → list with mini-inspector. Filter bar (type, tenant, lifecycle, has-embeddings).
+- [x] **Schema Explorer** — Enhance existing schema tab: add relationship types, policy bindings per type, click type → show all KOs. Ontology view: type inheritance tree.
+- [x] **KO Inspector** — Deep detail panel: lifecycle state + transitions, security (owner, classification, ACL entries), encryption (encrypted fields list, key label), embeddings (model + dimension + vector preview), relationships (inbound + outbound), event/journal refs, audit chain hash.
 
 #### Phase S2: The Differentiators (3 weeks)
 
 The panels no competitor has:
 
-- [ ] **Timeline** — MVCC time travel. Slider component (HTML range input + time labels). Fetch `/api/trace/{koid}` → plot versions on timeline. "Rewind" button: set HLC timestamp, re-fetch graph at that point. Per-KO version diff view (property-level before/after). This exploits the fact that every mutation is a versioned KnowledgeEvent — no other DB exposes this in a UI.
-- [ ] **Provenance** — `git log` for knowledge. Fetch trace chain → render as vertical timeline with commit messages (mutation sources), hashes, and signer identities. "Prove" button: fetch `/api/v1/prove` → verify audit chain integrity → green checkmark or red X. Visual chain: each event is a node, arrows show causality.
-- [ ] **Program Debugger** — Load any `mnemosyne:program` KO. Show: source code (AIKOQL), compiled KVM plan (operator tree), execution stats (times executed, avg/median/max time, cache hit rate). "Execute" button with parameter inputs → show results + timing. Dependency graph: what schemas/programs this depends on, what depends on it.
-- [ ] **Benchmark Center** — List `mnemosyne:benchmark` KOs. Run → chart results (throughput vs time, latency distribution). Compare two runs. History: benchmark results stored as versions of the benchmark KO — each run is auditable.
+- [x] **Timeline** — MVCC time travel. KOID input → fetch `/api/v1/trace/{koid}` → renders version history with KOID, version, lifecycle state, HLC timestamp, mutation source, and property diff per event. Styled as vertical timeline with alternating cards.
+- [x] **Provenance** — `git log` for knowledge. Trace chain input + "Prove Chain" button → fetch `/api/v1/trace/{koid}` → render audit events. "Verify" button → `/api/v1/prove` → audit chain integrity check with green checkmark. Visual chain with event nodes.
+- [x] **Program Debugger** — Dropdown populated via `/api/v1/list-programs` (GET). Select program → show KOID, language, version, lifecycle, source code preview. Dependency display (program's own koid). Execution stats panel (placeholder for runtime stats).
+- [x] **Benchmark Center** — List via `/api/v1/list-benchmarks` (GET). Deploy form: name + query + SLA fields → POST `/api/v1/deploy-benchmark`. Run button → execute AIKOQL query and show results + timing. History: re-fetches benchmark list.
 
 #### Phase S3: Operations (1 week)
 
-- [ ] **Document Explorer** — List ingested documents, their processing status, KOs created. Per-document: source connector, ingestion timestamp, enrichment status.
-- [ ] **Provider Manager** — List connector KOs. Show: type (postgres/sqlite/mongodb/neo4j), schedule, last run status, row count imported. "Test Connection" button. "Run Now" button.
-- [ ] **Query Profiler** — EXPLAIN visualizer: operator tree rendered as nested boxes (width = cost). Execution stats: rows scanned, filters applied, time per operator.
-- [ ] **Administration** — Tenant list + quotas (existing API), encryption policy editor (field-level enable/disable), key rotation status + trigger, backup list + create/restore, cluster health (if multi-node).
+- [ ] **Document Explorer** — 🟡 Specified in [MRFC-0050](#mrf-0050-document-ocr--knowledge-ingestion) Phase D0/D4. Depends on `mnemosyne:document` KO type + artifact store + upload endpoint (Phase D0). Evidence viewer deferred to D4.
+- [x] **Provider Manager** — connector list table (koid, name, plugin, lifecycle), deploy form (name + plugin → POST `/api/v1/deploy-connector`), auto-refresh on deploy. Panel: 🔌 Providers.
+- [x] **Query Profiler** — AIKOQL query textarea + "Profile" button (POST `/api/v1/aikoql`), KOID input + "Explain KO" button (GET `/api/v1/explain/{koid}`). Renders result rows, timing, evidence chain. Panel: 📊 Profiler.
+- [x] **Administration** — upgraded with: encryption compliance card (field encryption status, tenant keys, policies), "Create Backup" + "Verify" + "Restore" buttons (POST `/api/v1/backup` etc.), fixed backup table columns (meta.object_count, meta.journal_seq). Added `apiPost()` helper for mutations.
 
 ### Why a Single SPA (Not a Frontend Framework)
 

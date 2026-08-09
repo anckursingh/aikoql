@@ -127,7 +127,10 @@ impl VectorIndex for HnswVectorIndex {
 
     fn remove(&self, koid: &KOID) {
         self.tombstones.write().unwrap().insert(*koid);
-        self.model_map.write().unwrap().retain(|(k, _), _| k != koid);
+        self.model_map
+            .write()
+            .unwrap()
+            .retain(|(k, _), _| k != koid);
     }
 
     fn search(&self, qv: &[f32], k: usize, model: Option<&str>) -> Vec<(KOID, f32)> {
@@ -428,17 +431,20 @@ mod tests {
         idx.upsert(a, "text-embed-3", &[0.0, 1.0]);
         idx.upsert(b, "bge-m3", &[0.9, 0.1]);
         assert_eq!(idx.len(), 3); // three (koid, model) pairs
-        // Model filter: only bge-m3.
+                                  // Model filter: only bge-m3.
         let bge = idx.search(&[1.0, 0.0], 10, Some("bge-m3"));
         assert_eq!(bge.len(), 2); // a+b both in bge-m3
-        // Model filter: only text-embed-3.
+                                  // Model filter: only text-embed-3.
         let te3 = idx.search(&[0.0, 1.0], 10, Some("text-embed-3"));
         assert_eq!(te3.len(), 1);
         assert_eq!(te3[0].0, a);
         // Remove a: all model entries for a are gone.
         idx.remove(&a);
         assert_eq!(idx.len(), 1); // only (b, bge-m3) left
-        assert!(idx.search(&[1.0, 0.0], 10, Some("bge-m3")).iter().all(|(k, _)| *k == b));
+        assert!(idx
+            .search(&[1.0, 0.0], 10, Some("bge-m3"))
+            .iter()
+            .all(|(k, _)| *k == b));
     }
 
     #[test]

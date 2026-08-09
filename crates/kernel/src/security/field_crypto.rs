@@ -67,7 +67,11 @@ pub struct FieldCrypto {
 
 impl FieldCrypto {
     pub fn new(crypto: Arc<Crypto>, envelope: Arc<Envelope>) -> Self {
-        FieldCrypto { crypto, envelope, audit: RwLock::new(None) }
+        FieldCrypto {
+            crypto,
+            envelope,
+            audit: RwLock::new(None),
+        }
     }
 
     /// Attach an audit log for key usage event recording.
@@ -264,15 +268,21 @@ fn bytes_to_value(b: &[u8]) -> Option<Value> {
         0x05 => Some(Value::Null),
         0x07 => {
             // List: u16 count || [u16 len || encoded_item]*
-            if b.len() < 3 { return None; }
+            if b.len() < 3 {
+                return None;
+            }
             let n = u16::from_le_bytes([b[1], b[2]]) as usize;
             let mut items = Vec::with_capacity(n.min(1024));
             let mut pos = 3usize;
             for _ in 0..n {
-                if pos + 2 > b.len() { break; }
+                if pos + 2 > b.len() {
+                    break;
+                }
                 let item_len = u16::from_le_bytes([b[pos], b[pos + 1]]) as usize;
                 pos += 2;
-                if pos + item_len > b.len() { break; }
+                if pos + item_len > b.len() {
+                    break;
+                }
                 if let Some(v) = bytes_to_value(&b[pos..pos + item_len]) {
                     items.push(v);
                 }
@@ -282,21 +292,31 @@ fn bytes_to_value(b: &[u8]) -> Option<Value> {
         }
         0x08 => {
             // Map: u16 count || [u16 key_len || key || u16 val_len || val]*
-            if b.len() < 3 { return None; }
+            if b.len() < 3 {
+                return None;
+            }
             let n = u16::from_le_bytes([b[1], b[2]]) as usize;
             let mut map = BTreeMap::new();
             let mut pos = 3usize;
             for _ in 0..n {
-                if pos + 2 > b.len() { break; }
+                if pos + 2 > b.len() {
+                    break;
+                }
                 let key_len = u16::from_le_bytes([b[pos], b[pos + 1]]) as usize;
                 pos += 2;
-                if pos + key_len > b.len() { break; }
+                if pos + key_len > b.len() {
+                    break;
+                }
                 let key = String::from_utf8_lossy(&b[pos..pos + key_len]).into_owned();
                 pos += key_len;
-                if pos + 2 > b.len() { break; }
+                if pos + 2 > b.len() {
+                    break;
+                }
                 let val_len = u16::from_le_bytes([b[pos], b[pos + 1]]) as usize;
                 pos += 2;
-                if pos + val_len > b.len() { break; }
+                if pos + val_len > b.len() {
+                    break;
+                }
                 if let Some(v) = bytes_to_value(&b[pos..pos + val_len]) {
                     map.insert(key, v);
                 }
@@ -326,14 +346,20 @@ mod tests {
     }
     impl MemKms {
         fn new() -> Self {
-            MemKms { key: RwLock::new(Aes256Gcm::new().generate_key()) }
+            MemKms {
+                key: RwLock::new(Aes256Gcm::new().generate_key()),
+            }
         }
     }
     impl KeyManager for MemKms {
         fn master_key(&self, _passphrase: &str) -> Result<[u8; 32], String> {
             Ok(*self.key.read().unwrap())
         }
-        fn rotate(&self, _passphrase: &str, provider: &dyn CryptoProvider) -> Result<[u8; 32], String> {
+        fn rotate(
+            &self,
+            _passphrase: &str,
+            provider: &dyn CryptoProvider,
+        ) -> Result<[u8; 32], String> {
             let new_key = provider.generate_key();
             *self.key.write().unwrap() = new_key;
             Ok(new_key)
@@ -358,7 +384,9 @@ mod tests {
         props.insert("city".into(), Value::Text("NYC".into()));
 
         // Encrypt
-        let n = fc.encrypt_fields("acme", "employee", &mut props, &policy).unwrap();
+        let n = fc
+            .encrypt_fields("acme", "employee", &mut props, &policy)
+            .unwrap();
         assert_eq!(n, 1);
         // salary is now bytes
         assert!(matches!(props.get("salary"), Some(Value::Bytes(_))));
@@ -367,7 +395,9 @@ mod tests {
         assert_eq!(props.get("city"), Some(&Value::Text("NYC".into())));
 
         // Decrypt
-        let n = fc.decrypt_fields("acme", "employee", &mut props, &policy).unwrap();
+        let n = fc
+            .decrypt_fields("acme", "employee", &mut props, &policy)
+            .unwrap();
         assert_eq!(n, 1);
         assert_eq!(props.get("salary"), Some(&Value::Text("150000".into())));
     }
@@ -413,8 +443,10 @@ mod tests {
         let mut props_b = BTreeMap::new();
         props_b.insert("salary".into(), Value::Text("b-salary".into()));
 
-        fc.encrypt_fields("tenant-a", "t", &mut props_a, &policy).unwrap();
-        fc.encrypt_fields("tenant-b", "t", &mut props_b, &policy).unwrap();
+        fc.encrypt_fields("tenant-a", "t", &mut props_a, &policy)
+            .unwrap();
+        fc.encrypt_fields("tenant-b", "t", &mut props_b, &policy)
+            .unwrap();
 
         // Ciphertexts should differ because different tenant DEKs.
         let ct_a = props_a.get("salary").cloned();
@@ -422,8 +454,10 @@ mod tests {
         assert_ne!(ct_a, ct_b);
 
         // Each decrypts correctly with its own tenant.
-        fc.decrypt_fields("tenant-a", "t", &mut props_a, &policy).unwrap();
-        fc.decrypt_fields("tenant-b", "t", &mut props_b, &policy).unwrap();
+        fc.decrypt_fields("tenant-a", "t", &mut props_a, &policy)
+            .unwrap();
+        fc.decrypt_fields("tenant-b", "t", &mut props_b, &policy)
+            .unwrap();
         assert_eq!(props_a.get("salary"), Some(&Value::Text("a-salary".into())));
         assert_eq!(props_b.get("salary"), Some(&Value::Text("b-salary".into())));
     }

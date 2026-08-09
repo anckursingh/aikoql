@@ -33,22 +33,46 @@ pub struct Predicate {
 
 impl Predicate {
     pub fn eq(property: impl Into<String>, value: Value) -> Self {
-        Predicate { property: property.into(), op: PredOp::Eq, value }
+        Predicate {
+            property: property.into(),
+            op: PredOp::Eq,
+            value,
+        }
     }
     pub fn neq(property: impl Into<String>, value: Value) -> Self {
-        Predicate { property: property.into(), op: PredOp::Neq, value }
+        Predicate {
+            property: property.into(),
+            op: PredOp::Neq,
+            value,
+        }
     }
     pub fn gt(property: impl Into<String>, value: Value) -> Self {
-        Predicate { property: property.into(), op: PredOp::Gt, value }
+        Predicate {
+            property: property.into(),
+            op: PredOp::Gt,
+            value,
+        }
     }
     pub fn lt(property: impl Into<String>, value: Value) -> Self {
-        Predicate { property: property.into(), op: PredOp::Lt, value }
+        Predicate {
+            property: property.into(),
+            op: PredOp::Lt,
+            value,
+        }
     }
     pub fn gte(property: impl Into<String>, value: Value) -> Self {
-        Predicate { property: property.into(), op: PredOp::Gte, value }
+        Predicate {
+            property: property.into(),
+            op: PredOp::Gte,
+            value,
+        }
     }
     pub fn lte(property: impl Into<String>, value: Value) -> Self {
-        Predicate { property: property.into(), op: PredOp::Lte, value }
+        Predicate {
+            property: property.into(),
+            op: PredOp::Lte,
+            value,
+        }
     }
 }
 
@@ -72,14 +96,9 @@ pub enum FuseMode {
 #[derive(Clone, Debug, PartialEq)]
 pub enum IrOp {
     /// Scan all readable KOs of `type_name` as `subject`.
-    Scan {
-        type_name: String,
-        subject: String,
-    },
+    Scan { type_name: String, subject: String },
     /// Filter the current result set by property predicates.
-    Filter {
-        predicates: Vec<Predicate>,
-    },
+    Filter { predicates: Vec<Predicate> },
     /// Traverse graph edges from the current KOID set.
     Traverse {
         start_koid: String,
@@ -93,18 +112,11 @@ pub enum IrOp {
         k: usize,
     },
     /// Full-text search over the current result set.
-    TextSearch {
-        query: String,
-        k: usize,
-    },
+    TextSearch { query: String, k: usize },
     /// Fuse two ranked result sets into one (RRF or weighted).
-    Fuse {
-        mode: FuseMode,
-    },
+    Fuse { mode: FuseMode },
     /// Project specific fields from the result set.
-    Project {
-        fields: Vec<String>,
-    },
+    Project { fields: Vec<String> },
 }
 
 // ---------------------------------------------------------------------------
@@ -141,9 +153,11 @@ impl IrPlan {
         let first = &self.operators[0];
         match first {
             IrOp::Scan { .. } | IrOp::Traverse { .. } => {}
-            _ => return Err(KError::InvalidQuery(
-                "first IR operator must be Scan or Traverse".into(),
-            )),
+            _ => {
+                return Err(KError::InvalidQuery(
+                    "first IR operator must be Scan or Traverse".into(),
+                ))
+            }
         }
         let seen_scan = matches!(first, IrOp::Scan { .. });
         let mut seen_search = false;
@@ -151,7 +165,8 @@ impl IrPlan {
             match op {
                 IrOp::Scan { .. } => {
                     return Err(KError::InvalidQuery(format!(
-                        "Scan at position {}: only one Scan allowed", i
+                        "Scan at position {}: only one Scan allowed",
+                        i
                     )))
                 }
                 IrOp::Traverse { .. } => {
@@ -161,14 +176,16 @@ impl IrPlan {
                 }
                 IrOp::Filter { .. } if !seen_scan => {
                     return Err(KError::InvalidQuery(format!(
-                        "Filter at position {}: requires Scan", i
+                        "Filter at position {}: requires Scan",
+                        i
                     )))
                 }
                 IrOp::AnnSearch { .. } | IrOp::TextSearch { .. } => {
                     if !seen_scan {
                         return Err(KError::InvalidQuery(format!(
-                            "{:?} at position {}: requires Scan", op, i
-                        )))
+                            "{:?} at position {}: requires Scan",
+                            op, i
+                        )));
                     }
                     seen_search = true;
                 }
@@ -178,7 +195,7 @@ impl IrPlan {
                     ))
                 }
                 IrOp::Fuse { .. } => {} // ok
-                _ => {} // Filter, Traverse, etc. — validated above by position
+                _ => {}                 // Filter, Traverse, etc. — validated above by position
             }
         }
         Ok(())
@@ -234,13 +251,11 @@ mod tests {
 
     #[test]
     fn ir_plan_for_traverse() {
-        let plan = IrPlan::new(vec![
-            IrOp::Traverse {
-                start_koid: "abcdef1234567890abcdef1234567890".into(),
-                rel_type: Some("references".into()),
-                depth: 2,
-            },
-        ])
+        let plan = IrPlan::new(vec![IrOp::Traverse {
+            start_koid: "abcdef1234567890abcdef1234567890".into(),
+            rel_type: Some("references".into()),
+            depth: 2,
+        }])
         .with_description("find related notes");
         assert_eq!(plan.operators.len(), 1);
     }
@@ -252,11 +267,9 @@ mod tests {
 
     #[test]
     fn validate_rejects_filter_as_first_op() {
-        assert!(IrPlan::new(vec![IrOp::Filter {
-            predicates: vec![],
-        }])
-        .validate()
-        .is_err());
+        assert!(IrPlan::new(vec![IrOp::Filter { predicates: vec![] }])
+            .validate()
+            .is_err());
     }
 
     #[test]
@@ -266,9 +279,7 @@ mod tests {
                 type_name: "fact".into(),
                 subject: "a".into(),
             },
-            IrOp::Filter {
-                predicates: vec![],
-            },
+            IrOp::Filter { predicates: vec![] },
         ])
         .validate()
         .is_ok());
@@ -290,4 +301,3 @@ mod tests {
         .is_err());
     }
 }
-

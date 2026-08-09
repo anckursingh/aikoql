@@ -30,10 +30,8 @@ pub fn run_shell(db_path: &str, tenant: Option<&str>) {
         Arc::new(RedbEngine::open(db_path).expect("open database"))
     };
 
-    let kernel = Arc::new(
-        Kernel::open(engine, Arc::new(SystemClock), 0xCAFE)
-            .expect("open kernel"),
-    );
+    let kernel =
+        Arc::new(Kernel::open(engine, Arc::new(SystemClock), 0xCAFE).expect("open kernel"));
 
     println!(
         "Mnemosyne {} — AIKOQL Knowledge Shell",
@@ -176,10 +174,16 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
                     if types.is_empty() {
                         println!("(no types)");
                     } else {
-                        let filter = if arg.is_empty() { None } else { Some(arg.to_lowercase()) };
+                        let filter = if arg.is_empty() {
+                            None
+                        } else {
+                            Some(arg.to_lowercase())
+                        };
                         for t in &types {
                             if let Some(ref f) = filter {
-                                if !t.to_lowercase().contains(f) { continue; }
+                                if !t.to_lowercase().contains(f) {
+                                    continue;
+                                }
                             }
                             println!("  {}", t);
                         }
@@ -191,7 +195,11 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
         }
 
         ".count" => {
-            let type_filter = if arg.is_empty() { None } else { Some(arg.to_string()) };
+            let type_filter = if arg.is_empty() {
+                None
+            } else {
+                Some(arg.to_string())
+            };
             match kernel.scan_heads() {
                 Ok(heads) => {
                     let mut count = 0usize;
@@ -204,7 +212,11 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
                     if let Some(_t) = type_filter {
                         println!("(type filter not supported in head scan — showing total)");
                     }
-                    println!("{} objects (non-deleted), {} total heads", count, heads.len());
+                    println!(
+                        "{} objects (non-deleted), {} total heads",
+                        count,
+                        heads.len()
+                    );
                 }
                 Err(e) => return DotResult::Error(format!("{}", e)),
             }
@@ -220,10 +232,15 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
             match kernel.list_types() {
                 Ok(types) => {
                     if types.iter().any(|t| t == arg) {
-                        println!("Schema for '{}': (dynamic — properties validated on write)", arg);
+                        println!(
+                            "Schema for '{}': (dynamic — properties validated on write)",
+                            arg
+                        );
                     } else {
                         println!("Type '{}' not found. Known types:", arg);
-                        for t in &types { println!("  {}", t); }
+                        for t in &types {
+                            println!("  {}", t);
+                        }
                     }
                 }
                 Err(e) => return DotResult::Error(format!("{}", e)),
@@ -235,7 +252,9 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
             // Usage: .relate <source_hex> <target_hex> [rel_type]
             let parts: Vec<&str> = arg.split_whitespace().collect();
             if parts.len() < 2 {
-                return DotResult::Error("Usage: .relate <source_hex> <target_hex> [rel_type]".into());
+                return DotResult::Error(
+                    "Usage: .relate <source_hex> <target_hex> [rel_type]".into(),
+                );
             }
             let src = match KOID::from_hex(parts[0]) {
                 Ok(k) => k,
@@ -249,7 +268,13 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
             let user = Subject::new("shell-user");
             match kernel.relate(RelateRequest::new(&user, src, tgt, rt)) {
                 Ok(r) => {
-                    println!("Related: {} -> {} [{}] (v{})", src.to_hex(), tgt.to_hex(), rt, r.version);
+                    println!(
+                        "Related: {} -> {} [{}] (v{})",
+                        src.to_hex(),
+                        tgt.to_hex(),
+                        rt,
+                        r.version
+                    );
                 }
                 Err(e) => return DotResult::Error(format!("relate: {}", e)),
             }
@@ -258,7 +283,14 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
 
         ".backup" => {
             let dir_name = if arg.is_empty() {
-                format!("{}.backup.{}", db_path, std::time::UNIX_EPOCH.elapsed().map(|d| d.as_secs()).unwrap_or(0))
+                format!(
+                    "{}.backup.{}",
+                    db_path,
+                    std::time::UNIX_EPOCH
+                        .elapsed()
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                )
             } else {
                 arg.to_string()
             };
@@ -274,8 +306,19 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
         ".audit" => {
             match kernel.compliance_report() {
                 Ok(report) => {
-                    println!("Encryption: {}", if report.encryption_enabled { "enabled" } else { "disabled" });
-                    println!("Policies:  {} ({})", report.policies_registered, report.policy_types.join(", "));
+                    println!(
+                        "Encryption: {}",
+                        if report.encryption_enabled {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        }
+                    );
+                    println!(
+                        "Policies:  {} ({})",
+                        report.policies_registered,
+                        report.policy_types.join(", ")
+                    );
                     if let Some(ref s) = report.field_crypto_summary {
                         println!("Tenant keys: {}", s.tenant_keys);
                         for (kind, count) in &s.audit_events {
@@ -294,13 +337,20 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
             println!("Journal seq: {}", seq);
             println!(
                 "Audit hash: {}",
-                audit.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
+                audit
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>()
+                    .join(""),
             );
             println!("Object heads: {}", heads);
             DotResult::Ok
         }
 
-        _ => DotResult::Error(format!("Unknown command: {}. Type .help for commands.", verb)),
+        _ => DotResult::Error(format!(
+            "Unknown command: {}. Type .help for commands.",
+            verb
+        )),
     }
 }
 
@@ -315,46 +365,59 @@ fn ast_expr_to_value(e: &mnemosyne_compiler::parser::ast::Expr) -> Value {
 
 fn execute_and_print(kernel: &Kernel, plan: &IrPlan, stdout: &mut dyn Write) {
     match Interpreter::execute(kernel, plan) {
-        Ok(rows) => {
-            match rows {
-                mnemosyne_runtime::RowSet::Objects(objs) => {
-                    if objs.is_empty() {
-                        writeln!(stdout, "(0 rows)").ok();
-                        return;
-                    }
-                    writeln!(stdout, "── {} row(s) ──", objs.len()).ok();
-                    for obj in &objs {
-                        let preview = ko_text(obj);
-                        let preview_short: String = if preview.len() > 120 {
-                            format!("{}...", &preview[..117])
-                        } else {
-                            preview
-                        };
-                        writeln!(
-                            stdout,
-                            "  {}  v{}  {}  {}",
-                            obj.koid.to_hex(),
-                            obj.version,
-                            obj.metadata.type_name,
-                            preview_short
-                        )
-                        .ok();
-                    }
+        Ok(rows) => match rows {
+            mnemosyne_runtime::RowSet::Objects(objs) => {
+                if objs.is_empty() {
+                    writeln!(stdout, "(0 rows)").ok();
+                    return;
                 }
-                mnemosyne_runtime::RowSet::Scored(results) => {
-                    writeln!(stdout, "── {} result(s) ──", results.len()).ok();
-                    for (koid, score, type_name, version) in &results {
-                        writeln!(stdout, "  {}  v{}  {}  score={:.4}", koid.to_hex(), version, type_name, score).ok();
-                    }
-                }
-                mnemosyne_runtime::RowSet::Traversal(hits) => {
-                    writeln!(stdout, "── {} hop(s) ──", hits.len()).ok();
-                    for (koid, rel_type, depth) in &hits {
-                        writeln!(stdout, "  depth={}  {}  [{}]", depth, koid.to_hex(), rel_type).ok();
-                    }
+                writeln!(stdout, "── {} row(s) ──", objs.len()).ok();
+                for obj in &objs {
+                    let preview = ko_text(obj);
+                    let preview_short: String = if preview.len() > 120 {
+                        format!("{}...", &preview[..117])
+                    } else {
+                        preview
+                    };
+                    writeln!(
+                        stdout,
+                        "  {}  v{}  {}  {}",
+                        obj.koid.to_hex(),
+                        obj.version,
+                        obj.metadata.type_name,
+                        preview_short
+                    )
+                    .ok();
                 }
             }
-        }
+            mnemosyne_runtime::RowSet::Scored(results) => {
+                writeln!(stdout, "── {} result(s) ──", results.len()).ok();
+                for (koid, score, type_name, version) in &results {
+                    writeln!(
+                        stdout,
+                        "  {}  v{}  {}  score={:.4}",
+                        koid.to_hex(),
+                        version,
+                        type_name,
+                        score
+                    )
+                    .ok();
+                }
+            }
+            mnemosyne_runtime::RowSet::Traversal(hits) => {
+                writeln!(stdout, "── {} hop(s) ──", hits.len()).ok();
+                for (koid, rel_type, depth) in &hits {
+                    writeln!(
+                        stdout,
+                        "  depth={}  {}  [{}]",
+                        depth,
+                        koid.to_hex(),
+                        rel_type
+                    )
+                    .ok();
+                }
+            }
+        },
         Err(e) => {
             writeln!(stdout, "Error: {}", e).ok();
         }

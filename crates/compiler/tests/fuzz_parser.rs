@@ -14,9 +14,28 @@ use proptest::prelude::*;
 
 fn ident_str() -> impl Strategy<Value = String> {
     let keywords = &[
-        "match", "where", "and", "or", "return", "similar", "to", "traverse",
-        "create", "update", "delete", "ingest", "extract", "tables", "entities",
-        "build", "relationships", "commit", "explain", "true", "false", "null",
+        "match",
+        "where",
+        "and",
+        "or",
+        "return",
+        "similar",
+        "to",
+        "traverse",
+        "create",
+        "update",
+        "delete",
+        "ingest",
+        "extract",
+        "tables",
+        "entities",
+        "build",
+        "relationships",
+        "commit",
+        "explain",
+        "true",
+        "false",
+        "null",
     ];
     "[a-zA-Z_][a-zA-Z0-9_]{0,15}".prop_filter("not a keyword", move |s: &String| {
         let lower = s.to_lowercase();

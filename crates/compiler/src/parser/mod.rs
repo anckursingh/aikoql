@@ -77,20 +77,24 @@ pub fn compile_with_ontology(
             if pts.is_empty() {
                 Ok(vec![plan])
             } else {
-                pts.into_iter().map(|(_source, physical_type)| {
-                    let mut plan = plan.clone();
-                    // Replace the Scan's type_name with the physical type.
-                    for op in &mut plan.operators {
-                        if let IrOp::Scan { ref mut type_name, .. } = op {
-                            *type_name = physical_type.clone();
-                            break;
+                pts.into_iter()
+                    .map(|(_source, physical_type)| {
+                        let mut plan = plan.clone();
+                        // Replace the Scan's type_name with the physical type.
+                        for op in &mut plan.operators {
+                            if let IrOp::Scan {
+                                ref mut type_name, ..
+                            } = op
+                            {
+                                *type_name = physical_type.clone();
+                                break;
+                            }
                         }
-                    }
-                    plan.description = Some(format!(
-                        "MATCH {} (mapped to {})", m.entity, physical_type
-                    ));
-                    Ok(plan)
-                }).collect()
+                        plan.description =
+                            Some(format!("MATCH {} (mapped to {})", m.entity, physical_type));
+                        Ok(plan)
+                    })
+                    .collect()
             }
         }
         _ => Ok(vec![plan]),
@@ -173,16 +177,19 @@ fn compile_match(m: &ast::MatchStatement, subject: &str) -> Result<IrPlan, Strin
     // after Traverse when RETURN field projection is needed.
     if !has_traverse {
         match &m.projection {
-            ast::Projection::Star => {} // no Project needed — return all fields
+            ast::Projection::Star => {}    // no Project needed — return all fields
             ast::Projection::Explain => {} // handled by explain_endpoint separately
             ast::Projection::Fields(fields) => {
-                ops.push(IrOp::Project { fields: fields.clone() });
+                ops.push(IrOp::Project {
+                    fields: fields.clone(),
+                });
             }
         }
     }
 
     let plan = IrPlan::new(ops).with_description(format!("MATCH {}", m.entity));
-    plan.validate().map_err(|e| format!("AIKOQL1014: conflicting clauses — {}", e))?;
+    plan.validate()
+        .map_err(|e| format!("AIKOQL1014: conflicting clauses — {}", e))?;
     Ok(plan)
 }
 
@@ -210,7 +217,10 @@ fn flatten_predicates(preds: &[ast::Predicate]) -> Vec<Predicate> {
                 out.push(Predicate::lte(property.clone(), expr_to_value(value)));
             }
             ast::Predicate::And { left, right } => {
-                out.extend(flatten_predicates(&[left.as_ref().clone(), right.as_ref().clone()]));
+                out.extend(flatten_predicates(&[
+                    left.as_ref().clone(),
+                    right.as_ref().clone(),
+                ]));
             }
             ast::Predicate::Or { .. } => {
                 // ponytail: OR predicates not yet mapped to IR. Each OR branch
@@ -267,8 +277,15 @@ mod tests {
             _ => panic!("expected Scan as first op"),
         }
         match &plan.operators[1] {
-            IrOp::Traverse { start_koid, rel_type, depth } => {
-                assert!(start_koid.is_empty(), "set-based Traverse uses empty start_koid");
+            IrOp::Traverse {
+                start_koid,
+                rel_type,
+                depth,
+            } => {
+                assert!(
+                    start_koid.is_empty(),
+                    "set-based Traverse uses empty start_koid"
+                );
                 assert_eq!(rel_type.as_deref(), Some("knows"));
                 assert_eq!(*depth, 1);
             }
@@ -280,38 +297,54 @@ mod tests {
     fn ontology_expands_to_physical_scans() {
         use mnemosyne_kernel::knowledge::ontology::*;
         let mut classes = std::collections::BTreeMap::new();
-        classes.insert("Employee".into(), ClassDef {
-            name: "Employee".into(), parent: None, description: None,
-        });
+        classes.insert(
+            "Employee".into(),
+            ClassDef {
+                name: "Employee".into(),
+                parent: None,
+                description: None,
+            },
+        );
         let ont = OntologyRegistry::new(OntologyDef {
-            namespace: "test".into(), version: "1".into(),
+            namespace: "test".into(),
+            version: "1".into(),
             classes,
             relationships: std::collections::BTreeMap::new(),
             property_defs: std::collections::BTreeMap::new(),
             mappings: vec![
                 MappingEntry {
-                    source: "postgres".into(), physical_type: "employees".into(),
-                    class: "Employee".into(), property_map: std::collections::BTreeMap::new(),
+                    source: "postgres".into(),
+                    physical_type: "employees".into(),
+                    class: "Employee".into(),
+                    property_map: std::collections::BTreeMap::new(),
                 },
                 MappingEntry {
-                    source: "mongo".into(), physical_type: "employee".into(),
-                    class: "Employee".into(), property_map: std::collections::BTreeMap::new(),
+                    source: "mongo".into(),
+                    physical_type: "employee".into(),
+                    class: "Employee".into(),
+                    property_map: std::collections::BTreeMap::new(),
                 },
             ],
-        }).unwrap();
+        })
+        .unwrap();
 
         let registry = SchemaRegistry::new();
         let plans = compile_with_ontology(
-            "MATCH Employee RETURN *", "test-user", &registry, Some(&ont),
-        ).unwrap();
+            "MATCH Employee RETURN *",
+            "test-user",
+            &registry,
+            Some(&ont),
+        )
+        .unwrap();
         assert_eq!(plans.len(), 2);
         // Each plan should scan a different physical type.
-        let types: Vec<String> = plans.iter().map(|p| {
-            match &p.operators[0] {
+        let types: Vec<String> = plans
+            .iter()
+            .map(|p| match &p.operators[0] {
                 IrOp::Scan { type_name, .. } => type_name.clone(),
                 _ => panic!("expected Scan"),
-            }
-        }).collect();
+            })
+            .collect();
         assert!(types.contains(&"employees".to_string()));
         assert!(types.contains(&"employee".to_string()));
     }
@@ -320,21 +353,32 @@ mod tests {
     fn ontology_without_mappings_returns_single_plan() {
         use mnemosyne_kernel::knowledge::ontology::*;
         let mut classes = std::collections::BTreeMap::new();
-        classes.insert("Employee".into(), ClassDef {
-            name: "Employee".into(), parent: None, description: None,
-        });
+        classes.insert(
+            "Employee".into(),
+            ClassDef {
+                name: "Employee".into(),
+                parent: None,
+                description: None,
+            },
+        );
         let ont = OntologyRegistry::new(OntologyDef {
-            namespace: "test".into(), version: "1".into(),
+            namespace: "test".into(),
+            version: "1".into(),
             classes,
             relationships: std::collections::BTreeMap::new(),
             property_defs: std::collections::BTreeMap::new(),
             mappings: vec![],
-        }).unwrap();
+        })
+        .unwrap();
 
         let registry = SchemaRegistry::new();
         let plans = compile_with_ontology(
-            "MATCH Employee RETURN *", "test-user", &registry, Some(&ont),
-        ).unwrap();
+            "MATCH Employee RETURN *",
+            "test-user",
+            &registry,
+            Some(&ont),
+        )
+        .unwrap();
         assert_eq!(plans.len(), 1);
         match &plans[0].operators[0] {
             IrOp::Scan { type_name, .. } => assert_eq!(type_name, "Employee"),

@@ -46,5 +46,12 @@ fn bench_parse_hybrid(c: &mut Criterion) {
     c.bench_function("parse_hybrid", |b| b.iter(|| parser::compile(black_box(q))));
 }
 
-criterion_group!(benches, bench_parse_simple, bench_parse_hybrid, bench_parse_1kb, bench_parse_10kb, bench_parse_100kb);
+criterion_group!(
+    benches,
+    bench_parse_simple,
+    bench_parse_hybrid,
+    bench_parse_1kb,
+    bench_parse_10kb,
+    bench_parse_100kb
+);
 criterion_main!(benches);

@@ -194,10 +194,7 @@ impl GraphEngine {
                     continue;
                 }
                 let next_depth = depth + 1;
-                if kernel
-                    .verify(ctx.clone(), &target, Action::Read)
-                    .is_err()
-                {
+                if kernel.verify(ctx.clone(), &target, Action::Read).is_err() {
                     continue;
                 }
                 if visited.insert(target) {

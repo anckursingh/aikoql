@@ -23,10 +23,21 @@ impl McpClient {
     fn start(db_path: &str) -> Self {
         // Find binary relative to workspace root.
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap();
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
         let release_bin = workspace_root.join("target/release/mnemosyne-mcp.exe");
         let debug_bin = workspace_root.join("target/debug/mnemosyne-mcp.exe");
-        let bin = if release_bin.exists() { release_bin } else { debug_bin };
+        let bin = if release_bin.exists() {
+            release_bin
+        } else {
+            debug_bin
+        };
         eprintln!("Using binary: {}", bin.display());
         let mut child = Command::new(&bin)
             .arg("serve")
@@ -41,7 +52,12 @@ impl McpClient {
         let stdout = child.stdout.take().unwrap();
         let reader = BufReader::new(stdout);
 
-        McpClient { child, stdin, reader, next_id: 1 }
+        McpClient {
+            child,
+            stdin,
+            reader,
+            next_id: 1,
+        }
     }
 
     fn call(&mut self, tool: &str, args: &J) -> J {
@@ -78,7 +94,9 @@ impl McpClient {
             "jsonrpc": "2.0", "id": id, "method": "tools/call",
             "params": {"name": tool, "arguments": args}
         });
-        self.stdin.write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes()).unwrap();
+        self.stdin
+            .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
+            .unwrap();
         self.stdin.flush().unwrap();
         let mut response = String::new();
         self.reader.read_line(&mut response).unwrap();
@@ -137,27 +155,39 @@ fn real_world_agent_workflow() {
 
     // ── Phase 3: Graph Relationships ─────────────────────────────────────
 
-    let rel1 = c.call("relate", &json!({
-        "subject": "admin", "from": &alice_koid, "to": &bob_koid, "rel_type": "knows"
-    }));
+    let rel1 = c.call(
+        "relate",
+        &json!({
+            "subject": "admin", "from": &alice_koid, "to": &bob_koid, "rel_type": "knows"
+        }),
+    );
     assert!(rel1["koid"].as_str().is_some());
 
-    c.call("relate", &json!({
-        "subject": "admin", "from": &alice_koid, "to": &carol_koid, "rel_type": "collaborates"
-    }));
+    c.call(
+        "relate",
+        &json!({
+            "subject": "admin", "from": &alice_koid, "to": &carol_koid, "rel_type": "collaborates"
+        }),
+    );
 
     // Traverse from Alice.
-    let hits = c.call("traverse", &json!({
-        "subject": "admin", "koid": &alice_koid, "depth": 1, "direction": "outbound"
-    }));
+    let hits = c.call(
+        "traverse",
+        &json!({
+            "subject": "admin", "koid": &alice_koid, "depth": 1, "direction": "outbound"
+        }),
+    );
     // Should find both Bob and Carol.
     assert!(hits["hits"].as_array().unwrap().len() >= 2);
 
     // ── Phase 4: Search ──────────────────────────────────────────────────
 
-    let found = c.call("find_similar", &json!({
-        "subject": "admin", "type_name": "Employee", "text": "engineering lead", "k": 5
-    }));
+    let found = c.call(
+        "find_similar",
+        &json!({
+            "subject": "admin", "type_name": "Employee", "text": "engineering lead", "k": 5
+        }),
+    );
     assert!(found["results"].as_array().unwrap().len() >= 1);
 
     // ── Phase 5: AIKOQL Query ────────────────────────────────────────────
@@ -168,16 +198,22 @@ fn real_world_agent_workflow() {
 
     // ── Phase 6: Programs-as-KOs ─────────────────────────────────────────
 
-    let prog = c.call("deploy_program", &json!({
-        "subject": "admin", "name": "FindEngineers",
-        "body": "MATCH Employee WHERE dept == \"Engineering\" RETURN *",
-        "language": "AIKOQL"
-    }));
+    let prog = c.call(
+        "deploy_program",
+        &json!({
+            "subject": "admin", "name": "FindEngineers",
+            "body": "MATCH Employee WHERE dept == \"Engineering\" RETURN *",
+            "language": "AIKOQL"
+        }),
+    );
     let prog_koid = prog["koid"].as_str().unwrap().to_string();
 
-    let exec = c.call("execute_program", &json!({
-        "subject": "admin", "roles": ["admin"], "koid": &prog_koid
-    }));
+    let exec = c.call(
+        "execute_program",
+        &json!({
+            "subject": "admin", "roles": ["admin"], "koid": &prog_koid
+        }),
+    );
     assert!(exec["count"].as_u64().unwrap() >= 2);
 
     // List programs.
@@ -186,33 +222,45 @@ fn real_world_agent_workflow() {
 
     // ── Phase 7: Policy-as-KO ────────────────────────────────────────────
 
-    c.call("deploy_policy", &json!({
-        "subject": "admin", "name": "HRReadEmployee", "effect": "Allow",
-        "principal": "hr-team", "action": "Read", "resource_type": "Employee"
-    }));
+    c.call(
+        "deploy_policy",
+        &json!({
+            "subject": "admin", "name": "HRReadEmployee", "effect": "Allow",
+            "principal": "hr-team", "action": "Read", "resource_type": "Employee"
+        }),
+    );
 
     let eval = c.call("evaluate_policies", &json!({
         "subject": "admin", "principal": "hr-team", "action": "Read", "resource_type": "Employee"
     }));
     assert_eq!(eval["allowed"], true);
 
-    let deny_eval = c.call("evaluate_policies", &json!({
-        "subject": "admin", "principal": "intern", "action": "Read", "resource_type": "Employee"
-    }));
+    let deny_eval = c.call(
+        "evaluate_policies",
+        &json!({
+            "subject": "admin", "principal": "intern", "action": "Read", "resource_type": "Employee"
+        }),
+    );
     // intern has no policy — should not be allowed.
     assert_eq!(deny_eval["allowed"], false);
 
     // ── Phase 8: Workflow ────────────────────────────────────────────────
 
-    let wf = c.call("deploy_workflow", &json!({
-        "subject": "admin", "name": "TeamReport",
-        "steps": [{"order": 1, "program": "FindEngineers"}]
-    }));
+    let wf = c.call(
+        "deploy_workflow",
+        &json!({
+            "subject": "admin", "name": "TeamReport",
+            "steps": [{"order": 1, "program": "FindEngineers"}]
+        }),
+    );
     let wf_koid = wf["koid"].as_str().unwrap().to_string();
 
-    let wf_exec = c.call("execute_workflow", &json!({
-        "subject": "admin", "koid": &wf_koid
-    }));
+    let wf_exec = c.call(
+        "execute_workflow",
+        &json!({
+            "subject": "admin", "koid": &wf_koid
+        }),
+    );
     assert_eq!(wf_exec["executed"], true);
 
     // ── Phase 9: Backup + Audit ──────────────────────────────────────────
@@ -254,7 +302,9 @@ fn mcp_ping_and_tools_list() {
 
     // Ping
     let mut req = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
-    c.stdin.write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes()).unwrap();
+    c.stdin
+        .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
+        .unwrap();
     c.stdin.flush().unwrap();
     let mut resp = String::new();
     c.reader.read_line(&mut resp).unwrap();
@@ -263,13 +313,19 @@ fn mcp_ping_and_tools_list() {
 
     // Tools list
     req = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
-    c.stdin.write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes()).unwrap();
+    c.stdin
+        .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
+        .unwrap();
     c.stdin.flush().unwrap();
     resp.clear();
     c.reader.read_line(&mut resp).unwrap();
     let v: J = serde_json::from_str(&resp).unwrap();
     let tools = v["result"]["tools"].as_array().unwrap();
-    assert!(tools.len() >= 30, "Expected >=30 tools, got {}", tools.len());
+    assert!(
+        tools.len() >= 30,
+        "Expected >=30 tools, got {}",
+        tools.len()
+    );
 
     let _ = std::fs::remove_file(&db);
 }
@@ -281,19 +337,25 @@ fn mcp_idempotency_guarantee() {
     let mut c = McpClient::start(db.to_str().unwrap());
 
     // Create with idempotency key.
-    let r1 = c.call("remember", &json!({
-        "subject": "admin", "type_name": "Note",
-        "properties": {"body": "idempotent test"},
-        "idempotency_key": "agent-retry-001"
-    }));
+    let r1 = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "Note",
+            "properties": {"body": "idempotent test"},
+            "idempotency_key": "agent-retry-001"
+        }),
+    );
     let koid1 = r1["koid"].as_str().unwrap().to_string();
 
     // Repeat with same idempotency key — must return same KOID, not create a new one.
-    let r2 = c.call("remember", &json!({
-        "subject": "admin", "type_name": "Note",
-        "properties": {"body": "idempotent test"},
-        "idempotency_key": "agent-retry-001"
-    }));
+    let r2 = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "Note",
+            "properties": {"body": "idempotent test"},
+            "idempotency_key": "agent-retry-001"
+        }),
+    );
     assert_eq!(r2["koid"].as_str().unwrap(), koid1);
 
     let _ = std::fs::remove_file(&db);

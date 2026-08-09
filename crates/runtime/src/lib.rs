@@ -93,10 +93,7 @@ impl Interpreter {
 
     fn exec_op(kernel: &Kernel, op: &IrOp, input: RowSet) -> KResult<RowSet> {
         match op {
-            IrOp::Scan {
-                type_name,
-                subject,
-            } => {
+            IrOp::Scan { type_name, subject } => {
                 let subj = Subject::new(subject);
                 let kos = kernel.scan_by_type(&subj, type_name)?;
                 Ok(RowSet::Objects(kos))
@@ -114,10 +111,24 @@ impl Interpreter {
                             match p.op {
                                 PredOp::Eq => val == Some(&p.value),
                                 PredOp::Neq => val != Some(&p.value),
-                                PredOp::Gt => compare_values(val, Some(&p.value)) == Some(std::cmp::Ordering::Greater),
-                                PredOp::Lt => compare_values(val, Some(&p.value)) == Some(std::cmp::Ordering::Less),
-                                PredOp::Gte => matches!(compare_values(val, Some(&p.value)), Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Equal)),
-                                PredOp::Lte => matches!(compare_values(val, Some(&p.value)), Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal)),
+                                PredOp::Gt => {
+                                    compare_values(val, Some(&p.value))
+                                        == Some(std::cmp::Ordering::Greater)
+                                }
+                                PredOp::Lt => {
+                                    compare_values(val, Some(&p.value))
+                                        == Some(std::cmp::Ordering::Less)
+                                }
+                                PredOp::Gte => matches!(
+                                    compare_values(val, Some(&p.value)),
+                                    Some(std::cmp::Ordering::Greater)
+                                        | Some(std::cmp::Ordering::Equal)
+                                ),
+                                PredOp::Lte => matches!(
+                                    compare_values(val, Some(&p.value)),
+                                    Some(std::cmp::Ordering::Less)
+                                        | Some(std::cmp::Ordering::Equal)
+                                ),
                             }
                         })
                     })
@@ -133,9 +144,11 @@ impl Interpreter {
                 let start_koids: Vec<KOID> = if start_koid.is_empty() {
                     match &input {
                         RowSet::Objects(kos) => kos.iter().map(|ko| ko.koid).collect(),
-                        _ => return Err(KError::InvalidQuery(
-                            "set-based Traverse requires Object input from Scan".into()
-                        )),
+                        _ => {
+                            return Err(KError::InvalidQuery(
+                                "set-based Traverse requires Object input from Scan".into(),
+                            ))
+                        }
                     }
                 } else {
                     vec![KOID::from_hex(start_koid)
@@ -186,7 +199,11 @@ impl Interpreter {
             } => {
                 let kos = match &input {
                     RowSet::Objects(kos) => kos.clone(),
-                    _ => return Err(KError::InvalidQuery("AnnSearch requires Object input".into())),
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "AnnSearch requires Object input".into(),
+                        ))
+                    }
                 };
                 let model = embedding_model.as_deref();
                 let mut scored: Vec<(KOID, f32, String, u64)> = kos
@@ -199,7 +216,12 @@ impl Interpreter {
                                 return None;
                             }
                         }
-                        Some((ko.koid, cosine(vector, emb), ko.metadata.type_name.clone(), ko.version))
+                        Some((
+                            ko.koid,
+                            cosine(vector, emb),
+                            ko.metadata.type_name.clone(),
+                            ko.version,
+                        ))
                     })
                     .collect();
                 scored.sort_by(|a, b| {
@@ -213,14 +235,23 @@ impl Interpreter {
             IrOp::TextSearch { query, k } => {
                 let kos = match &input {
                     RowSet::Objects(kos) => kos.clone(),
-                    _ => return Err(KError::InvalidQuery("TextSearch requires Object input".into())),
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "TextSearch requires Object input".into(),
+                        ))
+                    }
                 };
                 let q_tokens = tokenize(query);
                 let mut scored: Vec<(KOID, f32, String, u64)> = kos
                     .iter()
                     .map(|ko| {
                         let doc_tokens = tokenize(&ko_text(ko));
-                        (ko.koid, jaccard(&q_tokens, &doc_tokens), ko.metadata.type_name.clone(), ko.version)
+                        (
+                            ko.koid,
+                            jaccard(&q_tokens, &doc_tokens),
+                            ko.metadata.type_name.clone(),
+                            ko.version,
+                        )
                     })
                     .collect();
                 scored.sort_by(|a, b| {
@@ -285,11 +316,7 @@ impl Runtime {
 
     /// Execute multiple plans in parallel. Each plan runs independently
     /// via `spawn_blocking`; results are collected in order.
-    pub fn execute_all(
-        &self,
-        kernel: Arc<Kernel>,
-        plans: &[IrPlan],
-    ) -> KResult<Vec<RowSet>> {
+    pub fn execute_all(&self, kernel: Arc<Kernel>, plans: &[IrPlan]) -> KResult<Vec<RowSet>> {
         let mut handles = Vec::new();
         for plan in plans.iter() {
             let k = kernel.clone();
@@ -321,9 +348,7 @@ impl Default for Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mnemosyne_kernel::{
-        ManualClock, MemoryEngine, Metadata, RememberRequest, SemanticBlock,
-    };
+    use mnemosyne_kernel::{ManualClock, MemoryEngine, Metadata, RememberRequest, SemanticBlock};
     use std::sync::Arc;
 
     fn mk() -> Kernel {
@@ -414,32 +439,52 @@ mod tests {
 
         // Gt: temp > 20 → only 35
         let plan = IrPlan::new(vec![
-            IrOp::Scan { type_name: "fact".into(), subject: "alice".into() },
-            IrOp::Filter { predicates: vec![Predicate::gt("temp", Value::Int(20))] },
+            IrOp::Scan {
+                type_name: "fact".into(),
+                subject: "alice".into(),
+            },
+            IrOp::Filter {
+                predicates: vec![Predicate::gt("temp", Value::Int(20))],
+            },
         ]);
         let r = Interpreter::execute(&k, &plan).unwrap();
         assert_eq!(r.object_count(), 1);
 
         // Gte: temp >= 20 → 35, 20
         let plan = IrPlan::new(vec![
-            IrOp::Scan { type_name: "fact".into(), subject: "alice".into() },
-            IrOp::Filter { predicates: vec![Predicate::gte("temp", Value::Int(20))] },
+            IrOp::Scan {
+                type_name: "fact".into(),
+                subject: "alice".into(),
+            },
+            IrOp::Filter {
+                predicates: vec![Predicate::gte("temp", Value::Int(20))],
+            },
         ]);
         let r = Interpreter::execute(&k, &plan).unwrap();
         assert_eq!(r.object_count(), 2);
 
         // Lt: temp < 20 → only 10
         let plan = IrPlan::new(vec![
-            IrOp::Scan { type_name: "fact".into(), subject: "alice".into() },
-            IrOp::Filter { predicates: vec![Predicate::lt("temp", Value::Int(20))] },
+            IrOp::Scan {
+                type_name: "fact".into(),
+                subject: "alice".into(),
+            },
+            IrOp::Filter {
+                predicates: vec![Predicate::lt("temp", Value::Int(20))],
+            },
         ]);
         let r = Interpreter::execute(&k, &plan).unwrap();
         assert_eq!(r.object_count(), 1);
 
         // Lte: temp <= 20 → 10, 20
         let plan = IrPlan::new(vec![
-            IrOp::Scan { type_name: "fact".into(), subject: "alice".into() },
-            IrOp::Filter { predicates: vec![Predicate::lte("temp", Value::Int(20))] },
+            IrOp::Scan {
+                type_name: "fact".into(),
+                subject: "alice".into(),
+            },
+            IrOp::Filter {
+                predicates: vec![Predicate::lte("temp", Value::Int(20))],
+            },
         ]);
         let r = Interpreter::execute(&k, &plan).unwrap();
         assert_eq!(r.object_count(), 2);
@@ -494,8 +539,14 @@ mod tests {
         p2.insert("body".into(), Value::Text("dogs".into()));
         create_ko(&k, &alice, "fact", p2, None);
 
-        let plan1 = IrPlan::new(vec![IrOp::Scan { type_name: "note".into(), subject: "alice".into() }]);
-        let plan2 = IrPlan::new(vec![IrOp::Scan { type_name: "fact".into(), subject: "alice".into() }]);
+        let plan1 = IrPlan::new(vec![IrOp::Scan {
+            type_name: "note".into(),
+            subject: "alice".into(),
+        }]);
+        let plan2 = IrPlan::new(vec![IrOp::Scan {
+            type_name: "fact".into(),
+            subject: "alice".into(),
+        }]);
 
         let rt = Runtime::new();
         let results = rt.execute_all(k, &[plan1, plan2]).unwrap();

@@ -35,7 +35,10 @@ impl ErrorCode {
     }
 
     pub fn retryable(&self) -> bool {
-        matches!(self, ErrorCode::Timeout | ErrorCode::RateLimited | ErrorCode::VersionConflict)
+        matches!(
+            self,
+            ErrorCode::Timeout | ErrorCode::RateLimited | ErrorCode::VersionConflict
+        )
     }
 
     pub fn suggestion(&self) -> &str {
@@ -55,11 +58,17 @@ impl ErrorCode {
     /// Classify an error message string into an error code.
     pub fn classify(msg: &str) -> Self {
         let lower = msg.to_lowercase();
-        if lower.contains("access denied") || lower.contains("unauthorized") || lower.contains("login required") {
+        if lower.contains("access denied")
+            || lower.contains("unauthorized")
+            || lower.contains("login required")
+        {
             ErrorCode::AccessDenied
         } else if lower.contains("version conflict") || lower.contains("conflict") {
             ErrorCode::VersionConflict
-        } else if lower.contains("not_found") || lower.contains("not found") || lower.contains("notfound") {
+        } else if lower.contains("not_found")
+            || lower.contains("not found")
+            || lower.contains("notfound")
+        {
             ErrorCode::NotFound
         } else if lower.contains("missing") || lower.contains("invalid") || lower.contains("bad") {
             ErrorCode::ValidationError

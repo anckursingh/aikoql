@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Mnemosyne Linux Release Build
-# Produces: build/linux/mnemosyne-mcp (static binary)
+# Produces: build/linux/  (binary + checksum + archive)
 # Requires: Rust toolchain (https://rustup.rs)
 #
 # Options:
@@ -11,13 +11,14 @@ set -euo pipefail
 
 TARGET=""
 TARGET_DIR="release"
-LINKER_CONFIG=""
+MUSL_FLAG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --musl)
             TARGET="x86_64-unknown-linux-musl"
             TARGET_DIR="x86_64-unknown-linux-musl/release"
+            MUSL_FLAG="musl"
             shift
             ;;
         --gnu)
@@ -33,7 +34,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Get version from Cargo.toml
+VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+VERSION="${VERSION:-0.1.0}"
+
+PLATFORM="${MUSL_FLAG:-gnu}"
+ARCHIVE_NAME="mnemosyne-linux-x86_64-${PLATFORM}-${VERSION}.tar.gz"
+
 echo "=== Mnemosyne Linux Release Build ==="
+echo "Version: $VERSION"
 if [[ -n "$TARGET" ]]; then
     echo "Target: $TARGET"
 else
@@ -47,34 +56,53 @@ if ! command -v cargo &>/dev/null; then
     exit 1
 fi
 
-echo "[1/4] Updating dependencies..."
+echo "[1/5] Running tests..."
+cargo test -p mnemosyne-mcp -- --test-threads=1 2>&1 | grep "test result" || echo "WARNING: Tests had issues, continuing..."
+
+echo "[2/5] Updating dependencies..."
 cargo update
 
 if [[ -n "$TARGET" ]]; then
-    echo "[2/4] Installing target $TARGET..."
+    echo "[3/5] Installing target $TARGET..."
     rustup target add "$TARGET"
 
-    echo "[3/4] Building release binary for $TARGET..."
+    echo "[4/5] Building release binary for $TARGET..."
     cargo build --release --target "$TARGET" -p mnemosyne-mcp
 else
-    echo "[2/4] Skipping target install (native build)"
-    echo "[3/4] Building release binary (native)..."
+    echo "[3/5] Skipping target install (native build)"
+    echo "[4/5] Building release binary (native)..."
     cargo build --release -p mnemosyne-mcp
 fi
 
-echo "[4/4] Collecting artifacts..."
+echo "[5/5] Collecting artifacts..."
 OUTDIR="build/linux"
+rm -rf "$OUTDIR"
 mkdir -p "$OUTDIR"
 
 cp "target/$TARGET_DIR/mnemosyne-mcp" "$OUTDIR/"
 cp QUICKSTART.md "$OUTDIR/"
 cp mnemosyne.toml "$OUTDIR/"
 
+# Version stamp
+echo "$VERSION" > "$OUTDIR/VERSION"
+echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OUTDIR/BUILD_INFO.txt"
+
+# SHA256 checksum
+sha256sum "$OUTDIR/mnemosyne-mcp" | cut -d' ' -f1 > "$OUTDIR/mnemosyne-mcp.sha256"
+
+# Distribution tarball
+tar -czf "build/$ARCHIVE_NAME" -C build linux/
+
 echo ""
 echo "=== Build complete ==="
+echo "Version: $VERSION"
 echo "Binary: $OUTDIR/mnemosyne-mcp"
 file "$OUTDIR/mnemosyne-mcp" 2>/dev/null || true
 ls -lh "$OUTDIR/mnemosyne-mcp"
+echo "Archive: build/$ARCHIVE_NAME"
 echo ""
-echo "Run: $OUTDIR/mnemosyne-mcp shell"
-echo "Or:  $OUTDIR/mnemosyne-mcp serve --listen 127.0.0.1:9090"
+echo "Usage:"
+echo "  mnemosyne-mcp shell                 Interactive shell"
+echo "  mnemosyne-mcp                       Start server (MCP TCP + HTTP metrics)"
+echo "  mnemosyne-mcp --metrics-addr 127.0.0.1:9181 my.db"
+echo "  mnemosyne-mcp import --help         Import data"

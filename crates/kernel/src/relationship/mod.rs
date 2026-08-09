@@ -20,7 +20,13 @@ impl RelationshipManager {
 
     /// Write both outbound and inbound index entries for one edge.
     /// Idempotent: same (src, rel_type, dst) key is a no-op at the KV level.
-    pub fn write_index(&self, batch: &mut crate::storage::store::WriteBatch, src: &KOID, rel_type: &str, dst: &KOID) {
+    pub fn write_index(
+        &self,
+        batch: &mut crate::storage::store::WriteBatch,
+        src: &KOID,
+        rel_type: &str,
+        dst: &KOID,
+    ) {
         self.repo.write_rel_index(batch, src, rel_type, dst);
     }
 

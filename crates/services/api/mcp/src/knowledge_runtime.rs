@@ -24,8 +24,11 @@ pub struct ExecutionStats {
 }
 
 static EXEC_STATS: std::sync::Mutex<ExecutionStats> = std::sync::Mutex::new(ExecutionStats {
-    programs_executed: 0, total_rows_returned: 0, total_time_ms: 0,
-    cache_hits: 0, cache_misses: 0,
+    programs_executed: 0,
+    total_rows_returned: 0,
+    total_time_ms: 0,
+    cache_hits: 0,
+    cache_misses: 0,
 });
 
 pub fn record_execution(rows: u64, elapsed_ms: u64, cache_hit: bool) {
@@ -33,7 +36,11 @@ pub fn record_execution(rows: u64, elapsed_ms: u64, cache_hit: bool) {
     s.programs_executed += 1;
     s.total_rows_returned += rows;
     s.total_time_ms += elapsed_ms;
-    if cache_hit { s.cache_hits += 1; } else { s.cache_misses += 1; }
+    if cache_hit {
+        s.cache_hits += 1;
+    } else {
+        s.cache_misses += 1;
+    }
 }
 
 #[allow(dead_code)]
@@ -52,7 +59,10 @@ pub struct ProgramCache {
 
 impl ProgramCache {
     pub fn new() -> Self {
-        ProgramCache { cache: Mutex::new(HashMap::new()), hits: Mutex::new(0) }
+        ProgramCache {
+            cache: Mutex::new(HashMap::new()),
+            hits: Mutex::new(0),
+        }
     }
 
     pub fn get(&self, koid: &KOID, expected_version: u64) -> Option<mnemosyne_kernel::ir::IrPlan> {
@@ -71,12 +81,16 @@ impl ProgramCache {
         // ponytail: simple LRU — if >100 entries, clear half.
         if guard.len() > 100 {
             let keys: Vec<KOID> = guard.keys().take(50).cloned().collect();
-            for k in keys { guard.remove(&k); }
+            for k in keys {
+                guard.remove(&k);
+            }
         }
         guard.insert(koid, (plan, version));
     }
 
-    pub fn stats(&self) -> u64 { *self.hits.lock().unwrap() }
+    pub fn stats(&self) -> u64 {
+        *self.hits.lock().unwrap()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -86,10 +100,15 @@ impl ProgramCache {
 /// Execute a Workflow KO: parse its steps, find each Program KO by name,
 /// compile and execute in order. Returns (step_logs, final_results).
 pub fn execute_workflow(
-    kernel: &Kernel, workflow_koid: &KOID, subject: &Subject, cache: Option<&ProgramCache>,
+    kernel: &Kernel,
+    workflow_koid: &KOID,
+    subject: &Subject,
+    cache: Option<&ProgramCache>,
 ) -> Result<Vec<String>, String> {
     let ctx = KnowledgeContext::from(subject.clone());
-    let wf_ko = kernel.get(ctx.clone(), workflow_koid).map_err(|e| e.to_string())?;
+    let wf_ko = kernel
+        .get(ctx.clone(), workflow_koid)
+        .map_err(|e| e.to_string())?;
 
     if wf_ko.metadata.type_name != "mnemosyne:workflow" {
         return Err("not a workflow".into());
@@ -107,7 +126,11 @@ pub fn execute_workflow(
         if let Some(arr) = v.as_array() {
             for item in arr {
                 let order = item.get("order").and_then(|o| o.as_i64()).unwrap_or(0);
-                let name = item.get("program").and_then(|p| p.as_str()).unwrap_or("?").to_string();
+                let name = item
+                    .get("program")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("?")
+                    .to_string();
                 steps.push((order, name));
             }
         }
@@ -121,20 +144,31 @@ pub fn execute_workflow(
         logs.push(format!("  Step {}: {}", order, prog_name));
         let prog = match programs.iter().find(|p| {
             p.properties.get("name").and_then(|v| match v {
-                Value::Text(s) => Some(s.as_str()), _ => None,
+                Value::Text(s) => Some(s.as_str()),
+                _ => None,
             }) == Some(prog_name.as_str())
         }) {
             Some(p) => p,
-            None => { logs.push(format!("    SKIP: not found")); continue; }
+            None => {
+                logs.push(format!("    SKIP: not found"));
+                continue;
+            }
         };
 
         let cur_ver = match prog.properties.get("version").and_then(|v| match v {
-            Value::Int(i) => Some(*i as u64), _ => None,
-        }) { Some(v) => v, None => 0 };
+            Value::Int(i) => Some(*i as u64),
+            _ => None,
+        }) {
+            Some(v) => v,
+            None => 0,
+        };
 
         let body = match prog.properties.get("body") {
             Some(Value::Text(s)) => s.clone(),
-            _ => { logs.push(format!("    SKIP: no body")); continue; }
+            _ => {
+                logs.push(format!("    SKIP: no body"));
+                continue;
+            }
         };
 
         // Check program cache.
@@ -148,11 +182,16 @@ pub fn execute_workflow(
                 (plan, false)
             }
         } else {
-            (mnemosyne_compiler::parser::compile_with_subject(&body, &subject.name)
-                .map_err(|e| format!("compile: {}", e))?, false)
+            (
+                mnemosyne_compiler::parser::compile_with_subject(&body, &subject.name)
+                    .map_err(|e| format!("compile: {}", e))?,
+                false,
+            )
         };
 
-        if cache_hit { logs.push(format!("    (cache hit)")); }
+        if cache_hit {
+            logs.push(format!("    (cache hit)"));
+        }
 
         let start = Instant::now();
         let optimized = mnemosyne_compiler::planner::Planner::optimize(&plan);
@@ -180,22 +219,39 @@ pub fn execute_workflow(
 /// Returns the new high-water sequence number.
 pub fn check_and_fire_triggers(kernel: &Kernel, last_seq: u64) -> Result<u64, String> {
     let (head, _) = kernel.journal_head().map_err(|e| e.to_string())?;
-    if head <= last_seq { return Ok(last_seq); }
+    if head <= last_seq {
+        return Ok(last_seq);
+    }
 
-    let subject = Subject { name: "trigger-engine".into(), roles: vec!["admin".into()] };
+    let subject = Subject {
+        name: "trigger-engine".into(),
+        roles: vec!["admin".into()],
+    };
     let events = kernel.journal().map_err(|e| e.to_string())?;
-    let triggers = kernel.scan_by_type(&subject, "mnemosyne:trigger").unwrap_or_default();
-    if triggers.is_empty() { return Ok(head); }
+    let triggers = kernel
+        .scan_by_type(&subject, "mnemosyne:trigger")
+        .unwrap_or_default();
+    if triggers.is_empty() {
+        return Ok(head);
+    }
 
     let mut new_water = last_seq;
     for ke in events.iter().skip(last_seq as usize) {
         new_water = ke.seq;
         for t in &triggers {
-            let ek = match t.properties.get("event_kind").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }) {
-                Some(s) => s, None => continue,
+            let ek = match t.properties.get("event_kind").and_then(|v| match v {
+                Value::Text(s) => Some(s.as_str()),
+                _ => None,
+            }) {
+                Some(s) => s,
+                None => continue,
             };
-            let pk = match t.properties.get("program_koid").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }) {
-                Some(s) => s, None => continue,
+            let pk = match t.properties.get("program_koid").and_then(|v| match v {
+                Value::Text(s) => Some(s.as_str()),
+                _ => None,
+            }) {
+                Some(s) => s,
+                None => continue,
             };
 
             let ke_kind = format!("{:?}", ke.kind);
@@ -204,8 +260,12 @@ pub fn check_and_fire_triggers(kernel: &Kernel, last_seq: u64) -> Result<u64, St
                     let ctx = KnowledgeContext::from(subject.clone());
                     if let Ok(prog_ko) = kernel.get(ctx, &prog_koid) {
                         if let Some(Value::Text(body)) = prog_ko.properties.get("body") {
-                            if let Ok(plan) = mnemosyne_compiler::parser::compile_with_subject(body, "trigger-engine") {
-                                let optimized = mnemosyne_compiler::planner::Planner::optimize(&plan);
+                            if let Ok(plan) = mnemosyne_compiler::parser::compile_with_subject(
+                                body,
+                                "trigger-engine",
+                            ) {
+                                let optimized =
+                                    mnemosyne_compiler::planner::Planner::optimize(&plan);
                                 let _ = mnemosyne_runtime::Interpreter::execute(kernel, &optimized);
                             }
                         }
@@ -215,4 +275,196 @@ pub fn check_and_fire_triggers(kernel: &Kernel, last_seq: u64) -> Result<u64, St
         }
     }
     Ok(new_water)
+}
+
+// ---------------------------------------------------------------------------
+// Agent Runtime — execute Agent KOs (MRFC-0030 Phase 7c)
+// ---------------------------------------------------------------------------
+
+/// Execute an Agent KO: load the agent, resolve skills → Program KOs, execute
+/// each skill with the agent's prompt as context. Returns execution log lines.
+pub fn execute_agent(
+    kernel: &Kernel,
+    agent_koid: &KOID,
+    subject: &Subject,
+    cache: Option<&ProgramCache>,
+) -> Result<Vec<String>, String> {
+    let ctx = KnowledgeContext::from(subject.clone());
+    let agent = kernel
+        .get(ctx.clone(), agent_koid)
+        .map_err(|e| e.to_string())?;
+
+    if agent.metadata.type_name != "mnemosyne:agent" {
+        return Err("not an agent".into());
+    }
+
+    let agent_name = agent
+        .properties
+        .get("name")
+        .and_then(|v| match v {
+            Value::Text(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .unwrap_or("?");
+    let prompt = agent
+        .properties
+        .get("prompt")
+        .and_then(|v| match v {
+            Value::Text(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .unwrap_or("");
+
+    let mut logs = vec![
+        format!("Agent: {} ({})", agent_name, agent.koid.to_hex()),
+        format!(
+            "  Prompt: {}",
+            if prompt.len() > 80 {
+                &prompt[..80]
+            } else {
+                prompt
+            }
+        ),
+    ];
+
+    // Parse skills JSON array → resolve to Program KOs by name.
+    let skills_json = agent
+        .properties
+        .get("skills")
+        .and_then(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "[]".to_string());
+
+    let skill_names: Vec<String> =
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&skills_json) {
+            v.as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|s| s.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
+
+    // Parse policies for context.
+    let policies_json = agent
+        .properties
+        .get("policies")
+        .and_then(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "[]".to_string());
+
+    // Parse tools.
+    let tools_json = agent
+        .properties
+        .get("tools")
+        .and_then(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "[]".to_string());
+
+    logs.push(format!(
+        "  Skills: {}\u{a0}Tools: {}\u{a0}Policies: {}",
+        skill_names.len(),
+        tools_json.len().min(60),
+        policies_json.len().min(60),
+    ));
+
+    if skill_names.is_empty() {
+        logs.push("  (no skills — agent is informational only)".into());
+        return Ok(logs);
+    }
+
+    let programs = kernel.list_programs(subject).map_err(|e| e.to_string())?;
+    let mut total_rows = 0u64;
+    let mut total_ms = 0u64;
+
+    for skill_name in &skill_names {
+        logs.push(format!("  Skill: {}", skill_name));
+        let prog = match programs.iter().find(|p| {
+            p.properties.get("name").and_then(|v| match v {
+                Value::Text(s) => Some(s.as_str()),
+                _ => None,
+            }) == Some(skill_name.as_str())
+        }) {
+            Some(p) => p,
+            None => {
+                logs.push(format!("    SKIP: program '{}' not found", skill_name));
+                continue;
+            }
+        };
+
+        let cur_ver = match prog.properties.get("version").and_then(|v| match v {
+            Value::Int(i) => Some(*i as u64),
+            _ => None,
+        }) {
+            Some(v) => v,
+            None => 0,
+        };
+
+        let body = match prog.properties.get("body") {
+            Some(Value::Text(s)) => s.clone(),
+            _ => {
+                logs.push("    SKIP: no body".into());
+                continue;
+            }
+        };
+
+        // Substitute {{prompt}} placeholder if present.
+        let body = body.replace("{{prompt}}", prompt);
+
+        // Check program cache.
+        let (plan, cache_hit) = if let Some(c) = cache {
+            if let Some(cached) = c.get(&prog.koid, cur_ver) {
+                (cached, true)
+            } else {
+                let plan = mnemosyne_compiler::parser::compile_with_subject(&body, &subject.name)
+                    .map_err(|e| format!("compile: {}", e))?;
+                c.put(prog.koid, cur_ver, plan.clone());
+                (plan, false)
+            }
+        } else {
+            (
+                mnemosyne_compiler::parser::compile_with_subject(&body, &subject.name)
+                    .map_err(|e| format!("compile: {}", e))?,
+                false,
+            )
+        };
+
+        if cache_hit {
+            logs.push("    (cache hit)".into());
+        }
+
+        let start = std::time::Instant::now();
+        let optimized = mnemosyne_compiler::planner::Planner::optimize(&plan);
+        match mnemosyne_runtime::Interpreter::execute(kernel, &optimized) {
+            Ok(rows) => {
+                let elapsed = start.elapsed().as_millis() as u64;
+                let count = match &rows {
+                    mnemosyne_runtime::RowSet::Objects(objs) => objs.len() as u64,
+                    _ => 0,
+                };
+                total_rows += count;
+                total_ms += elapsed;
+                record_execution(count, elapsed, cache_hit);
+                logs.push(format!("    OK: {} results in {}ms", count, elapsed));
+            }
+            Err(e) => logs.push(format!("    ERROR: {}", e)),
+        }
+    }
+
+    logs.push(format!(
+        "  Total: {} results in {}ms across {} skills",
+        total_rows,
+        total_ms,
+        skill_names.len()
+    ));
+    Ok(logs)
 }

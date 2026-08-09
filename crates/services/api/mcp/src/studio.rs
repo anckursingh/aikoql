@@ -315,6 +315,27 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <button data-panel="admin" title="Administration">
         <span class="ico">⚙</span><span class="lbl">Admin</span>
       </button>
+      <button data-panel="timeline" title="Timeline — MVCC time travel">
+        <span class="ico">⏳</span><span class="lbl">Timeline</span>
+      </button>
+      <button data-panel="provenance" title="Provenance — cryptographic audit chain">
+        <span class="ico">🔗</span><span class="lbl">Provenance</span>
+      </button>
+      <button data-panel="debugger" title="Program Debugger">
+        <span class="ico">🐛</span><span class="lbl">Debugger</span>
+      </button>
+      <button data-panel="benchmarks" title="Benchmark Center">
+        <span class="ico">⏱</span><span class="lbl">Benchmarks</span>
+      </button>
+      <button data-panel="profiler" title="Query Profiler">
+        <span class="ico">📊</span><span class="lbl">Profiler</span>
+      </button>
+      <button data-panel="providers" title="Provider Manager">
+        <span class="ico">🔌</span><span class="lbl">Providers</span>
+      </button>
+      <button data-panel="documents" title="Document Explorer">
+        <span class="ico">📄</span><span class="lbl">Documents</span>
+      </button>
     </nav>
     <div class="user-area">
       <div class="user-badge" onclick="logout()" id="user-badge">―</div>
@@ -431,9 +452,129 @@ tr:hover td { background: rgba(108,199,240,0.03); }
         </div>
       </div>
 
+      <!-- ── Query Profiler ── -->
+      <div class="panel" id="panel-profiler">
+        <div class="card">
+          <h3>📊 Query Profiler</h3>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Run AIKOQL queries and examine execution plans. Measure, compare, optimize.</p>
+          <div style="margin-bottom:12px;">
+            <textarea id="profiler-query" style="width:100%;height:80px;padding:10px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;font-family:var(--font-mono);resize:vertical;" placeholder="MATCH Employee RETURN name, salary"></textarea>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <button class="btn btn-pri" onclick="profileRun()">▶ Profile</button>
+            <button class="btn btn-sec btn-sm" onclick="profileExplain()">🔍 Explain KO</button>
+            <input type="text" id="profiler-koid-input" placeholder="KOID for EXPLAIN..." style="flex:1;padding:6px 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;font-family:var(--font-mono);" />
+          </div>
+        </div>
+        <div id="profiler-results"></div>
+      </div>
+
+      <!-- ── Provider Manager ── -->
+      <div class="panel" id="panel-providers">
+        <div class="card" style="margin-bottom:12px;">
+          <h3>🔌 Provider Manager</h3>
+          <p style="font-size:11px;color:var(--muted);">Connectors bridge Mnemosyne to external data systems. Deploy, monitor, and sync.</p>
+        </div>
+        <div id="providers-list"><div class="loading">Loading connectors...</div></div>
+        <div class="card" style="margin-top:12px;">
+          <h4>Deploy New Connector</h4>
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+            <input type="text" id="connector-name" placeholder="Connector name" style="padding:6px 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;flex:1;min-width:120px;" />
+            <input type="text" id="connector-plugin" placeholder="Plugin type (e.g. postgres)" style="padding:6px 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;flex:1;min-width:120px;" />
+            <button class="btn btn-pri btn-sm" onclick="deployConnector()">Deploy</button>
+          </div>
+          <div id="connector-deploy-result" style="margin-top:8px;"></div>
+        </div>
+      </div>
+
+      <!-- ── Document Explorer ── -->
+      <div class="panel" id="panel-documents">
+        <div class="card" style="margin-bottom:12px;">
+          <h3>📄 Document Explorer</h3>
+          <p style="font-size:11px;color:var(--muted);">Ingest documents → Knowledge Objects. Upload a PDF, DOCX, HTML, or TXT file to create queryable knowledge.</p>
+        </div>
+        <div class="card" style="margin-bottom:12px;">
+          <h4>Upload Document</h4>
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center;">
+            <input type="file" id="doc-file-input" style="padding:6px 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;flex:1;min-width:200px;" />
+            <button class="btn btn-pri btn-sm" onclick="ingestDocument()">Ingest</button>
+          </div>
+          <div id="doc-ingest-result" style="margin-top:8px;"></div>
+        </div>
+        <div id="documents-list"><div class="loading">Loading documents...</div></div>
+        <div id="doc-compile-result" style="margin-top:12px;"></div>
+      </div>
+
       <!-- ── Administration ── -->
       <div class="panel" id="panel-admin">
         <div class="admin-grid" id="admin-grid"><div class="loading">Loading dashboard...</div></div>
+      </div>
+
+      <!-- ── Timeline — MVCC Time Travel ── -->
+      <div class="panel" id="panel-timeline">
+        <div class="card">
+          <h3>⏳ Timeline — MVCC Time Travel</h3>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Every mutation is a versioned KnowledgeEvent. Enter a KOID to see its full version history.</p>
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <input type="text" id="timeline-koid-input" placeholder="KOID hex..." style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;font-family:var(--font-mono);" />
+            <button class="btn btn-pri" onclick="loadTimeline()">Load Timeline</button>
+          </div>
+          <div id="timeline-result"><div class="empty-state">Enter a KOID to view its version timeline.</div></div>
+        </div>
+      </div>
+
+      <!-- ── Provenance — Cryptographic Audit Chain ── -->
+      <div class="panel" id="panel-provenance">
+        <div class="card">
+          <h3>🔗 Provenance — Cryptographic Audit Chain</h3>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">git log for knowledge. Every version is SHA-256 chained. Independently verifiable.</p>
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <input type="text" id="provenance-koid-input" placeholder="KOID hex..." style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;font-family:var(--font-mono);" />
+            <button class="btn btn-pri" onclick="loadProvenance()">Trace Provenance</button>
+            <button class="btn btn-sec" onclick="verifyProvenance()">🔐 Prove Integrity</button>
+          </div>
+          <div id="provenance-result"><div class="empty-state">Enter a KOID to trace its provenance chain.</div></div>
+        </div>
+      </div>
+
+      <!-- ── Program Debugger ── -->
+      <div class="panel" id="panel-debugger">
+        <div class="card">
+          <h3>🐛 Program Debugger</h3>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Inspect AIKOQL programs: source code, compiled plan, execution stats, dependency graph.</p>
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <select id="debugger-program-select" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;font-family:var(--font);">
+              <option value="">Select a program...</option>
+            </select>
+            <button class="btn btn-pri" onclick="loadProgramDebugger()">Inspect</button>
+          </div>
+          <div id="debugger-result"><div class="empty-state">Select a deployed program to inspect.</div></div>
+        </div>
+      </div>
+
+      <!-- ── Benchmark Center ── -->
+      <div class="panel" id="panel-benchmarks">
+        <div class="card">
+          <h3>⏱ Benchmark Center</h3>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Versioned, replayable performance benchmarks as Knowledge Objects.</p>
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <button class="btn btn-pri" onclick="loadBenchmarks()">🔄 Refresh</button>
+            <button class="btn btn-sec btn-sm" onclick="showBenchmarkDeployForm()">+ New Benchmark</button>
+          </div>
+          <div id="benchmark-deploy-form" style="display:none;margin-bottom:12px;">
+            <input type="text" id="bm-name" placeholder="Benchmark name" style="width:100%;padding:6px;margin-bottom:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;font-family:var(--font);" />
+            <textarea id="bm-query" placeholder="Target AIKOQL query" style="width:100%;min-height:60px;padding:6px;margin-bottom:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;font-family:var(--font-mono);"></textarea>
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+              <span style="font-size:11px;color:var(--muted);">Iterations:</span>
+              <input type="number" id="bm-iterations" value="100" min="1" style="width:80px;padding:4px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;" />
+              <span style="font-size:11px;color:var(--muted);">Warmup:</span>
+              <input type="number" id="bm-warmup" value="10" min="0" style="width:80px;padding:4px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;" />
+            </div>
+            <button class="btn btn-pri btn-sm" onclick="deployBenchmark()">Deploy Benchmark</button>
+            <span id="bm-deploy-msg" style="margin-left:8px;font-size:11px;"></span>
+          </div>
+          <div id="benchmarks-result"><div class="loading">Loading benchmarks...</div></div>
+        </div>
       </div>
 
     </div>
@@ -500,6 +641,17 @@ async function api(url) {
   }
   return res.json();
 }
+async function apiPost(url, body) {
+  const sep = url.includes('?') ? '&' : '?';
+  const full = url + (authToken ? sep + 'token=' + encodeURIComponent(authToken) : '');
+  const res = await fetch(full, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})});
+  if (!res.ok) {
+    let msg = 'HTTP ' + res.status;
+    try { const b = await res.json(); if (b.error) msg = b.error; } catch(_) {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
 
 // ═══════════════════════════════════════════
 // Navigation
@@ -510,7 +662,7 @@ function switchPanel(name) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   const panel = document.getElementById('panel-' + name);
   if (panel) panel.classList.add('active');
-  const titles = { query:'Query Editor', graph:'Knowledge Graph', explorer:'Knowledge Explorer', schema:'Schema Explorer', ontology:'Ontology', inspector:'KO Inspector', admin:'Administration' };
+  const titles = { query:'Query Editor', graph:'Knowledge Graph', explorer:'Knowledge Explorer', schema:'Schema Explorer', ontology:'Ontology', inspector:'KO Inspector', admin:'Administration', timeline:'Timeline', provenance:'Provenance', debugger:'Program Debugger', benchmarks:'Benchmark Center', profiler:'Query Profiler', providers:'Provider Manager', documents:'Document Explorer' };
   document.getElementById('panel-title').textContent = titles[name] || name;
   document.getElementById('panel-breadcrumb').textContent = '';
   if (name === 'graph') initGraph();
@@ -518,6 +670,10 @@ function switchPanel(name) {
   if (name === 'schema') loadSchemaPanel();
   if (name === 'ontology') loadOntologyPanel();
   if (name === 'admin') loadAdminPanel();
+  if (name === 'providers') loadProviders();
+  if (name === 'debugger') loadDebuggerPrograms();
+  if (name === 'benchmarks') loadBenchmarks();
+  if (name === 'documents') loadDocuments();
 }
 document.querySelectorAll('#sidebar nav button').forEach(b => {
   b.addEventListener('click', () => switchPanel(b.dataset.panel));
@@ -1087,10 +1243,11 @@ async function saveOntology() {
 // ═══════════════════════════════════════════
 async function loadAdminPanel() {
   try {
-    const [health, metrics, backups] = await Promise.all([
+    const [health, metrics, backups, compliance] = await Promise.all([
       api('/health').catch(() => ({status:'offline'})),
       api('/api/v1/metrics-info').then(r => r.data).catch(() => ({})),
-      api('/api/v1/backups').then(r => r.data).catch(() => ({backups:[]}))
+      api('/api/v1/backups').then(r => r.data).catch(() => ({backups:[]})),
+      api('/api/v1/compliance').then(r => r.data).catch(() => null)
     ]);
     let html = '';
     // Health card
@@ -1111,24 +1268,75 @@ async function loadAdminPanel() {
       html += '</div>';
     }
     html += '</div>';
-    // Backups card
-    html += '<div class="card"><h3>Backups</h3>';
+    // Compliance card (new)
+    if (compliance) {
+      const cs = compliance.field_crypto_summary || {};
+      html += '<div class="card"><h3>Encryption</h3>';
+      html += '<div class="kv-row"><span class="kv-key">Enabled</span><span class="kv-val">'+(compliance.encryption_enabled?'✅ Yes':'⬜ No')+'</span></div>';
+      html += '<div class="kv-row"><span class="kv-key">Policies</span><span class="kv-val">'+(compliance.policies_registered||0)+'</span></div>';
+      html += '<div class="kv-row"><span class="kv-key">Tenant Keys</span><span class="kv-val">'+(cs.tenant_keys||0)+'</span></div>';
+      html += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Policy types: '+(compliance.policy_types||[]).join(', ')||'none'+'</div>';
+      html += '</div>';
+    }
+    // Backups card (upgraded: actions + correct columns)
+    html += '<div class="card"><h3>Backups & Recovery</h3>';
+    html += '<div style="display:flex;gap:8px;margin-bottom:10px;">';
+    html += '<button class="btn btn-pri btn-sm" onclick="adminCreateBackup()">📦 Create Backup</button>';
+    html += '</div>';
+    html += '<div id="admin-backup-result" style="margin-bottom:8px;"></div>';
     const blist = backups.backups || [];
     if (blist.length > 0) {
-      html += '<table><thead><tr><th>Name</th><th>Size</th><th>Created</th></tr></thead><tbody>';
-      blist.forEach(b => html += '<tr><td>'+b.name+'</td><td>'+(b.size_bytes||'?')+'</td><td>'+(b.created_at||'')+'</td></tr>');
+      html += '<table><thead><tr><th>Name</th><th>Objects</th><th>Journal</th><th>Actions</th></tr></thead><tbody>';
+      blist.forEach(b => {
+        const meta = b.meta || {};
+        html += '<tr><td class="mono" style="font-size:10px;">'+b.name+'</td><td>'+(meta.object_count||'?')+'</td><td>'+(meta.journal_seq||'?')+'</td>';
+        html += '<td>';
+        html += '<button class="btn btn-sec btn-sm" onclick="adminVerifyBackup(\''+b.name+'\')" style="margin-right:4px;">Verify</button>';
+        html += '<button class="btn btn-sec btn-sm" onclick="adminRestoreBackup(\''+b.name+'\')">Restore</button>';
+        html += '</td></tr>';
+      });
       html += '</tbody></table>';
-    } else { html += '<div style="color:var(--muted);font-size:11px;">No backups found. Create one via CLI or API.</div>'; }
+    } else { html += '<div style="color:var(--muted);font-size:11px;">No backups found.</div>'; }
     html += '</div>';
     // Audit card
-    html += '<div class="card"><h3>Audit & Compliance</h3>';
+    html += '<div class="card"><h3>Audit</h3>';
     html += '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">SHA-256 audit chain. Every mutation is cryptographically verifiable.</div>';
     html += '<button class="btn btn-sec btn-sm" onclick="loadAuditReport()">View Audit Report</button> ';
-    html += '<button class="btn btn-sec btn-sm" onclick="loadComplianceReport()">Compliance Report</button>';
+    html += '<button class="btn btn-sec btn-sm" onclick="loadComplianceReport()">Compliance Detail</button>';
     html += '<div id="admin-audit-result" style="margin-top:8px;"></div>';
     html += '</div>';
     document.getElementById('admin-grid').innerHTML = html;
   } catch(e) { document.getElementById('admin-grid').innerHTML = '<div class="error-text">Failed to load admin dashboard: '+e.message+'</div>'; }
+}
+async function adminCreateBackup() {
+  const div = document.getElementById('admin-backup-result');
+  div.innerHTML = '<span style="color:var(--muted);">Creating backup...</span>';
+  try {
+    const data = await apiPost('/api/v1/backup');
+    const d = data.data || data;
+    div.innerHTML = '<span style="color:var(--green);">Backup created: '+d.backup+' ('+d.object_count+' objects, verified: '+d.verified+')</span>';
+    setTimeout(() => loadAdminPanel(), 1500);
+  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+}
+async function adminVerifyBackup(name) {
+  const div = document.getElementById('admin-backup-result');
+  div.innerHTML = '<span style="color:var(--muted);">Verifying '+name+'...</span>';
+  try {
+    const data = await apiPost('/api/v1/verify-backup', {backup: name});
+    const d = data.data || data;
+    div.innerHTML = '<span style="color:'+(d.verified?'var(--green)':'var(--red)')+';">Backup '+name+': '+(d.verified?'✅ Verified':'❌ Invalid')+' (seq '+d.expected_journal_seq+')</span>';
+  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+}
+async function adminRestoreBackup(name) {
+  const div = document.getElementById('admin-backup-result');
+  if (!confirm('Restore backup "'+name+'"? This will replace the current database.')) return;
+  div.innerHTML = '<span style="color:var(--orange);">Restoring from '+name+'... server may restart.</span>';
+  try {
+    const data = await apiPost('/api/v1/restore', {backup: name});
+    const d = data.data || data;
+    div.innerHTML = '<span style="color:var(--green);">Restored from '+name+'. Recovery point: seq '+(d.recovery_point?.journal_seq||'?')+'</span>';
+    setTimeout(() => loadAdminPanel(), 2000);
+  } catch(e) { div.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
 }
 async function loadAuditReport() {
   const div = document.getElementById('admin-audit-result');
@@ -1145,6 +1353,500 @@ async function loadComplianceReport() {
     const data = await api('/api/v1/compliance');
     div.innerHTML = '<div class="pre-box">'+JSON.stringify(data, null, 2)+'</div>';
   } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+}
+
+// ═══════════════════════════════════════════
+// Timeline Panel (S2)
+// ═══════════════════════════════════════════
+async function loadTimeline() {
+  const koid = document.getElementById('timeline-koid-input').value.trim();
+  const div = document.getElementById('timeline-result');
+  if (!koid) { div.innerHTML = '<div class="error-text">Enter a KOID.</div>'; return; }
+  div.innerHTML = '<div class="loading">Loading version history...</div>';
+  try {
+    const trace = await api('/api/v1/trace/' + encodeURIComponent(koid));
+    const data = trace.data || trace;
+    const versions = data.versions || data.events || [];
+    if (!versions.length) { div.innerHTML = '<div class="empty-state">No versions found for this KOID.</div>'; return; }
+    let h = '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">'+versions.length+' versions</div>';
+    h += '<div class="timeline-track">';
+    versions.forEach((v, i) => {
+      const ts = v.timestamp || v.commit_ts || '?';
+      const ver = v.version !== undefined ? 'v' + v.version : '';
+      const src = v.source || v.mutation_source || '?';
+      h += '<div class="timeline-dot" style="margin-bottom:8px;">';
+      h += '<span class="badge badge-cyan">' + ver + '</span> ';
+      h += '<span style="font-size:11px;">' + ts + '</span> ';
+      h += '<span style="font-size:10px;color:var(--muted);">by ' + src + '</span>';
+      h += '</div>';
+    });
+    h += '</div>';
+    div.innerHTML = h;
+  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+}
+
+// ═══════════════════════════════════════════
+// Provenance Panel (S2)
+// ═══════════════════════════════════════════
+async function loadProvenance() {
+  const koid = document.getElementById('provenance-koid-input').value.trim();
+  const div = document.getElementById('provenance-result');
+  if (!koid) { div.innerHTML = '<div class="error-text">Enter a KOID.</div>'; return; }
+  div.innerHTML = '<div class="loading">Tracing provenance chain...</div>';
+  try {
+    const trace = await api('/api/v1/trace/' + encodeURIComponent(koid));
+    const data = trace.data || trace;
+    const versions = data.versions || data.events || [];
+    if (!versions.length) { div.innerHTML = '<div class="empty-state">No provenance data for this KOID.</div>'; return; }
+    let h = '<div class="provenance-chain">';
+    versions.forEach((v, i) => {
+      h += '<div class="provenance-node" style="border-left:2px solid var(--cyan);padding-left:12px;margin-bottom:12px;">';
+      h += '<div style="font-size:12px;font-weight:600;">#' + (i + 1) + ' — v' + (v.version || '?') + '</div>';
+      h += '<div style="font-size:11px;color:var(--muted);">' + (v.timestamp || v.commit_ts || '?') + '</div>';
+      h += '<div style="font-size:10px;color:var(--muted);">Source: ' + (v.source || v.mutation_source || '?') + '</div>';
+      if (v.audit_hash) h += '<div style="font-size:10px;font-family:var(--font-mono);color:var(--green);">SHA-256: ' + v.audit_hash.substring(0, 16) + '...</div>';
+      h += '</div>';
+    });
+    h += '</div>';
+    div.innerHTML = h;
+  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+}
+
+async function verifyProvenance() {
+  const div = document.getElementById('provenance-result');
+  div.innerHTML = '<div class="loading">Verifying audit chain...</div>';
+  try {
+    const proof = await api('/api/v1/prove');
+    const data = proof.data || proof;
+    div.innerHTML = '<div class="card" style="border-left:3px solid var(--green);padding:12px;">' +
+      '<div style="font-size:14px;font-weight:600;color:var(--green);">✅ Audit Chain Verified</div>' +
+      '<div style="font-size:11px;color:var(--muted);margin-top:4px;">Journal seq: ' + (data.journal_seq || '?') + '</div>' +
+      '<div style="font-size:10px;font-family:var(--font-mono);color:var(--muted);margin-top:4px;">Head: ' + ((data.head_audit_hash||'').substring(0,32)) + '...</div>' +
+      '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Events: ' + ((data.events||[]).length) + ' in chain</div>' +
+      '</div>';
+  } catch(e) { div.innerHTML = '<div class="error-text">Chain verification failed: '+e.message+'</div>'; }
+}
+
+// ═══════════════════════════════════════════
+// Program Debugger Panel (S2)
+// ═══════════════════════════════════════════
+async function loadDebuggerPrograms() {
+  const sel = document.getElementById('debugger-program-select');
+  sel.innerHTML = '<option value="">Loading...</option>';
+  try {
+    const data = await api('/api/v1/list-programs');
+    const programs = data.programs || [];
+    sel.innerHTML = '<option value="">Select a program...</option>';
+    programs.forEach(p => {
+      sel.innerHTML += '<option value="'+p.koid+'">'+p.name+' (v'+p.version+')</option>';
+    });
+  } catch(e) { sel.innerHTML = '<option value="">Error loading programs</option>'; }
+}
+
+async function loadProgramDebugger() {
+  const koid = document.getElementById('debugger-program-select').value;
+  const div = document.getElementById('debugger-result');
+  if (!koid) { div.innerHTML = '<div class="error-text">Select a program.</div>'; return; }
+  div.innerHTML = '<div class="loading">Loading program...</div>';
+  try {
+    // Get program details via graph query.
+    const data = await api('/api/v1/list-programs');
+    const programs = data.programs || [];
+    const prog = programs.find(p => p.koid === koid);
+    if (!prog) { div.innerHTML = '<div class="error-text">Program not found.</div>'; return; }
+    let h = '<div class="card"><h3>'+prog.name+'</h3>';
+    h += '<div class="kv-row"><span class="kv-key">KOID</span><span class="kv-val mono">'+prog.koid+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Language</span><span class="kv-val">'+ (prog.language||'AIKOQL') +'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Version</span><span class="kv-val">'+ (prog.version||'?') +'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Lifecycle</span><span class="kv-val">'+ (prog.lifecycle||'?') +'</span></div>';
+    h += '</div>';
+    // Show source.
+    if (prog.body) {
+      h += '<div class="card" style="margin-top:8px;"><h3>Source Code</h3>';
+      h += '<pre style="background:var(--bg);padding:10px;border-radius:5px;font-size:12px;font-family:var(--font-mono);overflow-x:auto;">'+prog.body+'</pre>';
+      h += '</div>';
+    }
+    // Execution stats.
+    h += '<div class="card" style="margin-top:8px;"><h3>Execution Stats</h3>';
+    try {
+      const stats = await api('/api/v1/execution-stats');
+      const s = stats.data || stats;
+      h += '<div class="kv-row"><span class="kv-key">Programs Executed</span><span class="kv-val">'+(s.programs_executed||0)+'</span></div>';
+      h += '<div class="kv-row"><span class="kv-key">Total Rows</span><span class="kv-val">'+(s.total_rows_returned||0)+'</span></div>';
+      h += '<div class="kv-row"><span class="kv-key">Cache Hit %</span><span class="kv-val">'+(s.cache_hit_pct||0).toFixed(1)+'%</span></div>';
+    } catch(e) { h += '<div style="color:var(--muted);font-size:11px;">Stats unavailable</div>'; }
+    h += '</div>';
+    // Show dependencies.
+    h += '<div class="card" style="margin-top:8px;"><h3>Dependencies</h3>';
+    h += '<button class="btn btn-sec btn-sm" onclick="loadProgramDeps(\''+prog.koid+'\')">Show Dependency Graph</button>';
+    h += '<div id="debugger-deps" style="margin-top:8px;"></div>';
+    h += '</div>';
+    div.innerHTML = h;
+  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+}
+
+async function loadProgramDeps(koid) {
+  const div = document.getElementById('debugger-deps');
+  div.innerHTML = '<div class="loading">Loading...</div>';
+  try {
+    const data = await api('/api/v1/trace/' + encodeURIComponent(koid));
+    const versions = (data.data||data).versions || (data.data||data).events || [];
+    div.innerHTML = '<div style="font-size:11px;color:var(--muted);">'+versions.length+' versions in trace chain. Program DAG is stored as DEPENDS_ON relationships.</div>';
+  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+}
+
+// ═══════════════════════════════════════════
+// Benchmark Center Panel (S2)
+// ═══════════════════════════════════════════
+async function loadBenchmarks() {
+  const div = document.getElementById('benchmarks-result');
+  div.innerHTML = '<div class="loading">Loading benchmarks...</div>';
+  try {
+    const data = await api('/api/v1/list-benchmarks');
+    const benchmarks = data.benchmarks || [];
+    if (!benchmarks.length) { div.innerHTML = '<div class="empty-state">No benchmarks deployed. Create one below.</div>'; return; }
+    let h = '<table><thead><tr><th>Name</th><th>Target Query</th><th>Iterations</th><th>Lifecycle</th><th>Actions</th></tr></thead><tbody>';
+    benchmarks.forEach(b => {
+      h += '<tr>';
+      h += '<td><strong>'+b.name+'</strong></td>';
+      h += '<td style="font-family:var(--font-mono);font-size:11px;">'+(b.target_query||'?')+'</td>';
+      h += '<td>'+(b.iterations||0)+'</td>';
+      h += '<td><span class="badge badge-cyan">'+b.lifecycle+'</span></td>';
+      h += '<td><button class="btn btn-sec btn-sm" onclick="runBenchmark(\''+b.koid+'\')">▶ Run</button></td>';
+      h += '</tr>';
+    });
+    h += '</tbody></table>';
+    div.innerHTML = h;
+  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+}
+
+async function runBenchmark(koid) {
+  const div = document.getElementById('benchmarks-result');
+  div.innerHTML = '<div class="loading">Running benchmark '+koid+'...</div>';
+  try {
+    // Deploy a program from the benchmark's target query for execution.
+    const data = await api('/api/v1/list-benchmarks');
+    const bm = (data.benchmarks||[]).find(b => b.koid === koid);
+    if (!bm) { div.innerHTML = '<div class="error-text">Benchmark not found.</div>'; return; }
+    const query = bm.target_query || '';
+    const name = bm.name || 'unnamed';
+    const iterations = parseInt(bm.iterations||'100', 10);
+
+    // Execute the query via AIKOQL and measure.
+    const start = performance.now();
+    let results = null;
+    for (let i = 0; i < iterations; i++) {
+      try {
+        results = await api('/api/v1/aikoql?query=' + encodeURIComponent(query));
+      } catch(e) { /* continue */ }
+    }
+    const elapsed = (performance.now() - start).toFixed(1);
+    const opsPerSec = (iterations / (elapsed / 1000)).toFixed(1);
+
+    let h = '<div class="card" style="border-left:3px solid var(--cyan);">';
+    h += '<h3>Benchmark: ' + name + '</h3>';
+    h += '<div class="kv-row"><span class="kv-key">Iterations</span><span class="kv-val">' + iterations + '</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Total Time</span><span class="kv-val">' + elapsed + 'ms</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Throughput</span><span class="kv-val">' + opsPerSec + ' ops/s</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Avg Latency</span><span class="kv-val">' + (elapsed / iterations).toFixed(2) + 'ms</span></div>';
+    h += '</div>';
+    h += '<button class="btn btn-sec btn-sm" style="margin-top:8px;" onclick="loadBenchmarks()">← Back to Benchmarks</button>';
+    div.innerHTML = h;
+  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+}
+
+function showBenchmarkDeployForm() {
+  const form = document.getElementById('benchmark-deploy-form');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+async function deployBenchmark() {
+  const name = document.getElementById('bm-name').value.trim();
+  const query = document.getElementById('bm-query').value.trim();
+  const iterations = document.getElementById('bm-iterations').value;
+  const warmup = document.getElementById('bm-warmup').value;
+  const msg = document.getElementById('bm-deploy-msg');
+  if (!name || !query) { msg.innerHTML = '<span style="color:var(--red);">Name and query required.</span>'; return; }
+  msg.innerHTML = 'Deploying...';
+  try {
+    const body = JSON.stringify({name:name, target_query:query, iterations:parseInt(iterations,10), warmup:parseInt(warmup,10)});
+    const url = '/api/v1/deploy-benchmark' + (authToken ? '?token='+encodeURIComponent(authToken) : '');
+    const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body});
+    const data = await res.json();
+    if (data.koid) {
+      msg.innerHTML = '<span style="color:var(--green);">Deployed: '+data.koid+'</span>';
+      document.getElementById('bm-name').value = '';
+      document.getElementById('bm-query').value = '';
+      setTimeout(() => loadBenchmarks(), 500);
+    } else { msg.innerHTML = '<span style="color:var(--red);">'+ (data.error||'Failed') +'</span>'; }
+  } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+}
+
+// ═══════════════════════════════════════════
+// Query Profiler (S3)
+// ═══════════════════════════════════════════
+async function profileRun() {
+  const query = document.getElementById('profiler-query').value.trim();
+  const div = document.getElementById('profiler-results');
+  if (!query) { div.innerHTML = '<div class="error-text">Enter a query.</div>'; return; }
+  div.innerHTML = '<div class="loading">Profiling...</div>';
+  const t0 = performance.now();
+  try {
+    const data = await api('/api/v1/aikoql?query=' + encodeURIComponent(query));
+    const t1 = performance.now();
+    const rows = data.rows || data.data?.rows || [];
+    let h = '<div class="card" style="border-left:3px solid var(--accent);">';
+    h += '<h4>Results</h4>';
+    h += '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;">' + rows.length + ' rows in ' + (t1-t0).toFixed(1) + 'ms</div>';
+    if (rows.length > 0) {
+      h += '<table><thead><tr>';
+      Object.keys(rows[0]).forEach(k => h += '<th>'+k+'</th>');
+      h += '</tr></thead><tbody>';
+      rows.slice(0,50).forEach(r => {
+        h += '<tr>';
+        Object.values(r).forEach(v => h += '<td style="font-size:10px;font-family:var(--font-mono);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(v===null?'∅':String(v).substring(0,80))+'</td>');
+        h += '</tr>';
+      });
+      h += '</tbody></table>';
+      if (rows.length > 50) h += '<div style="font-size:10px;color:var(--muted);margin-top:4px;">Showing 50 of '+rows.length+' rows.</div>';
+    }
+    h += '</div>';
+    div.innerHTML = h;
+  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+}
+async function profileExplain() {
+  const koid = document.getElementById('profiler-koid-input').value.trim();
+  const div = document.getElementById('profiler-results');
+  if (!koid) { div.innerHTML = '<div class="error-text">Enter a KOID for EXPLAIN.</div>'; return; }
+  div.innerHTML = '<div class="loading">Explaining...</div>';
+  try {
+    const data = await api('/api/v1/explain/' + encodeURIComponent(koid));
+    const d = data.data || data;
+    let h = '<div class="card"><h4>EXPLAIN — '+d.origin+'</h4>';
+    h += '<div class="kv-row"><span class="kv-key">KOID</span><span class="kv-val mono">'+d.koid+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Version</span><span class="kv-val">'+d.version+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Source</span><span class="kv-val mono" style="font-size:10px;">'+(d.source||'').substring(0,200)+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Confidence</span><span class="kv-val">'+d.confidence+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Verified</span><span class="kv-val">'+d.verified+'</span></div>';
+    if (d.evidence && d.evidence.length > 0) {
+      h += '<div style="margin-top:8px;font-size:11px;font-weight:600;">Evidence ('+d.evidence.length+'):</div>';
+      d.evidence.forEach(e => h += '<div class="kv-row"><span class="kv-key">'+e.rel_type+'</span><span class="kv-val mono">'+e.target+'</span></div>');
+    }
+    h += '</div>';
+    div.innerHTML = h;
+  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+}
+
+// ═══════════════════════════════════════════
+// Provider Manager (S3)
+// ═══════════════════════════════════════════
+async function loadProviders() {
+  const div = document.getElementById('providers-list');
+  try {
+    const data = await api('/api/v1/list-connectors');
+    const connectors = data.connectors || data.data?.connectors || [];
+    if (connectors.length === 0) {
+      div.innerHTML = '<div class="empty-state">No connectors deployed. Use the form below to add one.</div>';
+      return;
+    }
+    let h = '<div class="card"><h4>Connectors ('+connectors.length+')</h4><table><thead><tr><th>KOID</th><th>Name</th><th>Plugin</th><th>Status</th></tr></thead><tbody>';
+    connectors.forEach(c => {
+      const lc = c.lifecycle || '?';
+      const badge = lc === 'active' ? 'badge-green' : lc === 'draft' ? 'badge-cyan' : 'badge-muted';
+      h += '<tr><td class="mono" style="font-size:10px;">'+c.koid.substring(0,16)+'...</td><td>'+c.name+'</td><td>'+ (c.plugin||'?') +'</td><td><span class="badge '+badge+'">'+lc+'</span></td></tr>';
+    });
+    h += '</tbody></table></div>';
+    div.innerHTML = h;
+  } catch(e) { div.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+}
+async function deployConnector() {
+  const name = document.getElementById('connector-name').value.trim();
+  const plugin = document.getElementById('connector-plugin').value.trim();
+  const msg = document.getElementById('connector-deploy-result');
+  if (!name || !plugin) { msg.innerHTML = '<span style="color:var(--red);">Name and plugin required.</span>'; return; }
+  msg.innerHTML = 'Deploying...';
+  try {
+    const data = await apiPost('/api/v1/deploy-connector', {name, plugin, config:{}, schedule:'manual'});
+    const d = data.data || data;
+    msg.innerHTML = '<span style="color:var(--green);">Deployed: '+d.koid+'</span>';
+    document.getElementById('connector-name').value = '';
+    document.getElementById('connector-plugin').value = '';
+    setTimeout(() => loadProviders(), 500);
+  } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+}
+
+// ═══════════════════════════════════════════
+// Document Explorer (MRFC-0050 Phase D0)
+// ═══════════════════════════════════════════
+async function loadDocuments() {
+  const el = document.getElementById('documents-list');
+  try {
+    const d = await api('/api/v1/list-documents');
+    const docs = (d.documents || d.data?.documents || []);
+    if (!docs.length) { el.innerHTML = '<div class="empty-state">No documents ingested yet. Upload one above.</div>'; return; }
+    let html = '<table class="data-table"><thead><tr><th>KOID</th><th>Filename</th><th>Type</th><th>Size</th><th>Status</th><th>SHA-256</th><th>Actions</th></tr></thead><tbody>';
+    for (const doc of docs) {
+      const sz = doc.size_bytes < 1024 ? doc.size_bytes+' B' : doc.size_bytes < 1048576 ? (doc.size_bytes/1024).toFixed(1)+' KB' : (doc.size_bytes/1048576).toFixed(1)+' MB';
+      const badge = doc.status === 'ingested' ? '<span class="badge badge-ok">ingested</span>' : '<span class="badge">'+doc.status+'</span>';
+      html += '<tr><td class="mono"><a href="#" onclick="switchPanel(\'inspector\');document.getElementById(\'inspector-search-input\').value=\''+doc.koid+'\';inspectorSearch();return false;" style="color:var(--accent);">'+doc.koid.substring(0,16)+'...</a></td><td>'+doc.filename+'</td><td>'+doc.mime_type+'</td><td>'+sz+'</td><td>'+badge+'</td><td class="mono" style="font-size:9px;">'+doc.sha256.substring(0,12)+'...</td><td><button class="btn btn-pri btn-sm" onclick="compileDocument(\''+doc.koid+'\')">Compile</button></td></tr>';
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = '<div class="error-text">'+e.message+'</div>'; }
+}
+
+async function ingestDocument() {
+  const fileInput = document.getElementById('doc-file-input');
+  const msg = document.getElementById('doc-ingest-result');
+  const file = fileInput.files[0];
+  if (!file) { msg.innerHTML = '<span style="color:var(--red);">Select a file.</span>'; return; }
+  msg.innerHTML = 'Reading file...';
+  try {
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const b64 = reader.result.split(',')[1];
+        if (b64) resolve(b64); else reject(new Error('not a data URL'));
+      };
+      reader.onerror = () => reject(new Error('read error'));
+      reader.readAsDataURL(file);
+    });
+    msg.innerHTML = 'Ingesting...';
+    const data = await apiPost('/api/v1/documents', {filename: file.name, content_base64: base64, mime_type: file.type || 'application/octet-stream'});
+    const d = data.data || data;
+    const sz = d.size_bytes < 1024 ? d.size_bytes+' B' : (d.size_bytes/1024).toFixed(1)+' KB';
+    msg.innerHTML = '<span style="color:var(--green);">✓ Ingested: '+d.koid+' ('+d.status+', '+sz+', SHA-256: '+d.sha256.substring(0,16)+'...)</span>';
+    fileInput.value = '';
+    setTimeout(() => loadDocuments(), 500);
+  } catch(e) { msg.innerHTML = '<span style="color:var(--red);">'+e.message+'</span>'; }
+}
+
+async function compileDocument(koid) {
+  const el = document.getElementById('doc-compile-result');
+  el.innerHTML = '<div class="loading">Compiling document... (running D3→D9 pipeline)</div>';
+  try {
+    const raw = await apiPost('/api/v1/documents/compile', {koid});
+    const r = raw.data || raw; // REST API wraps in {"data": ...}
+
+    // Helper: extract enum variant name from serde's tagged representation.
+    // e.g. {"CreateKO": {...}} → "CreateKO", {"Skip": {...}} → "Skip"
+    const actionKind = (a) => {
+      if (a.CreateKO) return 'CreateKO';
+      if (a.UpdateKO) return 'UpdateKO';
+      if (a.Skip) return 'Skip';
+      if (a.NeedsReview) return 'NeedsReview';
+      return '?';
+    };
+    const actionPayload = (a) => a.CreateKO || a.UpdateKO || a.Skip || a.NeedsReview || {};
+    const badgeFor = (kind) => {
+      if (kind === 'CreateKO') return '<span class="badge badge-green">Create</span>';
+      if (kind === 'UpdateKO') return '<span class="badge badge-cyan">Update</span>';
+      if (kind === 'Skip') return '<span class="badge">Skip</span>';
+      if (kind === 'NeedsReview') return '<span class="badge badge-orange">Review</span>';
+      return '<span class="badge">'+kind+'</span>';
+    };
+
+    let html = '<div class="card" style="margin-bottom:12px;"><h4>🔬 Compilation Results</h4>';
+
+    // ── Stats ──
+    html += '<details open><summary><b>Phase Stats</b> ('+r.stats.phases.length+' phases, '+r.stats.total_us+' µs total)</summary>';
+    html += '<table class="data-table" style="margin-top:8px;"><thead><tr><th>Phase</th><th>Duration (µs)</th><th>Items</th></tr></thead><tbody>';
+    for (const p of r.stats.phases) {
+      html += '<tr><td>'+p.phase+'</td><td>'+p.duration_us+'</td><td>'+p.item_count+'</td></tr>';
+    }
+    html += '</tbody></table></details>';
+
+    // ── Knowledge IR ──
+    html += '<details style="margin-top:8px;"><summary><b>Knowledge IR</b> ('+r.ir.entities.length+' entities, '+r.ir.facts.length+' facts, '+r.ir.temporal.length+' temporal)</summary>';
+    if (r.ir.entities.length) {
+      html += '<table class="data-table" style="margin-top:8px;"><thead><tr><th>Entity</th><th>Class</th><th>Properties</th><th>Confidence</th></tr></thead><tbody>';
+      for (const e of r.ir.entities) {
+        html += '<tr><td><b>'+e.name+'</b></td><td>'+(e.type_hint||'?')+'</td><td>'+JSON.stringify(e.mentions||[]).substring(0,120)+'</td><td>'+(e.confidence||0).toFixed(2)+'</td></tr>';
+      }
+      html += '</tbody></table>';
+    }
+    if (r.ir.facts.length) {
+      html += '<div style="margin-top:6px;font-size:11px;color:var(--muted);">Facts: '+r.ir.facts.map(f=>f.statement).join('; ')+'</div>';
+    }
+    html += '</details>';
+
+    // ── Ontology ──
+    html += '<details style="margin-top:8px;"><summary><b>Ontology Proposals</b> ('+r.ontology.classes.length+' classes, '+r.ontology.properties.length+' properties, '+r.ontology.relationships.length+' relationships)</summary>';
+    if (r.ontology.classes.length) {
+      html += '<div style="margin-top:6px;"><b>Classes:</b> '+r.ontology.classes.map(c=>c.name+' (parent: '+(c.parent||'none')+')').join(', ')+'</div>';
+    }
+    if (r.ontology.properties.length) {
+      html += '<div style="margin-top:4px;"><b>Properties:</b> '+r.ontology.properties.map(p=>p.name+' ('+p.value_type+')').join(', ')+'</div>';
+    }
+    if (r.ontology.relationships.length) {
+      html += '<div style="margin-top:4px;"><b>Relationships:</b> '+r.ontology.relationships.map(r=>r.name+' ('+(r.domain||'?')+' → '+(r.range||'?')+')').join(', ')+'</div>';
+    }
+    html += '</details>';
+
+    // ── Resolution ──
+    html += '<details style="margin-top:8px;"><summary><b>Entity Resolution</b> ('+r.resolution.stats.total_entities+' total: '+r.resolution.stats.matched_count+' matched, '+r.resolution.stats.ambiguous_count+' ambiguous, '+r.resolution.stats.unmatched_count+' unmatched)</summary>';
+    if (r.resolution.matched.length) {
+      html += '<div style="margin-top:6px;font-size:11px;color:var(--green);">✓ Matched: '+r.resolution.matched.map(m=>m.entity_name+' → '+m.matched_koid).join(', ')+'</div>';
+    }
+    if (r.resolution.ambiguous.length) {
+      html += '<div style="margin-top:4px;font-size:11px;color:var(--orange);">⚠ Ambiguous: '+r.resolution.ambiguous.map(m=>m.entity_name).join(', ')+'</div>';
+    }
+    if (r.resolution.unmatched.length) {
+      html += '<div style="margin-top:4px;font-size:11px;color:var(--red);">✗ Unmatched: '+r.resolution.unmatched.map(m=>m.entity_name).join(', ')+'</div>';
+    }
+    html += '</details>';
+
+    // ── Commit Plan ──
+    html += '<details style="margin-top:8px;"><summary><b>Commit Plan</b> ('+r.commit_plan.stats.total_actions+' actions: '+r.commit_plan.stats.creates+' create, '+r.commit_plan.stats.updates+' update, '+r.commit_plan.stats.skips+' skip, '+r.commit_plan.stats.needs_review+' review, '+r.commit_plan.stats.total_conflicts+' conflicts)</summary>';
+    if (r.commit_plan.actions.length) {
+      html += '<table class="data-table" style="margin-top:8px;"><thead><tr><th>Kind</th><th>Entity</th><th>Details</th></tr></thead><tbody>';
+      for (const a of r.commit_plan.actions) {
+        const k = actionKind(a);
+        const p = actionPayload(a);
+        let detail = '';
+        if (k === 'CreateKO') detail = 'class: '+(p.class_name||'?')+', props: '+JSON.stringify(p.properties||[]);
+        else if (k === 'UpdateKO') detail = 'koid: '+(p.koid||'?')+', conflicts: '+(p.conflicts||[]).length;
+        else if (k === 'Skip') detail = p.reason||'';
+        else if (k === 'NeedsReview') detail = (p.reason||'')+', conflicts: '+(p.conflicts||[]).length;
+        html += '<tr><td>'+badgeFor(k)+'</td><td><b>'+p.entity_name+'</b></td><td style="font-size:10px;">'+detail+'</td></tr>';
+      }
+      html += '</tbody></table>';
+    }
+    html += '</details>';
+
+    // ── Evidence Trail ──
+    html += '<details style="margin-top:8px;"><summary><b>Evidence Trail</b> ('+r.evidence_trail.nodes.length+' nodes)</summary>';
+    if (r.evidence_trail.nodes.length) {
+      for (const n of r.evidence_trail.nodes) {
+        html += '<div style="margin-top:6px;padding:8px;background:var(--bg);border-radius:5px;border-left:3px solid var(--accent);"><span class="badge badge-purple">'+n.phase+'</span> <span style="font-size:11px;">'+n.step+'</span>';
+        if (n.entities && n.entities.length) {
+          html += '<div style="margin-top:4px;font-size:10px;color:var(--muted);">Entities: '+n.entities.join(', ')+'</div>';
+        }
+        if (n.source && n.source.length) {
+          html += '<div style="margin-top:2px;font-size:10px;color:var(--muted);">Evidence items: '+n.source.length+'</div>';
+        }
+        html += '</div>';
+      }
+    }
+    html += '</details>';
+
+    // ── Chunks ──
+    html += '<details style="margin-top:8px;"><summary><b>Embedded Chunks</b> ('+r.embedded_chunks.length+' chunks)</summary>';
+    if (r.embedded_chunks.length) {
+      html += '<table class="data-table" style="margin-top:8px;"><thead><tr><th>#</th><th>Structure</th><th>Heading Path</th><th>Preview</th><th>Embedding Dims</th></tr></thead><tbody>';
+      for (const ec of r.embedded_chunks) {
+        const ch = ec.chunk || ec;
+        const hp = (ch.structure && ch.structure.heading_path || []).join(' › ');
+        html += '<tr><td>'+(ch.position ? ch.position.chunk_index : 0)+'</td><td>'+(ch.structure ? ch.structure.source_type : '?')+'</td><td style="font-size:10px;">'+hp+'</td><td style="font-size:10px;">'+(ch.text||'').substring(0,80)+'...</td><td>'+(ec.embedding||[]).length+'</td></tr>';
+      }
+      html += '</tbody></table>';
+    }
+    html += '</details>';
+
+    html += '</div>'; // card
+    el.innerHTML = html;
+    el.scrollIntoView({behavior:'smooth'});
+  } catch(e) { el.innerHTML = '<div class="error-text">Compile failed: '+e.message+'</div>'; }
 }
 
 // ═══════════════════════════════════════════

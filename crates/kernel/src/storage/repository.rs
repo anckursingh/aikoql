@@ -290,13 +290,7 @@ impl KnowledgeRepository {
 
     /// Write both outbound and inbound index entries for one edge.
     /// Idempotent: same (src, rel_type, dst) key is a no-op at the KV level.
-    pub fn write_rel_index(
-        &self,
-        batch: &mut WriteBatch,
-        src: &KOID,
-        rel_type: &str,
-        dst: &KOID,
-    ) {
+    pub fn write_rel_index(&self, batch: &mut WriteBatch, src: &KOID, rel_type: &str, dst: &KOID) {
         batch.put(rel_out_key(src, rel_type, dst), vec![]);
         batch.put(rel_in_key(dst, rel_type, src), vec![]);
     }
@@ -322,11 +316,7 @@ impl KnowledgeRepository {
 
     /// Scan inbound edges to `dst`, optionally filtered by `rel_type`.
     /// Returns `(rel_type, source_koid)` pairs in key order.
-    pub fn scan_inbound(
-        &self,
-        dst: &KOID,
-        rel_type: Option<&str>,
-    ) -> KResult<Vec<(String, KOID)>> {
+    pub fn scan_inbound(&self, dst: &KOID, rel_type: Option<&str>) -> KResult<Vec<(String, KOID)>> {
         let prefix = match rel_type {
             Some(rt) => rel_in_prefix_dst_type(dst, rt),
             None => rel_in_prefix_dst(dst),

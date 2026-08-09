@@ -7,7 +7,9 @@ use mnemosyne_kernel::security::kms::KeyManager;
 use mnemosyne_kernel::storage::encrypted::EncryptedStore;
 use mnemosyne_kernel::storage::store::{MemoryEngine, StorageEngine, WriteBatch};
 use mnemosyne_kernel::storage::store_redb::RedbEngine;
-use mnemosyne_kernel::{Kernel, ManualClock, Metadata, Origin, ReferentialPolicy, RememberRequest, Subject, Value};
+use mnemosyne_kernel::{
+    Kernel, ManualClock, Metadata, Origin, ReferentialPolicy, RememberRequest, Subject, Value,
+};
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
@@ -100,7 +102,7 @@ fn e04_encrypted_memory_no_plaintext() {
     let raw = mem.get(b"classified").unwrap().unwrap();
     assert_ne!(raw, b"top-secret");
     assert_eq!(raw[0], 0x01); // version byte
-    // version(1) + nonce(12) + ciphertext(len) + tag(16) = 29+len
+                              // version(1) + nonce(12) + ciphertext(len) + tag(16) = 29+len
     assert!(raw.len() >= 29, "too small: {}", raw.len());
 }
 
@@ -114,7 +116,9 @@ struct MemKms {
 }
 impl MemKms {
     fn new() -> Self {
-        MemKms { key: RwLock::new(Aes256Gcm::new().generate_key()) }
+        MemKms {
+            key: RwLock::new(Aes256Gcm::new().generate_key()),
+        }
     }
 }
 impl KeyManager for MemKms {
@@ -151,36 +155,50 @@ fn e05_field_level_encrypt_remember_decrypt_get() {
     props.insert("salary".into(), Value::Int(150000));
     props.insert("ssn".into(), Value::Text("123-45-6789".into()));
 
-    let remembered = k.remember(RememberRequest {
-        context: (&alice).into(),
-        koid: None,
-        expected_version: Some(0),
-        idempotency_key: None,
-        metadata: Metadata {
-            type_name: "employee".into(),
-            tenant: Some("acme".into()),
-            schema_version: 1,
-            tags: vec![],
-        },
-        properties: props,
-        semantic: None,
-        relationships: vec![],
-        security: None,
-        extensions: BTreeMap::new(),
-        origin: Origin::Human,
-        note: None,
-        referential_policy: ReferentialPolicy::default(),
-    }).unwrap();
+    let remembered = k
+        .remember(RememberRequest {
+            context: (&alice).into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "employee".into(),
+                tenant: Some("acme".into()),
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: BTreeMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap();
 
     // Read back via get() — fields should be decrypted.
     let ko = k.get(&alice, &remembered.koid).unwrap();
-    assert_eq!(ko.properties.get("name"), Some(&Value::Text("Alice".into())));
+    assert_eq!(
+        ko.properties.get("name"),
+        Some(&Value::Text("Alice".into()))
+    );
     assert_eq!(ko.properties.get("salary"), Some(&Value::Int(150000)));
-    assert_eq!(ko.properties.get("ssn"), Some(&Value::Text("123-45-6789".into())));
+    assert_eq!(
+        ko.properties.get("ssn"),
+        Some(&Value::Text("123-45-6789".into()))
+    );
 
     // Read via raw_object_at — storage still has encrypted ciphertext.
-    let raw = k.raw_object_at(&remembered.koid, remembered.commit_ts).unwrap().unwrap();
-    assert_eq!(raw.properties.get("name"), Some(&Value::Text("Alice".into())));
+    let raw = k
+        .raw_object_at(&remembered.koid, remembered.commit_ts)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        raw.properties.get("name"),
+        Some(&Value::Text("Alice".into()))
+    );
     // salary and ssn are Bytes at rest:
     match raw.properties.get("salary") {
         Some(Value::Bytes(b)) => {
@@ -214,26 +232,28 @@ fn e06_field_encryption_without_policy_is_noop() {
     let mut props = BTreeMap::new();
     props.insert("salary".into(), Value::Int(99999));
 
-    let remembered = k.remember(RememberRequest {
-        context: (&alice).into(),
-        koid: None,
-        expected_version: Some(0),
-        idempotency_key: None,
-        metadata: Metadata {
-            type_name: "employee".into(),
-            tenant: None,
-            schema_version: 1,
-            tags: vec![],
-        },
-        properties: props,
-        semantic: None,
-        relationships: vec![],
-        security: None,
-        extensions: BTreeMap::new(),
-        origin: Origin::Human,
-        note: None,
-        referential_policy: ReferentialPolicy::default(),
-    }).unwrap();
+    let remembered = k
+        .remember(RememberRequest {
+            context: (&alice).into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "employee".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: BTreeMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap();
 
     let ko = k.get(&alice, &remembered.koid).unwrap();
     // No policy = no encryption, value stored and returned as-is.
@@ -265,7 +285,8 @@ fn e07_crash_safe_rotation_field_crypto_survives() {
         props.insert("name".into(), Value::Text("Alice".into()));
         props.insert("secret".into(), Value::Text("classified-data".into()));
 
-        fc.encrypt_fields("acme", "doc", &mut props, &policy).unwrap();
+        fc.encrypt_fields("acme", "doc", &mut props, &policy)
+            .unwrap();
         assert!(matches!(props.get("secret"), Some(Value::Bytes(_))));
         assert_eq!(props.get("name"), Some(&Value::Text("Alice".into())));
         (props, wrapped)
@@ -281,9 +302,13 @@ fn e07_crash_safe_rotation_field_crypto_survives() {
         let policy = EncryptionPolicy::new(vec!["secret".to_string()]);
 
         let mut props = encrypted_props.clone();
-        fc2.decrypt_fields("acme", "doc", &mut props, &policy).unwrap();
+        fc2.decrypt_fields("acme", "doc", &mut props, &policy)
+            .unwrap();
 
-        assert_eq!(props.get("secret"), Some(&Value::Text("classified-data".into())));
+        assert_eq!(
+            props.get("secret"),
+            Some(&Value::Text("classified-data".into()))
+        );
         assert_eq!(props.get("name"), Some(&Value::Text("Alice".into())));
     }
 }

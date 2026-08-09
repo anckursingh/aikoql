@@ -72,14 +72,38 @@ pub struct DeleteStatement {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Predicate {
-    Eq { property: String, value: Expr },
-    Neq { property: String, value: Expr },
-    Gt { property: String, value: Expr },
-    Lt { property: String, value: Expr },
-    Gte { property: String, value: Expr },
-    Lte { property: String, value: Expr },
-    And { left: Box<Predicate>, right: Box<Predicate> },
-    Or { left: Box<Predicate>, right: Box<Predicate> },
+    Eq {
+        property: String,
+        value: Expr,
+    },
+    Neq {
+        property: String,
+        value: Expr,
+    },
+    Gt {
+        property: String,
+        value: Expr,
+    },
+    Lt {
+        property: String,
+        value: Expr,
+    },
+    Gte {
+        property: String,
+        value: Expr,
+    },
+    Lte {
+        property: String,
+        value: Expr,
+    },
+    And {
+        left: Box<Predicate>,
+        right: Box<Predicate>,
+    },
+    Or {
+        left: Box<Predicate>,
+        right: Box<Predicate>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

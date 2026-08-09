@@ -24,7 +24,7 @@ use postgres::{Client, NoTls};
 #[derive(Clone, Debug)]
 pub struct ColumnInfo {
     pub name: String,
-    pub pg_type: String,     // e.g. "integer", "text", "boolean"
+    pub pg_type: String, // e.g. "integer", "text", "boolean"
     pub is_nullable: bool,
     pub is_primary_key: bool,
 }
@@ -47,8 +47,8 @@ impl PostgresConnector {
     /// Connect to a PostgreSQL database.
     /// `conn_str` format: `host=localhost user=postgres dbname=mydb`
     pub fn connect(conn_str: &str) -> Result<Self, String> {
-        let client = Client::connect(conn_str, NoTls)
-            .map_err(|e| format!("PG connection failed: {}", e))?;
+        let client =
+            Client::connect(conn_str, NoTls).map_err(|e| format!("PG connection failed: {}", e))?;
         Ok(PostgresConnector { client })
     }
 
@@ -152,8 +152,16 @@ impl PostgresConnector {
         schema: &TableSchema,
         tenant: Option<&str>,
     ) -> Result<Vec<KnowledgeObject>, String> {
-        let col_list: Vec<String> = schema.columns.iter().map(|c| quote_ident(&c.name)).collect();
-        let query = format!("SELECT {} FROM {}", col_list.join(", "), quote_ident(&schema.name));
+        let col_list: Vec<String> = schema
+            .columns
+            .iter()
+            .map(|c| quote_ident(&c.name))
+            .collect();
+        let query = format!(
+            "SELECT {} FROM {}",
+            col_list.join(", "),
+            quote_ident(&schema.name)
+        );
         let rows = self
             .client
             .query(&query, &[])
@@ -211,79 +219,86 @@ impl PostgresConnector {
 // ---------------------------------------------------------------------------
 
 /// Convert a PostgreSQL cell to a Mnemosyne Value.
-fn pg_cell_to_value(
-    row: &postgres::Row,
-    col_idx: usize,
-    pg_type: &str,
-    nullable: bool,
-) -> Value {
+fn pg_cell_to_value(row: &postgres::Row, col_idx: usize, pg_type: &str, nullable: bool) -> Value {
     // Try each target type; if the column is NULL, return Value::Null.
     if nullable && try_is_null(row, col_idx) {
         return Value::Null;
     }
     match pg_type {
         // Integer family
-        "smallint" | "integer" | "int" | "int4" => {
-            row.try_get::<_, i32>(col_idx)
-                .map(|v| Value::Int(v as i64))
-                .unwrap_or(Value::Null)
-        }
-        "bigint" | "int8" => {
-            row.try_get::<_, i64>(col_idx)
-                .map(Value::Int)
-                .unwrap_or(Value::Null)
-        }
+        "smallint" | "integer" | "int" | "int4" => row
+            .try_get::<_, i32>(col_idx)
+            .map(|v| Value::Int(v as i64))
+            .unwrap_or(Value::Null),
+        "bigint" | "int8" => row
+            .try_get::<_, i64>(col_idx)
+            .map(Value::Int)
+            .unwrap_or(Value::Null),
         // Float family
-        "real" | "float4" => {
-            row.try_get::<_, f32>(col_idx)
-                .map(|v| Value::Float(v as f64))
-                .unwrap_or(Value::Null)
-        }
-        "double precision" | "float8" | "numeric" | "decimal" => {
-            row.try_get::<_, f64>(col_idx)
-                .map(Value::Float)
-                .unwrap_or(Value::Null)
-        }
+        "real" | "float4" => row
+            .try_get::<_, f32>(col_idx)
+            .map(|v| Value::Float(v as f64))
+            .unwrap_or(Value::Null),
+        "double precision" | "float8" | "numeric" | "decimal" => row
+            .try_get::<_, f64>(col_idx)
+            .map(Value::Float)
+            .unwrap_or(Value::Null),
         // Boolean
-        "boolean" | "bool" => {
-            row.try_get::<_, bool>(col_idx)
-                .map(Value::Bool)
-                .unwrap_or(Value::Null)
-        }
+        "boolean" | "bool" => row
+            .try_get::<_, bool>(col_idx)
+            .map(Value::Bool)
+            .unwrap_or(Value::Null),
         // Text family
-        "text" | "varchar" | "character varying" | "char" | "character" | "name" | "uuid" | "json" | "jsonb" => {
-            row.try_get::<_, String>(col_idx)
-                .map(Value::Text)
-                .unwrap_or(Value::Null)
-        }
+        "text" | "varchar" | "character varying" | "char" | "character" | "name" | "uuid"
+        | "json" | "jsonb" => row
+            .try_get::<_, String>(col_idx)
+            .map(Value::Text)
+            .unwrap_or(Value::Null),
         // Binary
-        "bytea" => {
-            row.try_get::<_, Vec<u8>>(col_idx)
-                .map(Value::Bytes)
-                .unwrap_or(Value::Null)
-        }
+        "bytea" => row
+            .try_get::<_, Vec<u8>>(col_idx)
+            .map(Value::Bytes)
+            .unwrap_or(Value::Null),
         // Timestamps → ISO 8601 text
-        "timestamp" | "timestamptz" | "timestamp without time zone" | "timestamp with time zone" |
-        "date" | "time" | "timetz" => {
-            row.try_get::<_, String>(col_idx)
-                .map(Value::Text)
-                .unwrap_or(Value::Null)
-        }
+        "timestamp"
+        | "timestamptz"
+        | "timestamp without time zone"
+        | "timestamp with time zone"
+        | "date"
+        | "time"
+        | "timetz" => row
+            .try_get::<_, String>(col_idx)
+            .map(Value::Text)
+            .unwrap_or(Value::Null),
         // Everything else → text representation
-        _ => {
-            row.try_get::<_, String>(col_idx)
-                .map(Value::Text)
-                .unwrap_or(Value::Null)
-        }
+        _ => row
+            .try_get::<_, String>(col_idx)
+            .map(Value::Text)
+            .unwrap_or(Value::Null),
     }
 }
 
 fn try_is_null(row: &postgres::Row, col_idx: usize) -> bool {
     // ponytail: check null by trying to get as Option<String>.
-    row.try_get::<_, Option<String>>(col_idx).ok().flatten().is_none()
-        && row.try_get::<_, Option<i64>>(col_idx).ok().flatten().is_none()
-        && row.try_get::<_, Option<f64>>(col_idx).ok().flatten().is_none()
-        && row.try_get::<_, Option<bool>>(col_idx).ok().flatten().is_none()
+    row.try_get::<_, Option<String>>(col_idx)
+        .ok()
+        .flatten()
+        .is_none()
+        && row
+            .try_get::<_, Option<i64>>(col_idx)
+            .ok()
+            .flatten()
+            .is_none()
+        && row
+            .try_get::<_, Option<f64>>(col_idx)
+            .ok()
+            .flatten()
+            .is_none()
+        && row
+            .try_get::<_, Option<bool>>(col_idx)
+            .ok()
+            .flatten()
+            .is_none()
 }
 
 /// Deterministic KOID from table name and primary key parts.
@@ -325,8 +340,21 @@ fn value_to_string(v: &Value) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Null => "NULL".into(),
         Value::Bytes(b) => format!("{:x?}", b),
-        Value::List(items) => format!("[{}]", items.iter().map(value_to_string).collect::<Vec<_>>().join(",")),
-        Value::Map(m) => format!("{{{}}}", m.iter().map(|(k, v)| format!("{}:{}", k, value_to_string(v))).collect::<Vec<_>>().join(",")),
+        Value::List(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(value_to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::Map(m) => format!(
+            "{{{}}}",
+            m.iter()
+                .map(|(k, v)| format!("{}:{}", k, value_to_string(v)))
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
     }
 }
 

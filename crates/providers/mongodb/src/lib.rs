@@ -32,73 +32,103 @@ pub struct MongoConnector {
 impl MongoConnector {
     pub fn connect(uri: &str, database: &str) -> Result<Self, String> {
         let rt = Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
-        let client = rt.block_on(async { Client::with_uri_str(uri).await })
+        let client = rt
+            .block_on(async { Client::with_uri_str(uri).await })
             .map_err(|e| format!("MongoDB connection failed: {}", e))?;
         let db = client.database(database);
         Ok(MongoConnector { rt, client, db })
     }
 
     pub fn list_collections(&self) -> Result<Vec<String>, String> {
-        self.rt.block_on(async { self.db.list_collection_names().await })
+        self.rt
+            .block_on(async { self.db.list_collection_names().await })
             .map_err(|e| format!("list collections: {}", e))
     }
 
     pub fn introspect_collection(&self, name: &str) -> Result<CollectionSchema, String> {
-        self.rt.block_on(async {
-            let coll = self.db.collection::<Document>(name);
-            let count = coll.count_documents(doc! {}).await
-                .map_err(|e| format!("count {}: {}", name, e))?;
-            let mut props: Vec<String> = Vec::new();
-            let opts = mongodb::options::FindOptions::builder().limit(100).build();
-            let mut cursor = coll.find(doc! {}).with_options(opts).await
-                .map_err(|e| format!("sample {}: {}", name, e))?;
-            use futures_util::StreamExt;
-            while let Some(Ok(d)) = cursor.next().await {
-                collect_keys("", &d, &mut props);
-            }
-            props.sort();
-            props.dedup();
-            Ok(CollectionSchema { name: name.to_string(), document_count: count, properties: props })
-        }).map_err(|e: String| e)
+        self.rt
+            .block_on(async {
+                let coll = self.db.collection::<Document>(name);
+                let count = coll
+                    .count_documents(doc! {})
+                    .await
+                    .map_err(|e| format!("count {}: {}", name, e))?;
+                let mut props: Vec<String> = Vec::new();
+                let opts = mongodb::options::FindOptions::builder().limit(100).build();
+                let mut cursor = coll
+                    .find(doc! {})
+                    .with_options(opts)
+                    .await
+                    .map_err(|e| format!("sample {}: {}", name, e))?;
+                use futures_util::StreamExt;
+                while let Some(Ok(d)) = cursor.next().await {
+                    collect_keys("", &d, &mut props);
+                }
+                props.sort();
+                props.dedup();
+                Ok(CollectionSchema {
+                    name: name.to_string(),
+                    document_count: count,
+                    properties: props,
+                })
+            })
+            .map_err(|e: String| e)
     }
 
     pub fn introspect_all(&self) -> Result<Vec<CollectionSchema>, String> {
         let names = self.list_collections()?;
         let mut schemas = Vec::new();
-        for n in &names { schemas.push(self.introspect_collection(n)?); }
+        for n in &names {
+            schemas.push(self.introspect_collection(n)?);
+        }
         Ok(schemas)
     }
 
     pub fn import_collection(
-        &self, schema: &CollectionSchema, tenant: Option<&str>,
+        &self,
+        schema: &CollectionSchema,
+        tenant: Option<&str>,
     ) -> Result<Vec<KnowledgeObject>, String> {
-        self.rt.block_on(async {
-            let coll = self.db.collection::<Document>(&schema.name);
-            let mut cursor = coll.find(doc! {}).await
-                .map_err(|e| format!("import {}: {}", schema.name, e))?;
-            use futures_util::StreamExt;
-            let mut objects = Vec::new();
-            while let Some(Ok(doc)) = cursor.next().await {
-                let (props, koid) = document_to_ko(&doc, &schema.name);
-                objects.push(KnowledgeObject {
-                    koid, version: 0, commit_ts: 0,
-                    metadata: Metadata {
-                        type_name: schema.name.clone(),
-                        tenant: tenant.map(String::from),
-                        schema_version: 1,
-                        tags: vec!["imported".into(), "source:mongodb".into()],
-                    },
-                    properties: props,
-                    semantic: None, relationships: vec![], event_refs: vec![],
-                    security: SecurityDescriptor {
-                        owner: "mongodb-importer".into(), acl: vec![], classification: None,
-                    },
-                    lifecycle: Lifecycle { state: LifecycleState::Draft, origin: Origin::Human },
-                    extensions: ExtensionMap::new(),
-                });
-            }
-            Ok(objects)
-        }).map_err(|e: String| e)
+        self.rt
+            .block_on(async {
+                let coll = self.db.collection::<Document>(&schema.name);
+                let mut cursor = coll
+                    .find(doc! {})
+                    .await
+                    .map_err(|e| format!("import {}: {}", schema.name, e))?;
+                use futures_util::StreamExt;
+                let mut objects = Vec::new();
+                while let Some(Ok(doc)) = cursor.next().await {
+                    let (props, koid) = document_to_ko(&doc, &schema.name);
+                    objects.push(KnowledgeObject {
+                        koid,
+                        version: 0,
+                        commit_ts: 0,
+                        metadata: Metadata {
+                            type_name: schema.name.clone(),
+                            tenant: tenant.map(String::from),
+                            schema_version: 1,
+                            tags: vec!["imported".into(), "source:mongodb".into()],
+                        },
+                        properties: props,
+                        semantic: None,
+                        relationships: vec![],
+                        event_refs: vec![],
+                        security: SecurityDescriptor {
+                            owner: "mongodb-importer".into(),
+                            acl: vec![],
+                            classification: None,
+                        },
+                        lifecycle: Lifecycle {
+                            state: LifecycleState::Draft,
+                            origin: Origin::Human,
+                        },
+                        extensions: ExtensionMap::new(),
+                    });
+                }
+                Ok(objects)
+            })
+            .map_err(|e: String| e)
     }
 }
 
@@ -110,8 +140,11 @@ fn document_to_ko(doc: &Document, collection: &str) -> (PropertyMap, KOID) {
     let mut props = PropertyMap::new();
     let mut id_str: Option<String> = None;
     for (key, value) in doc.iter() {
-        if key == "_id" { id_str = Some(bson_id_to_string(value)); }
-        else { props.insert(key.clone(), bson_to_value(value)); }
+        if key == "_id" {
+            id_str = Some(bson_id_to_string(value));
+        } else {
+            props.insert(key.clone(), bson_to_value(value));
+        }
     }
     let pk = vec![id_str.unwrap_or_else(|| format!("{}:{}", collection, props.len()))];
     (props, deterministic_koid(collection, &pk))
@@ -124,7 +157,9 @@ fn bson_to_value(bson: &Bson) -> Value {
         Bson::Array(arr) => Value::List(arr.iter().map(bson_to_value).collect()),
         Bson::Document(doc) => {
             let mut m = BTreeMap::new();
-            for (k, v) in doc.iter() { m.insert(k.clone(), bson_to_value(v)); }
+            for (k, v) in doc.iter() {
+                m.insert(k.clone(), bson_to_value(v));
+            }
             Value::Map(m)
         }
         Bson::Boolean(b) => Value::Bool(*b),
@@ -151,21 +186,36 @@ fn bson_id_to_string(bson: &Bson) -> String {
 
 fn collect_keys(prefix: &str, doc: &Document, keys: &mut Vec<String>) {
     for (k, v) in doc.iter() {
-        let fk = if prefix.is_empty() { k.clone() } else { format!("{}.{}", prefix, k) };
+        let fk = if prefix.is_empty() {
+            k.clone()
+        } else {
+            format!("{}.{}", prefix, k)
+        };
         keys.push(fk.clone());
-        if let Bson::Document(sub) = v { collect_keys(&fk, sub, keys); }
+        if let Bson::Document(sub) = v {
+            collect_keys(&fk, sub, keys);
+        }
     }
 }
 
 fn deterministic_koid(table: &str, parts: &[String]) -> KOID {
     let mut hash: u64 = 0xcbf29ce484222325;
-    for b in table.as_bytes() { hash ^= *b as u64; hash = hash.wrapping_mul(0x100000001b3); }
-    hash ^= 0x3a; hash = hash.wrapping_mul(0x100000001b3);
-    for p in parts {
-        for b in p.as_bytes() { hash ^= *b as u64; hash = hash.wrapping_mul(0x100000001b3); }
-        hash ^= 0x2f; hash = hash.wrapping_mul(0x100000001b3);
+    for b in table.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
     }
-    let mut k = [0u8; 16]; k[..8].copy_from_slice(&hash.to_be_bytes());
+    hash ^= 0x3a;
+    hash = hash.wrapping_mul(0x100000001b3);
+    for p in parts {
+        for b in p.as_bytes() {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0x2f;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let mut k = [0u8; 16];
+    k[..8].copy_from_slice(&hash.to_be_bytes());
     KOID(k)
 }
 
@@ -181,7 +231,10 @@ mod tests {
     fn bson_scalars_to_value() {
         assert_eq!(bson_to_value(&Bson::Int32(42)), Value::Int(42));
         assert_eq!(bson_to_value(&Bson::Double(3.14)), Value::Float(3.14));
-        assert_eq!(bson_to_value(&Bson::String("hi".into())), Value::Text("hi".into()));
+        assert_eq!(
+            bson_to_value(&Bson::String("hi".into())),
+            Value::Text("hi".into())
+        );
         assert_eq!(bson_to_value(&Bson::Boolean(true)), Value::Bool(true));
         assert_eq!(bson_to_value(&Bson::Null), Value::Null);
     }

@@ -172,7 +172,8 @@ impl Compiler {
         }
 
         let plan = IrPlan::new(ops).with_description("AIKOQL query".to_string());
-        plan.validate().map_err(|e| format!("AIKOQL1014: conflicting clauses — {}", e))?;
+        plan.validate()
+            .map_err(|e| format!("AIKOQL1014: conflicting clauses — {}", e))?;
         Ok(plan)
     }
 }
@@ -193,9 +194,7 @@ fn json_to_value(v: &serde_json::Value) -> Result<mnemosyne_kernel::Value, Strin
         }
         serde_json::Value::String(s) => Value::Text(s.clone()),
         serde_json::Value::Array(_) => return Err("arrays not supported in filter values".into()),
-        serde_json::Value::Object(_) => {
-            return Err("objects not supported in filter values".into())
-        }
+        serde_json::Value::Object(_) => return Err("objects not supported in filter values".into()),
     })
 }
 
@@ -247,12 +246,15 @@ mod tests {
 
     #[test]
     fn rejects_both_scan_and_traverse() {
-        let json = r#"{"scan": {"type": "f", "subject": "a"}, "traverse": {"start": "00", "depth": 1}}"#;
+        let json =
+            r#"{"scan": {"type": "f", "subject": "a"}, "traverse": {"start": "00", "depth": 1}}"#;
         assert!(Compiler::compile(json).is_err());
     }
 
     #[test]
     fn rejects_unknown_field() {
-        assert!(Compiler::compile(r#"{"scan": {"type": "f", "subject": "a"}, "bogus": 1}"#).is_err());
+        assert!(
+            Compiler::compile(r#"{"scan": {"type": "f", "subject": "a"}, "bogus": 1}"#).is_err()
+        );
     }
 }

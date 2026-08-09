@@ -43,7 +43,10 @@ impl SigningKey {
         seed[16..24].copy_from_slice(&e2.to_le_bytes());
         seed[24..32].copy_from_slice(&e2.to_be_bytes());
         let public = derive_public(&seed);
-        SigningKey { secret: seed, public }
+        SigningKey {
+            secret: seed,
+            public,
+        }
     }
 
     /// Load from a 32-byte seed.
@@ -142,7 +145,9 @@ pub struct Signer {
 
 impl Signer {
     pub fn new() -> Self {
-        Signer { key: RwLock::new(None) }
+        Signer {
+            key: RwLock::new(None),
+        }
     }
 
     pub fn set_key(&self, key: SigningKey) {

@@ -82,7 +82,8 @@ impl Neo4jConnector {
             .set("Content-Type", "application/json")
             .send_json(&body)
             .map_err(|e| format!("cypher request: {}", e))?;
-        let neo: Neo4jResponse = resp.into_json()
+        let neo: Neo4jResponse = resp
+            .into_json()
             .map_err(|e| format!("parse response: {}", e))?;
         if !neo.errors.is_empty() {
             return Err(format!("{}: {}", neo.errors[0].code, neo.errors[0].message));
@@ -105,13 +106,19 @@ impl Neo4jConnector {
     /// List all node labels in the database.
     pub fn list_labels(&self) -> Result<Vec<String>, String> {
         let rows = self.cypher("CALL db.labels()")?;
-        Ok(rows.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        Ok(rows
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect())
     }
 
     /// List all relationship types.
     pub fn list_rel_types(&self) -> Result<Vec<String>, String> {
         let rows = self.cypher("CALL db.relationshipTypes()")?;
-        Ok(rows.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        Ok(rows
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect())
     }
 
     /// Get count of nodes for a label.
@@ -143,8 +150,7 @@ impl Neo4jConnector {
             .set("Content-Type", "application/json")
             .send_json(&body)
             .map_err(|e| format!("import nodes: {}", e))?;
-        let neo: Neo4jResponse = resp.into_json()
-            .map_err(|e| format!("parse: {}", e))?;
+        let neo: Neo4jResponse = resp.into_json().map_err(|e| format!("parse: {}", e))?;
         if !neo.errors.is_empty() {
             return Err(format!("{}: {}", neo.errors[0].code, neo.errors[0].message));
         }
@@ -154,7 +160,9 @@ impl Neo4jConnector {
 
         for result in &neo.results {
             for data in &result.data {
-                if data.row.len() < 3 { continue; }
+                if data.row.len() < 3 {
+                    continue;
+                }
                 let elem_id = data.row[0].as_str().unwrap_or("").to_string();
                 let props_val = &data.row[1];
                 let _labels_val = &data.row[2];
@@ -170,7 +178,9 @@ impl Neo4jConnector {
                 id_map.insert(elem_id, koid);
 
                 objects.push(KnowledgeObject {
-                    koid, version: 0, commit_ts: 0,
+                    koid,
+                    version: 0,
+                    commit_ts: 0,
                     metadata: Metadata {
                         type_name: label.to_string(),
                         tenant: tenant.map(String::from),
@@ -178,11 +188,18 @@ impl Neo4jConnector {
                         tags: vec!["imported".into(), "source:neo4j".into()],
                     },
                     properties: props,
-                    semantic: None, relationships: vec![], event_refs: vec![],
+                    semantic: None,
+                    relationships: vec![],
+                    event_refs: vec![],
                     security: SecurityDescriptor {
-                        owner: "neo4j-importer".into(), acl: vec![], classification: None,
+                        owner: "neo4j-importer".into(),
+                        acl: vec![],
+                        classification: None,
                     },
-                    lifecycle: Lifecycle { state: LifecycleState::Draft, origin: Origin::Human },
+                    lifecycle: Lifecycle {
+                        state: LifecycleState::Draft,
+                        origin: Origin::Human,
+                    },
                     extensions: ExtensionMap::new(),
                 });
             }
@@ -207,8 +224,7 @@ impl Neo4jConnector {
             .set("Content-Type", "application/json")
             .send_json(&body)
             .map_err(|e| format!("import rels: {}", e))?;
-        let neo: Neo4jResponse = resp.into_json()
-            .map_err(|e| format!("parse: {}", e))?;
+        let neo: Neo4jResponse = resp.into_json().map_err(|e| format!("parse: {}", e))?;
         if !neo.errors.is_empty() {
             return Err(format!("{}: {}", neo.errors[0].code, neo.errors[0].message));
         }
@@ -216,7 +232,9 @@ impl Neo4jConnector {
         let mut rels = Vec::new();
         for result in &neo.results {
             for data in &result.data {
-                if data.row.len() < 4 { continue; }
+                if data.row.len() < 4 {
+                    continue;
+                }
                 let src_id = data.row[0].as_str().unwrap_or("");
                 let tgt_id = data.row[1].as_str().unwrap_or("");
                 let rtype = data.row[2].as_str().unwrap_or(rel_type);
@@ -254,17 +272,21 @@ fn neo4j_json_to_value(v: &serde_json::Value) -> Value {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(*b),
         serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() { Value::Int(i) }
-            else if let Some(f) = n.as_f64() { Value::Float(f) }
-            else { Value::Text(n.to_string()) }
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Float(f)
+            } else {
+                Value::Text(n.to_string())
+            }
         }
         serde_json::Value::String(s) => Value::Text(s.clone()),
-        serde_json::Value::Array(arr) => {
-            Value::List(arr.iter().map(neo4j_json_to_value).collect())
-        }
+        serde_json::Value::Array(arr) => Value::List(arr.iter().map(neo4j_json_to_value).collect()),
         serde_json::Value::Object(obj) => {
             let mut m = std::collections::BTreeMap::new();
-            for (k, v) in obj { m.insert(k.clone(), neo4j_json_to_value(v)); }
+            for (k, v) in obj {
+                m.insert(k.clone(), neo4j_json_to_value(v));
+            }
             Value::Map(m)
         }
     }
@@ -291,18 +313,34 @@ fn base64_encode(input: &str) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(CHARS[((n >> 18) & 0x3F) as usize] as char);
         out.push(CHARS[((n >> 12) & 0x3F) as usize] as char);
-        out.push(if chunk.len() > 1 { CHARS[((n >> 6) & 0x3F) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { CHARS[(n & 0x3F) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            CHARS[((n >> 6) & 0x3F) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            CHARS[(n & 0x3F) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
 
 fn deterministic_koid(label: &str, elem_id: &str) -> KOID {
     let mut hash: u64 = 0xcbf29ce484222325;
-    for b in label.as_bytes() { hash ^= *b as u64; hash = hash.wrapping_mul(0x100000001b3); }
-    hash ^= 0x3a; hash = hash.wrapping_mul(0x100000001b3);
-    for b in elem_id.as_bytes() { hash ^= *b as u64; hash = hash.wrapping_mul(0x100000001b3); }
-    let mut k = [0u8; 16]; k[..8].copy_from_slice(&hash.to_be_bytes());
+    for b in label.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash ^= 0x3a;
+    hash = hash.wrapping_mul(0x100000001b3);
+    for b in elem_id.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let mut k = [0u8; 16];
+    k[..8].copy_from_slice(&hash.to_be_bytes());
     KOID(k)
 }
 
@@ -331,9 +369,18 @@ mod tests {
     #[test]
     fn json_scalars_to_value() {
         assert_eq!(neo4j_json_to_value(&serde_json::json!(42)), Value::Int(42));
-        assert_eq!(neo4j_json_to_value(&serde_json::json!(3.14)), Value::Float(3.14));
-        assert_eq!(neo4j_json_to_value(&serde_json::json!("hi")), Value::Text("hi".into()));
-        assert_eq!(neo4j_json_to_value(&serde_json::json!(true)), Value::Bool(true));
+        assert_eq!(
+            neo4j_json_to_value(&serde_json::json!(3.14)),
+            Value::Float(3.14)
+        );
+        assert_eq!(
+            neo4j_json_to_value(&serde_json::json!("hi")),
+            Value::Text("hi".into())
+        );
+        assert_eq!(
+            neo4j_json_to_value(&serde_json::json!(true)),
+            Value::Bool(true)
+        );
         assert_eq!(neo4j_json_to_value(&serde_json::json!(null)), Value::Null);
     }
 

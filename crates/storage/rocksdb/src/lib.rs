@@ -12,9 +12,9 @@
 //!   ascending by RocksDB's internal comparator (lexicographic byte order).
 //! - `get` → single-key point lookup.
 
-use mnemosyne_kernel::storage::store::{StorageEngine, WriteBatch};
 use mnemosyne_kernel::knowledge::kom::{KError, KResult};
-use rocksdb::{DB, Options, WriteBatch as Rwb, WriteOptions};
+use mnemosyne_kernel::storage::store::{StorageEngine, WriteBatch};
+use rocksdb::{Options, WriteBatch as Rwb, WriteOptions, DB};
 use std::path::Path;
 
 fn se(e: impl std::fmt::Display) -> KError {

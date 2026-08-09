@@ -83,7 +83,10 @@ impl Envelope {
             wrapped_key,
         };
         self.deks.write().unwrap().insert(tenant.to_string(), dek);
-        self.wrapped_deks.write().unwrap().insert(tenant.to_string(), wrapped);
+        self.wrapped_deks
+            .write()
+            .unwrap()
+            .insert(tenant.to_string(), wrapped);
         // Audit: log key creation.
         if let Some(ref audit) = *self.audit.read().unwrap() {
             let _ = audit.record(&KeyEvent::now(
@@ -98,16 +101,26 @@ impl Envelope {
     /// Load a previously-wrapped DEK (e.g., from database metadata on startup).
     pub fn load_dek(&self, wrapped: &WrappedDek) -> Result<[u8; 32], String> {
         let kek = *self.kek.read().unwrap();
-        let dek_bytes = self.crypto.decrypt(&kek, &wrapped.wrapped_key, wrapped.tenant.as_bytes())?;
+        let dek_bytes =
+            self.crypto
+                .decrypt(&kek, &wrapped.wrapped_key, wrapped.tenant.as_bytes())?;
         let mut dek = [0u8; 32];
         dek.copy_from_slice(&dek_bytes);
-        self.deks.write().unwrap().insert(wrapped.tenant.clone(), dek);
+        self.deks
+            .write()
+            .unwrap()
+            .insert(wrapped.tenant.clone(), dek);
         Ok(dek)
     }
 
     /// Return all wrapped DEKs for persistence (caller stores these alongside data).
     pub fn wrapped_deks(&self) -> Vec<WrappedDek> {
-        self.wrapped_deks.read().unwrap().values().cloned().collect()
+        self.wrapped_deks
+            .read()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Rotate the KEK: re-wrap all DEKs with the new KEK.
@@ -123,9 +136,13 @@ impl Envelope {
         let mut new_wrapped = HashMap::new();
         for (tenant, wrapped) in self.wrapped_deks.read().unwrap().iter() {
             // Decrypt DEK with old KEK.
-            let dek_bytes = self.crypto.decrypt(&old_kek, &wrapped.wrapped_key, tenant.as_bytes())?;
+            let dek_bytes =
+                self.crypto
+                    .decrypt(&old_kek, &wrapped.wrapped_key, tenant.as_bytes())?;
             // Re-encrypt DEK with new KEK.
-            let new_wrapped_key = self.crypto.encrypt(&new_kek, &dek_bytes, tenant.as_bytes())?;
+            let new_wrapped_key = self
+                .crypto
+                .encrypt(&new_kek, &dek_bytes, tenant.as_bytes())?;
             new_wrapped.insert(
                 tenant.clone(),
                 WrappedDek {
@@ -145,7 +162,10 @@ impl Envelope {
             let _ = audit.record(&KeyEvent::now(
                 KeyEventKind::Rotated,
                 "kek:master",
-                &format!("KEK rotated to id {}, {} DEKs rewrapped", new_id, deks_count),
+                &format!(
+                    "KEK rotated to id {}, {} DEKs rewrapped",
+                    new_id, deks_count
+                ),
             ));
         }
         Ok(())
@@ -169,7 +189,9 @@ mod tests {
 
     impl MemKms {
         fn new() -> Self {
-            MemKms { key: RwLock::new(Aes256Gcm::new().generate_key()) }
+            MemKms {
+                key: RwLock::new(Aes256Gcm::new().generate_key()),
+            }
         }
     }
 
@@ -178,7 +200,11 @@ mod tests {
             Ok(*self.key.read().unwrap())
         }
 
-        fn rotate(&self, _passphrase: &str, provider: &dyn CryptoProvider) -> Result<[u8; 32], String> {
+        fn rotate(
+            &self,
+            _passphrase: &str,
+            provider: &dyn CryptoProvider,
+        ) -> Result<[u8; 32], String> {
             let new_key = provider.generate_key();
             *self.key.write().unwrap() = new_key;
             Ok(new_key)

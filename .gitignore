@@ -17,5 +17,11 @@ build/
 *.key
 *.backup.*/
 /mnemosyne/
+# Playwright / E2E test artifacts
 .playwright-mcp/
+tests/e2e/node_modules/
+tests/e2e/test-results/
+*.png
+# Test database artifacts
+test-*.db
 --version

@@ -41,7 +41,10 @@ pub struct LocalKms {
 
 impl LocalKms {
     pub fn new(path: impl Into<String>) -> Self {
-        LocalKms { path: path.into(), cached_key: std::sync::RwLock::new(None) }
+        LocalKms {
+            path: path.into(),
+            cached_key: std::sync::RwLock::new(None),
+        }
     }
 }
 
@@ -53,8 +56,8 @@ impl KeyManager for LocalKms {
         }
         let path = Path::new(&self.path);
         if path.exists() {
-            let encrypted = fs::read(path)
-                .map_err(|e| format!("read master key file {}: {}", self.path, e))?;
+            let encrypted =
+                fs::read(path).map_err(|e| format!("read master key file {}: {}", self.path, e))?;
             if encrypted.len() < 48 {
                 return Err("master key file corrupted".into());
             }
@@ -76,11 +79,9 @@ impl KeyManager for LocalKms {
             file_content.extend_from_slice(&salt);
             file_content.extend_from_slice(&wrapped);
             if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| format!("create kms dir: {}", e))?;
+                fs::create_dir_all(parent).map_err(|e| format!("create kms dir: {}", e))?;
             }
-            fs::write(path, &file_content)
-                .map_err(|e| format!("write master key: {}", e))?;
+            fs::write(path, &file_content).map_err(|e| format!("write master key: {}", e))?;
             *self.cached_key.write().unwrap() = Some(key);
             Ok(key)
         }
@@ -95,8 +96,7 @@ impl KeyManager for LocalKms {
         let mut file_content = Vec::with_capacity(48);
         file_content.extend_from_slice(&salt);
         file_content.extend_from_slice(&wrapped);
-        fs::write(&self.path, &file_content)
-            .map_err(|e| format!("write rotated key: {}", e))?;
+        fs::write(&self.path, &file_content).map_err(|e| format!("write rotated key: {}", e))?;
         *self.cached_key.write().unwrap() = Some(new_key);
         Ok(new_key)
     }
@@ -170,7 +170,10 @@ pub struct AwsKms {
 
 impl AwsKms {
     pub fn new(key_id: impl Into<String>) -> Self {
-        AwsKms { key_id: key_id.into(), cached_key: std::sync::RwLock::new(None) }
+        AwsKms {
+            key_id: key_id.into(),
+            cached_key: std::sync::RwLock::new(None),
+        }
     }
 }
 
@@ -228,7 +231,9 @@ impl KeyManager for AzureKeyVault {
         // azure_security_keyvault SecretClient for production.
         if let Ok(hex) = std::env::var("MNEMOSYNE_AZURE_KV_KEY") {
             let bytes = hex_decode(hex.trim()).map_err(|e| format!("invalid hex key: {}", e))?;
-            if bytes.len() != 32 { return Err("Azure KV key must be 32 bytes".into()); }
+            if bytes.len() != 32 {
+                return Err("Azure KV key must be 32 bytes".into());
+            }
             let mut key = [0u8; 32];
             key.copy_from_slice(&bytes);
             *self.cached_key.write().unwrap() = Some(key);
@@ -255,10 +260,17 @@ pub struct GcpKeyManager {
 }
 
 impl GcpKeyManager {
-    pub fn new(project: impl Into<String>, location: impl Into<String>, key_ring: impl Into<String>, key_name: impl Into<String>) -> Self {
+    pub fn new(
+        project: impl Into<String>,
+        location: impl Into<String>,
+        key_ring: impl Into<String>,
+        key_name: impl Into<String>,
+    ) -> Self {
         GcpKeyManager {
-            project_id: project.into(), location: location.into(),
-            key_ring: key_ring.into(), key_name: key_name.into(),
+            project_id: project.into(),
+            location: location.into(),
+            key_ring: key_ring.into(),
+            key_name: key_name.into(),
             cached_key: std::sync::RwLock::new(None),
         }
     }
@@ -272,13 +284,18 @@ impl KeyManager for GcpKeyManager {
         // ponytail: reads MNEMOSYNE_GCP_KMS_KEY env var.
         if let Ok(hex) = std::env::var("MNEMOSYNE_GCP_KMS_KEY") {
             let bytes = hex_decode(hex.trim()).map_err(|e| format!("invalid hex key: {}", e))?;
-            if bytes.len() != 32 { return Err("GCP KMS key must be 32 bytes".into()); }
+            if bytes.len() != 32 {
+                return Err("GCP KMS key must be 32 bytes".into());
+            }
             let mut key = [0u8; 32];
             key.copy_from_slice(&bytes);
             *self.cached_key.write().unwrap() = Some(key);
             Ok(key)
         } else {
-            Err("GCP Cloud KMS not configured. Set MNEMOSYNE_GCP_KMS_KEY env var or use LocalKms.".into())
+            Err(
+                "GCP Cloud KMS not configured. Set MNEMOSYNE_GCP_KMS_KEY env var or use LocalKms."
+                    .into(),
+            )
         }
     }
 
@@ -332,7 +349,8 @@ mod tests {
     fn local_kms_rotate() {
         let _lock = TEST_MUTEX.lock().unwrap();
         let p = crate::security::crypto::Aes256Gcm::new();
-        let tmp = std::env::temp_dir().join(format!("mnemosyne-test-kms-rot-{}", std::process::id()));
+        let tmp =
+            std::env::temp_dir().join(format!("mnemosyne-test-kms-rot-{}", std::process::id()));
         let kms = LocalKms::new(tmp.to_str().unwrap());
         let old = kms.master_key("pw").unwrap();
         let new = kms.rotate("pw", &p).unwrap();

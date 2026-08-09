@@ -94,9 +94,10 @@ impl ReasoningEngine {
     fn evaluate(&self, kernel: &Kernel, ko: &KnowledgeObject) -> KResult<()> {
         let rules = self.rules.read().unwrap();
         for rule in rules.iter() {
-            let all_match = rule.conditions.iter().all(|(prop, expected)| {
-                ko.properties.get(prop) == Some(expected)
-            });
+            let all_match = rule
+                .conditions
+                .iter()
+                .all(|(prop, expected)| ko.properties.get(prop) == Some(expected));
             if !all_match {
                 continue;
             }

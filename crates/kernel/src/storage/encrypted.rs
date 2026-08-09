@@ -40,7 +40,9 @@ impl StorageEngine for EncryptedStore {
     fn get(&self, key: &[u8]) -> KResult<Option<Vec<u8>>> {
         match self.inner.get(key)? {
             Some(encrypted) => {
-                let plaintext = self.crypto.decrypt(&self.key, &encrypted, key)
+                let plaintext = self
+                    .crypto
+                    .decrypt(&self.key, &encrypted, key)
                     .map_err(|e| crate::knowledge::kom::KError::Store(format!("decrypt: {}", e)))?;
                 Ok(Some(plaintext))
             }
@@ -52,7 +54,9 @@ impl StorageEngine for EncryptedStore {
         let rows = self.inner.scan(prefix)?;
         let mut out = Vec::with_capacity(rows.len());
         for (k, v) in rows {
-            let plaintext = self.crypto.decrypt(&self.key, &v, &k)
+            let plaintext = self
+                .crypto
+                .decrypt(&self.key, &v, &k)
                 .map_err(|e| crate::knowledge::kom::KError::Store(format!("decrypt: {}", e)))?;
             out.push((k, plaintext));
         }
@@ -62,7 +66,9 @@ impl StorageEngine for EncryptedStore {
     fn write_batch(&self, batch: &WriteBatch) -> KResult<()> {
         let mut encrypted_batch = WriteBatch::new();
         for (k, v) in &batch.puts {
-            let encrypted = self.crypto.encrypt(&self.key, v, k)
+            let encrypted = self
+                .crypto
+                .encrypt(&self.key, v, k)
                 .map_err(|e| crate::knowledge::kom::KError::Store(format!("encrypt: {}", e)))?;
             encrypted_batch.put(k.clone(), encrypted);
         }
@@ -150,16 +156,26 @@ mod tests {
         let key = crypto.generate_key();
         let store = EncryptedStore::new(mem.clone(), crypto, key);
 
-        store.write_batch(&WriteBatch {
-            puts: vec![(b"secret".to_vec(), b"classified".to_vec())],
-            dels: vec![],
-        }).unwrap();
+        store
+            .write_batch(&WriteBatch {
+                puts: vec![(b"secret".to_vec(), b"classified".to_vec())],
+                dels: vec![],
+            })
+            .unwrap();
 
         // Verify the inner store contains NO plaintext.
         let raw = mem.get(b"secret").unwrap().unwrap();
         let raw_str = String::from_utf8_lossy(&raw);
-        assert!(!raw_str.contains("classified"), "plaintext leaked to inner store: {}", raw_str);
-        assert!(!raw_str.contains("secret"), "key leaked to inner store: {}", raw_str);
+        assert!(
+            !raw_str.contains("classified"),
+            "plaintext leaked to inner store: {}",
+            raw_str
+        );
+        assert!(
+            !raw_str.contains("secret"),
+            "key leaked to inner store: {}",
+            raw_str
+        );
         // Must start with version byte 0x01.
         assert_eq!(raw[0], 0x01, "version byte missing");
     }

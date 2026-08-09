@@ -6,7 +6,7 @@
 
 use crate::SchedulerJob;
 use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::transaction::kernel::{ForgetMode, KnowledgeContext, Kernel, Subject};
+use mnemosyne_kernel::transaction::kernel::{ForgetMode, Kernel, KnowledgeContext, Subject};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -113,8 +113,8 @@ mod tests {
     #[test]
     fn compaction_job_starts_and_shuts_down() {
         let job = CompactionJob::new(1); // 1-second interval for fast test
-        // ponytail: no kernel needed — start is tested via Scheduler integration.
-        // Just verify the job object is well-formed.
+                                         // ponytail: no kernel needed — start is tested via Scheduler integration.
+                                         // Just verify the job object is well-formed.
         assert_eq!(job.water(), 0);
         job.shutdown(); // no-op if not started
     }

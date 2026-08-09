@@ -8,9 +8,9 @@
 //! Error codes: AIKOQL1030 (unknown type), AIKOQL1031 (unknown property),
 //! AIKOQL1032 (type mismatch), AIKOQL1033 (unknown relationship).
 
+use mnemosyne_kernel::knowledge::kom::Schema;
 use mnemosyne_kernel::knowledge::ontology::OntologyRegistry;
 use mnemosyne_kernel::lifecycle::schema::SchemaRegistry;
-use mnemosyne_kernel::knowledge::kom::Schema;
 
 use super::parser::ast::*;
 use super::parser::diagnostics::{self, Diagnostic};
@@ -22,7 +22,10 @@ pub struct SemanticAnalyzer<'a> {
 
 impl<'a> SemanticAnalyzer<'a> {
     pub fn new(registry: &'a SchemaRegistry) -> Self {
-        SemanticAnalyzer { registry, ontology: None }
+        SemanticAnalyzer {
+            registry,
+            ontology: None,
+        }
     }
 
     /// Enable ontology-aware validation (class inheritance, relationship names).
@@ -56,11 +59,16 @@ impl<'a> SemanticAnalyzer<'a> {
         if let Some(ref trav) = m.traverse {
             if let Some(ont) = self.ontology {
                 // Resolve the domain: if m.entity is a physical type, look up its ontology class.
-                let domain_class = ont.class_for_physical(&m.entity)
-                    .unwrap_or(&m.entity);
-                if ont.resolve_relationship(domain_class, &trav.relation).is_none() {
+                let domain_class = ont.class_for_physical(&m.entity).unwrap_or(&m.entity);
+                if ont
+                    .resolve_relationship(domain_class, &trav.relation)
+                    .is_none()
+                {
                     return Err(diagnostics::unknown_relationship(
-                        &trav.relation, &m.entity, 0, 0,
+                        &trav.relation,
+                        &m.entity,
+                        0,
+                        0,
                     ));
                 }
             }
@@ -97,7 +105,9 @@ impl<'a> SemanticAnalyzer<'a> {
 
     fn resolve_entity(&self, name: &str) -> Result<Option<&Schema>, Diagnostic> {
         // Built-in types always pass validation.
-        if name == mnemosyne_kernel::knowledge::ontology::ONTOLOGY_TYPE || name.starts_with("mnemosyne:") {
+        if name == mnemosyne_kernel::knowledge::ontology::ONTOLOGY_TYPE
+            || name.starts_with("mnemosyne:")
+        {
             return Ok(None);
         }
         // Ontology class or physical mapping takes priority.
@@ -114,12 +124,17 @@ impl<'a> SemanticAnalyzer<'a> {
             }
         }
         // Fallback: must be registered in SchemaRegistry.
-        self.registry.get(name)
+        self.registry
+            .get(name)
             .map(Some)
             .ok_or_else(|| diagnostics::unknown_type(name, 0, 0))
     }
 
-    fn check_predicate_properties(&self, pred: &Predicate, schema: &Schema) -> Result<(), Diagnostic> {
+    fn check_predicate_properties(
+        &self,
+        pred: &Predicate,
+        schema: &Schema,
+    ) -> Result<(), Diagnostic> {
         match pred {
             Predicate::Eq { property, .. }
             | Predicate::Neq { property, .. }
@@ -139,12 +154,7 @@ impl<'a> SemanticAnalyzer<'a> {
         // If schema is closed (allowed_properties is Some), check membership.
         if let Some(ref allowed) = schema.allowed_properties {
             if !allowed.contains(name) {
-                return Err(diagnostics::unknown_property(
-                    name,
-                    &schema.type_name,
-                    0,
-                    0,
-                ));
+                return Err(diagnostics::unknown_property(name, &schema.type_name, 0, 0));
             }
         }
         // Open-world schemas allow any property — skip.

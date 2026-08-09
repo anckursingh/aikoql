@@ -48,7 +48,11 @@ impl TenantManager {
     }
 
     /// Rebuild usage counters from a full head scan. Called on startup.
-    pub fn rebuild(&self, heads: &[(KOID, u64, u64, LifecycleState)], type_resolver: impl Fn(&KOID) -> Option<String>) {
+    pub fn rebuild(
+        &self,
+        heads: &[(KOID, u64, u64, LifecycleState)],
+        type_resolver: impl Fn(&KOID) -> Option<String>,
+    ) {
         let mut usage = self.usage.write().unwrap();
         usage.clear();
         for (koid, _, _, state) in heads {

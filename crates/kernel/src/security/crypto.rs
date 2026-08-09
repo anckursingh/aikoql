@@ -77,7 +77,9 @@ pub struct Aes256Gcm {
 
 impl Aes256Gcm {
     pub fn new() -> Self {
-        Aes256Gcm { cache: RwLock::new(None) }
+        Aes256Gcm {
+            cache: RwLock::new(None),
+        }
     }
 
     fn get_cipher(&self, key: &[u8; 32]) -> Result<AesImpl, String> {
@@ -88,8 +90,7 @@ impl Aes256Gcm {
             }
         }
         // Slow path: compute key expansion once per key.
-        let cipher = AesImpl::new_from_slice(key)
-            .map_err(|e| format!("aes-gcm init: {}", e))?;
+        let cipher = AesImpl::new_from_slice(key).map_err(|e| format!("aes-gcm init: {}", e))?;
         *self.cache.write().unwrap() = Some((*key, cipher.clone()));
         Ok(cipher)
     }
@@ -102,7 +103,13 @@ impl CryptoProvider for Aes256Gcm {
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
         let raw = cipher
-            .encrypt(nonce, aes_gcm::aead::Payload { msg: plaintext, aad })
+            .encrypt(
+                nonce,
+                aes_gcm::aead::Payload {
+                    msg: plaintext,
+                    aad,
+                },
+            )
             .map_err(|e| format!("aes-gcm encrypt: {}", e))?;
         let mut combined = Vec::with_capacity(NONCE_LEN + raw.len());
         combined.extend_from_slice(&nonce_bytes);
@@ -113,7 +120,10 @@ impl CryptoProvider for Aes256Gcm {
     fn decrypt(&self, key: &[u8; 32], data: &[u8], aad: &[u8]) -> Result<Vec<u8>, String> {
         let (version, raw) = unwrap(data).ok_or("unsupported crypto version or truncated data")?;
         if version != CRYPTO_VERSION_AES {
-            return Err(format!("expected AES-GCM version 0x{:02x}, got 0x{:02x}", CRYPTO_VERSION_AES, version));
+            return Err(format!(
+                "expected AES-GCM version 0x{:02x}, got 0x{:02x}",
+                CRYPTO_VERSION_AES, version
+            ));
         }
         if raw.len() < NONCE_LEN + TAG_LEN {
             return Err("ciphertext too short".into());
@@ -122,7 +132,13 @@ impl CryptoProvider for Aes256Gcm {
         let ciphertext_and_tag = &raw[NONCE_LEN..];
         let cipher = self.get_cipher(key)?;
         cipher
-            .decrypt(nonce, aes_gcm::aead::Payload { msg: ciphertext_and_tag, aad })
+            .decrypt(
+                nonce,
+                aes_gcm::aead::Payload {
+                    msg: ciphertext_and_tag,
+                    aad,
+                },
+            )
             .map_err(|e| format!("aes-gcm decrypt: {}", e))
     }
 
@@ -150,7 +166,9 @@ pub struct ChaCha20Poly1305 {
 
 impl ChaCha20Poly1305 {
     pub fn new() -> Self {
-        ChaCha20Poly1305 { cache: RwLock::new(None) }
+        ChaCha20Poly1305 {
+            cache: RwLock::new(None),
+        }
     }
 
     fn get_cipher(&self, key: &[u8; 32]) -> Result<ChaChaImpl, String> {
@@ -173,7 +191,13 @@ impl CryptoProvider for ChaCha20Poly1305 {
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
         let nonce = chacha20poly1305::Nonce::from_slice(&nonce_bytes);
         let raw = cipher
-            .encrypt(nonce, chacha20poly1305::aead::Payload { msg: plaintext, aad })
+            .encrypt(
+                nonce,
+                chacha20poly1305::aead::Payload {
+                    msg: plaintext,
+                    aad,
+                },
+            )
             .map_err(|e| format!("chacha20-poly1305 encrypt: {}", e))?;
         let mut combined = Vec::with_capacity(NONCE_LEN + raw.len());
         combined.extend_from_slice(&nonce_bytes);
@@ -196,7 +220,13 @@ impl CryptoProvider for ChaCha20Poly1305 {
         let ciphertext_and_tag = &raw[NONCE_LEN..];
         let cipher = self.get_cipher(key)?;
         cipher
-            .decrypt(nonce, chacha20poly1305::aead::Payload { msg: ciphertext_and_tag, aad })
+            .decrypt(
+                nonce,
+                chacha20poly1305::aead::Payload {
+                    msg: ciphertext_and_tag,
+                    aad,
+                },
+            )
             .map_err(|e| format!("chacha20-poly1305 decrypt: {}", e))
     }
 
@@ -223,7 +253,9 @@ pub struct Crypto {
 
 impl Crypto {
     pub fn new(provider: Box<dyn CryptoProvider>) -> Self {
-        Crypto { provider: RwLock::new(provider) }
+        Crypto {
+            provider: RwLock::new(provider),
+        }
     }
 
     pub fn encrypt(&self, key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, String> {

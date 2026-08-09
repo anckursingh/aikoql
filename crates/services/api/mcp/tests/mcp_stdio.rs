@@ -585,10 +585,16 @@ fn m08_aikoql_query_over_mcp() {
     c.call_tool("remember", json!({"subject": "alice", "type_name": "Person", "properties": {"name": "Alice", "city": "Amsterdam"}}));
     c.call_tool("remember", json!({"subject": "alice", "type_name": "Person", "properties": {"name": "Bob", "city": "London"}}));
 
-    let all = c.call_tool("aikoql", json!({"subject": "alice", "query": "MATCH Person RETURN *"}));
+    let all = c.call_tool(
+        "aikoql",
+        json!({"subject": "alice", "query": "MATCH Person RETURN *"}),
+    );
     assert_eq!(all["results"].as_array().unwrap().len(), 2);
 
-    let filtered = c.call_tool("aikoql", json!({"subject": "alice", "query": "MATCH Person WHERE name == \"Alice\" RETURN *"}));
+    let filtered = c.call_tool(
+        "aikoql",
+        json!({"subject": "alice", "query": "MATCH Person WHERE name == \"Alice\" RETURN *"}),
+    );
     assert_eq!(filtered["results"].as_array().unwrap().len(), 1);
 
     let _ = std::fs::remove_file(&db);
@@ -605,20 +611,26 @@ fn m09_session_identity_persistence() {
     c.notify("notifications/initialized");
 
     // Establish session identity via session/init method.
-    let sess = c.request("session/init", json!({
-        "agent_id": "pm-agent-7",
-        "run_id": "run-42",
-        "roles": ["admin", "reviewer"]
-    }));
+    let sess = c.request(
+        "session/init",
+        json!({
+            "agent_id": "pm-agent-7",
+            "run_id": "run-42",
+            "roles": ["admin", "reviewer"]
+        }),
+    );
     assert_eq!(sess["session"]["agent_id"], "pm-agent-7");
     assert_eq!(sess["session"]["run_id"], "run-42");
     assert!(sess["established"].as_bool().unwrap());
 
     // Create a KO without passing "subject" — session identity should be used.
-    let r = c.call_tool("remember", json!({
-        "type_name": "Task",
-        "properties": {"title": "Fix login bug", "priority": 1}
-    }));
+    let r = c.call_tool(
+        "remember",
+        json!({
+            "type_name": "Task",
+            "properties": {"title": "Fix login bug", "priority": 1}
+        }),
+    );
     let koid = r["koid"].as_str().unwrap().to_string();
     assert!(!koid.is_empty());
 
@@ -628,19 +640,25 @@ fn m09_session_identity_persistence() {
     assert_eq!(ko["type_name"], "Task");
 
     // Verify session_init tool also works (backward compat).
-    let sess2 = c.call_tool("session_init", json!({
-        "agent_id": "qa-agent-3",
-        "run_id": "run-99",
-        "roles": ["tester"]
-    }));
+    let sess2 = c.call_tool(
+        "session_init",
+        json!({
+            "agent_id": "qa-agent-3",
+            "run_id": "run-99",
+            "roles": ["tester"]
+        }),
+    );
     assert_eq!(sess2["session"]["agent_id"], "qa-agent-3");
     assert_eq!(sess2["session"]["roles"][0], "tester");
 
     // Now creates should use the new identity.
-    let r2 = c.call_tool("remember", json!({
-        "type_name": "Task",
-        "properties": {"title": "Verify login fix"}
-    }));
+    let r2 = c.call_tool(
+        "remember",
+        json!({
+            "type_name": "Task",
+            "properties": {"title": "Verify login fix"}
+        }),
+    );
     let koid2 = r2["koid"].as_str().unwrap();
     let ko2 = c.call_tool("get", json!({"koid": koid2}));
     assert_eq!(ko2["properties"]["title"], "Verify login fix");
@@ -656,16 +674,22 @@ fn m10_session_roles_merged_with_call_roles() {
     c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "roles-test", "version": "0"}}));
     c.notify("notifications/initialized");
 
-    c.request("session/init", json!({
-        "agent_id": "pm-agent-7",
-        "roles": ["admin"]
-    }));
+    c.request(
+        "session/init",
+        json!({
+            "agent_id": "pm-agent-7",
+            "roles": ["admin"]
+        }),
+    );
 
     // Create a KO — session roles should be applied.
-    let r = c.call_tool("remember", json!({
-        "type_name": "Task",
-        "properties": {"title": "Test role merge"}
-    }));
+    let r = c.call_tool(
+        "remember",
+        json!({
+            "type_name": "Task",
+            "properties": {"title": "Test role merge"}
+        }),
+    );
     let koid = r["koid"].as_str().unwrap();
 
     // The KO is accessible (session identity with admin role was used).
@@ -687,20 +711,29 @@ fn m11_aikoql_stream_over_mcp() {
 
     // Create 150 objects to ensure 2+ chunks (chunk_size=100).
     for i in 0..150 {
-        c.call_tool("remember", json!({
-            "subject": "alice",
-            "type_name": "Item",
-            "properties": {"idx": i, "label": format!("item-{}", i)}
-        }));
+        c.call_tool(
+            "remember",
+            json!({
+                "subject": "alice",
+                "type_name": "Item",
+                "properties": {"idx": i, "label": format!("item-{}", i)}
+            }),
+        );
     }
 
     // Stream query: request returns first chunk, remaining come as notifications.
-    let first = c.request("aikoql/stream", json!({
-        "query": "MATCH Item RETURN *",
-        "subject": "alice"
-    }));
+    let first = c.request(
+        "aikoql/stream",
+        json!({
+            "query": "MATCH Item RETURN *",
+            "subject": "alice"
+        }),
+    );
     assert_eq!(first["chunk"], 0);
-    assert!(first["total_chunks"].as_u64().unwrap() >= 2, "expected 2+ chunks for 150 items");
+    assert!(
+        first["total_chunks"].as_u64().unwrap() >= 2,
+        "expected 2+ chunks for 150 items"
+    );
     let stream_id = first["stream_id"].as_str().unwrap().to_string();
     let first_results = first["results"].as_array().unwrap();
     assert!(!first_results.is_empty());
@@ -717,17 +750,347 @@ fn m11_aikoql_stream_over_mcp() {
                 all_results.push(r.clone());
             }
         }
-        if params.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+        if params
+            .get("done")
+            .and_then(|d| d.as_bool())
+            .unwrap_or(false)
+        {
             break;
         }
     }
 
     assert_eq!(all_results.len(), 150);
     // Verify unique KOIDs.
-    let koids: std::collections::HashSet<String> = all_results.iter()
+    let koids: std::collections::HashSet<String> = all_results
+        .iter()
         .map(|r| r["koid"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(koids.len(), 150);
+
+    let _ = std::fs::remove_file(&db);
+}
+
+#[test]
+fn m12_agent_runtime_execute_agent_with_skills() {
+    // Deploy a Program KO, then an Agent KO referencing it, and execute the
+    // agent. Verifies Agent Runtime resolves skills → programs and runs them.
+    let db = tmp_db("agent_runtime");
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "agent-test", "version": "0"}}));
+    c.notify("notifications/initialized");
+    c.call_tool(
+        "session_init",
+        json!({"agent_id": "tester", "roles": ["admin"]}),
+    );
+
+    // Create test data.
+    c.call_tool(
+        "remember",
+        json!({
+            "subject": "tester", "type_name": "Person",
+            "properties": {"name": "Ada", "dept": "Eng"}
+        }),
+    );
+    c.call_tool(
+        "remember",
+        json!({
+            "subject": "tester", "type_name": "Person",
+            "properties": {"name": "Bob", "dept": "HR"}
+        }),
+    );
+
+    // Deploy a Program KO that filters by department.
+    c.call_tool(
+        "deploy_program",
+        json!({
+            "name": "FindEngPeople",
+            "body": "MATCH Person WHERE dept == \"Eng\" RETURN name",
+            "language": "AIKOQL",
+            "subject": "tester"
+        }),
+    );
+
+    // Deploy an Agent KO with the program as a skill.
+    let agent = c.call_tool(
+        "deploy_agent",
+        json!({
+            "name": "HRAssistant",
+            "prompt": "You help find people in the org.",
+            "skills": ["FindEngPeople"],
+            "tools": [],
+            "policies": [],
+            "subject": "tester"
+        }),
+    );
+    let agent_koid = agent["koid"].as_str().unwrap();
+
+    // Execute the agent.
+    let result = c.call_tool(
+        "execute_agent",
+        json!({"koid": agent_koid, "subject": "tester"}),
+    );
+    let log: Vec<String> = result["execution_log"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let log_text = log.join("\n");
+
+    assert!(
+        log_text.contains("HRAssistant"),
+        "log should mention agent name, got: {}",
+        log_text
+    );
+    assert!(
+        log_text.contains("FindEngPeople"),
+        "log should mention skill name, got: {}",
+        log_text
+    );
+    assert!(
+        log_text.contains("OK:"),
+        "log should show successful execution, got: {}",
+        log_text
+    );
+
+    let _ = std::fs::remove_file(&db);
+}
+
+// --- MRFC-0050 Document Ingestion tests ---
+
+#[test]
+fn m13_document_ingest_and_extract_text() {
+    // D1 acceptance: ingest a text file, verify extraction populates page_count and char_count.
+    let db = tmp_db("doc_d1");
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "doc-test", "version": "0"}}));
+    c.notify("notifications/initialized");
+    c.call_tool(
+        "session_init",
+        json!({"agent_id": "tester", "roles": ["admin"]}),
+    );
+
+    // Base64-encode a simple text document.
+    let b64 = "SGVsbG8gZnJvbSBNbmVtb3N5bmUgRDEuClRoaXMgaXMgYSB0ZXN0IGRvY3VtZW50LgpJdCBoYXMgdGhyZWUgbGluZXMu";
+
+    let ingested = c.call_tool(
+        "document_ingest",
+        json!({
+            "filename": "test-d1.txt",
+            "content_base64": b64,
+            "mime_type": "text/plain"
+        }),
+    );
+    let koid = ingested["koid"].as_str().unwrap();
+    assert!(!koid.is_empty(), "ingest must return a koid");
+    assert_eq!(
+        ingested["status"], "extracted",
+        "text/plain must be extracted"
+    );
+    assert_eq!(ingested["page_count"], 1, "plain text = 1 page");
+    let char_count = ingested["char_count"].as_i64().unwrap();
+    assert!(char_count > 0, "extracted text must have characters");
+
+    // Verify via document_status.
+    let status = c.call_tool("document_status", json!({"koid": koid}));
+    assert_eq!(status["koid"], koid);
+    assert_eq!(status["status"], "extracted");
+    assert_eq!(status["page_count"], 1);
+    assert_eq!(status["char_count"].as_i64().unwrap(), char_count);
+
+    // Verify via document_list.
+    let list = c.call_tool("document_list", json!({"subject": "tester"}));
+    let docs = list["documents"].as_array().unwrap();
+    assert!(!docs.is_empty(), "document list must contain ingested doc");
+    let found = docs.iter().find(|d| d["koid"] == koid).unwrap();
+    assert_eq!(found["filename"], "test-d1.txt");
+    assert_eq!(found["status"], "extracted");
+
+    // Verify dedup: same content returns existing document.
+    let dedup = c.call_tool(
+        "document_ingest",
+        json!({
+            "filename": "test-d1-dup.txt",
+            "content_base64": b64,
+            "mime_type": "text/plain"
+        }),
+    );
+    assert_eq!(dedup["status"], "duplicate");
+    assert_eq!(dedup["koid"], koid);
+
+    // Verify unsupported format still ingests (with status "ingested").
+    let binary_b64 = "AAECAwQ=";
+    let unsupported = c.call_tool(
+        "document_ingest",
+        json!({
+            "filename": "unknown.bin",
+            "content_base64": binary_b64,
+            "mime_type": "application/octet-stream"
+        }),
+    );
+    assert_eq!(
+        unsupported["status"], "ingested",
+        "unsupported format still ingested"
+    );
+    assert_eq!(unsupported["page_count"], 0);
+
+    let _ = std::fs::remove_file(&db);
+}
+
+#[test]
+fn m14_document_ocr_detection_and_source_tagging() {
+    // D2 acceptance: verify pages are tagged with source="native" for native text,
+    // and OCR tools are detected/absent gracefully.
+    let dir = std::env::temp_dir().join("mnemosyne-d2-test");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Write a text file and verify source tagging.
+    let txt_path = dir.join("source-test.txt");
+    std::fs::write(&txt_path, "Hello from D2 test.\nThis has two lines.\n").unwrap();
+    let doc =
+        mnemosyne_ingestion::extract_document(&txt_path.to_string_lossy(), "text/plain").unwrap();
+    assert_eq!(doc.page_count, 1);
+    assert_eq!(doc.pages[0].source, "native");
+    assert!(doc.pages[0].text.contains("Hello from D2 test"));
+
+    // Verify OCR decision heuristic is wired (empty page needs OCR).
+    assert!(mnemosyne_ingestion::page_needs_ocr("", 10));
+    assert!(!mnemosyne_ingestion::page_needs_ocr(
+        "This is a full page of text.",
+        10
+    ));
+
+    // Verify tool_available returns false for garbage, true for a real command.
+    assert!(!mnemosyne_ingestion::tool_available(
+        "nonexistent-tool-xyzzy-12345"
+    ));
+    // cmd.exe or sh must exist.
+    assert!(
+        mnemosyne_ingestion::tool_available("cmd") || mnemosyne_ingestion::tool_available("sh")
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// --- MRFC-0050 Document Compilation test ---
+
+#[test]
+fn m15_document_compile_pipeline() {
+    // D9 acceptance: ingest a document, compile it, verify all pipeline phases
+    // produce non-empty output.
+    let db = tmp_db("doc_compile");
+    let mut c = McpClient::start(&db);
+    c.request(
+        "initialize",
+        json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "compile-test", "version": "0"}}),
+    );
+    c.notify("notifications/initialized");
+    c.call_tool(
+        "session_init",
+        json!({"agent_id": "tester", "roles": ["admin"]}),
+    );
+
+    // Ingest a document with structured business content.
+    let content = "Om Building Materials\n\
+                   GSTIN: 10CQAPS3890L1ZM\n\
+                   Shop No. 12, Gandhi Nagar, Patna, Bihar\n\n\
+                   Achintya Industries Pvt. Ltd.\n\
+                   GSTIN: 09AADCA1234C1Z5\n\
+                   Plot 45, Industrial Area, Kanpur, UP\n\n\
+                   TAX INVOICE\n\
+                   Invoice No: INV-2024-001\n\
+                   Date: 2024-07-15\n\n\
+                   Grey Cement, HSN 2523291, 220 Bags, Rs.590/bag\n\
+                   Fe 500 TMT Bar, HSN 7214200, 10 MT, Rs.58500/MT\n\
+                   Taxable: Rs.714800, IGST: Rs.141644, Total: Rs.856444";
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
+
+    let ingested = c.call_tool(
+        "document_ingest",
+        json!({
+            "filename": "invoice-test.txt",
+            "content_base64": b64,
+            "mime_type": "text/plain"
+        }),
+    );
+    let koid = ingested["koid"].as_str().unwrap();
+    assert!(!koid.is_empty());
+
+    // Compile the document.
+    let result = c.call_tool(
+        "document_compile",
+        json!({"koid": koid}),
+    );
+
+    // Verify IR: entities discovered.
+    let ir = &result["ir"];
+    let entities = ir["entities"].as_array().unwrap();
+    assert!(!entities.is_empty(), "IR should discover entities from invoice text");
+
+    // Verify entities contain invoice-related names.
+    let entity_names: Vec<&str> = entities
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        entity_names.iter().any(|n| n.contains("Om") || n.contains("Building")),
+        "should find 'Om Building Materials' in entities: {:?}",
+        entity_names
+    );
+
+    // Verify ontology proposals.
+    let ontology = &result["ontology"];
+    let classes = ontology["classes"].as_array().unwrap();
+    let _props = ontology["properties"].as_array().unwrap();
+    let _rels = ontology["relationships"].as_array().unwrap();
+    assert!(!classes.is_empty(), "ontology should propose classes");
+
+    // Verify resolution stats.
+    let res = &result["resolution"];
+    let res_stats = &res["stats"];
+    assert!(res_stats["total_entities"].as_u64().unwrap() > 0);
+    assert_eq!(
+        res_stats["total_entities"].as_u64().unwrap(),
+        res_stats["matched_count"].as_u64().unwrap()
+            + res_stats["ambiguous_count"].as_u64().unwrap()
+            + res_stats["unmatched_count"].as_u64().unwrap()
+    );
+
+    // Verify commit plan has actions.
+    let plan = &result["commit_plan"];
+    let actions = plan["actions"].as_array().unwrap();
+    assert!(!actions.is_empty(), "commit plan must have at least one action");
+    let plan_stats = &plan["stats"];
+    assert!(plan_stats["total_actions"].as_u64().unwrap() > 0);
+
+    // Verify embedded chunks.
+    let chunks = result["embedded_chunks"].as_array().unwrap();
+    assert!(!chunks.is_empty(), "should produce at least one embedded chunk");
+    // Each chunk must have an embedding vector.
+    for chunk in chunks {
+        let emb = chunk["embedding"].as_array().unwrap();
+        assert!(!emb.is_empty(), "each chunk must have an embedding");
+    }
+
+    // Verify evidence trail covers all phases.
+    let trail = &result["evidence_trail"];
+    let nodes = trail["nodes"].as_array().unwrap();
+    assert!(!nodes.is_empty(), "evidence trail must have nodes");
+    let phases: std::collections::HashSet<&str> = nodes
+        .iter()
+        .map(|n| n["phase"].as_str().unwrap())
+        .collect();
+    assert!(phases.contains("D4-semantic-ir"));
+    assert!(phases.contains("D5-ontology"));
+    assert!(phases.contains("D6-resolution"));
+    assert!(phases.contains("D7-reconcile"));
+
+    // Verify stats: 6 phases (D3-D8).
+    let stats = &result["stats"];
+    let phases_arr = stats["phases"].as_array().unwrap();
+    assert_eq!(phases_arr.len(), 6, "pipeline must have 6 phases (D3-D8)");
+    assert!(stats["total_us"].as_u64().unwrap() > 0);
 
     let _ = std::fs::remove_file(&db);
 }
