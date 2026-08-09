@@ -1,7 +1,7 @@
 # Mnemosyne — Implementation Plan
 
 **Architecture:** [MRFC-0005](MRFC-0005-System-Architecture.md) | [MRFC-0010](MRFC-0010-AIKOQL-Parser-Architecture-v2.md) | [MRFC-0020](MRFC-0020-Encryption-Key-Management-Architecture.md) | [MRFC-0030](#mrf-0030-active-knowledge-objects--the-knowledge-operating-system) — Active Knowledge Objects | **NEW: [MRFC-0050](#mrf-0050-document-ocr--knowledge-ingestion) — Document OCR & Ingestion**  
-**Status:** Phases 1–5 complete, MRFC-0020 complete, API Layer done, MRFC-0030 Phase 7a–7d complete (9/9 Active KOs + Agent Runtime), MRFC-0040 complete, Studio Phase S2/S3 complete, MRFC-0050 Phase D1–D2 complete  
+**Status:** Phases 1–5 complete, MRFC-0020 complete, API Layer done, MRFC-0030 Phase 7a–7d complete (9/9 Active KOs + Agent Runtime), MRFC-0040 complete, Studio Phase S2/S3/S4 complete (Document Compiler UI), MRFC-0050 Phase D1–D9 complete (full Document Knowledge Compiler pipeline)  
 **Last updated:** 2026-08-09
 
 ---
@@ -44,19 +44,17 @@ benchmarks/               ← Load + micro-benchmarks (moved from crates/)
 | Metric | Value |
 |--------|-------|
 | Crates | 20 (kernel, graph, vector, scheduler, semantic, reasoning, compiler, runtime, ingestion, mcp, python-sdk, typescript-sdk, benchmarks, cluster/proxy, provider-sdk, rocksdb, 4 providers) |
-| Rust tests | 330+ (all green) |
-| MCP tools | 49 |
+| Rust tests | 390+ (all green: 195 ingestion + 18 MCP integration + kernel/compiler/runtime/engines) |
+| MCP tools | 59 |
 | Storage backends | 3 (redb, RocksDB, Memory) — StorageEngine trait, 3 methods |
 | CLI subcommands | 7 (shell, serve, backup, restore, audit, keygen, import) |
 | Providers | 4 (PostgreSQL, SQLite, MongoDB, Neo4j) + Provider SDK trait |
 | Compiler pipeline | Lexer → Parser → AST → Semantic Analyzer → KIR → Planner — all 5 statement types, 6 operators |
 | SDKs | Python (PyO3 + MCP client), TypeScript, Java, Go — all compiling |
+| Document pipeline | D1-D9: Physical Analysis → AST → Knowledge IR → Ontology → Resolution → Commit → Chunking → Compiler — 195 tests |
+| Studio | 13 panels + Document Explorer with full D1-D9 compile results UI + Playwright E2E |
 | Encryption status | AES-256-GCM + ChaCha20-Poly1305, Envelope encryption (KEK→DEK), LocalKMS, EncryptedStore, Field-level encryption, KeyAuditLog, ComplianceReport, KeyRotationJob — MRFC-0020 Phase 1–5 complete |
-| Fuzz | 3 proptest harnesses |
-| Bench | 100 KB query = 111 µs (180× under 20 ms gate) |
-| Cluster proxy | Persistent connections, retry with backoff, startup health check, partial-result merging |
-| HTTP | REST API (30 endpoints), Graph browser UI + Studio SPA, Prometheus /metrics + /health |
-| Agent experience | MRFC-0040 complete — session identity, structured errors, batch ops, schema discovery, health, agent memory, Python MCP client, unified Agent SDK, auto-embedding, streaming queries |
+| Build | Windows release binary + Linux cross-compile (musl), scripts/build-release.{bat,sh} with SHA256 + archives |
 | MVP ready | ✅ Docker packaging (Dockerfile + docker-compose), RocksDB backend (feature-gated, Linux), config-based backend selection |
 
 ---
@@ -341,10 +339,13 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
 8. **`fusion=exact` Query Hint** (MRFC-0009 §4) — ✅ IMPLEMENTED
    - [x] `Fusion::Exact` variant added — bypasses indexes entirely
 
-9. **Missing Knowledge Services** (MRFC-0005 §Knowledge Services) — 🟡 IN PROGRESS
-   - OCR, NER, Embedding, Ontology — no crates, no code
-   - IngestionPlugin trait exists but only TextLineIngester stub implemented
-   - **[MRFC-0050](#mrf-0050-document-ocr--knowledge-ingestion) specifies the full document ingestion pipeline** — see below for phased implementation plan
+9. **Missing Knowledge Services** (MRFC-0005 §Knowledge Services) — ✅ IMPLEMENTED
+   - [x] OCR (D2), NER (D4), Embedding (D8), Ontology (D5) — all implemented in `crates/ingestion/`
+   - [x] Full D1-D9 Document Knowledge Compiler pipeline — 195 tests
+   - [x] Multi-source ontology merging (`merge_proposals`) — Postgres, MongoDB, SQLite, Neo4j
+   - [x] MCP tools: `document_ingest`, `document_list`, `document_status`, `document_compile`
+   - [x] Studio Document Explorer: upload → ingest → compile with 7-section results UI
+   - [x] Playwright E2E test covering full workflow
 
 ### Tier 3 — Operational Gaps
 
@@ -375,11 +376,11 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
 | Tier | Items | Status |
 |---|---|---|
 | 1 — Core Architecture | Class B syscalls ✅, ABI stability ✅, API Layer ✅, Programs-as-KOs ✅ (MRFC-0030 Phase 7a–7d, 9 Active KO types, Agent Runtime, 49 tools, 37 REST endpoints) | 4/4 done |
-| 2 — High Value | fusion=exact ✅, offline prove ✅, Storage Kernel ⬜, embedding migration ⬜, Knowledge Services 🟡 (MRFC-0050 spec complete, D0 pending) | 2/5 done |
-| 3 — Operational | CI/CD ✅, Cloud KMS ✅ (AWS/Azure/GCP stubs), compliance packs ⬜, replicas ⬜, Studio S1/S2/S3 ✅, Document Explorer 🟡 | 4/6 done |
+| 2 — High Value | fusion=exact ✅, offline prove ✅, Storage Kernel ⬜, embedding migration ⬜, Knowledge Services ✅ (D1-D9 pipeline, 195 tests, multi-source ontology, Studio UI, E2E) | 3/5 done |
+| 3 — Operational | CI/CD ✅, Cloud KMS ✅ (AWS/Azure/GCP stubs), compliance packs ⬜, replicas ⬜, Studio S1/S2/S3/S4 ✅, Document Explorer ✅ (compile UI + Playwright E2E) | 5/6 done |
 | 4 — Research | Searchable enc, enclaves, PQC, federated mesh, KVM bytecode (deferred), NL frontend | All post-1.0 |
 
-**Gaps closed: 9 of 19. Tier 1 fully complete. 2 in progress (Knowledge Services via MRFC-0050, Document Explorer). 3 remaining in Tiers 2–3: Storage Kernel, embedding migration, compliance packs. Studio 13 panels complete. 15 acceptance tests. Build scripts with SHA256/archives.**
+**Gaps closed: 11 of 19. Tier 1 fully complete. 2 remaining in Tiers 2–3: Storage Kernel, embedding migration. Compliance packs deferred. Studio 13 panels + Document Explorer (S4) complete. 18 MCP acceptance tests. Build scripts with SHA256/archives. Playwright E2E test suite in tests/e2e/.**
 
 ---
 
@@ -563,7 +564,7 @@ PDF → Physical Analysis(D1+D2) → Document AST(D3) → Knowledge IR(D4) → �
 
 #### Phases D5-D9: Ontology → Resolution → Commit → Retrieval → Agent
 
-Deferred to post-D4. See v2 spec §10-20 for detailed interfaces. The existing ontology system, vector engine, scheduler, and kernel write path provide the foundation for D5-D9.
+Implemented in full. See `crates/ingestion/src/` — `ontology.rs` (D5), `resolution.rs` (D6), `commit.rs` (D7), `chunking.rs` + `embedding.rs` (D8), `pipeline.rs` (D9). All phases wired through MCP `document_compile` tool, REST API, and Studio UI. 195 tests + Playwright E2E.
 
 ### New Acceptance Criteria (v2 AC-17 through AC-27)
 
