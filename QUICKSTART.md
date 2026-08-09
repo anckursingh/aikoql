@@ -28,27 +28,110 @@ Accepts multiple MCP client connections over TCP.
 mnemosyne-mcp --listen 127.0.0.1:9090 [database_path]
 ```
 
-### TCP + Metrics
-Adds a Prometheus-compatible HTTP metrics endpoint:
+### TCP + Metrics (REST API + Studio)
+Starts the HTTP server with REST API, health endpoints, and the Studio web UI:
 
 ```
 mnemosyne-mcp --listen 127.0.0.1:9090 --metrics-addr 127.0.0.1:9091 [database_path]
 ```
 
-Health check: `GET http://127.0.0.1:9091/health`
-Metrics: `GET http://127.0.0.1:9091/metrics`
+### Metrics-Only Mode (Studio UI)
+For local use where you only need the Studio web interface and REST API (no MCP over TCP):
 
-## Available MCP Tools (23 total)
+```
+mnemosyne-mcp ./mnemosyne.redb --metrics-addr 127.0.0.1:9191
+```
+
+> **Note:** In metrics-only mode, the process must have an open stdin to stay alive.
+> Run with: `sleep 99999 | mnemosyne-mcp ./mnemosyne.redb --metrics-addr 127.0.0.1:9191`
+
+Endpoints available on the metrics port:
+| Endpoint | Description |
+|----------|-------------|
+| `GET /health` | Health check with uptime |
+| `GET /metrics` | Prometheus-compatible metrics |
+| `GET /studio` | **Studio web UI** (see below) |
+| `POST /api/login` | Studio authentication |
+| `POST /api/v1/documents` | Document upload + ingest |
+| `POST /api/v1/documents/compile` | Run full D1-D9 pipeline |
+
+## Studio UI
+
+Mnemosyne includes a built-in web-based Studio for visual knowledge management. No separate install — it's served directly by the binary.
+
+### Starting Studio
+
+```bash
+# Start with metrics-addr (any port):
+# Windows:
+sleep 99999 | .\target\release\mnemosyne-mcp.exe .\mnemosyne.redb --metrics-addr 127.0.0.1:9191
+
+# Linux:
+sleep 99999 | ./mnemosyne-mcp ./mnemosyne.redb --metrics-addr 127.0.0.1:9191
+```
+
+Open **http://127.0.0.1:9191/studio** in your browser. Login with `admin` / `admin`.
+
+### Studio Panels
+
+| Panel | What it does |
+|-------|-------------|
+| **⌨ Query Editor** | Run AIKOQL queries, explain plans, stream results |
+| **🕸 Knowledge Graph** | Visual graph traversal and exploration |
+| **📁 Explorer** | Browse knowledge objects by type |
+| **🏷 Schema** | View and manage type schemas |
+| **🔬 Inspector** | Inspect individual knowledge objects |
+| **🦉 Ontology** | Manage ontology classes, properties, relationships |
+| **⚙ Admin** | System configuration, tenants, roles |
+| **⏳ Timeline** | Temporal view of knowledge mutations |
+| **🔗 Provenance** | Trace evidence chains and data lineage |
+| **📄 Documents** | **Document ingestion and knowledge compilation** |
+
+### Document Explorer Workflow
+
+The **📄 Documents** panel implements the full D1-D9 pipeline:
+
+1. **Upload** — Choose a PDF, DOCX, HTML, or TXT file
+2. **Ingest** — Extracts text, detects OCR vs native, stores as knowledge object
+3. **Compile** — Runs the full D1-D9 knowledge compiler pipeline:
+
+| Phase | What happens |
+|-------|-------------|
+| D1-D2 | Physical analysis — text extraction + OCR detection |
+| D3 | Document AST — structured block tree |
+| D4 | Knowledge IR — entities, relations, facts, temporal assertions |
+| D5 | Ontology proposals — class, property, relationship discovery |
+| D6 | Entity resolution — match entities against existing knowledge base |
+| D7 | Reconciliation — commit plan (create/update/skip/review) |
+| D8 | Chunking + embedding — vector-ready document chunks |
+| D9 | Compiler pipeline — orchestrates D3→D8 in one call |
+
+The compilation results display all phases: stats, IR entities, ontology proposals, resolution matches, commit plan actions, evidence trail, and embedded chunks.
+
+Try it with the sample invoice PDF at:
+`C:/Users/ancku/CascadeProjects/ai-crm-platform/services/billing-processor/output/invoice_9655.pdf`
+
+## Available MCP Tools (26 total)
 
 | Category | Tools |
 |----------|-------|
 | **Knowledge CRUD** | `remember`, `forget`, `evolve`, `get` |
 | **Search** | `find_similar` (vector+text hybrid), `aikoql` (query language) |
 | **Graph** | `relate`, `traverse` |
+| **Documents** | `document_ingest`, `document_status`, `document_compile` |
+| **Agent Runtime** | `agent_memory`, `session_init`, `batch` |
 | **Audit** | `trace`, `explain`, `prove`, `verify`, `audit_report` |
 | **Backup** | `backup`, `verify_backup`, `restore`, `list_backups` |
 | **Compliance** | `compliance_report` (encryption audit) |
-| **Ops** | `metrics`, `ping`, `eval_recall`, `eval_staleness`, `eval_contradictions` |
+| **Ops** | `health`, `metrics`, `ping`, `eval_recall`, `eval_staleness`, `eval_contradictions` |
+
+### Document Pipeline Tools
+
+| Tool | Input | Output |
+|------|-------|--------|
+| `document_ingest` | Base64-encoded file + MIME type | KOID of ingested document |
+| `document_status` | KOID | Extraction status + page/chars/OCR stats |
+| `document_compile` | KOID | Full `CompilationResult`: IR, ontology, resolution, commit plan, chunks, evidence trail, stats |
 
 ## Configuration
 
@@ -71,15 +154,41 @@ AES-256-GCM with envelope encryption (KEK→DEK→Data). Field-level encryption 
 
 ## Building from Source
 
+Requires: Rust toolchain (https://rustup.rs). No other dependencies for Windows.
+
 ```bash
-# Windows:
+# Windows — fast path (just the MCP server):
+cargo build --release -p mnemosyne-mcp
+# → target/release/mnemosyne-mcp.exe
+
+# Windows — full build with scripts:
 scripts\build-release.bat
 
-# Linux:
+# Linux — native build:
+cargo build --release -p mnemosyne-mcp
 bash scripts/build-release.sh
+
+# Linux — cross-compile from Windows:
+# Requires x86_64-linux-musl-gcc (try WSL Ubuntu for native Linux builds).
+rustup target add x86_64-unknown-linux-musl
+cargo build --release -p mnemosyne-mcp --target x86_64-unknown-linux-musl
 ```
 
-Requires: Rust toolchain (https://rustup.rs). No other dependencies.
+### Running Tests
+
+```bash
+# Unit + integration tests (MCP server):
+cargo test -p mnemosyne-mcp -- --test-threads=1
+
+# Ingestion pipeline tests (190+ tests):
+cargo test -p mnemosyne-ingestion
+
+# Multi-source ontology merge tests:
+cargo test -p mnemosyne-ingestion --test multi_source_ontology
+
+# E2E Playwright tests (requires npx playwright install):
+cd tests/e2e && npx playwright test
+```
 
 ## Connecting from Code
 
@@ -126,12 +235,15 @@ By default, Mnemosyne stores all data in a single [redb](https://github.com/cber
 
 | Platform | Binary | Status |
 |----------|--------|--------|
-| Windows 10/11 | `mnemosyne-mcp.exe` | ✅ |
-| Linux x86_64 | `mnemosyne-mcp` | ✅ |
+| Windows 10/11 | `mnemosyne-mcp.exe` | ✅ Full (build + Studio + E2E) |
+| Linux x86_64 | `mnemosyne-mcp` | ✅ Full (native build or cross-compile) |
 | macOS (ARM/x86) | `mnemosyne-mcp` | Build from source |
 
 ## Next Steps
 
-- Read [IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) for architecture overview
-- Read [MRFC-0020](docs/MRFC-0020-Encryption-Key-Management-Architecture.md) for encryption design
+- Open **http://127.0.0.1:9191/studio** — explore the Studio UI
+- Read [MRFC-0050](docs/MRFC-0050-Document-OCR-HLD-LLD.md) — document pipeline design
+- Read [MRFC-0040](docs/MRFC-0040-Agent-Experience-Improvements.md) — agent runtime improvements
+- Read [IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) — architecture overview
+- Read [MRFC-0020](docs/MRFC-0020-Encryption-Key-Management-Architecture.md) — encryption design
 - Run `mnemosyne-mcp --help` for all CLI options
