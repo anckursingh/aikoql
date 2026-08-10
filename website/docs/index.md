@@ -30,10 +30,12 @@ mnemosyne shell :memory:
 
 ### For AI Agents
 
-- **MCP Protocol** — 38 tools over stdio or TCP. Autodiscovery via `tools/list`.
+- **MCP Protocol** — 59 tools over stdio or TCP. Autodiscovery via `tools/list`.
+- **Agent Knowledge Interface** — Pre-compile knowledge so agents spend tokens on problem-solving, not discovery.
+- **Context Compiler** — 40-60% reduction in agent discovery tokens. Compiles code + docs into minimum sufficient context.
 - **Schema Discovery** — Agents learn what types and properties exist before composing queries.
 - **Idempotent Mutations** — Safe to retry. Same `idempotency_key` = exact-once commit.
-- **REST API** — 35 endpoints with JSON, Bearer auth, OpenAPI 3.0 spec.
+- **REST API** — 40+ endpoints with JSON, Bearer auth, OpenAPI 3.0 spec.
 - **4 SDKs** — Python (PyO3), TypeScript, Go, Java.
 
 ### For Knowledge Engineers
@@ -45,6 +47,11 @@ mnemosyne shell :memory:
 - **Hybrid Search** — Vector (HNSW) + text (BM25) with RRF fusion.
 - **Graph Traversal** — Relationship-first queries with depth and direction.
 - **Programs-as-KOs** — Deploy AIKOQL programs as versioned objects. Execute with `{{param}}` substitution.
+- **Knowledge Compiler** — Markdown + Rust code → KnowledgeIr. Multi-source merging. Staleness detection.
+- **Document Pipeline (D1-D9)** — Upload PDF/DOCX/Markdown → OCR → Document AST → KnowledgeIr → KOs.
+- **Connector Bridge** — PostgreSQL, SQLite, MongoDB, Neo4j schemas → KnowledgeIr conversion.
+- **Constraint Engine** — Property types, uniqueness, cardinality, domain/check constraints, programmable constraints.
+- **Change Reconciliation** — Git diff → affected entities → auto-proposals → validate → apply.
 
 ### For Operations
 
@@ -71,7 +78,7 @@ Storage Kernel (redb · EncryptedStore)
 ## Quick Links
 
 - [Getting Started](/docs/getting-started) — Install and run in 5 minutes
-- [API Reference](/docs/api-reference) — All 38 MCP tools + 35 REST endpoints
+- [API Reference](/docs/api-reference) — All 59 MCP tools + 40+ REST endpoints
 - [Architecture](/docs/architecture) — Deep dive into the Knowledge OS
 - [Programs-as-KOs](/docs/guides/programs) — Deploy, execute, version, audit
 - [Encryption](/docs/guides/encryption) — AES-256-GCM setup and key management

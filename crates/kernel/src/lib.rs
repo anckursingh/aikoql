@@ -22,10 +22,13 @@ pub mod object;
 pub mod relationship;
 
 pub mod knowledge {
+    pub mod authority;
     pub mod codec;
+    pub mod evidence;
     pub mod kom;
     pub mod notify;
     pub mod ontology;
+    pub mod scope;
     pub mod scoring;
 }
 
@@ -64,14 +67,20 @@ pub use index::{
     BruteForceVectorIndex, IndexCoordinator, IndexMaintainerApi, TextIndex, TokenTextIndex,
     VectorIndex,
 };
+pub use knowledge::authority::{Authority, AuthorityRanking};
+pub use knowledge::evidence::{Evidence, EvidenceMethod};
 pub use knowledge::kom::{
-    fnv1a64, AclEntry, Action, ArithOp, CheckExpression, CompareOp, ConstraintResult,
-    ConstraintViolation, Direction, Effect, EventKind, EventRef, ExtensionMap, IdGen,
-    InferenceCandidate, KError, KResult, KnowledgeEntity, KnowledgeEvent, KnowledgeObject,
-    Lifecycle, LifecycleState, Metadata, Origin, PropertyMap, ReferentialPolicy, RelationshipRef,
-    Schema, SecurityDescriptor, SemanticBlock, UniquenessScope, Value, ViolationSeverity, KOID,
-    KOID_LEN,
+    fnv1a64, AclEntry, Action, ArithOp, CheckExpression, CompareOp, Conflict,
+    ConflictDetector, ConflictResolution, ConstraintResult, ConstraintViolation, Direction,
+    Effect, EventKind, EventRef, ExtensionMap, IdGen, InferenceCandidate, KError, KResult,
+    KnowledgeEntity, KnowledgeEvent, KnowledgeObject, Lifecycle, LifecycleState, Metadata, Origin,
+    PropertyMap, ReferentialPolicy, RelationshipRef, Schema, SecurityDescriptor, SemanticBlock,
+    UniquenessScope, Value, ViolationSeverity, KOID, KOID_LEN,
+    // MRFC-0070 relationship types
+    CALLS, CONSTRAINED_BY, CONTRADICTS, DEPENDS_ON, DERIVED_FROM, DOCUMENTED_BY, GOVERNED_BY,
+    IMPLEMENTS, IMPORTS, RELATIONSHIP_TYPES, SUPERSEDES, TESTED_BY,
 };
+pub use knowledge::scope::{Scope, ScopeResolver};
 pub use knowledge::ontology::{Cardinality, ClassDef, OntologyDef, OntologyRegistry, RelDef};
 pub use storage::store::{ConstraintCapabilities, MemoryEngine, StorageEngine, WriteBatch};
 pub use storage::store_redb::RedbEngine;

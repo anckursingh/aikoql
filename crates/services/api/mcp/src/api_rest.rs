@@ -288,6 +288,70 @@ fn route_inner(
             tool_eval_contradictions(k, &args())
         }
 
+        // Agent Knowledge Interface (MRFC-0070)
+        ("POST", "/api/v1/agent/compile-context") => {
+            need_auth()?;
+            tool_compile_context(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/agent/reconcile") => {
+            need_auth()?;
+            tool_reconcile(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/agent/connector-bridge") => {
+            need_auth()?;
+            tool_connector_bridge(k, &args())
+        }
+        ("POST", "/api/v1/agent/filter-secrets") => {
+            need_auth()?;
+            tool_filter_secrets(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/agent/explain-component") => {
+            need_auth()?;
+            tool_explain_component(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/agent/explain-decision") => {
+            need_auth()?;
+            tool_explain_decision(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/agent/trace-requirement") => {
+            need_auth()?;
+            tool_trace_requirement(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/agent/find-conflicts") => {
+            need_auth()?;
+            tool_find_conflicts(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/agent/find-stale") => {
+            need_auth()?;
+            tool_find_stale(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/agent/validate-change") => {
+            need_auth()?;
+            tool_validate_change(k, &args(), db_path)
+        }
+        ("POST", "/api/v1/agent/propose-update") => {
+            need_auth()?;
+            tool_propose_update(k, &args(), db_path)
+        }
+
+        // Memory tools (MRFC-0070)
+        ("POST", "/api/v1/agent/memory-search") => {
+            need_auth()?;
+            tool_memory_search(&args())
+        }
+        ("POST", "/api/v1/agent/memory-store") => {
+            need_auth()?;
+            tool_memory_store(&args())
+        }
+        ("POST", "/api/v1/agent/memory-update") => {
+            need_auth()?;
+            tool_memory_update(&args())
+        }
+        ("POST", "/api/v1/agent/memory-delete") => {
+            need_auth()?;
+            tool_memory_delete(&args())
+        }
+
         _ => Err("Not Found".into()),
     }
 }

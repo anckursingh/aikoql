@@ -500,21 +500,39 @@ pub struct SecurityDescriptor {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LifecycleState {
+    // Original MRFC-0001 states (tags 0-4, preserved for backward compat)
     Draft,
     Active,
     Verified,
     Archived,
     Deleted,
+    // MRFC-0070 extended states (tags 5-11)
+    Discovered,
+    Extracted,
+    Proposed,
+    Validated,
+    Accepted,
+    Updated,
+    Superseded,
 }
 
 impl LifecycleState {
     pub fn tag(self) -> u8 {
         match self {
+            // Original tags preserved
             LifecycleState::Draft => 0,
             LifecycleState::Active => 1,
             LifecycleState::Verified => 2,
             LifecycleState::Archived => 3,
             LifecycleState::Deleted => 4,
+            // New MRFC-0070 states
+            LifecycleState::Discovered => 5,
+            LifecycleState::Extracted => 6,
+            LifecycleState::Proposed => 7,
+            LifecycleState::Validated => 8,
+            LifecycleState::Accepted => 9,
+            LifecycleState::Updated => 10,
+            LifecycleState::Superseded => 11,
         }
     }
     pub fn from_tag(t: u8) -> Option<Self> {
@@ -524,17 +542,52 @@ impl LifecycleState {
             2 => Some(LifecycleState::Verified),
             3 => Some(LifecycleState::Archived),
             4 => Some(LifecycleState::Deleted),
+            5 => Some(LifecycleState::Discovered),
+            6 => Some(LifecycleState::Extracted),
+            7 => Some(LifecycleState::Proposed),
+            8 => Some(LifecycleState::Validated),
+            9 => Some(LifecycleState::Accepted),
+            10 => Some(LifecycleState::Updated),
+            11 => Some(LifecycleState::Superseded),
             _ => None,
         }
     }
 
-    /// Strict chain per MRFC-0001 §6. Any other transition is illegal and the
-    /// kernel MUST return `INVALID_STATE` deterministically.
+    /// Full MRFC-0070 knowledge lifecycle transitions.
+    /// Legacy path (backward compat):
+    ///   Draft → Active → Verified → Archived → Deleted
+    /// MRFC-0070 path:
+    ///   Discovered → Extracted → Proposed → Validated → Accepted → Active
+    ///   Active → Updated (new version) → Superseded (old version)
+    ///   Superseded → Archived → Deleted
+    /// Cross-compat: Draft ≈ Proposed, Verified ≈ Accepted
     pub fn can_transition(self, to: LifecycleState) -> bool {
         use LifecycleState::*;
         matches!(
             (self, to),
-            (Draft, Active) | (Active, Verified) | (Verified, Archived) | (Archived, Deleted)
+            // Legacy path
+            (Draft, Active)
+                | (Active, Verified)
+                | (Verified, Archived)
+                | (Archived, Deleted)
+            // MRFC-0070 creation path
+                | (Discovered, Extracted)
+                | (Extracted, Proposed)
+                | (Proposed, Validated)
+                | (Validated, Accepted)
+                | (Accepted, Active)
+            // Active phase — evolution
+                | (Active, Updated)
+                | (Updated, Superseded)
+            // Termination
+                | (Superseded, Archived)
+            // Cross-compat bridges (new states only — legacy path unchanged)
+                | (Draft, Proposed)     // Draft → MRFC-0070 path
+                | (Draft, Accepted)     // Draft → Accepted (skip legacy Verified)
+                | (Proposed, Active)    // Proposed → Active
+                | (Accepted, Archived)  // Accepted → Archived
+                | (Accepted, Updated)   // Accepted → Updated
+                | (Active, Superseded)  // Active → Superseded
         )
     }
 }
@@ -547,6 +600,13 @@ impl fmt::Display for LifecycleState {
             LifecycleState::Verified => "verified",
             LifecycleState::Archived => "archived",
             LifecycleState::Deleted => "deleted",
+            LifecycleState::Discovered => "discovered",
+            LifecycleState::Extracted => "extracted",
+            LifecycleState::Proposed => "proposed",
+            LifecycleState::Validated => "validated",
+            LifecycleState::Accepted => "accepted",
+            LifecycleState::Updated => "updated",
+            LifecycleState::Superseded => "superseded",
         };
         write!(f, "{}", s)
     }
@@ -685,6 +745,186 @@ impl KnowledgeObject {
             }
         }
         Ok(())
+    }
+
+    // ---- MRFC-0070 Phase A0: Authority & Scope helpers (stored in extensions) ----
+
+    /// Extension key for `Authority` value.
+    pub const EXT_AUTHORITY: &str = "authority";
+    /// Extension key for `Scope` value.
+    pub const EXT_SCOPE: &str = "scope";
+
+    /// Get the Authority level from extensions, if set.
+    pub fn authority(&self) -> Option<crate::knowledge::authority::Authority> {
+        self.extensions
+            .get(Self::EXT_AUTHORITY)
+            .and_then(|v| match v {
+                Value::Text(s) => crate::knowledge::authority::Authority::from_str(s),
+                _ => None,
+            })
+    }
+
+    /// Set the Authority level in extensions.
+    pub fn set_authority(&mut self, a: crate::knowledge::authority::Authority) {
+        self.extensions
+            .insert(Self::EXT_AUTHORITY.into(), Value::Text(a.as_str().into()));
+    }
+
+    /// Get the Scope from extensions, if set.
+    pub fn scope(&self) -> Option<crate::knowledge::scope::Scope> {
+        self.extensions
+            .get(Self::EXT_SCOPE)
+            .and_then(|v| match v {
+                Value::Text(s) => crate::knowledge::scope::Scope::from_str(s),
+                _ => None,
+            })
+    }
+
+    /// Set the Scope in extensions.
+    pub fn set_scope(&mut self, s: crate::knowledge::scope::Scope) {
+        self.extensions
+            .insert(Self::EXT_SCOPE.into(), Value::Text(s.as_str().into()));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MRFC-0070 Phase A0: Canonical Relationship Types
+// ---------------------------------------------------------------------------
+
+/// Dependency relationship: source depends on target.
+pub const DEPENDS_ON: &str = "depends_on";
+/// Implementation relationship: source implements target (interface/contract).
+pub const IMPLEMENTS: &str = "implements";
+/// Test coverage: source is tested by target (test → implementation).
+pub const TESTED_BY: &str = "tested_by";
+/// Governance: source is governed by target (policy/rule).
+pub const GOVERNED_BY: &str = "governed_by";
+/// Documentation: source is documented by target.
+pub const DOCUMENTED_BY: &str = "documented_by";
+/// Constraint: source is constrained by target (rule/requirement).
+pub const CONSTRAINED_BY: &str = "constrained_by";
+/// Call graph: source calls target (function call).
+pub const CALLS: &str = "calls";
+/// Import: source imports target (module import).
+pub const IMPORTS: &str = "imports";
+/// Supersession: source supersedes target (newer version).
+pub const SUPERSEDES: &str = "supersedes";
+/// Contradiction: source contradicts target (conflicting claim).
+pub const CONTRADICTS: &str = "contradicts";
+/// Derivation: source is derived from target.
+pub const DERIVED_FROM: &str = "derived_from";
+
+/// All MRFC-0070 relationship types for iteration/discovery.
+pub const RELATIONSHIP_TYPES: &[&str] = &[
+    DEPENDS_ON,
+    IMPLEMENTS,
+    TESTED_BY,
+    GOVERNED_BY,
+    DOCUMENTED_BY,
+    CONSTRAINED_BY,
+    CALLS,
+    IMPORTS,
+    SUPERSEDES,
+    CONTRADICTS,
+    DERIVED_FROM,
+];
+
+// ---------------------------------------------------------------------------
+// MRFC-0070 Phase A0: Conflict Knowledge Object
+// ---------------------------------------------------------------------------
+
+/// A Conflict KO represents a contradiction between two Claims.
+///
+/// Created by `ConflictDetector` when two claims make contradictory statements
+/// about the same subject. The Conflict has a resolution state machine:
+///   Unresolved → UnderReview → Resolved (with resolution rationale).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Conflict {
+    /// KOID of the first contradictory claim.
+    pub claim_a: KOID,
+    /// KOID of the second contradictory claim.
+    pub claim_b: KOID,
+    /// Human-readable description of the contradiction.
+    pub description: String,
+    /// Resolution state.
+    pub resolution: ConflictResolution,
+    /// How the conflict was resolved (if resolved).
+    pub resolution_rationale: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConflictResolution {
+    /// Conflict has not been reviewed yet.
+    Unresolved,
+    /// Conflict is under active review.
+    UnderReview,
+    /// Claim A takes precedence over Claim B.
+    ResolvedAPreferred,
+    /// Claim B takes precedence over Claim A.
+    ResolvedBPreferred,
+    /// Both claims are valid in different contexts/scopes.
+    ResolvedBothValid,
+    /// Both claims rejected, replaced by a new claim.
+    ResolvedReplaced,
+}
+
+impl ConflictResolution {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ConflictResolution::Unresolved => "unresolved",
+            ConflictResolution::UnderReview => "under_review",
+            ConflictResolution::ResolvedAPreferred => "resolved_a_preferred",
+            ConflictResolution::ResolvedBPreferred => "resolved_b_preferred",
+            ConflictResolution::ResolvedBothValid => "resolved_both_valid",
+            ConflictResolution::ResolvedReplaced => "resolved_replaced",
+        }
+    }
+
+    pub fn is_resolved(self) -> bool {
+        !matches!(
+            self,
+            ConflictResolution::Unresolved | ConflictResolution::UnderReview
+        )
+    }
+}
+
+/// Detects contradictory claims from two KOs.
+///
+/// ponytail: simple property-level comparison for now; full semantic
+/// contradiction detection (e.g. via embedding similarity) is Phase A4.
+pub struct ConflictDetector;
+
+impl ConflictDetector {
+    /// Detect conflicts between two Claim KOs by comparing their properties.
+    /// Returns `Some(Conflict)` if the claims contradict each other,
+    /// `None` otherwise.
+    pub fn detect(claim_a_ko: &KnowledgeObject, claim_b_ko: &KnowledgeObject) -> Option<Conflict> {
+        // Only compare Claim-typed KOs
+        if claim_a_ko.metadata.type_name != "Claim"
+            || claim_b_ko.metadata.type_name != "Claim"
+        {
+            return None;
+        }
+        // Same subject? Check "statement" and "subject" properties
+        let subj_a = claim_a_ko
+            .properties
+            .get("subject")
+            .or_else(|| claim_a_ko.properties.get("statement"));
+        let subj_b = claim_b_ko
+            .properties
+            .get("subject")
+            .or_else(|| claim_b_ko.properties.get("statement"));
+
+        match (subj_a, subj_b) {
+            (Some(Value::Text(a)), Some(Value::Text(b))) if a == b => Some(Conflict {
+                claim_a: claim_a_ko.koid,
+                claim_b: claim_b_ko.koid,
+                description: format!("Contradictory claims about: {}", a),
+                resolution: ConflictResolution::Unresolved,
+                resolution_rationale: None,
+            }),
+            _ => None,
+        }
     }
 }
 

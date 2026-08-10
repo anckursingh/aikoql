@@ -151,6 +151,63 @@ pub use pipeline::{
     PhaseStats, PipelineStats,
 };
 
+// Phase A1: Markdown-to-Knowledge Compiler
+mod markdown;
+pub use markdown::{
+    compile_markdown_file, compile_markdown_string, detect_instruction_injection, is_instruction,
+    render_ir_to_markdown, MarkdownSemanticAnalyzer, SectionKind,
+};
+
+// Phase A2: Code-to-Knowledge Compiler
+mod code;
+pub use code::{compile_rust_file, compile_rust_source};
+
+// Phase A3: Multi-source Knowledge Graph merging
+mod merge;
+pub use merge::{evidence_trail, merge_knowledge_ir};
+
+// Phase A4: Staleness detection
+mod staleness;
+pub use staleness::{detect_staleness, StalenessWarning};
+
+// Phase A5: Context Compiler
+mod context;
+pub use context::{
+    compile_context, compile_context_cached, context_cache_stats, expand_entity,
+    expand_relationship, expand_source, invalidate_context_cache, render_context_markdown,
+    ContextPackage, EntityExpansion, RankedEntity, RankedFact, RankedRelation,
+};
+
+mod reconcile;
+pub use reconcile::{reconcile, stale_entities, AffectedEntity, ImpactSeverity, ReconciliationReport};
+
+mod connector_bridge;
+pub use connector_bridge::{
+    connector_metadata_to_ir, discover_connector_schema, ConnectorMetadata, ContainerInfo, FieldInfo,
+    ReferenceInfo,
+};
+
+mod secret_filter;
+pub use secret_filter::{filter_secrets, SecretFinding, SecretKind};
+
+mod reconciliation_workflow;
+pub use reconciliation_workflow::{
+    apply_proposal, auto_proposals_from_stale, process_workflow, validate_proposal, ApplyResult,
+    ValidationResult, ValidatedProposal, WorkflowReport,
+};
+
+mod ingest_dir;
+pub use ingest_dir::{build_report, format_report, ingest_directory, IngestReport, IngestResult};
+
+mod aikoql_ops;
+pub use aikoql_ops::{
+    explain_component, explain_decision, find_conflicts, find_stale_documentation,
+    propose_knowledge_update, trace_requirement, validate_change, AffectedKnowledgeInfo,
+    ChangeValidation, ComponentExplanation, ConflictReport, ContradictoryClaim,
+    DecisionExplanation, KnowledgeProposal, ProposalAction, ProposalStatus, RequirementTrace,
+    StaleDocumentationReport, StaleEntityInfo,
+};
+
 /// A single page of extracted text.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageModel {

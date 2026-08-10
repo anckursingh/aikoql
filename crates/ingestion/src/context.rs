@@ -1,0 +1,772 @@
+//! MRFC-0070 Phase A5: Context Compiler — THE KILLER FEATURE.
+//!
+//! Given a task description and a merged KnowledgeIr, compiles the minimum
+//! sufficient context package under a token budget.
+//!
+//! Pipeline: Score → Rank → Pack → Trim.
+
+use crate::ir::KnowledgeIr;
+
+/// A context package ready for agent consumption.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ContextPackage {
+    /// Entities most relevant to the task.
+    pub entities: Vec<RankedEntity>,
+    /// Facts/rules/claims relevant to the task.
+    pub facts: Vec<RankedFact>,
+    /// Relationships relevant to the task.
+    pub relations: Vec<RankedRelation>,
+    /// Total estimated tokens in this package.
+    pub estimated_tokens: usize,
+    /// Whether the package was trimmed to fit the budget.
+    pub trimmed: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RankedEntity {
+    pub name: String,
+    pub type_hint: Option<String>,
+    pub score: f32,
+    pub mentions: Vec<String>,
+    /// Why was this entity included in the context?
+    pub justification: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RankedFact {
+    pub statement: String,
+    pub entities: Vec<String>,
+    pub score: f32,
+    /// Why was this fact included?
+    pub justification: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RankedRelation {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub score: f32,
+    /// Why was this relation included?
+    pub justification: String,
+}
+
+/// Compile a context package from merged KnowledgeIr for a task.
+///
+/// - `task`: natural language description of what the agent needs to do.
+/// - `ir`: merged KnowledgeIr from all compilers.
+/// - `token_budget`: max tokens for the context package (0 = unlimited).
+pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> ContextPackage {
+    let task_lower = task.to_lowercase();
+    let task_words: Vec<&str> = task_lower.split_whitespace().collect();
+
+    // Score entities by name overlap + mention overlap with task
+    let mut entities: Vec<RankedEntity> = ir
+        .entities
+        .iter()
+        .map(|e| {
+            let name_score = keyword_score(&e.name.to_lowercase(), &task_words);
+            let mut mention_score: f32 = 0.0;
+            let mut matched_mentions = Vec::new();
+            for mention in &e.mentions {
+                let ms = keyword_score(&mention.to_lowercase(), &task_words) * 0.5;
+                if ms > 0.0 {
+                    matched_mentions.push(mention.clone());
+                }
+                mention_score += ms;
+            }
+            let mut score = name_score + mention_score;
+            score *= 1.0 + (e.mentions.len() as f32 * 0.1).min(0.5);
+
+            let justification = if name_score > 0.0 {
+                format!(
+                    "name matches task keywords (score: {:.1}), {} mentions",
+                    name_score,
+                    e.mentions.len()
+                )
+            } else if !matched_mentions.is_empty() {
+                format!(
+                    "mentions match task: {}",
+                    matched_mentions.first().unwrap()
+                )
+            } else {
+                format!("type '{}' has {} mentions", e.type_hint.as_deref().unwrap_or("unknown"), e.mentions.len())
+            };
+
+            RankedEntity {
+                name: e.name.clone(),
+                type_hint: e.type_hint.clone(),
+                score,
+                mentions: e.mentions.clone(),
+                justification,
+            }
+        })
+        .collect();
+    entities.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Score facts by statement overlap with task
+    let mut facts: Vec<RankedFact> = ir
+        .facts
+        .iter()
+        .map(|f| {
+            let stmt_score = keyword_score(&f.statement.to_lowercase(), &task_words);
+            // Boost facts connected to high-scoring entities
+            let entity_boost: f32 = f
+                .entities
+                .iter()
+                .map(|en| {
+                    entities
+                        .iter()
+                        .find(|e| e.name == *en)
+                        .map(|e| e.score * 0.3)
+                        .unwrap_or(0.0)
+                })
+                .sum();
+            let score = stmt_score + entity_boost.min(0.5);
+
+            let justification = if stmt_score > 0.0 {
+                format!("statement matches task keywords (score: {:.1})", stmt_score)
+            } else if entity_boost > 0.0 {
+                format!("connected to relevant entity: {}", f.entities.join(", "))
+            } else {
+                "general domain knowledge".into()
+            };
+
+            RankedFact {
+                statement: f.statement.clone(),
+                entities: f.entities.clone(),
+                score,
+                justification,
+            }
+        })
+        .collect();
+    facts.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Score relations by subject, predicate, and object overlap with task + entities
+    let mut relations: Vec<RankedRelation> = ir
+        .relations
+        .iter()
+        .map(|r| {
+            let subj_score = entities
+                .iter()
+                .find(|e| e.name == r.subject)
+                .map(|e| e.score)
+                .unwrap_or(0.0);
+            let obj_score = entities
+                .iter()
+                .find(|e| e.name == r.object)
+                .map(|e| e.score)
+                .unwrap_or(0.0);
+            let pred_score = keyword_score(&r.predicate.to_lowercase(), &task_words);
+            let score = subj_score.max(obj_score) + pred_score * 0.5;
+
+            let justification = if pred_score > 0.0 {
+                format!(
+                    "predicate '{}' matches task, connected entities: {} ↔ {}",
+                    r.predicate, r.subject, r.object
+                )
+            } else {
+                format!(
+                    "connects relevant entities: {} → {} (via {})",
+                    r.subject, r.object, r.predicate
+                )
+            };
+
+            RankedRelation {
+                subject: r.subject.clone(),
+                predicate: r.predicate.clone(),
+                object: r.object.clone(),
+                score,
+                justification,
+            }
+        })
+        .collect();
+    relations.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Pack and trim to token budget
+    let unlimited = token_budget == 0;
+    let mut pkg = ContextPackage::default();
+    let mut tokens = 0usize;
+
+    for e in &entities {
+        if e.score <= 0.0 {
+            break;
+        }
+        let est = est_tokens(&e.name) + e.mentions.iter().map(|m| est_tokens(m)).sum::<usize>();
+        if !unlimited && tokens + est > token_budget {
+            pkg.trimmed = true;
+            break;
+        }
+        tokens += est;
+        pkg.entities.push(e.clone());
+    }
+
+    for f in &facts {
+        if f.score <= 0.0 {
+            break;
+        }
+        let est = est_tokens(&f.statement) + f.entities.iter().map(|e| est_tokens(e)).sum::<usize>();
+        if !unlimited && tokens + est > token_budget {
+            pkg.trimmed = true;
+            break;
+        }
+        tokens += est;
+        pkg.facts.push(f.clone());
+    }
+
+    for r in &relations {
+        if r.score <= 0.0 {
+            break;
+        }
+        let est =
+            est_tokens(&r.subject) + est_tokens(&r.predicate) + est_tokens(&r.object);
+        if !unlimited && tokens + est > token_budget {
+            pkg.trimmed = true;
+            break;
+        }
+        tokens += est;
+        pkg.relations.push(r.clone());
+    }
+
+    pkg.estimated_tokens = tokens;
+    pkg
+}
+
+/// Score a text against task keywords. Each exact word match adds 1.0,
+/// partial (substring) match adds 0.3.
+fn keyword_score(text: &str, task_words: &[&str]) -> f32 {
+    let mut score: f32 = 0.0;
+    for &word in task_words {
+        if word.len() < 3 {
+            continue; // skip short words
+        }
+        if text.contains(word) {
+            score += 1.0;
+        } else {
+            // Partial match: word fragments
+            for chunk in text.split_whitespace() {
+                if chunk.contains(word) || word.contains(chunk) {
+                    score += 0.3;
+                    break;
+                }
+            }
+        }
+    }
+    score
+}
+
+/// Conservative token estimate: 1 token ≈ 4 chars for English text.
+fn est_tokens(text: &str) -> usize {
+    (text.len() + 3) / 4
+}
+
+/// Render a ContextPackage as a human-readable Markdown string for agent consumption.
+pub fn render_context_markdown(pkg: &ContextPackage) -> String {
+    let mut md = String::new();
+
+    if !pkg.entities.is_empty() {
+        md.push_str("## Relevant Components\n\n");
+        for e in &pkg.entities {
+            let type_str = e
+                .type_hint
+                .as_deref()
+                .unwrap_or("Unknown");
+            md.push_str(&format!("- **{}** ({})", e.name, type_str));
+            if !e.mentions.is_empty() {
+                md.push_str(&format!(": {}", e.mentions.first().unwrap()));
+            }
+            md.push('\n');
+        }
+        md.push('\n');
+    }
+
+    if !pkg.facts.is_empty() {
+        md.push_str("## Relevant Facts & Rules\n\n");
+        for f in &pkg.facts {
+            md.push_str(&format!("- {}\n", f.statement));
+        }
+        md.push('\n');
+    }
+
+    if !pkg.relations.is_empty() {
+        md.push_str("## Relevant Relationships\n\n");
+        for r in &pkg.relations {
+            md.push_str(&format!(
+                "- `{}` --[{}]--> `{}`\n",
+                r.subject, r.predicate, r.object
+            ));
+        }
+        md.push('\n');
+    }
+
+    if pkg.trimmed {
+        md.push_str(
+            "> ⚠️ Context trimmed to fit token budget. Some relevant items were omitted.\n\n",
+        );
+    }
+
+    md
+}
+
+// ---------------------------------------------------------------------------
+// Progressive Context Expansion
+// ---------------------------------------------------------------------------
+
+/// Expand context for a specific entity — return ALL its facts, relations,
+/// evidence details, and source information.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct EntityExpansion {
+    pub entity: RankedEntity,
+    pub all_facts: Vec<RankedFact>,
+    pub all_relations: Vec<RankedRelation>,
+    pub evidence_source: Option<String>,
+    pub evidence_confidence: f32,
+}
+
+/// EXPAND KO: get full details about a specific entity in the context.
+pub fn expand_entity(
+    entity_name: &str,
+    pkg: &ContextPackage,
+    ir: &KnowledgeIr,
+) -> Option<EntityExpansion> {
+    let entity = pkg.entities.iter().find(|e| e.name == entity_name)?.clone();
+
+    let all_facts: Vec<RankedFact> = ir
+        .facts
+        .iter()
+        .filter(|f| f.entities.contains(&entity_name.to_string()))
+        .map(|f| RankedFact {
+            statement: f.statement.clone(),
+            entities: f.entities.clone(),
+            score: f.confidence,
+            justification: format!("references entity '{}'", entity_name),
+        })
+        .collect();
+
+    let all_relations: Vec<RankedRelation> = ir
+        .relations
+        .iter()
+        .filter(|r| r.subject == entity_name || r.object == entity_name)
+        .map(|r| RankedRelation {
+            subject: r.subject.clone(),
+            predicate: r.predicate.clone(),
+            object: r.object.clone(),
+            score: r.confidence,
+            justification: format!(
+                "connects '{}' with '{}'",
+                r.subject, r.object
+            ),
+        })
+        .collect();
+
+    let src_entity = ir.entities.iter().find(|e| e.name == entity_name);
+    let source = src_entity.and_then(|e| e.evidence.document_id.clone());
+    let confidence = src_entity.map(|e| e.confidence).unwrap_or(0.0);
+
+    Some(EntityExpansion {
+        entity,
+        all_facts,
+        all_relations,
+        evidence_source: source,
+        evidence_confidence: confidence,
+    })
+}
+
+/// EXPAND RELATIONSHIP: get the full chain of relationships connected to entities
+/// in the context, tracing transitive dependencies up to a given depth.
+pub fn expand_relationship(
+    entity_name: &str,
+    ir: &KnowledgeIr,
+    depth: usize,
+) -> Vec<Vec<RankedRelation>> {
+    let mut chains = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut queue: Vec<(String, usize, Vec<RankedRelation>)> =
+        vec![(entity_name.to_string(), 0, vec![])];
+
+    while let Some((current, d, chain)) = queue.pop() {
+        if d >= depth || visited.contains(&current) {
+            if !chain.is_empty() {
+                chains.push(chain);
+            }
+            continue;
+        }
+        visited.insert(current.clone());
+
+        let neighbors: Vec<_> = ir
+            .relations
+            .iter()
+            .filter(|r| r.subject == current || r.object == current)
+            .collect();
+
+        if neighbors.is_empty() && !chain.is_empty() {
+            chains.push(chain.clone());
+        }
+
+        for rel in &neighbors {
+            let next = if rel.subject == current {
+                &rel.object
+            } else {
+                &rel.subject
+            };
+            let mut new_chain = chain.clone();
+            new_chain.push(RankedRelation {
+                subject: rel.subject.clone(),
+                predicate: rel.predicate.clone(),
+                object: rel.object.clone(),
+                score: rel.confidence,
+                justification: format!(
+                    "depth {}: {} → {}",
+                    d + 1,
+                    current,
+                    next
+                ),
+            });
+            queue.push((next.clone(), d + 1, new_chain));
+        }
+    }
+
+    chains
+}
+
+/// EXPAND SOURCE: get all entities and facts from a specific evidence source.
+pub fn expand_source(
+    source_hint: &str,
+    ir: &KnowledgeIr,
+) -> (Vec<RankedEntity>, Vec<RankedFact>) {
+    let entities: Vec<RankedEntity> = ir
+        .entities
+        .iter()
+        .filter(|e| {
+            e.evidence
+                .document_id
+                .as_deref()
+                .map_or(false, |s| s.contains(source_hint))
+        })
+        .map(|e| RankedEntity {
+            name: e.name.clone(),
+            type_hint: e.type_hint.clone(),
+            score: e.confidence,
+            mentions: e.mentions.clone(),
+            justification: format!("from source: {}", source_hint),
+        })
+        .collect();
+
+    let entity_names: std::collections::HashSet<&str> =
+        entities.iter().map(|e| e.name.as_str()).collect();
+
+    let facts: Vec<RankedFact> = ir
+        .facts
+        .iter()
+        .filter(|f| {
+            f.entities
+                .iter()
+                .any(|en| entity_names.contains(en.as_str()))
+        })
+        .map(|f| RankedFact {
+            statement: f.statement.clone(),
+            entities: f.entities.clone(),
+            score: f.confidence,
+            justification: format!("connected to source: {}", source_hint),
+        })
+        .collect();
+
+    (entities, facts)
+}
+
+// ---------------------------------------------------------------------------
+// Context Cache
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// A cache entry: compiled context + insertion time.
+#[derive(Clone, Debug)]
+struct CacheEntry {
+    pkg: ContextPackage,
+    inserted_at: Instant,
+    knowledge_hash: u64,
+}
+
+/// Simple task→context cache with TTL and invalidation on knowledge change.
+static CONTEXT_CACHE: LazyLock<Mutex<HashMap<String, CacheEntry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Hash the IR to detect knowledge changes (invalidates cache).
+fn ir_fingerprint(ir: &KnowledgeIr) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    ir.entities.len().hash(&mut h);
+    ir.facts.len().hash(&mut h);
+    ir.relations.len().hash(&mut h);
+    for e in &ir.entities {
+        e.name.hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Compile context with caching. Returns None when cache hit,
+/// or Some(ContextPackage) on cache miss (caller should use the result).
+pub fn compile_context_cached(
+    task: &str,
+    ir: &KnowledgeIr,
+    token_budget: usize,
+    ttl_secs: u64,
+) -> ContextPackage {
+    let fp = ir_fingerprint(ir);
+    let cache_key = format!("{}:{}:{}", task, token_budget, fp);
+
+    // Check cache
+    {
+        let cache = CONTEXT_CACHE.lock().unwrap();
+        if let Some(entry) = cache.get(&cache_key) {
+            if entry.inserted_at.elapsed() < Duration::from_secs(ttl_secs)
+                && entry.knowledge_hash == fp
+            {
+                return entry.pkg.clone();
+            }
+        }
+    }
+
+    // Cache miss — compile fresh
+    let pkg = compile_context(task, ir, token_budget);
+
+    // Store in cache
+    {
+        let mut cache = CONTEXT_CACHE.lock().unwrap();
+        // ponytail: simple eviction — drop oldest entry if > 100 entries
+        if cache.len() > 100 {
+            let oldest_key = cache
+                .iter()
+                .min_by_key(|(_, v)| v.inserted_at)
+                .map(|(k, _)| k.clone());
+            if let Some(k) = oldest_key {
+                cache.remove(&k);
+            }
+        }
+        cache.insert(
+            cache_key,
+            CacheEntry {
+                pkg: pkg.clone(),
+                inserted_at: Instant::now(),
+                knowledge_hash: fp,
+            },
+        );
+    }
+
+    pkg
+}
+
+/// Invalidate all cached contexts (call when knowledge changes).
+pub fn invalidate_context_cache() {
+    let mut cache = CONTEXT_CACHE.lock().unwrap();
+    cache.clear();
+}
+
+/// Get cache statistics.
+pub fn context_cache_stats() -> (usize, u64) {
+    let cache = CONTEXT_CACHE.lock().unwrap();
+    let count = cache.len();
+    let oldest = cache
+        .values()
+        .map(|e| e.inserted_at.elapsed().as_secs())
+        .max()
+        .unwrap_or(0);
+    (count, oldest)
+}
+
+#[cfg(test)]
+mod expansion_tests {
+    use super::*;
+    use crate::ir::{EntityCandidate, Evidence, FactCandidate, RelationCandidate};
+
+    fn sample_ir() -> KnowledgeIr {
+        KnowledgeIr {
+            entities: vec![
+                EntityCandidate {
+                    name: "TransactionEngine".into(),
+                    type_hint: Some("Struct".into()),
+                    mentions: vec!["Handles MVCC transaction isolation".into()],
+                    confidence: 0.85,
+                    evidence: Evidence {
+                        document_id: Some("crates/kernel/src/transaction.rs".into()),
+                        ..Default::default()
+                    },
+                },
+                EntityCandidate {
+                    name: "ConstraintEngine".into(),
+                    type_hint: Some("Struct".into()),
+                    mentions: vec!["Validates constraint rules".into()],
+                    confidence: 0.85,
+                    evidence: Evidence::default(),
+                },
+            ],
+            facts: vec![
+                FactCandidate {
+                    statement: "must use MVCC for all writes".into(),
+                    entities: vec!["TransactionEngine".into()],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+            ],
+            relations: vec![RelationCandidate {
+                subject: "ConstraintEngine".into(),
+                predicate: "depends_on".into(),
+                object: "TransactionEngine".into(),
+                confidence: 0.8,
+                evidence: Evidence::default(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn expand_entity_returns_all_facts_and_relations() {
+        let ir = sample_ir();
+        let pkg = compile_context("transaction", &ir, 0);
+        let expansion = expand_entity("TransactionEngine", &pkg, &ir).unwrap();
+        assert_eq!(expansion.entity.name, "TransactionEngine");
+        assert!(!expansion.all_facts.is_empty());
+        assert!(!expansion.all_relations.is_empty());
+        assert!(expansion.evidence_source.is_some());
+    }
+
+    #[test]
+    fn expand_relationship_traces_dependencies() {
+        let ir = sample_ir();
+        let chains = expand_relationship("ConstraintEngine", &ir, 3);
+        // Should find the ConstraintEngine → TransactionEngine chain
+        assert!(!chains.is_empty());
+    }
+
+    #[test]
+    fn context_cache_hits_on_repeat_task() {
+        let ir = sample_ir();
+        // Invalidate first to ensure clean state
+        invalidate_context_cache();
+
+        let pkg1 = compile_context_cached("transaction", &ir, 0, 300);
+        let pkg2 = compile_context_cached("transaction", &ir, 0, 300);
+        // Both should return the same context (from cache on second call)
+        assert_eq!(pkg1.estimated_tokens, pkg2.estimated_tokens);
+        assert_eq!(pkg1.entities.len(), pkg2.entities.len());
+    }
+
+    #[test]
+    fn context_cache_invalidates_on_clear() {
+        let ir = sample_ir();
+        invalidate_context_cache();
+        let _ = compile_context_cached("transaction", &ir, 0, 300);
+        let (count, _) = context_cache_stats();
+        assert!(count > 0, "cache should have entries after compile");
+        invalidate_context_cache();
+        let (count2, _) = context_cache_stats();
+        assert_eq!(count2, 0, "cache should be empty after invalidate");
+    }
+
+    #[test]
+    fn expand_source_filters_by_evidence_path() {
+        let ir = sample_ir();
+        let (entities, _facts) = expand_source("transaction.rs", &ir);
+        assert!(!entities.is_empty());
+        assert!(entities.iter().any(|e| e.name == "TransactionEngine"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::{EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate};
+
+    fn sample_ir() -> KnowledgeIr {
+        KnowledgeIr {
+            entities: vec![
+                EntityCandidate {
+                    name: "TransactionEngine".into(),
+                    type_hint: Some("Struct".into()),
+                    mentions: vec!["Handles MVCC transaction isolation".into()],
+                    confidence: 0.85,
+                    evidence: Evidence::default(),
+                },
+                EntityCandidate {
+                    name: "ConstraintEngine".into(),
+                    type_hint: Some("Struct".into()),
+                    mentions: vec!["Validates constraint rules".into()],
+                    confidence: 0.85,
+                    evidence: Evidence::default(),
+                },
+                EntityCandidate {
+                    name: "AuthService".into(),
+                    type_hint: Some("Module".into()),
+                    mentions: vec!["Handles authentication".into()],
+                    confidence: 0.7,
+                    evidence: Evidence::default(),
+                },
+            ],
+            facts: vec![
+                FactCandidate {
+                    statement: "must use MVCC for all writes".into(),
+                    entities: vec!["TransactionEngine".into()],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+                FactCandidate {
+                    statement: "constraints are validated at commit time".into(),
+                    entities: vec!["ConstraintEngine".into()],
+                    confidence: 0.85,
+                    evidence: Evidence::default(),
+                },
+                FactCandidate {
+                    statement: "AuthService supports OAuth2 and JWT".into(),
+                    entities: vec!["AuthService".into()],
+                    confidence: 0.7,
+                    evidence: Evidence::default(),
+                },
+            ],
+            relations: vec![
+                RelationCandidate {
+                    subject: "ConstraintEngine".into(),
+                    predicate: "DEPENDS_ON".into(),
+                    object: "TransactionEngine".into(),
+                    confidence: 0.8,
+                    evidence: Evidence::default(),
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn compile_ranks_by_task_relevance() {
+        let ir = sample_ir();
+        let pkg = compile_context("add constraint validation to transaction", &ir, 0);
+        assert!(!pkg.entities.is_empty());
+        // Both ConstraintEngine and TransactionEngine should rank high (order depends on exact overlap)
+        let names: Vec<&str> = pkg.entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"ConstraintEngine"), "should include ConstraintEngine");
+        assert!(names.contains(&"TransactionEngine"), "should include TransactionEngine");
+        // AuthService should not rank for this task
+        assert!(!names.contains(&"AuthService"), "AuthService should NOT rank for constraint task");
+    }
+
+    #[test]
+    fn compile_respects_token_budget() {
+        let ir = sample_ir();
+        let pkg = compile_context("auth", &ir, 5); // very small budget
+        assert!(pkg.trimmed, "should be trimmed on tiny budget");
+        assert!(pkg.estimated_tokens <= 10, "should be near the budget");
+    }
+
+    #[test]
+    fn render_produces_markdown() {
+        let ir = sample_ir();
+        let pkg = compile_context("transaction", &ir, 0);
+        let md = render_context_markdown(&pkg);
+        assert!(md.contains("TransactionEngine"));
+        assert!(md.contains("DEPENDS_ON"));
+    }
+}

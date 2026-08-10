@@ -60,12 +60,13 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{error, info, info_span, warn};
 
 static SERVER_START: OnceLock<Instant> = OnceLock::new();
 static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 static STREAM_ID: AtomicU64 = AtomicU64::new(0);
+static MEMORY_DIR: OnceLock<String> = OnceLock::new();
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
@@ -133,6 +134,17 @@ fn main() {
         }
         Some("audit") => {
             run_audit(arg_after.unwrap_or("./mnemosyne.redb"));
+            return;
+        }
+        Some("ingest-dir") => {
+            let path = arg_after.unwrap_or(".");
+            let db = arg_after2.unwrap_or("./mnemosyne.redb");
+            run_ingest_dir(path, db);
+            return;
+        }
+        Some("report") => {
+            let path = arg_after.unwrap_or(".");
+            run_report(path);
             return;
         }
         Some("import") => {
@@ -397,6 +409,7 @@ fn main() {
     let mut listen_addr: Option<String> = None;
     let mut metrics_addr: Option<String> = None;
     let mut db_path = "./mnemosyne.redb".to_string();
+    let mut memory_dir = "./memory".to_string();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -416,12 +429,20 @@ fn main() {
                 );
                 i += 2;
             }
+            "--memory-dir" => {
+                memory_dir = args
+                    .get(i + 1)
+                    .cloned()
+                    .unwrap_or_else(|| "./memory".into());
+                i += 2;
+            }
             _ => {
                 db_path = args[i].clone();
                 i += 1;
             }
         }
     }
+    MEMORY_DIR.set(memory_dir).ok();
 
     let engine = RedbEngine::open(&db_path).expect("open store");
     let kernel = Arc::new(
@@ -563,6 +584,8 @@ fn print_usage() {
         "  audit [DB]             Print encryption compliance report\n",
         "  keygen [PATH]          Generate an encryption master key\n",
         "  import <SOURCE> [ARGS]  Import from DB (postgres, sqlite, mongodb)\n",
+        "  ingest-dir [PATH] [DB] Ingest directory into knowledge base\n",
+        "  report [PATH]          Print knowledge report for directory\n",
         "\n",
         "Server options (serve mode):\n",
         "  --listen ADDR          TCP listen address (e.g., 127.0.0.1:9090)\n",
@@ -579,6 +602,10 @@ fn print_usage() {
         "  mnemosyne-mcp audit                           # Compliance report\n",
         "  mnemosyne-mcp keygen ./master.key             # Generate key\n",
         "  mnemosyne-mcp import 'host=localhost db=mydb'   # Import from PostgreSQL\n",
+        "  mnemosyne-mcp ingest-dir                        # Ingest CWD\n",
+        "  mnemosyne-mcp ingest-dir ~/my-project            # Ingest specific path\n",
+        "  mnemosyne-mcp report                            # Report on CWD\n",
+        "  mnemosyne-mcp report ~/my-project                # Report on specific path\n",
     ));
 }
 
@@ -669,6 +696,99 @@ fn run_audit(db_path: &str) {
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
+        }
+    }
+}
+
+fn run_report(path: &str) {
+    eprintln!("Analyzing directory: {}\n", path);
+
+    let result = match mnemosyne_ingestion::ingest_directory(path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let report = mnemosyne_ingestion::build_report(
+        &result.ir,
+        path,
+        result.files_processed,
+        result.files_skipped,
+        result.dirs_skipped,
+        result.binary_skipped,
+    );
+    println!("{}", mnemosyne_ingestion::format_report(&report));
+}
+
+fn run_ingest_dir(path: &str, db_path: &str) {
+    eprintln!("Ingesting directory: {}\n", path);
+
+    let result = match mnemosyne_ingestion::ingest_directory(path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let report = mnemosyne_ingestion::build_report(
+        &result.ir,
+        path,
+        result.files_processed,
+        result.files_skipped,
+        result.dirs_skipped,
+        result.binary_skipped,
+    );
+    println!("{}\n", mnemosyne_ingestion::format_report(&report));
+
+    // Store as a Knowledge Object in the database.
+    let engine = RedbEngine::open(db_path).expect("open db");
+    let kernel = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let subj = Subject::with_roles("ingest-dir", &["admin"]);
+
+    let ir_json = serde_json::to_string(&result.ir).unwrap_or_default();
+    let mut props = PropertyMap::new();
+    props.insert("source_path".into(), Value::Text(path.to_string()));
+    props.insert("entity_count".into(), Value::Int(result.ir.entities.len() as i64));
+    props.insert("fact_count".into(), Value::Int(result.ir.facts.len() as i64));
+    props.insert("relation_count".into(), Value::Int(result.ir.relations.len() as i64));
+    props.insert("ir_json".into(), Value::Text(ir_json));
+
+    match kernel.remember(RememberRequest {
+        context: (&subj).into(),
+        koid: None,
+        expected_version: Some(0),
+        idempotency_key: Some(format!("ingest-dir-{}", path)),
+        metadata: Metadata {
+            type_name: "mnemosyne:ingested-directory".into(),
+            tenant: None,
+            schema_version: 1,
+            tags: vec!["ingest-dir".into(), "auto".into()],
+        },
+        properties: props,
+        semantic: None,
+        relationships: vec![],
+        security: Some(SecurityDescriptor {
+            owner: "ingest-dir".into(),
+            acl: vec![],
+            classification: None,
+        }),
+        extensions: ExtensionMap::new(),
+        origin: Origin::Human,
+        note: Some(format!("Directory ingestion: {}", path)),
+        referential_policy: ReferentialPolicy::Permissive,
+    }) {
+        Ok(r) => {
+            println!("Stored as knowledge object:");
+            println!("  KOID: {}", r.koid.to_hex());
+            println!("\nQuery with: mnemosyne-mcp shell {} -- then:", db_path);
+            println!("  compile_context \"your task\" {} 3000", r.koid.to_hex());
+        }
+        Err(e) => {
+            eprintln!("Warning: could not store KO: {}", e);
+            println!("IR generated but not persisted.");
         }
     }
 }
@@ -1526,6 +1646,127 @@ fn err_frame(id: &J, code: i64, message: &str) -> J {
 
 type ToolResult = Result<J, (i64, String)>;
 
+// ---------------------------------------------------------------------------
+// A7: Agent Gateway — audit log, capabilities, rate limiting
+// ---------------------------------------------------------------------------
+
+use std::sync::LazyLock;
+
+static RATE_STORE: LazyLock<Mutex<HashMap<String, (Instant, u32)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Append a JSON line to the audit log.
+fn audit_log(db_path: &str, agent_id: &str, tool: &str, outcome: &str, detail: &str) {
+    let log_path = format!("{}.audit.log", db_path);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = json!({
+        "ts": ts,
+        "agent": agent_id,
+        "tool": tool,
+        "outcome": outcome,
+        "detail": if detail.len() > 200 { &detail[..200] } else { detail },
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = writeln!(f, "{}", entry);
+    }
+}
+
+fn tool_detail(name: &str, args: &J) -> String {
+    let s = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or("");
+    match name {
+        "memory_search" => format!("query={}", s("query")),
+        "memory_store" => format!("name={}", s("name")),
+        "memory_update" => format!("name={}", s("name")),
+        "memory_delete" => format!("name={}", s("name")),
+        "remember" => format!("koid={}", s("koid")),
+        "get" | "explain" | "trace" | "forget" | "evolve" | "verify" => {
+            format!("koid={}", s("koid"))
+        }
+        "find_similar" => format!("query={}", s("query")),
+        "compile_context" => format!("task={}", s("task")),
+        "document_ingest" => format!("path={}", s("path")),
+        "session_init" => format!("agent={}", s("agent_id")),
+        "import" => format!("source={}", s("source")),
+        "restore" => format!("backup={}", s("backup")),
+        _ => String::new(),
+    }
+}
+
+/// Capability grants: which roles can call which tools.
+/// Empty allowed list = unrestricted (admin/superuser).
+fn check_capability(roles: &[String], tool: &str) -> Result<(), (i64, String)> {
+    if roles.is_empty() || roles.contains(&"admin".to_string()) {
+        return Ok(()); // admin has full access
+    }
+
+    // Sensitive tools require specific roles
+    let restricted: &[(&str, &[&str])] = &[
+        ("backup", &["operator"]),
+        ("restore", &["operator"]),
+        ("deploy_program", &["developer"]),
+        ("deploy_policy", &["developer"]),
+        ("deploy_workflow", &["developer"]),
+        ("deploy_agent", &["developer"]),
+        ("deploy_connector", &["developer"]),
+        ("execute_program", &["operator"]),
+        ("deploy_benchmark", &["developer"]),
+        ("audit_report", &["auditor"]),
+        ("compliance_report", &["auditor"]),
+    ];
+
+    for (restricted_tool, allowed_roles) in restricted {
+        if tool == *restricted_tool {
+            if !allowed_roles.iter().any(|r| roles.contains(&r.to_string())) {
+                return Err((
+                    -32001,
+                    format!(
+                        "capability denied: tool '{}' requires one of {:?}",
+                        tool, allowed_roles
+                    ),
+                ));
+            }
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+/// Simple per-agent rate limiter: max calls per minute.
+/// Uses a sliding window — resets after 60s.
+fn check_rate(agent_id: &str, roles: &[String], max_per_minute: u32) -> Result<(), (i64, String)> {
+    // ponytail: unauthenticated session (no roles) = unrestricted
+    if roles.is_empty() || roles.contains(&"admin".to_string()) {
+        return Ok(());
+    }
+    let mut store = RATE_STORE.lock().unwrap();
+    let now = Instant::now();
+    let window = Duration::from_secs(60);
+
+    let should_reset = match store.get(agent_id) {
+        Some((start, _)) => now.duration_since(*start) > window,
+        None => true,
+    };
+
+    if should_reset {
+        store.insert(agent_id.to_string(), (now, 1));
+    } else {
+        let count = store.get(agent_id).map(|(_, c)| *c).unwrap_or(0);
+        if count >= max_per_minute {
+            return Err((-32002, format!("rate limit exceeded: {} calls/min", max_per_minute)));
+        }
+        let start = store.get(agent_id).unwrap().0;
+        store.insert(agent_id.to_string(), (start, count + 1));
+    }
+    Ok(())
+}
+
 fn call_tool(
     k: &Kernel,
     name: &str,
@@ -1533,6 +1774,16 @@ fn call_tool(
     db_path: &str,
     session: &mut McpSession,
 ) -> ToolResult {
+    // A7: Check capability + rate limit before dispatch
+    if let Err(e) = check_capability(&session.roles, name) {
+        audit_log(db_path, &session.agent_id, name, "denied:capability", &e.1);
+        return Err(e);
+    }
+    if let Err(e) = check_rate(&session.agent_id, &session.roles, 120) {
+        audit_log(db_path, &session.agent_id, name, "denied:rate", &e.1);
+        return Err(e);
+    }
+
     let res = match name {
         "remember" => tool_remember(k, args),
         "forget" => tool_forget(k, args),
@@ -1586,10 +1837,25 @@ fn call_tool(
         "document_list" => tool_document_list(k, args),
         "document_status" => tool_document_status(k, args),
         "document_compile" => tool_document_compile(k, args, db_path),
+        "compile_context" => tool_compile_context(k, args, db_path),
+        "reconcile" => tool_reconcile(k, args, db_path),
+        "connector_bridge" => tool_connector_bridge(k, args),
+        "filter_secrets" => tool_filter_secrets(k, args, db_path),
+        "explain_component" => tool_explain_component(k, args, db_path),
+        "explain_decision" => tool_explain_decision(k, args, db_path),
+        "trace_requirement" => tool_trace_requirement(k, args, db_path),
+        "find_conflicts" => tool_find_conflicts(k, args, db_path),
+        "find_stale" => tool_find_stale(k, args, db_path),
+        "validate_change" => tool_validate_change(k, args, db_path),
+        "propose_update" => tool_propose_update(k, args, db_path),
         "discover_schema" => tool_discover_schema(k),
         "discover_ontology" => tool_discover_ontology(k),
         "health" => tool_health(k),
         "agent_memory" => tool_agent_memory(k, args),
+        "memory_search" => tool_memory_search(args),
+        "memory_store" => tool_memory_store(args),
+        "memory_update" => tool_memory_update(args),
+        "memory_delete" => tool_memory_delete(args),
         "batch" => tool_batch(k, args),
         "session_init" => tool_session_init(args, session),
         "decide" => tool_decide(k, args),
@@ -1597,11 +1863,14 @@ fn call_tool(
     };
     let wrapped = error_codes::wrap_result(res);
     if wrapped["ok"] == true {
+        audit_log(db_path, &session.agent_id, name, "ok", &tool_detail(name, args));
         Ok(json!({
             "content": [{"type": "text", "text": wrapped["data"].to_string()}],
             "isError": false
         }))
     } else {
+        let err_detail = wrapped["error"].as_str().unwrap_or("unknown error");
+        audit_log(db_path, &session.agent_id, name, "error", err_detail);
         Ok(json!({
             "content": [{"type": "text", "text": wrapped.to_string()}],
             "isError": true
@@ -3210,13 +3479,482 @@ fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Result<J, Strin
         return Err(format!("artifact not found: {}", artifact_path));
     }
 
-    let doc = mnemosyne_ingestion::extract_document(&artifact_path, &mime_type)
-        .map_err(|e| format!("extract for compile: {}", e))?;
+    // Markdown: use semantic compiler
+    let is_markdown = mime_type.contains("markdown")
+        || mime_type == "text/md"
+        || artifact_path.ends_with(".md");
 
-    let result = mnemosyne_ingestion::compile_document_mock(&doc, &[]);
+    // Rust source: use code-to-knowledge compiler
+    let is_rust = mime_type.contains("rust")
+        || artifact_path.ends_with(".rs");
 
-    // Serialize CompilationResult via serde.
-    serde_json::to_value(&result).map_err(|e| format!("serialize: {}", e))
+    let mut result = if is_markdown {
+        let content = std::fs::read_to_string(&artifact_path)
+            .map_err(|e| format!("read markdown: {}", e))?;
+        let ir = mnemosyne_ingestion::compile_markdown_string(
+            &content,
+            Some(hex.to_string()),
+        )
+        .map_err(|e| format!("markdown compile: {}", e))?;
+        let ir_json = serde_json::to_value(&ir).unwrap_or_default();
+        serde_json::json!({
+            "markdown_ir": ir_json,
+            "method": "markdown-compiler",
+            "phase_stats": {
+                "d1_extract": "skipped (markdown text)",
+                "d2_ocr": "skipped",
+                "markdown_compile": "ok"
+            },
+            "entities": ir.entities.len(),
+            "facts": ir.facts.len(),
+            "relations": ir.relations.len(),
+            "total_candidates": ir.total_candidates()
+        })
+    } else if is_rust {
+        let ir = mnemosyne_ingestion::compile_rust_file(&artifact_path)
+            .map_err(|e| format!("rust compile: {}", e))?;
+        let ir_json = serde_json::to_value(&ir).unwrap_or_default();
+        serde_json::json!({
+            "code_ir": ir_json,
+            "method": "rust-code-parser",
+            "phase_stats": {
+                "d1_extract": "skipped (rust source)",
+                "d2_ocr": "skipped",
+                "code_compile": "ok"
+            },
+            "entities": ir.entities.len(),
+            "facts": ir.facts.len(),
+            "relations": ir.relations.len(),
+            "total_candidates": ir.total_candidates()
+        })
+    } else {
+        let doc = mnemosyne_ingestion::extract_document(&artifact_path, &mime_type)
+            .map_err(|e| format!("extract for compile: {}", e))?;
+        let cr = mnemosyne_ingestion::compile_document_mock(&doc, &[]);
+        serde_json::to_value(&cr).map_err(|e| format!("serialize: {}", e))?
+    };
+
+    // Attach document metadata
+    if let Some(obj) = result.as_object_mut() {
+        obj.insert("koid".into(), serde_json::Value::String(hex.to_string()));
+        obj.insert("mime_type".into(), serde_json::Value::String(mime_type));
+    }
+
+    Ok(result)
+}
+
+// ---- Context Compiler (MRFC-0070 Phase A6) ---------------------------
+
+fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let hex = args
+        .get("koid")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: koid")?;
+    let task = args
+        .get("task")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: task")?;
+    let token_budget: usize = args
+        .get("token_budget")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(2000) as usize;
+
+    let koid = KOID::from_hex(hex).map_err(|e| e.to_string())?;
+    let ctx = KnowledgeContext::from(subject_of(args));
+    let ko = k.get(ctx, &koid).map_err(|e| e.to_string())?;
+
+    let sha256 = ko
+        .properties
+        .get("sha256")
+        .and_then(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        })
+        .ok_or("document missing sha256 property")?;
+    let mime_type = ko
+        .properties
+        .get("mime_type")
+        .and_then(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "application/octet-stream".into());
+
+    let artifact_path = format!("{}.artifacts/{}", db_path, sha256);
+    if !std::path::Path::new(&artifact_path).exists() {
+        return Err(format!("artifact not found: {}", artifact_path));
+    }
+
+    // Compile the document into KnowledgeIr
+    let ir = if mime_type.contains("markdown")
+        || mime_type == "text/md"
+        || artifact_path.ends_with(".md")
+    {
+        let content = std::fs::read_to_string(&artifact_path)
+            .map_err(|e| format!("read markdown: {}", e))?;
+        mnemosyne_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
+            .map_err(|e| format!("markdown compile: {}", e))
+    } else if mime_type.contains("rust") || artifact_path.ends_with(".rs") {
+        mnemosyne_ingestion::compile_rust_file(&artifact_path)
+            .map_err(|e| format!("rust compile: {}", e))
+    } else {
+        let doc = mnemosyne_ingestion::extract_document(&artifact_path, &mime_type)
+            .map_err(|e| format!("extract: {}", e))?;
+        let cr = mnemosyne_ingestion::compile_document_mock(&doc, &[]);
+        Ok(mnemosyne_ingestion::KnowledgeIr {
+            facts: serde_json::from_value(
+                serde_json::to_value(&cr).unwrap_or_default(),
+            )
+            .unwrap_or_default(),
+            ..Default::default()
+        })
+    }?;
+
+    // Compile context package
+    let pkg = mnemosyne_ingestion::compile_context(task, &ir, token_budget);
+    let md = mnemosyne_ingestion::render_context_markdown(&pkg);
+
+    let pkg_json = serde_json::to_value(&pkg).unwrap_or_default();
+    Ok(serde_json::json!({
+        "context_markdown": md,
+        "package": pkg_json,
+        "koid": hex,
+        "task": task,
+        "token_budget": token_budget,
+    }))
+}
+
+// A8: Change Reconciliation — git diff → affected entities → impact report.
+fn tool_reconcile(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let hex = args
+        .get("koid")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: koid")?;
+    let files: Vec<String> = args
+        .get("files")
+        .and_then(|v| v.as_array())
+        .ok_or("missing: files")?
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+
+    let koid = KOID::from_hex(hex).map_err(|e| e.to_string())?;
+    let ctx = KnowledgeContext::from(subject_of(args));
+    let ko = k.get(ctx, &koid).map_err(|e| e.to_string())?;
+
+    let sha256 = ko
+        .properties
+        .get("sha256")
+        .and_then(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        })
+        .ok_or("document missing sha256 property")?;
+    let mime_type = ko
+        .properties
+        .get("mime_type")
+        .and_then(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "application/octet-stream".into());
+
+    let artifact_path = format!("{}.artifacts/{}", db_path, sha256);
+    if !std::path::Path::new(&artifact_path).exists() {
+        return Err(format!("artifact not found: {}", artifact_path));
+    }
+
+    let ir = if mime_type.contains("markdown")
+        || mime_type == "text/md"
+        || artifact_path.ends_with(".md")
+    {
+        let content = std::fs::read_to_string(&artifact_path)
+            .map_err(|e| format!("read markdown: {}", e))?;
+        mnemosyne_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
+            .map_err(|e| format!("markdown compile: {}", e))
+    } else if mime_type.contains("rust") || artifact_path.ends_with(".rs") {
+        mnemosyne_ingestion::compile_rust_file(&artifact_path)
+            .map_err(|e| format!("rust compile: {}", e))
+    } else {
+        let doc = mnemosyne_ingestion::extract_document(&artifact_path, &mime_type)
+            .map_err(|e| format!("extract: {}", e))?;
+        let cr = mnemosyne_ingestion::compile_document_mock(&doc, &[]);
+        Ok(mnemosyne_ingestion::KnowledgeIr {
+            facts: serde_json::from_value(
+                serde_json::to_value(&cr).unwrap_or_default(),
+            )
+            .unwrap_or_default(),
+            ..Default::default()
+        })
+    }?;
+
+    let report = mnemosyne_ingestion::reconcile(&files, &ir);
+    let report_json = serde_json::to_value(&report).unwrap_or_default();
+    Ok(serde_json::json!({
+        "report": report_json,
+        "koid": hex,
+    }))
+}
+
+// A9: Connector Bridge — convert connector metadata into KnowledgeIr.
+fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
+    let connector_type = args
+        .get("connector_type")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: connector_type")?;
+    let label = args
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
+
+    let raw_tables = args.get("tables").and_then(|v| v.as_array());
+    let raw_refs = args.get("references").and_then(|v| v.as_array());
+
+    let meta = if let Some(tables) = raw_tables {
+        // Parse tables from JSON
+        let containers: Vec<mnemosyne_ingestion::ContainerInfo> = tables
+            .iter()
+            .map(|t| {
+                let name = t["name"].as_str().unwrap_or("unknown").to_string();
+                let fields: Vec<mnemosyne_ingestion::FieldInfo> = t["fields"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .map(|f| mnemosyne_ingestion::FieldInfo {
+                                name: f["name"].as_str().unwrap_or("?").to_string(),
+                                data_type: f["data_type"].as_str().unwrap_or("text").to_string(),
+                                is_primary_key: f["is_primary_key"].as_bool().unwrap_or(false),
+                                nullable: f["nullable"].as_bool().unwrap_or(true),
+                                is_unique: f["is_unique"].as_bool().unwrap_or(false),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                mnemosyne_ingestion::ContainerInfo {
+                    name,
+                    fields,
+                    row_count: t["row_count"].as_u64(),
+                }
+            })
+            .collect();
+
+        let references: Vec<mnemosyne_ingestion::ReferenceInfo> = raw_refs
+            .map(|a| {
+                a.iter()
+                    .map(|r| mnemosyne_ingestion::ReferenceInfo {
+                        from_container: r["from_container"]
+                            .as_str()
+                            .unwrap_or("?")
+                            .to_string(),
+                        from_fields: r["from_fields"]
+                            .as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default(),
+                        to_container: r["to_container"]
+                            .as_str()
+                            .unwrap_or("?")
+                            .to_string(),
+                        to_fields: r["to_fields"]
+                            .as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default(),
+                        name: r["name"].as_str().map(String::from),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        mnemosyne_ingestion::ConnectorMetadata {
+            connector_type: connector_type.to_string(),
+            label: label.to_string(),
+            containers,
+            references,
+            version: None,
+        }
+    } else {
+        // ponytail: empty metadata for unknown schemas — agent should call
+        // connector's own introspection tool first
+        mnemosyne_ingestion::ConnectorMetadata {
+            connector_type: connector_type.to_string(),
+            label: label.to_string(),
+            ..Default::default()
+        }
+    };
+
+    let ir = mnemosyne_ingestion::connector_metadata_to_ir(&meta);
+    let ir_json = serde_json::to_value(&ir).unwrap_or_default();
+    Ok(serde_json::json!({
+        "knowledge_ir": ir_json,
+        "connector_type": connector_type,
+        "label": label,
+        "entity_count": ir.entities.len(),
+        "fact_count": ir.facts.len(),
+        "relation_count": ir.relations.len(),
+    }))
+}
+
+// A6: AIKOQL Agent Operations — 7 semantic query tools.
+// All follow the same pattern: get koid → compile KnowledgeIr → run op.
+
+fn get_ir_for_koid(k: &Kernel, args: &J, db_path: &str) -> Result<mnemosyne_ingestion::KnowledgeIr, String> {
+    let hex = args
+        .get("koid")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: koid")?;
+    let koid = KOID::from_hex(hex).map_err(|e| e.to_string())?;
+    let ctx = KnowledgeContext::from(subject_of(args));
+    let ko = k.get(ctx, &koid).map_err(|e| e.to_string())?;
+    let sha256 = ko
+        .properties
+        .get("sha256")
+        .and_then(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        })
+        .ok_or("document missing sha256 property")?;
+    let mime_type = ko
+        .properties
+        .get("mime_type")
+        .and_then(|v| match v {
+            Value::Text(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "application/octet-stream".into());
+    let artifact_path = format!("{}.artifacts/{}", db_path, sha256);
+    if !std::path::Path::new(&artifact_path).exists() {
+        return Err(format!("artifact not found: {}", artifact_path));
+    }
+    if mime_type.contains("markdown") || mime_type == "text/md" || artifact_path.ends_with(".md") {
+        let content = std::fs::read_to_string(&artifact_path)
+            .map_err(|e| format!("read markdown: {}", e))?;
+        mnemosyne_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
+            .map_err(|e| format!("markdown compile: {}", e))
+    } else if mime_type.contains("rust") || artifact_path.ends_with(".rs") {
+        mnemosyne_ingestion::compile_rust_file(&artifact_path)
+            .map_err(|e| format!("rust compile: {}", e))
+    } else {
+        let doc = mnemosyne_ingestion::extract_document(&artifact_path, &mime_type)
+            .map_err(|e| format!("extract: {}", e))?;
+        let cr = mnemosyne_ingestion::compile_document_mock(&doc, &[]);
+        Ok(mnemosyne_ingestion::KnowledgeIr {
+            facts: serde_json::from_value(
+                serde_json::to_value(&cr).unwrap_or_default(),
+            )
+            .unwrap_or_default(),
+            ..Default::default()
+        })
+    }
+}
+
+fn tool_explain_component(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let ir = get_ir_for_koid(k, args, db_path)?;
+    let explanation =
+        mnemosyne_ingestion::explain_component(name, &ir).ok_or_else(|| format!("component '{}' not found", name))?;
+    Ok(serde_json::to_value(&explanation).unwrap_or_default())
+}
+
+fn tool_explain_decision(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let ir = get_ir_for_koid(k, args, db_path)?;
+    let explanation =
+        mnemosyne_ingestion::explain_decision(name, &ir).ok_or_else(|| format!("decision '{}' not found", name))?;
+    Ok(serde_json::to_value(&explanation).unwrap_or_default())
+}
+
+fn tool_trace_requirement(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let req_id = args.get("requirement").and_then(|v| v.as_str()).ok_or("missing: requirement")?;
+    let ir = get_ir_for_koid(k, args, db_path)?;
+    let trace = mnemosyne_ingestion::trace_requirement(req_id, &ir);
+    Ok(serde_json::to_value(&trace).unwrap_or_default())
+}
+
+fn tool_find_conflicts(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let component = args.get("component").and_then(|v| v.as_str()).ok_or("missing: component")?;
+    let ir = get_ir_for_koid(k, args, db_path)?;
+    let conflicts = mnemosyne_ingestion::find_conflicts(component, &ir);
+    Ok(serde_json::to_value(&conflicts).unwrap_or_default())
+}
+
+fn tool_find_stale(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let ir = get_ir_for_koid(k, args, db_path)?;
+    let report = mnemosyne_ingestion::find_stale_documentation(&ir);
+    Ok(serde_json::to_value(&report).unwrap_or_default())
+}
+
+fn tool_validate_change(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let description = args.get("change").and_then(|v| v.as_str()).ok_or("missing: change")?;
+    let ir = get_ir_for_koid(k, args, db_path)?;
+    let validation = mnemosyne_ingestion::validate_change(description, &ir);
+    Ok(serde_json::to_value(&validation).unwrap_or_default())
+}
+
+fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let action_str = args.get("action").and_then(|v| v.as_str()).ok_or("missing: action")?;
+    let action = match action_str {
+        "add_fact" => mnemosyne_ingestion::ProposalAction::AddFact,
+        "remove_fact" => mnemosyne_ingestion::ProposalAction::RemoveFact,
+        "update_entity" => mnemosyne_ingestion::ProposalAction::UpdateEntity,
+        "add_relation" => mnemosyne_ingestion::ProposalAction::AddRelation,
+        "remove_relation" => mnemosyne_ingestion::ProposalAction::RemoveRelation,
+        _ => return Err(format!("unknown action: {}", action_str)),
+    };
+    let target = args.get("target_entity").and_then(|v| v.as_str()).map(String::from);
+    let new_facts: Vec<String> = args
+        .get("new_facts")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let remove_facts: Vec<String> = args
+        .get("remove_facts")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let new_relations: Vec<(String, String, String)> = args
+        .get("new_relations")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| {
+                    let arr = v.as_array()?;
+                    Some((
+                        arr.get(0)?.as_str()?.to_string(),
+                        arr.get(1)?.as_str()?.to_string(),
+                        arr.get(2)?.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let justification = args
+        .get("justification")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let agent_id = args
+        .get("agent_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let ir = get_ir_for_koid(k, args, db_path)?;
+    let proposal = mnemosyne_ingestion::propose_knowledge_update(
+        action,
+        target,
+        new_facts,
+        remove_facts,
+        new_relations,
+        justification,
+        agent_id,
+        &ir,
+    );
+    Ok(serde_json::to_value(&proposal).unwrap_or_default())
+}
+
+fn tool_filter_secrets(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
+    let ir = get_ir_for_koid(k, args, db_path)?;
+    let (_redacted, findings) = mnemosyne_ingestion::filter_secrets(&ir);
+    Ok(serde_json::to_value(&findings).unwrap_or_default())
 }
 
 // ---- Agent Experience Improvements (MRFC-0040) -------------------------
@@ -3389,6 +4127,288 @@ fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> {
         }))
         .collect();
     Ok(json!({"memories": memories, "count": memories.len()}))
+}
+
+// ---- Memory Tools (MRFC-0070) ------------------------------------------
+
+fn resolve_memory_dir(args: &J) -> String {
+    args.get("memory_dir")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| MEMORY_DIR.get().cloned().unwrap_or_else(|| "./memory".into()))
+}
+
+fn parse_memory_frontmatter(raw: &str) -> Option<(String, String, String)> {
+    // Parse YAML frontmatter between --- delimiters.
+    // Returns (name, description, type) from the frontmatter.
+    let body = raw.strip_prefix("---\n")?;
+    let (front, _rest) = body.split_once("\n---")?;
+    let mut name = String::new();
+    let mut desc = String::new();
+    let mut mtype = String::new();
+    for line in front.lines() {
+        let trimmed = line.trim();
+        if let Some(v) = trimmed.strip_prefix("name:") {
+            name = v.trim().trim_matches('"').to_string();
+        } else if let Some(v) = trimmed.strip_prefix("description:") {
+            desc = v.trim().trim_matches('"').to_string();
+        } else if let Some(v) = trimmed.strip_prefix("type:") {
+            // may appear under metadata: block
+            mtype = v.trim().trim_matches('"').to_string();
+        }
+    }
+    if name.is_empty() { None } else { Some((name, desc, mtype)) }
+}
+
+fn tool_memory_search(args: &J) -> Result<J, String> {
+    let query = args.get("query").and_then(|v| v.as_str()).ok_or("missing: query")?;
+    let max_results = args.get("max_results").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+    let dir = resolve_memory_dir(args);
+    let query_lower = query.to_lowercase();
+
+    let mut results: Vec<J> = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) => return Err(format!("cannot read memory dir '{}': {}", dir, e)),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
+        let fname = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if fname == "MEMORY" { continue; }
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let (name, desc, _mtype) = parse_memory_frontmatter(&raw).unwrap_or_else(|| {
+            (fname.to_string(), String::new(), String::new())
+        });
+
+        // Score: name match > description match > body match
+        let name_score = if name.to_lowercase().contains(&query_lower) { 3.0 } else { 0.0 };
+        let desc_score = if desc.to_lowercase().contains(&query_lower) { 2.0 } else { 0.0 };
+        let body_score = {
+            let body_lower = raw.to_lowercase();
+            let c = body_lower.matches(&query_lower).count();
+            (c as f64) * 0.5
+        };
+        let score = name_score + desc_score + body_score;
+
+        if score > 0.0 {
+            // Extract snippet: first line in body that contains query, or first body line
+            let body_start = raw.find("\n---").map(|i| i + 4).unwrap_or(0);
+            let body_text = &raw[body_start..];
+            let snippet = body_text
+                .lines()
+                .find(|l| l.to_lowercase().contains(&query_lower))
+                .unwrap_or_else(|| body_text.lines().next().unwrap_or(""))
+                .trim()
+                .to_string();
+            let snippet = if snippet.len() > 200 {
+                format!("{}...", &snippet[..200])
+            } else {
+                snippet
+            };
+
+            results.push(json!({
+                "name": name,
+                "description": desc,
+                "file": path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                "snippet": snippet,
+                "score": score,
+            }));
+        }
+    }
+
+    results.sort_by(|a, b| b["score"].as_f64().unwrap_or(0.0).partial_cmp(&a["score"].as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(max_results);
+
+    Ok(json!({"results": results, "count": results.len(), "query": query}))
+}
+
+fn tool_memory_store(args: &J) -> Result<J, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let description = args.get("description").and_then(|v| v.as_str()).ok_or("missing: description")?;
+    let content = args.get("content").and_then(|v| v.as_str()).ok_or("missing: content")?;
+    let mtype = args.get("type").and_then(|v| v.as_str()).unwrap_or("project");
+    let dir = resolve_memory_dir(args);
+
+    // Ensure directory exists
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create memory dir '{}': {}", dir, e))?;
+
+    // Validate name is kebab-case slug
+    if name.contains(char::is_whitespace) || name.contains('\\') || name.contains('/') {
+        return Err("name must be a kebab-case slug (no whitespace, slashes, or backslashes)".into());
+    }
+
+    let filename = format!("{}.md", name);
+    let filepath = std::path::PathBuf::from(&dir).join(&filename);
+
+    // Build frontmatter with ISO 8601 timestamp
+    let now = system_time_iso8601();
+    let frontmatter = format!(
+        "---\nname: {}\ndescription: \"{}\"\nmetadata:\n  type: {}\n  modified: {}\n---\n\n{}\n",
+        name, description, mtype, now, content
+    );
+
+    std::fs::write(&filepath, &frontmatter)
+        .map_err(|e| format!("cannot write memory '{}': {}", filepath.display(), e))?;
+
+    // Append to MEMORY.md index if not already present
+    let index_path = std::path::PathBuf::from(&dir).join("MEMORY.md");
+    let index_line = format!("- [{}]({}) — {}\n", name_to_title(name), filename, description);
+    if index_path.exists() {
+        let existing = std::fs::read_to_string(&index_path).unwrap_or_default();
+        if !existing.contains(&filename) {
+            std::fs::write(&index_path, format!("{}{}", existing, index_line))
+                .map_err(|e| format!("cannot update MEMORY.md: {}", e))?;
+        }
+    } else {
+        std::fs::write(&index_path, index_line).map_err(|e| format!("cannot create MEMORY.md: {}", e))?;
+    }
+
+    Ok(json!({
+        "stored": true,
+        "name": name,
+        "file": filename,
+        "path": filepath.to_string_lossy(),
+    }))
+}
+
+fn tool_memory_update(args: &J) -> Result<J, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let dir = resolve_memory_dir(args);
+
+    let filename = format!("{}.md", name);
+    let filepath = std::path::PathBuf::from(&dir).join(&filename);
+    if !filepath.exists() {
+        return Err(format!("memory '{}' not found at {}", name, filepath.display()));
+    }
+
+    let raw = std::fs::read_to_string(&filepath)
+        .map_err(|e| format!("cannot read '{}': {}", filepath.display(), e))?;
+    let (cur_name, cur_desc, cur_type) =
+        parse_memory_frontmatter(&raw).unwrap_or_else(|| (name.to_string(), String::new(), "project".to_string()));
+
+    let new_desc = args.get("description").and_then(|v| v.as_str()).unwrap_or(&cur_desc);
+    let new_type = args.get("type").and_then(|v| v.as_str()).unwrap_or(&cur_type);
+    let new_content = args.get("content").and_then(|v| v.as_str());
+
+    // Rebuild the file: keep body if content not provided
+    let body = if let Some(c) = new_content {
+        c.to_string()
+    } else {
+        // Extract body after frontmatter
+        raw.find("\n---")
+            .and_then(|i| {
+                let rest = &raw[i + 4..];
+                rest.find("\n---").map(|j| rest[j + 4..].trim().to_string())
+            })
+            .unwrap_or_default()
+    };
+
+    let now = system_time_iso8601();
+    let frontmatter = format!(
+        "---\nname: {}\ndescription: \"{}\"\nmetadata:\n  type: {}\n  modified: {}\n---\n\n{}\n",
+        cur_name, new_desc, new_type, now, body
+    );
+
+    std::fs::write(&filepath, &frontmatter)
+        .map_err(|e| format!("cannot write '{}': {}", filepath.display(), e))?;
+
+    Ok(json!({
+        "updated": true,
+        "name": cur_name,
+        "file": filename,
+        "path": filepath.to_string_lossy(),
+    }))
+}
+
+fn tool_memory_delete(args: &J) -> Result<J, String> {
+    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let dir = resolve_memory_dir(args);
+
+    let filename = format!("{}.md", name);
+    let filepath = std::path::PathBuf::from(&dir).join(&filename);
+    if !filepath.exists() {
+        return Err(format!("memory '{}' not found at {}", name, filepath.display()));
+    }
+
+    // Read before deleting to confirm what was there
+    let raw = std::fs::read_to_string(&filepath)
+        .map_err(|e| format!("cannot read '{}': {}", filepath.display(), e))?;
+    let (_cur_name, cur_desc, _cur_type) =
+        parse_memory_frontmatter(&raw).unwrap_or_else(|| (name.to_string(), String::new(), String::new()));
+
+    std::fs::remove_file(&filepath)
+        .map_err(|e| format!("cannot delete '{}': {}", filepath.display(), e))?;
+
+    // Remove from MEMORY.md index
+    let index_path = std::path::PathBuf::from(&dir).join("MEMORY.md");
+    if index_path.exists() {
+        let existing = std::fs::read_to_string(&index_path).unwrap_or_default();
+        let cleaned: String = existing
+            .lines()
+            .filter(|l| !l.contains(&filename))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Append final newline if we had content
+        let cleaned = if cleaned.is_empty() {
+            cleaned
+        } else {
+            format!("{}\n", cleaned.trim_end())
+        };
+        std::fs::write(&index_path, &cleaned)
+            .map_err(|e| format!("cannot update MEMORY.md: {}", e))?;
+    }
+
+    Ok(json!({
+        "deleted": true,
+        "name": name,
+        "file": filename,
+        "description": cur_desc,
+    }))
+}
+
+fn name_to_title(name: &str) -> String {
+    name.split('-')
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().to_string() + c.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn system_time_iso8601() -> String {
+    // ponytail: avoid chrono dep — format manually from UNIX epoch. Good enough for memory timestamps.
+    use std::time::SystemTime;
+    let dur = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_secs = dur.as_secs();
+    let days_since_epoch = (total_secs / 86400) as i64;
+    let time_of_day = total_secs % 86400;
+    let h = time_of_day / 3600;
+    let mi = (time_of_day % 3600) / 60;
+    let s = time_of_day % 60;
+
+    // civil_from_days algorithm (Hinnant) — all i64 arithmetic
+    let z = days_since_epoch + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u64; // day of era, non-negative
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, h, mi, s)
 }
 
 fn tool_batch(k: &Kernel, args: &J) -> Result<J, String> {
@@ -3597,7 +4617,12 @@ fn serve_metrics(
                 let ont = ontology.clone();
                 std::thread::spawn(move || handle_http(&mut s, &k, &sess, &db, &ont));
             }
-            Err(_) => break,
+            Err(e) => {
+                // ponytail: don't die on transient accept errors.
+                if cfg!(debug_assertions) {
+                    eprintln!("metrics accept error: {}", e);
+                }
+            }
         }
     }
 }
@@ -4290,12 +5315,12 @@ fn handle_http(
     }
 
     let (status, content_type, body) = match route {
-        "/ui" | "/" => (
+        "/ui" => (
             "200 OK",
             "text/html; charset=utf-8",
             graph_ui::GRAPH_UI_HTML.to_string(),
         ),
-        "/studio" => (
+        "/" | "/studio" => (
             "200 OK",
             "text/html; charset=utf-8",
             studio::STUDIO_HTML.to_string(),
@@ -4449,6 +5474,14 @@ fn tool_metrics(k: &Kernel) -> Result<J, String> {
             LifecycleState::Verified => verified += 1,
             LifecycleState::Archived => archived += 1,
             LifecycleState::Deleted => deleted += 1,
+            // MRFC-0070 states: count as draft-equivalent pending
+            LifecycleState::Discovered
+            | LifecycleState::Extracted
+            | LifecycleState::Proposed
+            | LifecycleState::Validated
+            | LifecycleState::Accepted
+            | LifecycleState::Updated
+            | LifecycleState::Superseded => draft += 1,
         }
     }
     // Type-level breakdown (ponytail: O(n) scan; add type index if slow).
@@ -4541,13 +5574,28 @@ fn tools_list() -> J {
             {"name": "document_list", "description": "List all ingested Document Knowledge Objects (MRFC-0050).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "document_status", "description": "Get processing status and metadata for an ingested document by KOID (MRFC-0050).", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}}, "required": ["koid"]}},
             {"name": "document_compile", "description": "Run the full D1-D9 document knowledge compiler pipeline on an ingested document. Returns IR entities, ontology proposals, entity resolution, commit plan, embedded chunks, and evidence trail. (MRFC-0050)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid"]}},
+            {"name": "compile_context", "description": "Compile a minimum sufficient context package for an agent task from a knowledge document. Takes a task description and returns ranked entities, facts, and relationships under a token budget. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "task": {"type": "string", "description": "Natural language task description"}, "token_budget": {"type": "integer", "default": 2000, "description": "Max tokens for the context package"}, "subject": {"type": "string"}}, "required": ["koid", "task"]}},
+            {"name": "reconcile", "description": "Reconcile changed files against a knowledge document. Given a list of changed file paths (e.g., from git diff), returns affected entities, potentially stale facts, and an impact report. (MRFC-0070-A8)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "files": {"type": "array", "items": {"type": "string"}, "description": "List of changed file paths (e.g., from git diff --name-only)"}, "subject": {"type": "string"}}, "required": ["koid", "files"]}},
+            {"name": "connector_bridge", "description": "Convert connector schema metadata into KnowledgeIr. Provide connector_type (postgres/sqlite/mongodb/neo4j), label, and optional tables/references arrays. Each table needs name and fields (array of {name, data_type, is_primary_key, nullable, is_unique}). Each reference needs from_container, from_fields, to_container, to_fields, and optional name. (MRFC-0070-A9)", "inputSchema": {"type": "object", "properties": {"connector_type": {"type": "string"}, "label": {"type": "string"}, "tables": {"type": "array"}, "references": {"type": "array"}}, "required": ["connector_type"]}},
+            {"name": "filter_secrets", "description": "Scan a knowledge document for secrets, API keys, tokens, emails, credit cards, and PII. Returns a list of findings with type, location, and redacted text. (MRFC-0070-A7)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid"]}},
+            {"name": "explain_component", "description": "Explain a component: purpose, dependencies, dependents, facts, decisions, and tests. AIKOQL: EXPLAIN COMPONENT. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "name": {"type": "string", "description": "Component name"}, "subject": {"type": "string"}}, "required": ["koid", "name"]}},
+            {"name": "explain_decision", "description": "Explain an architectural decision: context, problem, options, selected, rationale, consequences. AIKOQL: EXPLAIN DECISION. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "name": {"type": "string", "description": "ADR name"}, "subject": {"type": "string"}}, "required": ["koid", "name"]}},
+            {"name": "trace_requirement", "description": "Trace a requirement through decisions, components, functions, to tests. AIKOQL: TRACE REQUIREMENT. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "requirement": {"type": "string", "description": "Requirement text or ID"}, "subject": {"type": "string"}}, "required": ["koid", "requirement"]}},
+            {"name": "find_conflicts", "description": "Find contradictory claims and ambiguous facts about a component. AIKOQL: FIND CONFLICTS. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "component": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid", "component"]}},
+            {"name": "find_stale", "description": "Find stale documentation: documentation that has diverged from code. AIKOQL: FIND STALE DOCUMENTATION. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid"]}},
+            {"name": "validate_change", "description": "Validate a proposed change: what knowledge entities, facts, and relations would be affected? Returns risk assessment. AIKOQL: VALIDATE CHANGE. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "change": {"type": "string", "description": "Change description"}, "subject": {"type": "string"}}, "required": ["koid", "change"]}},
+            {"name": "propose_update", "description": "Propose a knowledge update: add/remove facts, update entities, add/remove relations. Enters reconciliation workflow (PROPOSED → VALIDATED → ACCEPTED/REJECTED). AIKOQL: PROPOSE KNOWLEDGE UPDATE. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "action": {"type": "string", "enum": ["add_fact", "remove_fact", "update_entity", "add_relation", "remove_relation"]}, "target_entity": {"type": "string"}, "new_facts": {"type": "array", "items": {"type": "string"}}, "remove_facts": {"type": "array", "items": {"type": "string"}}, "new_relations": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}, "justification": {"type": "string"}, "agent_id": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid", "action"]}},
             {"name": "discover_schema", "description": "Discover all types and their properties in the database (MRFC-0040 agent experience).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "discover_ontology", "description": "Auto-discover an ontology from all stored Knowledge Objects: classes, properties, relationships, and source mappings (MRFC-0041). Saves the ontology as an Ontology KO.", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "health", "description": "Health check with readiness, journal seq, journal lag, object count, connection pool, uptime (MRFC-0040).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "agent_memory", "description": "Store or retrieve agent memories with TTL. Write: agent_id + key + value. Read: agent_id only. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"agent_id": {"type": "string"}, "key": {"type": "string"}, "value": {}, "ttl": {"type": "integer"}}, "required": ["agent_id"]}},
             {"name": "batch", "description": "Atomic batch of remember/relate/forget operations. Use $N.koid to reference previous results. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"operations": {"type": "array"}}, "required": ["operations"]}},
             {"name": "session_init", "description": "Establish agent session identity. Subsequent calls in this connection inherit agent_id, run_id, tenant, roles. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"agent_id": {"type": "string"}, "run_id": {"type": "string"}, "tenant": {"type": "string"}, "roles": {"type": "array", "items": {"type": "string"}}}, "required": ["agent_id"]}},
-            {"name": "decide", "description": "Record an agent decision on a Knowledge Object with rationale and confidence. Creates a provenance-tagged version. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "decision": {"type": "string"}, "rationale": {"type": "string"}, "confidence": {"type": "number"}}, "required": ["koid", "decision"]}}
+            {"name": "decide", "description": "Record an agent decision on a Knowledge Object with rationale and confidence. Creates a provenance-tagged version. (MRFC-0040)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "decision": {"type": "string"}, "rationale": {"type": "string"}, "confidence": {"type": "number"}}, "required": ["koid", "decision"]}},
+            {"name": "memory_search", "description": "Search the agent memory directory for knowledge fragments. Returns ranked results with name, description, snippet, and relevance. The memory directory contains Markdown files with YAML frontmatter — each file is one memory. (MRFC-0070)", "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "description": "Search query — matched against memory names, descriptions, and body content"}, "max_results": {"type": "integer", "default": 10, "description": "Maximum number of results to return"}, "memory_dir": {"type": "string", "description": "Override the memory directory path (default: server --memory-dir)"}}, "required": ["query"]}},
+            {"name": "memory_store", "description": "Store a new memory as a Markdown file with YAML frontmatter in the memory directory. Auto-generates the filename from the name slug. The memory is indexed in MEMORY.md. (MRFC-0070)", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "description": "Short kebab-case slug for this memory (e.g. 'mrf-0070-phase-a1-complete')"}, "description": {"type": "string", "description": "One-line summary used to decide relevance during recall"}, "content": {"type": "string", "description": "Body of the memory — the fact, decision, or knowledge to persist"}, "type": {"type": "string", "enum": ["user", "feedback", "project", "reference"], "default": "project", "description": "Memory type"}, "memory_dir": {"type": "string", "description": "Override the memory directory path (default: server --memory-dir)"}}, "required": ["name", "description", "content"]}},
+        {"name": "memory_update", "description": "Update an existing memory's frontmatter fields and/or body content. Only provided fields are changed — omitted fields keep their current values. Updates the modified timestamp. (MRFC-0070)", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "description": "Name slug of the memory to update"}, "description": {"type": "string", "description": "New one-line summary (omit to keep current)"}, "content": {"type": "string", "description": "New body content (omit to keep current)"}, "type": {"type": "string", "enum": ["user", "feedback", "project", "reference"], "description": "New memory type (omit to keep current)"}, "memory_dir": {"type": "string", "description": "Override the memory directory path"}}, "required": ["name"]}},
+        {"name": "memory_delete", "description": "Delete a memory file from the memory directory and remove its entry from MEMORY.md. Returns the deleted memory's name and path. (MRFC-0070)", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "description": "Name slug of the memory to delete"}, "memory_dir": {"type": "string", "description": "Override the memory directory path"}}, "required": ["name"]}}
         ]
     })
 }

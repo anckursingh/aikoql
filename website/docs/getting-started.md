@@ -5,6 +5,36 @@ description: Install and run Mnemosyne in 5 minutes
 
 # Getting Started
 
+## CLI Commands
+
+```
+Mnemosyne comes with 9 CLI commands:
+  shell [DB]             Interactive knowledge shell
+  serve [--listen ADDR] [--metrics-addr ADDR] [DB]  Start MCP + HTTP server
+  ingest-dir [PATH] [DB] Ingest directory into knowledge base
+  report [PATH]          Print knowledge report for directory (read-only)
+  backup <db>            Create verified backup
+  restore <backup>       PITR restore from backup
+  keygen <path>          Generate master encryption key
+  encrypt <db>           Encrypt an existing database
+  decrypt <db>           Decrypt a database
+```
+
+### Ingest a Codebase
+
+```bash
+# Analyze any directory without storing (read-only report)
+mnemosyne report ~/my-project
+
+# Ingest and store as Knowledge Objects
+mnemosyne ingest-dir ~/my-project ./kb.redb
+```
+
+The ingest engine classifies every file:
+- `.md` → Markdown Knowledge Compiler (sections, ADRs, facts)
+- `.rs` → Rust Code Parser (DEPENDS_ON, IMPLEMENTS, TESTED_BY)
+- Mixed sources → Merged + deduplicated + staleness-checked
+
 ## Installation
 
 ### Download Binary

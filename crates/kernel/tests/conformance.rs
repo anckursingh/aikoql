@@ -61,6 +61,9 @@ fn drive_to(k: &Kernel, s: &Subject, koid: &KOID, target: LifecycleState) {
         Verified => &[Active, Verified],
         Archived => &[Active, Verified, Archived],
         Deleted => &[Active, Verified, Archived, Deleted],
+        // MRFC-0070 states: not reachable from Draft via legacy path.
+        // KOs in these states are created directly at that state.
+        Discovered | Extracted | Proposed | Validated | Accepted | Updated | Superseded => &[],
     };
     for t in path {
         k.evolve(s, koid, *t, Origin::System, None, None).unwrap();

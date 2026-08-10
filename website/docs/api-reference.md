@@ -5,7 +5,7 @@ description: Complete reference for all MCP tools and REST endpoints
 
 # API Reference
 
-Mnemosyne exposes 38 MCP tools and 35 REST endpoints.
+Mnemosyne exposes 59 MCP tools and 40+ REST endpoints.
 
 ## Authentication
 
@@ -340,6 +340,201 @@ MCP: eval_staleness
 ```
 POST /api/v1/eval/contradictions
 MCP: eval_contradictions
+```
+
+## Agent Knowledge Interface (MRFC-0070)
+
+Compile, reconcile, and bridge knowledge for AI agents.
+
+### `agent/compile-context` — Compile minimum sufficient context for a task
+
+```
+POST /api/v1/agent/compile-context
+MCP: compile_context
+```
+
+```json
+{"task": "Fix the login bug in auth.rs", "token_budget": 8000}
+```
+
+Returns ranked, deduplicated context package with entities, facts, and relationships.
+
+### `agent/reconcile` — Git diff → affected entities → auto-proposals
+
+```
+POST /api/v1/agent/reconcile
+MCP: reconcile
+```
+
+```json
+{"git_diff": "...", "knowledge_base_path": "./kb.redb"}
+```
+
+### `agent/connector-bridge` — DB schema metadata → KnowledgeIr
+
+```
+POST /api/v1/agent/connector-bridge
+MCP: connector_bridge
+```
+
+```json
+{"connector_type": "postgresql", "schema_metadata": {...}}
+```
+
+### `agent/filter-secrets` — PII/secret filtering (11 secret types)
+
+```
+POST /api/v1/agent/filter-secrets
+MCP: filter_secrets
+```
+
+### `agent/explain-component` — Explain a code component from knowledge graph
+
+```
+POST /api/v1/agent/explain-component
+MCP: explain_component
+```
+
+### `agent/explain-decision` — Explain an ADR from knowledge graph
+
+```
+POST /api/v1/agent/explain-decision
+MCP: explain_decision
+```
+
+### `agent/trace-requirement` — Trace requirement → implementation path
+
+```
+POST /api/v1/agent/trace-requirement
+MCP: trace_requirement
+```
+
+### `agent/find-conflicts` — Detect contradictory facts across sources
+
+```
+POST /api/v1/agent/find-conflicts
+MCP: find_conflicts
+```
+
+### `agent/find-stale` — Detect stale facts
+
+```
+POST /api/v1/agent/find-stale
+MCP: find_stale
+```
+
+### `agent/validate-change` — Validate a proposed change against constraints
+
+```
+POST /api/v1/agent/validate-change
+MCP: validate_change
+```
+
+### `agent/propose-update` — Auto-propose knowledge update from change
+
+```
+POST /api/v1/agent/propose-update
+MCP: propose_update
+```
+
+### Memory Tools
+
+```
+POST /api/v1/agent/memory-search   MCP: memory_search
+POST /api/v1/agent/memory-store    MCP: memory_store
+POST /api/v1/agent/memory-update   MCP: memory_update
+POST /api/v1/agent/memory-delete   MCP: memory_delete
+```
+
+## Document Pipeline (D1-D9)
+
+### `documents` — Ingest a document (PDF, DOCX, Markdown)
+
+```
+POST /api/v1/documents
+MCP: document_ingest
+```
+
+```json
+{"path": "/uploads/architecture-decision.pdf", "title": "ADR-0042"}
+```
+
+Runs the full D1-D9 pipeline: Upload → OCR → Document AST → KnowledgeIr → Ontology → Resolution → Commit.
+
+### `documents/compile` — Compile an ingested document to KOs
+
+```
+POST /api/v1/documents/compile
+MCP: document_compile
+```
+
+### `list-documents` — List all ingested documents with status
+
+```
+GET /api/v1/list-documents
+MCP: document_list
+```
+
+### `documents/{koid}/status` — Get document pipeline status
+
+```
+GET /api/v1/documents/{koid}/status
+MCP: document_status
+```
+
+## Connector Management
+
+### `deploy-connector` — Deploy a connector as KO
+
+```
+POST /api/v1/deploy-connector
+MCP: deploy_connector
+```
+
+### `list-connectors` — List all connectors
+
+```
+POST /api/v1/list-connectors
+MCP: list_connectors
+```
+
+## Active KOs: Views, Reports, Benchmarks
+
+### Views
+
+```
+POST /api/v1/deploy-view      MCP: deploy_view
+POST /api/v1/list-views       MCP: list_views
+```
+
+### Reports
+
+```
+POST /api/v1/deploy-report    MCP: deploy_report
+POST /api/v1/list-reports     MCP: list_reports
+```
+
+### Benchmarks
+
+```
+POST /api/v1/deploy-benchmark MCP: deploy_benchmark
+POST /api/v1/list-benchmarks  MCP: list_benchmarks
+```
+
+## Trigger Management
+
+### `deploy-trigger` — Deploy event-condition-action trigger
+
+```
+POST /api/v1/deploy-trigger
+MCP: deploy_trigger
+```
+
+### `check-triggers` — Evaluate pending triggers
+
+```
+POST /api/v1/check-triggers
+MCP: check_triggers
 ```
 
 ## Class B (Inference)
