@@ -76,26 +76,57 @@ impl RowSet {
 // Interpreter
 // ---------------------------------------------------------------------------
 
-/// Stateless physical-plan interpreter. Executes one `IrPlan` against a
-/// `Kernel` and returns the final result set.
-pub struct Interpreter;
+/// Physical-plan interpreter with state for hybrid search fusion.
+///
+/// Not stateless — caches the last `Objects` and `Scored` row sets so that
+/// `Fuse` can combine the preceding two search results (AnnSearch + TextSearch)
+/// in a linear pipeline.
+pub struct Interpreter {
+    /// Cached objects from the most recent Scan/Filter — reused when a search
+    /// op receives Scored input instead of Objects (hybrid pipeline).
+    cached_objects: Option<Vec<KnowledgeObject>>,
+    /// Subject from the most recent Scan, for BM25 delegation to find_similar.
+    cached_subject: Option<Subject>,
+    /// The previous scored result, stored for Fuse to combine with the current.
+    prev_scored: Option<Vec<(KOID, f32, String, u64)>>,
+}
 
 impl Interpreter {
-    /// Execute a plan. Returns the final `RowSet` — callers destructure it
-    /// into the expected output format (JSON, protobuf, etc.).
+    /// Execute a plan. Returns the final `RowSet`.
     pub fn execute(kernel: &Kernel, plan: &IrPlan) -> KResult<RowSet> {
+        let mut interp = Interpreter {
+            cached_objects: None,
+            cached_subject: None,
+            prev_scored: None,
+        };
         let mut rows = RowSet::Objects(Vec::new());
         for op in &plan.operators {
-            rows = Self::exec_op(kernel, op, rows)?;
+            rows = interp.exec_op(kernel, op, rows)?;
         }
         Ok(rows)
     }
 
-    fn exec_op(kernel: &Kernel, op: &IrOp, input: RowSet) -> KResult<RowSet> {
+    /// Resolve input to objects: if Scored, use cached objects; otherwise use as-is.
+    fn resolve_objects(&self, input: &RowSet) -> KResult<Vec<KnowledgeObject>> {
+        match input {
+            RowSet::Objects(kos) => Ok(kos.clone()),
+            RowSet::Scored(_) => self
+                .cached_objects
+                .clone()
+                .ok_or_else(|| KError::InvalidQuery("no cached objects for search op".into())),
+            _ => Err(KError::InvalidQuery(
+                "search op requires Objects or Scored input".into(),
+            )),
+        }
+    }
+
+    fn exec_op(&mut self, kernel: &Kernel, op: &IrOp, input: RowSet) -> KResult<RowSet> {
         match op {
             IrOp::Scan { type_name, subject } => {
                 let subj = Subject::new(subject);
                 let kos = kernel.scan_by_type(&subj, type_name)?;
+                self.cached_objects = Some(kos.clone());
+                self.cached_subject = Some(subj);
                 Ok(RowSet::Objects(kos))
             }
             IrOp::Filter { predicates } => {
@@ -133,6 +164,7 @@ impl Interpreter {
                         })
                     })
                     .collect();
+                self.cached_objects = Some(filtered.clone());
                 Ok(RowSet::Objects(filtered))
             }
             IrOp::Traverse {
@@ -140,7 +172,6 @@ impl Interpreter {
                 rel_type,
                 depth,
             } => {
-                // Set-based Traverse: empty start_koid consumes input RowSet.
                 let start_koids: Vec<KOID> = if start_koid.is_empty() {
                     match &input {
                         RowSet::Objects(kos) => kos.iter().map(|ko| ko.koid).collect(),
@@ -176,7 +207,6 @@ impl Interpreter {
                     }
                 }
 
-                // BFS deeper levels.
                 while let Some((cur, d)) = queue.pop_front() {
                     if d >= *depth {
                         continue;
@@ -194,17 +224,22 @@ impl Interpreter {
             }
             IrOp::AnnSearch {
                 vector,
+                query_text,
                 embedding_model,
                 k,
             } => {
-                let kos = match &input {
-                    RowSet::Objects(kos) => kos.clone(),
-                    _ => {
-                        return Err(KError::InvalidQuery(
-                            "AnnSearch requires Object input".into(),
-                        ))
+                // If no vector but we have query_text, fall back to text search
+                // (ponytail: real embedding generation needs an embedding provider
+                // wired into the kernel; add when available).
+                if vector.is_empty() {
+                    if let Some(ref qt) = query_text {
+                        return self.exec_text_search(kernel, qt, k, &input);
                     }
-                };
+                    return Err(KError::InvalidQuery(
+                        "AnnSearch requires vector or query_text".into(),
+                    ));
+                }
+                let kos = self.resolve_objects(&input)?;
                 let model = embedding_model.as_deref();
                 let mut scored: Vec<(KOID, f32, String, u64)> = kos
                     .iter()
@@ -230,43 +265,35 @@ impl Interpreter {
                         .then_with(|| a.0.cmp(&b.0))
                 });
                 scored.truncate(*k);
+                self.prev_scored = Some(scored.clone());
                 Ok(RowSet::Scored(scored))
             }
-            IrOp::TextSearch { query, k } => {
-                let kos = match &input {
-                    RowSet::Objects(kos) => kos.clone(),
-                    _ => {
-                        return Err(KError::InvalidQuery(
-                            "TextSearch requires Object input".into(),
-                        ))
+            IrOp::TextSearch { query, k, scoring } => {
+                // BM25 path: delegate to kernel's IndexCoordinator when available.
+                if scoring.as_deref() == Some("bm25") {
+                    if let Some(ref subj) = self.cached_subject {
+                        if let Ok(scored) = kernel.type_scoped_text_search(subj, query, *k) {
+                            if !scored.is_empty() {
+                                self.prev_scored = Some(scored.clone());
+                                return Ok(RowSet::Scored(scored));
+                            }
+                        }
                     }
-                };
-                let q_tokens = tokenize(query);
-                let mut scored: Vec<(KOID, f32, String, u64)> = kos
-                    .iter()
-                    .map(|ko| {
-                        let doc_tokens = tokenize(&ko_text(ko));
-                        (
-                            ko.koid,
-                            jaccard(&q_tokens, &doc_tokens),
-                            ko.metadata.type_name.clone(),
-                            ko.version,
-                        )
-                    })
-                    .collect();
-                scored.sort_by(|a, b| {
-                    b.1.partial_cmp(&a.1)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                        .then_with(|| a.0.cmp(&b.0))
-                });
-                scored.truncate(*k);
-                Ok(RowSet::Scored(scored))
+                    // Fall through to Jaccard on empty result or error.
+                }
+                self.exec_text_search(kernel, query, k, &input)
             }
-            IrOp::Fuse { .. } => {
-                // ponytail: Fuse consumes the last two Scored row sets from
-                // preceding AnnSearch + TextSearch. Full multi-input Fuse
-                // with explicit input wiring lands when DAG plans arrive.
-                Ok(input)
+            IrOp::Fuse { mode } => {
+                let current = match &input {
+                    RowSet::Scored(s) => s.clone(),
+                    _ => return Ok(input), // nothing to fuse, pass through
+                };
+                let prev = match self.prev_scored.take() {
+                    Some(p) => p,
+                    None => return Ok(RowSet::Scored(current)), // no previous, pass through
+                };
+                let fused = Self::fuse_scored(&prev, &current, mode);
+                Ok(RowSet::Scored(fused))
             }
             IrOp::Project { fields } => {
                 let mut kos = match input {
@@ -276,7 +303,6 @@ impl Interpreter {
                 if fields.contains(&"*".to_string()) {
                     return Ok(RowSet::Objects(kos));
                 }
-                // Filter properties to only the requested fields.
                 for ko in &mut kos {
                     let mut filtered = PropertyMap::new();
                     for f in fields {
@@ -287,6 +313,136 @@ impl Interpreter {
                     ko.properties = filtered;
                 }
                 Ok(RowSet::Objects(kos))
+            }
+        }
+    }
+
+    /// Inline Jaccard text search over the input objects.
+    fn exec_text_search(
+        &mut self,
+        _kernel: &Kernel,
+        query: &str,
+        k: &usize,
+        input: &RowSet,
+    ) -> KResult<RowSet> {
+        let kos = self.resolve_objects(input)?;
+        let q_tokens = tokenize(query);
+        let mut scored: Vec<(KOID, f32, String, u64)> = kos
+            .iter()
+            .map(|ko| {
+                let doc_tokens = tokenize(&ko_text(ko));
+                (
+                    ko.koid,
+                    jaccard(&q_tokens, &doc_tokens),
+                    ko.metadata.type_name.clone(),
+                    ko.version,
+                )
+            })
+            .collect();
+        scored.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        scored.truncate(*k);
+        self.prev_scored = Some(scored.clone());
+        Ok(RowSet::Scored(scored))
+    }
+
+    /// RRF or weighted fusion of two scored result sets.
+    fn fuse_scored(
+        a: &[(KOID, f32, String, u64)],
+        b: &[(KOID, f32, String, u64)],
+        mode: &FuseMode,
+    ) -> Vec<(KOID, f32, String, u64)> {
+        match mode {
+            FuseMode::VectorOnly => {
+                let mut out = a.to_vec();
+                out.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap_or(Ordering::Equal));
+                out
+            }
+            FuseMode::TextOnly => {
+                let mut out = b.to_vec();
+                out.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap_or(Ordering::Equal));
+                out
+            }
+            FuseMode::Weighted { wv, wt } => {
+                let bmap: std::collections::BTreeMap<KOID, f32> =
+                    b.iter().map(|(koid, s, ..)| (*koid, *s)).collect();
+                let mut merged: Vec<(KOID, f32, String, u64)> = a
+                    .iter()
+                    .map(|(koid, sv, tn, ver)| {
+                        let tb = bmap.get(koid).copied().unwrap_or(0.0);
+                        (*koid, wv * sv + wt * tb, tn.clone(), *ver)
+                    })
+                    .collect();
+                // Include entries only in b.
+                let a_set: std::collections::BTreeSet<KOID> =
+                    a.iter().map(|(koid, ..)| *koid).collect();
+                for (koid, sb, tn, ver) in b {
+                    if !a_set.contains(koid) {
+                        merged.push((*koid, *wt * sb, tn.clone(), *ver));
+                    }
+                }
+                merged.sort_by(|x, y| {
+                    y.1.partial_cmp(&x.1)
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| x.0.cmp(&y.0))
+                });
+                merged
+            }
+            FuseMode::Rrf { k0 } => {
+                let k0f = *k0 as f32;
+                // Build rank maps (1-indexed ranks, only entries with score > 0).
+                let rank = |scored: &[(KOID, f32, String, u64)]| -> std::collections::BTreeMap<KOID, usize> {
+                    let mut r = std::collections::BTreeMap::new();
+                    for (i, (koid, s, ..)) in scored.iter().enumerate() {
+                        if *s > 0.0 {
+                            r.entry(*koid).or_insert(i + 1);
+                        }
+                    }
+                    r
+                };
+                let ra = rank(a);
+                let rb = rank(b);
+                let all_koids: std::collections::BTreeSet<KOID> =
+                    ra.keys().chain(rb.keys()).copied().collect();
+                let mut merged: Vec<(KOID, f32, String, u64)> = all_koids
+                    .into_iter()
+                    .map(|koid| {
+                        let mut rrf = 0.0f32;
+                        if let Some(ra_val) = ra.get(&koid) {
+                            rrf += 1.0 / (k0f + 1.0 + *ra_val as f32);
+                        }
+                        if let Some(rb_val) = rb.get(&koid) {
+                            rrf += 1.0 / (k0f + 1.0 + *rb_val as f32);
+                        }
+                        // Carry type_name/version from whichever set has it.
+                        let tn = a
+                            .iter()
+                            .find(|(k, ..)| *k == koid)
+                            .map(|(_, _, tn, _)| tn.clone())
+                            .or_else(|| {
+                                b.iter()
+                                    .find(|(k, ..)| *k == koid)
+                                    .map(|(_, _, tn, _)| tn.clone())
+                            })
+                            .unwrap_or_default();
+                        let ver = a
+                            .iter()
+                            .find(|(k, ..)| *k == koid)
+                            .map(|(_, _, _, v)| *v)
+                            .or_else(|| b.iter().find(|(k, ..)| *k == koid).map(|(_, _, _, v)| *v))
+                            .unwrap_or(0);
+                        (koid, rrf, tn, ver)
+                    })
+                    .collect();
+                merged.sort_by(|x, y| {
+                    y.1.partial_cmp(&x.1)
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| x.0.cmp(&y.0))
+                });
+                merged
             }
         }
     }
@@ -511,6 +667,7 @@ mod tests {
             IrOp::TextSearch {
                 query: "cats".into(),
                 k: 5,
+                scoring: None,
             },
         ]);
 
@@ -558,6 +715,207 @@ mod tests {
         match &results[1] {
             RowSet::Objects(kos) => assert_eq!(kos.len(), 1),
             _ => panic!("expected Objects"),
+        }
+    }
+
+    // ---- R13: Fuse (RRF / Weighted) tests ----
+
+    #[test]
+    fn fuse_rrf_combines_two_scored_sets() {
+        use mnemosyne_kernel::ir::FuseMode;
+        let k1 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1").unwrap();
+        let k2 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2").unwrap();
+        let k3 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3").unwrap();
+        let a = vec![
+            (k1, 0.9, "note".into(), 1u64),
+            (k2, 0.5, "note".into(), 1u64),
+        ];
+        let b = vec![
+            (k2, 0.8, "note".into(), 1u64),
+            (k3, 0.3, "note".into(), 1u64),
+        ];
+        let fused = Interpreter::fuse_scored(&a, &b, &FuseMode::Rrf { k0: 60 });
+        // All three koids should appear, sorted by RRF score desc.
+        assert_eq!(fused.len(), 3);
+        // k2 appears in both lists → highest RRF score.
+        assert_eq!(fused[0].0, k2);
+        // Scores should be in descending order.
+        assert!(fused[0].1 >= fused[1].1);
+        assert!(fused[1].1 >= fused[2].1);
+    }
+
+    #[test]
+    fn fuse_weighted_combines_scores() {
+        use mnemosyne_kernel::ir::FuseMode;
+        let k1 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1").unwrap();
+        let k2 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2").unwrap();
+        let a = vec![(k1, 1.0, "note".into(), 1u64)];
+        let b = vec![(k2, 1.0, "note".into(), 1u64)];
+        let fused = Interpreter::fuse_scored(&a, &b, &FuseMode::Weighted { wv: 0.7, wt: 0.3 });
+        assert_eq!(fused.len(), 2);
+        // k1: 0.7*1.0 + 0.3*0 = 0.7; k2: 0.7*0 + 0.3*1.0 = 0.3
+        let k1_score = fused.iter().find(|(k, ..)| *k == k1).unwrap().1;
+        let k2_score = fused.iter().find(|(k, ..)| *k == k2).unwrap().1;
+        assert!((k1_score - 0.7).abs() < 0.001);
+        assert!((k2_score - 0.3).abs() < 0.001);
+    }
+
+    #[test]
+    fn fuse_vector_only_picks_first() {
+        use mnemosyne_kernel::ir::FuseMode;
+        let k1 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1").unwrap();
+        let k2 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2").unwrap();
+        let a = vec![(k1, 0.9, "note".into(), 1u64)];
+        let b = vec![(k2, 0.8, "note".into(), 1u64)];
+        let fused = Interpreter::fuse_scored(&a, &b, &FuseMode::VectorOnly);
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].0, k1);
+    }
+
+    #[test]
+    fn fuse_text_only_picks_second() {
+        use mnemosyne_kernel::ir::FuseMode;
+        let k1 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1").unwrap();
+        let k2 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2").unwrap();
+        let a = vec![(k1, 0.9, "note".into(), 1u64)];
+        let b = vec![(k2, 0.8, "note".into(), 1u64)];
+        let fused = Interpreter::fuse_scored(&a, &b, &FuseMode::TextOnly);
+        assert_eq!(fused.len(), 1);
+        assert_eq!(fused[0].0, k2);
+    }
+
+    #[test]
+    fn ann_search_with_query_text_falls_back_to_text() {
+        let k = mk();
+        let alice = Subject::new("alice");
+
+        let mut p1 = PropertyMap::new();
+        p1.insert("body".into(), Value::Text("cats are great".into()));
+        create_ko(&k, &alice, "note", p1, None);
+
+        let mut p2 = PropertyMap::new();
+        p2.insert("body".into(), Value::Text("unrelated fish".into()));
+        create_ko(&k, &alice, "note", p2, None);
+
+        // AnnSearch with empty vector + query_text → falls back to text search.
+        let plan = IrPlan::new(vec![
+            IrOp::Scan {
+                type_name: "note".into(),
+                subject: "alice".into(),
+            },
+            IrOp::AnnSearch {
+                vector: vec![],
+                query_text: Some("cats".into()),
+                embedding_model: None,
+                k: 5,
+            },
+        ]);
+
+        let result = Interpreter::execute(&k, &plan).unwrap();
+        match result {
+            RowSet::Scored(scored) => {
+                assert!(!scored.is_empty());
+                // "cats are great" should score higher.
+                assert!(scored[0].1 > 0.0);
+            }
+            _ => panic!("expected Scored"),
+        }
+    }
+
+    #[test]
+    fn text_search_with_bm25_scoring_falls_back_to_jaccard() {
+        let k = mk();
+        let alice = Subject::new("alice");
+
+        let mut p1 = PropertyMap::new();
+        p1.insert("body".into(), Value::Text("machine learning basics".into()));
+        create_ko(&k, &alice, "note", p1, None);
+
+        // BM25 scoring without a maintainer → falls back to Jaccard.
+        let plan = IrPlan::new(vec![
+            IrOp::Scan {
+                type_name: "note".into(),
+                subject: "alice".into(),
+            },
+            IrOp::TextSearch {
+                query: "machine learning".into(),
+                k: 5,
+                scoring: Some("bm25".into()),
+            },
+        ]);
+
+        let result = Interpreter::execute(&k, &plan).unwrap();
+        match result {
+            RowSet::Scored(scored) => {
+                assert!(!scored.is_empty());
+                assert!(scored[0].1 > 0.0);
+            }
+            _ => panic!("expected Scored"),
+        }
+    }
+
+    #[test]
+    fn hybrid_ann_then_text_then_fuse_pipeline() {
+        let k = mk();
+        let alice = Subject::new("alice");
+
+        // Create a KO with both embedding and text content.
+        let mut p1 = PropertyMap::new();
+        p1.insert("body".into(), Value::Text("cats are wonderful".into()));
+        let emb = vec![0.5; 128]; // dummy 128-dim embedding
+        let sem = SemanticBlock {
+            embedding: Some(emb.clone()),
+            embedding_model: Some("test-model".into()),
+            summary: Some("about cats".into()),
+            confidence: None,
+            source: None,
+        };
+        create_ko(&k, &alice, "note", p1, Some(sem));
+
+        let mut p2 = PropertyMap::new();
+        p2.insert("body".into(), Value::Text("unrelated fish".into()));
+        let emb2 = vec![0.1; 128];
+        let sem2 = SemanticBlock {
+            embedding: Some(emb2.clone()),
+            embedding_model: Some("test-model".into()),
+            summary: Some("about fish".into()),
+            confidence: None,
+            source: None,
+        };
+        create_ko(&k, &alice, "note", p2, Some(sem2));
+
+        // Hybrid plan: Scan → AnnSearch → TextSearch → Fuse
+        let query_emb = vec![0.5; 128]; // matches "cats" doc
+        let plan = IrPlan::new(vec![
+            IrOp::Scan {
+                type_name: "note".into(),
+                subject: "alice".into(),
+            },
+            IrOp::AnnSearch {
+                vector: query_emb,
+                query_text: None,
+                embedding_model: Some("test-model".into()),
+                k: 5,
+            },
+            IrOp::TextSearch {
+                query: "cats".into(),
+                k: 5,
+                scoring: None,
+            },
+            IrOp::Fuse {
+                mode: FuseMode::Rrf { k0: 60 },
+            },
+        ]);
+
+        let result = Interpreter::execute(&k, &plan).unwrap();
+        match result {
+            RowSet::Scored(scored) => {
+                assert!(!scored.is_empty(), "hybrid search should return results");
+                // The "cats" document should be top-ranked (high vector + text score).
+                // Verify the top result has a nonzero score.
+                assert!(scored[0].1 > 0.0);
+            }
+            _ => panic!("expected Scored from hybrid pipeline"),
         }
     }
 }

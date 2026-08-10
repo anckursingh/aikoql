@@ -140,6 +140,7 @@ impl Compiler {
                 }
                 ops.push(IrOp::AnnSearch {
                     vector: v.clone(),
+                    query_text: None,
                     embedding_model: search.model.clone(),
                     k: search.k,
                 });
@@ -151,6 +152,7 @@ impl Compiler {
                 ops.push(IrOp::TextSearch {
                     query: t.clone(),
                     k: search.k,
+                    scoring: None,
                 });
             }
         }

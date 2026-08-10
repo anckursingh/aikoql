@@ -1788,6 +1788,41 @@ impl Kernel {
             .search(self, q)
     }
 
+    /// Type-scoped text search via the IndexCoordinator (BM25 when maintainer
+    /// is attached, Jaccard fallback otherwise). Returns `(koid, score,
+    /// type_name, version)` tuples like the runtime's `RowSet::Scored`.
+    /// Uses `subject` for ACL; callers should pass the same subject used in
+    /// the preceding Scan operator.
+    pub fn type_scoped_text_search(
+        &self,
+        subject: &Subject,
+        query: &str,
+        k: usize,
+    ) -> KResult<Vec<(KOID, f32, String, u64)>> {
+        let q = SimilarityQuery {
+            context: KnowledgeContext::new(subject.clone()),
+            filter: None,
+            text: Some(query.to_string()),
+            vector: None,
+            embedding_model: None,
+            k,
+            fusion: Fusion::TextOnly,
+        };
+        self.find_similar(q).map(|results| {
+            results
+                .into_iter()
+                .map(|s| {
+                    (
+                        s.ko.koid,
+                        s.score,
+                        s.ko.metadata.type_name.clone(),
+                        s.ko.version,
+                    )
+                })
+                .collect()
+        })
+    }
+
     // ---- type scanning ---------------------------------------------------
 
     /// Return all readable KOs of a given type (ACL-filtered).

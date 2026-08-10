@@ -13,6 +13,10 @@ pub enum Token {
     Return,
     Similar,
     To,
+    Score,
+    Bm25,
+    Using,
+    Embedding,
     Traverse,
     Create,
     Update,
@@ -133,6 +137,10 @@ impl Lexer {
             "RETURN" => Token::Return,
             "SIMILAR" => Token::Similar,
             "TO" => Token::To,
+            "SCORE" => Token::Score,
+            "BM25" => Token::Bm25,
+            "USING" => Token::Using,
+            "EMBEDDING" => Token::Embedding,
             "TRAVERSE" => Token::Traverse,
             "CREATE" => Token::Create,
             "UPDATE" => Token::Update,
@@ -277,5 +285,30 @@ mod tests {
         let ts = tokens("// comment\nMATCH Person RETURN *");
         assert_eq!(ts[0], Token::Match);
         assert_eq!(ts[1], Token::Ident("Person".into()));
+    }
+
+    #[test]
+    fn lex_similar_with_score_bm25() {
+        let ts = tokens("MATCH Person SIMILAR TO \"John\" SCORE BM25 RETURN *");
+        assert_eq!(ts[0], Token::Match);
+        assert_eq!(ts[4], Token::StringLit("John".into()));
+        assert_eq!(ts[5], Token::Score);
+        assert_eq!(ts[6], Token::Bm25);
+    }
+
+    #[test]
+    fn lex_similar_with_using_embedding() {
+        let ts = tokens("MATCH Doc SIMILAR TO \"concept\" USING EMBEDDING RETURN *");
+        assert_eq!(ts[5], Token::Using);
+        assert_eq!(ts[6], Token::Embedding);
+    }
+
+    #[test]
+    fn lex_similar_with_both() {
+        let ts = tokens("MATCH X SIMILAR TO \"q\" SCORE BM25 USING EMBEDDING RETURN koid");
+        assert_eq!(ts[5], Token::Score);
+        assert_eq!(ts[6], Token::Bm25);
+        assert_eq!(ts[7], Token::Using);
+        assert_eq!(ts[8], Token::Embedding);
     }
 }

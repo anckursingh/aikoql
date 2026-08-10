@@ -2340,6 +2340,7 @@ fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
         if let Some(ref v) = vector {
             ops.push(IrOp::AnnSearch {
                 vector: v.clone(),
+                query_text: None,
                 embedding_model: model.map(String::from),
                 k: k_req,
             });
@@ -2348,6 +2349,7 @@ fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
             ops.push(IrOp::TextSearch {
                 query: t.into(),
                 k: k_req,
+                scoring: None,
             });
         }
         if vector.is_some() && text.is_some() {

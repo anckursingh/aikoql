@@ -153,12 +153,36 @@ fn compile_match(m: &ast::MatchStatement, subject: &str) -> Result<IrPlan, Strin
         ops.push(IrOp::Filter { predicates: flat });
     }
 
-    // SIMILAR → AnnSearch.
+    // SIMILAR → TextSearch (default Jaccard), optionally with BM25 scoring.
+    // USING EMBEDDING → AnnSearch (vector ANN).
+    // Both → TextSearch + AnnSearch + Fuse (hybrid retrieval).
     if let Some(ref sim) = m.similarity {
+        let use_bm25 = matches!(sim.score, Some(ast::ScoringMethod::Bm25));
+        let use_embedding = matches!(sim.using, Some(ast::UsingMethod::Embedding));
+
+        if use_embedding {
+            ops.push(IrOp::AnnSearch {
+                vector: Vec::new(),
+                query_text: Some(sim.query.clone()),
+                embedding_model: None,
+                k: 10,
+            });
+        }
         ops.push(IrOp::TextSearch {
             query: sim.query.clone(),
             k: 10,
+            scoring: if use_bm25 { Some("bm25".into()) } else { None },
         });
+        if use_embedding && use_bm25 {
+            ops.push(IrOp::Fuse {
+                mode: FuseMode::Rrf { k0: 60 },
+            });
+        } else if use_embedding {
+            // Vector + default text: fuse with RRF.
+            ops.push(IrOp::Fuse {
+                mode: FuseMode::Rrf { k0: 60 },
+            });
+        }
     }
 
     // TRAVERSE — set-based, consumes Scan output.
@@ -383,6 +407,75 @@ mod tests {
         match &plans[0].operators[0] {
             IrOp::Scan { type_name, .. } => assert_eq!(type_name, "Employee"),
             _ => panic!("expected Scan"),
+        }
+    }
+
+    // ---- R13: SCORE BM25 / USING EMBEDDING lowering tests ----
+
+    #[test]
+    fn compile_similar_score_bm25() {
+        let plan = compile("MATCH Person SIMILAR TO \"John\" SCORE BM25 RETURN *").unwrap();
+        // Scan + TextSearch (with scoring=bm25)
+        assert_eq!(plan.operators.len(), 2);
+        match &plan.operators[1] {
+            IrOp::TextSearch { query, scoring, .. } => {
+                assert_eq!(query, "John");
+                assert_eq!(scoring.as_deref(), Some("bm25"));
+            }
+            _ => panic!("expected TextSearch"),
+        }
+    }
+
+    #[test]
+    fn compile_similar_using_embedding() {
+        let plan = compile("MATCH Doc SIMILAR TO \"concept\" USING EMBEDDING RETURN *").unwrap();
+        // Scan + AnnSearch (with query_text) + TextSearch + Fuse
+        assert!(plan.operators.len() >= 3);
+        let has_ann = plan
+            .operators
+            .iter()
+            .any(|op| matches!(op, IrOp::AnnSearch { .. }));
+        let has_fuse = plan
+            .operators
+            .iter()
+            .any(|op| matches!(op, IrOp::Fuse { .. }));
+        assert!(has_ann, "expected AnnSearch in plan");
+        assert!(has_fuse, "expected Fuse in plan");
+    }
+
+    #[test]
+    fn compile_similar_both_bm25_and_embedding() {
+        let plan = compile("MATCH X SIMILAR TO \"q\" SCORE BM25 USING EMBEDDING RETURN *").unwrap();
+        // Scan + AnnSearch + TextSearch(bm25) + Fuse
+        assert!(plan.operators.len() >= 4);
+        let has_ann = plan
+            .operators
+            .iter()
+            .any(|op| matches!(op, IrOp::AnnSearch { .. }));
+        let has_text = plan
+            .operators
+            .iter()
+            .any(|op| matches!(op, IrOp::TextSearch { .. }));
+        let has_fuse = plan
+            .operators
+            .iter()
+            .any(|op| matches!(op, IrOp::Fuse { .. }));
+        assert!(has_ann, "expected AnnSearch");
+        assert!(has_text, "expected TextSearch");
+        assert!(has_fuse, "expected Fuse");
+    }
+
+    #[test]
+    fn compile_similar_plain_unchanged() {
+        // Backward compat: plain SIMILAR TO without SCORE/USING still works.
+        let plan = compile("MATCH Person SIMILAR TO \"John\" RETURN *").unwrap();
+        assert_eq!(plan.operators.len(), 2); // Scan + TextSearch (no scoring)
+        match &plan.operators[1] {
+            IrOp::TextSearch { query, scoring, .. } => {
+                assert_eq!(query, "John");
+                assert_eq!(scoring.as_deref(), None);
+            }
+            _ => panic!("expected TextSearch"),
         }
     }
 }

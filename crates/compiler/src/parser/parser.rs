@@ -17,6 +17,10 @@ fn token_name(t: &Token) -> String {
         Token::Return => "RETURN".into(),
         Token::Similar => "SIMILAR".into(),
         Token::To => "TO".into(),
+        Token::Score => "SCORE".into(),
+        Token::Bm25 => "BM25".into(),
+        Token::Using => "USING".into(),
+        Token::Embedding => "EMBEDDING".into(),
         Token::Traverse => "TRAVERSE".into(),
         Token::Create => "CREATE".into(),
         Token::Update => "UPDATE".into(),
@@ -153,8 +157,12 @@ impl Parser {
                 Token::Similar => {
                     self.advance();
                     self.expect(Token::To)?;
+                    let query = self.expect_string()?;
+                    let (score, using) = self.parse_similarity_options()?;
                     sim = Some(SimilarityClause {
-                        query: self.expect_string()?,
+                        query,
+                        score,
+                        using,
                     });
                 }
                 Token::Traverse => {
@@ -182,6 +190,47 @@ impl Parser {
                 }
             }
         }
+    }
+
+    /// Parse optional `SCORE BM25` and/or `USING EMBEDDING` after `SIMILAR TO "..."`.
+    fn parse_similarity_options(
+        &mut self,
+    ) -> Result<(Option<ScoringMethod>, Option<UsingMethod>), ParseError> {
+        let mut score = None;
+        let mut using = None;
+        loop {
+            match &self.current {
+                Token::Score => {
+                    self.advance();
+                    match &self.current {
+                        Token::Bm25 => {
+                            score = Some(ScoringMethod::Bm25);
+                            self.advance();
+                        }
+                        _ => return Err(expected_err("BM25", &self.current, self.line, self.col)),
+                    }
+                }
+                Token::Using => {
+                    self.advance();
+                    match &self.current {
+                        Token::Embedding => {
+                            using = Some(UsingMethod::Embedding);
+                            self.advance();
+                        }
+                        _ => {
+                            return Err(expected_err(
+                                "EMBEDDING",
+                                &self.current,
+                                self.line,
+                                self.col,
+                            ))
+                        }
+                    }
+                }
+                _ => break,
+            }
+        }
+        Ok((score, using))
     }
 
     fn parse_predicate(&mut self) -> Result<Predicate, ParseError> {
@@ -489,5 +538,68 @@ mod tests {
             .unwrap_err();
         assert_eq!(e.code, diagnostics::Code::InvalidOperator);
         assert!(e.hint.unwrap().contains("=="));
+    }
+
+    #[test]
+    fn parse_similar_score_bm25() {
+        match Parser::new("MATCH Person SIMILAR TO \"John\" SCORE BM25 RETURN *")
+            .parse_statement()
+            .unwrap()
+        {
+            Statement::Match(m) => {
+                let sim = m.similarity.unwrap();
+                assert_eq!(sim.query, "John");
+                assert_eq!(sim.score, Some(ScoringMethod::Bm25));
+                assert_eq!(sim.using, None);
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn parse_similar_using_embedding() {
+        match Parser::new("MATCH Doc SIMILAR TO \"concept\" USING EMBEDDING RETURN koid")
+            .parse_statement()
+            .unwrap()
+        {
+            Statement::Match(m) => {
+                let sim = m.similarity.unwrap();
+                assert_eq!(sim.query, "concept");
+                assert_eq!(sim.score, None);
+                assert_eq!(sim.using, Some(UsingMethod::Embedding));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn parse_similar_both_bm25_and_embedding() {
+        match Parser::new("MATCH X SIMILAR TO \"q\" SCORE BM25 USING EMBEDDING RETURN *")
+            .parse_statement()
+            .unwrap()
+        {
+            Statement::Match(m) => {
+                let sim = m.similarity.unwrap();
+                assert_eq!(sim.score, Some(ScoringMethod::Bm25));
+                assert_eq!(sim.using, Some(UsingMethod::Embedding));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn parse_similar_reordered_using_then_score() {
+        // USING EMBEDDING before SCORE BM25 should also work.
+        match Parser::new("MATCH X SIMILAR TO \"q\" USING EMBEDDING SCORE BM25 RETURN *")
+            .parse_statement()
+            .unwrap()
+        {
+            Statement::Match(m) => {
+                let sim = m.similarity.unwrap();
+                assert_eq!(sim.score, Some(ScoringMethod::Bm25));
+                assert_eq!(sim.using, Some(UsingMethod::Embedding));
+            }
+            _ => panic!(),
+        }
     }
 }

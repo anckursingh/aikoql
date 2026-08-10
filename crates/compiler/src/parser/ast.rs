@@ -109,6 +109,20 @@ pub enum Predicate {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SimilarityClause {
     pub query: String,
+    /// Optional scoring method: BM25 for Tantivy-backed keyword retrieval.
+    pub score: Option<ScoringMethod>,
+    /// Optional retrieval method: Embedding for vector ANN search.
+    pub using: Option<UsingMethod>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ScoringMethod {
+    Bm25,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum UsingMethod {
+    Embedding,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -108,11 +108,22 @@ pub enum IrOp {
     /// ANN vector similarity search over the current result set.
     AnnSearch {
         vector: Vec<f32>,
+        /// Text to embed at query time (when vector is empty). Requires an
+        /// embedding provider wired into the kernel; degrades to text search
+        /// when no provider is available.
+        query_text: Option<String>,
         embedding_model: Option<String>,
         k: usize,
     },
     /// Full-text search over the current result set.
-    TextSearch { query: String, k: usize },
+    TextSearch {
+        query: String,
+        k: usize,
+        /// Scoring method: absent = Jaccard (default), "bm25" = Tantivy BM25
+        /// via the IndexCoordinator when a text-index maintainer is attached;
+        /// falls back to Jaccard otherwise.
+        scoring: Option<String>,
+    },
     /// Fuse two ranked result sets into one (RRF or weighted).
     Fuse { mode: FuseMode },
     /// Project specific fields from the result set.
@@ -235,12 +246,14 @@ mod tests {
             },
             IrOp::AnnSearch {
                 vector: vec![1.0, 0.0],
+                query_text: None,
                 embedding_model: Some("bge-m3".into()),
                 k: 5,
             },
             IrOp::TextSearch {
                 query: "cats".into(),
                 k: 5,
+                scoring: None,
             },
             IrOp::Fuse {
                 mode: FuseMode::Rrf { k0: 60 },

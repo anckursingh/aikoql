@@ -150,6 +150,7 @@ mod tests {
             IrOp::TextSearch {
                 query: "test".into(),
                 k: 5,
+                scoring: None,
             },
         ]);
         let opt = Planner::optimize(&plan);
