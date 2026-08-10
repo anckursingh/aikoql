@@ -24,7 +24,7 @@
   "mcpServers": {
     "mnemosyne": {
       "command": "npx",
-      "args": ["-y", "mnemosyne-mcp@latest", "serve", "--listen", "127.0.0.1:9090", "--metrics-addr", "127.0.0.1:9091"]
+      "args": ["-y", "mnemosyne-mcp@latest", "serve", "--metrics-addr", "127.0.0.1:9091"]
     }
   }
 }
