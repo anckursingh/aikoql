@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Mnemosyne — download + run the platform binary from GitHub Releases.
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -28,18 +28,34 @@ function download() {
 
   fs.mkdirSync(BIN_DIR, { recursive: true });
 
+  // Download to temp file first for atomicity
+  const tmpPath = binPath + '.tmp';
   try {
-    // Use platform-native download
+    if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
     if (process.platform === 'win32') {
-      execSync(`powershell -c "Invoke-WebRequest -Uri '${url}' -OutFile '${binPath}'"`, { stdio: 'inherit' });
+      execSync(`powershell -c "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '${url}' -OutFile '${tmpPath}'"`, { stdio: 'inherit' });
     } else {
-      execSync(`curl -fsSL '${url}' -o '${binPath}' && chmod +x '${binPath}'`, { stdio: 'inherit' });
+      execSync(`curl -fsSL '${url}' -o '${tmpPath}' && chmod +x '${tmpPath}'`, { stdio: 'inherit' });
     }
   } catch (e) {
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
     console.error('mnemosyne: download failed. Build from source: cargo install mnemosyne-mcp');
     process.exit(1);
   }
 
+  // Verify download isn't empty/corrupt (binary is ~20MB)
+  try {
+    const stat = fs.statSync(tmpPath);
+    if (stat.size < 1000000) {
+      throw new Error(`Downloaded file too small (${stat.size} bytes), likely corrupted`);
+    }
+  } catch (e) {
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    console.error(`mnemosyne: ${e.message}. Build from source: cargo install mnemosyne-mcp`);
+    process.exit(1);
+  }
+
+  fs.renameSync(tmpPath, binPath);
   if (process.platform !== 'win32') {
     try { fs.chmodSync(binPath, 0o755); } catch (_) {}
   }
@@ -54,10 +70,18 @@ if (!fs.existsSync(binPath)) {
   process.exit(1);
 }
 
-// Forward all args to the binary
+// Forward all args to the binary via long-lived spawn (MCP needs persistent stdio)
 const args = process.argv.slice(2);
-try {
-  execSync(`"${binPath}" ${args.map(a => `"${a}"`).join(' ')}`, { stdio: 'inherit' });
-} catch (e) {
-  process.exit(e.status || 1);
-}
+const child = spawn(binPath, args, { stdio: 'inherit' });
+
+child.on('exit', (code, signal) => {
+  if (signal) {
+    process.exit(128 + (signal === 'SIGTERM' ? 15 : 9));
+  }
+  process.exit(code || 0);
+});
+
+// Forward parent signals to child
+['SIGTERM', 'SIGINT', 'SIGHUP'].forEach(sig => {
+  process.on(sig, () => child.kill(sig));
+});
