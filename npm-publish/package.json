@@ -1,0 +1,31 @@
+{
+  "name": "mnemosyne-mcp",
+  "version": "0.1.0",
+  "description": "Mnemosyne — The Agent-First Knowledge Database. Single binary, zero deps. 59 MCP tools.",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Anckur Singh",
+    "url": "https://github.com/anckursingh"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anckursingh/mnemosyne.git"
+  },
+  "homepage": "https://github.com/anckursingh/mnemosyne",
+  "keywords": [
+    "mnemosyne",
+    "knowledge-graph",
+    "knowledge-database",
+    "mcp",
+    "mcp-server",
+    "ai-agents",
+    "context-compiler",
+    "claude-code"
+  ],
+  "bin": {
+    "mnemosyne-mcp": "./run.js"
+  },
+  "files": [
+    "run.js"
+  ]
+}

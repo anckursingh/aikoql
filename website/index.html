@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mnemosyne — The Agent-First Knowledge Database</title>
+<meta name="description" content="Mnemosyne is the knowledge operating system for AI agents. Everything is a Knowledge Object — data, programs, workflows, policies. 59 MCP tools, 4 SDKs, 14-panel Studio UI.">
+<style>
+:root {
+  --bg: #0a0a12;
+  --panel: #13131f;
+  --border: #252538;
+  --text: #d0d0d0;
+  --muted: #6b6b7b;
+  --accent: #6cc7f0;
+  --accent2: #b89ae0;
+  --green: #4ade80;
+  --red: #f87171;
+  --yellow: #facc15;
+  --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  --max-w: 1100px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.6; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+header { background: var(--panel); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; }
+header .wrap { max-width: var(--max-w); margin: 0 auto; display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; }
+header .logo { font-size: 20px; font-weight: 700; color: var(--accent); }
+header .logo span { color: var(--accent2); }
+header nav a { color: var(--muted); margin-left: 24px; font-size: 13px; font-weight: 500; transition: color 0.15s; }
+header nav a:hover { color: var(--text); text-decoration: none; }
+
+.hero { text-align: center; padding: 100px 24px 80px; max-width: 800px; margin: 0 auto; }
+.hero h1 { font-size: 48px; font-weight: 800; letter-spacing: -1.5px; line-height: 1.15; margin-bottom: 20px; }
+.hero h1 em { color: var(--accent); font-style: normal; }
+.hero p.sub { color: var(--muted); font-size: 18px; max-width: 600px; margin: 0 auto 36px; }
+.hero .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.hero .cta a { padding: 12px 28px; border-radius: 8px; font-size: 14px; font-weight: 600; transition: all 0.15s; }
+.cta-primary { background: var(--accent); color: #0a0a12 !important; }
+.cta-primary:hover { background: #7dd4f5; text-decoration: none !important; }
+.cta-secondary { background: transparent; border: 1px solid var(--border); color: var(--text) !important; }
+.cta-secondary:hover { border-color: var(--accent); text-decoration: none !important; }
+
+.stats { display: flex; justify-content: center; gap: 48px; flex-wrap: wrap; padding: 0 24px 60px; }
+.stat { text-align: center; }
+.stat .n { font-size: 32px; font-weight: 800; color: var(--accent); }
+.stat .l { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+
+section { max-width: var(--max-w); margin: 0 auto; padding: 60px 24px; }
+section h2 { font-size: 28px; font-weight: 700; margin-bottom: 12px; letter-spacing: -0.5px; }
+section .lead { color: var(--muted); font-size: 15px; margin-bottom: 32px; }
+
+.features { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+.feature { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 24px; }
+.feature .icon { font-size: 24px; margin-bottom: 10px; }
+.feature h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.feature p { color: var(--muted); font-size: 13px; }
+
+.comparison { overflow-x: auto; }
+.comparison table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.comparison th { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--muted); font-weight: 500; }
+.comparison td { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.comparison .yes { color: var(--green); }
+.comparison .no { color: var(--red); }
+
+code { font-family: var(--mono); font-size: 12px; background: rgba(108,199,240,0.08); padding: 2px 6px; border-radius: 4px; }
+pre { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; overflow-x: auto; margin: 12px 0; }
+pre code { background: none; padding: 0; }
+
+.panels-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.panel-chip { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; font-size: 13px; }
+
+.install-section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 32px; margin: 0 24px; }
+.install-section h3 { margin-bottom: 12px; }
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+.tab { padding: 6px 16px; background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 6px 6px 0 0; cursor: pointer; font-size: 12px; font-family: var(--font); }
+.tab.active { background: var(--bg); color: var(--accent); border-bottom-color: var(--bg); }
+
+footer { border-top: 1px solid var(--border); padding: 40px 24px; text-align: center; color: var(--muted); font-size: 12px; margin-top: 60px; }
+footer a { color: var(--muted); }
+footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
+
+.divider { height: 1px; background: var(--border); max-width: var(--max-w); margin: 0 auto; }
+
+@media (max-width: 700px) {
+  .hero h1 { font-size: 32px; }
+  .stats { gap: 24px; }
+  .features { grid-template-columns: 1fr; }
+}
+
+/* Architecture diagram */
+.arch-diagram { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; font-family: var(--mono); font-size: 12px; line-height: 1.8; overflow-x: auto; }
+.arch-diagram .l1 { color: var(--accent2); }
+.arch-diagram .l2 { color: #7dd4f5; }
+.arch-diagram .l3 { color: var(--green); }
+.arch-diagram .l4 { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="logo">🧠 Mnemosyne<span>OS</span></div>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#install">Install</a>
+      <a href="/docs/">Docs</a>
+      <a href="https://github.com/anckursingh/mnemosyne" target="_blank">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <h1>The <em>Agent-First</em><br>Knowledge Database</h1>
+  <p class="sub">Pre-compile software knowledge so AI agents spend tokens on problem-solving, not discovery. Everything is a Knowledge Object.</p>
+  <div class="cta">
+    <a href="#install" class="cta-primary">Get Started</a>
+    <a href="/docs/" class="cta-secondary">Read the Docs</a>
+  </div>
+</section>
+
+<div class="stats">
+  <div class="stat"><div class="n">600+</div><div class="l">Tests (0 failures)</div></div>
+  <div class="stat"><div class="n">59</div><div class="l">MCP Tools</div></div>
+  <div class="stat"><div class="n">4</div><div class="l">Language SDKs</div></div>
+  <div class="stat"><div class="n">14</div><div class="l">Studio Panels</div></div>
+  <div class="stat"><div class="n">9</div><div class="l">CLI Commands</div></div>
+  <div class="stat"><div class="n">4</div><div class="l">DB Connectors</div></div>
+</div>
+
+<div class="divider"></div>
+
+<section id="features">
+  <h2>Why Mnemosyne?</h2>
+  <p class="lead">The only database built from the ground up for the agent era. Not a better Postgres. Not a better vector DB. A new category.</p>
+
+  <div class="features">
+    <div class="feature">
+      <div class="icon">📦</div>
+      <h3>Context Compiler (MRFC-0070)</h3>
+      <p>40-60% reduction in agent discovery tokens. Compiles code + docs + ADRs into minimum sufficient context packages under token budget. No other database has this.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🔐</div>
+      <h3>Encryption at Rest</h3>
+      <p>AES-256-GCM + ChaCha20-Poly1305. Envelope encryption (KEK→DEK→Data). Per-tenant key isolation. Field-level encryption policies. Online key rotation.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">📝</div>
+      <h3>AIKOQL Query Language</h3>
+      <p>Purpose-built for knowledge graphs. Lexer → Parser → AST → Semantic Analyzer → KIR → Planner → Runtime. 5 statement types, 6 operators. Streaming results.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🕸</div>
+      <h3>Knowledge Graph + Hybrid Search</h3>
+      <p>Force-directed visualization. Vector (HNSW) + Text (BM25) hybrid search with RRF fusion. Graph traversal with depth and direction. Relationship-first queries.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">⚡</div>
+      <h3>Active Knowledge Objects</h3>
+      <p>9 executable KO types: Program, Workflow, Policy, Agent, Trigger, Connector, View, Report, Benchmark. All share the same lifecycle: identity, versioning, provenance, ACL, audit.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">📄</div>
+      <h3>Document Knowledge Compiler</h3>
+      <p>D1-D9 pipeline: Upload PDF/DOCX/Markdown → OCR → Document AST → Knowledge IR → Ontology → Resolution → Commit → KOs. 195 tests.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🔌</div>
+      <h3>4 Database Connectors</h3>
+      <p>PostgreSQL, SQLite, MongoDB, Neo4j. Schema → entities + relationships + facts via connector bridge. Universal connector_metadata_to_ir() for all types.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🛡</div>
+      <h3>Constraint Engine (~95%)</h3>
+      <p>Property types, uniqueness, cardinality, domain/check constraints, transaction-aware deferred evaluation, connector pushdown, constraint inference, programmable constraints.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">📡</div>
+      <h3>MCP + REST + Studio</h3>
+      <p>59 MCP tools over stdio/TCP. 40+ REST endpoints with OpenAPI 3.0. 14-panel Studio UI — no npm, no build step. Zero external dependencies.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">💾</div>
+      <h3>Self-Contained Binary</h3>
+      <p>Single file: 3.4 MB (Windows), 3.7 MB (Linux musl). Zero runtime deps. Embedded redb database. CLI, server, Studio UI, and shell — all in one binary.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🧩</div>
+      <h3>4 Language SDKs</h3>
+      <p>Python (PyO3 native + pure MCP client), TypeScript, Go (stdlib), Java (Gson). Unified Agent.connect() that auto-detects embedded vs server mode.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🏗</div>
+      <h3>Agent Knowledge Interface</h3>
+      <p>10 knowledge primitives. 11 authority levels. 12 scope levels. Markdown→KO compiler. Rust code→KO compiler. Context compiler. Conflict detection. Staleness detection. Change reconciliation.</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section id="architecture">
+  <h2>Architecture</h2>
+  <p class="lead">The Knowledge OS Stack — layered like an operating system for knowledge.</p>
+  <div class="arch-diagram"><pre><code>┌──────────────────────────────────────────────────────────────┐
+│  <span class="l1">ACTIVE KNOWLEDGE OBJECTS</span>                                    │
+│  <span class="l1">Program · Workflow · Agent · Policy · Trigger · Connector</span>    │
+│  <span class="l1">View · Report · Benchmark · Ontology</span>                          │
+├──────────────────────────────────────────────────────────────┤
+│  <span class="l2">KNOWLEDGE RUNTIME</span>                                            │
+│  <span class="l2">Compiler → KVM · Orchestrator · Policy Engine · Trigger Engine</span> │
+├──────────────────────────────────────────────────────────────┤
+│  <span class="l3">KNOWLEDGE KERNEL</span>                                              │
+│  <span class="l3">MVCC · OCC · HLC · RBAC · Audit · CDC</span>                         │
+│  <span class="l3">Schema Registry · Ontology Registry · Constraint Engine</span>       │
+├──────────────────────────────────────────────────────────────┤
+│  <span class="l4">STORAGE KERNEL</span>                                                 │
+│  <span class="l4">redb · EncryptedStore · RocksDB · MemoryEngine</span>                 │
+└──────────────────────────────────────────────────────────────┘</code></pre></div>
+  <p style="margin-top:20px;color:var(--muted);font-size:14px">
+    <strong>Core principle:</strong> Everything is a Knowledge Object — data, programs, workflows, policies, agents, prompts, and connectors all share the same lifecycle: identity, versioning, provenance, access control, audit trail. Inspired by Git (objects), Kubernetes (resources), and Unix (files).
+  </p>
+</section>
+
+<div class="divider"></div>
+
+<section>
+  <h2>What Can Mnemosyne Studio Show?</h2>
+  <p class="lead">14 panels — 5 unique capabilities no competitor has.</p>
+  <div class="panels-grid">
+    <div class="panel-chip">⌨️ Query Editor (AIKOQL + CodeMirror 6)</div>
+    <div class="panel-chip">🕸️ Knowledge Graph (vis-network)</div>
+    <div class="panel-chip">📁 Knowledge Explorer (tree browser)</div>
+    <div class="panel-chip">🏷️ Schema Explorer (types + relationships)</div>
+    <div class="panel-chip">🔬 KO Inspector (full detail panel)</div>
+    <div class="panel-chip">🦉 Ontology (class/property/relationship)</div>
+    <div class="panel-chip">⚙️ Administration (tenants, quotas, keys)</div>
+    <div class="panel-chip">⏳ Timeline (MVCC time travel) 🔥</div>
+    <div class="panel-chip">🔗 Provenance (cryptographic audit chain) 🔥</div>
+    <div class="panel-chip">🐛 Program Debugger (KVM bytecode view) 🔥</div>
+    <div class="panel-chip">⏱️ Benchmark Center (versioned benchmarks) 🔥</div>
+    <div class="panel-chip">📊 Query Profiler (execution plans)</div>
+    <div class="panel-chip">🔌 Provider Manager (connector management)</div>
+    <div class="panel-chip">📄 Document Explorer (D1-D9 pipeline)</div>
+  </div>
+  <p style="margin-top:12px;color:var(--muted);font-size:12px">🔥 = Unique capability — no graph DB, analytics platform, or document DB has this.</p>
+</section>
+
+<div class="divider"></div>
+
+<section id="install">
+  <h2>Get Started in 5 Seconds</h2>
+  <p class="lead">Single binary. Zero dependencies. No installers.</p>
+  <div class="install-section">
+    <h3>Download</h3>
+    <div class="tabs">
+      <button class="tab active" onclick="showInstall('windows',this)">Windows</button>
+      <button class="tab" onclick="showInstall('linux',this)">Linux (musl)</button>
+      <button class="tab" onclick="showInstall('source',this)">From Source</button>
+    </div>
+    <div id="inst-windows"><pre><code>curl -LO https://github.com/anckursingh/mnemosyne/releases/latest/download/mnemosyne-windows.exe
+mv mnemosyne-windows.exe mnemosyne.exe
+.\mnemosyne.exe --help</code></pre></div>
+    <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/mnemosyne/releases/latest/download/mnemosyne-linux
+chmod +x mnemosyne-linux && mv mnemosyne-linux /usr/local/bin/mnemosyne
+mnemosyne --help</code></pre></div>
+    <div id="inst-source" style="display:none"><pre><code>git clone https://github.com/anckursingh/mnemosyne.git
+cd mnemosyne
+cargo build --release -p mnemosyne-mcp
+./target/release/mnemosyne-mcp --help</code></pre></div>
+  </div>
+
+  <h3 style="margin: 28px 0 12px;">Quick Start</h3>
+  <pre><code># Interactive shell (in-memory)
+mnemosyne shell :memory:
+
+# Start MCP server + HTTP + Studio UI
+mnemosyne serve --listen 127.0.0.1:9090 --metrics-addr 127.0.0.1:9091 ./kb.redb
+
+# Ingest your codebase into knowledge base
+mnemosyne ingest-dir ~/my-project
+
+# Print knowledge report for any directory
+mnemosyne report ~/my-project</code></pre>
+
+  <h3 style="margin: 28px 0 12px;">Connect from Code</h3>
+  <div class="tabs">
+    <button class="tab active" onclick="showInstall('py',this)">Python</button>
+    <button class="tab" onclick="showInstall('ts',this)">TypeScript</button>
+    <button class="tab" onclick="showInstall('go',this)">Go</button>
+  </div>
+  <div id="inst-py"><pre><code>from mnemosyne import Agent
+db = Agent.connect("localhost:9090")  # or Agent.connect("./kb.redb")
+db.remember({"type_name": "Note", "properties": {"body": "Hello Mnemosyne"}})
+result = db.query("MATCH Note RETURN *")</code></pre></div>
+  <div id="inst-ts" style="display:none"><pre><code>import { MnemosyneClient } from 'mnemosyne-sdk';
+const client = new MnemosyneClient({ command: './mnemosyne' });
+await client.connect();
+await client.remember({ type_name: 'Note', properties: { body: 'Hello' } });</code></pre></div>
+  <div id="inst-go" style="display:none"><pre><code>import "github.com/ancku/mnemosyne-sdk"
+client := mnemosyne.NewClient("127.0.0.1:9090")
+client.Connect()
+result, _ := client.Remember(map[string]interface{}{"type_name": "Note"})</code></pre></div>
+</section>
+
+<div class="divider"></div>
+
+<section>
+  <h2>Comparison</h2>
+  <p class="lead">What does Mnemosyne give you that other databases don't?</p>
+  <div class="comparison">
+    <table>
+      <tr><th>Capability</th><th>Neo4j</th><th>PostgreSQL</th><th>MongoDB</th><th>Weaviate</th><th>Mnemosyne</th></tr>
+      <tr><td>Graph + Vector + Text in one</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅</td></tr>
+      <tr><td>MCP protocol native</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅</td></tr>
+      <tr><td>Context Compiler (agents)</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅</td></tr>
+      <tr><td>Cryptographic audit chain</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ SHA-256</td></tr>
+      <tr><td>MVCC time travel</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅</td></tr>
+      <tr><td>Programs-as-KOs</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅</td></tr>
+      <tr><td>Field-level encryption</td><td class="no">—</td><td class="yes">pgcrypto</td><td class="yes">CSFLE</td><td class="no">—</td><td class="yes">✅ AES-256-GCM</td></tr>
+      <tr><td>Embedded (single binary)</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅</td></tr>
+      <tr><td>Document→Knowledge pipeline</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ D1-D9</td></tr>
+      <tr><td>Constraint engine</td><td class="yes">Node keys</td><td class="yes">Full</td><td class="yes">Schema val</td><td class="no">—</td><td class="yes">✅ C1-C9</td></tr>
+      <tr><td>DB connectors built-in</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ 4 connectors</td></tr>
+      <tr><td>Envelope encryption</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ KEK→DEK</td></tr>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <div class="links">
+    <a href="/docs/">Documentation</a>
+    <a href="/docs/getting-started">Getting Started</a>
+    <a href="/docs/api-reference">API Reference</a>
+    <a href="/docs/architecture">Architecture</a>
+    <a href="https://github.com/anckursingh/mnemosyne" target="_blank">GitHub</a>
+    <a href="/docs/guides/programs">Programs-as-KOs</a>
+    <a href="/docs/guides/encryption">Encryption</a>
+    <a href="/docs/guides/import">Import Data</a>
+  </div>
+  <p>Mnemosyne — Apache 2.0 License. Built in Rust. Single binary, zero runtime deps.</p>
+</footer>
+
+<script>
+function showInstall(id, btn) {
+  document.querySelectorAll('[id^="inst-"]').forEach(e => e.style.display = 'none');
+  document.getElementById('inst-' + id).style.display = 'block';
+  btn.parentElement.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+}
+</script>
+</body>
+</html>
