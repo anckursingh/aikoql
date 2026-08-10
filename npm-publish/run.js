@@ -9,10 +9,10 @@ const exe = process.platform === 'win32' ? 'mnemosyne.exe' : 'mnemosyne';
 const binPath = path.join(BIN_DIR, exe);
 
 const PLATFORM_MAP = {
-  'win32-x64':  'mnemosyne-windows.exe',
-  'linux-x64':  'mnemosyne-linux',
-  'darwin-x64': 'mnemosyne-macos',
-  'darwin-arm64': 'mnemosyne-macos-arm64',
+  'win32-x64':  'mnemosyne-mcp.exe',
+  'linux-x64':  'mnemosyne-mcp-linux',
+  'darwin-x64': 'mnemosyne-mcp-macos',
+  'darwin-arm64': 'mnemosyne-mcp-macos-arm64',
 };
 
 function download() {
