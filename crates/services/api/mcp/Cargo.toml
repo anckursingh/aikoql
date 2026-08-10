@@ -1,0 +1,23 @@
+[package]
+name = "mnemosyne-mcp"
+description = "Mnemosyne MCP server: the Knowledge Syscall ABI (MRFC-0011 Class A) over Model Context Protocol stdio transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mnemosyne-kernel = { path = "../../../kernel" }
+mnemosyne-graph = { path = "../../../engines/graph" }
+mnemosyne-runtime = { path = "../../../runtime" }
+mnemosyne-compiler = { path = "../../../compiler" }
+mnemosyne-postgres = { path = "../../../providers/postgres" }
+mnemosyne-sqlite = { path = "../../../providers/sqlite" }
+mnemosyne-mongodb = { path = "../../../providers/mongodb" }
+mnemosyne-neo4j = { path = "../../../providers/neo4j" }
+mnemosyne-ingestion = { path = "../../../ingestion" }
+serde_json = "1"
+sha2 = "0.10"
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

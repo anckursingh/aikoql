@@ -1,0 +1,30 @@
+[package]
+name = "mnemosyne-kernel"
+description = "Mnemosyne Knowledge Kernel: KOM (MRFC-0001), commit pipeline, KS-ABI Class A syscalls (MRFC-0011). std-only, deterministic."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+redb = "2"
+tokio = { version = "1", features = ["rt", "sync", "macros"] }
+sha2 = "0.10"
+hmac = "0.12"
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+rand = "0.8"
+regex = "1"
+
+[dev-dependencies]
+mnemosyne-vector = { path = "../engines/vector" }
+mnemosyne-scheduler = { path = "../engines/scheduler" }
+mnemosyne-graph = { path = "../engines/graph" }
+mnemosyne-compiler = { path = "../compiler" }
+mnemosyne-runtime = { path = "../runtime" }
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "kom_benchmark"
+harness = false

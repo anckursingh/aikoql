@@ -1,0 +1,44 @@
+# Mnemosyne MVP — development & production compose
+version: "3.8"
+
+services:
+  mnemosyne:
+    build: .
+    ports:
+      - "9090:9090"   # MCP TCP
+      - "9091:9091"   # HTTP /metrics + /health + Graph UI
+    volumes:
+      - mnemosyne_data:/data
+    environment:
+      - RUST_LOG=info
+    restart: unless-stopped
+
+  # Optional: PostgreSQL provider for federated queries
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: mnemosyne
+      POSTGRES_PASSWORD: mnemosyne
+      POSTGRES_DB: knowledge
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    profiles: [full]
+
+  # Optional: Neo4j provider for graph federation
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/password
+    volumes:
+      - neo4j_data:/data
+    profiles: [full]
+
+volumes:
+  mnemosyne_data:
+  postgres_data:
+  neo4j_data:

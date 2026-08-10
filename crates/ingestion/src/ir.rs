@@ -1,0 +1,1192 @@
+//! D4: Knowledge IR — staging layer between DocumentAst and kernel commit.
+//!
+//! Semantic analyzers produce `KnowledgeIr` from `DocumentAst`. The IR holds
+//! candidate entities, relations, facts, events, and temporal assertions, each
+//! carrying provenance evidence. Validation and ontology resolution happen in
+//! later phases (D5-D7) before kernel commit.
+//!
+//! # Architecture
+//! - `Evidence` — per-candidate provenance (document, page, extractor, confidence)
+//! - `EntityCandidate` — named entity with type hint and mentions
+//! - `RelationCandidate` — subject–predicate–object triple
+//! - `FactCandidate` — statement with linked entities
+//! - `EventCandidate` — temporal event with participants
+//! - `TemporalAssertion` — time-bound claim
+//! - `KnowledgeIr` — container for all candidate types
+//! - `SemanticAnalyzer` — trait: `analyze(ast) → KnowledgeIr`
+
+use crate::ast::{BlockType, DocumentAst};
+
+// ---------------------------------------------------------------------------
+// Evidence — provenance for every candidate
+// ---------------------------------------------------------------------------
+
+/// Ties a candidate back to its source in the document.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Evidence {
+    /// Document identifier (filename, URI, or KOID).
+    pub document_id: Option<String>,
+    /// Page number where the evidence was found (1-based).
+    pub page: Option<u32>,
+    /// Bounding box on the page, if available.
+    pub bbox_text: Option<String>,
+    /// Name of the extractor that produced this candidate.
+    pub extractor: String,
+    /// Model or version identifier (e.g. "mock-v1", "gpt-4o").
+    pub model: Option<String>,
+    /// Confidence score 0.0–1.0 from the extractor.
+    pub confidence: f32,
+}
+
+impl Default for Evidence {
+    fn default() -> Self {
+        Evidence {
+            document_id: None,
+            page: None,
+            bbox_text: None,
+            extractor: "unknown".into(),
+            model: None,
+            confidence: 0.0,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Candidate types
+// ---------------------------------------------------------------------------
+
+/// A named entity found in the document.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EntityCandidate {
+    /// Canonical name (e.g. "Acme Corp", "John Smith").
+    pub name: String,
+    /// Hint at the ontology type (e.g. "Organization", "Person", "Location").
+    pub type_hint: Option<String>,
+    /// Text spans where this entity appears.
+    pub mentions: Vec<String>,
+    /// Confidence from the extractor.
+    pub confidence: f32,
+    /// Provenance evidence.
+    pub evidence: Evidence,
+}
+
+/// A relationship between two entities.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RelationCandidate {
+    /// Subject entity name (resolved to EntityCandidate.name).
+    pub subject: String,
+    /// Predicate / relationship type (e.g. "employed_by", "located_in").
+    pub predicate: String,
+    /// Object entity name.
+    pub object: String,
+    /// Confidence from the extractor.
+    pub confidence: f32,
+    /// Provenance evidence.
+    pub evidence: Evidence,
+}
+
+/// A factual statement extracted from the document.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FactCandidate {
+    /// The statement text (e.g. "Acme Corp was founded in 2019").
+    pub statement: String,
+    /// Entity names referenced in this statement.
+    pub entities: Vec<String>,
+    /// Confidence from the extractor.
+    pub confidence: f32,
+    /// Provenance evidence.
+    pub evidence: Evidence,
+}
+
+/// An event described in the document with temporal context.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EventCandidate {
+    /// Description of the event.
+    pub description: String,
+    /// What triggered or caused this event, if mentioned.
+    pub trigger: Option<String>,
+    /// Entity names participating in this event.
+    pub participants: Vec<String>,
+    /// Temporal assertions linked to this event.
+    pub temporal: Vec<TemporalAssertion>,
+    /// Confidence from the extractor.
+    pub confidence: f32,
+    /// Provenance evidence.
+    pub evidence: Evidence,
+}
+
+/// A time-bound claim (date, duration, or relative time reference).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TemporalAssertion {
+    /// The raw temporal text (e.g. "January 2024", "Q3 2025", "last week").
+    pub text: String,
+    /// ISO-8601 start time, if parseable.
+    pub start_time: Option<String>,
+    /// ISO-8601 end time, if parseable.
+    pub end_time: Option<String>,
+    /// Confidence from the extractor.
+    pub confidence: f32,
+    /// Provenance evidence.
+    pub evidence: Evidence,
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge IR container
+// ---------------------------------------------------------------------------
+
+/// Staging representation between DocumentAst and kernel commit.
+///
+/// Produced by `SemanticAnalyzer::analyze()`. Candidates are validated,
+/// reconciled, and resolved to ontology types in phases D5-D7 before
+/// being committed as KnowledgeObjects.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct KnowledgeIr {
+    pub entities: Vec<EntityCandidate>,
+    pub relations: Vec<RelationCandidate>,
+    pub facts: Vec<FactCandidate>,
+    pub events: Vec<EventCandidate>,
+    pub temporal: Vec<TemporalAssertion>,
+    /// Source document identifier for all candidates.
+    pub document_id: Option<String>,
+    /// Total pages processed.
+    pub page_count: u32,
+    /// Name of the extractor that produced this IR.
+    pub extractor: String,
+}
+
+impl KnowledgeIr {
+    /// True when no candidates of any kind were found.
+    pub fn is_empty(&self) -> bool {
+        self.entities.is_empty()
+            && self.relations.is_empty()
+            && self.facts.is_empty()
+            && self.events.is_empty()
+            && self.temporal.is_empty()
+    }
+
+    /// Total candidate count across all categories.
+    pub fn total_candidates(&self) -> usize {
+        self.entities.len()
+            + self.relations.len()
+            + self.facts.len()
+            + self.events.len()
+            + self.temporal.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SemanticAnalyzer trait
+// ---------------------------------------------------------------------------
+
+/// Pluggable semantic analysis: DocumentAst → KnowledgeIr.
+///
+/// Implementations range from simple regex heuristics (mock) to LLM-based
+/// extraction (OpenAI, Anthropic). The trait is the stable contract between
+/// the ingestion pipeline and semantic backends.
+pub trait SemanticAnalyzer: Send + Sync {
+    /// Human-readable name (e.g. "mock", "openai-gpt-4o").
+    fn name(&self) -> &str;
+
+    /// Analyze a document AST and produce structured knowledge candidates.
+    fn analyze(&self, ast: &DocumentAst) -> KnowledgeIr;
+}
+
+// ---------------------------------------------------------------------------
+// Mock semantic analyzer — rule-based extraction for testing
+// ---------------------------------------------------------------------------
+
+/// A mock analyzer that extracts entities and relations using simple heuristics.
+///
+/// Strategy:
+/// - **Entities**: capitalized phrases ≥2 words from headings and paragraphs.
+/// - **Relations**: co-occurring entity pairs within the same paragraph.
+/// - **Facts**: headings as fact statements.
+/// - **Events**: paragraphs containing date-like patterns.
+/// - **Temporal**: date-like substrings extracted from text.
+pub struct MockSemanticAnalyzer {
+    /// Confidence value assigned to all mock candidates.
+    pub confidence: f32,
+}
+
+impl MockSemanticAnalyzer {
+    pub fn new() -> Self {
+        MockSemanticAnalyzer { confidence: 0.85 }
+    }
+
+    pub fn with_confidence(confidence: f32) -> Self {
+        MockSemanticAnalyzer { confidence }
+    }
+}
+
+impl SemanticAnalyzer for MockSemanticAnalyzer {
+    fn name(&self) -> &str {
+        "mock"
+    }
+
+    fn analyze(&self, ast: &DocumentAst) -> KnowledgeIr {
+        let mut ir = KnowledgeIr {
+            document_id: None,
+            page_count: ast.page_count,
+            extractor: "mock".into(),
+            ..Default::default()
+        };
+
+        let extractor: String = "mock".into();
+
+        for (pi, page) in ast.pages.iter().enumerate() {
+            let page_num = (pi + 1) as u32;
+            let page_text = collect_text(&page.children);
+
+            // Extract entities: capitalized multi-word phrases
+            for entity_name in extract_capitalized_phrases(&page_text) {
+                if !ir.entities.iter().any(|e| e.name == entity_name) {
+                    let mentions: Vec<String> = page
+                        .children
+                        .iter()
+                        .filter(|c| c.text.contains(&entity_name))
+                        .map(|c| c.text.clone())
+                        .collect();
+                    ir.entities.push(EntityCandidate {
+                        name: entity_name.clone(),
+                        type_hint: guess_type(&entity_name),
+                        mentions: if mentions.is_empty() {
+                            vec![entity_name.clone()]
+                        } else {
+                            mentions
+                        },
+                        confidence: self.confidence,
+                        evidence: Evidence {
+                            document_id: None,
+                            page: Some(page_num),
+                            bbox_text: None,
+                            extractor: extractor.clone(),
+                            model: Some("mock-v1".into()),
+                            confidence: self.confidence,
+                        },
+                    });
+                }
+            }
+
+            // Extract facts from headings
+            for child in &page.children {
+                if matches!(child.block_type, BlockType::Heading { .. })
+                    || matches!(child.block_type, BlockType::Title)
+                {
+                    let entities: Vec<String> = extract_capitalized_phrases(&child.text);
+                    if !child.text.is_empty() && !entities.is_empty() {
+                        ir.facts.push(FactCandidate {
+                            statement: child.text.clone(),
+                            entities,
+                            confidence: self.confidence,
+                            evidence: Evidence {
+                                document_id: None,
+                                page: Some(page_num),
+                                bbox_text: None,
+                                extractor: extractor.clone(),
+                                model: Some("mock-v1".into()),
+                                confidence: self.confidence,
+                            },
+                        });
+                    }
+                }
+            }
+
+            // Extract temporal assertions
+            for date_match in extract_date_patterns(&page_text) {
+                let (start, end) = parse_iso_date(&date_match);
+                ir.temporal.push(TemporalAssertion {
+                    text: date_match.clone(),
+                    start_time: start,
+                    end_time: end,
+                    confidence: self.confidence,
+                    evidence: Evidence {
+                        document_id: None,
+                        page: Some(page_num),
+                        bbox_text: None,
+                        extractor: extractor.clone(),
+                        model: Some("mock-v1".into()),
+                        confidence: self.confidence,
+                    },
+                });
+            }
+        }
+
+        // Extract relations: co-occurring entity pairs in the same paragraph
+        if ir.entities.len() >= 2 {
+            for page in &ast.pages {
+                let page_text = collect_text(&page.children);
+                for paragraph in page_text.split('\n').filter(|p| !p.trim().is_empty()) {
+                    let entities_in_para: Vec<&String> = ir
+                        .entities
+                        .iter()
+                        .filter(|e| paragraph.contains(&e.name))
+                        .map(|e| &e.name)
+                        .collect();
+
+                    for i in 0..entities_in_para.len() {
+                        for j in (i + 1)..entities_in_para.len() {
+                            let subj = entities_in_para[i].clone();
+                            let obj = entities_in_para[j].clone();
+                            // Skip if this pair already exists.
+                            if ir
+                                .relations
+                                .iter()
+                                .any(|r| r.subject == subj && r.object == obj)
+                            {
+                                continue;
+                            }
+                            ir.relations.push(RelationCandidate {
+                                subject: subj,
+                                predicate: "related_to".into(),
+                                object: obj,
+                                confidence: self.confidence * 0.7,
+                                evidence: Evidence {
+                                    document_id: None,
+                                    page: None,
+                                    bbox_text: None,
+                                    extractor: extractor.clone(),
+                                    model: Some("mock-v1".into()),
+                                    confidence: self.confidence * 0.7,
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        ir
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mock helpers — heuristic extraction
+// ---------------------------------------------------------------------------
+
+/// Walk all AST nodes and collect their text, one line per node.
+fn collect_text(nodes: &[crate::AstNode]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for node in nodes {
+        if !node.text.trim().is_empty() {
+            lines.push(node.text.clone());
+        }
+        if !node.children.is_empty() {
+            lines.push(collect_text(&node.children));
+        }
+    }
+    lines.join("\n")
+}
+
+/// Extract capitalized multi-word phrases (potential named entities).
+///
+/// Uses a sliding window of 2–3 words within runs of consecutive capitalized
+/// words. This avoids merging distinct entities like "Acme Corporation" and
+/// "Annual Report" into one long phrase.
+fn extract_capitalized_phrases(text: &str) -> Vec<String> {
+    let mut entities: Vec<String> = Vec::new();
+    // Split and clean trailing punctuation from each word.
+    let raw_words: Vec<&str> = text.split_whitespace().collect();
+    let words: Vec<String> = raw_words
+        .iter()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string())
+        .collect();
+
+    let mut i = 0;
+    while i < words.len() {
+        let w = &words[i];
+        if w.len() >= 2 && w.chars().next().map_or(false, |c| c.is_uppercase()) {
+            // Find the end of this capitalized run.
+            let mut end = i + 1;
+            while end < words.len() {
+                let next = &words[end];
+                if next.len() >= 2 && next.chars().next().map_or(false, |c| c.is_uppercase()) {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            let run_len = end - i;
+            // Emit 2-word sliding windows within the run.
+            if run_len >= 2 {
+                for start in i..(end - 1) {
+                    let name = words[start..start + 2].join(" ");
+                    if name.len() > 4 && !entities.contains(&name) {
+                        entities.push(name);
+                    }
+                }
+            }
+            // Emit 3-word sliding windows within the run.
+            if run_len >= 3 {
+                for start in i..(end - 2) {
+                    let name = words[start..start + 3].join(" ");
+                    if name.len() > 4 && !entities.contains(&name) {
+                        entities.push(name);
+                    }
+                }
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    entities
+}
+
+/// Guess an ontology type from the entity name using keyword heuristics.
+fn guess_type(name: &str) -> Option<String> {
+    let lower = name.to_lowercase();
+    let org_keywords = [
+        "inc",
+        "corp",
+        "ltd",
+        "llc",
+        "company",
+        "corporation",
+        "group",
+        "holdings",
+        "enterprise",
+        "industries",
+        "solutions",
+        "technologies",
+        "systems",
+        "bank",
+        "insurance",
+        "capital",
+        "partners",
+        "consulting",
+    ];
+    let person_keywords = ["dr.", "mr.", "mrs.", "ms.", "prof.", "sir"];
+    let location_keywords = [
+        "city",
+        "town",
+        "county",
+        "state",
+        "province",
+        "district",
+        "region",
+        "street",
+        "avenue",
+        "road",
+        "lane",
+        "boulevard",
+        "drive",
+        "court",
+        "place",
+        "square",
+    ];
+
+    for kw in &org_keywords {
+        if lower.contains(kw) {
+            return Some("Organization".into());
+        }
+    }
+    for kw in &person_keywords {
+        if lower.starts_with(kw) {
+            return Some("Person".into());
+        }
+    }
+    for kw in &location_keywords {
+        if lower.contains(kw) {
+            return Some("Location".into());
+        }
+    }
+    // Default: check if it looks like a person (two words, first is short-ish)
+    let parts: Vec<&str> = name.split_whitespace().collect();
+    if parts.len() == 2 && parts[0].len() <= 15 {
+        return Some("Person".into());
+    }
+    Some("Thing".into())
+}
+
+/// Find date-like patterns in text.
+fn extract_date_patterns(text: &str) -> Vec<String> {
+    let mut dates: Vec<String> = Vec::new();
+    // Simple patterns: "Month YYYY", "Month DD, YYYY", "YYYY-MM-DD", "QN YYYY"
+    let months = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+    ];
+
+    let words: Vec<&str> = text.split_whitespace().collect();
+    for (i, w) in words.iter().enumerate() {
+        let w_clean = w.trim_matches(|c: char| !c.is_alphanumeric());
+        // "Month YYYY" or "Month DD, YYYY"
+        if months.contains(&w_clean) && i + 1 < words.len() {
+            let next = words[i + 1].trim_matches(|c: char| !c.is_alphanumeric());
+            if next.len() == 4 && next.chars().all(|c| c.is_ascii_digit()) {
+                dates.push(format!("{} {}", w_clean, next));
+            } else if next.chars().all(|c| c.is_ascii_digit()) && i + 2 < words.len() {
+                let year = words[i + 2].trim_matches(|c: char| !c.is_alphanumeric());
+                if year.len() == 4 && year.chars().all(|c| c.is_ascii_digit()) {
+                    dates.push(format!("{} {}, {}", w_clean, next, year));
+                }
+            }
+        }
+        // "QN YYYY" (e.g. "Q3 2025")
+        if w_clean.starts_with('Q')
+            && w_clean.len() == 2
+            && w_clean[1..].chars().all(|c| c.is_ascii_digit())
+            && i + 1 < words.len()
+        {
+            let year = words[i + 1].trim_matches(|c: char| !c.is_alphanumeric());
+            if year.len() == 4 && year.chars().all(|c| c.is_ascii_digit()) {
+                dates.push(format!("{} {}", w_clean, year));
+            }
+        }
+        // "YYYY-MM-DD"
+        if w_clean.len() == 10
+            && w_clean.chars().nth(4) == Some('-')
+            && w_clean.chars().nth(7) == Some('-')
+        {
+            let parts: Vec<&str> = w_clean.split('-').collect();
+            if parts.len() == 3
+                && parts[0].chars().all(|c| c.is_ascii_digit())
+                && parts[1].chars().all(|c| c.is_ascii_digit())
+                && parts[2].chars().all(|c| c.is_ascii_digit())
+            {
+                dates.push(w_clean.to_string());
+            }
+        }
+    }
+    dates
+}
+
+/// Parse a date string into ISO-8601 start/end, returning None if unparseable.
+fn parse_iso_date(text: &str) -> (Option<String>, Option<String>) {
+    let months_map: std::collections::HashMap<&str, &str> = [
+        ("January", "01"),
+        ("February", "02"),
+        ("March", "03"),
+        ("April", "04"),
+        ("May", "05"),
+        ("June", "06"),
+        ("July", "07"),
+        ("August", "08"),
+        ("September", "09"),
+        ("October", "10"),
+        ("November", "11"),
+        ("December", "12"),
+        ("Jan", "01"),
+        ("Feb", "02"),
+        ("Mar", "03"),
+        ("Apr", "04"),
+        ("May", "05"),
+        ("Jun", "06"),
+        ("Jul", "07"),
+        ("Aug", "08"),
+        ("Sep", "09"),
+        ("Oct", "10"),
+        ("Nov", "11"),
+        ("Dec", "12"),
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    // "YYYY-MM-DD"
+    if text.len() == 10 && text.chars().nth(4) == Some('-') {
+        return (
+            Some(format!("{}T00:00:00Z", text)),
+            Some(format!("{}T23:59:59Z", text)),
+        );
+    }
+
+    // "Month YYYY"
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    if parts.len() == 2 {
+        if let Some(month) = months_map.get(parts[0]) {
+            if parts[1].len() == 4 && parts[1].chars().all(|c| c.is_ascii_digit()) {
+                let start = format!("{}-{}-01T00:00:00Z", parts[1], month);
+                let end_day = month_end_day(month, parts[1]).unwrap_or("31");
+                let end = format!("{}-{}-{}T23:59:59Z", parts[1], month, end_day);
+                return (Some(start), Some(end));
+            }
+        }
+        // "QN YYYY"
+        if parts[0].starts_with('Q') {
+            let q: u32 = parts[0][1..].parse().unwrap_or(0);
+            if q >= 1 && q <= 4 {
+                let (start_month, end_month) = match q {
+                    1 => ("01", "03"),
+                    2 => ("04", "06"),
+                    3 => ("07", "09"),
+                    4 => ("10", "12"),
+                    _ => unreachable!(),
+                };
+                let start = format!("{}-{}-01T00:00:00Z", parts[1], start_month);
+                let end_day = month_end_day(end_month, parts[1]).unwrap_or("31");
+                let end = format!("{}-{}-{}T23:59:59Z", parts[1], end_month, end_day);
+                return (Some(start), Some(end));
+            }
+        }
+    }
+
+    // "Month DD, YYYY"
+    if parts.len() == 3 {
+        if let Some(month) = months_map.get(parts[0]) {
+            let day = parts[1].trim_matches(',');
+            if day.chars().all(|c| c.is_ascii_digit()) && parts[2].len() == 4 {
+                let day_padded = format!("{:0>2}", day);
+                let start = format!("{}-{}-{}T00:00:00Z", parts[2], month, day_padded);
+                let end = format!("{}-{}-{}T23:59:59Z", parts[2], month, day_padded);
+                return (Some(start), Some(end));
+            }
+        }
+    }
+
+    (None, None)
+}
+
+fn month_end_day(month: &str, year: &str) -> Option<&'static str> {
+    let y: i32 = year.parse().ok()?;
+    match month {
+        "01" | "03" | "05" | "07" | "08" | "10" | "12" => Some("31"),
+        "04" | "06" | "09" | "11" => Some("30"),
+        "02" => {
+            if (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0) {
+                Some("29")
+            } else {
+                Some("28")
+            }
+        }
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Convenience: DocumentModel → KnowledgeIr pipeline
+// ---------------------------------------------------------------------------
+
+/// Full pipeline: DocumentModel → DocumentAst → KnowledgeIr.
+///
+/// Uses the mock analyzer by default. Swap in an LLM-backed analyzer for
+/// production use.
+pub fn document_model_to_ir(
+    doc: &crate::DocumentModel,
+    analyzer: &dyn SemanticAnalyzer,
+) -> KnowledgeIr {
+    let ast = crate::document_model_to_ast(doc);
+    analyzer.analyze(&ast)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{AstNode, BlockType, DocumentAst};
+
+    fn make_ast(pages: Vec<Vec<AstNode>>) -> DocumentAst {
+        let page_count = pages.len() as u32;
+        let pages = pages
+            .into_iter()
+            .map(|children| AstNode {
+                block_type: BlockType::Unknown,
+                text: String::new(),
+                children,
+                bbox: None,
+                confidence: None,
+            })
+            .collect();
+        DocumentAst {
+            pages,
+            page_count,
+            source_type: "native".into(),
+        }
+    }
+
+    fn paragraph(text: &str) -> AstNode {
+        AstNode {
+            block_type: BlockType::Paragraph,
+            text: text.to_string(),
+            children: vec![],
+            bbox: None,
+            confidence: None,
+        }
+    }
+
+    fn heading(level: u8, text: &str) -> AstNode {
+        AstNode {
+            block_type: BlockType::Heading { level },
+            text: text.to_string(),
+            children: vec![],
+            bbox: None,
+            confidence: None,
+        }
+    }
+
+    fn title(text: &str) -> AstNode {
+        AstNode {
+            block_type: BlockType::Title,
+            text: text.to_string(),
+            children: vec![],
+            bbox: None,
+            confidence: None,
+        }
+    }
+
+    // ── Entity extraction ──
+
+    #[test]
+    fn extracts_capitalized_entities_from_paragraphs() {
+        let ast = make_ast(vec![vec![paragraph(
+            "Acme Corporation announced a partnership with Globex Industries in New York.",
+        )]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"Acme Corporation"));
+        assert!(names.contains(&"Globex Industries"));
+        assert!(names.contains(&"New York"));
+    }
+
+    #[test]
+    fn deduplicates_entities_across_pages() {
+        let ast = make_ast(vec![
+            vec![paragraph("Acme Corporation is a leader in widgets.")],
+            vec![paragraph("Acme Corporation was founded in 2019.")],
+        ]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        let count = ir
+            .entities
+            .iter()
+            .filter(|e| e.name == "Acme Corporation")
+            .count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn skips_single_capitalized_words() {
+        let ast = make_ast(vec![vec![paragraph("Widgets are great.")]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        assert!(ir.entities.is_empty());
+    }
+
+    #[test]
+    fn entity_has_type_hint() {
+        let ast = make_ast(vec![vec![paragraph(
+            "Acme Corp and John Smith met at City Hall on Main Street.",
+        )]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        let org = ir.entities.iter().find(|e| e.name == "Acme Corp").unwrap();
+        assert_eq!(org.type_hint.as_deref(), Some("Organization"));
+
+        let person = ir.entities.iter().find(|e| e.name == "John Smith").unwrap();
+        assert_eq!(person.type_hint.as_deref(), Some("Person"));
+    }
+
+    // ── Fact extraction ──
+
+    #[test]
+    fn extracts_facts_from_headings() {
+        let ast = make_ast(vec![vec![
+            heading(1, "Acme Corporation Reports Record Revenue"),
+            paragraph("The company announced Q3 2025 results today."),
+        ]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        assert!(ir.facts.len() >= 1);
+        let fact = &ir.facts[0];
+        assert!(fact
+            .statement
+            .contains("Acme Corporation Reports Record Revenue"));
+        assert!(!fact.entities.is_empty());
+    }
+
+    #[test]
+    fn title_becomes_fact() {
+        let ast = make_ast(vec![vec![
+            title("Annual Report 2024"),
+            paragraph("Prepared by Acme Corporation."),
+        ]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        let fact = ir
+            .facts
+            .iter()
+            .find(|f| f.statement.contains("Annual Report 2024"));
+        assert!(fact.is_some());
+    }
+
+    // ── Relation extraction ──
+
+    #[test]
+    fn extracts_relations_between_cooccurring_entities() {
+        let ast = make_ast(vec![vec![paragraph(
+            "Acme Corporation partnered with Globex Industries to develop New Technology.",
+        )]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        assert!(!ir.relations.is_empty());
+        // All three entities should have relations between them.
+        let pairs: Vec<(&str, &str)> = ir
+            .relations
+            .iter()
+            .map(|r| (r.subject.as_str(), r.object.as_str()))
+            .collect();
+        assert!(
+            pairs.contains(&("Acme Corporation", "Globex Industries"))
+                || pairs.contains(&("Globex Industries", "Acme Corporation"))
+        );
+    }
+
+    #[test]
+    fn no_relations_with_single_entity() {
+        let ast = make_ast(vec![vec![paragraph(
+            "Acme Corporation is the market leader.",
+        )]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        assert!(ir.relations.is_empty());
+    }
+
+    // ── Temporal extraction ──
+
+    #[test]
+    fn extracts_month_year_dates() {
+        let ast = make_ast(vec![vec![paragraph(
+            "The agreement was signed in January 2024 and renewed March 2025.",
+        )]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        let texts: Vec<&str> = ir.temporal.iter().map(|t| t.text.as_str()).collect();
+        assert!(
+            texts.contains(&"January 2024"),
+            "expected January 2024 in {:?}",
+            texts
+        );
+        assert!(
+            texts.contains(&"March 2025"),
+            "expected March 2025 in {:?}",
+            texts
+        );
+    }
+
+    #[test]
+    fn extracts_iso_dates() {
+        let ast = make_ast(vec![vec![paragraph("Effective date: 2024-06-15.")]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        let iso = ir.temporal.iter().find(|t| t.text == "2024-06-15").unwrap();
+        assert_eq!(iso.start_time.as_deref(), Some("2024-06-15T00:00:00Z"));
+    }
+
+    #[test]
+    fn extracts_quarter_year_dates() {
+        let ast = make_ast(vec![vec![paragraph(
+            "Results for Q3 2025 exceeded expectations.",
+        )]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        let q3 = ir.temporal.iter().find(|t| t.text == "Q3 2025").unwrap();
+        assert!(q3.start_time.as_deref().unwrap().starts_with("2025-07"));
+        assert!(q3.end_time.as_deref().unwrap().starts_with("2025-09"));
+    }
+
+    #[test]
+    fn temporal_has_evidence() {
+        let ast = make_ast(vec![vec![paragraph("Signed January 2024.")]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        let t = &ir.temporal[0];
+        assert_eq!(t.evidence.page, Some(1));
+        assert_eq!(t.evidence.extractor, "mock");
+        assert!((t.evidence.confidence - 0.85).abs() < 0.001);
+    }
+
+    // ── Evidence propagation ──
+
+    #[test]
+    fn entity_evidence_includes_page_number() {
+        let ast = make_ast(vec![
+            vec![paragraph("Page 1: Acme Corporation.")],
+            vec![paragraph("Page 2: Globex Industries.")],
+        ]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        let acme = ir
+            .entities
+            .iter()
+            .find(|e| e.name == "Acme Corporation")
+            .unwrap();
+        assert_eq!(acme.evidence.page, Some(1));
+
+        let globex = ir
+            .entities
+            .iter()
+            .find(|e| e.name == "Globex Industries")
+            .unwrap();
+        assert_eq!(globex.evidence.page, Some(2));
+    }
+
+    // ── KnowledgeIr container ──
+
+    #[test]
+    fn knowledge_ir_is_empty_for_blank_document() {
+        let ast = make_ast(vec![]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        assert!(ir.is_empty());
+        assert_eq!(ir.total_candidates(), 0);
+    }
+
+    #[test]
+    fn knowledge_ir_total_candidates_counts_all_types() {
+        let ast = make_ast(vec![vec![
+            heading(1, "Acme Corporation Fiscal Year 2024"),
+            paragraph("Acme Corporation reported revenue in January 2024."),
+        ]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        assert!(ir.total_candidates() > 0);
+        // Should have at least: 1 entity (Acme Corporation), 1 fact (heading), 1 temporal (January 2024)
+        assert!(!ir.entities.is_empty());
+        assert!(!ir.facts.is_empty());
+        assert!(!ir.temporal.is_empty());
+    }
+
+    #[test]
+    fn knowledge_ir_stores_extractor_name() {
+        let ast = make_ast(vec![vec![paragraph("Test.")]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        assert_eq!(ir.extractor, "mock");
+    }
+
+    // ── Pipeline integration ──
+
+    #[test]
+    fn document_model_to_ir_pipeline() {
+        use crate::{DocumentModel, PageModel};
+
+        let doc = DocumentModel {
+            page_count: 1,
+            pages: vec![PageModel {
+                page_number: 1,
+                text: "Acme Corporation\n\nAnnual Report for Fiscal Year 2024\n\nPrepared by Globex Industries in January 2025.".into(),
+                char_count: 90,
+                source: "native".into(),
+                ocr_confidence: None,
+            }],
+            total_chars: 90,
+            ocr_stats: None,
+        };
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = document_model_to_ir(&doc, &analyzer);
+
+        assert!(!ir.is_empty());
+        assert_eq!(ir.extractor, "mock");
+        assert_eq!(ir.page_count, 1);
+
+        let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            names.contains(&"Acme Corporation"),
+            "expected Acme Corporation in entities: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Globex Industries"),
+            "expected Globex Industries in entities: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Fiscal Year"),
+            "expected Fiscal Year in entities: {:?}",
+            names
+        );
+    }
+
+    // ── MockSemanticAnalyzer configurability ──
+
+    #[test]
+    fn mock_analyzer_custom_confidence() {
+        let ast = make_ast(vec![vec![paragraph("Acme Corporation is great.")]]);
+
+        let analyzer = MockSemanticAnalyzer::with_confidence(0.42);
+        let ir = analyzer.analyze(&ast);
+
+        assert!((ir.entities[0].confidence - 0.42).abs() < 0.001);
+        assert!((ir.entities[0].evidence.confidence - 0.42).abs() < 0.001);
+    }
+
+    // ── SemanticAnalyzer trait ──
+
+    #[test]
+    fn mock_implements_semantic_analyzer_trait() {
+        let ast = make_ast(vec![vec![paragraph("Acme Corporation.")]]);
+
+        // Use trait object to verify trait impl.
+        let analyzer: &dyn SemanticAnalyzer = &MockSemanticAnalyzer::new();
+        assert_eq!(analyzer.name(), "mock");
+
+        let ir = analyzer.analyze(&ast);
+        assert!(!ir.entities.is_empty());
+    }
+
+    // ── Edge cases ──
+
+    #[test]
+    fn empty_document_produces_empty_ir() {
+        let ast = make_ast(vec![vec![]]);
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+        assert!(ir.is_empty());
+    }
+
+    #[test]
+    fn no_false_positives_on_common_words() {
+        let ast = make_ast(vec![vec![paragraph(
+            "The quick brown fox jumps over the lazy dog.",
+        )]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        // "The", "Fox" — single words should not be entities.
+        // No capitalized multi-word phrases in this sentence.
+        assert!(ir.entities.is_empty());
+    }
+
+    #[test]
+    fn handles_list_items_in_ast() {
+        let ast = make_ast(vec![vec![
+            heading(1, "Vendors"),
+            AstNode {
+                block_type: BlockType::List { ordered: false },
+                text: String::new(),
+                children: vec![
+                    AstNode {
+                        block_type: BlockType::ListItem,
+                        text: "Acme Corporation".into(),
+                        children: vec![],
+                        bbox: None,
+                        confidence: None,
+                    },
+                    AstNode {
+                        block_type: BlockType::ListItem,
+                        text: "Globex Industries".into(),
+                        children: vec![],
+                        bbox: None,
+                        confidence: None,
+                    },
+                ],
+                bbox: None,
+                confidence: None,
+            },
+        ]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"Acme Corporation"));
+        assert!(names.contains(&"Globex Industries"));
+    }
+
+    #[test]
+    fn handles_ast_with_tables() {
+        let ast = make_ast(vec![vec![
+            paragraph("The following vendors are approved:"),
+            AstNode {
+                block_type: BlockType::Table,
+                text: "Acme Corporation\tGlobex Industries".into(),
+                children: vec![AstNode {
+                    block_type: BlockType::TableRow,
+                    text: String::new(),
+                    children: vec![
+                        AstNode {
+                            block_type: BlockType::TableCell {
+                                row_span: 1,
+                                col_span: 1,
+                            },
+                            text: "Acme Corporation".into(),
+                            children: vec![],
+                            bbox: None,
+                            confidence: None,
+                        },
+                        AstNode {
+                            block_type: BlockType::TableCell {
+                                row_span: 1,
+                                col_span: 1,
+                            },
+                            text: "Globex Industries".into(),
+                            children: vec![],
+                            bbox: None,
+                            confidence: None,
+                        },
+                    ],
+                    bbox: None,
+                    confidence: None,
+                }],
+                bbox: None,
+                confidence: None,
+            },
+        ]]);
+
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast);
+
+        let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"Acme Corporation"));
+        assert!(names.contains(&"Globex Industries"));
+    }
+}

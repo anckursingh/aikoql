@@ -1,0 +1,14 @@
+[package]
+name = "mnemosyne-proxy"
+description = "Mnemosyne Cluster Proxy: hash-based shard router. Fans out MCP requests to N shards."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "mnemosyne-proxy"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"

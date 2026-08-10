@@ -1,0 +1,16 @@
+target/
+.git/
+.idea/
+.pytest_cache/
+__pycache__/
+*.redb
+*.redb.backup.*
+*.pdb
+*.key
+*.backup.*/
+node_modules/
+.playwright-mcp/
+dist/
+build/
+*.whl
+.venv/

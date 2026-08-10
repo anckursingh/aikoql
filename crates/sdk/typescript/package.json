@@ -1,0 +1,15 @@
+{
+  "name": "mnemosyne-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the Mnemosyne Knowledge Database",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^5.9.3"
+  }
+}

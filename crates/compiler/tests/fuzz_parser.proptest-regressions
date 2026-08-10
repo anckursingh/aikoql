@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d651b8352689bf1fb0c9fa493fc642774005ed53e8405db9564f86e164570684 # shrinks to kw = "MATCH", entity = "a", prop_name = "A", op = "<=", val = "", extra = ""
+cc acac33e9fbc2213e0664a7cbbfcfbc9765a2e8850e47b95775bf28963620facb # shrinks to entity = "A", prop1 = "or", val1 = "", prop2 = "_", val2 = ""

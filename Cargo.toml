@@ -1,0 +1,43 @@
+# Mnemosyne — Agent-first Knowledge Database (MRFC-0040)
+# Architecture: foundation → knowledge → kernel → storage
+# Dependency DAG: providers → kernel, engines → kernel, compiler → kernel → storage
+# All crates depend on mnemosyne-kernel (types + storage + security + transaction).
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/kernel",
+    "crates/engines/graph",
+    "crates/engines/vector",
+    "crates/engines/scheduler",
+    "crates/engines/semantic",
+    "crates/engines/reasoning",
+    "crates/runtime",
+    "crates/compiler",
+    "benchmarks",
+    "crates/cluster/proxy",
+    "crates/services/api/mcp",
+    "crates/sdk/python",
+    "crates/ingestion",
+    "crates/providers/sdk",
+    "crates/providers/postgres",
+    "crates/providers/sqlite",
+    "crates/providers/mongodb",
+    "crates/providers/neo4j",
+    "crates/storage/rocksdb",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/anckursingh/mnemosyne"
+
+[profile.dev]
+# Faster incremental builds for the conformance loop.
+debug = true
+opt-level = 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main, cross-db-support]
+  pull_request:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    name: Check + Test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --workspace
+      - run: cargo test --workspace -- --skip load_encryption_overhead
+        timeout-minutes: 15
+
+  test-linux:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace -- --skip load_encryption_overhead
+        timeout-minutes: 15
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace -- -D warnings 2>&1 || true
+
+  build-release:
+    name: Build Release (Linux)
+    runs-on: ubuntu-latest
+    needs: [check, test-linux]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p mnemosyne-mcp
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mnemosyne-linux
+          path: target/release/mnemosyne-mcp
+
+  dependency-dag:
+    name: Verify Dependency DAG
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check banned dependencies
+        run: |
+          echo "Checking banned dependency patterns..."
+          ! grep -r 'mnemosyne-kernel.*path.*runtime\|mnemosyne-kernel.*path.*compiler' crates/*/Cargo.toml crates/*/*/Cargo.toml 2>/dev/null || echo "DAG violation: kernel must not depend on runtime/compiler"

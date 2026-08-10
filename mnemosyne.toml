@@ -1,0 +1,41 @@
+# Mnemosyne Configuration
+# Copy this file to where you run mnemosyne-mcp, or override values via CLI flags.
+# CLI flags always take precedence over this config file.
+
+[storage]
+# Storage backend: "redb" (default) or "rocksdb" (requires --features storage-rocksdb).
+# redb: pure Rust, single-writer, ideal for development and single-agent workloads.
+# rocksdb: C++ LSM-tree, concurrent readers+writers, better for production workloads.
+backend = "redb"
+# Path to the database directory (redb uses a single file, rocksdb uses a directory).
+path = "./mnemosyne_data"
+
+[database]
+# Deprecated: use [storage] section above. Kept for backward compatibility.
+# Path to the redb database file. Default: ./mnemosyne.redb
+path = "./mnemosyne.redb"
+
+[server]
+# TCP listen address. Comment out for stdio mode (single client).
+# listen = "127.0.0.1:9090"
+
+# Prometheus metrics + health check HTTP endpoint. Comment out to disable.
+# metrics_addr = "127.0.0.1:9091"
+
+[encryption]
+# Enable encryption at rest (MRFC-0020). Requires a key file.
+# Set to true and provide a key_path to enable.
+enabled = false
+
+# Path to the master key file for the LocalKMS.
+# key_path = "./mnemosyne.key"
+
+# Passphrase for the LocalKMS key derivation (or set MNEMOSYNE_PASSPHRASE env var).
+# passphrase = "change-me-in-production"
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log format: text, json
+format = "text"
