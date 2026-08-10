@@ -173,7 +173,7 @@ impl PostgresConnector {
             let mut pk_parts: Vec<String> = Vec::new();
 
             for (i, col) in schema.columns.iter().enumerate() {
-                let val = pg_cell_to_value(&row, i, &col.pg_type, col.is_nullable);
+                let val = pg_cell_to_value(row, i, &col.pg_type, col.is_nullable);
                 props.insert(col.name.clone(), val.clone());
 
                 if col.is_primary_key {

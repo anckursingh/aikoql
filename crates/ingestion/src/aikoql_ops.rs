@@ -113,9 +113,10 @@ pub struct DecisionExplanation {
 
 /// Generate a decision explanation from merged KnowledgeIr.
 pub fn explain_decision(name: &str, ir: &KnowledgeIr) -> Option<DecisionExplanation> {
-    let entity = ir.entities.iter().find(|e| {
-        e.name == name && e.type_hint.as_deref() == Some("Decision")
-    })?;
+    let entity = ir
+        .entities
+        .iter()
+        .find(|e| e.name == name && e.type_hint.as_deref() == Some("Decision"))?;
 
     // Parse ADR structure from mentions
     let all_text = entity.mentions.join("\n");
@@ -136,9 +137,7 @@ pub fn explain_decision(name: &str, ir: &KnowledgeIr) -> Option<DecisionExplanat
     let related: Vec<String> = ir
         .entities
         .iter()
-        .filter(|e| {
-            e.name != name && entity.mentions.iter().any(|m| m.contains(&e.name))
-        })
+        .filter(|e| e.name != name && entity.mentions.iter().any(|m| m.contains(&e.name)))
         .map(|e| e.name.clone())
         .collect();
 
@@ -168,14 +167,18 @@ pub fn explain_decision(name: &str, ir: &KnowledgeIr) -> Option<DecisionExplanat
                 .filter(|l| !l.is_empty())
                 .map(|l| l.trim().to_string())
                 .collect();
-            if lines.is_empty() { vec![] } else { lines }
+            if lines.is_empty() {
+                vec![]
+            } else {
+                lines
+            }
         },
         related_components: related,
         facts,
     })
 }
 
-fn extract_section<'a>(text: &'a str, section_name: &str, next_section: &str) -> Option<String> {
+fn extract_section(text: &str, section_name: &str, next_section: &str) -> Option<String> {
     let lower = text.to_lowercase();
     let start_marker = format!("## {}", section_name.to_lowercase());
     let start = lower.find(&start_marker)?;
@@ -213,7 +216,9 @@ pub fn trace_requirement(requirement_id: &str, ir: &KnowledgeIr) -> RequirementT
     // Find the requirement (fact with must/should/shall)
     let req_fact = ir.facts.iter().find(|f| {
         f.statement.contains(requirement_id)
-            || f.statement.to_lowercase().contains(&requirement_id.to_lowercase())
+            || f.statement
+                .to_lowercase()
+                .contains(&requirement_id.to_lowercase())
     });
 
     let req_text = req_fact
@@ -221,9 +226,7 @@ pub fn trace_requirement(requirement_id: &str, ir: &KnowledgeIr) -> RequirementT
         .unwrap_or_else(|| requirement_id.to_string());
 
     // Find entities mentioned in this requirement
-    let req_entities: Vec<String> = req_fact
-        .map(|f| f.entities.clone())
-        .unwrap_or_default();
+    let req_entities: Vec<String> = req_fact.map(|f| f.entities.clone()).unwrap_or_default();
 
     let mut trace_chain: Vec<String> = vec![format!("Requirement: {}", req_text)];
 
@@ -234,8 +237,7 @@ pub fn trace_requirement(requirement_id: &str, ir: &KnowledgeIr) -> RequirementT
         .filter(|e| {
             e.type_hint.as_deref() == Some("Decision")
                 && (e.mentions.iter().any(|m| {
-                    req_entities.iter().any(|re| m.contains(re))
-                        || m.contains(requirement_id)
+                    req_entities.iter().any(|re| m.contains(re)) || m.contains(requirement_id)
                 }))
         })
         .map(|e| {
@@ -250,9 +252,9 @@ pub fn trace_requirement(requirement_id: &str, ir: &KnowledgeIr) -> RequirementT
         .filter(|name| {
             ir.entities.iter().any(|e| {
                 e.name == **name
-                    && e.type_hint.as_deref().map_or(false, |t| {
-                        matches!(t, "Struct" | "Module" | "Enum" | "Trait")
-                    })
+                    && e.type_hint
+                        .as_deref()
+                        .is_some_and(|t| matches!(t, "Struct" | "Module" | "Enum" | "Trait"))
             })
         })
         .cloned()
@@ -267,11 +269,12 @@ pub fn trace_requirement(requirement_id: &str, ir: &KnowledgeIr) -> RequirementT
         .entities
         .iter()
         .filter(|e| {
-            e.type_hint.as_deref().map_or(false, |t| {
-                matches!(t, "Function" | "Method" | "Impl")
-            }) && components
-                .iter()
-                .any(|c| e.name.contains(c) || e.mentions.iter().any(|m| m.contains(c)))
+            e.type_hint
+                .as_deref()
+                .is_some_and(|t| matches!(t, "Function" | "Method" | "Impl"))
+                && components
+                    .iter()
+                    .any(|c| e.name.contains(c) || e.mentions.iter().any(|m| m.contains(c)))
         })
         .map(|e| {
             trace_chain.push(format!("Function: {}", e.name));
@@ -445,12 +448,7 @@ pub fn find_stale_documentation(ir: &KnowledgeIr) -> StaleDocumentationReport {
     let doc_facts: Vec<&FactCandidate> = ir
         .facts
         .iter()
-        .filter(|f| {
-            f.evidence
-                .extractor
-                .contains("markdown")
-                || f.evidence.extractor == "unknown"
-        })
+        .filter(|f| f.evidence.extractor.contains("markdown") || f.evidence.extractor == "unknown")
         .collect();
 
     let code_facts: Vec<&FactCandidate> = ir
@@ -482,13 +480,8 @@ pub fn find_stale_documentation(ir: &KnowledgeIr) -> StaleDocumentationReport {
         if !doc_refs.is_empty() && code_refs.is_empty() {
             stale_entities.push(StaleEntityInfo {
                 entity_name: entity.name.clone(),
-                entity_source: entity
-                    .evidence
-                    .document_id
-                    .clone()
-                    .unwrap_or_default(),
-                reason: "documented but no code reference — possibly removed or renamed"
-                    .into(),
+                entity_source: entity.evidence.document_id.clone().unwrap_or_default(),
+                reason: "documented but no code reference — possibly removed or renamed".into(),
             });
         }
 
@@ -496,11 +489,7 @@ pub fn find_stale_documentation(ir: &KnowledgeIr) -> StaleDocumentationReport {
         if doc_refs.is_empty() && !code_refs.is_empty() {
             stale_entities.push(StaleEntityInfo {
                 entity_name: entity.name.clone(),
-                entity_source: entity
-                    .evidence
-                    .document_id
-                    .clone()
-                    .unwrap_or_default(),
+                entity_source: entity.evidence.document_id.clone().unwrap_or_default(),
                 reason: "exists in code but has no documentation — documentation gap".into(),
             });
         }
@@ -510,10 +499,7 @@ pub fn find_stale_documentation(ir: &KnowledgeIr) -> StaleDocumentationReport {
     for doc_fact in &doc_facts {
         let has_code_corroboration = code_facts.iter().any(|cf| {
             jaccard_similarity(&doc_fact.statement, &cf.statement) > 0.3
-                && cf
-                    .entities
-                    .iter()
-                    .any(|e| doc_fact.entities.contains(e))
+                && cf.entities.iter().any(|e| doc_fact.entities.contains(e))
         });
 
         if !has_code_corroboration && !doc_fact.statement.starts_with("must") {
@@ -568,8 +554,7 @@ pub fn validate_change(description: &str, ir: &KnowledgeIr) -> ChangeValidation 
     // Entities whose name or mentions overlap with change description
     for entity in &ir.entities {
         let name_hit = desc_words.iter().any(|w| {
-            entity.name.to_lowercase().contains(*w)
-                || w.contains(&entity.name.to_lowercase())
+            entity.name.to_lowercase().contains(*w) || w.contains(&entity.name.to_lowercase())
         });
 
         let mention_hit = entity
@@ -579,9 +564,9 @@ pub fn validate_change(description: &str, ir: &KnowledgeIr) -> ChangeValidation 
 
         if name_hit || mention_hit {
             let impact = if name_hit {
-                format!("direct: entity name matches change description")
+                "direct: entity name matches change description".to_string()
             } else {
-                format!("indirect: entity mentions overlap with change")
+                "indirect: entity mentions overlap with change".to_string()
             };
 
             affected_entities.push(AffectedKnowledgeInfo {
@@ -808,7 +793,9 @@ mod tests {
         assert_eq!(explanation.name, "TransactionEngine");
         assert_eq!(explanation.type_hint.as_deref(), Some("Struct"));
         assert!(!explanation.purpose.is_empty());
-        assert!(explanation.dependents.contains(&"ConstraintEngine".to_string()));
+        assert!(explanation
+            .dependents
+            .contains(&"ConstraintEngine".to_string()));
     }
 
     #[test]
@@ -869,12 +856,10 @@ mod tests {
         let ir = sample_ir();
         let validation = validate_change("modify MVCC isolation level", &ir);
         assert!(!validation.affected_entities.is_empty());
-        assert!(
-            validation
-                .affected_entities
-                .iter()
-                .any(|a| a.entity_name == "TransactionEngine")
-        );
+        assert!(validation
+            .affected_entities
+            .iter()
+            .any(|a| a.entity_name == "TransactionEngine"));
     }
 
     #[test]

@@ -1,0 +1,19 @@
+name: Benchmark (Nightly)
+
+on:
+  schedule:
+    - cron: '37 3 * * *' # daily at 03:37 UTC
+  workflow_dispatch: # manual trigger
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace -- --ignored --test-threads=1
+        timeout-minutes: 30

@@ -914,10 +914,12 @@ function renderExplorerTree() {
   const types = Object.entries(explorerData.schema).filter(([t]) => !filter || t.toLowerCase().includes(filter));
   let html = '';
   types.forEach(([typeName, info]) => {
+    const count = info.count||0;
+    if (count === 0) return; // skip empty types — prevents "No objects" dead-end click
     const tenantList = (info.tenants||[]).join(', ');
     html += '<div class="tree-item type-node" onclick="exploreType(\''+typeName.replace(/'/g,"\\'")+'\')" data-type="'+typeName+'">';
     html += '<span style="color:'+colorFor(typeName)+'">●</span> '+typeName;
-    html += '<span class="count">'+(info.count||0)+'</span>';
+    html += '<span class="count">'+count+'</span>';
     html += '</div>';
     if (info.tenants && info.tenants.length > 0) {
       info.tenants.forEach(t => {

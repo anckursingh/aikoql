@@ -1,4 +1,7 @@
 //! Mnemosyne Document Ingestion Plugin SDK — Phase 5 Multi-Modal.
+#![allow(clippy::new_without_default)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
 //!
 //! Defines the `IngestionPlugin` trait for document-to-KO pipelines.
 //! Reference implementations (PDF → OCR → KO) live in separate crates
@@ -179,12 +182,14 @@ pub use context::{
 };
 
 mod reconcile;
-pub use reconcile::{reconcile, stale_entities, AffectedEntity, ImpactSeverity, ReconciliationReport};
+pub use reconcile::{
+    reconcile, stale_entities, AffectedEntity, ImpactSeverity, ReconciliationReport,
+};
 
 mod connector_bridge;
 pub use connector_bridge::{
-    connector_metadata_to_ir, discover_connector_schema, ConnectorMetadata, ContainerInfo, FieldInfo,
-    ReferenceInfo,
+    connector_metadata_to_ir, discover_connector_schema, ConnectorMetadata, ContainerInfo,
+    FieldInfo, ReferenceInfo,
 };
 
 mod secret_filter;
@@ -193,11 +198,17 @@ pub use secret_filter::{filter_secrets, SecretFinding, SecretKind};
 mod reconciliation_workflow;
 pub use reconciliation_workflow::{
     apply_proposal, auto_proposals_from_stale, process_workflow, validate_proposal, ApplyResult,
-    ValidationResult, ValidatedProposal, WorkflowReport,
+    ValidatedProposal, ValidationResult, WorkflowReport,
 };
 
 mod ingest_dir;
-pub use ingest_dir::{build_report, format_report, ingest_directory, IngestReport, IngestResult};
+pub use ingest_dir::{
+    build_report, collect_file_paths, compile_file, format_report, ingest_directory,
+    parallel_ingest_directory, IngestReport, IngestResult,
+};
+
+mod ingest_incremental;
+pub use ingest_incremental::{incremental_diff_ingest, incremental_ingest_directory, TrackState};
 
 mod aikoql_ops;
 pub use aikoql_ops::{

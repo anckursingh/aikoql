@@ -15,8 +15,8 @@ pub struct EventFilter {
 
 impl EventFilter {
     pub fn matches(&self, ke: &KnowledgeEvent) -> bool {
-        self.koid.map_or(true, |k| k == ke.koid)
-            && self.kinds.as_ref().map_or(true, |ks| ks.contains(&ke.kind))
+        self.koid.is_none_or(|k| k == ke.koid)
+            && self.kinds.as_ref().is_none_or(|ks| ks.contains(&ke.kind))
     }
 }
 

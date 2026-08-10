@@ -751,7 +751,7 @@ impl Kernel {
                 continue;
             }
             if let Some(tn) = type_name {
-                if &ko.metadata.type_name != tn {
+                if ko.metadata.type_name != tn {
                     continue;
                 }
             }
@@ -910,6 +910,19 @@ impl Kernel {
             });
         }
         let creating = head.is_none();
+        // MRFC-0060 Phase R12: provenance fields are immutable once written.
+        // Evidence, source_artifact, and revision extensions cannot be changed.
+        if !creating {
+            let head_ext = &head.as_ref().unwrap().extensions;
+            for key in &["evidence", "source_artifact", "revision"] {
+                if head_ext.contains_key(*key) && req.extensions.get(*key) != head_ext.get(*key) {
+                    return Err(KError::InvalidObject(format!(
+                        "provenance field '{}' is immutable — cannot be changed after creation",
+                        key
+                    )));
+                }
+            }
+        }
         // MRFC-0060 Phase C6: compute write-set for incremental constraint evaluation.
         let write_set: Option<HashSet<String>> = if creating {
             None // evaluate all constraints for creates
@@ -2030,7 +2043,7 @@ impl Kernel {
             events: count,
             chain_valid: valid,
             head_audit_hash: prev,
-            signatures_verified: !self.signing_key.is_some()
+            signatures_verified: self.signing_key.is_none()
                 || (signatures_verified && signed_count > 0),
         })
     }

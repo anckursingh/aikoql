@@ -1,4 +1,5 @@
 //! Neo4j Import Connector — cross-db-support milestone 4.
+#![allow(dead_code)]
 //!
 //! Connects to Neo4j via HTTP JSON API, imports nodes as KnowledgeObjects
 //! and relationships as RelationshipRefs. Uses `ureq` for sync HTTP.
@@ -126,7 +127,7 @@ impl Neo4jConnector {
         let rows = self.cypher(&format!("MATCH (n:`{}`) RETURN count(n)", label))?;
         rows.first()
             .and_then(|v| v.as_u64())
-            .ok_or_else(|| format!("unexpected count result"))
+            .ok_or_else(|| "unexpected count result".to_string())
     }
 
     // ------------------------------------------------------------------

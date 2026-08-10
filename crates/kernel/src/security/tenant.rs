@@ -29,6 +29,12 @@ pub struct TenantManager {
     usage: RwLock<HashMap<String, usize>>,
 }
 
+impl Default for TenantManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TenantManager {
     pub fn new() -> Self {
         TenantManager {

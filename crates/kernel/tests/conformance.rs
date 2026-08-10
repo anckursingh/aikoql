@@ -2420,3 +2420,82 @@ fn t06zv_provenance_required_accepts_sourced() {
     });
     assert!(k.remember(r).is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// Phase R8 — Security: authorisation hardening tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t27_non_owner_denied_without_acl_grant() {
+    let k = mk().0;
+    let alice = Subject::new("alice");
+    let bob = Subject::new("bob");
+
+    // Bob creates a document with no ACL — only the owner can access.
+    let mut r = RememberRequest::create(bob, meta("Document"));
+    r.properties
+        .insert("title".into(), Value::Text("bob-private".into()));
+    let created = k.remember(r).unwrap();
+
+    // Alice (non-owner, no ACL grant) cannot read.
+    assert!(
+        k.get(&alice, &created.koid).is_err(),
+        "non-owner without ACL grant must be denied"
+    );
+}
+
+#[test]
+fn t28_acl_read_allowed_delete_denied() {
+    let k = mk().0;
+    let alice = Subject::new("alice");
+    let bob = Subject::new("bob");
+
+    // Bob creates a document with an ACL granting Alice read-only.
+    let mut r = RememberRequest::create(bob, meta("Document"));
+    r.properties
+        .insert("title".into(), Value::Text("bob-shared".into()));
+    r.security = Some(SecurityDescriptor {
+        owner: "bob".into(),
+        acl: vec![AclEntry {
+            principal: "alice".into(),
+            action: Action::Read,
+            effect: Effect::Allow,
+        }],
+        classification: None,
+    });
+    let created = k.remember(r).unwrap();
+
+    // Alice can read (ACL allows).
+    assert!(
+        k.get(&alice, &created.koid).is_ok(),
+        "ACL-granted read must work"
+    );
+    // But Alice cannot delete (no write/delete ACL entry).
+    assert!(
+        k.forget(&alice, &created.koid, ForgetMode::Tombstone, None, None)
+            .is_err(),
+        "delete without ACL grant must be denied"
+    );
+}
+
+#[test]
+fn t29_anonymous_and_unauthorised_access_denied() {
+    let k = mk().0;
+    let alice = Subject::new("alice");
+    let mut r = RememberRequest::create(alice, meta("Document"));
+    r.properties
+        .insert("title".into(), Value::Text("needs-session".into()));
+    let created = k.remember(r).unwrap();
+
+    // Empty-name subject (unauthenticated) cannot read.
+    assert!(
+        k.get(&Subject::new(""), &created.koid).is_err(),
+        "anonymous read must be denied"
+    );
+
+    // Different user with no grant cannot read.
+    assert!(
+        k.get(&Subject::new("eve"), &created.koid).is_err(),
+        "unauthorised read must be denied"
+    );
+}

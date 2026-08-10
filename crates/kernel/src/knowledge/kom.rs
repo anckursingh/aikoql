@@ -81,12 +81,18 @@ impl KOID {
 
     /// Parse a 32-char hex string (as produced by `to_hex`) back into a KOID.
     pub fn from_hex(s: &str) -> KResult<Self> {
+        let s = s.trim();
         let b = s.as_bytes();
         if b.len() != KOID_LEN * 2 {
             return Err(KError::InvalidObject(format!(
-                "koid hex must be {} chars, got {}",
+                "koid hex must be {} chars, got {} (value: '{}')",
                 KOID_LEN * 2,
-                b.len()
+                b.len(),
+                if s.len() > 50 {
+                    format!("{}...", &s[..47])
+                } else {
+                    s.to_string()
+                }
             )));
         }
         let mut out = [0u8; KOID_LEN];
@@ -587,7 +593,7 @@ impl LifecycleState {
                 | (Proposed, Active)    // Proposed → Active
                 | (Accepted, Archived)  // Accepted → Archived
                 | (Accepted, Updated)   // Accepted → Updated
-                | (Active, Superseded)  // Active → Superseded
+                | (Active, Superseded) // Active → Superseded
         )
     }
 }
@@ -772,12 +778,10 @@ impl KnowledgeObject {
 
     /// Get the Scope from extensions, if set.
     pub fn scope(&self) -> Option<crate::knowledge::scope::Scope> {
-        self.extensions
-            .get(Self::EXT_SCOPE)
-            .and_then(|v| match v {
-                Value::Text(s) => crate::knowledge::scope::Scope::from_str(s),
-                _ => None,
-            })
+        self.extensions.get(Self::EXT_SCOPE).and_then(|v| match v {
+            Value::Text(s) => crate::knowledge::scope::Scope::from_str(s),
+            _ => None,
+        })
     }
 
     /// Set the Scope in extensions.
@@ -900,9 +904,7 @@ impl ConflictDetector {
     /// `None` otherwise.
     pub fn detect(claim_a_ko: &KnowledgeObject, claim_b_ko: &KnowledgeObject) -> Option<Conflict> {
         // Only compare Claim-typed KOs
-        if claim_a_ko.metadata.type_name != "Claim"
-            || claim_b_ko.metadata.type_name != "Claim"
-        {
+        if claim_a_ko.metadata.type_name != "Claim" || claim_b_ko.metadata.type_name != "Claim" {
             return None;
         }
         // Same subject? Check "statement" and "subject" properties
@@ -1475,7 +1477,7 @@ fn validate_format(format: &str, value: &Value) -> Result<(), String> {
             if let Some(caps) = re.captures(s) {
                 let month: u32 = caps[2].parse().unwrap_or(0);
                 let day: u32 = caps[3].parse().unwrap_or(0);
-                if month >= 1 && month <= 12 && day >= 1 && day <= 31 {
+                if (1..=12).contains(&month) && (1..=31).contains(&day) {
                     return Ok(());
                 }
             }
@@ -1741,9 +1743,8 @@ impl Parser {
             .get(self.pos)
             .cloned()
             .ok_or_else(|| "unexpected end of expression".into())
-            .map(|t| {
+            .inspect(|_t| {
                 self.pos += 1;
-                t
             })
     }
 

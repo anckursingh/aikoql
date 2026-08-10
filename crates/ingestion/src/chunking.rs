@@ -150,6 +150,12 @@ pub struct MockDocumentChunker {
     strategy: ChunkingStrategy,
 }
 
+impl Default for MockDocumentChunker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockDocumentChunker {
     pub fn new() -> Self {
         MockDocumentChunker {

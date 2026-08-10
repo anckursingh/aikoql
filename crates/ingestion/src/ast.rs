@@ -213,9 +213,8 @@ fn classify_blocks(text: &str, _page: u32) -> Vec<AstNode> {
     // Post-processing passes.
     let nodes = merge_list_continuations(nodes);
     let nodes = merge_adjacent_lists(nodes);
-    let nodes = detect_figures(nodes);
 
-    nodes
+    detect_figures(nodes)
 }
 
 /// Post-pass: merge adjacent List blocks into a single List.
@@ -243,11 +242,11 @@ fn flush_list(buffer: &mut Vec<AstNode>, out: &mut Vec<AstNode>) {
         return;
     }
     let items = std::mem::take(buffer);
-    let ordered = items.first().map_or(false, |item| {
+    let ordered = items.first().is_some_and(|item| {
         // Ordered if the first item starts with a digit followed by "." or ")"
         let t = item.text.trim();
-        t.chars().next().map_or(false, |c| c.is_ascii_digit())
-            && t.chars().nth(1).map_or(false, |c| c == '.' || c == ')')
+        t.chars().next().is_some_and(|c| c.is_ascii_digit())
+            && t.chars().nth(1).is_some_and(|c| c == '.' || c == ')')
     });
     out.push(AstNode {
         block_type: BlockType::List { ordered },
@@ -273,7 +272,7 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
         .collect();
     if numeric_prefix.len() >= 2 && first.len() < 150 {
         let dots = numeric_prefix.chars().filter(|c| *c == '.').count() as u8;
-        let level = dots.max(1).min(3); // "1." → 1 dot → level 1; "1.1.1" → 3 dots → level 3
+        let level = dots.clamp(1, 3); // "1." → 1 dot → level 1; "1.1.1" → 3 dots → level 3
         return Some(AstNode {
             block_type: BlockType::Heading { level },
             text: text.to_string(),
@@ -422,11 +421,10 @@ fn is_table_block(lines: &[&str]) -> bool {
             || t.starts_with('•')
             || t.starts_with('*')
             || t.starts_with(" - ")
-            || (t.chars().next().map_or(false, |c| c.is_ascii_digit())
+            || (t.chars().next().is_some_and(|c| c.is_ascii_digit())
                 && t.chars()
-                    .skip_while(|c| c.is_ascii_digit())
-                    .next()
-                    .map_or(false, |c| c == '.' || c == ')'))
+                    .find(|c| !c.is_ascii_digit())
+                    .is_some_and(|c| c == '.' || c == ')'))
     }) {
         return false;
     }
@@ -629,9 +627,8 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
 
         // ── Title detection: first block, larger-than-average font ──
         if idx == 0
-            && hint.map_or(false, |h| {
-                page_avg_height > 0.0 && h.avg_word_height > page_avg_height * 1.3
-            })
+            && hint
+                .is_some_and(|h| page_avg_height > 0.0 && h.avg_word_height > page_avg_height * 1.3)
         {
             let h = hint.unwrap();
             nodes.push(AstNode {
@@ -651,9 +648,8 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
         }
 
         // ── Font-size-based heading: word height > 1.2x page average ──
-        if hint.map_or(false, |h| {
-            page_avg_height > 0.0 && h.avg_word_height > page_avg_height * 1.2
-        }) && lines.len() <= 3
+        if hint.is_some_and(|h| page_avg_height > 0.0 && h.avg_word_height > page_avg_height * 1.2)
+            && lines.len() <= 3
         {
             let h = hint.unwrap();
             let first = lines[0].trim();
@@ -757,9 +753,8 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
     // Post-processing passes.
     let nodes = merge_list_continuations(nodes);
     let nodes = merge_adjacent_lists(nodes);
-    let nodes = detect_figures(nodes);
 
-    nodes
+    detect_figures(nodes)
 }
 
 fn heading_level_from_text(first: &str) -> u8 {
@@ -803,7 +798,7 @@ fn merge_list_continuations(nodes: Vec<AstNode>) -> Vec<AstNode> {
                 out.push(node);
             }
             BlockType::Paragraph => {
-                let preceded_by_list_item = out.last().map_or(false, |n| {
+                let preceded_by_list_item = out.last().is_some_and(|n| {
                     matches!(n.block_type, BlockType::ListItem)
                         || (matches!(n.block_type, BlockType::List { .. })
                             && !n.children.is_empty())
@@ -836,11 +831,10 @@ fn is_continuation_paragraph(node: &AstNode) -> bool {
     if t.starts_with('-')
         || t.starts_with('•')
         || t.starts_with('*')
-        || (t.chars().next().map_or(false, |c| c.is_ascii_digit())
+        || (t.chars().next().is_some_and(|c| c.is_ascii_digit())
             && t.chars()
-                .skip_while(|c| c.is_ascii_digit())
-                .next()
-                .map_or(false, |c| c == '.' || c == ')'))
+                .find(|c| !c.is_ascii_digit())
+                .is_some_and(|c| c == '.' || c == ')'))
     {
         return false;
     }
@@ -942,8 +936,7 @@ fn detect_figures(nodes: Vec<AstNode>) -> Vec<AstNode> {
 fn parse_figure_marker(text: &str) -> Option<String> {
     let t = text.trim();
     for prefix in &["Figure ", "Fig. ", "Fig "] {
-        if t.starts_with(prefix) {
-            let rest = &t[prefix.len()..];
+        if let Some(rest) = t.strip_prefix(prefix) {
             let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
             if !num.is_empty() {
                 return Some(format!("{}{}", prefix, num));

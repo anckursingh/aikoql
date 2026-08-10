@@ -184,15 +184,17 @@ impl GraphEngine {
             if depth >= q.depth as u32 {
                 continue;
             }
-            let edges = kernel
+            let mut edges: Vec<(String, KOID)> = kernel
                 .outbound_edges(&cur, q.rel_type.as_deref())
                 .unwrap_or_default();
+            // Merge inbound edges when direction is None (both) or Inbound.
+            if q.direction != Some(Direction::Outbound) {
+                let inbound = kernel
+                    .inbound_edges(&cur, q.rel_type.as_deref())
+                    .unwrap_or_default();
+                edges.extend(inbound);
+            }
             for (rel_type, target) in edges {
-                // Direction filter: index is outbound-only; skip if caller
-                // asked for inbound-only.
-                if let Some(Direction::Inbound) = q.direction {
-                    continue;
-                }
                 let next_depth = depth + 1;
                 if kernel.verify(ctx.clone(), &target, Action::Read).is_err() {
                     continue;

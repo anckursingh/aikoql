@@ -86,15 +86,13 @@ pub fn connector_metadata_to_ir(meta: &ConnectorMetadata) -> KnowledgeIr {
         entities.push(EntityCandidate {
             name: entity_name.clone(),
             type_hint: Some(format!("{}{}", meta.connector_type, container_type)),
-            mentions: vec![
-                format!(
-                    "{} '{}' with {} fields (approx {} rows)",
-                    container_type,
-                    container.name,
-                    container.fields.len(),
-                    container.row_count.unwrap_or(0)
-                ),
-            ],
+            mentions: vec![format!(
+                "{} '{}' with {} fields (approx {} rows)",
+                container_type,
+                container.name,
+                container.fields.len(),
+                container.row_count.unwrap_or(0)
+            )],
             confidence: 1.0,
             evidence,
         });
@@ -131,7 +129,11 @@ pub fn connector_metadata_to_ir(meta: &ConnectorMetadata) -> KnowledgeIr {
                     container.name,
                     field.name,
                     field.data_type,
-                    if field.nullable { "nullable" } else { "NOT NULL" },
+                    if field.nullable {
+                        "nullable"
+                    } else {
+                        "NOT NULL"
+                    },
                     if field.is_primary_key { "PK" } else { "" },
                 ),
                 entities: vec![entity_name.clone()],
@@ -199,15 +201,15 @@ pub fn discover_connector_schema(
 
     let references: Vec<ReferenceInfo> = foreign_keys
         .iter()
-        .map(|(from_container, from_fields, to_container, to_fields, name)| {
-            ReferenceInfo {
+        .map(
+            |(from_container, from_fields, to_container, to_fields, name)| ReferenceInfo {
                 from_container: from_container.to_string(),
                 from_fields: from_fields.iter().map(|s| s.to_string()).collect(),
                 to_container: to_container.to_string(),
                 to_fields: to_fields.iter().map(|s| s.to_string()).collect(),
                 name: name.map(|n| n.to_string()),
-            }
-        })
+            },
+        )
         .collect();
 
     ConnectorMetadata {

@@ -91,7 +91,7 @@ pub fn filter_secrets(ir: &KnowledgeIr) -> (KnowledgeIr, Vec<SecretFinding>) {
             fact.statement = format!("[REDACTED:{}] {}", kind.as_str(), fact.statement);
             findings.push(SecretFinding {
                 kind,
-                location: format!("fact.statement"),
+                location: "fact.statement".to_string(),
                 redacted: fact.statement.clone(),
             });
         }
@@ -114,9 +114,7 @@ fn detect_secret(text: &str) -> Option<SecretKind> {
     }
 
     // Bearer tokens
-    if contains_pattern(text, "Bearer ")
-        || contains_pattern(text, "bearer ")
-    {
+    if contains_pattern(text, "Bearer ") || contains_pattern(text, "bearer ") {
         return Some(SecretKind::BearerToken);
     }
 
@@ -134,8 +132,7 @@ fn detect_secret(text: &str) -> Option<SecretKind> {
     }
 
     // Private keys
-    if text.contains("-----BEGIN")
-        && (text.contains("PRIVATE KEY") || text.contains("RSA PRIVATE"))
+    if text.contains("-----BEGIN") && (text.contains("PRIVATE KEY") || text.contains("RSA PRIVATE"))
     {
         return Some(SecretKind::PrivateKey);
     }
@@ -208,7 +205,9 @@ fn is_email(text: &str) -> bool {
             if parts.len() == 2
                 && !parts[0].is_empty()
                 && parts[1].contains('.')
-                && parts[0].chars().all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-' || c == '+')
+                && parts[0]
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '-' || c == '+')
             {
                 return true;
             }
@@ -233,7 +232,9 @@ fn is_credit_card(text: &str) -> bool {
     // Also check for dash-separated: XXXX-XXXX-XXXX-XXXX
     let dash_parts: Vec<&str> = text.split('-').collect();
     if dash_parts.len() == 4
-        && dash_parts.iter().all(|p| p.len() == 4 && p.chars().all(|c| c.is_ascii_digit()))
+        && dash_parts
+            .iter()
+            .all(|p| p.len() == 4 && p.chars().all(|c| c.is_ascii_digit()))
     {
         return true;
     }
@@ -262,10 +263,7 @@ fn is_likely_token(text: &str) -> bool {
         .collect();
     // ponytail: token detection threshold — 40+ char base64-like strings
     // with no spaces are likely tokens/secrets
-    if clean.len() > 40
-        && !text.contains(' ')
-        && (clean.ends_with('=') || clean.len() > 60)
-    {
+    if clean.len() > 40 && !text.contains(' ') && (clean.ends_with('=') || clean.len() > 60) {
         return true;
     }
     false
@@ -329,7 +327,8 @@ mod tests {
     fn redacts_connection_string() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
-                statement: "Server=prod-db.example.com;Password=superSecret123;Database=mydb".into(),
+                statement: "Server=prod-db.example.com;Password=superSecret123;Database=mydb"
+                    .into(),
                 entities: vec![],
                 confidence: 0.5,
                 evidence: Default::default(),

@@ -33,6 +33,16 @@ enabled = false
 # Passphrase for the LocalKMS key derivation (or set MNEMOSYNE_PASSPHRASE env var).
 # passphrase = "change-me-in-production"
 
+[rate_limit]
+# Enable per-process rate limiting for MCP tool calls.
+enabled = true
+# Maximum tool calls per minute per connection.
+max_calls_per_minute = 120
+# NOTE: Process-local. In a horizontally-scaled deployment (load balancer →
+# N instances), each instance independently allows max_calls_per_minute.
+# For global rate limiting, use a shared backend (see rate_limiter.rs) or
+# enforce limits at the gateway layer.
+
 [logging]
 # Log level: trace, debug, info, warn, error
 level = "info"

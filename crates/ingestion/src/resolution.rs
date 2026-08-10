@@ -132,6 +132,12 @@ pub struct MockEntityResolver {
     pub ambiguity_threshold: f32,
 }
 
+impl Default for MockEntityResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockEntityResolver {
     pub fn new() -> Self {
         MockEntityResolver {
@@ -167,7 +173,7 @@ impl EntityResolver for MockEntityResolver {
 
             for entry in knowledge_base {
                 // Type filter: if both have types, they must match.
-                if let (Some(ref etype), ref etype_kb) = (&entity.type_hint, &entry.type_name) {
+                if let (Some(ref etype), etype_kb) = (&entity.type_hint, &entry.type_name) {
                     if !etype_kb.is_empty() && !types_match(etype, etype_kb) {
                         continue;
                     }
@@ -461,7 +467,7 @@ impl EntityResolver for VectorEntityResolver {
 
             for (entry, kb_emb) in &self.kb_embeddings {
                 // Type filter.
-                if let (Some(ref etype), ref etype_kb) = (&entity.type_hint, &entry.type_name) {
+                if let (Some(ref etype), etype_kb) = (&entity.type_hint, &entry.type_name) {
                     if !etype_kb.is_empty() && !types_match(etype, etype_kb) {
                         continue;
                     }

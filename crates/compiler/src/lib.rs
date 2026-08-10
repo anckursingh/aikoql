@@ -1,4 +1,5 @@
 //! Mnemosyne Compiler — AIKOQL → Knowledge IR.
+#![allow(clippy::module_inception)]
 //!
 //! Two frontends, one target:
 //! - `Compiler::compile(json)` — JSON-based AIKOQL (simple, agent-friendly)

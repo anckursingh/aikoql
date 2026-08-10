@@ -9,9 +9,9 @@
 mod benchmarks {
     use mnemosyne_ingestion::{
         apply_proposal, auto_proposals_from_stale, compile_context, compile_markdown_string,
-        compile_rust_source, connector_metadata_to_ir, discover_connector_schema,
-        filter_secrets, merge_knowledge_ir, process_workflow, reconcile,
-        render_context_markdown, validate_proposal,
+        compile_rust_source, connector_metadata_to_ir, discover_connector_schema, filter_secrets,
+        merge_knowledge_ir, process_workflow, reconcile, render_context_markdown,
+        validate_proposal,
     };
     use std::time::Instant;
 
@@ -121,6 +121,7 @@ use crate::auth::{AuthProvider, Identity};
 
     /// Measure extraction throughput: markdown entities/sec + code entities/sec.
     #[test]
+    #[ignore = "benchmark: use cargo test --ignored or nightly workflow"]
     fn bench_extraction_throughput() {
         let iterations = 100;
         let start = Instant::now();
@@ -138,14 +139,27 @@ use crate::auth::{AuthProvider, Identity};
         let code_per_sec = iterations as f64 / code_elapsed.as_secs_f64();
 
         eprintln!("=== BENCH: Extraction Throughput ===");
-        eprintln!("  Markdown: {:.1} docs/sec ({:.2?} for {} iterations)", md_per_sec, md_elapsed, iterations);
-        eprintln!("  Code:     {:.1} files/sec ({:.2?} for {} iterations)", code_per_sec, code_elapsed, iterations);
-        assert!(md_per_sec > 10.0, "markdown extraction should exceed 10 docs/sec");
-        assert!(code_per_sec > 10.0, "code extraction should exceed 10 files/sec");
+        eprintln!(
+            "  Markdown: {:.1} docs/sec ({:.2?} for {} iterations)",
+            md_per_sec, md_elapsed, iterations
+        );
+        eprintln!(
+            "  Code:     {:.1} files/sec ({:.2?} for {} iterations)",
+            code_per_sec, code_elapsed, iterations
+        );
+        assert!(
+            md_per_sec > 10.0,
+            "markdown extraction should exceed 10 docs/sec"
+        );
+        assert!(
+            code_per_sec > 10.0,
+            "code extraction should exceed 10 files/sec"
+        );
     }
 
     /// Measure token reduction: raw doc tokens vs compiled context tokens.
     #[test]
+    #[ignore = "benchmark: use cargo test --ignored or nightly workflow"]
     fn bench_token_reduction() {
         let md_ir = compile_markdown_string(MARKDOWN_DOC, Some("CLAUDE.md".into())).unwrap();
         let code_ir = compile_rust_source(RUST_CODE, Some("lib.rs"));
@@ -163,17 +177,34 @@ use crate::auth::{AuthProvider, Identity};
         let reduction_pct2 = (1.0 - ctx_tokens2 as f64 / raw_tokens as f64) * 100.0;
 
         eprintln!("=== BENCH: Token Reduction ===");
-        eprintln!("  Raw documents: {} tokens ({} chars)", raw_tokens, MARKDOWN_DOC.len() + RUST_CODE.len());
-        eprintln!("  Context (constraint task): {} tokens → {:.1}% reduction", ctx_tokens, reduction_pct);
-        eprintln!("  Context (auth task):      {} tokens → {:.1}% reduction", ctx_tokens2, reduction_pct2);
+        eprintln!(
+            "  Raw documents: {} tokens ({} chars)",
+            raw_tokens,
+            MARKDOWN_DOC.len() + RUST_CODE.len()
+        );
+        eprintln!(
+            "  Context (constraint task): {} tokens → {:.1}% reduction",
+            ctx_tokens, reduction_pct
+        );
+        eprintln!(
+            "  Context (auth task):      {} tokens → {:.1}% reduction",
+            ctx_tokens2, reduction_pct2
+        );
         eprintln!("  Target: ≥40% reduction");
 
-        assert!(reduction_pct > 30.0, "should reduce tokens by >30% for constraint task");
-        assert!(reduction_pct2 > 30.0, "should reduce tokens by >30% for auth task");
+        assert!(
+            reduction_pct > 30.0,
+            "should reduce tokens by >30% for constraint task"
+        );
+        assert!(
+            reduction_pct2 > 30.0,
+            "should reduce tokens by >30% for auth task"
+        );
     }
 
     /// Measure context quality: relevant entities rank above irrelevant.
     #[test]
+    #[ignore = "benchmark: use cargo test --ignored or nightly workflow"]
     fn bench_context_precision() {
         let md_ir = compile_markdown_string(MARKDOWN_DOC, Some("CLAUDE.md".into())).unwrap();
         let code_ir = compile_rust_source(RUST_CODE, Some("lib.rs"));
@@ -181,7 +212,9 @@ use crate::auth::{AuthProvider, Identity};
 
         // Task about constraint validation → ConstraintEngine should rank high
         let pkg = compile_context("add a constraint validation rule", &merged, 0);
-        let top_entities: Vec<&str> = pkg.entities.iter()
+        let top_entities: Vec<&str> = pkg
+            .entities
+            .iter()
             .take(3)
             .map(|e| e.name.as_str())
             .collect();
@@ -192,28 +225,33 @@ use crate::auth::{AuthProvider, Identity};
 
         let has_constraint = top_entities.contains(&"ConstraintEngine");
         let has_transaction = top_entities.contains(&"TransactionEngine");
-        assert!(has_constraint || has_transaction,
-            "at least one core entity should rank top-3");
+        assert!(
+            has_constraint || has_transaction,
+            "at least one core entity should rank top-3"
+        );
     }
 
     /// Measure reconciliation accuracy: known change → correct affected entities.
     #[test]
+    #[ignore = "benchmark: use cargo test --ignored or nightly workflow"]
     fn bench_reconciliation_accuracy() {
         let md_ir = compile_markdown_string(MARKDOWN_DOC, Some("CLAUDE.md".into())).unwrap();
         let code_ir = compile_rust_source(RUST_CODE, Some("lib.rs"));
         let merged = merge_knowledge_ir(&[md_ir, code_ir]);
 
         // Simulate changing the constraint.rs file
-        let report = reconcile(
-            &["crates/kernel/src/constraint.rs".to_string()],
-            &merged,
-        );
+        let report = reconcile(&["crates/kernel/src/constraint.rs".to_string()], &merged);
 
         eprintln!("=== BENCH: Reconciliation Accuracy ===");
         eprintln!("  Changed: crates/kernel/src/constraint.rs");
-        eprintln!("  Affected entities: {:?}", report.affected_entities.iter()
-            .map(|a| format!("{} ({:?})", a.entity_name, a.severity))
-            .collect::<Vec<_>>());
+        eprintln!(
+            "  Affected entities: {:?}",
+            report
+                .affected_entities
+                .iter()
+                .map(|a| format!("{} ({:?})", a.entity_name, a.severity))
+                .collect::<Vec<_>>()
+        );
         eprintln!("  Stale facts: {}", report.potentially_stale_facts.len());
         eprintln!("  Summary: {}", report.summary);
 
@@ -222,17 +260,45 @@ use crate::auth::{AuthProvider, Identity};
 
     /// Measure connector bridge: tables/sec conversion throughput.
     #[test]
+    #[ignore = "benchmark: use cargo test --ignored or nightly workflow"]
     fn bench_connector_bridge_throughput() {
         let iterations = 200;
         let meta = discover_connector_schema(
             "postgres",
             "benchdb",
             &[
-                ("users", &[("id", "int", true, false, true), ("email", "varchar", false, false, true), ("name", "varchar", false, true, false)]),
-                ("orders", &[("id", "int", true, false, true), ("user_id", "int", false, false, false), ("total", "numeric", false, false, false)]),
-                ("products", &[("id", "int", true, false, true), ("name", "varchar", false, false, true), ("price", "numeric", false, false, false)]),
+                (
+                    "users",
+                    &[
+                        ("id", "int", true, false, true),
+                        ("email", "varchar", false, false, true),
+                        ("name", "varchar", false, true, false),
+                    ],
+                ),
+                (
+                    "orders",
+                    &[
+                        ("id", "int", true, false, true),
+                        ("user_id", "int", false, false, false),
+                        ("total", "numeric", false, false, false),
+                    ],
+                ),
+                (
+                    "products",
+                    &[
+                        ("id", "int", true, false, true),
+                        ("name", "varchar", false, false, true),
+                        ("price", "numeric", false, false, false),
+                    ],
+                ),
             ],
-            &[("orders", &["user_id"], "users", &["id"], Some("fk_orders_users"))],
+            &[(
+                "orders",
+                &["user_id"],
+                "users",
+                &["id"],
+                Some("fk_orders_users"),
+            )],
         );
 
         let start = Instant::now();
@@ -243,12 +309,19 @@ use crate::auth::{AuthProvider, Identity};
         let per_sec = iterations as f64 / elapsed.as_secs_f64();
 
         eprintln!("=== BENCH: Connector Bridge Throughput ===");
-        eprintln!("  {:.1} schema-to-IR conversions/sec ({:.2?} for {} iterations)", per_sec, elapsed, iterations);
-        assert!(per_sec > 50.0, "connector bridge should exceed 50 conversions/sec");
+        eprintln!(
+            "  {:.1} schema-to-IR conversions/sec ({:.2?} for {} iterations)",
+            per_sec, elapsed, iterations
+        );
+        assert!(
+            per_sec > 50.0,
+            "connector bridge should exceed 50 conversions/sec"
+        );
     }
 
     /// Measure markdown rendering: context → markdown throughput.
     #[test]
+    #[ignore = "benchmark: use cargo test --ignored or nightly workflow"]
     fn bench_context_rendering() {
         let md_ir = compile_markdown_string(MARKDOWN_DOC, Some("CLAUDE.md".into())).unwrap();
         let code_ir = compile_rust_source(RUST_CODE, Some("lib.rs"));
@@ -264,7 +337,10 @@ use crate::auth::{AuthProvider, Identity};
         let per_sec = iterations as f64 / elapsed.as_secs_f64();
 
         eprintln!("=== BENCH: Context Markdown Rendering ===");
-        eprintln!("  {:.1} renders/sec ({:.2?} for {} iterations)", per_sec, elapsed, iterations);
+        eprintln!(
+            "  {:.1} renders/sec ({:.2?} for {} iterations)",
+            per_sec, elapsed, iterations
+        );
         assert!(per_sec > 100.0, "rendering should exceed 100 renders/sec");
     }
 
@@ -272,6 +348,7 @@ use crate::auth::{AuthProvider, Identity};
     /// and knowledge accuracy vs raw-document baseline across representative
     /// engineering tasks.
     #[test]
+    #[ignore = "benchmark: use cargo test --ignored or nightly workflow"]
     fn bench_agent_task_simulation() {
         // Prepare the knowledge graph.
         let md_ir = compile_markdown_string(MARKDOWN_DOC, Some("CLAUDE.md".into())).unwrap();
@@ -345,7 +422,8 @@ use crate::auth::{AuthProvider, Identity};
             total_tokens_raw += raw_tokens as u64;
 
             // Check entity recall.
-            let ctx_entity_names: Vec<&str> = pkg.entities.iter().map(|e| e.name.as_str()).collect();
+            let ctx_entity_names: Vec<&str> =
+                pkg.entities.iter().map(|e| e.name.as_str()).collect();
             let mut task_entity_hits = 0u64;
             for required in task.required_entities {
                 if ctx_entity_names.contains(required) {
@@ -385,9 +463,15 @@ use crate::auth::{AuthProvider, Identity};
             eprintln!(
                 "  Task {} ({:<20}): entities={}/{}, facts={}/{}, tokens={}, {}",
                 i + 1,
-                if task.description.len() > 20 { &task.description[..20] } else { task.description },
-                task_entity_hits, task.required_entities.len(),
-                task_fact_hits, task.required_facts.len(),
+                if task.description.len() > 20 {
+                    &task.description[..20]
+                } else {
+                    task.description
+                },
+                task_entity_hits,
+                task.required_entities.len(),
+                task_fact_hits,
+                task.required_facts.len(),
                 ctx_tokens,
                 if passed { "PASS" } else { "FAIL" },
             );
@@ -401,25 +485,46 @@ use crate::auth::{AuthProvider, Identity};
         let token_savings = (1.0 - avg_tokens_mnemosyne as f64 / avg_tokens_raw as f64) * 100.0;
 
         eprintln!("  ---");
-        eprintln!("  Completion rate:   {:.0}% ({}/{})", completion_rate, tasks_passing, tasks.len());
-        eprintln!("  Entity recall:     {:.0}% ({}/{})", entity_recall, entity_hits, total_required_entities);
-        eprintln!("  Fact recall:       {:.0}% ({}/{})", fact_recall, fact_hits, total_required_facts);
+        eprintln!(
+            "  Completion rate:   {:.0}% ({}/{})",
+            completion_rate,
+            tasks_passing,
+            tasks.len()
+        );
+        eprintln!(
+            "  Entity recall:     {:.0}% ({}/{})",
+            entity_recall, entity_hits, total_required_entities
+        );
+        eprintln!(
+            "  Fact recall:       {:.0}% ({}/{})",
+            fact_recall, fact_hits, total_required_facts
+        );
         eprintln!("  Avg tokens (Mnemosyne): {} / task", avg_tokens_mnemosyne);
         eprintln!("  Avg tokens (raw docs):  {} / task", avg_tokens_raw);
         eprintln!("  Token savings:     {:.1}%", token_savings);
 
         // Assertions: must meet quality thresholds.
-        assert!(completion_rate >= 50.0,
-            "at least 50% task completion rate (got {:.0}%)", completion_rate);
-        assert!(entity_recall >= 50.0,
-            "at least 50% entity recall (got {:.0}%)", entity_recall);
-        assert!(token_savings >= 25.0,
-            "at least 25% token savings vs raw docs (got {:.1}%)", token_savings);
+        assert!(
+            completion_rate >= 50.0,
+            "at least 50% task completion rate (got {:.0}%)",
+            completion_rate
+        );
+        assert!(
+            entity_recall >= 50.0,
+            "at least 50% entity recall (got {:.0}%)",
+            entity_recall
+        );
+        assert!(
+            token_savings >= 25.0,
+            "at least 25% token savings vs raw docs (got {:.1}%)",
+            token_savings
+        );
     }
 
     /// Secret filtering performance: measure throughput for scanning
     /// typical knowledge documents.
     #[test]
+    #[ignore = "benchmark: use cargo test --ignored or nightly workflow"]
     fn bench_secret_filtering_throughput() {
         let md_ir = compile_markdown_string(MARKDOWN_DOC, Some("CLAUDE.md".into())).unwrap();
         let iterations = 500;
@@ -430,23 +535,27 @@ use crate::auth::{AuthProvider, Identity};
         let elapsed = start.elapsed();
         let per_sec = iterations as f64 / elapsed.as_secs_f64();
         eprintln!("=== BENCH: Secret Filtering Throughput ===");
-        eprintln!("  {:.1} IR scans/sec ({:.2?} for {} iterations)", per_sec, elapsed, iterations);
-        assert!(per_sec > 500.0, "secret filtering should exceed 500 scans/sec");
+        eprintln!(
+            "  {:.1} IR scans/sec ({:.2?} for {} iterations)",
+            per_sec, elapsed, iterations
+        );
+        assert!(
+            per_sec > 500.0,
+            "secret filtering should exceed 500 scans/sec"
+        );
     }
 
     /// Reconciliation workflow integration: reconcile → auto-proposals →
     /// validate → apply end-to-end.
     #[test]
+    #[ignore = "benchmark: use cargo test --ignored or nightly workflow"]
     fn bench_reconciliation_workflow_e2e() {
         let md_ir = compile_markdown_string(MARKDOWN_DOC, Some("CLAUDE.md".into())).unwrap();
         let code_ir = compile_rust_source(RUST_CODE, Some("lib.rs"));
         let merged = merge_knowledge_ir(&[md_ir, code_ir]);
 
         // Step 1: Reconcile a change.
-        let report = reconcile(
-            &["crates/kernel/src/constraint.rs".to_string()],
-            &merged,
-        );
+        let report = reconcile(&["crates/kernel/src/constraint.rs".to_string()], &merged);
 
         eprintln!("=== BENCH: Reconciliation Workflow E2E ===");
         eprintln!("  Affected entities: {}", report.affected_entities.len());
@@ -473,8 +582,15 @@ use crate::auth::{AuthProvider, Identity};
 
         // Step 4: Apply workflow to get final IR.
         let (final_ir, wf_report) = process_workflow(&proposals, &merged);
-        eprintln!("  Accepted: {}, Rejected: {}", wf_report.accepted, wf_report.rejected);
-        eprintln!("  Final IR entities: {} → {}", merged.entities.len(), final_ir.entities.len());
+        eprintln!(
+            "  Accepted: {}, Rejected: {}",
+            wf_report.accepted, wf_report.rejected
+        );
+        eprintln!(
+            "  Final IR entities: {} → {}",
+            merged.entities.len(),
+            final_ir.entities.len()
+        );
 
         // Verify the workflow ran end-to-end.
         assert!(!report.summary.is_empty());

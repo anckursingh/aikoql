@@ -222,7 +222,7 @@ impl KeyAuditLog {
                 continue;
             }
             let idx = v[0] as usize;
-            if idx >= 1 && idx <= 4 {
+            if (1..=4).contains(&idx) {
                 counts[idx] += 1;
             }
         }

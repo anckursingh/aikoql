@@ -17,6 +17,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace -- -D warnings
       - run: cargo check --workspace
       - run: cargo test --workspace -- --skip load_encryption_overhead
         timeout-minutes: 15
@@ -39,7 +43,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --check
-      - run: cargo clippy --workspace -- -D warnings 2>&1 || true
+      - run: cargo clippy --workspace -- -D warnings
 
   build-release:
     name: Build Release (Linux)
@@ -63,4 +67,8 @@ jobs:
       - name: Check banned dependencies
         run: |
           echo "Checking banned dependency patterns..."
-          ! grep -r 'mnemosyne-kernel.*path.*runtime\|mnemosyne-kernel.*path.*compiler' crates/*/Cargo.toml crates/*/*/Cargo.toml 2>/dev/null || echo "DAG violation: kernel must not depend on runtime/compiler"
+          if grep -r 'mnemosyne-kernel.*path.*runtime\|mnemosyne-kernel.*path.*compiler' crates/*/Cargo.toml crates/*/*/Cargo.toml 2>/dev/null; then
+            echo "DAG VIOLATION: kernel must not depend on runtime/compiler"
+            exit 1
+          fi
+          echo "Dependency DAG OK"

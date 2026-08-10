@@ -12,8 +12,7 @@ use mnemosyne_kernel::knowledge::kom;
 ///
 /// On parse failure, returns an empty IR with a warning logged to stderr.
 pub fn compile_rust_file(path: &str) -> Result<KnowledgeIr, String> {
-    let src = std::fs::read_to_string(path)
-        .map_err(|e| format!("read '{}': {}", path, e))?;
+    let src = std::fs::read_to_string(path).map_err(|e| format!("read '{}': {}", path, e))?;
     Ok(compile_rust_source(&src, Some(path)))
 }
 
@@ -323,7 +322,11 @@ fn path_to_string(path: &syn::Path) -> String {
 fn type_or_trait_name(imp: &syn::ItemImpl) -> String {
     // impl TraitName for TypeName { ... } or impl TypeName { ... }
     if let Some((_, trait_path, _)) = &imp.trait_ {
-        format!("impl {} for {}", path_to_string(trait_path), type_path_to_string(&imp.self_ty))
+        format!(
+            "impl {} for {}",
+            path_to_string(trait_path),
+            type_path_to_string(&imp.self_ty)
+        )
     } else {
         format!("impl {}", type_path_to_string(&imp.self_ty))
     }
@@ -375,11 +378,12 @@ struct ConstraintEngine {
             .expect("should find ConstraintEngine struct");
         assert_eq!(entity.type_hint.as_deref(), Some("Struct"));
         assert!(!entity.mentions.is_empty(), "should have doc comment");
-        assert!(ir
-            .facts
-            .iter()
-            .any(|f| f.statement.contains("constraint engine")),
-            "should have doc fact");
+        assert!(
+            ir.facts
+                .iter()
+                .any(|f| f.statement.contains("constraint engine")),
+            "should have doc fact"
+        );
     }
 
     #[test]
@@ -397,22 +401,20 @@ fn test_constraint_validation() {
             .find(|e| e.name == "test_constraint_validation")
             .expect("should find test function");
         assert_eq!(entity.type_hint.as_deref(), Some("Test"));
-        assert!(ir
-            .relations
-            .iter()
-            .any(|r| r.predicate == kom::TESTED_BY),
-            "should have TESTED_BY relation");
+        assert!(
+            ir.relations.iter().any(|r| r.predicate == kom::TESTED_BY),
+            "should have TESTED_BY relation"
+        );
     }
 
     #[test]
     fn parse_use_creates_depends_on() {
         let src = r#"use std::collections::HashMap;"#;
         let ir = compile_rust_source(src, Some("test.rs"));
-        assert!(ir
-            .relations
-            .iter()
-            .any(|r| r.predicate == kom::DEPENDS_ON),
-            "use should create DEPENDS_ON");
+        assert!(
+            ir.relations.iter().any(|r| r.predicate == kom::DEPENDS_ON),
+            "use should create DEPENDS_ON"
+        );
     }
 
     #[test]
@@ -425,21 +427,22 @@ impl Validator for MyValidator {
 }
 "#;
         let ir = compile_rust_source(src, Some("test.rs"));
-        assert!(ir
-            .entities
-            .iter()
-            .any(|e| e.type_hint.as_deref() == Some("Trait")),
-            "should find Validator trait");
-        assert!(ir
-            .entities
-            .iter()
-            .any(|e| e.type_hint.as_deref() == Some("Impl")),
-            "should find impl");
-        assert!(ir
-            .relations
-            .iter()
-            .any(|r| r.predicate == kom::IMPLEMENTS),
-            "should have IMPLEMENTS relation");
+        assert!(
+            ir.entities
+                .iter()
+                .any(|e| e.type_hint.as_deref() == Some("Trait")),
+            "should find Validator trait"
+        );
+        assert!(
+            ir.entities
+                .iter()
+                .any(|e| e.type_hint.as_deref() == Some("Impl")),
+            "should find impl"
+        );
+        assert!(
+            ir.relations.iter().any(|r| r.predicate == kom::IMPLEMENTS),
+            "should have IMPLEMENTS relation"
+        );
     }
 
     #[test]
@@ -451,16 +454,16 @@ mod engine {
 }
 "#;
         let ir = compile_rust_source(src, Some("test.rs"));
-        assert!(ir
-            .entities
-            .iter()
-            .any(|e| e.name == "engine" && e.type_hint.as_deref() == Some("Module")),
-            "should find module");
-        assert!(ir
-            .entities
-            .iter()
-            .any(|e| e.name == "Constraint"),
-            "should find struct inside module");
+        assert!(
+            ir.entities
+                .iter()
+                .any(|e| e.name == "engine" && e.type_hint.as_deref() == Some("Module")),
+            "should find module"
+        );
+        assert!(
+            ir.entities.iter().any(|e| e.name == "Constraint"),
+            "should find struct inside module"
+        );
     }
 
     #[test]
@@ -484,10 +487,11 @@ enum LifecycleState {
 }
 "#;
         let ir = compile_rust_source(src, Some("test.rs"));
-        assert!(ir
-            .entities
-            .iter()
-            .any(|e| e.name == "LifecycleState" && e.type_hint.as_deref() == Some("Enum")),
-            "should find enum");
+        assert!(
+            ir.entities
+                .iter()
+                .any(|e| e.name == "LifecycleState" && e.type_hint.as_deref() == Some("Enum")),
+            "should find enum"
+        );
     }
 }

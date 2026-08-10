@@ -57,6 +57,11 @@ pub struct ConstraintCapabilities {
 pub trait StorageEngine: Send + Sync {
     fn get(&self, key: &[u8]) -> KResult<Option<Vec<u8>>>;
     /// Prefix scan, sorted ascending by key.
+    ///
+    /// Implementations MUST seek directly to the prefix range (O(log n) +
+    /// O(prefix-range)) rather than iterating from the beginning of the key
+    /// space (O(all-keys)). Backends that cannot support this (e.g. external
+    /// stores without native prefix iteration) must document the limitation.
     fn scan(&self, prefix: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>>;
     /// Atomically apply the batch (all-or-nothing).
     fn write_batch(&self, batch: &WriteBatch) -> KResult<()>;

@@ -40,7 +40,7 @@ impl ConstraintEvaluator {
         }
         // Domain constraints (always immediate)
         for prop_def in &schema.properties {
-            if write_set.map_or(true, |ws| ws.contains(&prop_def.name)) {
+            if write_set.is_none_or(|ws| ws.contains(&prop_def.name)) {
                 if let Some(value) = properties.get(&prop_def.name) {
                     for dc in &prop_def.domain_constraints {
                         dc.validate(value).map_err(|msg| {
@@ -103,7 +103,7 @@ impl ConstraintEvaluator {
         }
         // Domain constraints — only for properties in write-set
         for prop_def in &schema.properties {
-            if write_set.map_or(true, |ws| ws.contains(&prop_def.name)) {
+            if write_set.is_none_or(|ws| ws.contains(&prop_def.name)) {
                 if let Some(value) = properties.get(&prop_def.name) {
                     for dc in &prop_def.domain_constraints {
                         if let Err(msg) = dc.validate(value) {
@@ -123,7 +123,7 @@ impl ConstraintEvaluator {
         }
         // Provenance-required properties (MRFC-0060 AC-17) — value must come from a
         // trusted source.  Flagged when the source is missing or empty.
-        let has_source = provenance_source.map_or(false, |s| !s.is_empty());
+        let has_source = provenance_source.is_some_and(|s| !s.is_empty());
         if !has_source {
             for prop_def in &schema.properties {
                 if prop_def.provenance_required {
@@ -177,7 +177,7 @@ pub(crate) fn check_affected_by_write_set(
     cc: &crate::knowledge::kom::CheckConstraint,
     write_set: Option<&HashSet<String>>,
 ) -> bool {
-    write_set.map_or(true, |ws| {
+    write_set.is_none_or(|ws| {
         cc.predicate
             .referenced_properties()
             .iter()
@@ -190,7 +190,7 @@ pub(crate) fn unique_affected_by_write_set(
     constraint: &crate::knowledge::kom::UniqueConstraint,
     write_set: Option<&HashSet<String>>,
 ) -> bool {
-    write_set.map_or(true, |ws| {
+    write_set.is_none_or(|ws| {
         constraint
             .properties
             .iter()

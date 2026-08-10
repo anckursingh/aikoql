@@ -137,7 +137,10 @@ mod tests {
     fn repository_contains_component() {
         assert!(ScopeResolver::contains(Scope::Repository, Scope::Component));
         assert!(ScopeResolver::contains(Scope::Repository, Scope::Task));
-        assert!(!ScopeResolver::contains(Scope::Component, Scope::Repository));
+        assert!(!ScopeResolver::contains(
+            Scope::Component,
+            Scope::Repository
+        ));
     }
 
     #[test]

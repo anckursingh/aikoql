@@ -97,7 +97,7 @@ impl VectorIndex for BruteForceVectorIndex {
         let map = self.inner.read().unwrap();
         let mut scored: Vec<(KOID, f32)> = map
             .iter()
-            .filter(|((_, m), _)| model.map_or(true, |f| m == f))
+            .filter(|((_, m), _)| model.is_none_or(|f| m == f))
             .map(|((id, _), v)| (*id, cosine(qv, v)))
             .collect();
         scored.sort_by(|a, b| {

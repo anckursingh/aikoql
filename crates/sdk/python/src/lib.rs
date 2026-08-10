@@ -1,4 +1,6 @@
 //! Python SDK for the Mnemosyne Knowledge Kernel.
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::useless_conversion)]
 //!
 //! Exposes a minimal, synchronous `Mnemosyne` class backed by the durable
 //! kernel. The LangGraph checkpointer wrapper lives in pure Python on top of
@@ -349,7 +351,7 @@ impl Mnemosyne {
     #[pyo3(signature = (query, subject = "query-user"))]
     fn aikoql(&self, py: Python<'_>, query: &str, subject: &str) -> PyResult<PyObject> {
         let raw = mnemosyne_compiler::parser::compile_with_subject(query, subject)
-            .map_err(|e| PyRuntimeError::new_err(e))?;
+            .map_err(PyRuntimeError::new_err)?;
         let plan = mnemosyne_compiler::planner::Planner::optimize(&raw);
         let result = py.allow_threads(move || {
             mnemosyne_runtime::Interpreter::execute(&self.inner, &plan).map_err(to_pyerr)

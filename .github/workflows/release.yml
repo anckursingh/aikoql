@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Windows binary ──────────────────────────────────────────────
+  windows:
+    name: Build Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release
+        run: cargo build --release -p mnemosyne-mcp
+      - name: Generate SHA-256
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 target/release/mnemosyne-mcp.exe).Hash.ToLower()
+          "$hash  mnemosyne-mcp.exe" | Out-File -Encoding ASCII target/release/mnemosyne-mcp.exe.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            target/release/mnemosyne-mcp.exe
+            target/release/mnemosyne-mcp.exe.sha256
+
+  # ── Linux glibc binary ──────────────────────────────────────────
+  linux-gnu:
+    name: Build Linux (x86_64-gnu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release
+        run: cargo build --release -p mnemosyne-mcp
+      - name: Generate SHA-256
+        run: |
+          sha256sum target/release/mnemosyne-mcp | cut -d' ' -f1 > target/release/mnemosyne-mcp-linux.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-gnu
+          path: |
+            target/release/mnemosyne-mcp
+            target/release/mnemosyne-mcp-linux.sha256
+
+  # ── Linux musl binary ───────────────────────────────────────────
+  linux-musl:
+    name: Build Linux (x86_64-musl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: Build release (musl)
+        run: cross build --release --target x86_64-unknown-linux-musl -p mnemosyne-mcp
+      - name: Generate SHA-256
+        run: |
+          sha256sum target/x86_64-unknown-linux-musl/release/mnemosyne-mcp | cut -d' ' -f1 \
+            > target/x86_64-unknown-linux-musl/release/mnemosyne-mcp-linux-musl.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-musl
+          path: |
+            target/x86_64-unknown-linux-musl/release/mnemosyne-mcp
+            target/x86_64-unknown-linux-musl/release/mnemosyne-mcp-linux-musl.sha256
+
+  # ── macOS Intel binary ──────────────────────────────────────────
+  macos-intel:
+    name: Build macOS (x86_64)
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release
+        run: cargo build --release -p mnemosyne-mcp
+      - name: Generate SHA-256
+        run: |
+          shasum -a 256 target/release/mnemosyne-mcp | cut -d' ' -f1 > target/release/mnemosyne-mcp-macos.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-intel
+          path: |
+            target/release/mnemosyne-mcp
+            target/release/mnemosyne-mcp-macos.sha256
+
+  # ── macOS Apple Silicon binary ──────────────────────────────────
+  macos-arm:
+    name: Build macOS (aarch64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release
+        run: cargo build --release -p mnemosyne-mcp
+      - name: Generate SHA-256
+        run: |
+          shasum -a 256 target/release/mnemosyne-mcp | cut -d' ' -f1 \
+            > target/release/mnemosyne-mcp-macos-arm64.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm
+          path: |
+            target/release/mnemosyne-mcp
+            target/release/mnemosyne-mcp-macos-arm64.sha256
+
+  # ── GitHub Release ──────────────────────────────────────────────
+  github-release:
+    name: Publish Release
+    needs: [windows, linux-gnu, linux-musl, macos-intel, macos-arm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Rename + collect
+        run: |
+          cp windows/mnemosyne-mcp.exe           mnemosyne-mcp.exe
+          cp windows/mnemosyne-mcp.exe.sha256    mnemosyne-mcp.exe.sha256
+          cp linux-gnu/mnemosyne-mcp             mnemosyne-mcp-linux
+          cp linux-gnu/mnemosyne-mcp-linux.sha256 mnemosyne-mcp-linux.sha256
+          cp linux-musl/mnemosyne-mcp             mnemosyne-mcp-linux-musl
+          cp linux-musl/mnemosyne-mcp-linux-musl.sha256 mnemosyne-mcp-linux-musl.sha256
+          cp macos-intel/mnemosyne-mcp            mnemosyne-mcp-macos
+          cp macos-intel/mnemosyne-mcp-macos.sha256 mnemosyne-mcp-macos.sha256
+          cp macos-arm/mnemosyne-mcp              mnemosyne-mcp-macos-arm64
+          cp macos-arm/mnemosyne-mcp-macos-arm64.sha256 mnemosyne-mcp-macos-arm64.sha256
+      - name: Checksums file
+        run: |
+          cat mnemosyne-mcp-*.sha256 > checksums.txt
+          sha256sum checksums.txt > checksums.txt.sha256
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            mnemosyne-mcp.exe
+            mnemosyne-mcp.exe.sha256
+            mnemosyne-mcp-linux
+            mnemosyne-mcp-linux.sha256
+            mnemosyne-mcp-linux-musl
+            mnemosyne-mcp-linux-musl.sha256
+            mnemosyne-mcp-macos
+            mnemosyne-mcp-macos.sha256
+            mnemosyne-mcp-macos-arm64
+            mnemosyne-mcp-macos-arm64.sha256
+            checksums.txt
+            checksums.txt.sha256
+          generate_release_notes: true

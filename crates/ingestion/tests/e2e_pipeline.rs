@@ -84,11 +84,13 @@ use crate::transaction::Transaction;
             .any(|e| e.name == "ConstraintEngine"),
         "should find ConstraintEngine struct"
     );
-    assert!(code_ir
-        .relations
-        .iter()
-        .any(|r| r.predicate == "depends_on"),
-        "should find depends_on from use statement");
+    assert!(
+        code_ir
+            .relations
+            .iter()
+            .any(|r| r.predicate == "depends_on"),
+        "should find depends_on from use statement"
+    );
 
     // 3. Merge
     let code_entities = code_ir.entities.len();
@@ -123,9 +125,15 @@ use crate::transaction::Transaction;
 
     // 4. Detect staleness
     // Label facts by source (markdown facts first, then code facts)
-    let md_fact_count = merged.facts.iter().filter(|f| {
-        f.statement.contains("MVCC") || f.statement.contains("must") || f.statement.contains("should")
-    }).count();
+    let md_fact_count = merged
+        .facts
+        .iter()
+        .filter(|f| {
+            f.statement.contains("MVCC")
+                || f.statement.contains("must")
+                || f.statement.contains("should")
+        })
+        .count();
     let sources: Vec<&str> = vec!["markdown"; md_fact_count.min(merged.facts.len())];
     let mut all_sources = sources;
     while all_sources.len() < merged.facts.len() {
@@ -145,10 +153,7 @@ use crate::transaction::Transaction;
         !pkg.entities.is_empty(),
         "context should have relevant entities"
     );
-    assert!(
-        !pkg.facts.is_empty(),
-        "context should have relevant facts"
-    );
+    assert!(!pkg.facts.is_empty(), "context should have relevant facts");
 
     // ConstraintEngine and TransactionEngine should be top-ranked for this task
     let names: Vec<&str> = pkg.entities.iter().map(|e| e.name.as_str()).collect();
@@ -164,7 +169,11 @@ use crate::transaction::Transaction;
 
     eprintln!("=== E2E Pipeline Test Passed ===");
     let md_ir2 = compile_markdown_string(markdown, None).unwrap();
-    eprintln!("Markdown IR:  {} entities, {} facts", md_ir2.entities.len(), md_ir2.facts.len());
+    eprintln!(
+        "Markdown IR:  {} entities, {} facts",
+        md_ir2.entities.len(),
+        md_ir2.facts.len()
+    );
     eprintln!(
         "Code IR:      {} entities, {} facts, {} relations",
         code_entities, code_facts, code_relations

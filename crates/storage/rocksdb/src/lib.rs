@@ -53,17 +53,18 @@ impl StorageEngine for RocksDbEngine {
     }
 
     fn scan(&self, prefix: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>> {
-        let iter = self.db.iterator(rocksdb::IteratorMode::Start);
+        // Seek directly to the prefix range rather than iterating from Start.
+        // RocksDB keys are lexicographic — once k stops matching the prefix
+        // we short-circuit. With seek, O(prefix-range) instead of O(all-keys).
+        let iter = self.db.iterator(rocksdb::IteratorMode::From(
+            prefix,
+            rocksdb::Direction::Forward,
+        ));
         let mut out = Vec::new();
         for item in iter {
             let (k, v) = item.map_err(se)?;
             if !k.starts_with(prefix) {
-                // Past the prefix range — short-circuit on first non-matching key.
-                // Relies on RocksDB's lexicographic ordering.
-                if k.as_ref() > prefix {
-                    break;
-                }
-                continue;
+                break;
             }
             out.push((k.to_vec(), v.to_vec()));
         }

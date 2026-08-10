@@ -82,7 +82,7 @@ impl EventManager {
         let rec = self
             .persisted
             .get_mut(id)
-            .ok_or_else(|| KError::NotFound(KOID::ZERO))?;
+            .ok_or(KError::NotFound(KOID::ZERO))?;
         rec.last_seq = seq;
         let rec = rec.clone();
         self.persist(repo, id, &rec)
@@ -99,10 +99,7 @@ impl EventManager {
     }
 
     pub fn replay(&self, repo: &KnowledgeRepository, id: &str) -> KResult<Vec<KnowledgeEvent>> {
-        let rec = self
-            .persisted
-            .get(id)
-            .ok_or_else(|| KError::NotFound(KOID::ZERO))?;
+        let rec = self.persisted.get(id).ok_or(KError::NotFound(KOID::ZERO))?;
         Ok(repo
             .scan_events_after(rec.last_seq)?
             .into_iter()

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Mnemosyne — download + run the platform binary from GitHub Releases.
+// Mnemosyne — download + verify + run the platform binary from GitHub Releases.
 const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const BIN_DIR = path.join(__dirname, 'bin');
 const exe = process.platform === 'win32' ? 'mnemosyne.exe' : 'mnemosyne';
@@ -15,44 +16,78 @@ const PLATFORM_MAP = {
   'darwin-arm64': 'mnemosyne-mcp-macos-arm64',
 };
 
+function fail(msg) {
+  console.error(`mnemosyne: ${msg}\nBuild from source: cargo install mnemosyne-mcp`);
+  process.exit(1);
+}
+
 function download() {
   const platform = `${process.platform}-${process.arch}`;
   const file = PLATFORM_MAP[platform];
   if (!file) {
-    console.error(`mnemosyne: no prebuilt binary for ${platform}. Build from source.`);
-    process.exit(1);
+    fail(`no prebuilt binary for ${platform}.`);
   }
 
-  const url = `https://github.com/anckursingh/mnemosyne/releases/latest/download/${file}`;
+  const base = `https://github.com/anckursingh/mnemosyne/releases/latest/download`;
+  const binUrl = `${base}/${file}`;
+  const chkUrl = `${base}/${file}.sha256`;
+
   console.error(`mnemosyne: downloading ${file}...`);
 
   fs.mkdirSync(BIN_DIR, { recursive: true });
 
-  // Download to temp file first for atomicity
   const tmpPath = binPath + '.tmp';
+  const clean = () => { try { fs.unlinkSync(tmpPath); } catch (_) {} };
+
+  // ── Download binary ──────────────────────────────────────────
   try {
-    if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    clean();
     if (process.platform === 'win32') {
-      execSync(`powershell -c "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '${url}' -OutFile '${tmpPath}'"`, { stdio: 'inherit' });
+      execSync(`powershell -c "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '${binUrl}' -OutFile '${tmpPath}'"`, { stdio: 'inherit' });
     } else {
-      execSync(`curl -fsSL '${url}' -o '${tmpPath}' && chmod +x '${tmpPath}'`, { stdio: 'inherit' });
+      execSync(`curl -fsSL '${binUrl}' -o '${tmpPath}' && chmod +x '${tmpPath}'`, { stdio: 'inherit' });
     }
-  } catch (e) {
-    try { fs.unlinkSync(tmpPath); } catch (_) {}
-    console.error('mnemosyne: download failed. Build from source: cargo install mnemosyne-mcp');
-    process.exit(1);
+  } catch (_) {
+    clean();
+    fail('download failed.');
   }
 
-  // Verify download isn't empty/corrupt (binary is ~20MB)
+  // ── Size sanity check ────────────────────────────────────────
   try {
     const stat = fs.statSync(tmpPath);
-    if (stat.size < 1000000) {
-      throw new Error(`Downloaded file too small (${stat.size} bytes), likely corrupted`);
+    if (stat.size < 1_000_000) {
+      throw new Error(`file too small (${stat.size} bytes), likely corrupted`);
     }
   } catch (e) {
-    try { fs.unlinkSync(tmpPath); } catch (_) {}
-    console.error(`mnemosyne: ${e.message}. Build from source: cargo install mnemosyne-mcp`);
-    process.exit(1);
+    clean();
+    fail(e.message);
+  }
+
+  // ── SHA-256 verification ─────────────────────────────────────
+  console.error('mnemosyne: verifying checksum...');
+  try {
+    const checksumUrl = chkUrl;
+    let expected;
+    if (process.platform === 'win32') {
+      expected = execSync(`powershell -c "$ProgressPreference='SilentlyContinue'; (Invoke-WebRequest -Uri '${checksumUrl}').Content.Trim()"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    } else {
+      expected = execSync(`curl -fsSL '${checksumUrl}'`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    }
+
+    const actual = crypto.createHash('sha256').update(fs.readFileSync(tmpPath)).digest('hex');
+
+    // The .sha256 file may be "<hash>  <filename>" or just "<hash>"
+    const expectedHash = expected.split(/\s+/)[0].toLowerCase();
+    if (expectedHash !== actual) {
+      throw new Error(`checksum mismatch\n  expected: ${expectedHash}\n  actual:   ${actual}`);
+    }
+    console.error(`mnemosyne: checksum OK (${actual.substring(0, 12)}...)`);
+  } catch (e) {
+    clean();
+    if (e.message.includes('checksum mismatch')) {
+      fail(e.message);
+    }
+    fail(`checksum verification failed — unable to fetch or verify integrity.`);
   }
 
   fs.renameSync(tmpPath, binPath);
@@ -66,8 +101,7 @@ if (!fs.existsSync(binPath)) {
 }
 
 if (!fs.existsSync(binPath)) {
-  console.error('mnemosyne: binary not found after download.');
-  process.exit(1);
+  fail('binary not found after download.');
 }
 
 // Forward all args to the binary via long-lived spawn (MCP needs persistent stdio)

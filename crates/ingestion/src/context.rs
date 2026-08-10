@@ -85,12 +85,13 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
                     e.mentions.len()
                 )
             } else if !matched_mentions.is_empty() {
-                format!(
-                    "mentions match task: {}",
-                    matched_mentions.first().unwrap()
-                )
+                format!("mentions match task: {}", matched_mentions.first().unwrap())
             } else {
-                format!("type '{}' has {} mentions", e.type_hint.as_deref().unwrap_or("unknown"), e.mentions.len())
+                format!(
+                    "type '{}' has {} mentions",
+                    e.type_hint.as_deref().unwrap_or("unknown"),
+                    e.mentions.len()
+                )
             };
 
             RankedEntity {
@@ -102,7 +103,11 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
             }
         })
         .collect();
-    entities.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    entities.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Score facts by statement overlap with task
     let mut facts: Vec<RankedFact> = ir
@@ -140,7 +145,11 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
             }
         })
         .collect();
-    facts.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    facts.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Score relations by subject, predicate, and object overlap with task + entities
     let mut relations: Vec<RankedRelation> = ir
@@ -181,7 +190,11 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
             }
         })
         .collect();
-    relations.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    relations.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Pack and trim to token budget
     let unlimited = token_budget == 0;
@@ -205,7 +218,8 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
         if f.score <= 0.0 {
             break;
         }
-        let est = est_tokens(&f.statement) + f.entities.iter().map(|e| est_tokens(e)).sum::<usize>();
+        let est =
+            est_tokens(&f.statement) + f.entities.iter().map(|e| est_tokens(e)).sum::<usize>();
         if !unlimited && tokens + est > token_budget {
             pkg.trimmed = true;
             break;
@@ -218,8 +232,7 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
         if r.score <= 0.0 {
             break;
         }
-        let est =
-            est_tokens(&r.subject) + est_tokens(&r.predicate) + est_tokens(&r.object);
+        let est = est_tokens(&r.subject) + est_tokens(&r.predicate) + est_tokens(&r.object);
         if !unlimited && tokens + est > token_budget {
             pkg.trimmed = true;
             break;
@@ -257,7 +270,7 @@ fn keyword_score(text: &str, task_words: &[&str]) -> f32 {
 
 /// Conservative token estimate: 1 token ≈ 4 chars for English text.
 fn est_tokens(text: &str) -> usize {
-    (text.len() + 3) / 4
+    text.len().div_ceil(4)
 }
 
 /// Render a ContextPackage as a human-readable Markdown string for agent consumption.
@@ -267,10 +280,7 @@ pub fn render_context_markdown(pkg: &ContextPackage) -> String {
     if !pkg.entities.is_empty() {
         md.push_str("## Relevant Components\n\n");
         for e in &pkg.entities {
-            let type_str = e
-                .type_hint
-                .as_deref()
-                .unwrap_or("Unknown");
+            let type_str = e.type_hint.as_deref().unwrap_or("Unknown");
             md.push_str(&format!("- **{}** ({})", e.name, type_str));
             if !e.mentions.is_empty() {
                 md.push_str(&format!(": {}", e.mentions.first().unwrap()));
@@ -352,10 +362,7 @@ pub fn expand_entity(
             predicate: r.predicate.clone(),
             object: r.object.clone(),
             score: r.confidence,
-            justification: format!(
-                "connects '{}' with '{}'",
-                r.subject, r.object
-            ),
+            justification: format!("connects '{}' with '{}'", r.subject, r.object),
         })
         .collect();
 
@@ -415,12 +422,7 @@ pub fn expand_relationship(
                 predicate: rel.predicate.clone(),
                 object: rel.object.clone(),
                 score: rel.confidence,
-                justification: format!(
-                    "depth {}: {} → {}",
-                    d + 1,
-                    current,
-                    next
-                ),
+                justification: format!("depth {}: {} → {}", d + 1, current, next),
             });
             queue.push((next.clone(), d + 1, new_chain));
         }
@@ -430,10 +432,7 @@ pub fn expand_relationship(
 }
 
 /// EXPAND SOURCE: get all entities and facts from a specific evidence source.
-pub fn expand_source(
-    source_hint: &str,
-    ir: &KnowledgeIr,
-) -> (Vec<RankedEntity>, Vec<RankedFact>) {
+pub fn expand_source(source_hint: &str, ir: &KnowledgeIr) -> (Vec<RankedEntity>, Vec<RankedFact>) {
     let entities: Vec<RankedEntity> = ir
         .entities
         .iter()
@@ -441,7 +440,7 @@ pub fn expand_source(
             e.evidence
                 .document_id
                 .as_deref()
-                .map_or(false, |s| s.contains(source_hint))
+                .is_some_and(|s| s.contains(source_hint))
         })
         .map(|e| RankedEntity {
             name: e.name.clone(),
@@ -605,14 +604,12 @@ mod expansion_tests {
                     evidence: Evidence::default(),
                 },
             ],
-            facts: vec![
-                FactCandidate {
-                    statement: "must use MVCC for all writes".into(),
-                    entities: vec!["TransactionEngine".into()],
-                    confidence: 0.9,
-                    evidence: Evidence::default(),
-                },
-            ],
+            facts: vec![FactCandidate {
+                statement: "must use MVCC for all writes".into(),
+                entities: vec!["TransactionEngine".into()],
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            }],
             relations: vec![RelationCandidate {
                 subject: "ConstraintEngine".into(),
                 predicate: "depends_on".into(),
@@ -727,15 +724,13 @@ mod tests {
                     evidence: Evidence::default(),
                 },
             ],
-            relations: vec![
-                RelationCandidate {
-                    subject: "ConstraintEngine".into(),
-                    predicate: "DEPENDS_ON".into(),
-                    object: "TransactionEngine".into(),
-                    confidence: 0.8,
-                    evidence: Evidence::default(),
-                },
-            ],
+            relations: vec![RelationCandidate {
+                subject: "ConstraintEngine".into(),
+                predicate: "DEPENDS_ON".into(),
+                object: "TransactionEngine".into(),
+                confidence: 0.8,
+                evidence: Evidence::default(),
+            }],
             ..Default::default()
         }
     }
@@ -747,10 +742,19 @@ mod tests {
         assert!(!pkg.entities.is_empty());
         // Both ConstraintEngine and TransactionEngine should rank high (order depends on exact overlap)
         let names: Vec<&str> = pkg.entities.iter().map(|e| e.name.as_str()).collect();
-        assert!(names.contains(&"ConstraintEngine"), "should include ConstraintEngine");
-        assert!(names.contains(&"TransactionEngine"), "should include TransactionEngine");
+        assert!(
+            names.contains(&"ConstraintEngine"),
+            "should include ConstraintEngine"
+        );
+        assert!(
+            names.contains(&"TransactionEngine"),
+            "should include TransactionEngine"
+        );
         // AuthService should not rank for this task
-        assert!(!names.contains(&"AuthService"), "AuthService should NOT rank for constraint task");
+        assert!(
+            !names.contains(&"AuthService"),
+            "AuthService should NOT rank for constraint task"
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 //! Mnemosyne Scheduler Engine — background job execution.
+#![allow(clippy::len_without_is_empty)]
 //!
 //! Provides the `Scheduler` that manages pluggable background jobs, and
 //! `IndexMaintainer` (KE-driven async index maintenance) as the first

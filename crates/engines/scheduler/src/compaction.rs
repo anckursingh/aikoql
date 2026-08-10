@@ -82,8 +82,8 @@ fn compact(kernel: &Kernel) -> KResult<usize> {
     let heads = kernel.scan_heads()?;
     let mut count = 0;
     for (koid, _version, _ts, state) in &heads {
-        if *state == LifecycleState::Deleted {
-            if kernel
+        if *state == LifecycleState::Deleted
+            && kernel
                 .forget(
                     KnowledgeContext::new(Subject::new("compaction")),
                     koid,
@@ -92,9 +92,8 @@ fn compact(kernel: &Kernel) -> KResult<usize> {
                     Some("periodic compaction".into()),
                 )
                 .is_ok()
-            {
-                count += 1;
-            }
+        {
+            count += 1;
         }
     }
     Ok(count)

@@ -30,10 +30,7 @@ pub struct StalenessWarning {
 ///
 /// `source_labels`: labels for each facts source (e.g. "code" or "markdown").
 /// Must be same length as `facts` or empty (defaults to "unknown").
-pub fn detect_staleness(
-    facts: &[FactCandidate],
-    source_labels: &[&str],
-) -> Vec<StalenessWarning> {
+pub fn detect_staleness(facts: &[FactCandidate], source_labels: &[&str]) -> Vec<StalenessWarning> {
     let sources: Vec<&str> = if source_labels.len() == facts.len() {
         source_labels.to_vec()
     } else {
@@ -66,7 +63,7 @@ pub fn detect_staleness(
     }
 
     // Compare facts sharing the same entity key
-    for (_entity, pairs) in &by_entity {
+    for pairs in by_entity.values() {
         if pairs.len() < 2 {
             continue;
         }
@@ -83,12 +80,11 @@ pub fn detect_staleness(
                 }
 
                 // Higher confidence → more authoritative
-                let (authoritative, stale, auth_src, stale_src) =
-                    if a.confidence >= b.confidence {
-                        (a, b, src_a, src_b)
-                    } else {
-                        (b, a, src_b, src_a)
-                    };
+                let (authoritative, stale, auth_src, stale_src) = if a.confidence >= b.confidence {
+                    (a, b, src_a, src_b)
+                } else {
+                    (b, a, src_b, src_a)
+                };
 
                 // Determine severity
                 let severity = if contains_contradiction(&authoritative.statement, &stale.statement)
@@ -122,10 +118,8 @@ pub fn detect_staleness(
 
 /// Simple Jaccard similarity for short texts.
 fn similarity(a: &str, b: &str) -> f64 {
-    let a_words: std::collections::BTreeSet<&str> =
-        a.split_whitespace().collect();
-    let b_words: std::collections::BTreeSet<&str> =
-        b.split_whitespace().collect();
+    let a_words: std::collections::BTreeSet<&str> = a.split_whitespace().collect();
+    let b_words: std::collections::BTreeSet<&str> = b.split_whitespace().collect();
     let intersection = a_words.intersection(&b_words).count();
     let union = a_words.union(&b_words).count();
     if union == 0 {
@@ -180,8 +174,16 @@ mod tests {
     #[test]
     fn detects_staleness_when_facts_differ() {
         let facts = vec![
-            make_fact("The system uses MVCC for isolation", &["TransactionEngine"], 0.85),
-            make_fact("The system uses HNSW for isolation", &["TransactionEngine"], 0.6),
+            make_fact(
+                "The system uses MVCC for isolation",
+                &["TransactionEngine"],
+                0.85,
+            ),
+            make_fact(
+                "The system uses HNSW for isolation",
+                &["TransactionEngine"],
+                0.6,
+            ),
         ];
         let sources = &["code", "markdown"];
         let warnings = detect_staleness(&facts, sources);
@@ -204,11 +206,18 @@ mod tests {
     #[test]
     fn different_same_entity_facts_flag_divergence() {
         let facts = vec![
-            make_fact("The system uses MVCC for transaction isolation", &["Engine"], 0.85),
+            make_fact(
+                "The system uses MVCC for transaction isolation",
+                &["Engine"],
+                0.85,
+            ),
             make_fact("MVCC is used for isolation", &["Engine"], 0.6),
         ];
         let warnings = detect_staleness(&facts, &["code", "docs"]);
-        assert!(!warnings.is_empty(), "different facts about same entity should flag divergence");
+        assert!(
+            !warnings.is_empty(),
+            "different facts about same entity should flag divergence"
+        );
         assert_eq!(warnings[0].severity, "divergence");
     }
 

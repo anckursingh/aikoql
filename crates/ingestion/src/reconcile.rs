@@ -57,8 +57,7 @@ pub fn reconcile(changed_files: &[String], ir: &KnowledgeIr) -> ReconciliationRe
     // Build file → entity mapping from evidence paths
     // Each entity whose evidence.source matches a changed file is directly affected.
     let mut affected: Vec<AffectedEntity> = Vec::new();
-    let mut affected_names: std::collections::HashSet<&str> =
-        std::collections::HashSet::new();
+    let mut affected_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
     for entity in &ir.entities {
         let source = entity.evidence.document_id.as_deref().unwrap_or("");
@@ -137,8 +136,8 @@ pub fn reconcile(changed_files: &[String], ir: &KnowledgeIr) -> ReconciliationRe
     }
 
     // Backfill related_entities for direct-impact entries
-    for i in 0..affected.len() {
-        let name = affected[i].entity_name.clone();
+    for entry in &mut affected {
+        let name = entry.entity_name.clone();
         let related: Vec<String> = ir
             .relations
             .iter()
@@ -151,7 +150,7 @@ pub fn reconcile(changed_files: &[String], ir: &KnowledgeIr) -> ReconciliationRe
                 }
             })
             .collect();
-        affected[i].related_entities = related;
+        entry.related_entities = related;
     }
 
     // Collect all potentially stale facts
@@ -208,7 +207,8 @@ pub fn stale_entities(changed_files: &[String], ir: &KnowledgeIr) -> Vec<String>
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(src);
-            file_set.contains(src) || file_set.contains(bn)
+            file_set.contains(src)
+                || file_set.contains(bn)
                 || changed_files.iter().any(|f| f.ends_with(bn))
         })
         .map(|e| e.name.clone())
@@ -274,15 +274,13 @@ mod tests {
                     evidence: Evidence::default(),
                 },
             ],
-            relations: vec![
-                RelationCandidate {
-                    subject: "ConstraintEngine".into(),
-                    predicate: "depends_on".into(),
-                    object: "TransactionEngine".into(),
-                    confidence: 0.8,
-                    evidence: Evidence::default(),
-                },
-            ],
+            relations: vec![RelationCandidate {
+                subject: "ConstraintEngine".into(),
+                predicate: "depends_on".into(),
+                object: "TransactionEngine".into(),
+                confidence: 0.8,
+                evidence: Evidence::default(),
+            }],
             ..Default::default()
         }
     }
@@ -290,10 +288,7 @@ mod tests {
     #[test]
     fn reconcile_direct_change_finds_entity() {
         let ir = sample_ir();
-        let report = reconcile(
-            &["crates/kernel/src/transaction.rs".to_string()],
-            &ir,
-        );
+        let report = reconcile(&["crates/kernel/src/transaction.rs".to_string()], &ir);
         assert_eq!(report.changed_files.len(), 1);
         // TransactionEngine directly affected + ConstraintEngine indirectly (depends_on)
         let names: Vec<&str> = report
@@ -301,37 +296,34 @@ mod tests {
             .iter()
             .map(|e| e.entity_name.as_str())
             .collect();
-        assert!(names.contains(&"TransactionEngine"), "direct entity should be affected");
-        assert!(names.contains(&"ConstraintEngine"), "dependent entity should cascade");
+        assert!(
+            names.contains(&"TransactionEngine"),
+            "direct entity should be affected"
+        );
+        assert!(
+            names.contains(&"ConstraintEngine"),
+            "dependent entity should cascade"
+        );
     }
 
     #[test]
     fn reconcile_unrelated_file_no_impact() {
         let ir = sample_ir();
-        let report = reconcile(
-            &["README.md".to_string()],
-            &ir,
-        );
+        let report = reconcile(&["README.md".to_string()], &ir);
         assert!(report.affected_entities.is_empty());
     }
 
     #[test]
     fn stale_entities_detects_changed_sources() {
         let ir = sample_ir();
-        let stale = stale_entities(
-            &["crates/auth/src/lib.rs".to_string()],
-            &ir,
-        );
+        let stale = stale_entities(&["crates/auth/src/lib.rs".to_string()], &ir);
         assert_eq!(stale, vec!["AuthService"]);
     }
 
     #[test]
     fn reconcile_stale_facts_flagged() {
         let ir = sample_ir();
-        let report = reconcile(
-            &["crates/kernel/src/transaction.rs".to_string()],
-            &ir,
-        );
+        let report = reconcile(&["crates/kernel/src/transaction.rs".to_string()], &ir);
         assert!(
             report
                 .potentially_stale_facts

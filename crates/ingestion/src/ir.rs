@@ -208,6 +208,12 @@ pub struct MockSemanticAnalyzer {
     pub confidence: f32,
 }
 
+impl Default for MockSemanticAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockSemanticAnalyzer {
     pub fn new() -> Self {
         MockSemanticAnalyzer { confidence: 0.85 }
@@ -394,12 +400,12 @@ fn extract_capitalized_phrases(text: &str) -> Vec<String> {
     let mut i = 0;
     while i < words.len() {
         let w = &words[i];
-        if w.len() >= 2 && w.chars().next().map_or(false, |c| c.is_uppercase()) {
+        if w.len() >= 2 && w.chars().next().is_some_and(|c| c.is_uppercase()) {
             // Find the end of this capitalized run.
             let mut end = i + 1;
             while end < words.len() {
                 let next = &words[end];
-                if next.len() >= 2 && next.chars().next().map_or(false, |c| c.is_uppercase()) {
+                if next.len() >= 2 && next.chars().next().is_some_and(|c| c.is_uppercase()) {
                     end += 1;
                 } else {
                     break;
@@ -626,7 +632,7 @@ fn parse_iso_date(text: &str) -> (Option<String>, Option<String>) {
         // "QN YYYY"
         if parts[0].starts_with('Q') {
             let q: u32 = parts[0][1..].parse().unwrap_or(0);
-            if q >= 1 && q <= 4 {
+            if (1..=4).contains(&q) {
                 let (start_month, end_month) = match q {
                     1 => ("01", "03"),
                     2 => ("04", "06"),

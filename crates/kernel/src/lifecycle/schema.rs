@@ -40,9 +40,7 @@ impl SchemaRegistry {
             for prop_def in &schema.properties {
                 match ko.properties.get(&prop_def.name) {
                     Some(value) => {
-                        value
-                            .type_check(prop_def)
-                            .map_err(|msg| KError::InvalidSchema(msg))?;
+                        value.type_check(prop_def).map_err(KError::InvalidSchema)?;
                     }
                     None => {
                         if !skip_not_null && prop_def.required {

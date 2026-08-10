@@ -1,4 +1,5 @@
 #![recursion_limit = "512"]
+#![allow(clippy::too_many_arguments)]
 //! mnemosyne-mcp — MCP server for the Knowledge Kernel.
 //!
 //! Exposes the MRFC-0011 Class A syscalls as MCP tools over the stdio
@@ -13,6 +14,7 @@ mod api_rest;
 mod error_codes;
 mod graph_ui;
 mod knowledge_runtime;
+mod rate_limiter;
 mod shell;
 mod studio;
 
@@ -139,7 +141,21 @@ fn main() {
         Some("ingest-dir") => {
             let path = arg_after.unwrap_or(".");
             let db = arg_after2.unwrap_or("./mnemosyne.redb");
-            run_ingest_dir(path, db);
+            let mut parallel = false;
+            let mut incremental = false;
+            let tail_args: Vec<&str> = args
+                .iter()
+                .skip(subcmd_idx.unwrap() + 2)
+                .map(String::as_str)
+                .collect();
+            for a in &tail_args {
+                if *a == "--parallel" {
+                    parallel = true;
+                } else if *a == "--incremental" {
+                    incremental = true;
+                }
+            }
+            run_ingest_dir(path, db, parallel, incremental);
             return;
         }
         Some("report") => {
@@ -464,10 +480,15 @@ fn main() {
                     .collect();
                 let candidate = if !manual.is_empty() {
                     // Prefer the latest manually-created ontology.
-                    manual.into_iter().max_by_key(|ko| ko.commit_ts).unwrap()
+                    manual
+                        .into_iter()
+                        .max_by_key(|ko| ko.commit_ts)
+                        .expect("manual is non-empty")
                 } else {
                     // Fall back to latest auto-discovered.
-                    kos.iter().max_by_key(|ko| ko.commit_ts).unwrap()
+                    kos.iter()
+                        .max_by_key(|ko| ko.commit_ts)
+                        .expect("kos is non-empty")
                 };
                 match OntologyDef::from_ko(candidate) {
                     Ok(def) => {
@@ -584,7 +605,7 @@ fn print_usage() {
         "  audit [DB]             Print encryption compliance report\n",
         "  keygen [PATH]          Generate an encryption master key\n",
         "  import <SOURCE> [ARGS]  Import from DB (postgres, sqlite, mongodb)\n",
-        "  ingest-dir [PATH] [DB] Ingest directory into knowledge base\n",
+        "  ingest-dir [PATH] [DB] [--parallel] [--incremental] Ingest directory into knowledge base\n",
         "  report [PATH]          Print knowledge report for directory\n",
         "\n",
         "Server options (serve mode):\n",
@@ -602,8 +623,10 @@ fn print_usage() {
         "  mnemosyne-mcp audit                           # Compliance report\n",
         "  mnemosyne-mcp keygen ./master.key             # Generate key\n",
         "  mnemosyne-mcp import 'host=localhost db=mydb'   # Import from PostgreSQL\n",
-        "  mnemosyne-mcp ingest-dir                        # Ingest CWD\n",
+        "  mnemosyne-mcp ingest-dir                        # Ingest CWD (sequential)\n",
         "  mnemosyne-mcp ingest-dir ~/my-project            # Ingest specific path\n",
+        "  mnemosyne-mcp ingest-dir . --parallel            # Parallel ingestion\n",
+        "  mnemosyne-mcp ingest-dir . --incremental         # Incremental (git-tracked)\n",
         "  mnemosyne-mcp report                            # Report on CWD\n",
         "  mnemosyne-mcp report ~/my-project                # Report on specific path\n",
     ));
@@ -722,14 +745,37 @@ fn run_report(path: &str) {
     println!("{}", mnemosyne_ingestion::format_report(&report));
 }
 
-fn run_ingest_dir(path: &str, db_path: &str) {
+fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) {
     eprintln!("Ingesting directory: {}\n", path);
 
-    let result = match mnemosyne_ingestion::ingest_directory(path) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
+    let result = if incremental {
+        eprintln!("Mode: incremental");
+        match mnemosyne_ingestion::incremental_ingest_directory(path) {
+            Ok((r, full)) => {
+                eprintln!("({} ingest)\n", if full { "full" } else { "incremental" });
+                r
+            }
+            Err(e) => {
+                eprintln!("Incremental skipped: {}", e);
+                return;
+            }
+        }
+    } else if parallel {
+        eprintln!("Mode: parallel");
+        match mnemosyne_ingestion::parallel_ingest_directory(path) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        match mnemosyne_ingestion::ingest_directory(path) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
     };
 
@@ -745,15 +791,25 @@ fn run_ingest_dir(path: &str, db_path: &str) {
 
     // Store as a Knowledge Object in the database.
     let engine = RedbEngine::open(db_path).expect("open db");
-    let kernel = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let kernel =
+        Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
     let subj = Subject::with_roles("ingest-dir", &["admin"]);
 
     let ir_json = serde_json::to_string(&result.ir).unwrap_or_default();
     let mut props = PropertyMap::new();
     props.insert("source_path".into(), Value::Text(path.to_string()));
-    props.insert("entity_count".into(), Value::Int(result.ir.entities.len() as i64));
-    props.insert("fact_count".into(), Value::Int(result.ir.facts.len() as i64));
-    props.insert("relation_count".into(), Value::Int(result.ir.relations.len() as i64));
+    props.insert(
+        "entity_count".into(),
+        Value::Int(result.ir.entities.len() as i64),
+    );
+    props.insert(
+        "fact_count".into(),
+        Value::Int(result.ir.facts.len() as i64),
+    );
+    props.insert(
+        "relation_count".into(),
+        Value::Int(result.ir.relations.len() as i64),
+    );
     props.insert("ir_json".into(), Value::Text(ir_json));
 
     match kernel.remember(RememberRequest {
@@ -841,8 +897,8 @@ fn run_pg_import(
     let mut total_imported = 0usize;
 
     for schema in &schemas {
-        if let Some(ref tf) = table_filter {
-            if schema.name != *tf {
+        if let Some(tf) = table_filter {
+            if schema.name != tf {
                 continue;
             }
         }
@@ -940,8 +996,8 @@ fn run_sqlite_import(
     let mut total_imported = 0usize;
 
     for schema in &schemas {
-        if let Some(ref tf) = table_filter {
-            if schema.name != *tf {
+        if let Some(tf) = table_filter {
+            if schema.name != tf {
                 continue;
             }
         }
@@ -1038,8 +1094,8 @@ fn run_mongo_import(
     let mut total_imported = 0usize;
 
     for schema in &schemas {
-        if let Some(ref cf) = coll_filter {
-            if schema.name != *cf {
+        if let Some(cf) = coll_filter {
+            if schema.name != cf {
                 continue;
             }
         }
@@ -1315,7 +1371,13 @@ fn handle_message(
     let id = msg.get("id").cloned();
     let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
 
-    // Rate limiting: count tool calls per connection.
+    // Rate limiting: process-local sliding-window counter.
+    //
+    // Scope: This limiter is per-process. In a multi-instance deployment
+    // (load balancer → N instances), each instance independently allows
+    // the configured limit. For global rate limiting, use a shared
+    // Redis-backed `RateLimiter` impl (see rate_limiter.rs) or gateway-level
+    // enforcement.
     if method == "tools/call" {
         let count = rate_limits.entry("_connection".into()).or_insert(0);
         *count += 1;
@@ -1558,7 +1620,7 @@ fn notification_subscribe(
                 json!({
                     "jsonrpc": "2.0",
                     "method": "notifications/notify",
-                    "params": {"id": id.clone(), "event": ke_json(&ke)}
+                    "params": {"id": id.clone(), "event": ke_json(ke)}
                 }),
             );
         }
@@ -1759,7 +1821,10 @@ fn check_rate(agent_id: &str, roles: &[String], max_per_minute: u32) -> Result<(
     } else {
         let count = store.get(agent_id).map(|(_, c)| *c).unwrap_or(0);
         if count >= max_per_minute {
-            return Err((-32002, format!("rate limit exceeded: {} calls/min", max_per_minute)));
+            return Err((
+                -32002,
+                format!("rate limit exceeded: {} calls/min", max_per_minute),
+            ));
         }
         let start = store.get(agent_id).unwrap().0;
         store.insert(agent_id.to_string(), (start, count + 1));
@@ -1794,6 +1859,7 @@ fn call_tool(
         "trace" => tool_trace(k, args),
         "explain" => tool_explain(k, args),
         "prove" => tool_prove(k, args),
+        "provenance" => tool_provenance(k, args),
         "relate" => tool_relate(k, args),
         "traverse" => tool_traverse(k, args),
         "eval_recall" => tool_eval_recall(k, args),
@@ -1863,7 +1929,13 @@ fn call_tool(
     };
     let wrapped = error_codes::wrap_result(res);
     if wrapped["ok"] == true {
-        audit_log(db_path, &session.agent_id, name, "ok", &tool_detail(name, args));
+        audit_log(
+            db_path,
+            &session.agent_id,
+            name,
+            "ok",
+            &tool_detail(name, args),
+        );
         Ok(json!({
             "content": [{"type": "text", "text": wrapped["data"].to_string()}],
             "isError": false
@@ -2207,7 +2279,7 @@ fn tool_forget(k: &Kernel, args: &J) -> Result<J, String> {
     };
     let f = k
         .forget(
-            &subject_of(args),
+            subject_of(args),
             &koid_of(args)?,
             mode,
             args.get("expected_version").and_then(|v| v.as_u64()),
@@ -2220,7 +2292,7 @@ fn tool_forget(k: &Kernel, args: &J) -> Result<J, String> {
 fn tool_evolve(k: &Kernel, args: &J) -> Result<J, String> {
     let e = k
         .evolve(
-            &subject_of(args),
+            subject_of(args),
             &koid_of(args)?,
             parse_state(args)?,
             parse_origin(args),
@@ -2237,14 +2309,14 @@ fn tool_evolve(k: &Kernel, args: &J) -> Result<J, String> {
 }
 
 fn tool_verify(k: &Kernel, args: &J) -> Result<J, String> {
-    k.verify(&subject_of(args), &koid_of(args)?, parse_action(args)?)
+    k.verify(subject_of(args), &koid_of(args)?, parse_action(args)?)
         .map_err(|e| e.to_string())?;
     Ok(json!({"allowed": true}))
 }
 
 fn tool_get(k: &Kernel, args: &J) -> Result<J, String> {
     let ko = k
-        .get(&subject_of(args), &koid_of(args)?)
+        .get(subject_of(args), &koid_of(args)?)
         .map_err(|e| e.to_string())?;
     Ok(ko_json(&ko))
 }
@@ -2335,7 +2407,7 @@ fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
 
 fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
     let lin = k
-        .trace(&subject_of(args), &koid_of(args)?)
+        .trace(subject_of(args), &koid_of(args)?)
         .map_err(|e| e.to_string())?;
     Ok(json!({
         "koid": lin.koid.to_hex(),
@@ -2351,7 +2423,7 @@ fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
 fn tool_explain(k: &Kernel, args: &J) -> Result<J, String> {
     let ex = k
         .explain(
-            &subject_of(args),
+            subject_of(args),
             &koid_of(args)?,
             args.get("version").and_then(|v| v.as_u64()),
         )
@@ -2368,9 +2440,54 @@ fn tool_explain(k: &Kernel, args: &J) -> Result<J, String> {
     }))
 }
 
+fn tool_provenance(k: &Kernel, args: &J) -> Result<J, String> {
+    let koid = koid_of(args)?;
+    let ex = k
+        .explain(subject_of(args), &koid, None)
+        .map_err(|e| e.to_string())?;
+    let trace = k
+        .trace(subject_of(args), &koid)
+        .map_err(|e| e.to_string())?;
+
+    let mut md = format!("## Provenance for `{}`\n\n", koid.to_hex());
+    md.push_str(&format!(
+        "- **Version:** {}\n- **Origin:** {:?}\n- **Source:** {}\n- **Confidence:** {:.2}\n- **Verified:** {}\n\n",
+        ex.version,
+        ex.origin,
+        ex.source.as_deref().unwrap_or("unknown"),
+        ex.confidence.unwrap_or(0.0),
+        ex.verified,
+    ));
+
+    if !ex.evidence.is_empty() {
+        md.push_str("### Evidence Chain\n\n");
+        for (i, (rel_type, target)) in ex.evidence.iter().enumerate() {
+            md.push_str(&format!(
+                "{}. `{}` → `{}`\n",
+                i + 1,
+                rel_type,
+                target.to_hex()
+            ));
+        }
+        md.push('\n');
+    }
+
+    if !trace.events.is_empty() {
+        md.push_str("### Audit Trail\n\n");
+        for evt in &trace.events {
+            md.push_str(&format!(
+                "- `{:?}` @ seq={} commit_ts={}\n",
+                evt.kind, evt.seq, evt.commit_ts
+            ));
+        }
+    }
+
+    Ok(json!({"koid": koid.to_hex(), "provenance": md}))
+}
+
 fn tool_prove(k: &Kernel, args: &J) -> Result<J, String> {
     let p = k
-        .prove(&subject_of(args), &koid_of(args)?)
+        .prove(subject_of(args), &koid_of(args)?)
         .map_err(|e| e.to_string())?;
     Ok(json!({
         "claim": p.claim.to_hex(),
@@ -2637,25 +2754,34 @@ fn tool_backup(k: &Kernel, db_path: &str) -> Result<J, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs();
-    let backup_dir = format!("{}.backup.{}", db_path, ts);
+    use std::path::{Path, PathBuf};
+    let src = Path::new(db_path);
+    let backup_dir: PathBuf = {
+        let mut p = src.as_os_str().to_os_string();
+        p.push(format!(".backup.{}", ts));
+        PathBuf::from(p)
+    };
     std::fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
 
-    // Copy the database file.
-    let data_path = format!("{}/data.redb", backup_dir);
-    std::fs::copy(db_path, &data_path).map_err(|e| e.to_string())?;
+    // Copy the database file — use filename from source for multi-file db support.
+    let src_file = src.file_name().ok_or("invalid db path: no filename")?;
+    let dest_path = backup_dir.join(src_file);
+    std::fs::copy(src, &dest_path).map_err(|e| e.to_string())?;
 
     // Record source metadata.
     let (seq, _audit) = k.journal_head().map_err(|e| e.to_string())?;
     let obj_count = k.scan_heads().map_err(|e| e.to_string())?.len();
+    let meta_path = backup_dir.join("meta.json");
     std::fs::write(
-        format!("{}/meta.json", backup_dir),
+        &meta_path,
         json!({"timestamp": ts, "source": db_path, "journal_seq": seq, "object_count": obj_count})
             .to_string(),
     )
     .map_err(|e| e.to_string())?;
 
     // Verify: open backup in a temp kernel and check integrity.
-    let verified = verify_backup_file(&data_path, seq, obj_count);
+    let dest_str = dest_path.to_string_lossy().to_string();
+    let verified = verify_backup_file(&dest_str, seq, obj_count);
 
     Ok(
         json!({"backup": backup_dir, "timestamp": ts, "journal_seq": seq, "object_count": obj_count, "verified": verified}),
@@ -2966,12 +3092,12 @@ fn tool_evaluate_policies(k: &Kernel, args: &J) -> Result<J, String> {
         .get("resource_type")
         .and_then(|v| v.as_str())
         .ok_or("missing: resource_type")?;
-    let action = match action_str {
-        "Read" => Action::Read,
-        "Write" => Action::Write,
-        "Admin" => Action::Admin,
-        "Evolve" => Action::Evolve,
-        "Delete" => Action::Delete,
+    let action = match action_str.to_lowercase().as_str() {
+        "read" => Action::Read,
+        "write" => Action::Write,
+        "admin" => Action::Admin,
+        "evolve" => Action::Evolve,
+        "delete" => Action::Delete,
         _ => return Err(format!("unknown action: {}", action_str)),
     };
     let result = k
@@ -3040,10 +3166,10 @@ fn tool_add_dependency(k: &Kernel, args: &J) -> Result<J, String> {
     let src = KOID::from_hex(src_hex).map_err(|e| e.to_string())?;
     let tgt = KOID::from_hex(tgt_hex).map_err(|e| e.to_string())?;
     let req = RelateRequest::new(
-        &subject_of(args),
+        subject_of(args),
         src,
         tgt,
-        &format!("DEPENDS_ON_{}", dep_type),
+        format!("DEPENDS_ON_{}", dep_type),
     );
     let r = k.relate(req).map_err(|e| e.to_string())?;
     Ok(json!({"koid": r.koid.to_hex(), "version": r.version}))
@@ -3077,7 +3203,7 @@ fn tool_execution_stats() -> Result<J, String> {
         "programs_executed": s.programs_executed,
         "total_rows": s.total_rows_returned,
         "total_time_ms": s.total_time_ms,
-        "avg_time_ms": if s.programs_executed > 0 { s.total_time_ms / s.programs_executed } else { 0 },
+        "avg_time_ms": s.total_time_ms.checked_div(s.programs_executed).unwrap_or(0),
         "cache_hits": s.cache_hits,
         "cache_misses": s.cache_misses,
         "cache_hit_rate": if s.cache_hits + s.cache_misses > 0 {
@@ -3480,22 +3606,17 @@ fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Result<J, Strin
     }
 
     // Markdown: use semantic compiler
-    let is_markdown = mime_type.contains("markdown")
-        || mime_type == "text/md"
-        || artifact_path.ends_with(".md");
+    let is_markdown =
+        mime_type.contains("markdown") || mime_type == "text/md" || artifact_path.ends_with(".md");
 
     // Rust source: use code-to-knowledge compiler
-    let is_rust = mime_type.contains("rust")
-        || artifact_path.ends_with(".rs");
+    let is_rust = mime_type.contains("rust") || artifact_path.ends_with(".rs");
 
     let mut result = if is_markdown {
-        let content = std::fs::read_to_string(&artifact_path)
-            .map_err(|e| format!("read markdown: {}", e))?;
-        let ir = mnemosyne_ingestion::compile_markdown_string(
-            &content,
-            Some(hex.to_string()),
-        )
-        .map_err(|e| format!("markdown compile: {}", e))?;
+        let content =
+            std::fs::read_to_string(&artifact_path).map_err(|e| format!("read markdown: {}", e))?;
+        let ir = mnemosyne_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
+            .map_err(|e| format!("markdown compile: {}", e))?;
         let ir_json = serde_json::to_value(&ir).unwrap_or_default();
         serde_json::json!({
             "markdown_ir": ir_json,
@@ -3559,56 +3680,7 @@ fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Result<J, String
         .and_then(|v| v.as_u64())
         .unwrap_or(2000) as usize;
 
-    let koid = KOID::from_hex(hex).map_err(|e| e.to_string())?;
-    let ctx = KnowledgeContext::from(subject_of(args));
-    let ko = k.get(ctx, &koid).map_err(|e| e.to_string())?;
-
-    let sha256 = ko
-        .properties
-        .get("sha256")
-        .and_then(|v| match v {
-            Value::Text(s) => Some(s.clone()),
-            _ => None,
-        })
-        .ok_or("document missing sha256 property")?;
-    let mime_type = ko
-        .properties
-        .get("mime_type")
-        .and_then(|v| match v {
-            Value::Text(s) => Some(s.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| "application/octet-stream".into());
-
-    let artifact_path = format!("{}.artifacts/{}", db_path, sha256);
-    if !std::path::Path::new(&artifact_path).exists() {
-        return Err(format!("artifact not found: {}", artifact_path));
-    }
-
-    // Compile the document into KnowledgeIr
-    let ir = if mime_type.contains("markdown")
-        || mime_type == "text/md"
-        || artifact_path.ends_with(".md")
-    {
-        let content = std::fs::read_to_string(&artifact_path)
-            .map_err(|e| format!("read markdown: {}", e))?;
-        mnemosyne_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
-            .map_err(|e| format!("markdown compile: {}", e))
-    } else if mime_type.contains("rust") || artifact_path.ends_with(".rs") {
-        mnemosyne_ingestion::compile_rust_file(&artifact_path)
-            .map_err(|e| format!("rust compile: {}", e))
-    } else {
-        let doc = mnemosyne_ingestion::extract_document(&artifact_path, &mime_type)
-            .map_err(|e| format!("extract: {}", e))?;
-        let cr = mnemosyne_ingestion::compile_document_mock(&doc, &[]);
-        Ok(mnemosyne_ingestion::KnowledgeIr {
-            facts: serde_json::from_value(
-                serde_json::to_value(&cr).unwrap_or_default(),
-            )
-            .unwrap_or_default(),
-            ..Default::default()
-        })
-    }?;
+    let ir = get_ir_for_koid(k, args, db_path)?;
 
     // Compile context package
     let pkg = mnemosyne_ingestion::compile_context(task, &ir, token_budget);
@@ -3638,55 +3710,7 @@ fn tool_reconcile(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
         .filter_map(|v| v.as_str().map(String::from))
         .collect();
 
-    let koid = KOID::from_hex(hex).map_err(|e| e.to_string())?;
-    let ctx = KnowledgeContext::from(subject_of(args));
-    let ko = k.get(ctx, &koid).map_err(|e| e.to_string())?;
-
-    let sha256 = ko
-        .properties
-        .get("sha256")
-        .and_then(|v| match v {
-            Value::Text(s) => Some(s.clone()),
-            _ => None,
-        })
-        .ok_or("document missing sha256 property")?;
-    let mime_type = ko
-        .properties
-        .get("mime_type")
-        .and_then(|v| match v {
-            Value::Text(s) => Some(s.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| "application/octet-stream".into());
-
-    let artifact_path = format!("{}.artifacts/{}", db_path, sha256);
-    if !std::path::Path::new(&artifact_path).exists() {
-        return Err(format!("artifact not found: {}", artifact_path));
-    }
-
-    let ir = if mime_type.contains("markdown")
-        || mime_type == "text/md"
-        || artifact_path.ends_with(".md")
-    {
-        let content = std::fs::read_to_string(&artifact_path)
-            .map_err(|e| format!("read markdown: {}", e))?;
-        mnemosyne_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
-            .map_err(|e| format!("markdown compile: {}", e))
-    } else if mime_type.contains("rust") || artifact_path.ends_with(".rs") {
-        mnemosyne_ingestion::compile_rust_file(&artifact_path)
-            .map_err(|e| format!("rust compile: {}", e))
-    } else {
-        let doc = mnemosyne_ingestion::extract_document(&artifact_path, &mime_type)
-            .map_err(|e| format!("extract: {}", e))?;
-        let cr = mnemosyne_ingestion::compile_document_mock(&doc, &[]);
-        Ok(mnemosyne_ingestion::KnowledgeIr {
-            facts: serde_json::from_value(
-                serde_json::to_value(&cr).unwrap_or_default(),
-            )
-            .unwrap_or_default(),
-            ..Default::default()
-        })
-    }?;
+    let ir = get_ir_for_koid(k, args, db_path)?;
 
     let report = mnemosyne_ingestion::reconcile(&files, &ir);
     let report_json = serde_json::to_value(&report).unwrap_or_default();
@@ -3742,21 +3766,23 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
             .map(|a| {
                 a.iter()
                     .map(|r| mnemosyne_ingestion::ReferenceInfo {
-                        from_container: r["from_container"]
-                            .as_str()
-                            .unwrap_or("?")
-                            .to_string(),
+                        from_container: r["from_container"].as_str().unwrap_or("?").to_string(),
                         from_fields: r["from_fields"]
                             .as_array()
-                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect()
+                            })
                             .unwrap_or_default(),
-                        to_container: r["to_container"]
-                            .as_str()
-                            .unwrap_or("?")
-                            .to_string(),
+                        to_container: r["to_container"].as_str().unwrap_or("?").to_string(),
                         to_fields: r["to_fields"]
                             .as_array()
-                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect()
+                            })
                             .unwrap_or_default(),
                         name: r["name"].as_str().map(String::from),
                     })
@@ -3796,7 +3822,11 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
 // A6: AIKOQL Agent Operations — 7 semantic query tools.
 // All follow the same pattern: get koid → compile KnowledgeIr → run op.
 
-fn get_ir_for_koid(k: &Kernel, args: &J, db_path: &str) -> Result<mnemosyne_ingestion::KnowledgeIr, String> {
+fn get_ir_for_koid(
+    k: &Kernel,
+    args: &J,
+    db_path: &str,
+) -> Result<mnemosyne_ingestion::KnowledgeIr, String> {
     let hex = args
         .get("koid")
         .and_then(|v| v.as_str())
@@ -3804,73 +3834,89 @@ fn get_ir_for_koid(k: &Kernel, args: &J, db_path: &str) -> Result<mnemosyne_inge
     let koid = KOID::from_hex(hex).map_err(|e| e.to_string())?;
     let ctx = KnowledgeContext::from(subject_of(args));
     let ko = k.get(ctx, &koid).map_err(|e| e.to_string())?;
-    let sha256 = ko
-        .properties
-        .get("sha256")
-        .and_then(|v| match v {
-            Value::Text(s) => Some(s.clone()),
-            _ => None,
-        })
-        .ok_or("document missing sha256 property")?;
-    let mime_type = ko
-        .properties
-        .get("mime_type")
-        .and_then(|v| match v {
-            Value::Text(s) => Some(s.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| "application/octet-stream".into());
-    let artifact_path = format!("{}.artifacts/{}", db_path, sha256);
-    if !std::path::Path::new(&artifact_path).exists() {
-        return Err(format!("artifact not found: {}", artifact_path));
+
+    // Path 1: Document KO with sha256 → read artifact → re-compile.
+    if let Some(Value::Text(sha256)) = ko.properties.get("sha256") {
+        let mime_type = ko
+            .properties
+            .get("mime_type")
+            .and_then(|v| match v {
+                Value::Text(s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "application/octet-stream".into());
+        let artifact_path = format!("{}.artifacts/{}", db_path, sha256);
+        if !std::path::Path::new(&artifact_path).exists() {
+            return Err(format!("artifact not found: {}", artifact_path));
+        }
+        return if mime_type.contains("markdown")
+            || mime_type == "text/md"
+            || artifact_path.ends_with(".md")
+        {
+            let content = std::fs::read_to_string(&artifact_path)
+                .map_err(|e| format!("read markdown: {}", e))?;
+            mnemosyne_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
+                .map_err(|e| format!("markdown compile: {}", e))
+        } else if mime_type.contains("rust") || artifact_path.ends_with(".rs") {
+            mnemosyne_ingestion::compile_rust_file(&artifact_path)
+                .map_err(|e| format!("rust compile: {}", e))
+        } else {
+            let doc = mnemosyne_ingestion::extract_document(&artifact_path, &mime_type)
+                .map_err(|e| format!("extract: {}", e))?;
+            let cr = mnemosyne_ingestion::compile_document_mock(&doc, &[]);
+            Ok(mnemosyne_ingestion::KnowledgeIr {
+                facts: serde_json::from_value(serde_json::to_value(&cr).unwrap_or_default())
+                    .unwrap_or_default(),
+                ..Default::default()
+            })
+        };
     }
-    if mime_type.contains("markdown") || mime_type == "text/md" || artifact_path.ends_with(".md") {
-        let content = std::fs::read_to_string(&artifact_path)
-            .map_err(|e| format!("read markdown: {}", e))?;
-        mnemosyne_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
-            .map_err(|e| format!("markdown compile: {}", e))
-    } else if mime_type.contains("rust") || artifact_path.ends_with(".rs") {
-        mnemosyne_ingestion::compile_rust_file(&artifact_path)
-            .map_err(|e| format!("rust compile: {}", e))
-    } else {
-        let doc = mnemosyne_ingestion::extract_document(&artifact_path, &mime_type)
-            .map_err(|e| format!("extract: {}", e))?;
-        let cr = mnemosyne_ingestion::compile_document_mock(&doc, &[]);
-        Ok(mnemosyne_ingestion::KnowledgeIr {
-            facts: serde_json::from_value(
-                serde_json::to_value(&cr).unwrap_or_default(),
-            )
-            .unwrap_or_default(),
-            ..Default::default()
-        })
+
+    // Path 2: Direct KO with ir_json (from remember/ingest-dir) → deserialize.
+    if let Some(Value::Text(ir_json)) = ko.properties.get("ir_json") {
+        return serde_json::from_str(ir_json).map_err(|e| format!("deserialize ir_json: {}", e));
     }
+
+    Err("KO has neither sha256 (document) nor ir_json (direct knowledge) — use document_ingest or ingest-dir first".into())
 }
 
 fn tool_explain_component(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
-    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: name")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
-    let explanation =
-        mnemosyne_ingestion::explain_component(name, &ir).ok_or_else(|| format!("component '{}' not found", name))?;
+    let explanation = mnemosyne_ingestion::explain_component(name, &ir)
+        .ok_or_else(|| format!("component '{}' not found", name))?;
     Ok(serde_json::to_value(&explanation).unwrap_or_default())
 }
 
 fn tool_explain_decision(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
-    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: name")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
-    let explanation =
-        mnemosyne_ingestion::explain_decision(name, &ir).ok_or_else(|| format!("decision '{}' not found", name))?;
+    let explanation = mnemosyne_ingestion::explain_decision(name, &ir)
+        .ok_or_else(|| format!("decision '{}' not found", name))?;
     Ok(serde_json::to_value(&explanation).unwrap_or_default())
 }
 
 fn tool_trace_requirement(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
-    let req_id = args.get("requirement").and_then(|v| v.as_str()).ok_or("missing: requirement")?;
+    let req_id = args
+        .get("requirement")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: requirement")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
     let trace = mnemosyne_ingestion::trace_requirement(req_id, &ir);
     Ok(serde_json::to_value(&trace).unwrap_or_default())
 }
 
 fn tool_find_conflicts(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
-    let component = args.get("component").and_then(|v| v.as_str()).ok_or("missing: component")?;
+    let component = args
+        .get("component")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: component")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
     let conflicts = mnemosyne_ingestion::find_conflicts(component, &ir);
     Ok(serde_json::to_value(&conflicts).unwrap_or_default())
@@ -3883,14 +3929,20 @@ fn tool_find_stale(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
 }
 
 fn tool_validate_change(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
-    let description = args.get("change").and_then(|v| v.as_str()).ok_or("missing: change")?;
+    let description = args
+        .get("change")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: change")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
     let validation = mnemosyne_ingestion::validate_change(description, &ir);
     Ok(serde_json::to_value(&validation).unwrap_or_default())
 }
 
 fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
-    let action_str = args.get("action").and_then(|v| v.as_str()).ok_or("missing: action")?;
+    let action_str = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: action")?;
     let action = match action_str {
         "add_fact" => mnemosyne_ingestion::ProposalAction::AddFact,
         "remove_fact" => mnemosyne_ingestion::ProposalAction::RemoveFact,
@@ -3899,16 +3951,27 @@ fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String>
         "remove_relation" => mnemosyne_ingestion::ProposalAction::RemoveRelation,
         _ => return Err(format!("unknown action: {}", action_str)),
     };
-    let target = args.get("target_entity").and_then(|v| v.as_str()).map(String::from);
+    let target = args
+        .get("target_entity")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let new_facts: Vec<String> = args
         .get("new_facts")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     let remove_facts: Vec<String> = args
         .get("remove_facts")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     let new_relations: Vec<(String, String, String)> = args
         .get("new_relations")
@@ -3918,7 +3981,7 @@ fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String>
                 .filter_map(|v| {
                     let arr = v.as_array()?;
                     Some((
-                        arr.get(0)?.as_str()?.to_string(),
+                        arr.first()?.as_str()?.to_string(),
                         arr.get(1)?.as_str()?.to_string(),
                         arr.get(2)?.as_str()?.to_string(),
                     ))
@@ -4122,7 +4185,7 @@ fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> {
         .map(|ko| json!({
             "koid": ko.koid.to_hex(),
             "key": ko.properties.get("key").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }),
-            "value": ko.properties.get("value").map(|v| value_to_json(v)),
+            "value": ko.properties.get("value").map(value_to_json),
             "ttl": ko.properties.get("ttl").and_then(|v| match v { Value::Int(i) => Some(i), _ => None }),
         }))
         .collect();
@@ -4135,7 +4198,12 @@ fn resolve_memory_dir(args: &J) -> String {
     args.get("memory_dir")
         .and_then(|v| v.as_str())
         .map(String::from)
-        .unwrap_or_else(|| MEMORY_DIR.get().cloned().unwrap_or_else(|| "./memory".into()))
+        .unwrap_or_else(|| {
+            MEMORY_DIR
+                .get()
+                .cloned()
+                .unwrap_or_else(|| "./memory".into())
+        })
 }
 
 fn parse_memory_frontmatter(raw: &str) -> Option<(String, String, String)> {
@@ -4157,14 +4225,23 @@ fn parse_memory_frontmatter(raw: &str) -> Option<(String, String, String)> {
             mtype = v.trim().trim_matches('"').to_string();
         }
     }
-    if name.is_empty() { None } else { Some((name, desc, mtype)) }
+    if name.is_empty() {
+        None
+    } else {
+        Some((name, desc, mtype))
+    }
 }
 
 fn tool_memory_search(args: &J) -> Result<J, String> {
-    let query = args.get("query").and_then(|v| v.as_str()).ok_or("missing: query")?;
-    let max_results = args.get("max_results").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: query")?;
+    let max_results = args
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10) as usize;
     let dir = resolve_memory_dir(args);
-    let query_lower = query.to_lowercase();
 
     let mut results: Vec<J> = Vec::new();
     let entries = match std::fs::read_dir(&dir) {
@@ -4174,34 +4251,55 @@ fn tool_memory_search(args: &J) -> Result<J, String> {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
         let fname = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        if fname == "MEMORY" { continue; }
+        if fname == "MEMORY" {
+            continue;
+        }
         let raw = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(_) => continue,
         };
-        let (name, desc, _mtype) = parse_memory_frontmatter(&raw).unwrap_or_else(|| {
-            (fname.to_string(), String::new(), String::new())
-        });
+        let (name, desc, _mtype) = parse_memory_frontmatter(&raw)
+            .unwrap_or_else(|| (fname.to_string(), String::new(), String::new()));
 
-        // Score: name match > description match > body match
-        let name_score = if name.to_lowercase().contains(&query_lower) { 3.0 } else { 0.0 };
-        let desc_score = if desc.to_lowercase().contains(&query_lower) { 2.0 } else { 0.0 };
-        let body_score = {
-            let body_lower = raw.to_lowercase();
-            let c = body_lower.matches(&query_lower).count();
-            (c as f64) * 0.5
+        // Tokenized scoring: split both query and candidate on
+        // whitespace/hyphens/underscores, score by token intersection.
+        // "dogfooding e2e test" matches "e2e-dogfooding-session" because
+        // tokens {dogfooding, e2e, test} ∩ {e2e, dogfooding, session} = {dogfooding, e2e}.
+        fn tokenize(s: &str) -> Vec<String> {
+            s.to_lowercase()
+                .split(|c: char| c.is_whitespace() || c == '-' || c == '_')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        }
+        let query_tokens: Vec<String> = tokenize(query);
+        let token_score = |text: &str, weight: f64| -> f64 {
+            let text_tokens = tokenize(text);
+            if text_tokens.is_empty() || query_tokens.is_empty() {
+                return 0.0;
+            }
+            let hits = query_tokens
+                .iter()
+                .filter(|qt| text_tokens.contains(qt))
+                .count();
+            (hits as f64) / (query_tokens.len() as f64) * weight
         };
+        let name_score = token_score(&name, 3.0);
+        let desc_score = token_score(&desc, 2.0);
+        let body_score = token_score(&raw, 0.5);
         let score = name_score + desc_score + body_score;
 
         if score > 0.0 {
-            // Extract snippet: first line in body that contains query, or first body line
+            // Extract snippet: first line in body that matches a query token
             let body_start = raw.find("\n---").map(|i| i + 4).unwrap_or(0);
             let body_text = &raw[body_start..];
             let snippet = body_text
                 .lines()
-                .find(|l| l.to_lowercase().contains(&query_lower))
+                .find(|l| query_tokens.iter().any(|qt| l.to_lowercase().contains(qt)))
                 .unwrap_or_else(|| body_text.lines().next().unwrap_or(""))
                 .trim()
                 .to_string();
@@ -4221,25 +4319,46 @@ fn tool_memory_search(args: &J) -> Result<J, String> {
         }
     }
 
-    results.sort_by(|a, b| b["score"].as_f64().unwrap_or(0.0).partial_cmp(&a["score"].as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b["score"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .partial_cmp(&a["score"].as_f64().unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(max_results);
 
     Ok(json!({"results": results, "count": results.len(), "query": query}))
 }
 
 fn tool_memory_store(args: &J) -> Result<J, String> {
-    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
-    let description = args.get("description").and_then(|v| v.as_str()).ok_or("missing: description")?;
-    let content = args.get("content").and_then(|v| v.as_str()).ok_or("missing: content")?;
-    let mtype = args.get("type").and_then(|v| v.as_str()).unwrap_or("project");
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: name")?;
+    let description = args
+        .get("description")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: description")?;
+    let content = args
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: content")?;
+    let mtype = args
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("project");
     let dir = resolve_memory_dir(args);
 
     // Ensure directory exists
-    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create memory dir '{}': {}", dir, e))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("cannot create memory dir '{}': {}", dir, e))?;
 
     // Validate name is kebab-case slug
     if name.contains(char::is_whitespace) || name.contains('\\') || name.contains('/') {
-        return Err("name must be a kebab-case slug (no whitespace, slashes, or backslashes)".into());
+        return Err(
+            "name must be a kebab-case slug (no whitespace, slashes, or backslashes)".into(),
+        );
     }
 
     let filename = format!("{}.md", name);
@@ -4257,7 +4376,12 @@ fn tool_memory_store(args: &J) -> Result<J, String> {
 
     // Append to MEMORY.md index if not already present
     let index_path = std::path::PathBuf::from(&dir).join("MEMORY.md");
-    let index_line = format!("- [{}]({}) — {}\n", name_to_title(name), filename, description);
+    let index_line = format!(
+        "- [{}]({}) — {}\n",
+        name_to_title(name),
+        filename,
+        description
+    );
     if index_path.exists() {
         let existing = std::fs::read_to_string(&index_path).unwrap_or_default();
         if !existing.contains(&filename) {
@@ -4265,7 +4389,8 @@ fn tool_memory_store(args: &J) -> Result<J, String> {
                 .map_err(|e| format!("cannot update MEMORY.md: {}", e))?;
         }
     } else {
-        std::fs::write(&index_path, index_line).map_err(|e| format!("cannot create MEMORY.md: {}", e))?;
+        std::fs::write(&index_path, index_line)
+            .map_err(|e| format!("cannot create MEMORY.md: {}", e))?;
     }
 
     Ok(json!({
@@ -4277,22 +4402,35 @@ fn tool_memory_store(args: &J) -> Result<J, String> {
 }
 
 fn tool_memory_update(args: &J) -> Result<J, String> {
-    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: name")?;
     let dir = resolve_memory_dir(args);
 
     let filename = format!("{}.md", name);
     let filepath = std::path::PathBuf::from(&dir).join(&filename);
     if !filepath.exists() {
-        return Err(format!("memory '{}' not found at {}", name, filepath.display()));
+        return Err(format!(
+            "memory '{}' not found at {}",
+            name,
+            filepath.display()
+        ));
     }
 
     let raw = std::fs::read_to_string(&filepath)
         .map_err(|e| format!("cannot read '{}': {}", filepath.display(), e))?;
-    let (cur_name, cur_desc, cur_type) =
-        parse_memory_frontmatter(&raw).unwrap_or_else(|| (name.to_string(), String::new(), "project".to_string()));
+    let (cur_name, cur_desc, cur_type) = parse_memory_frontmatter(&raw)
+        .unwrap_or_else(|| (name.to_string(), String::new(), "project".to_string()));
 
-    let new_desc = args.get("description").and_then(|v| v.as_str()).unwrap_or(&cur_desc);
-    let new_type = args.get("type").and_then(|v| v.as_str()).unwrap_or(&cur_type);
+    let new_desc = args
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&cur_desc);
+    let new_type = args
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&cur_type);
     let new_content = args.get("content").and_then(|v| v.as_str());
 
     // Rebuild the file: keep body if content not provided
@@ -4326,20 +4464,27 @@ fn tool_memory_update(args: &J) -> Result<J, String> {
 }
 
 fn tool_memory_delete(args: &J) -> Result<J, String> {
-    let name = args.get("name").and_then(|v| v.as_str()).ok_or("missing: name")?;
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: name")?;
     let dir = resolve_memory_dir(args);
 
     let filename = format!("{}.md", name);
     let filepath = std::path::PathBuf::from(&dir).join(&filename);
     if !filepath.exists() {
-        return Err(format!("memory '{}' not found at {}", name, filepath.display()));
+        return Err(format!(
+            "memory '{}' not found at {}",
+            name,
+            filepath.display()
+        ));
     }
 
     // Read before deleting to confirm what was there
     let raw = std::fs::read_to_string(&filepath)
         .map_err(|e| format!("cannot read '{}': {}", filepath.display(), e))?;
-    let (_cur_name, cur_desc, _cur_type) =
-        parse_memory_frontmatter(&raw).unwrap_or_else(|| (name.to_string(), String::new(), String::new()));
+    let (_cur_name, cur_desc, _cur_type) = parse_memory_frontmatter(&raw)
+        .unwrap_or_else(|| (name.to_string(), String::new(), String::new()));
 
     std::fs::remove_file(&filepath)
         .map_err(|e| format!("cannot delete '{}': {}", filepath.display(), e))?;
@@ -4420,19 +4565,25 @@ fn tool_batch(k: &Kernel, args: &J) -> Result<J, String> {
     let mut koids: Vec<String> = Vec::new();
     for op in ops {
         let name = op
-            .get("remember")
-            .or_else(|| op.get("relate"))
-            .or_else(|| op.get("forget"))
-            .map(|_| {
-                if op.get("remember").is_some() {
-                    "remember"
-                } else if op.get("relate").is_some() {
-                    "relate"
-                } else if op.get("forget").is_some() {
-                    "forget"
-                } else {
-                    "unknown"
-                }
+            .get("op")
+            .or_else(|| op.get("type"))
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                // Fallback: detect operation by presence of remember/relate/forget keys
+                op.get("remember")
+                    .or_else(|| op.get("relate"))
+                    .or_else(|| op.get("forget"))
+                    .map(|_| {
+                        if op.get("remember").is_some() {
+                            "remember"
+                        } else if op.get("relate").is_some() {
+                            "relate"
+                        } else if op.get("forget").is_some() {
+                            "forget"
+                        } else {
+                            "unknown"
+                        }
+                    })
             })
             .unwrap_or("unknown");
         // Substitute $N references with previously returned KOIDs.
@@ -4702,9 +4853,10 @@ fn graph_api(k: &Kernel, path: &str) -> Result<String, String> {
     // If a center KOID is specified, start traversal from it first.
     let start_koids: Vec<KOID> = if let Some(c) = center_koid {
         if let Ok(ko) = k.get(browser_ctx.clone(), &c) {
-            if tenant_filter.as_ref().map_or(true, |tf| {
-                ko.metadata.tenant.as_deref() == Some(tf.as_str())
-            }) {
+            if tenant_filter
+                .as_ref()
+                .is_none_or(|tf| ko.metadata.tenant.as_deref() == Some(tf.as_str()))
+            {
                 add_node_api(&mut nodes, &mut nodes_added, &ko, detail);
             }
         }
@@ -4783,7 +4935,7 @@ fn add_node_api(
     }
     nodes_added.insert(hex.clone());
     let c = color_for_type(&ko.metadata.type_name);
-    let label = node_label(&ko, 30);
+    let label = node_label(ko, 30);
     let tenant = ko.metadata.tenant.clone().unwrap_or_default();
     let key_props: Vec<J> = ko
         .properties
@@ -5378,13 +5530,7 @@ fn handle_http(
         }
         _p if route.starts_with("/api/aikoql") => {
             let session = validate_token(token.as_deref(), sessions);
-            if session.is_none() {
-                (
-                    "401 Unauthorized",
-                    "application/json",
-                    json!({"error": "login required"}).to_string(),
-                )
-            } else {
+            if let Some(session) = session {
                 let query = parse_query_param(path, "query");
                 let tenant = {
                     let t = parse_query_param(path, "tenant");
@@ -5395,7 +5541,7 @@ fn handle_http(
                     }
                 };
                 let tenant_deref = tenant.as_deref();
-                match aikoql_endpoint(k, &query, &session.unwrap(), tenant_deref, ontology) {
+                match aikoql_endpoint(k, &query, &session, tenant_deref, ontology) {
                     Ok(b) => ("200 OK", "application/json", b),
                     Err(e) => (
                         "400 Bad Request",
@@ -5403,6 +5549,12 @@ fn handle_http(
                         json!({"error": e}).to_string(),
                     ),
                 }
+            } else {
+                (
+                    "401 Unauthorized",
+                    "application/json",
+                    json!({"error": "login required"}).to_string(),
+                )
             }
         }
         _ => ("404 Not Found", "text/plain", "Not Found\n".into()),
@@ -5531,6 +5683,7 @@ fn tools_list() -> J {
             {"name": "trace", "description": "Full lineage of a fact: versions + events.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid}, "required": ["koid"]}},
             {"name": "explain", "description": "Why is this believed: provenance, source, confidence, evidence.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "version": {"type": "integer"}}, "required": ["koid"]}},
             {"name": "prove", "description": "Verify the hash-chained audit trail for a claim.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid}, "required": ["koid"]}},
+            {"name": "provenance", "description": "Render the full provenance chain as markdown: source, evidence, audit trail.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid}, "required": ["koid"]}},
             {"name": "relate", "description": "Add a directed relationship edge from one KO to another.", "inputSchema": {"type": "object", "properties": {"subject": subj, "from": koid, "to": koid, "rel_type": {"type": "string"}}, "required": ["from", "to", "rel_type"]}},
             {"name": "traverse", "description": "Walk relationship edges from a starting KO up to a depth.", "inputSchema": {"type": "object", "properties": {"subject": subj, "koid": koid, "rel_type": {"type": "string"}, "depth": {"type": "integer"}}, "required": ["koid"]}},
             {"name": "eval_recall", "description": "Measure recall@k against an expected KOID set.", "inputSchema": {"type": "object", "properties": {"subject": subj, "type_name": {"type": "string"}, "text": {"type": "string"}, "vector": {"type": "array"}, "k": {"type": "integer"}, "fusion": {"type": "string"}, "expected": {"type": "array", "items": {"type": "string"}}}, "required": ["expected"]}},

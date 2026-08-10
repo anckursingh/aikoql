@@ -75,6 +75,12 @@ pub struct Aes256Gcm {
     cache: RwLock<Option<([u8; 32], AesImpl)>>,
 }
 
+impl Default for Aes256Gcm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Aes256Gcm {
     pub fn new() -> Self {
         Aes256Gcm {
@@ -162,6 +168,12 @@ impl CryptoProvider for Aes256Gcm {
 /// Useful for platforms without AES-NI and for crypto agility.
 pub struct ChaCha20Poly1305 {
     cache: RwLock<Option<([u8; 32], ChaChaImpl)>>,
+}
+
+impl Default for ChaCha20Poly1305 {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ChaCha20Poly1305 {

@@ -150,23 +150,24 @@ pub fn execute_workflow(
         }) {
             Some(p) => p,
             None => {
-                logs.push(format!("    SKIP: not found"));
+                logs.push("    SKIP: not found".to_string());
                 continue;
             }
         };
 
-        let cur_ver = match prog.properties.get("version").and_then(|v| match v {
-            Value::Int(i) => Some(*i as u64),
-            _ => None,
-        }) {
-            Some(v) => v,
-            None => 0,
-        };
+        let cur_ver = prog
+            .properties
+            .get("version")
+            .and_then(|v| match v {
+                Value::Int(i) => Some(*i as u64),
+                _ => None,
+            })
+            .unwrap_or_default();
 
         let body = match prog.properties.get("body") {
             Some(Value::Text(s)) => s.clone(),
             _ => {
-                logs.push(format!("    SKIP: no body"));
+                logs.push("    SKIP: no body".to_string());
                 continue;
             }
         };
@@ -190,7 +191,7 @@ pub fn execute_workflow(
         };
 
         if cache_hit {
-            logs.push(format!("    (cache hit)"));
+            logs.push("    (cache hit)".to_string());
         }
 
         let start = Instant::now();
@@ -401,13 +402,14 @@ pub fn execute_agent(
             }
         };
 
-        let cur_ver = match prog.properties.get("version").and_then(|v| match v {
-            Value::Int(i) => Some(*i as u64),
-            _ => None,
-        }) {
-            Some(v) => v,
-            None => 0,
-        };
+        let cur_ver = prog
+            .properties
+            .get("version")
+            .and_then(|v| match v {
+                Value::Int(i) => Some(*i as u64),
+                _ => None,
+            })
+            .unwrap_or_default();
 
         let body = match prog.properties.get("body") {
             Some(Value::Text(s)) => s.clone(),

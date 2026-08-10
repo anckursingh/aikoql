@@ -1,4 +1,8 @@
 //! mnemosyne-kernel — the Knowledge Kernel for AI.
+#![allow(clippy::len_without_is_empty)]
+#![allow(clippy::should_implement_trait)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
 //!
 //! Increment 1 scope:
 //! - `knowledge`: Knowledge Object Model (MRFC-0001) — canonical types, codec,
@@ -70,18 +74,60 @@ pub use index::{
 pub use knowledge::authority::{Authority, AuthorityRanking};
 pub use knowledge::evidence::{Evidence, EvidenceMethod};
 pub use knowledge::kom::{
-    fnv1a64, AclEntry, Action, ArithOp, CheckExpression, CompareOp, Conflict,
-    ConflictDetector, ConflictResolution, ConstraintResult, ConstraintViolation, Direction,
-    Effect, EventKind, EventRef, ExtensionMap, IdGen, InferenceCandidate, KError, KResult,
-    KnowledgeEntity, KnowledgeEvent, KnowledgeObject, Lifecycle, LifecycleState, Metadata, Origin,
-    PropertyMap, ReferentialPolicy, RelationshipRef, Schema, SecurityDescriptor, SemanticBlock,
-    UniquenessScope, Value, ViolationSeverity, KOID, KOID_LEN,
+    fnv1a64,
+    AclEntry,
+    Action,
+    ArithOp,
+    CheckExpression,
+    CompareOp,
+    Conflict,
+    ConflictDetector,
+    ConflictResolution,
+    ConstraintResult,
+    ConstraintViolation,
+    Direction,
+    Effect,
+    EventKind,
+    EventRef,
+    ExtensionMap,
+    IdGen,
+    InferenceCandidate,
+    KError,
+    KResult,
+    KnowledgeEntity,
+    KnowledgeEvent,
+    KnowledgeObject,
+    Lifecycle,
+    LifecycleState,
+    Metadata,
+    Origin,
+    PropertyMap,
+    ReferentialPolicy,
+    RelationshipRef,
+    Schema,
+    SecurityDescriptor,
+    SemanticBlock,
+    UniquenessScope,
+    Value,
+    ViolationSeverity,
     // MRFC-0070 relationship types
-    CALLS, CONSTRAINED_BY, CONTRADICTS, DEPENDS_ON, DERIVED_FROM, DOCUMENTED_BY, GOVERNED_BY,
-    IMPLEMENTS, IMPORTS, RELATIONSHIP_TYPES, SUPERSEDES, TESTED_BY,
+    CALLS,
+    CONSTRAINED_BY,
+    CONTRADICTS,
+    DEPENDS_ON,
+    DERIVED_FROM,
+    DOCUMENTED_BY,
+    GOVERNED_BY,
+    IMPLEMENTS,
+    IMPORTS,
+    KOID,
+    KOID_LEN,
+    RELATIONSHIP_TYPES,
+    SUPERSEDES,
+    TESTED_BY,
 };
-pub use knowledge::scope::{Scope, ScopeResolver};
 pub use knowledge::ontology::{Cardinality, ClassDef, OntologyDef, OntologyRegistry, RelDef};
+pub use knowledge::scope::{Scope, ScopeResolver};
 pub use storage::store::{ConstraintCapabilities, MemoryEngine, StorageEngine, WriteBatch};
 pub use storage::store_redb::RedbEngine;
 pub use transaction::kernel::{

@@ -49,9 +49,35 @@ const DEONTIC_MARKERS: &[&str] = &["must", "shall", "should", "must not", "shall
 
 /// Imperative verbs that indicate an Instruction.
 const IMPERATIVE_VERBS: &[&str] = &[
-    "run", "use", "never", "always", "ensure", "check", "avoid", "prefer", "set", "add",
-    "install", "configure", "create", "delete", "update", "write", "read", "open", "close",
-    "start", "stop", "build", "test", "deploy", "commit", "push", "pull", "merge", "rebase",
+    "run",
+    "use",
+    "never",
+    "always",
+    "ensure",
+    "check",
+    "avoid",
+    "prefer",
+    "set",
+    "add",
+    "install",
+    "configure",
+    "create",
+    "delete",
+    "update",
+    "write",
+    "read",
+    "open",
+    "close",
+    "start",
+    "stop",
+    "build",
+    "test",
+    "deploy",
+    "commit",
+    "push",
+    "pull",
+    "merge",
+    "rebase",
 ];
 
 /// Heading patterns → entity type hints. Only headings that describe
@@ -179,8 +205,7 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                             .next()
                             .filter(|l| !l.contains(' '))
                             .unwrap_or("");
-                        s.code_blocks
-                            .push((lang.to_string(), node.text.clone()));
+                        s.code_blocks.push((lang.to_string(), node.text.clone()));
                     }
                 }
                 _ => {
@@ -241,10 +266,7 @@ fn classify_section(section: &Section) -> SectionKind {
 
     // 3. Body text signals for instructions
     let full = section.full_text().to_lowercase();
-    if IMPERATIVE_VERBS
-        .iter()
-        .any(|v| full.starts_with(v))
-    {
+    if IMPERATIVE_VERBS.iter().any(|v| full.starts_with(v)) {
         return SectionKind::Instruction;
     }
 
@@ -318,9 +340,7 @@ pub fn is_instruction(text: &str) -> bool {
         return true;
     }
     // Imperative verbs at start
-    IMPERATIVE_VERBS
-        .iter()
-        .any(|v| lower.starts_with(v))
+    IMPERATIVE_VERBS.iter().any(|v| lower.starts_with(v))
 }
 
 /// Prompt-injection defense: check if untrusted Markdown contains
@@ -658,8 +678,9 @@ fn extract_markdown_links(text: &str) -> Vec<String> {
                 if close_idx + 1 < len && chars[close_idx + 1] == '(' {
                     let paren_start = close_idx + 2;
                     if let Some(close_paren) = chars[paren_start..].iter().position(|&c| c == ')') {
-                        let target: String =
-                            chars[paren_start..paren_start + close_paren].iter().collect();
+                        let target: String = chars[paren_start..paren_start + close_paren]
+                            .iter()
+                            .collect();
                         if !target.trim().is_empty() {
                             targets.push(target.trim().to_string());
                         }
@@ -672,10 +693,11 @@ fn extract_markdown_links(text: &str) -> Vec<String> {
                     let inner_start = i + 2;
                     if let Some(close_wiki) = chars[inner_start..]
                         .windows(2)
-                        .position(|w| w == &[']', ']'])
+                        .position(|w| w == [']', ']'])
                     {
-                        let target: String =
-                            chars[inner_start..inner_start + close_wiki].iter().collect();
+                        let target: String = chars[inner_start..inner_start + close_wiki]
+                            .iter()
+                            .collect();
                         if !target.trim().is_empty() {
                             targets.push(target.trim().to_string());
                         }
@@ -721,8 +743,16 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
 
         // Code fence: ``` or ~~~
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            let fence_char = if trimmed.starts_with("```") { "```" } else { "~~~" };
-            let lang = trimmed.strip_prefix(fence_char).unwrap_or("").trim().to_string();
+            let fence_char = if trimmed.starts_with("```") {
+                "```"
+            } else {
+                "~~~"
+            };
+            let lang = trimmed
+                .strip_prefix(fence_char)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             let mut code_lines: Vec<&str> = Vec::new();
             i += 1;
             while i < len {
@@ -756,9 +786,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             // Strip trailing #s
             let text = text.trim_end_matches('#').trim();
             nodes.push(AstNode {
-                block_type: BlockType::Heading {
-                    level: level as u8,
-                },
+                block_type: BlockType::Heading { level: level as u8 },
                 text: text.to_string(),
                 children: vec![],
                 bbox: None,
@@ -825,7 +853,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                     i += 1;
                 }
             }
-            let ordered = trimmed.chars().next().map_or(false, |c| c.is_ascii_digit());
+            let ordered = trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
             nodes.push(AstNode {
                 block_type: BlockType::List { ordered },
                 text: String::new(),
@@ -954,7 +982,11 @@ fn is_md_list_item(line: &str) -> bool {
     while i < chars.len() && chars[i].is_ascii_digit() {
         i += 1;
     }
-    i > 0 && i < chars.len() && (chars[i] == '.' || chars[i] == ')') && i + 1 < chars.len() && chars[i + 1] == ' '
+    i > 0
+        && i < chars.len()
+        && (chars[i] == '.' || chars[i] == ')')
+        && i + 1 < chars.len()
+        && chars[i + 1] == ' '
 }
 
 fn md_list_prefix_len(line: &str) -> usize {
@@ -1112,7 +1144,10 @@ Mnemosyne is an Agent-first Knowledge Database.
 Run `cargo build` to compile.
 "#;
         let ir = compile_markdown_string(md, Some("test.md".into())).unwrap();
-        assert!(!ir.entities.is_empty(), "should extract entity from # heading");
+        assert!(
+            !ir.entities.is_empty(),
+            "should extract entity from # heading"
+        );
         assert!(
             ir.facts.len() >= 3,
             "should extract facts from paragraphs + lists, got {}",
@@ -1145,9 +1180,16 @@ Rationale: Memory safety + performance.
 Status: Accepted
 "#;
         let ir = compile_markdown_string(md, Some("CLAUDE.md".into())).unwrap();
-        assert!(ir.entities.len() >= 2, "should find Architecture + ADR entities");
+        assert!(
+            ir.entities.len() >= 2,
+            "should find Architecture + ADR entities"
+        );
         let total = ir.total_candidates();
-        assert!(total >= 5, "should have substantial candidates, got {}", total);
+        assert!(
+            total >= 5,
+            "should have substantial candidates, got {}",
+            total
+        );
     }
 }
 
@@ -1293,7 +1335,9 @@ Status: Accepted
 
         // Architecture entity must survive round-trip.
         assert!(
-            names2.iter().any(|n| n.contains("Mnemosyne") || n.contains("Architecture")),
+            names2
+                .iter()
+                .any(|n| n.contains("Mnemosyne") || n.contains("Architecture")),
             "architecture entity should survive round-trip"
         );
 
@@ -1319,7 +1363,10 @@ Status: Accepted
             "deontic rule must survive round-trip"
         );
 
-        eprintln!("Rendered markdown:\n{}", &rendered[..rendered.len().min(500)]);
+        eprintln!(
+            "Rendered markdown:\n{}",
+            &rendered[..rendered.len().min(500)]
+        );
     }
 
     #[test]
@@ -1342,7 +1389,10 @@ This is a component.
         // Must have entity headings.
         assert!(rendered.contains("## "), "should have entity headings");
         // Must have facts section.
-        assert!(rendered.contains("Rules & Facts"), "should have rules section");
+        assert!(
+            rendered.contains("Rules & Facts"),
+            "should have rules section"
+        );
 
         // Should be parseable again (no panic).
         let _ir2 = compile_markdown_string(&rendered, Some("test.md".into())).unwrap();

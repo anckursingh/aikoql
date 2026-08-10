@@ -205,9 +205,7 @@ pub fn apply_proposal(proposal: &KnowledgeProposal, ir: &KnowledgeIr) -> ApplyRe
         ProposalAction::RemoveRelation => {
             for (subject, predicate, object) in &proposal.new_relations {
                 ir.relations.retain(|r| {
-                    !(r.subject == *subject
-                        && r.predicate == *predicate
-                        && r.object == *object)
+                    !(r.subject == *subject && r.predicate == *predicate && r.object == *object)
                 });
             }
         }

@@ -188,8 +188,7 @@ impl Kernel {
                 Some(e) => e,
                 None => continue,
             };
-            for j in (i + 1)..objects.len() {
-                let b = &objects[j];
+            for b in objects.iter().skip(i + 1) {
                 let emb_b = match b.semantic.as_ref().and_then(|s| s.embedding.as_ref()) {
                     Some(e) => e,
                     None => continue,

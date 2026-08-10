@@ -119,6 +119,12 @@ pub struct TesseractCli {
     pub pdftoppm_path: Option<String>,
 }
 
+impl Default for TesseractCli {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TesseractCli {
     pub fn new() -> Self {
         TesseractCli {
@@ -275,8 +281,8 @@ fn aggregate_block_bboxes(words: &[OcrWord]) -> Vec<BlockBbox> {
     }
 
     groups
-        .into_iter()
-        .map(|(_block_num, block_words)| {
+        .into_values()
+        .map(|block_words| {
             if block_words.is_empty() {
                 return BlockBbox::default();
             }

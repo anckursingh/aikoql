@@ -15,6 +15,7 @@ use std::sync::Arc;
 /// maintainer is attached it falls back to the exact inline path (same scoring,
 /// zero lag). This keeps the kernel working out-of-the-box without background
 /// threads while still allowing pluggable ANN/BM25 indexes.
+#[derive(Default)]
 pub struct IndexCoordinator {
     maintainer: Option<Arc<dyn IndexMaintainerApi>>,
 }
@@ -169,11 +170,5 @@ impl IndexCoordinator {
         });
         merged.truncate(q.k);
         Ok(merged)
-    }
-}
-
-impl Default for IndexCoordinator {
-    fn default() -> Self {
-        Self { maintainer: None }
     }
 }

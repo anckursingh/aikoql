@@ -189,6 +189,12 @@ pub struct MockKnowledgeReconciler {
     pub normalize_values: bool,
 }
 
+impl Default for MockKnowledgeReconciler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockKnowledgeReconciler {
     pub fn new() -> Self {
         MockKnowledgeReconciler {

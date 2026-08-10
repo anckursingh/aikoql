@@ -21,7 +21,8 @@ pub fn merge_knowledge_ir(sources: &[KnowledgeIr]) -> KnowledgeIr {
     }
 
     // Entity dedup by normalized name
-    let mut seen_entities: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut seen_entities: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
 
     for ir in sources {
         for entity in &ir.entities {
@@ -80,10 +81,7 @@ pub fn merge_knowledge_ir(sources: &[KnowledgeIr]) -> KnowledgeIr {
 /// strip trailing 's' (plural forms).
 fn normalize_name(name: &str) -> String {
     let lower = name.to_lowercase();
-    let collapsed: String = lower
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let collapsed: String = lower.split_whitespace().collect::<Vec<_>>().join(" ");
     // Strip common suffixes for fuzzy matching
     let trimmed = collapsed
         .trim_end_matches("type")
