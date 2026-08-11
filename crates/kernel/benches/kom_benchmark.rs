@@ -1,10 +1,10 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use aikoql_kernel::codec::{decode_ko, encode_ko};
 use aikoql_kernel::kom::{
     AclEntry, Action, Direction, Effect, EventKind, EventRef, IdGen, KnowledgeObject, Lifecycle,
     LifecycleState, Metadata, Origin, RelationshipRef, SecurityDescriptor, SemanticBlock, Value,
     KOID,
 };
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::collections::BTreeMap;
 
 fn sample_ko() -> KnowledgeObject {

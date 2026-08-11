@@ -279,8 +279,8 @@ mod tests {
     use super::*;
     use crate::AiProvider;
     use aikoql_kernel::{
-        ExtensionMap, KOID, Lifecycle, LifecycleState, Metadata, Origin, PropertyMap,
-        SecurityDescriptor,
+        ExtensionMap, Lifecycle, LifecycleState, Metadata, Origin, PropertyMap, SecurityDescriptor,
+        KOID,
     };
     use std::sync::Arc;
 

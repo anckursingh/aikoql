@@ -980,7 +980,11 @@ mod tests {
         let result = Interpreter::execute(&k, &plan).unwrap();
         match result {
             RowSet::Scored(scored) => {
-                assert_eq!(scored.len(), 2, "both KOs have embeddings, both should match");
+                assert_eq!(
+                    scored.len(),
+                    2,
+                    "both KOs have embeddings, both should match"
+                );
                 // The "cats" KO (matching embedding) must rank higher.
                 assert!(
                     scored[0].1 > scored[1].1,

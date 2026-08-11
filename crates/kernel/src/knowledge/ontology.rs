@@ -555,8 +555,7 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
     let mut rel_pairs: BTreeSet<(String, String)> = BTreeSet::new(); // (source_type, rel_type)
 
     for ko in kos {
-        if ko.metadata.type_name == ONTOLOGY_TYPE || ko.metadata.type_name.starts_with("aikoql:")
-        {
+        if ko.metadata.type_name == ONTOLOGY_TYPE || ko.metadata.type_name.starts_with("aikoql:") {
             continue;
         }
         // Detect source from tags: "source:postgres", "source:neo4j", "source:mongodb", "source:sqlite"

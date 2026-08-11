@@ -265,8 +265,7 @@ pub fn check_and_fire_triggers(kernel: &Kernel, last_seq: u64) -> Result<u64, St
                                 body,
                                 "trigger-engine",
                             ) {
-                                let optimized =
-                                    aikoql_compiler::planner::Planner::optimize(&plan);
+                                let optimized = aikoql_compiler::planner::Planner::optimize(&plan);
                                 let _ = aikoql_runtime::Interpreter::execute(kernel, &optimized);
                             }
                         }

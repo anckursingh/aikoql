@@ -11,8 +11,8 @@
 //! ponytail: traversal skipped — needs graph engine dep. Add when
 //! benchmarks crate depends on aikoql-graph.
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use aikoql_kernel::*;
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -179,13 +179,16 @@ fn bench_scan_type(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(n));
         group.bench_function(format!("scan_n={}", n), |b| {
-            b.iter(|| {
-                black_box(kernel.scan_by_type(&subject, "doc").unwrap())
-            })
+            b.iter(|| black_box(kernel.scan_by_type(&subject, "doc").unwrap()))
         });
     }
     group.finish();
 }
 
-criterion_group!(benches, bench_write_throughput, bench_read_latency, bench_scan_type);
+criterion_group!(
+    benches,
+    bench_write_throughput,
+    bench_read_latency,
+    bench_scan_type
+);
 criterion_main!(benches);

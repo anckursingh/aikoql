@@ -56,6 +56,7 @@ use aikoql_kernel::knowledge::ontology::{
 use aikoql_kernel::lifecycle::schema::SchemaRegistry;
 use aikoql_kernel::*;
 use aikoql_scheduler::Scheduler;
+#[cfg(feature = "embedding-openai")]
 use aikoql_semantic::provider::OpenAiEmbeddingProvider;
 use aikoql_semantic::{EmbeddingEnricher, SemanticEngine};
 use serde_json::{json, Value as J};
@@ -430,8 +431,10 @@ fn main() {
     let mut db_path = "./aikoql.redb".to_string();
     let mut memory_dir = "./memory".to_string();
     let mut embedding_provider: Option<String> = None;
+    #[allow(unused_assignments, unused_variables)]
     let mut embedding_base_url = String::new();
     let mut embedding_model = String::new();
+    #[allow(unused_assignments, unused_variables)]
     let mut embedding_api_key: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
@@ -460,11 +463,8 @@ fn main() {
                 i += 2;
             }
             "--embedding-provider" => {
-                embedding_provider = Some(
-                    args.get(i + 1)
-                        .cloned()
-                        .unwrap_or_else(|| "openai".into()),
-                );
+                embedding_provider =
+                    Some(args.get(i + 1).cloned().unwrap_or_else(|| "candle".into()));
                 i += 2;
             }
             "--embedding-base-url" => {
@@ -482,11 +482,7 @@ fn main() {
                 i += 2;
             }
             "--embedding-api-key" => {
-                embedding_api_key = Some(
-                    args.get(i + 1)
-                        .cloned()
-                        .unwrap_or_default(),
-                );
+                embedding_api_key = Some(args.get(i + 1).cloned().unwrap_or_default());
                 i += 2;
             }
             _ => {
@@ -498,8 +494,10 @@ fn main() {
     MEMORY_DIR.set(memory_dir).ok();
 
     let engine = RedbEngine::open(&db_path).expect("open store");
-    let kernel = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xA9C9).expect("open kernel");
+    let kernel =
+        Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xA9C9).expect("open kernel");
 
+    #[cfg(feature = "embedding-openai")]
     let url = if embedding_base_url.is_empty() {
         "http://localhost:11434".to_string()
     } else {
@@ -513,7 +511,22 @@ fn main() {
 
     // Build provider Arc first so we can share it with the enrichment engine.
     let emb_provider: Option<Arc<dyn EmbeddingProvider>> = match embedding_provider.as_deref() {
-        Some("candle") => {
+        Some("openai") => {
+            #[cfg(feature = "embedding-openai")]
+            {
+                let p = OpenAiEmbeddingProvider::new(&url, &model, embedding_api_key.as_deref());
+                Some(Arc::new(p))
+            }
+            #[cfg(not(feature = "embedding-openai"))]
+            {
+                info!(
+                    "openai embedding requested but binary not compiled with embedding-openai feature"
+                );
+                None
+            }
+        }
+        _ => {
+            // Default: Candle (offline, CPU-only, ~90 MB HF model download on first use)
             #[cfg(feature = "embedding-candle")]
             {
                 let p = aikoql_semantic::provider::CandleEmbedding::new()
@@ -522,14 +535,11 @@ fn main() {
             }
             #[cfg(not(feature = "embedding-candle"))]
             {
-                info!("candle embedding requested but binary not compiled with embedding-candle feature");
+                info!(
+                    "no embedding provider compiled in — activate embedding-candle or embedding-openai feature"
+                );
                 None
             }
-        }
-        _ => {
-            // Default: OpenAI-compatible (Ollama, OpenAI, etc.)
-            let p = OpenAiEmbeddingProvider::new(&url, &model, embedding_api_key.as_deref());
-            Some(Arc::new(p))
         }
     };
 
@@ -2468,8 +2478,7 @@ fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
         }
         let raw = IrPlan::new(ops).with_description(format!("find_similar type={}", type_name));
         let plan = aikoql_compiler::planner::Planner::optimize(&raw);
-        let result =
-            aikoql_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
+        let result = aikoql_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
         return match result {
             aikoql_runtime::RowSet::Scored(scored) => Ok(json!({
                 "results": scored.iter().map(|(koid, score, tn, version)| json!({
@@ -2820,8 +2829,8 @@ fn execute_stream_query(
     query: &str,
     subject: &str,
 ) -> Result<(Vec<J>, String), String> {
-    let raw = aikoql_compiler::parser::compile_with_subject(query, subject)
-        .map_err(|e| e.to_string())?;
+    let raw =
+        aikoql_compiler::parser::compile_with_subject(query, subject).map_err(|e| e.to_string())?;
     let plan = aikoql_compiler::planner::Planner::optimize(&raw);
     let result = aikoql_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
 
@@ -3119,8 +3128,7 @@ fn tool_execute_program(k: &Kernel, args: &J) -> Result<J, String> {
     let plan = aikoql_compiler::parser::compile_with_subject(&query, &exec_subject.name)
         .map_err(|e| format!("compile: {}", e))?;
     let optimized = aikoql_compiler::planner::Planner::optimize(&plan);
-    let result =
-        aikoql_runtime::Interpreter::execute(k, &optimized).map_err(|e| e.to_string())?;
+    let result = aikoql_runtime::Interpreter::execute(k, &optimized).map_err(|e| e.to_string())?;
     match result {
         aikoql_runtime::RowSet::Objects(kos) => Ok(json!({
             "results": kos.iter().map(|ko| json!({

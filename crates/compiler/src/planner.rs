@@ -119,10 +119,7 @@ mod tests {
                 subject: "b".into(),
             },
             IrOp::Filter {
-                predicates: vec![Predicate::eq(
-                    "salary",
-                    aikoql_kernel::Value::Int(100000),
-                )],
+                predicates: vec![Predicate::eq("salary", aikoql_kernel::Value::Int(100000))],
             },
         ]);
         let opt = Planner::optimize(&plan);

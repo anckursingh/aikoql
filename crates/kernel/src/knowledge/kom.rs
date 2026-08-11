@@ -806,8 +806,10 @@ impl KnowledgeObject {
 
     /// Set the ContentTrust level in extensions.
     pub fn set_content_trust(&mut self, ct: ContentTrust) {
-        self.extensions
-            .insert(Self::EXT_CONTENT_TRUST.into(), Value::Text(ct.as_str().into()));
+        self.extensions.insert(
+            Self::EXT_CONTENT_TRUST.into(),
+            Value::Text(ct.as_str().into()),
+        );
     }
 }
 

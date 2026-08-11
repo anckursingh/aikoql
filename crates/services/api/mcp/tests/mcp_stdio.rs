@@ -132,11 +132,7 @@ impl Drop for McpClient {
 
 fn tmp_db(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!(
-        "aikoql_mcp_{}_{}.redb",
-        name,
-        std::process::id()
-    ));
+    p.push(format!("aikoql_mcp_{}_{}.redb", name, std::process::id()));
     let _ = std::fs::remove_file(&p);
     p
 }
@@ -965,9 +961,7 @@ fn m14_document_ocr_detection_and_source_tagging() {
         "nonexistent-tool-xyzzy-12345"
     ));
     // cmd.exe or sh must exist.
-    assert!(
-        aikoql_ingestion::tool_available("cmd") || aikoql_ingestion::tool_available("sh")
-    );
+    assert!(aikoql_ingestion::tool_available("cmd") || aikoql_ingestion::tool_available("sh"));
 
     std::fs::remove_dir_all(&dir).ok();
 }

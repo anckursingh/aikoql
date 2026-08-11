@@ -423,8 +423,7 @@ fn e2e_full_pipeline_with_kernel() {
 
     // 6. Direct physical query — Alice (use admin subject for ACL)
     let plan =
-        aikoql_compiler::parser::compile_with_subject("MATCH employees RETURN *", "admin")
-            .unwrap();
+        aikoql_compiler::parser::compile_with_subject("MATCH employees RETURN *", "admin").unwrap();
     let result = Interpreter::execute(&kernel, &plan).unwrap();
     if let aikoql_runtime::RowSet::Objects(kos) = result {
         assert_eq!(kos.len(), 1);
@@ -440,9 +439,7 @@ fn e2e_full_pipeline_with_kernel() {
     assert_eq!(plans.len(), 2);
     let mut total = 0;
     for plan in &plans {
-        if let aikoql_runtime::RowSet::Objects(kos) =
-            Interpreter::execute(&kernel, plan).unwrap()
-        {
+        if let aikoql_runtime::RowSet::Objects(kos) = Interpreter::execute(&kernel, plan).unwrap() {
             total += kos.len();
         }
     }

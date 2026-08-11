@@ -6,8 +6,8 @@
 //! Hardware note: results are machine-dependent. Gate thresholds must be
 //! defined on a fixed instance type (per MRFC-0005 §NFRs).
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use aikoql_kernel::*;
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use std::sync::Arc;
 use std::time::Duration;

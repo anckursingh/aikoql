@@ -9,9 +9,14 @@
 //! back versioned claims — never silent mutation (Determinism Law).
 
 use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::knowledge::notify::EventFilter;
 use aikoql_kernel::transaction::kernel::{Kernel, RememberRequest, Subject};
+use aikoql_kernel::KError;
 use aikoql_scheduler::SchedulerJob;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Embedding providers
@@ -19,12 +24,12 @@ use std::sync::Arc;
 
 pub mod provider;
 
+#[cfg(feature = "embedding-candle")]
+pub use provider::CandleEmbedding;
 pub use provider::EmbeddingEnricher;
 pub use provider::MockEmbeddingProvider;
 #[cfg(feature = "embedding-openai")]
 pub use provider::OpenAiEmbeddingProvider;
-#[cfg(feature = "embedding-candle")]
-pub use provider::CandleEmbedding;
 
 // ---------------------------------------------------------------------------
 // AI Provider plugin interface
@@ -51,19 +56,34 @@ pub trait AiProvider: Send + Sync {
 // SemanticEngine
 // ---------------------------------------------------------------------------
 
+/// Inner state shared with the background enrichment thread.
+struct SemanticInner {
+    water: AtomicU64,
+    stop: AtomicBool,
+    handle: Mutex<Option<JoinHandle<()>>>,
+}
+
 /// Background service that enriches KOs with semantic metadata.
 /// Uses a pluggable `AiProvider`; the default no-op provider enriches nothing.
 pub struct SemanticEngine {
     provider: Arc<dyn AiProvider>,
+    inner: Arc<SemanticInner>,
 }
 
 impl SemanticEngine {
     pub fn new(provider: Arc<dyn AiProvider>) -> Self {
-        SemanticEngine { provider }
+        SemanticEngine {
+            provider,
+            inner: Arc::new(SemanticInner {
+                water: AtomicU64::new(0),
+                stop: AtomicBool::new(false),
+                handle: Mutex::new(None),
+            }),
+        }
     }
 
     /// Enrich a single KO: call the provider, build a `SemanticBlock`, and
-    /// write it back via `kernel.remember()` with `origin=SemanticEnrichment`.
+    /// write it back via `kernel.remember()`.
     fn enrich_one(&self, kernel: &Kernel, ko: &KnowledgeObject) -> KResult<()> {
         // Skip if already enriched (ponytail: check model name for multi-model).
         if ko.semantic.is_some() {
@@ -105,7 +125,7 @@ impl SchedulerJob for SemanticEngine {
 
     fn start(&self, kernel: &Kernel) -> KResult<()> {
         let subject = Subject::new("semantic-engine");
-        // Enrich all existing KOs that lack semantic blocks.
+        // Catch-up: enrich all existing KOs that lack semantic blocks.
         // ponytail: scan_by_type per type; a scan_all_readable would avoid
         // the type-whitelist problem. Add when more than 2-3 types exist.
         for type_name in &["fact", "note", "claim", "evidence", "document"] {
@@ -113,19 +133,82 @@ impl SchedulerJob for SemanticEngine {
                 self.enrich_one(kernel, &ko)?;
             }
         }
+
+        // Subscribe to live events so new remember+embed:true calls get processed.
+        let rx = kernel.notify(EventFilter::default());
+        let k = kernel.clone_handle();
+        let provider = self.provider.clone();
+        let inner = self.inner.clone();
+
+        let handle = std::thread::spawn(move || loop {
+            if inner.stop.load(Ordering::Relaxed) {
+                break;
+            }
+            match rx.recv_timeout(Duration::from_millis(25)) {
+                Ok(ke) => {
+                    // Only process creates/updates/claims — skip audit, lifecycle, forget.
+                    match ke.kind {
+                        EventKind::Created | EventKind::Updated | EventKind::ClaimAsserted => {}
+                        _ => {
+                            inner.water.store(ke.seq, Ordering::Relaxed);
+                            continue;
+                        }
+                    }
+                    match k.raw_object_at(&ke.koid, ke.commit_ts) {
+                        Ok(Some(ko)) if ko.lifecycle.state != LifecycleState::Deleted => {
+                            // enrich_one is idempotent (checks semantic.is_some()) —
+                            // safe even if we see our own write-back events.
+                            let engine = SemanticEngine {
+                                provider: provider.clone(),
+                                inner: inner.clone(),
+                            };
+                            if engine.enrich_one(&k, &ko).is_ok() {
+                                inner.water.store(ke.seq, Ordering::Relaxed);
+                            }
+                        }
+                        _ => {
+                            inner.water.store(ke.seq, Ordering::Relaxed);
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        });
+
+        *self.inner.handle.lock().unwrap() = Some(handle);
         Ok(())
     }
 
     fn shutdown(&self) {
-        // Stateless — no background thread.
+        self.inner.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.inner.handle.lock().unwrap().take() {
+            let _ = handle.join();
+        }
     }
 
-    fn checkpoint(&self, _dir: &std::path::Path) -> KResult<()> {
+    fn checkpoint(&self, dir: &std::path::Path) -> KResult<()> {
+        let tmp = dir.with_extension("tmp");
+        if tmp.exists() {
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+        std::fs::create_dir_all(&tmp)
+            .map_err(|e| KError::Store(format!("checkpoint mkdir: {e}")))?;
+        let water = self.inner.water.load(Ordering::Relaxed);
+        std::fs::write(tmp.join("water.txt"), water.to_string())
+            .map_err(|e| KError::Store(format!("checkpoint write: {e}")))?;
+        std::fs::write(tmp.join("COMPLETE"), b"")
+            .map_err(|e| KError::Store(format!("checkpoint complete: {e}")))?;
+        if dir.exists() {
+            std::fs::remove_dir_all(dir)
+                .map_err(|e| KError::Store(format!("checkpoint rm old: {e}")))?;
+        }
+        std::fs::rename(&tmp, dir).map_err(|e| KError::Store(format!("checkpoint rename: {e}")))?;
         Ok(())
     }
 
     fn water(&self) -> u64 {
-        0 // Stateless; enrichment is idempotent via version check.
+        self.inner.water.load(Ordering::Relaxed)
     }
 }
 

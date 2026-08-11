@@ -26,3 +26,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 embedding-candle = ["aikoql-semantic/embedding-candle"]
+embedding-openai = ["aikoql-semantic/embedding-openai"]

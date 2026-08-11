@@ -342,7 +342,10 @@ use crate::auth::{AuthProvider, Identity};
             per_sec, elapsed, iterations
         );
         // Informational only — GitHub runners are non-deterministic.
-        println!("  rendering throughput: {:.1} renders/sec (informational, not a CI gate)", per_sec);
+        println!(
+            "  rendering throughput: {:.1} renders/sec (informational, not a CI gate)",
+            per_sec
+        );
     }
 
     /// Simulated agent task benchmark: measures completion rate, token savings,

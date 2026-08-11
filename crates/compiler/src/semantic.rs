@@ -105,8 +105,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
     fn resolve_entity(&self, name: &str) -> Result<Option<&Schema>, Diagnostic> {
         // Built-in types always pass validation.
-        if name == aikoql_kernel::knowledge::ontology::ONTOLOGY_TYPE
-            || name.starts_with("aikoql:")
+        if name == aikoql_kernel::knowledge::ontology::ONTOLOGY_TYPE || name.starts_with("aikoql:")
         {
             return Ok(None);
         }

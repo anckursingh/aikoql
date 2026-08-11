@@ -644,8 +644,7 @@ mod tests {
     #[test]
     fn v1_migration_roundtrip() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let tmp =
-            std::env::temp_dir().join(format!("aikoql-test-kms-v1-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("aikoql-test-kms-v1-{}", std::process::id()));
 
         // Simulate a v1 key file.
         let mut original_key = [0u8; 32];
@@ -713,8 +712,7 @@ mod tests {
     fn local_kms_rotate() {
         let _lock = TEST_MUTEX.lock().unwrap();
         let p = crate::security::crypto::Aes256Gcm::new();
-        let tmp =
-            std::env::temp_dir().join(format!("aikoql-test-kms-rot-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("aikoql-test-kms-rot-{}", std::process::id()));
         let kms = LocalKms::new(tmp.to_str().unwrap());
         let old = kms.master_key("pw").unwrap();
         let new = kms.rotate("pw", &p).unwrap();
@@ -732,8 +730,7 @@ mod tests {
     #[test]
     fn local_kms_new_file_is_v2_format() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let tmp =
-            std::env::temp_dir().join(format!("aikoql-test-kms-new-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("aikoql-test-kms-new-{}", std::process::id()));
         let kms = LocalKms::new(tmp.to_str().unwrap());
         let _ = kms.master_key("fresh").unwrap();
         let on_disk = fs::read(&tmp).unwrap();
@@ -745,8 +742,7 @@ mod tests {
     #[test]
     fn corrupted_envelope_size_rejected() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let tmp =
-            std::env::temp_dir().join(format!("aikoql-test-kms-corr-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("aikoql-test-kms-corr-{}", std::process::id()));
         // Write 50 bytes of garbage (not 48 for v1, not 88 for v2).
         fs::write(&tmp, &[0u8; 50]).unwrap();
         let kms = LocalKms::new(tmp.to_str().unwrap());
