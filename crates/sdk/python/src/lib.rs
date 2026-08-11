@@ -145,20 +145,20 @@ fn scored_ko_to_py(py: Python<'_>, s: &ScoredKO) -> PyObject {
     dict.into_py(py)
 }
 
-#[pyclass]
-pub struct aikoql {
+#[pyclass(name = "aikoql")]
+pub struct Aikoql {
     inner: Arc<Kernel>,
 }
 
 #[pymethods]
-impl aikoql {
+impl Aikoql {
     #[new]
     #[pyo3(signature = (path, salt = 0))]
     fn new(path: &str, salt: u64) -> PyResult<Self> {
         let engine = RedbEngine::open(path).map_err(to_pyerr)?;
         let kernel =
             Kernel::open(Arc::new(engine), Arc::new(SystemClock), salt).map_err(to_pyerr)?;
-        Ok(aikoql {
+        Ok(Aikoql {
             inner: Arc::new(kernel),
         })
     }
@@ -383,6 +383,6 @@ impl aikoql {
 
 #[pymodule]
 fn _aikoql(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<aikoql>()?;
+    m.add_class::<Aikoql>()?;
     Ok(())
 }

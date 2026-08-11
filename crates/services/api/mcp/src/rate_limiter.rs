@@ -22,6 +22,7 @@ use std::collections::HashMap;
 ///
 /// Implementations must be `Send + Sync` for concurrent use across
 /// connection-handler tasks.
+#[allow(dead_code)]
 pub trait RateLimiter: Send + Sync {
     /// Record one call for `key` and return whether it is allowed.
     /// Returns `true` if under the limit, `false` if the limit is exceeded.
@@ -38,12 +39,14 @@ pub trait RateLimiter: Send + Sync {
 ///
 /// Counts calls per key in a `HashMap`. Callers must periodically reset
 /// counts (e.g. every 60s) to implement a sliding window.
+#[allow(dead_code)]
 pub struct InMemoryRateLimiter {
     max_per_window: u64,
     counters: HashMap<String, u64>,
 }
 
 impl InMemoryRateLimiter {
+    #[allow(dead_code)]
     pub fn new(max_per_window: u64) -> Self {
         InMemoryRateLimiter {
             max_per_window,

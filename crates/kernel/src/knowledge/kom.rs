@@ -818,20 +818,15 @@ impl KnowledgeObject {
 /// Trust level for content ingested from external sources.
 /// Stored in `KnowledgeObject.extensions` under `EXT_CONTENT_TRUST`.
 /// Used by secret filtering, prompt-injection guards, and audit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ContentTrust {
     /// Authenticated system/admin input — highest trust.
     Trusted,
     /// External document/connector content — treat with caution.
     Untrusted,
     /// Trust level not explicitly set — conservative default (same as Untrusted).
+    #[default]
     Unknown,
-}
-
-impl Default for ContentTrust {
-    fn default() -> Self {
-        ContentTrust::Unknown
-    }
 }
 
 impl ContentTrust {

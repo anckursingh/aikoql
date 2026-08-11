@@ -70,6 +70,12 @@ pub struct MockEmbeddingProvider {
     dim: usize,
 }
 
+impl Default for MockEmbeddingProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockEmbeddingProvider {
     pub fn new() -> Self {
         MockEmbeddingProvider { dim: 384 }

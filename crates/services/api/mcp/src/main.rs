@@ -76,6 +76,7 @@ static MEMORY_DIR: OnceLock<String> = OnceLock::new();
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
+#[allow(unused_assignments)]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
