@@ -192,7 +192,7 @@ impl VectorIndex for HnswVectorIndex {
             .map_err(|e| KError::Store(format!("hnsw save: {}", e)))?;
         // R7: models stored as {koid_hex: [model1, model2, ...]}.
         let mut models_json: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for ((koid, model), _) in self.model_map.read().unwrap().iter() {
+        for (koid, model) in self.model_map.read().unwrap().keys() {
             models_json
                 .entry(koid.to_hex())
                 .or_default()
