@@ -42,6 +42,8 @@ build/
 *.key
 *.backup.*/
 /aikoql/
+.mnemosyne/
+/mnemosyne/
 
 # Playwright / E2E test artifacts
 .playwright-mcp/

@@ -1,3 +1,0 @@
-[2m2026-08-10T06:35:02.892463Z[0m [32m INFO[0m [2mmnemosyne_mcp[0m[2m:[0m no ontology KO found — using empty registry
-[2m2026-08-10T06:35:02.892738Z[0m [32m INFO[0m [2mmnemosyne_mcp[0m[2m:[0m metrics HTTP server started [3maddr[0m[2m=[0m127.0.0.1:9091
-[2m2026-08-10T06:35:02.895509Z[0m [32m INFO[0m [2mmnemosyne_mcp[0m[2m:[0m mnemosyne-mcp TCP server ready [3maddr[0m[2m=[0m127.0.0.1:9090 [3mdb[0m[2m=[0m.mnemosyne/mnemosyne.redb
