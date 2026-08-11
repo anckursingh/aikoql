@@ -55,6 +55,7 @@ use mnemosyne_kernel::knowledge::ontology::{
 };
 use mnemosyne_kernel::lifecycle::schema::SchemaRegistry;
 use mnemosyne_kernel::*;
+use mnemosyne_semantic::provider::OpenAiEmbeddingProvider;
 use serde_json::{json, Value as J};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -426,6 +427,10 @@ fn main() {
     let mut metrics_addr: Option<String> = None;
     let mut db_path = "./mnemosyne.redb".to_string();
     let mut memory_dir = "./memory".to_string();
+    let mut embedding_provider: Option<String> = None;
+    let mut embedding_base_url = String::new();
+    let mut embedding_model = String::new();
+    let mut embedding_api_key: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -452,6 +457,36 @@ fn main() {
                     .unwrap_or_else(|| "./memory".into());
                 i += 2;
             }
+            "--embedding-provider" => {
+                embedding_provider = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .unwrap_or_else(|| "openai".into()),
+                );
+                i += 2;
+            }
+            "--embedding-base-url" => {
+                embedding_base_url = args
+                    .get(i + 1)
+                    .cloned()
+                    .unwrap_or_else(|| "http://localhost:11434".into());
+                i += 2;
+            }
+            "--embedding-model" => {
+                embedding_model = args
+                    .get(i + 1)
+                    .cloned()
+                    .unwrap_or_else(|| "nomic-embed-text".into());
+                i += 2;
+            }
+            "--embedding-api-key" => {
+                embedding_api_key = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+                i += 2;
+            }
             _ => {
                 db_path = args[i].clone();
                 i += 1;
@@ -461,9 +496,40 @@ fn main() {
     MEMORY_DIR.set(memory_dir).ok();
 
     let engine = RedbEngine::open(&db_path).expect("open store");
-    let kernel = Arc::new(
-        Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xA9C9).expect("open kernel"),
-    );
+    let kernel = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xA9C9).expect("open kernel");
+    let kernel = {
+        let url = if embedding_base_url.is_empty() {
+            "http://localhost:11434".to_string()
+        } else {
+            embedding_base_url.clone()
+        };
+        let model = if embedding_model.is_empty() {
+            "nomic-embed-text".to_string()
+        } else {
+            embedding_model.clone()
+        };
+        match embedding_provider.as_deref() {
+            Some("candle") => {
+                #[cfg(feature = "embedding-candle")]
+                {
+                    let provider = mnemosyne_semantic::provider::CandleEmbedding::new()
+                        .expect("load candle embedding model");
+                    kernel.with_embedding_provider(Arc::new(provider))
+                }
+                #[cfg(not(feature = "embedding-candle"))]
+                {
+                    info!("candle embedding requested but binary not compiled with embedding-candle feature");
+                    kernel
+                }
+            }
+            _ => {
+                // Default: OpenAI-compatible (Ollama, OpenAI, etc.)
+                let provider = OpenAiEmbeddingProvider::new(&url, &model, embedding_api_key.as_deref());
+                kernel.with_embedding_provider(Arc::new(provider))
+            }
+        }
+    };
+    let kernel = Arc::new(kernel);
     let db_path = Arc::new(db_path);
     SERVER_START.set(Instant::now()).ok();
 
@@ -611,6 +677,10 @@ fn print_usage() {
         "Server options (serve mode):\n",
         "  --listen ADDR          TCP listen address (e.g., 127.0.0.1:9090)\n",
         "  --metrics-addr ADDR    HTTP metrics + health endpoint (e.g., 127.0.0.1:9091)\n",
+        "  --embedding-provider P  Embedding provider: \"openai\" (default) or \"candle\"\n",
+        "  --embedding-base-url U  OpenAI-compatible base URL (default: http://localhost:11434)\n",
+        "  --embedding-model M     Model name (default: nomic-embed-text)\n",
+        "  --embedding-api-key K   API key for remote endpoints (omit for Ollama)\n",
         "\n",
         "Examples:\n",
         "  mnemosyne-mcp shell                           # Interactive shell\n",

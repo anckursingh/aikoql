@@ -1,0 +1,261 @@
+{
+  "timestamp": "2026-08-10T06:34:04.395392+00:00",
+  "total": 42,
+  "passed": 42,
+  "failed": 0,
+  "score_pct": 100.0,
+  "results": [
+    {
+      "name": "initialize \u2014 MCP handshake",
+      "passed": true,
+      "detail": "{'protocolVersion': '2024-11-05', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'mnemosyne-mcp', 'version': '0.1.0'}}",
+      "phase": "P0"
+    },
+    {
+      "name": "health \u2014 server reports ready",
+      "passed": true,
+      "detail": "{'status': 'healthy', 'ready': True, 'journal_seq': 0, 'journal_lag_ms': 0, 'object_count': 0, 'connection_pool': '1/1', 'audit_hash': '0000000000000000000000000000000000000000000000000000000000000000",
+      "phase": "P0"
+    },
+    {
+      "name": "AKI-001: KO creation \u2014 Component typed KO",
+      "passed": true,
+      "detail": "019fea60dbd40000000000000000a9c9",
+      "phase": "A0"
+    },
+    {
+      "name": "AKI-002: KO retrieval \u2014 get by KOID",
+      "passed": true,
+      "detail": "{'koid': '019fea60dbd40000000000000000a9c9', 'version': 1, 'commit_ts': 117069817060786176, 'type_name': 'Component', 'state': 'draft', 'properties': {'language': 'Rust', 'name': 'TestComponent'}, 'se",
+      "phase": "A0"
+    },
+    {
+      "name": "AKI-010: Lifecycle \u2014 KO has state field",
+      "passed": true,
+      "detail": "{'koid': '019fea60dbd40000000000000000a9c9', 'version': 1, 'commit_ts': 117069817060786176, 'type_name': 'Component', 'state': 'draft', 'properties': {'language': 'Rust', 'name': 'TestComponent'}, 'se",
+      "phase": "A0"
+    },
+    {
+      "name": "AKI-005: Scoped KO \u2014 tenant-scoped creation",
+      "passed": true,
+      "detail": "A0",
+      "phase": ""
+    },
+    {
+      "name": "AKI-006: Authority \u2014 explain tool works with decisions",
+      "passed": true,
+      "detail": "{'koid': '019fea60dbd40000000000000000a9c9', 'version': 2, 'origin': 'Agent(\"mcp-agent\")', 'source': None, 'confidence': None, 'verified': False, 'evidence': [], 'event_refs': [{'seq': 1, 'commit_ts':",
+      "phase": "A0"
+    },
+    {
+      "name": "AKI-007: Temporal \u2014 trace returns version history",
+      "passed": true,
+      "detail": "{'koid': '019fea60dbd40000000000000000a9c9', 'versions': [{'version': 1, 'commit_ts': 117069817060786176, 'state': 'draft'}, {'version': 2, 'commit_ts': 117069817061244928, 'state': 'draft'}], 'events",
+      "phase": "A0"
+    },
+    {
+      "name": "remember \u2014 creates Task KO",
+      "passed": true,
+      "detail": "019fea60dbe40000000000000000a9c9",
+      "phase": "BASELINE"
+    },
+    {
+      "name": "get \u2014 returns correct type",
+      "passed": true,
+      "detail": "BASELINE",
+      "phase": ""
+    },
+    {
+      "name": "get \u2014 property round-trip",
+      "passed": true,
+      "detail": "BASELINE",
+      "phase": ""
+    },
+    {
+      "name": "find_similar \u2014 hybrid recall works",
+      "passed": true,
+      "detail": "{'results': [{'koid': '019fea60dbe40000000000000000a9c9', 'score': 0.5, 'index_lag_ms': 0, 'type_name': 'Task', 'version': 1}]}",
+      "phase": "BASELINE"
+    },
+    {
+      "name": "aikoql \u2014 MATCH query executes",
+      "passed": true,
+      "detail": "{'results': [{'koid': '019fea60dbe40000000000000000a9c9', 'type_name': 'Task', 'version': 1, 'properties': {'priority': 'high', 'title': 'Test task for universal harness'}}]}",
+      "phase": "BASELINE"
+    },
+    {
+      "name": "relate + traverse \u2014 relationship graph",
+      "passed": true,
+      "detail": "{'hits': [{'koid': '019fea60dbee0000000000000000a9c9', 'depth': 1, 'rel_type': 'affects', 'direction': 'outbound'}]}",
+      "phase": "BASELINE"
+    },
+    {
+      "name": "trace + explain + prove \u2014 evidence chain",
+      "passed": true,
+      "detail": "{'claim': '019fea60dbe40000000000000000a9c9', 'events': 6, 'chain_valid': True, 'head_audit_hash': [104, 59, 204, 140, 80, 131, 89, 94, 253, 158, 26, 109, 146, 28, 49, 53, 137, 236, 213, 200, 113, 88,",
+      "phase": "BASELINE"
+    },
+    {
+      "name": "discover_schema \u2014 type inventory",
+      "passed": true,
+      "detail": "{'types': ['Component', 'Requirement', 'Task'], 'type_info': {'Component': {'count': 2}, 'Requirement': {'count': 1}, 'Task': {'count': 1}}, 'total_types': 3}",
+      "phase": "BASELINE"
+    },
+    {
+      "name": "metrics \u2014 server statistics",
+      "passed": true,
+      "detail": "{'journal_seq': 6, 'total_objects': 4, 'active_objects': 4, 'uptime_seconds': 0.3, 'by_lifecycle': {'draft': 4, 'active': 0, 'verified': 0, 'archived': 0, 'deleted': 0}, 'by_type': {'Component': 2, 'R",
+      "phase": "BASELINE"
+    },
+    {
+      "name": "audit_report \u2014 compliance report",
+      "passed": true,
+      "detail": "{'audit_chain': '683bcc8c5083595efd9e1a6d921c313589ecd5c871584e0a89dd068e5c863315', 'journal_seq': 6, 'journal_events': 6, 'total_objects': 4, 'objects': [{'koid': '019fea60dbd40000000000000000a9c9', ",
+      "phase": "BASELINE"
+    },
+    {
+      "name": "forget \u2014 tombstone + get still returns",
+      "passed": true,
+      "detail": "{'koid': '019fea60dbe40000000000000000a9c9', 'version': 3, 'commit_ts': 117069817063866368, 'type_name': 'Task', 'state': 'deleted', 'properties': {'priority': 'high', 'title': 'Test task for universa",
+      "phase": "BASELINE"
+    },
+    {
+      "name": "session_init \u2014 agent identity established",
+      "passed": true,
+      "detail": "{'session': {'agent_id': 'universal-harness-agent', 'run_id': 'run-001', 'tenant': None, 'roles': ['tester']}, 'established': True, 'note': 'Session identity established. Subsequent tool calls inherit",
+      "phase": "AGENT"
+    },
+    {
+      "name": "batch \u2014 atomic multi-operation",
+      "passed": true,
+      "detail": "{'results': [{'op': 'remember', 'ok': False, 'error': 'missing argument: type_name'}, {'op': 'remember', 'ok': False, 'error': 'missing argument: type_name'}], 'count': 2}",
+      "phase": "AGENT"
+    },
+    {
+      "name": "agent_memory \u2014 agent session memory",
+      "passed": true,
+      "detail": "{'koid': '019fea60dc0b0000000000000000a9c9', 'stored': True}",
+      "phase": "AGENT"
+    },
+    {
+      "name": "decide \u2014 provenance-tagged decision",
+      "passed": true,
+      "detail": "{'koid': '019fea60dc0d0000000000000000a9c9', 'version': 2, 'decision': 'verified_against_code', 'confidence': 0.99, 'recorded': True}",
+      "phase": "AGENT"
+    },
+    {
+      "name": "deploy_program \u2014 Program KO created",
+      "passed": true,
+      "detail": "{'koid': '019fea60dc120000000000000000a9c9', 'version': 1, 'name': 'TestProgram', 'language': 'AIKOQL'}",
+      "phase": "MRFC-0030"
+    },
+    {
+      "name": "list_programs \u2014 program inventory",
+      "passed": true,
+      "detail": "{'programs': [{'koid': '019fea60dc120000000000000000a9c9', 'name': 'TestProgram', 'language': 'AIKOQL', 'version': 1, 'lifecycle': 'draft'}]}",
+      "phase": "MRFC-0030"
+    },
+    {
+      "name": "deploy_policy \u2014 Policy KO created",
+      "passed": true,
+      "detail": "{'koid': '019fea60dc170000000000000000a9c9', 'version': 1, 'name': 'TestPolicy'}",
+      "phase": "MRFC-0030"
+    },
+    {
+      "name": "deploy_workflow \u2014 Workflow KO created",
+      "passed": true,
+      "detail": "{'koid': '019fea60dc1b0000000000000000a9c9', 'version': 1, 'name': 'TestWorkflow'}",
+      "phase": "MRFC-0030"
+    },
+    {
+      "name": "deploy_agent \u2014 Agent KO created",
+      "passed": true,
+      "detail": "{'koid': '019fea60dc1d0000000000000000a9c9', 'version': 1, 'name': 'TestAgent'}",
+      "phase": "MRFC-0030"
+    },
+    {
+      "name": "deploy_trigger \u2014 Trigger KO created",
+      "passed": true,
+      "detail": "{'koid': '019fea60dc200000000000000000a9c9', 'version': 1, 'name': 'TestTrigger'}",
+      "phase": "MRFC-0030"
+    },
+    {
+      "name": "execute_workflow \u2014 Workflow execution",
+      "passed": true,
+      "detail": "{'logs': ['Workflow: 019fea60dc1b0000000000000000a9c9', '  Step 1: TestProgram', '    OK: 0 results in 0ms'], 'executed': True}",
+      "phase": "MRFC-0030"
+    },
+    {
+      "name": "check_triggers \u2014 Trigger evaluation",
+      "passed": true,
+      "detail": "{'water_mark': 15}",
+      "phase": "MRFC-0030"
+    },
+    {
+      "name": "program_cache_stats \u2014 KVM cache status",
+      "passed": true,
+      "detail": "{'cache_hits': 0}",
+      "phase": "MRFC-0030"
+    },
+    {
+      "name": "document_ingest \u2014 markdown ingestion",
+      "passed": true,
+      "detail": "{'koid': '019fea60dc300000000000000000a9c9', 'sha256': '6593ff35b4e4c008c46256876c5732711beea59f1835781bd342ce7816a3647e', 'size_bytes': 178, 'page_count': 1, 'char_count': 177, 'status': 'extracted'}",
+      "phase": "MRFC-0050"
+    },
+    {
+      "name": "document_status \u2014 processing status",
+      "passed": true,
+      "detail": "{'koid': '019fea60dc300000000000000000a9c9', 'filename': 'test_doc.md', 'mime_type': 'text/markdown', 'sha256': '6593ff35b4e4c008c46256876c5732711beea59f1835781bd342ce7816a3647e', 'size_bytes': 178, '",
+      "phase": "MRFC-0050"
+    },
+    {
+      "name": "document_list \u2014 document inventory",
+      "passed": true,
+      "detail": "{'documents': [{'koid': '019fea60dc300000000000000000a9c9', 'filename': 'test_doc.md', 'mime_type': 'text/markdown', 'sha256': '6593ff35b4e4c008c46256876c5732711beea59f1835781bd342ce7816a3647e', 'size",
+      "phase": "MRFC-0050"
+    },
+    {
+      "name": "document_compile \u2014 knowledge extraction",
+      "passed": true,
+      "detail": "{'ir': {'entities': [{'name': 'Test Document', 'type_hint': 'Person', 'mentions': ['# Test Document'], 'confidence': 0.8500000238418579, 'evidence': {'document_id': None, 'page': 1, 'bbox_text': None,",
+      "phase": "MRFC-0050"
+    },
+    {
+      "name": "constraint: valid typed properties accepted",
+      "passed": true,
+      "detail": "{'koid': '019fea60dc660000000000000000a9c9', 'version': 1, 'commit_ts': 117069817070354432}",
+      "phase": "MRFC-0060"
+    },
+    {
+      "name": "discover_ontology \u2014 ontology discovery",
+      "passed": true,
+      "detail": "{'saved': True, 'koid': '019fea60dc690000000000000000a9c9', 'version': 1, 'namespace': 'discovered', 'classes': 4, 'relationships': 0, 'mappings': 4, 'types_discovered': ['Claim', 'Component', 'Requir",
+      "phase": "MRFC-0060"
+    },
+    {
+      "name": "studio: Studio HTML \u2014 /studio",
+      "passed": true,
+      "detail": "HTTP 200, 112988 bytes",
+      "phase": "STUDIO"
+    },
+    {
+      "name": "studio: Health endpoint \u2014 /health",
+      "passed": true,
+      "detail": "HTTP 200, 36 bytes",
+      "phase": "STUDIO"
+    },
+    {
+      "name": "studio: Metrics endpoint \u2014 /metrics",
+      "passed": true,
+      "detail": "HTTP 200, 524 bytes",
+      "phase": "STUDIO"
+    },
+    {
+      "name": "studio: Schema API \u2014 /api/v1/schema",
+      "passed": true,
+      "detail": "HTTP 200, 1484 bytes",
+      "phase": "STUDIO"
+    }
+  ]
+}

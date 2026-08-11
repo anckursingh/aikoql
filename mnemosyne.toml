@@ -43,6 +43,18 @@ max_calls_per_minute = 120
 # For global rate limiting, use a shared backend (see rate_limiter.rs) or
 # enforce limits at the gateway layer.
 
+[embedding]
+# Embedding provider for MATCH ... USING EMBEDDING queries.
+# "openai" (OpenAI-compatible: Ollama, OpenAI, etc.) — uses /v1/embeddings.
+# "candle" (local BERT inference via candle-transformers) — no network, CPU only.
+provider = "openai"
+# Base URL for OpenAI-compatible endpoint (omit /v1; default: Ollama localhost).
+base_url = "http://localhost:11434"
+# Model name for the embedding endpoint.
+model = "nomic-embed-text"
+# API key for remote services (omit for Ollama — no auth needed).
+# api_key = "sk-..."
+
 [logging]
 # Log level: trace, debug, info, warn, error
 level = "info"

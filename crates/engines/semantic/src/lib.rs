@@ -14,6 +14,18 @@ use mnemosyne_scheduler::SchedulerJob;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
+// Embedding providers
+// ---------------------------------------------------------------------------
+
+pub mod provider;
+
+pub use provider::MockEmbeddingProvider;
+#[cfg(feature = "embedding-openai")]
+pub use provider::OpenAiEmbeddingProvider;
+#[cfg(feature = "embedding-candle")]
+pub use provider::CandleEmbedding;
+
+// ---------------------------------------------------------------------------
 // AI Provider plugin interface
 // ---------------------------------------------------------------------------
 

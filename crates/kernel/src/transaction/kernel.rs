@@ -9,6 +9,7 @@
 //!   injected `Clock`; no external calls anywhere in this file.
 //! - ACL enforcement lives HERE (kernel boundary), not in adapters (MRFC-0001 §12).
 
+use crate::embedding::EmbeddingProvider;
 use crate::event::EventManager;
 use crate::index::coordinator::IndexCoordinator;
 use crate::knowledge::codec::{self, Enc};
@@ -514,6 +515,8 @@ pub struct Kernel {
     field_crypto: Option<Arc<FieldCrypto>>,
     /// Per-type encryption policies: type_name → which fields to encrypt.
     encryption_policies: Arc<RwLock<HashMap<String, EncryptionPolicy>>>,
+    /// Optional embedding provider for query-time ANN search (USING EMBEDDING).
+    embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
 }
 
 impl Kernel {
@@ -549,6 +552,7 @@ impl Kernel {
             tenants: Arc::new(TenantManager::new()),
             field_crypto: None,
             encryption_policies: Arc::new(RwLock::new(HashMap::new())),
+            embedding_provider: None,
         })
     }
 
@@ -641,12 +645,31 @@ impl Kernel {
             tenants: self.tenants.clone(),
             field_crypto: self.field_crypto.clone(),
             encryption_policies: self.encryption_policies.clone(),
+            embedding_provider: self.embedding_provider.clone(),
         }
     }
 
     /// Attach an index maintainer; `find_similar` routes through it afterwards.
     pub fn attach_indexes(&self, m: Arc<dyn crate::index::IndexMaintainerApi>) {
         *self.indexes.write().unwrap() = Some(IndexCoordinator::with_maintainer(m));
+    }
+
+    /// Builder: attach an embedding provider for query-time ANN search
+    /// (`MATCH ... USING EMBEDDING`).  Call after `Kernel::open()`.
+    pub fn with_embedding_provider(mut self, p: Arc<dyn EmbeddingProvider>) -> Self {
+        self.embedding_provider = Some(p);
+        self
+    }
+
+    /// Embed query text using the configured provider.  Returns
+    /// `UnsupportedOperation` when no provider is wired.
+    pub fn embed_text(&self, text: &str, model: Option<&str>) -> KResult<Vec<f32>> {
+        match &self.embedding_provider {
+            Some(p) => p.embed(text, model),
+            None => Err(KError::UnsupportedOperation(
+                "no embedding provider configured; set --embedding-provider flag".into(),
+            )),
+        }
     }
 
     /// Register a schema for automatic validation on `remember`.

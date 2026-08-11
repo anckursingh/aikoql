@@ -1,0 +1,2 @@
+--- Page 1 [native] ---
+# Mnemosyne Quick Start  Mnemosyne is a knowledge database for AI agents. It stores knowledge objects with provenance, supports hybrid recall (vector + text + graph), and exposes 59 MCP tools.  ## Architecture - Storage Engine (RocksDB) - Commit Pipeline (MRFC-0008) - Hybrid Recall (MRFC-0009) - AIKOQL Query Language (MRFC-0010) - Knowledge Syscall ABI (MRFC-0011)  ## Key Concepts - Knowledge Objects (KOs) are the unit of storage - Every write is provenance-tagged - The commit pipeline ensures atomicity

@@ -228,17 +228,24 @@ impl Interpreter {
                 embedding_model,
                 k,
             } => {
-                // If no vector but we have query_text, fall back to text search
-                // (ponytail: real embedding generation needs an embedding provider
-                // wired into the kernel; add when available).
-                if vector.is_empty() {
-                    if let Some(ref qt) = query_text {
-                        return self.exec_text_search(kernel, qt, k, &input);
+                // Generate embedding from query_text if no explicit vector.
+                let vector = if vector.is_empty() {
+                    match query_text.as_deref() {
+                        Some(qt) => match kernel.embed_text(qt, embedding_model.as_deref()) {
+                            Ok(v) => v,
+                            // Graceful degrade: no provider or error -> Jaccard.
+                            Err(_) => return self.exec_text_search(kernel, qt, k, &input),
+                        },
+                        None => {
+                            return Err(KError::InvalidQuery(
+                                "AnnSearch requires vector or query_text".into(),
+                            ));
+                        }
                     }
-                    return Err(KError::InvalidQuery(
-                        "AnnSearch requires vector or query_text".into(),
-                    ));
-                }
+                } else {
+                    vector.clone()
+                };
+                // Shared cosine-scoring path (embedded + explicit vectors).
                 let kos = self.resolve_objects(&input)?;
                 let model = embedding_model.as_deref();
                 let mut scored: Vec<(KOID, f32, String, u64)> = kos
@@ -253,7 +260,7 @@ impl Interpreter {
                         }
                         Some((
                             ko.koid,
-                            cosine(vector, emb),
+                            cosine(&vector, emb),
                             ko.metadata.type_name.clone(),
                             ko.version,
                         ))

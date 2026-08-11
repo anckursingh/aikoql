@@ -18,6 +18,7 @@
 //! outside, in the (future) scheduler domain.
 
 pub mod async_kernel;
+pub mod embedding;
 pub mod eval;
 pub mod event;
 pub mod index;
@@ -63,6 +64,7 @@ pub mod kernel {
 }
 
 pub use async_kernel::AsyncKernel;
+pub use embedding::EmbeddingProvider;
 pub use eval::{
     Contradiction, EvalContradictionQuery, EvalRecallQuery, EvalRecallReport, EvalStalenessQuery,
     EvalStalenessReport,

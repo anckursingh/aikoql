@@ -9,3 +9,16 @@ repository.workspace = true
 [dependencies]
 mnemosyne-kernel = { path = "../../kernel" }
 mnemosyne-scheduler = { path = "../../engines/scheduler" }
+ureq = { version = "2", optional = true }
+serde_json = { version = "1", optional = true }
+candle-core = { version = "0.9", optional = true }
+candle-nn = { version = "0.9", optional = true }
+candle-transformers = { version = "0.9", optional = true }
+tokenizers = { version = "0.20", optional = true }
+hf-hub = { version = "0.3", optional = true }
+
+[features]
+default = ["embedding-openai"]
+embedding-openai = ["dep:ureq", "dep:serde_json"]
+embedding-candle = ["dep:candle-core", "dep:candle-nn",
+                    "dep:candle-transformers", "dep:tokenizers", "dep:hf-hub"]
