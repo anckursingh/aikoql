@@ -1,7 +1,7 @@
 {
-  "name": "mnemosyne-sdk",
+  "name": "aikoql-sdk",
   "version": "0.1.0",
-  "description": "TypeScript SDK for the Mnemosyne Knowledge Database",
+  "description": "TypeScript SDK for the Aikoql Knowledge Database",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {

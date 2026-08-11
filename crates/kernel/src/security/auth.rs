@@ -1,7 +1,7 @@
 //! Authorization Manager — RBAC + ACL policy evaluation.
 //!
 //! Owns the in-memory role-inheritance graph and per-type policy rules loaded
-//! from persisted `mnemosyne:role` and `mnemosyne:policy` objects. The kernel
+//! from persisted `aikoql:role` and `aikoql:policy` objects. The kernel
 //! calls `AuthManager::authorize` before reads, writes, evolves, and deletes.
 
 use crate::knowledge::kom::*;
@@ -9,8 +9,8 @@ use crate::storage::repository::KnowledgeRepository;
 use crate::transaction::kernel::Subject;
 use std::collections::{HashMap, HashSet};
 
-pub const ROLE_TYPE: &str = "mnemosyne:role";
-pub const POLICY_TYPE: &str = "mnemosyne:policy";
+pub const ROLE_TYPE: &str = "aikoql:role";
+pub const POLICY_TYPE: &str = "aikoql:policy";
 
 fn value_text(v: &Value) -> Option<&str> {
     match v {

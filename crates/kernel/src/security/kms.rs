@@ -325,7 +325,7 @@ fn xor_unwrap(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
 // deferred. Stubs accept a key_uri and return the key for MVP.
 // ---------------------------------------------------------------------------
 
-/// AWS KMS stub. Set MNEMOSYNE_AWS_KMS_KEY=<hex-key> for MVP.
+/// AWS KMS stub. Set AIKOQL_AWS_KMS_KEY=<hex-key> for MVP.
 pub struct AwsKms {
     pub key_id: String,
     cached_key: std::sync::RwLock<Option<[u8; 32]>>,
@@ -345,7 +345,7 @@ impl KeyManager for AwsKms {
         if let Some(k) = *self.cached_key.read().unwrap() {
             return Ok(k);
         }
-        if let Ok(hex) = std::env::var("MNEMOSYNE_AWS_KMS_KEY") {
+        if let Ok(hex) = std::env::var("AIKOQL_AWS_KMS_KEY") {
             let bytes = hex_decode(hex.trim()).map_err(|e| format!("invalid hex key: {}", e))?;
             if bytes.len() != 32 {
                 return Err("AWS KMS key must be 32 bytes (64 hex chars)".into());
@@ -355,7 +355,7 @@ impl KeyManager for AwsKms {
             *self.cached_key.write().unwrap() = Some(key);
             Ok(key)
         } else {
-            Err("AWS KMS not configured. Set MNEMOSYNE_AWS_KMS_KEY env var or use LocalKms.".into())
+            Err("AWS KMS not configured. Set AIKOQL_AWS_KMS_KEY env var or use LocalKms.".into())
         }
     }
 
@@ -366,7 +366,7 @@ impl KeyManager for AwsKms {
     }
 }
 
-/// Azure Key Vault stub. Set MNEMOSYNE_AZURE_KV_KEY=<hex-key> for MVP.
+/// Azure Key Vault stub. Set AIKOQL_AZURE_KV_KEY=<hex-key> for MVP.
 pub struct AzureKeyVault {
     pub vault_url: String,
     pub key_name: String,
@@ -388,7 +388,7 @@ impl KeyManager for AzureKeyVault {
         if let Some(k) = *self.cached_key.read().unwrap() {
             return Ok(k);
         }
-        if let Ok(hex) = std::env::var("MNEMOSYNE_AZURE_KV_KEY") {
+        if let Ok(hex) = std::env::var("AIKOQL_AZURE_KV_KEY") {
             let bytes = hex_decode(hex.trim()).map_err(|e| format!("invalid hex key: {}", e))?;
             if bytes.len() != 32 {
                 return Err("Azure KV key must be 32 bytes".into());
@@ -399,7 +399,7 @@ impl KeyManager for AzureKeyVault {
             Ok(key)
         } else {
             Err(
-                "Azure Key Vault not configured. Set MNEMOSYNE_AZURE_KV_KEY env var or use LocalKms."
+                "Azure Key Vault not configured. Set AIKOQL_AZURE_KV_KEY env var or use LocalKms."
                     .into(),
             )
         }
@@ -412,7 +412,7 @@ impl KeyManager for AzureKeyVault {
     }
 }
 
-/// GCP Cloud KMS stub. Set MNEMOSYNE_GCP_KMS_KEY=<hex-key> for MVP.
+/// GCP Cloud KMS stub. Set AIKOQL_GCP_KMS_KEY=<hex-key> for MVP.
 pub struct GcpKeyManager {
     pub project_id: String,
     pub location: String,
@@ -443,7 +443,7 @@ impl KeyManager for GcpKeyManager {
         if let Some(k) = *self.cached_key.read().unwrap() {
             return Ok(k);
         }
-        if let Ok(hex) = std::env::var("MNEMOSYNE_GCP_KMS_KEY") {
+        if let Ok(hex) = std::env::var("AIKOQL_GCP_KMS_KEY") {
             let bytes = hex_decode(hex.trim()).map_err(|e| format!("invalid hex key: {}", e))?;
             if bytes.len() != 32 {
                 return Err("GCP KMS key must be 32 bytes".into());
@@ -454,7 +454,7 @@ impl KeyManager for GcpKeyManager {
             Ok(key)
         } else {
             Err(
-                "GCP Cloud KMS not configured. Set MNEMOSYNE_GCP_KMS_KEY env var or use LocalKms."
+                "GCP Cloud KMS not configured. Set AIKOQL_GCP_KMS_KEY env var or use LocalKms."
                     .into(),
             )
         }
@@ -645,7 +645,7 @@ mod tests {
     fn v1_migration_roundtrip() {
         let _lock = TEST_MUTEX.lock().unwrap();
         let tmp =
-            std::env::temp_dir().join(format!("mnemosyne-test-kms-v1-{}", std::process::id()));
+            std::env::temp_dir().join(format!("aikoql-test-kms-v1-{}", std::process::id()));
 
         // Simulate a v1 key file.
         let mut original_key = [0u8; 32];
@@ -677,7 +677,7 @@ mod tests {
     #[test]
     fn local_kms_create_and_load() {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let tmp = std::env::temp_dir().join(format!("mnemosyne-test-kms-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("aikoql-test-kms-{}", std::process::id()));
         let kms = LocalKms::new(tmp.to_str().unwrap());
         let key1 = kms.master_key("test-passphrase").unwrap();
         assert_ne!(key1, [0u8; 32]);
@@ -714,7 +714,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         let p = crate::security::crypto::Aes256Gcm::new();
         let tmp =
-            std::env::temp_dir().join(format!("mnemosyne-test-kms-rot-{}", std::process::id()));
+            std::env::temp_dir().join(format!("aikoql-test-kms-rot-{}", std::process::id()));
         let kms = LocalKms::new(tmp.to_str().unwrap());
         let old = kms.master_key("pw").unwrap();
         let new = kms.rotate("pw", &p).unwrap();
@@ -733,7 +733,7 @@ mod tests {
     fn local_kms_new_file_is_v2_format() {
         let _lock = TEST_MUTEX.lock().unwrap();
         let tmp =
-            std::env::temp_dir().join(format!("mnemosyne-test-kms-new-{}", std::process::id()));
+            std::env::temp_dir().join(format!("aikoql-test-kms-new-{}", std::process::id()));
         let kms = LocalKms::new(tmp.to_str().unwrap());
         let _ = kms.master_key("fresh").unwrap();
         let on_disk = fs::read(&tmp).unwrap();
@@ -746,7 +746,7 @@ mod tests {
     fn corrupted_envelope_size_rejected() {
         let _lock = TEST_MUTEX.lock().unwrap();
         let tmp =
-            std::env::temp_dir().join(format!("mnemosyne-test-kms-corr-{}", std::process::id()));
+            std::env::temp_dir().join(format!("aikoql-test-kms-corr-{}", std::process::id()));
         // Write 50 bytes of garbage (not 48 for v1, not 88 for v2).
         fs::write(&tmp, &[0u8; 50]).unwrap();
         let kms = LocalKms::new(tmp.to_str().unwrap());

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Universal Test Harness for Mnemosyne — Agent Knowledge Interface (MRFC-0070)
+Universal Test Harness for aikoql — Agent Knowledge Interface (MRFC-0070)
 
-Acts as the testing bridge between coding agents and the Mnemosyne application.
+Acts as the testing bridge between coding agents and the aikoql application.
 Every MRFC-0070 phase MUST pass this harness before marking complete.
 
 Methodology (per IMPLEMENTATION-PLAN.md):
@@ -10,10 +10,10 @@ Methodology (per IMPLEMENTATION-PLAN.md):
 
 Usage:
     # Start the MCP server first (or let the harness start it):
-    python tests/universal_test_harness.py --server-binary ./target/release/mnemosyne-mcp.exe
+    python tests/universal_test_harness.py --server-binary ./target/release/aikoql-mcp.exe
 
     # With a pre-built release:
-    python tests/universal_test_harness.py --server-binary ./build/windows/mnemosyne-mcp.exe
+    python tests/universal_test_harness.py --server-binary ./build/windows/aikoql-mcp.exe
 
     # Connect to an already-running server:
     python tests/universal_test_harness.py --host 127.0.0.1 --port 9090
@@ -27,7 +27,7 @@ Usage:
 Design:
     - Each test section maps to acceptance criteria from IMPLEMENTATION-PLAN.md
     - Tests are self-documenting: failures explain what knowledge capability broke
-    - The harness itself is a real agent client — dogfooding Mnemosyne's own interface
+    - The harness itself is a real agent client — dogfooding aikoql's own interface
     - Results are JSON-serializable for CI integration
 """
 
@@ -54,7 +54,7 @@ DEFAULT_HTTP_PORT = 9091
 SERVER_STARTUP_TIMEOUT = 30  # seconds
 
 # ---------------------------------------------------------------------------
-# MCP Client (minimal — avoids dependency on mnemosyne package for portability)
+# MCP Client (minimal — avoids dependency on aikoql package for portability)
 # ---------------------------------------------------------------------------
 
 
@@ -73,7 +73,7 @@ class McpError(Exception):
 
 
 class McpClient:
-    """Minimal JSON-RPC 2.0 client for Mnemosyne MCP server."""
+    """Minimal JSON-RPC 2.0 client for Aikoql MCP server."""
 
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         self.host = host
@@ -319,7 +319,7 @@ class UniversalTestHarness:
             })
             self.assert_ok(fs, "find_similar — hybrid recall works", phase)
 
-            # AIKOQL query
+            # aikoql query
             a = self.client.call_tool("aikoql", {
                 "query": "MATCH Task RETURN *",
             })
@@ -431,7 +431,7 @@ class UniversalTestHarness:
             prog = self.client.call_tool("deploy_program", {
                 "name": "TestProgram",
                 "body": "MATCH Task RETURN *",
-                "language": "AIKOQL",
+                "language": "aikoql",
             })
             self.assert_ok(prog, "deploy_program — Program KO created", phase)
 
@@ -690,7 +690,7 @@ class UniversalTestHarness:
 
 
 class ServerManager:
-    """Manages the Mnemosyne MCP server lifecycle."""
+    """Manages the Aikoql MCP server lifecycle."""
 
     def __init__(self, binary: str, db_path: str, host: str = DEFAULT_HOST,
                  port: int = DEFAULT_PORT, http_port: int = DEFAULT_HTTP_PORT):
@@ -755,24 +755,24 @@ class ServerManager:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Universal Test Harness for Mnemosyne — Agent Knowledge Interface",
+        description="Universal Test Harness for aikoql — Agent Knowledge Interface",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   # Build and test (auto-starts server):
-  python tests/universal_test_harness.py --server-binary ./target/release/mnemosyne-mcp.exe
+  python tests/universal_test_harness.py --server-binary ./target/release/aikoql-mcp.exe
 
   # Test an already-running server:
   python tests/universal_test_harness.py --host 127.0.0.1 --port 9090
 
   # Run only Phase A0 tests:
-  python tests/universal_test_harness.py --server-binary ./target/release/mnemosyne-mcp.exe --phase A0
+  python tests/universal_test_harness.py --server-binary ./target/release/aikoql-mcp.exe --phase A0
 
   # Run Phase A0 + Baseline tests:
-  python tests/universal_test_harness.py --server-binary ./target/release/mnemosyne-mcp.exe --phase A0 --phase BASELINE
+  python tests/universal_test_harness.py --server-binary ./target/release/aikoql-mcp.exe --phase A0 --phase BASELINE
         """,
     )
-    parser.add_argument("--server-binary", help="Path to mnemosyne-mcp binary (auto-starts server)")
+    parser.add_argument("--server-binary", help="Path to aikoql-mcp binary (auto-starts server)")
     parser.add_argument("--host", default=DEFAULT_HOST, help=f"MCP server host (default: {DEFAULT_HOST})")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"MCP server port (default: {DEFAULT_PORT})")
     parser.add_argument("--http-port", type=int, default=DEFAULT_HTTP_PORT, help=f"HTTP metrics/Studio port (default: {DEFAULT_HTTP_PORT})")
@@ -790,10 +790,10 @@ Examples:
         if args.server_binary:
             if not os.path.exists(args.server_binary):
                 print(f"ERROR: Server binary not found: {args.server_binary}")
-                print("Build it first: cargo build --release -p mnemosyne-mcp")
+                print("Build it first: cargo build --release -p aikoql-mcp")
                 sys.exit(1)
 
-            db_path = tempfile.mktemp(suffix=".redb", prefix="mnemosyne_test_")
+            db_path = tempfile.mktemp(suffix=".redb", prefix="aikoql_test_")
             server_mgr = ServerManager(args.server_binary, db_path, args.host, args.port, args.http_port)
             if not server_mgr.start():
                 sys.exit(1)
@@ -802,7 +802,7 @@ Examples:
         client = McpClient(args.host, args.port)
         client.connect(timeout=10.0)
         client.initialize("universal-test-harness", "1.0.0")
-        print(f"Connected to Mnemosyne at {args.host}:{args.port}")
+        print(f"Connected to aikoql at {args.host}:{args.port}")
 
         # Run tests
         harness = UniversalTestHarness(client, verbose=args.verbose)

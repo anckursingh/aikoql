@@ -75,6 +75,209 @@ dependencies = [
 ]
 
 [[package]]
+name = "aikoql-benchmarks"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "aikoql-scheduler",
+ "aikoql-vector",
+ "criterion",
+]
+
+[[package]]
+name = "aikoql-compiler"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "criterion",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aikoql-graph"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+]
+
+[[package]]
+name = "aikoql-ingestion"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "pdf-extract",
+ "rayon",
+ "serde",
+ "serde_json",
+ "syn 2.0.119",
+ "zip 0.6.6",
+]
+
+[[package]]
+name = "aikoql-kernel"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "aikoql-compiler",
+ "aikoql-graph",
+ "aikoql-runtime",
+ "aikoql-scheduler",
+ "aikoql-vector",
+ "argon2",
+ "chacha20poly1305",
+ "criterion",
+ "hmac 0.12.1",
+ "proptest",
+ "rand 0.8.7",
+ "redb",
+ "regex",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
+name = "aikoql-mcp"
+version = "0.1.0"
+dependencies = [
+ "aikoql-compiler",
+ "aikoql-graph",
+ "aikoql-ingestion",
+ "aikoql-kernel",
+ "aikoql-mongodb",
+ "aikoql-neo4j",
+ "aikoql-postgres",
+ "aikoql-runtime",
+ "aikoql-scheduler",
+ "aikoql-semantic",
+ "aikoql-sqlite",
+ "base64 0.22.1",
+ "serde_json",
+ "sha2 0.10.9",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "aikoql-mongodb"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "futures-util",
+ "mongodb",
+ "tokio",
+]
+
+[[package]]
+name = "aikoql-neo4j"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "aikoql-postgres"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "postgres",
+]
+
+[[package]]
+name = "aikoql-provider-sdk"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+]
+
+[[package]]
+name = "aikoql-proxy"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "aikoql-py"
+version = "0.1.0"
+dependencies = [
+ "aikoql-compiler",
+ "aikoql-graph",
+ "aikoql-kernel",
+ "aikoql-runtime",
+ "pyo3",
+]
+
+[[package]]
+name = "aikoql-reasoning"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "aikoql-scheduler",
+]
+
+[[package]]
+name = "aikoql-rocksdb"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "rocksdb",
+]
+
+[[package]]
+name = "aikoql-runtime"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "aikoql-semantic",
+ "tokio",
+]
+
+[[package]]
+name = "aikoql-scheduler"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+]
+
+[[package]]
+name = "aikoql-semantic"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "aikoql-scheduler",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "hf-hub",
+ "serde_json",
+ "tokenizers",
+ "ureq",
+]
+
+[[package]]
+name = "aikoql-sqlite"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "rusqlite",
+]
+
+[[package]]
+name = "aikoql-vector"
+version = "0.1.0"
+dependencies = [
+ "aikoql-kernel",
+ "fast-hnsw",
+ "serde_json",
+ "tantivy",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2334,207 +2537,6 @@ dependencies = [
  "libc",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mnemosyne-benchmarks"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "mnemosyne-kernel",
- "mnemosyne-scheduler",
- "mnemosyne-vector",
-]
-
-[[package]]
-name = "mnemosyne-compiler"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "mnemosyne-kernel",
- "proptest",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "mnemosyne-graph"
-version = "0.1.0"
-dependencies = [
- "mnemosyne-kernel",
-]
-
-[[package]]
-name = "mnemosyne-ingestion"
-version = "0.1.0"
-dependencies = [
- "mnemosyne-kernel",
- "pdf-extract",
- "rayon",
- "serde",
- "serde_json",
- "syn 2.0.119",
- "zip 0.6.6",
-]
-
-[[package]]
-name = "mnemosyne-kernel"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "argon2",
- "chacha20poly1305",
- "criterion",
- "hmac 0.12.1",
- "mnemosyne-compiler",
- "mnemosyne-graph",
- "mnemosyne-runtime",
- "mnemosyne-scheduler",
- "mnemosyne-vector",
- "proptest",
- "rand 0.8.7",
- "redb",
- "regex",
- "sha2 0.10.9",
- "tokio",
-]
-
-[[package]]
-name = "mnemosyne-mcp"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "mnemosyne-compiler",
- "mnemosyne-graph",
- "mnemosyne-ingestion",
- "mnemosyne-kernel",
- "mnemosyne-mongodb",
- "mnemosyne-neo4j",
- "mnemosyne-postgres",
- "mnemosyne-runtime",
- "mnemosyne-semantic",
- "mnemosyne-sqlite",
- "serde_json",
- "sha2 0.10.9",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "mnemosyne-mongodb"
-version = "0.1.0"
-dependencies = [
- "futures-util",
- "mnemosyne-kernel",
- "mongodb",
- "tokio",
-]
-
-[[package]]
-name = "mnemosyne-neo4j"
-version = "0.1.0"
-dependencies = [
- "mnemosyne-kernel",
- "serde",
- "serde_json",
- "ureq",
-]
-
-[[package]]
-name = "mnemosyne-postgres"
-version = "0.1.0"
-dependencies = [
- "mnemosyne-kernel",
- "postgres",
-]
-
-[[package]]
-name = "mnemosyne-provider-sdk"
-version = "0.1.0"
-dependencies = [
- "mnemosyne-kernel",
-]
-
-[[package]]
-name = "mnemosyne-proxy"
-version = "0.1.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "mnemosyne-py"
-version = "0.1.0"
-dependencies = [
- "mnemosyne-compiler",
- "mnemosyne-graph",
- "mnemosyne-kernel",
- "mnemosyne-runtime",
- "pyo3",
-]
-
-[[package]]
-name = "mnemosyne-reasoning"
-version = "0.1.0"
-dependencies = [
- "mnemosyne-kernel",
- "mnemosyne-scheduler",
-]
-
-[[package]]
-name = "mnemosyne-rocksdb"
-version = "0.1.0"
-dependencies = [
- "mnemosyne-kernel",
- "rocksdb",
-]
-
-[[package]]
-name = "mnemosyne-runtime"
-version = "0.1.0"
-dependencies = [
- "mnemosyne-kernel",
- "tokio",
-]
-
-[[package]]
-name = "mnemosyne-scheduler"
-version = "0.1.0"
-dependencies = [
- "mnemosyne-kernel",
-]
-
-[[package]]
-name = "mnemosyne-semantic"
-version = "0.1.0"
-dependencies = [
- "candle-core",
- "candle-nn",
- "candle-transformers",
- "hf-hub",
- "mnemosyne-kernel",
- "mnemosyne-scheduler",
- "serde_json",
- "tokenizers",
- "ureq",
-]
-
-[[package]]
-name = "mnemosyne-sqlite"
-version = "0.1.0"
-dependencies = [
- "mnemosyne-kernel",
- "rusqlite",
-]
-
-[[package]]
-name = "mnemosyne-vector"
-version = "0.1.0"
-dependencies = [
- "fast-hnsw",
- "mnemosyne-kernel",
- "serde_json",
- "tantivy",
 ]
 
 [[package]]

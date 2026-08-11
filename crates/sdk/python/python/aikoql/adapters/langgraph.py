@@ -1,4 +1,4 @@
-"""LangGraph-native checkpoint/long-term memory adapter backed by Mnemosyne.
+"""LangGraph-native checkpoint/long-term memory adapter backed by aikoql.
 
 Implements the saver surface LangGraph expects (`get`, `put`, `list` and async
 variants). Does not require LangGraph at import time.
@@ -11,22 +11,22 @@ import copy
 import json
 from typing import Any, Iterator, Optional
 
-from mnemosyne._mnemosyne import Mnemosyne
+from aikoql._aikoql import aikoql
 
 
-class MnemosyneLangGraphSaver:
-    """LangGraph-compatible checkpoint saver backed by Mnemosyne KOs."""
+class AikoqlLangGraphSaver:
+    """LangGraph-compatible checkpoint saver backed by Aikoql KOs."""
 
     def __init__(self, path: str, subject: str = "langgraph", salt: int = 0) -> None:
-        self.client = Mnemosyne(path, salt)
+        self.client = aikoql(path, salt)
         self.subject = subject
         self._type_name = "langgraph_checkpoint"
 
     @classmethod
     def from_client(
-        cls, client: Mnemosyne, subject: str = "langgraph"
-    ) -> "MnemosyneLangGraphSaver":
-        """Wrap an existing Mnemosyne client (useful for tests)."""
+        cls, client: aikoql, subject: str = "langgraph"
+    ) -> "AikoqlLangGraphSaver":
+        """Wrap an existing aikoql client (useful for tests)."""
         inst = cls.__new__(cls)
         inst.client = client
         inst.subject = subject

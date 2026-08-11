@@ -9,7 +9,7 @@
 //! - BSON fields → PropertyMap (sub-docs → Map, arrays → List)
 //! - Schemaless: properties auto-discovered from documents
 
-use mnemosyne_kernel::knowledge::kom::*;
+use aikoql_kernel::knowledge::kom::*;
 use mongodb::bson::{doc, Bson, Document};
 use mongodb::Client;
 use std::collections::BTreeMap;
@@ -133,7 +133,7 @@ impl MongoConnector {
 }
 
 // ---------------------------------------------------------------------------
-// BSON → Mnemosyne Value
+// BSON → Aikoql Value
 // ---------------------------------------------------------------------------
 
 fn document_to_ko(doc: &Document, collection: &str) -> (PropertyMap, KOID) {

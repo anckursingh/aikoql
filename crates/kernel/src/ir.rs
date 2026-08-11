@@ -1,7 +1,7 @@
 //! Knowledge IR — the intermediate representation between query frontends
 //! and the runtime interpreter (MRFC-0005 §Compiler Layer).
 //!
-//! Every frontend (MCP, SQL, GraphQL, AIKOQL) compiles to this operator DAG.
+//! Every frontend (MCP, SQL, GraphQL, aikoql) compiles to this operator DAG.
 //! The runtime interpreter executes it against the Knowledge Kernel.
 //!
 //! Design: linear pipeline for v1 (no joins, no subqueries). Operators are

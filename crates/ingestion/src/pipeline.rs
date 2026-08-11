@@ -22,6 +22,7 @@ use crate::ontology::{discover_ontology_from_ir, OntologyProposal};
 use crate::resolution::{
     resolve_entities, EntityResolver, KnowledgeBaseEntry, MockEntityResolver, ResolutionResult,
 };
+use crate::secret_filter::{filter_secrets, SecretFinding};
 use crate::DocumentModel;
 
 // ---------------------------------------------------------------------------
@@ -69,7 +70,7 @@ impl PipelineStats {
 /// The output of a full document knowledge compilation run (D1–D8).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CompilationResult {
-    /// Intermediate knowledge IR from semantic analysis.
+    /// Intermediate knowledge IR from semantic analysis (secrets redacted).
     pub ir: KnowledgeIr,
     /// Ontology proposals discovered from the document.
     pub ontology: OntologyProposal,
@@ -83,6 +84,8 @@ pub struct CompilationResult {
     pub evidence_trail: EvidenceTrail,
     /// Phase-level statistics.
     pub stats: PipelineStats,
+    /// Secrets/PII detected and redacted during compilation (R8 remediation).
+    pub secret_findings: Vec<SecretFinding>,
 }
 
 impl CompilationResult {
@@ -340,8 +343,11 @@ pub fn compile_document(
 
     // D4: DocumentAst → KnowledgeIr
     let t_ir = time_now();
-    let ir = document_model_to_ir(doc, analyzer);
+    let raw_ir = document_model_to_ir(doc, analyzer);
     let dt_ir = time_now() - t_ir;
+
+    // R8: scan and redact secrets/PII before IR flows into commit planning
+    let (ir, secret_findings) = filter_secrets(&raw_ir);
 
     // D5: KnowledgeIr → OntologyProposal
     let t_onto = time_now();
@@ -395,6 +401,7 @@ pub fn compile_document(
         embedded_chunks,
         evidence_trail,
         stats,
+        secret_findings,
     }
 }
 

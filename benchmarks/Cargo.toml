@@ -1,19 +1,23 @@
 [package]
-name = "mnemosyne-benchmarks"
-description = "Mnemosyne benchmark harness — load tests and micro-benchmarks. Gates releases on published thresholds."
+name = "aikoql-benchmarks"
+description = "aikoql benchmark harness — load tests and micro-benchmarks. Gates releases on published thresholds."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-mnemosyne-kernel = { path = "../crates/kernel" }
-mnemosyne-vector = { path = "../crates/engines/vector" }
-mnemosyne-scheduler = { path = "../crates/engines/scheduler" }
+aikoql-kernel = { path = "../crates/kernel" }
+aikoql-vector = { path = "../crates/engines/vector" }
+aikoql-scheduler = { path = "../crates/engines/scheduler" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
 name = "hybrid_recall"
+harness = false
+
+[[bench]]
+name = "knowledge_ops"
 harness = false

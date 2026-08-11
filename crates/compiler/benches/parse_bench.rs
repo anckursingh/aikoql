@@ -4,7 +4,7 @@
 //! end-to-end `parser::compile()` latency.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use mnemosyne_compiler::parser;
+use aikoql_compiler::parser;
 
 /// Build a query string of approximately `size_kb` kilobytes.
 fn build_fat_query(size_kb: usize) -> String {

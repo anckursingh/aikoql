@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mnemosyne — The Agent-First Knowledge Database</title>
-<meta name="description" content="Mnemosyne is the knowledge operating system for AI agents. Everything is a Knowledge Object — data, programs, workflows, policies. 59 MCP tools, 4 SDKs, 14-panel Studio UI.">
+<title>aikoql — The Agent-First Knowledge Database</title>
+<meta name="description" content="aikoql is the knowledge operating system for AI agents. Everything is a Knowledge Object — data, programs, workflows, policies. 59 MCP tools, 4 SDKs, 14-panel Studio UI.">
 <style>
 :root {
   --bg: #0a0a12;
@@ -103,13 +103,13 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
 
 <header>
   <div class="wrap">
-    <div class="logo">🧠 Mnemosyne<span>OS</span></div>
+    <div class="logo">🧠 aikoql<span>OS</span></div>
     <nav>
       <a href="#features">Features</a>
       <a href="#architecture">Architecture</a>
       <a href="#install">Install</a>
       <a href="/docs/">Docs</a>
-      <a href="https://github.com/anckursingh/mnemosyne" target="_blank">GitHub</a>
+      <a href="https://github.com/anckursingh/aikoql" target="_blank">GitHub</a>
     </nav>
   </div>
 </header>
@@ -135,7 +135,7 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
 <div class="divider"></div>
 
 <section id="features">
-  <h2>Why Mnemosyne?</h2>
+  <h2>Why aikoql?</h2>
   <p class="lead">The only database built from the ground up for the agent era. Not a better Postgres. Not a better vector DB. A new category.</p>
 
   <div class="features">
@@ -151,7 +151,7 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
     </div>
     <div class="feature">
       <div class="icon">📝</div>
-      <h3>AIKOQL Query Language</h3>
+      <h3>Aikoql Query Language</h3>
       <p>Purpose-built for knowledge graphs. Lexer → Parser → AST → Semantic Analyzer → KIR → Planner → Runtime. 5 statement types, 6 operators. Streaming results.</p>
     </div>
     <div class="feature">
@@ -230,10 +230,10 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
 <div class="divider"></div>
 
 <section>
-  <h2>What Can Mnemosyne Studio Show?</h2>
+  <h2>What Can Aikoql Studio Show?</h2>
   <p class="lead">14 panels — 5 unique capabilities no competitor has.</p>
   <div class="panels-grid">
-    <div class="panel-chip">⌨️ Query Editor (AIKOQL + CodeMirror 6)</div>
+    <div class="panel-chip">⌨️ Query Editor (aikoql + CodeMirror 6)</div>
     <div class="panel-chip">🕸️ Knowledge Graph (vis-network)</div>
     <div class="panel-chip">📁 Knowledge Explorer (tree browser)</div>
     <div class="panel-chip">🏷️ Schema Explorer (types + relationships)</div>
@@ -263,30 +263,30 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
       <button class="tab" onclick="showInstall('linux',this)">Linux (musl)</button>
       <button class="tab" onclick="showInstall('source',this)">From Source</button>
     </div>
-    <div id="inst-windows"><pre><code>curl -LO https://github.com/anckursingh/mnemosyne/releases/latest/download/mnemosyne-windows.exe
-mv mnemosyne-windows.exe mnemosyne.exe
-.\mnemosyne.exe --help</code></pre></div>
-    <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/mnemosyne/releases/latest/download/mnemosyne-linux
-chmod +x mnemosyne-linux && mv mnemosyne-linux /usr/local/bin/mnemosyne
-mnemosyne --help</code></pre></div>
-    <div id="inst-source" style="display:none"><pre><code>git clone https://github.com/anckursingh/mnemosyne.git
-cd mnemosyne
-cargo build --release -p mnemosyne-mcp
-./target/release/mnemosyne-mcp --help</code></pre></div>
+    <div id="inst-windows"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/latest/download/aikoql-windows.exe
+mv aikoql-windows.exe aikoql.exe
+.\aikoql.exe --help</code></pre></div>
+    <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/latest/download/aikoql-linux
+chmod +x aikoql-linux && mv aikoql-linux /usr/local/bin/aikoql
+aikoql --help</code></pre></div>
+    <div id="inst-source" style="display:none"><pre><code>git clone https://github.com/anckursingh/aikoql.git
+cd aikoql
+cargo build --release -p aikoql-mcp
+./target/release/aikoql-mcp --help</code></pre></div>
   </div>
 
   <h3 style="margin: 28px 0 12px;">Quick Start</h3>
   <pre><code># Interactive shell (in-memory)
-mnemosyne shell :memory:
+aikoql shell :memory:
 
 # Start MCP server + HTTP + Studio UI
-mnemosyne serve --listen 127.0.0.1:9090 --metrics-addr 127.0.0.1:9091 ./kb.redb
+aikoql serve --listen 127.0.0.1:9090 --metrics-addr 127.0.0.1:9091 ./kb.redb
 
 # Ingest your codebase into knowledge base
-mnemosyne ingest-dir ~/my-project
+aikoql ingest-dir ~/my-project
 
 # Print knowledge report for any directory
-mnemosyne report ~/my-project</code></pre>
+aikoql report ~/my-project</code></pre>
 
   <h3 style="margin: 28px 0 12px;">Connect from Code</h3>
   <div class="tabs">
@@ -294,16 +294,16 @@ mnemosyne report ~/my-project</code></pre>
     <button class="tab" onclick="showInstall('ts',this)">TypeScript</button>
     <button class="tab" onclick="showInstall('go',this)">Go</button>
   </div>
-  <div id="inst-py"><pre><code>from mnemosyne import Agent
+  <div id="inst-py"><pre><code>from aikoql import Agent
 db = Agent.connect("localhost:9090")  # or Agent.connect("./kb.redb")
-db.remember({"type_name": "Note", "properties": {"body": "Hello Mnemosyne"}})
+db.remember({"type_name": "Note", "properties": {"body": "Hello aikoql"}})
 result = db.query("MATCH Note RETURN *")</code></pre></div>
-  <div id="inst-ts" style="display:none"><pre><code>import { MnemosyneClient } from 'mnemosyne-sdk';
-const client = new MnemosyneClient({ command: './mnemosyne' });
+  <div id="inst-ts" style="display:none"><pre><code>import { AikoqlClient } from 'aikoql-sdk';
+const client = new AikoqlClient({ command: './aikoql' });
 await client.connect();
 await client.remember({ type_name: 'Note', properties: { body: 'Hello' } });</code></pre></div>
-  <div id="inst-go" style="display:none"><pre><code>import "github.com/ancku/mnemosyne-sdk"
-client := mnemosyne.NewClient("127.0.0.1:9090")
+  <div id="inst-go" style="display:none"><pre><code>import "github.com/ancku/aikoql-sdk"
+client := aikoql.NewClient("127.0.0.1:9090")
 client.Connect()
 result, _ := client.Remember(map[string]interface{}{"type_name": "Note"})</code></pre></div>
 </section>
@@ -312,10 +312,10 @@ result, _ := client.Remember(map[string]interface{}{"type_name": "Note"})</code>
 
 <section>
   <h2>Comparison</h2>
-  <p class="lead">What does Mnemosyne give you that other databases don't?</p>
+  <p class="lead">What does aikoql give you that other databases don't?</p>
   <div class="comparison">
     <table>
-      <tr><th>Capability</th><th>Neo4j</th><th>PostgreSQL</th><th>MongoDB</th><th>Weaviate</th><th>Mnemosyne</th></tr>
+      <tr><th>Capability</th><th>Neo4j</th><th>PostgreSQL</th><th>MongoDB</th><th>Weaviate</th><th>aikoql</th></tr>
       <tr><td>Graph + Vector + Text in one</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅</td></tr>
       <tr><td>MCP protocol native</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅</td></tr>
       <tr><td>Context Compiler (agents)</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅</td></tr>
@@ -338,12 +338,12 @@ result, _ := client.Remember(map[string]interface{}{"type_name": "Note"})</code>
     <a href="/docs/getting-started">Getting Started</a>
     <a href="/docs/api-reference">API Reference</a>
     <a href="/docs/architecture">Architecture</a>
-    <a href="https://github.com/anckursingh/mnemosyne" target="_blank">GitHub</a>
+    <a href="https://github.com/anckursingh/aikoql" target="_blank">GitHub</a>
     <a href="/docs/guides/programs">Programs-as-KOs</a>
     <a href="/docs/guides/encryption">Encryption</a>
     <a href="/docs/guides/import">Import Data</a>
   </div>
-  <p>Mnemosyne — Apache 2.0 License. Built in Rust. Single binary, zero runtime deps.</p>
+  <p>aikoql — Apache 2.0 License. Built in Rust. Single binary, zero runtime deps.</p>
 </footer>
 
 <script>

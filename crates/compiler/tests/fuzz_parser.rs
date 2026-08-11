@@ -1,15 +1,15 @@
-//! Fuzz tests for AIKOQL Lexer + Parser (MRFC-0010 §11).
+//! Fuzz tests for Aikoql Lexer + Parser (MRFC-0010 §11).
 //!
 //! Invariants:
 //! - Lexer never panics on arbitrary input.
 //! - Parser never panics on any valid token stream.
 //! - Round-trip: AST → string → parse → equivalent AST.
 
-use mnemosyne_compiler::parser::{self, ast::*};
+use aikoql_compiler::parser::{self, ast::*};
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
-// Strategy: generate random valid AIKOQL source fragments
+// Strategy: generate random valid aikoql source fragments
 // ---------------------------------------------------------------------------
 
 fn ident_str() -> impl Strategy<Value = String> {
@@ -70,7 +70,7 @@ proptest! {
         }
     }
 
-    /// Parser invariant: never panics on valid AIKOQL fragments.
+    /// Parser invariant: never panics on valid aikoql fragments.
     #[test]
     fn fuzz_parser_never_panics(
         kw in keyword(),

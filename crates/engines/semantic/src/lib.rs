@@ -1,4 +1,4 @@
-//! Mnemosyne Semantic Engine — AI-powered knowledge enrichment.
+//! Aikoql Semantic Engine — AI-powered knowledge enrichment.
 //!
 //! Consumes Knowledge Events, calls pluggable AI providers, and writes back
 //! provenance-tagged `SemanticBlock` enrichments with `origin=SemanticEnrichment`.
@@ -8,9 +8,9 @@
 //! classification, NER. All work is async, off the commit path, and writes
 //! back versioned claims — never silent mutation (Determinism Law).
 
-use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::transaction::kernel::{Kernel, RememberRequest, Subject};
-use mnemosyne_scheduler::SchedulerJob;
+use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::transaction::kernel::{Kernel, RememberRequest, Subject};
+use aikoql_scheduler::SchedulerJob;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 pub mod provider;
 
+pub use provider::EmbeddingEnricher;
 pub use provider::MockEmbeddingProvider;
 #[cfg(feature = "embedding-openai")]
 pub use provider::OpenAiEmbeddingProvider;
@@ -135,8 +136,8 @@ impl SchedulerJob for SemanticEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mnemosyne_kernel::{ManualClock, MemoryEngine, Metadata};
-    use mnemosyne_scheduler::Scheduler;
+    use aikoql_kernel::{ManualClock, MemoryEngine, Metadata};
+    use aikoql_scheduler::Scheduler;
     use std::sync::Arc;
 
     struct MockProvider;

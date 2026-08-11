@@ -51,7 +51,7 @@ impl ErrorCode {
             ErrorCode::Timeout => "The operation timed out. Retry with a smaller batch or narrower query",
             ErrorCode::Internal => "An unexpected error occurred. Report this if it persists",
             ErrorCode::NotAProgram => "The KOID references an object that is not a program. Use list_programs to find valid programs",
-            ErrorCode::CompileError => "The AIKOQL query has a syntax error. Check the query and retry",
+            ErrorCode::CompileError => "The aikoql query has a syntax error. Check the query and retry",
         }
     }
 

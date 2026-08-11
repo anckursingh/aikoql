@@ -1,4 +1,4 @@
-//! AIKOQL Parser — recursive descent per MRFC-0010 §3.
+//! Aikoql Parser — recursive descent per MRFC-0010 §3.
 //! Error codes and messages are defined in `diagnostics.rs`.
 
 use super::ast::*;

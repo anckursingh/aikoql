@@ -4,8 +4,8 @@
 //! This file is the canonical coverage map. If a rule is added to the grammar,
 //! a test must be added here.
 
-use mnemosyne_compiler::parser;
-use mnemosyne_compiler::parser::ast::*;
+use aikoql_compiler::parser;
+use aikoql_compiler::parser::ast::*;
 
 // ---------------------------------------------------------------------------
 // query = match | create | update | delete | ingest

@@ -1,5 +1,5 @@
 [package]
-name = "mnemosyne-mongodb"
+name = "aikoql-mongodb"
 description = "MongoDB import connector — collection discovery, BSON-to-KO mapping, bulk import"
 version.workspace = true
 edition.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-mnemosyne-kernel = { path = "../../kernel" }
+aikoql-kernel = { path = "../../kernel" }
 mongodb = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 futures-util = "0.3"

@@ -7,9 +7,9 @@
 //! - index_lag is reported and returns to 0 after catch-up
 //! - forget removes documents from recall through the index path
 
-use mnemosyne_kernel::*;
-use mnemosyne_scheduler::IndexMaintainer;
-use mnemosyne_vector::{HnswVectorIndex, TantivyTextIndex};
+use aikoql_kernel::*;
+use aikoql_scheduler::IndexMaintainer;
+use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -304,7 +304,7 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let checkpoint_dir = std::env::temp_dir().join(format!("mnemosyne-i08-{}", stamp));
+    let checkpoint_dir = std::env::temp_dir().join(format!("aikoql-i08-{}", stamp));
     m1.checkpoint(&checkpoint_dir).unwrap();
     m1.shutdown();
 

@@ -1,4 +1,4 @@
-# Mnemosyne — Vision & Competitive Strategy
+# aikoql — Vision & Competitive Strategy
 
 **Version:** 1.0
 **Status:** Approved direction (pending MRFC ratification)
@@ -13,29 +13,29 @@
 For 40 years, data stores were designed for humans writing queries. The next decade belongs to agents performing thousands of memory reads and writes per task. A store *designed* for agents — not retrofitted for them — wins the era. This transition is comparable in magnitude to the shift from batch to interactive computing.
 
 ## Bet 2 — LLMs commoditize; memory compounds
-Foundation models are interchangeable and racing toward zero margin. Frameworks are gravity-less. The only layer that accumulates durable value and resists substitution is **memory**: knowledge with provenance, history, confidence, and relationships. Data gravity created the last generation of infrastructure winners; **knowledge gravity creates the next**. Mnemosyne is a bet on becoming the gravity well.
+Foundation models are interchangeable and racing toward zero margin. Frameworks are gravity-less. The only layer that accumulates durable value and resists substitution is **memory**: knowledge with provenance, history, confidence, and relationships. Data gravity created the last generation of infrastructure winners; **knowledge gravity creates the next**. aikoql is a bet on becoming the gravity well.
 
 ## Bet 3 — Regulation makes provenance mandatory, not optional
-The EU AI Act and its global successors will require traceable evidence for automated decisions. Every enterprise deploying agents will be forced to answer *"why did the AI decide this?"* Provenance stops being a feature and becomes **compliance infrastructure**. Because provenance lives in the write path — object model, commit pipeline, version semantics — it cannot be retrofitted into stores that never captured it (see `ARCHITECTURE-REVIEW.md` §10.1). Mnemosyne is the only store born with it in the commit pipeline.
+The EU AI Act and its global successors will require traceable evidence for automated decisions. Every enterprise deploying agents will be forced to answer *"why did the AI decide this?"* Provenance stops being a feature and becomes **compliance infrastructure**. Because provenance lives in the write path — object model, commit pipeline, version semantics — it cannot be retrofitted into stores that never captured it (see `ARCHITECTURE-REVIEW.md` §10.1). aikoql is the only store born with it in the commit pipeline.
 
 ## Bet 4 — The AI infrastructure soup consolidates into a few agent runtime substrates
 Today's stack (Postgres + vector DB + graph DB + cache + search + memory-SaaS + orchestrator + observability) mirrors web stacks before consolidation. The winners will not be the best vector index; they will be the substrates that make the other boxes unnecessary. Multi-model capability is table stakes by 2028. **The real contest is for the memory substrate.**
 
 ## Bet 5 — The first major database substantially built by coding agents from specs will out-execute everyone
-The MRFC corpus makes Mnemosyne the most agent-legible infrastructure project in existence. Agent-authored contributions increasingly dominate open-source velocity. This is not a process detail — it is a **compounding execution moat** that no 35-year-old codebase can replicate.
+The MRFC corpus makes aikoql the most agent-legible infrastructure project in existence. Agent-authored contributions increasingly dominate open-source velocity. This is not a process detail — it is a **compounding execution moat** that no 35-year-old codebase can replicate.
 
 ## Historical framing
 | Era | Category | Winners |
 |---|---|---|
 | 1980s–2010s | System of Record | Oracle, PostgreSQL |
 | 2010s–2020s | System of Intelligence | Snowflake, Databricks |
-| 2020s– | **System of Memory (open slot)** | **Mnemosyne — The Knowledge Kernel for AI** |
+| 2020s– | **System of Memory (open slot)** | **aikoql — The Knowledge Kernel for AI** |
 
 ---
 
 # 2. Positioning
 
-- **Category claimed from day one:** *Mnemosyne — The Knowledge Kernel for AI.*
+- **Category claimed from day one:** *aikoql — The Knowledge Kernel for AI.*
 - **Gen-1 product truth:** a provenance-native memory substrate for AI agents — embedded-first, MCP-native, spec-first.
 - **Discipline:** the brand runs ahead of the product; the capability claims never do. Kernels become platforms, platforms become ecosystems, databases become commodities.
 - **Never positioned as:** "better Postgres", "better vector DB", "better graph DB". Those fights are lost before they start.
@@ -102,7 +102,7 @@ Each phase ships a real product **and** deepens a moat. No phase may start befor
 **Market moves**
 - First knowledge-program gallery: reusable memory behaviors (summarize-and-verify, entity resolution, ontology alignment) installable as plugins.
 
-**Edge created:** the category jump — from *store* to *knowledge computation*. Competitors sell storage; Mnemosyne sells what knowledge **does**.
+**Edge created:** the category jump — from *store* to *knowledge computation*. Competitors sell storage; aikoql sells what knowledge **does**.
 
 **Exit gate:** scheduler syscalls in production at 2+ partners; 25+ community knowledge programs; zero deterministic-path regressions.
 
@@ -114,7 +114,7 @@ Each phase ships a real product **and** deepens a moat. No phase may start befor
 - Multi-tenancy and resource governance (`ResourceContext` threaded through execution).
 
 **Market moves**
-- Land 2–3 regulated-industry lighthouse customers (finance, health, legal) where agents currently **cannot be deployed at all**. Mnemosyne becomes the unblock.
+- Land 2–3 regulated-industry lighthouse customers (finance, health, legal) where agents currently **cannot be deployed at all**. aikoql becomes the unblock.
 
 **Edge created:** compliance-grade AI — the enterprise revenue moat.
 
@@ -170,4 +170,4 @@ Each phase ships a real product **and** deepens a moat. No phase may start befor
 
 # 7. Bottom Line
 
-Every incumbent is racing to add vector search to the past. Mnemosyne is the only project designing the memory layer of the agent economy — where the user is a machine, the unit is knowledge, the currency is trust, and the moat is provenance captured at commit time. Execute Phases 0–2 flawlessly and the category is ours to lose. The window is 12–24 months.
+Every incumbent is racing to add vector search to the past. aikoql is the only project designing the memory layer of the agent economy — where the user is a machine, the unit is knowledge, the currency is trust, and the moat is provenance captured at commit time. Execute Phases 0–2 flawlessly and the category is ours to lose. The window is 12–24 months.

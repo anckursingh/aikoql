@@ -1,5 +1,5 @@
-# Mnemosyne Configuration
-# Copy this file to where you run mnemosyne-mcp, or override values via CLI flags.
+# Aikoql Configuration
+# Copy this file to where you run aikoql-mcp, or override values via CLI flags.
 # CLI flags always take precedence over this config file.
 
 [storage]
@@ -8,12 +8,12 @@
 # rocksdb: C++ LSM-tree, concurrent readers+writers, better for production workloads.
 backend = "redb"
 # Path to the database directory (redb uses a single file, rocksdb uses a directory).
-path = "./mnemosyne_data"
+path = "./aikoql_data"
 
 [database]
 # Deprecated: use [storage] section above. Kept for backward compatibility.
-# Path to the redb database file. Default: ./mnemosyne.redb
-path = "./mnemosyne.redb"
+# Path to the redb database file. Default: ./aikoql.redb
+path = "./aikoql.redb"
 
 [server]
 # TCP listen address. Comment out for stdio mode (single client).
@@ -28,9 +28,9 @@ path = "./mnemosyne.redb"
 enabled = false
 
 # Path to the master key file for the LocalKMS.
-# key_path = "./mnemosyne.key"
+# key_path = "./aikoql.key"
 
-# Passphrase for the LocalKMS key derivation (or set MNEMOSYNE_PASSPHRASE env var).
+# Passphrase for the LocalKMS key derivation (or set AIKOQL_PASSPHRASE env var).
 # passphrase = "change-me-in-production"
 
 [rate_limit]

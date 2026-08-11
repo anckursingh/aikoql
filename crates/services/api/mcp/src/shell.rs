@@ -1,16 +1,16 @@
-//! Interactive AIKOQL shell — the `mnemosyne` REPL.
+//! Interactive aikoql shell — the `aikoql` REPL.
 //!
-//! Like `sqlite3` or `psql`, but for the AIKOQL knowledge query language.
+//! Like `sqlite3` or `psql`, but for the aikoql knowledge query language.
 //! Opens a database file, accepts queries and dot-commands, prints results.
 
-use mnemosyne_compiler::parser;
-use mnemosyne_graph::*;
-use mnemosyne_kernel::ir::IrPlan;
-use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::knowledge::scoring::ko_text;
-use mnemosyne_kernel::transaction::kernel::{Kernel, RememberRequest, Subject};
-use mnemosyne_kernel::{MemoryEngine, Origin, RedbEngine, ReferentialPolicy, SystemClock};
-use mnemosyne_runtime::Interpreter;
+use aikoql_compiler::parser;
+use aikoql_graph::*;
+use aikoql_kernel::ir::IrPlan;
+use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::knowledge::scoring::ko_text;
+use aikoql_kernel::transaction::kernel::{Kernel, RememberRequest, Subject};
+use aikoql_kernel::{MemoryEngine, Origin, RedbEngine, ReferentialPolicy, SystemClock};
+use aikoql_runtime::Interpreter;
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 pub fn run_shell(db_path: &str, tenant: Option<&str>) {
     let tenant_opt: Option<String> = tenant.map(String::from);
-    let engine: Arc<dyn mnemosyne_kernel::StorageEngine> = if db_path == ":memory:" {
+    let engine: Arc<dyn aikoql_kernel::StorageEngine> = if db_path == ":memory:" {
         Arc::new(MemoryEngine::new())
     } else {
         let path = Path::new(db_path);
@@ -34,7 +34,7 @@ pub fn run_shell(db_path: &str, tenant: Option<&str>) {
         Arc::new(Kernel::open(engine, Arc::new(SystemClock), 0xCAFE).expect("open kernel"));
 
     println!(
-        "Mnemosyne {} — AIKOQL Knowledge Shell",
+        "aikoql {} — Aikoql Knowledge Shell",
         env!("CARGO_PKG_VERSION")
     );
     println!("Connected to: {}", db_path);
@@ -51,7 +51,7 @@ pub fn run_shell(db_path: &str, tenant: Option<&str>) {
 
     loop {
         line.clear();
-        write!(stdout, "mnemosyne> ").ok();
+        write!(stdout, "aikoql> ").ok();
         stdout.flush().ok();
 
         match reader.read_line(&mut line) {
@@ -78,9 +78,9 @@ pub fn run_shell(db_path: &str, tenant: Option<&str>) {
             continue;
         }
 
-        // AIKOQL: parse first, then route query vs mutation.
+        // aikoql: parse first, then route query vs mutation.
         match parser::parse(trimmed) {
-            Ok(mnemosyne_compiler::parser::ast::Statement::Create(create)) => {
+            Ok(aikoql_compiler::parser::ast::Statement::Create(create)) => {
                 let mut props = BTreeMap::new();
                 for (k, v) in &create.properties {
                     props.insert(k.clone(), ast_expr_to_value(v));
@@ -148,7 +148,7 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
         ".exit" | ".quit" | ".q" => DotResult::Exit,
 
         ".help" => {
-            println!("AIKOQL Commands:");
+            println!("Aikoql Commands:");
             println!("  GET <koid>                    Fetch object by KOID");
             println!("  FIND [IN <type>] MATCH <prop> <op> <val> [AND|OR ...]  Filtered search");
             println!("  FIND [IN <type>] SIMILAR TO <text>  Similarity search");
@@ -354,19 +354,19 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
     }
 }
 
-fn ast_expr_to_value(e: &mnemosyne_compiler::parser::ast::Expr) -> Value {
+fn ast_expr_to_value(e: &aikoql_compiler::parser::ast::Expr) -> Value {
     match e {
-        mnemosyne_compiler::parser::ast::Expr::String(s) => Value::Text(s.clone()),
-        mnemosyne_compiler::parser::ast::Expr::Number(n) => Value::Float(*n),
-        mnemosyne_compiler::parser::ast::Expr::Bool(b) => Value::Bool(*b),
-        mnemosyne_compiler::parser::ast::Expr::Null => Value::Null,
+        aikoql_compiler::parser::ast::Expr::String(s) => Value::Text(s.clone()),
+        aikoql_compiler::parser::ast::Expr::Number(n) => Value::Float(*n),
+        aikoql_compiler::parser::ast::Expr::Bool(b) => Value::Bool(*b),
+        aikoql_compiler::parser::ast::Expr::Null => Value::Null,
     }
 }
 
 fn execute_and_print(kernel: &Kernel, plan: &IrPlan, stdout: &mut dyn Write) {
     match Interpreter::execute(kernel, plan) {
         Ok(rows) => match rows {
-            mnemosyne_runtime::RowSet::Objects(objs) => {
+            aikoql_runtime::RowSet::Objects(objs) => {
                 if objs.is_empty() {
                     writeln!(stdout, "(0 rows)").ok();
                     return;
@@ -390,7 +390,7 @@ fn execute_and_print(kernel: &Kernel, plan: &IrPlan, stdout: &mut dyn Write) {
                     .ok();
                 }
             }
-            mnemosyne_runtime::RowSet::Scored(results) => {
+            aikoql_runtime::RowSet::Scored(results) => {
                 writeln!(stdout, "── {} result(s) ──", results.len()).ok();
                 for (koid, score, type_name, version) in &results {
                     writeln!(
@@ -404,7 +404,7 @@ fn execute_and_print(kernel: &Kernel, plan: &IrPlan, stdout: &mut dyn Write) {
                     .ok();
                 }
             }
-            mnemosyne_runtime::RowSet::Traversal(hits) => {
+            aikoql_runtime::RowSet::Traversal(hits) => {
                 writeln!(stdout, "── {} hop(s) ──", hits.len()).ok();
                 for (koid, rel_type, depth) in &hits {
                     writeln!(

@@ -1,10 +1,10 @@
 [package]
-name = "mnemosyne-graph"
-description = "Mnemosyne Graph Engine: relationship traversal, path expansion and edge mutation."
+name = "aikoql-graph"
+description = "Aikoql Graph Engine: relationship traversal, path expansion and edge mutation."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-mnemosyne-kernel = { path = "../../kernel" }
+aikoql-kernel = { path = "../../kernel" }

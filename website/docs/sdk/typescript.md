@@ -6,9 +6,9 @@ description: MCP JSON-RPC client for Node.js
 # TypeScript SDK
 
 ```typescript
-import { MnemosyneClient } from 'mnemosyne-sdk';
+import { AikoqlClient } from 'aikoql-sdk';
 
-const client = new MnemosyneClient({ command: './mnemosyne' });
+const client = new AikoqlClient({ command: './aikoql' });
 await client.connect();
 
 // Create
@@ -25,7 +25,7 @@ const results = await client.findSimilar({
   text: 'engineer',
 });
 
-// AIKOQL
+// aikoql
 const rows = await client.aikoql({
   query: 'MATCH Employee RETURN name, role',
 });

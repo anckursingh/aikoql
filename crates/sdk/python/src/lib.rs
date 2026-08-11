@@ -1,13 +1,13 @@
-//! Python SDK for the Mnemosyne Knowledge Kernel.
+//! Python SDK for the Aikoql Knowledge Kernel.
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::useless_conversion)]
 //!
-//! Exposes a minimal, synchronous `Mnemosyne` class backed by the durable
+//! Exposes a minimal, synchronous `aikoql` class backed by the durable
 //! kernel. The LangGraph checkpointer wrapper lives in pure Python on top of
-//! these primitives (`mnemosyne.checkpointer`).
+//! these primitives (`aikoql.checkpointer`).
 
-use mnemosyne_graph::{GraphEngineApi, RelateRequest, TraverseQuery};
-use mnemosyne_kernel::{
+use aikoql_graph::{GraphEngineApi, RelateRequest, TraverseQuery};
+use aikoql_kernel::{
     Fusion, Kernel, KnowledgeContext, Metadata, RedbEngine, RememberRequest, ScoredKO,
     SemanticBlock, SimilarityQuery, Subject, SystemClock, Value, KOID,
 };
@@ -18,7 +18,7 @@ use pyo3::PyObject;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-fn to_pyerr(e: mnemosyne_kernel::KError) -> PyErr {
+fn to_pyerr(e: aikoql_kernel::KError) -> PyErr {
     PyRuntimeError::new_err(format!("{}", e))
 }
 
@@ -50,7 +50,7 @@ fn value_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         Ok(Value::Map(m))
     } else {
         Err(PyValueError::new_err(
-            "unsupported Python value type for Mnemosyne property",
+            "unsupported Python value type for aikoql property",
         ))
     }
 }
@@ -111,7 +111,7 @@ fn semantic_from_py(sem: &Bound<'_, PyDict>) -> PyResult<SemanticBlock> {
     })
 }
 
-fn ko_to_py(py: Python<'_>, ko: &mnemosyne_kernel::KnowledgeObject) -> PyObject {
+fn ko_to_py(py: Python<'_>, ko: &aikoql_kernel::KnowledgeObject) -> PyObject {
     let dict = PyDict::new_bound(py);
     dict.set_item("koid", ko.koid.to_hex()).unwrap();
     dict.set_item("version", ko.version).unwrap();
@@ -146,19 +146,19 @@ fn scored_ko_to_py(py: Python<'_>, s: &ScoredKO) -> PyObject {
 }
 
 #[pyclass]
-pub struct Mnemosyne {
+pub struct aikoql {
     inner: Arc<Kernel>,
 }
 
 #[pymethods]
-impl Mnemosyne {
+impl aikoql {
     #[new]
     #[pyo3(signature = (path, salt = 0))]
     fn new(path: &str, salt: u64) -> PyResult<Self> {
         let engine = RedbEngine::open(path).map_err(to_pyerr)?;
         let kernel =
             Kernel::open(Arc::new(engine), Arc::new(SystemClock), salt).map_err(to_pyerr)?;
-        Ok(Mnemosyne {
+        Ok(aikoql {
             inner: Arc::new(kernel),
         })
     }
@@ -228,7 +228,7 @@ impl Mnemosyne {
                 .forget(
                     &subj,
                     &koid,
-                    mnemosyne_kernel::ForgetMode::Tombstone,
+                    aikoql_kernel::ForgetMode::Tombstone,
                     None,
                     None,
                 )
@@ -336,7 +336,7 @@ impl Mnemosyne {
             dict.set_item("rel_type", h.rel_type.clone()).unwrap();
             dict.set_item(
                 "direction",
-                if h.direction == mnemosyne_graph::Direction::Outbound {
+                if h.direction == aikoql_graph::Direction::Outbound {
                     "outbound"
                 } else {
                     "inbound"
@@ -350,21 +350,21 @@ impl Mnemosyne {
 
     #[pyo3(signature = (query, subject = "query-user"))]
     fn aikoql(&self, py: Python<'_>, query: &str, subject: &str) -> PyResult<PyObject> {
-        let raw = mnemosyne_compiler::parser::compile_with_subject(query, subject)
+        let raw = aikoql_compiler::parser::compile_with_subject(query, subject)
             .map_err(PyRuntimeError::new_err)?;
-        let plan = mnemosyne_compiler::planner::Planner::optimize(&raw);
+        let plan = aikoql_compiler::planner::Planner::optimize(&raw);
         let result = py.allow_threads(move || {
-            mnemosyne_runtime::Interpreter::execute(&self.inner, &plan).map_err(to_pyerr)
+            aikoql_runtime::Interpreter::execute(&self.inner, &plan).map_err(to_pyerr)
         })?;
         match result {
-            mnemosyne_runtime::RowSet::Objects(kos) => {
+            aikoql_runtime::RowSet::Objects(kos) => {
                 let list = PyList::empty_bound(py);
                 for ko in &kos {
                     list.append(ko_to_py(py, ko)).unwrap();
                 }
                 Ok(list.into_py(py))
             }
-            mnemosyne_runtime::RowSet::Scored(scored) => {
+            aikoql_runtime::RowSet::Scored(scored) => {
                 let list = PyList::empty_bound(py);
                 for (koid, score, type_name, version) in &scored {
                     let dict = PyDict::new_bound(py);
@@ -382,7 +382,7 @@ impl Mnemosyne {
 }
 
 #[pymodule]
-fn _mnemosyne(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<Mnemosyne>()?;
+fn _aikoql(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<aikoql>()?;
     Ok(())
 }

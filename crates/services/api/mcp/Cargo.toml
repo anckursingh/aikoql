@@ -1,22 +1,23 @@
 [package]
-name = "mnemosyne-mcp"
-description = "Mnemosyne MCP server: the Knowledge Syscall ABI (MRFC-0011 Class A) over Model Context Protocol stdio transport"
+name = "aikoql-mcp"
+description = "Aikoql MCP server: the Knowledge Syscall ABI (MRFC-0011 Class A) over Model Context Protocol stdio transport"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-mnemosyne-kernel = { path = "../../../kernel" }
-mnemosyne-graph = { path = "../../../engines/graph" }
-mnemosyne-runtime = { path = "../../../runtime" }
-mnemosyne-compiler = { path = "../../../compiler" }
-mnemosyne-postgres = { path = "../../../providers/postgres" }
-mnemosyne-sqlite = { path = "../../../providers/sqlite" }
-mnemosyne-mongodb = { path = "../../../providers/mongodb" }
-mnemosyne-neo4j = { path = "../../../providers/neo4j" }
-mnemosyne-ingestion = { path = "../../../ingestion" }
-mnemosyne-semantic = { path = "../../../engines/semantic" }
+aikoql-kernel = { path = "../../../kernel" }
+aikoql-graph = { path = "../../../engines/graph" }
+aikoql-runtime = { path = "../../../runtime" }
+aikoql-compiler = { path = "../../../compiler" }
+aikoql-postgres = { path = "../../../providers/postgres" }
+aikoql-sqlite = { path = "../../../providers/sqlite" }
+aikoql-mongodb = { path = "../../../providers/mongodb" }
+aikoql-neo4j = { path = "../../../providers/neo4j" }
+aikoql-ingestion = { path = "../../../ingestion" }
+aikoql-semantic = { path = "../../../engines/semantic" }
+aikoql-scheduler = { path = "../../../engines/scheduler" }
 serde_json = "1"
 sha2 = "0.10"
 base64 = "0.22"
@@ -24,4 +25,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
-embedding-candle = ["mnemosyne-semantic/embedding-candle"]
+embedding-candle = ["aikoql-semantic/embedding-candle"]

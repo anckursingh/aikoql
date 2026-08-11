@@ -8,7 +8,7 @@
     {
       "name": "initialize \u2014 MCP handshake",
       "passed": true,
-      "detail": "{'protocolVersion': '2024-11-05', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'mnemosyne-mcp', 'version': '0.1.0'}}",
+      "detail": "{'protocolVersion': '2024-11-05', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'aikoql-mcp', 'version': '0.1.0'}}",
       "phase": "P0"
     },
     {
@@ -146,13 +146,13 @@
     {
       "name": "deploy_program \u2014 Program KO created",
       "passed": true,
-      "detail": "{'koid': '019fea60dc120000000000000000a9c9', 'version': 1, 'name': 'TestProgram', 'language': 'AIKOQL'}",
+      "detail": "{'koid': '019fea60dc120000000000000000a9c9', 'version': 1, 'name': 'TestProgram', 'language': 'aikoql'}",
       "phase": "MRFC-0030"
     },
     {
       "name": "list_programs \u2014 program inventory",
       "passed": true,
-      "detail": "{'programs': [{'koid': '019fea60dc120000000000000000a9c9', 'name': 'TestProgram', 'language': 'AIKOQL', 'version': 1, 'lifecycle': 'draft'}]}",
+      "detail": "{'programs': [{'koid': '019fea60dc120000000000000000a9c9', 'name': 'TestProgram', 'language': 'aikoql', 'version': 1, 'lifecycle': 'draft'}]}",
       "phase": "MRFC-0030"
     },
     {

@@ -1,17 +1,17 @@
 # MRFC-0050 — Document OCR, Understanding & Knowledge Ingestion
 
 **Status:** Proposed  
-**Target:** Mnemosyne MVP 1.0  
+**Target:** Aikoql MVP 1.0  
 **Scope:** Document ingestion, OCR, layout understanding, semantic
 extraction, ontology mapping, entity resolution, provenance, embeddings,
 and Knowledge Object creation.
 
 ## 1. Purpose
 
-Mnemosyne should treat documents as first-class knowledge sources. OCR
+aikoql should treat documents as first-class knowledge sources. OCR
 is therefore not a standalone RAG feature: it is an ingestion mechanism
 that converts unstructured documents into the same Knowledge Object,
-ontology, graph, vector, provenance, security, and AIKOQL model used for
+ontology, graph, vector, provenance, security, and aikoql model used for
 structured sources.
 
 The target flow is:
@@ -51,7 +51,7 @@ OCR + page/region data   │
              ↓
        Knowledge Kernel
              ↓
-       AIKOQL / Agents / Studio
+       aikoql / Agents / Studio
 ```
 
 ## 2. MVP Goal
@@ -257,7 +257,7 @@ KO
                    v
              Knowledge Kernel
              /            \
-          AIKOQL         Agents
+          aikoql         Agents
 ```
 
 ## 6. HLD Components
@@ -325,7 +325,7 @@ status.
 
 ### OCR Provider
 
-Do not couple Mnemosyne to one vendor.
+Do not couple aikoql to one vendor.
 
 ``` rust
 pub trait OcrProvider: Send + Sync {
@@ -1096,7 +1096,7 @@ document_ingest
  → prove
 ```
 
-## 24. AIKOQL
+## 24. aikoql
 
 Document-derived knowledge must be queryable through the same ontology.
 
@@ -1228,7 +1228,7 @@ Cross-tenant artifact and knowledge access is impossible.
 
 Configured sensitive fields use MRFC-0020 encryption.
 
-### AC-15 AIKOQL
+### AC-15 aikoql
 
 Document-derived KOs are queryable through the ontology.
 
@@ -1271,14 +1271,14 @@ provider cost
 Expose:
 
 ``` text
-mnemosyne_documents_ingested_total
-mnemosyne_documents_failed_total
-mnemosyne_ocr_pages_total
-mnemosyne_ocr_failures_total
-mnemosyne_extraction_duration_seconds
-mnemosyne_ontology_mapping_duration_seconds
-mnemosyne_entity_resolution_duration_seconds
-mnemosyne_document_pipeline_duration_seconds
+aikoql_documents_ingested_total
+aikoql_documents_failed_total
+aikoql_ocr_pages_total
+aikoql_ocr_failures_total
+aikoql_extraction_duration_seconds
+aikoql_ontology_mapping_duration_seconds
+aikoql_entity_resolution_duration_seconds
+aikoql_document_pipeline_duration_seconds
 ```
 
 ## 28. Accuracy
@@ -1545,7 +1545,7 @@ customer-contract.pdf
 10. Resolve Customer against existing PostgreSQL/Neo4j/Mongo KOs.
 11. Commit Document and domain KOs with evidence.
 12. Create embeddings and indexes.
-13. Query through AIKOQL.
+13. Query through aikoql.
 14. Let an agent retrieve the answer plus evidence.
 
 Example agent question:
@@ -1564,7 +1564,7 @@ bounding box
 confidence
 ```
 
-## 33. Strategic Role in Mnemosyne
+## 33. Strategic Role in aikoql
 
 The final architecture becomes:
 
@@ -1573,7 +1573,7 @@ The final architecture becomes:
                         |
                  Agent SDK / MCP
                         |
-                     AIKOQL
+                     aikoql
                         |
               Knowledge / Query Layer
                         |
@@ -1614,7 +1614,7 @@ The strategic point is:
 > system. They are mechanisms for converting unstructured information
 > into the same Knowledge Object universe as structured data.**
 
-That makes document ingestion a critical part of Mnemosyne’s
+That makes document ingestion a critical part of aikoql’s
 semantic-federation story.
 
 ## 34. MVP Definition of Done
@@ -1638,7 +1638,7 @@ semantic-federation story.
 [ ] KO creation
 [ ] Graph indexing
 [ ] Vector indexing
-[ ] AIKOQL query
+[ ] aikoql query
 [ ] MCP/Python agent access
 [ ] Studio document/evidence view
 [ ] Crash recovery
@@ -1672,7 +1672,7 @@ Knowledge Objects
    ↓
 Graph + Vector + Provenance
    ↓
-AIKOQL
+aikoql
    ↓
 Agent
    ↓
@@ -1694,12 +1694,12 @@ Ontology Auto Discovery
       ↓
 Unified Knowledge Model
       ↓
-AIKOQL
+aikoql
       ↓
 Agent
       ↓
 Explainable answer + evidence
 ```
 
-This is the document capability that should support the **Mnemosyne MVP
+This is the document capability that should support the **Aikoql MVP
 1.0** rather than becoming another independent feature set.

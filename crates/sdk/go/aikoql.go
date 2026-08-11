@@ -1,11 +1,11 @@
-// Mnemosyne Go SDK — MCP JSON-RPC client over TCP.
+// Aikoql Go SDK — MCP JSON-RPC client over TCP.
 //
 // Usage:
 //   db := NewClient("127.0.0.1:9090")
 //   db.Initialize()
 //   ko, _ := db.Remember(RememberParams{TypeName: "fact", Properties: map[string]any{"x": 1}})
 
-package mnemosyne
+package aikoql
 
 import (
 	"bufio"
@@ -76,7 +76,7 @@ func (c *Client) Initialize() error {
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]interface{}{},
 		"clientInfo": map[string]interface{}{
-			"name": "mnemosyne-go-sdk", "version": "0.1.0",
+			"name": "aikoql-go-sdk", "version": "0.1.0",
 		},
 	})
 	return err

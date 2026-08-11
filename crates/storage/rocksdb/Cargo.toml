@@ -1,11 +1,11 @@
 [package]
-name = "mnemosyne-rocksdb"
-description = "RocksDB storage backend for Mnemosyne Knowledge Kernel — implements the StorageEngine trait"
+name = "aikoql-rocksdb"
+description = "RocksDB storage backend for Aikoql Knowledge Kernel — implements the StorageEngine trait"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-mnemosyne-kernel = { path = "../../kernel" }
+aikoql-kernel = { path = "../../kernel" }
 rocksdb = "0.22"

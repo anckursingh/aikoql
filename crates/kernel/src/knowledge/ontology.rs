@@ -75,7 +75,7 @@ pub struct RelDef {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PropertyDef {
     pub name: String,
-    /// Mnemosyne value type: "Text", "Int", "Float", "Bool", "DateTime", "Json".
+    /// aikoql value type: "Text", "Int", "Float", "Bool", "DateTime", "Json".
     pub value_type: String,
     pub required: bool,
     /// When `true`, a Null value is accepted for this property.
@@ -545,7 +545,7 @@ impl OntologyRegistry {
 /// Source is detected from KO tags (`source:postgres`, `source:neo4j`, etc.).
 /// If no source tag is found, falls back to `"native"`.
 ///
-/// Skip built-in types: "Ontology", "mnemosyne:*".
+/// Skip built-in types: "Ontology", "aikoql:*".
 /// Idempotent: running multiple times (e.g. after adding more connectors)
 /// produces a cumulative ontology including all types from all sources.
 pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
@@ -555,7 +555,7 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
     let mut rel_pairs: BTreeSet<(String, String)> = BTreeSet::new(); // (source_type, rel_type)
 
     for ko in kos {
-        if ko.metadata.type_name == ONTOLOGY_TYPE || ko.metadata.type_name.starts_with("mnemosyne:")
+        if ko.metadata.type_name == ONTOLOGY_TYPE || ko.metadata.type_name.starts_with("aikoql:")
         {
             continue;
         }
@@ -1312,11 +1312,11 @@ mod tests {
                 classification: None,
             },
         ));
-        // mnemosyne:* types should be skipped.
+        // aikoql:* types should be skipped.
         kos.push(KnowledgeObject::new(
             KOID::ZERO,
             Metadata {
-                type_name: "mnemosyne:role".into(),
+                type_name: "aikoql:role".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec![],

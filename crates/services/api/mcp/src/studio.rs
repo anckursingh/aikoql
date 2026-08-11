@@ -1,4 +1,4 @@
-//! Mnemosyne Studio — The Knowledge OS Desktop.
+//! Aikoql Studio — The Knowledge OS Desktop.
 //!
 //! Served at `/studio`. Single-page application: sidebar navigation + 6 panels.
 //! Every panel uses the existing REST API — zero new backend endpoints.
@@ -11,7 +11,7 @@ pub const STUDIO_HTML: &str = r##"<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mnemosyne Studio</title>
+<title>Aikoql Studio</title>
 <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.js"></script>
 <script type="module">
 import {EditorView, basicSetup} from "https://esm.sh/codemirror@6.0.1"
@@ -19,7 +19,7 @@ import {sql, PostgreSQL} from "https://esm.sh/@codemirror/lang-sql@6.2.0"
 import {oneDark} from "https://esm.sh/@codemirror/theme-one-dark@6.1.2"
 import {autocompletion} from "https://esm.sh/@codemirror/autocomplete@6.0.0"
 
-// ── AIKOQL keyword completions ──
+// ── aikoql keyword completions ──
 const AIKOQL_KEYWORDS = [
   // Statements
   {label:"CREATE",type:"keyword",detail:"Create a Knowledge Object",boost:3},
@@ -59,19 +59,19 @@ const AIKOQL_KEYWORDS = [
   {label:"true",type:"keyword",detail:"Boolean"},
   {label:"false",type:"keyword",detail:"Boolean"},
   {label:"null",type:"keyword",detail:"Null"},
-  // mnemosyne: types
-  {label:"mnemosyne:program",type:"type",detail:"Program KO"},
-  {label:"mnemosyne:workflow",type:"type",detail:"Workflow KO"},
-  {label:"mnemosyne:policy",type:"type",detail:"Policy KO"},
-  {label:"mnemosyne:agent",type:"type",detail:"Agent KO"},
-  {label:"mnemosyne:trigger",type:"type",detail:"Trigger KO"},
-  {label:"mnemosyne:connector",type:"type",detail:"Connector KO"},
-  {label:"mnemosyne:benchmark",type:"type",detail:"Benchmark KO"},
-  {label:"mnemosyne:view",type:"type",detail:"Materialized view KO"},
-  {label:"mnemosyne:report",type:"type",detail:"Report KO"},
-  {label:"mnemosyne:ontology",type:"type",detail:"Ontology KO"},
-  {label:"mnemosyne:memory",type:"type",detail:"Agent memory"},
-  {label:"mnemosyne:query",type:"type",detail:"Saved query KO"},
+  // aikoql: types
+  {label:"aikoql:program",type:"type",detail:"Program KO"},
+  {label:"aikoql:workflow",type:"type",detail:"Workflow KO"},
+  {label:"aikoql:policy",type:"type",detail:"Policy KO"},
+  {label:"aikoql:agent",type:"type",detail:"Agent KO"},
+  {label:"aikoql:trigger",type:"type",detail:"Trigger KO"},
+  {label:"aikoql:connector",type:"type",detail:"Connector KO"},
+  {label:"aikoql:benchmark",type:"type",detail:"Benchmark KO"},
+  {label:"aikoql:view",type:"type",detail:"Materialized view KO"},
+  {label:"aikoql:report",type:"type",detail:"Report KO"},
+  {label:"aikoql:ontology",type:"type",detail:"Ontology KO"},
+  {label:"aikoql:memory",type:"type",detail:"Agent memory"},
+  {label:"aikoql:query",type:"type",detail:"Saved query KO"},
 ];
 // Dynamic type names — populated from /api/schema after login.
 window.__schemaTypes = [];
@@ -104,8 +104,8 @@ window.__initCodeMirror = function() {
       EditorView.updateListener.of(update => {
         if (update.docChanged) {
           const q = update.state.doc.toString().trim();
-          const hist = JSON.parse(localStorage.getItem('mnemosyne-query-history')||'[]');
-          if (q && !hist.includes(q)) { hist.unshift(q); if (hist.length>50) hist.pop(); localStorage.setItem('mnemosyne-query-history',JSON.stringify(hist)); }
+          const hist = JSON.parse(localStorage.getItem('aikoql-query-history')||'[]');
+          if (q && !hist.includes(q)) { hist.unshift(q); if (hist.length>50) hist.pop(); localStorage.setItem('aikoql-query-history',JSON.stringify(hist)); }
         }
       })
     ],
@@ -279,7 +279,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 <!-- ── Login ── -->
 <div id="login-overlay">
   <div class="login-card">
-    <h1>Mnemosyne Studio</h1>
+    <h1>Aikoql Studio</h1>
     <div class="sub">The Knowledge OS Desktop</div>
     <input type="text" id="login-user" placeholder="Username" value="admin" autocomplete="off" />
     <input type="password" id="login-pass" placeholder="Password" value="admin" />
@@ -292,7 +292,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
 <!-- ── App ── -->
 <div id="app">
   <div id="sidebar">
-    <div class="logo">🧠<span class="logo-text">Mnemosyne</span></div>
+    <div class="logo">🧠<span class="logo-text">aikoql</span></div>
     <nav>
       <button class="active" data-panel="query" title="Query Editor">
         <span class="ico">⌨</span><span class="lbl">Query Editor</span>
@@ -352,7 +352,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <div class="panel active" id="panel-query">
         <div class="card">
           <div class="query-editor-label">
-            <span>AIKOQL Query</span>
+            <span>Aikoql Query</span>
             <span>Ctrl+Enter to run · comma-separated properties · SQL-style highlighting</span>
           </div>
           <div id="query-editor"></div>
@@ -456,7 +456,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <div class="panel" id="panel-profiler">
         <div class="card">
           <h3>📊 Query Profiler</h3>
-          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Run AIKOQL queries and examine execution plans. Measure, compare, optimize.</p>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Run aikoql queries and examine execution plans. Measure, compare, optimize.</p>
           <div style="margin-bottom:12px;">
             <textarea id="profiler-query" style="width:100%;height:80px;padding:10px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;font-family:var(--font-mono);resize:vertical;" placeholder="MATCH Employee RETURN name, salary"></textarea>
           </div>
@@ -473,7 +473,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <div class="panel" id="panel-providers">
         <div class="card" style="margin-bottom:12px;">
           <h3>🔌 Provider Manager</h3>
-          <p style="font-size:11px;color:var(--muted);">Connectors bridge Mnemosyne to external data systems. Deploy, monitor, and sync.</p>
+          <p style="font-size:11px;color:var(--muted);">Connectors bridge aikoql to external data systems. Deploy, monitor, and sync.</p>
         </div>
         <div id="providers-list"><div class="loading">Loading connectors...</div></div>
         <div class="card" style="margin-top:12px;">
@@ -541,7 +541,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
       <div class="panel" id="panel-debugger">
         <div class="card">
           <h3>🐛 Program Debugger</h3>
-          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Inspect AIKOQL programs: source code, compiled plan, execution stats, dependency graph.</p>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Inspect aikoql programs: source code, compiled plan, execution stats, dependency graph.</p>
           <div style="display:flex;gap:8px;margin-bottom:12px;">
             <select id="debugger-program-select" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:12px;font-family:var(--font);">
               <option value="">Select a program...</option>
@@ -563,7 +563,7 @@ tr:hover td { background: rgba(108,199,240,0.03); }
           </div>
           <div id="benchmark-deploy-form" style="display:none;margin-bottom:12px;">
             <input type="text" id="bm-name" placeholder="Benchmark name" style="width:100%;padding:6px;margin-bottom:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;font-family:var(--font);" />
-            <textarea id="bm-query" placeholder="Target AIKOQL query" style="width:100%;min-height:60px;padding:6px;margin-bottom:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;font-family:var(--font-mono);"></textarea>
+            <textarea id="bm-query" placeholder="Target aikoql query" style="width:100%;min-height:60px;padding:6px;margin-bottom:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;font-family:var(--font-mono);"></textarea>
             <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
               <span style="font-size:11px;color:var(--muted);">Iterations:</span>
               <input type="number" id="bm-iterations" value="100" min="1" style="width:80px;padding:4px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:5px;font-size:11px;" />
@@ -1458,7 +1458,7 @@ async function loadProgramDebugger() {
     if (!prog) { div.innerHTML = '<div class="error-text">Program not found.</div>'; return; }
     let h = '<div class="card"><h3>'+prog.name+'</h3>';
     h += '<div class="kv-row"><span class="kv-key">KOID</span><span class="kv-val mono">'+prog.koid+'</span></div>';
-    h += '<div class="kv-row"><span class="kv-key">Language</span><span class="kv-val">'+ (prog.language||'AIKOQL') +'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Language</span><span class="kv-val">'+ (prog.language||'aikoql') +'</span></div>';
     h += '<div class="kv-row"><span class="kv-key">Version</span><span class="kv-val">'+ (prog.version||'?') +'</span></div>';
     h += '<div class="kv-row"><span class="kv-key">Lifecycle</span><span class="kv-val">'+ (prog.lifecycle||'?') +'</span></div>';
     h += '</div>';
@@ -1534,7 +1534,7 @@ async function runBenchmark(koid) {
     const name = bm.name || 'unnamed';
     const iterations = parseInt(bm.iterations||'100', 10);
 
-    // Execute the query via AIKOQL and measure.
+    // Execute the query via aikoql and measure.
     const start = performance.now();
     let results = null;
     for (let i = 0; i < iterations; i++) {

@@ -561,7 +561,7 @@ mod tests {
 
     fn sample_ko() -> KnowledgeObject {
         let mut properties = PropertyMap::new();
-        properties.insert("name".into(), Value::Text("mnemosyne".into()));
+        properties.insert("name".into(), Value::Text("aikoql".into()));
         properties.insert("score".into(), Value::Float(0.99));
         properties.insert("rank".into(), Value::Int(-7));
         properties.insert(

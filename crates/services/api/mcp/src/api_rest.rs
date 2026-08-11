@@ -403,13 +403,13 @@ fn check_auth(
 fn openapi_spec() -> Result<J, String> {
     Ok(json!({
         "openapi": "3.0.3",
-        "info": {"title": "Mnemosyne API", "version": "1.0.0"},
+        "info": {"title": "Aikoql API", "version": "1.0.0"},
         "servers": [{"url": "/api/v1"}],
         "paths": {
             "/remember": {"post": {"summary": "Create/update KO"}},
             "/get/{koid}": {"get": {"summary": "Fetch KO by KOID"}},
             "/find-similar": {"post": {"summary": "Hybrid search"}},
-            "/aikoql": {"post": {"summary": "Execute AIKOQL"}},
+            "/aikoql": {"post": {"summary": "Execute aikoql"}},
             "/relate": {"post": {"summary": "Create relationship"}},
             "/traverse": {"post": {"summary": "Walk graph"}},
             "/reason": {"post": {"summary": "Class B: reason"}},

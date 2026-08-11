@@ -1,6 +1,6 @@
 #![recursion_limit = "512"]
 #![allow(clippy::too_many_arguments)]
-//! mnemosyne-mcp — MCP server for the Knowledge Kernel.
+//! aikoql-mcp — MCP server for the Knowledge Kernel.
 //!
 //! Exposes the MRFC-0011 Class A syscalls as MCP tools over the stdio
 //! transport (newline-delimited JSON-RPC 2.0). `notify` is intentionally not
@@ -48,14 +48,16 @@ impl Default for McpSession {
     }
 }
 
-use mnemosyne_graph::*;
-use mnemosyne_kernel::ir::*;
-use mnemosyne_kernel::knowledge::ontology::{
+use aikoql_graph::*;
+use aikoql_kernel::ir::*;
+use aikoql_kernel::knowledge::ontology::{
     discover_ontology, OntologyDef, OntologyRegistry, ONTOLOGY_TYPE,
 };
-use mnemosyne_kernel::lifecycle::schema::SchemaRegistry;
-use mnemosyne_kernel::*;
-use mnemosyne_semantic::provider::OpenAiEmbeddingProvider;
+use aikoql_kernel::lifecycle::schema::SchemaRegistry;
+use aikoql_kernel::*;
+use aikoql_scheduler::Scheduler;
+use aikoql_semantic::provider::OpenAiEmbeddingProvider;
+use aikoql_semantic::{EmbeddingEnricher, SemanticEngine};
 use serde_json::{json, Value as J};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -78,7 +80,7 @@ fn main() {
 
     // Handle --version and --help before anything else.
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("mnemosyne-mcp {}", env!("CARGO_PKG_VERSION"));
+        println!("aikoql-mcp {}", env!("CARGO_PKG_VERSION"));
         return;
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -94,8 +96,8 @@ fn main() {
 
     match subcmd {
         Some("shell") => {
-            // Accept: mnemosyne-mcp shell [--tenant NAME] [DB_PATH]
-            let mut db = "./mnemosyne.redb";
+            // Accept: aikoql-mcp shell [--tenant NAME] [DB_PATH]
+            let mut db = "./aikoql.redb";
             let mut tenant: Option<&str> = None;
             let tail_args: Vec<&str> = args
                 .iter()
@@ -123,25 +125,25 @@ fn main() {
             return;
         }
         Some("backup") => {
-            run_backup(arg_after.unwrap_or("./mnemosyne.redb"));
+            run_backup(arg_after.unwrap_or("./aikoql.redb"));
             return;
         }
         Some("restore") => {
             let backup = arg_after.unwrap_or_else(|| {
-                eprintln!("Usage: mnemosyne-mcp restore <BACKUP_DIR> [DB_PATH]");
+                eprintln!("Usage: aikoql-mcp restore <BACKUP_DIR> [DB_PATH]");
                 std::process::exit(1);
             });
-            let target = arg_after2.unwrap_or("./mnemosyne.redb");
+            let target = arg_after2.unwrap_or("./aikoql.redb");
             run_restore(backup, target);
             return;
         }
         Some("audit") => {
-            run_audit(arg_after.unwrap_or("./mnemosyne.redb"));
+            run_audit(arg_after.unwrap_or("./aikoql.redb"));
             return;
         }
         Some("ingest-dir") => {
             let path = arg_after.unwrap_or(".");
-            let db = arg_after2.unwrap_or("./mnemosyne.redb");
+            let db = arg_after2.unwrap_or("./aikoql.redb");
             let mut parallel = false;
             let mut incremental = false;
             let tail_args: Vec<&str> = args
@@ -174,7 +176,7 @@ fn main() {
                 .map(String::as_str)
                 .collect();
             if ti_args.is_empty() {
-                eprintln!("Usage: mnemosyne-mcp import <SOURCE> [ARGS...]");
+                eprintln!("Usage: aikoql-mcp import <SOURCE> [ARGS...]");
                 eprintln!("Sources: postgres, sqlite, mongodb, neo4j");
                 eprintln!("  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [DB_PATH]");
                 eprintln!("  import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
@@ -187,7 +189,7 @@ fn main() {
             match ti_args[0] {
                 "postgres" => {
                     let mut conn_str: Option<&str> = None;
-                    let mut target_db = "./mnemosyne.redb";
+                    let mut target_db = "./aikoql.redb";
                     let mut tenant: Option<&str> = None;
                     let mut table_filter: Option<&str> = None;
                     let mut ti = 1;
@@ -224,7 +226,7 @@ fn main() {
                         }
                     }
                     let cs = conn_str.unwrap_or_else(|| {
-                        eprintln!("Usage: mnemosyne-mcp import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [DB_PATH]");
+                        eprintln!("Usage: aikoql-mcp import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [DB_PATH]");
                         std::process::exit(1);
                     });
                     run_pg_import(cs, target_db, tenant, table_filter);
@@ -233,7 +235,7 @@ fn main() {
                     let mut uri: Option<&str> = None;
                     let mut user = "neo4j";
                     let mut password = "password";
-                    let mut target_db = "./mnemosyne.redb";
+                    let mut target_db = "./aikoql.redb";
                     let mut tenant: Option<&str> = None;
                     let mut label_filter: Option<&str> = None;
                     let mut ni = 1;
@@ -286,7 +288,7 @@ fn main() {
                         }
                     }
                     let u = uri.unwrap_or_else(|| {
-                        eprintln!("Usage: mnemosyne-mcp import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [DB_PATH]");
+                        eprintln!("Usage: aikoql-mcp import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [DB_PATH]");
                         std::process::exit(1);
                     });
                     run_neo4j_import(u, user, password, target_db, tenant, label_filter);
@@ -294,7 +296,7 @@ fn main() {
                 "mongodb" => {
                     let mut uri: Option<&str> = None;
                     let mut database: Option<&str> = None;
-                    let mut target_db = "./mnemosyne.redb";
+                    let mut target_db = "./aikoql.redb";
                     let mut tenant: Option<&str> = None;
                     let mut coll_filter: Option<&str> = None;
                     let mut mi = 1;
@@ -342,7 +344,7 @@ fn main() {
                         }
                     }
                     let u = uri.unwrap_or_else(|| {
-                        eprintln!("Usage: mnemosyne-mcp import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [DB_PATH]");
+                        eprintln!("Usage: aikoql-mcp import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [DB_PATH]");
                         std::process::exit(1);
                     });
                     let db = database.unwrap_or_else(|| {
@@ -353,7 +355,7 @@ fn main() {
                 }
                 "sqlite" => {
                     let mut source_file: Option<&str> = None;
-                    let mut target_db = "./mnemosyne.redb";
+                    let mut target_db = "./aikoql.redb";
                     let mut tenant: Option<&str> = None;
                     let mut table_filter: Option<&str> = None;
                     let mut si = 1;
@@ -390,7 +392,7 @@ fn main() {
                         }
                     }
                     let sf = source_file.unwrap_or_else(|| {
-                        eprintln!("Usage: mnemosyne-mcp import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
+                        eprintln!("Usage: aikoql-mcp import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
                         std::process::exit(1);
                     });
                     run_sqlite_import(sf, target_db, tenant, table_filter);
@@ -406,7 +408,7 @@ fn main() {
             return;
         }
         Some("keygen") => {
-            run_keygen(arg_after.unwrap_or("./mnemosyne.key"));
+            run_keygen(arg_after.unwrap_or("./aikoql.key"));
             return;
         }
         Some("help") => {
@@ -425,7 +427,7 @@ fn main() {
         .init();
     let mut listen_addr: Option<String> = None;
     let mut metrics_addr: Option<String> = None;
-    let mut db_path = "./mnemosyne.redb".to_string();
+    let mut db_path = "./aikoql.redb".to_string();
     let mut memory_dir = "./memory".to_string();
     let mut embedding_provider: Option<String> = None;
     let mut embedding_base_url = String::new();
@@ -497,39 +499,60 @@ fn main() {
 
     let engine = RedbEngine::open(&db_path).expect("open store");
     let kernel = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xA9C9).expect("open kernel");
-    let kernel = {
-        let url = if embedding_base_url.is_empty() {
-            "http://localhost:11434".to_string()
-        } else {
-            embedding_base_url.clone()
-        };
-        let model = if embedding_model.is_empty() {
-            "nomic-embed-text".to_string()
-        } else {
-            embedding_model.clone()
-        };
-        match embedding_provider.as_deref() {
-            Some("candle") => {
-                #[cfg(feature = "embedding-candle")]
-                {
-                    let provider = mnemosyne_semantic::provider::CandleEmbedding::new()
-                        .expect("load candle embedding model");
-                    kernel.with_embedding_provider(Arc::new(provider))
-                }
-                #[cfg(not(feature = "embedding-candle"))]
-                {
-                    info!("candle embedding requested but binary not compiled with embedding-candle feature");
-                    kernel
-                }
+
+    let url = if embedding_base_url.is_empty() {
+        "http://localhost:11434".to_string()
+    } else {
+        embedding_base_url.clone()
+    };
+    let model = if embedding_model.is_empty() {
+        "nomic-embed-text".to_string()
+    } else {
+        embedding_model.clone()
+    };
+
+    // Build provider Arc first so we can share it with the enrichment engine.
+    let emb_provider: Option<Arc<dyn EmbeddingProvider>> = match embedding_provider.as_deref() {
+        Some("candle") => {
+            #[cfg(feature = "embedding-candle")]
+            {
+                let p = aikoql_semantic::provider::CandleEmbedding::new()
+                    .expect("load candle embedding model");
+                Some(Arc::new(p))
             }
-            _ => {
-                // Default: OpenAI-compatible (Ollama, OpenAI, etc.)
-                let provider = OpenAiEmbeddingProvider::new(&url, &model, embedding_api_key.as_deref());
-                kernel.with_embedding_provider(Arc::new(provider))
+            #[cfg(not(feature = "embedding-candle"))]
+            {
+                info!("candle embedding requested but binary not compiled with embedding-candle feature");
+                None
             }
         }
+        _ => {
+            // Default: OpenAI-compatible (Ollama, OpenAI, etc.)
+            let p = OpenAiEmbeddingProvider::new(&url, &model, embedding_api_key.as_deref());
+            Some(Arc::new(p))
+        }
+    };
+
+    let kernel = if let Some(ref p) = emb_provider {
+        kernel.with_embedding_provider(p.clone())
+    } else {
+        kernel
     };
     let kernel = Arc::new(kernel);
+
+    // Start background enrichment if embedding provider is configured.
+    // ponytail: synchronous scan on startup — blocks until all KOs are enriched.
+    // Move to background thread when startup latency matters.
+    if let Some(enrichment_provider) = emb_provider {
+        let enricher = EmbeddingEnricher::new(enrichment_provider, &model);
+        let engine = Arc::new(SemanticEngine::new(Arc::new(enricher)));
+        let sched = Scheduler::new();
+        sched.register(engine);
+        if let Err(e) = sched.start_all(&kernel) {
+            info!(error = %e, "background enrichment scan failed");
+        }
+    }
+
     let db_path = Arc::new(db_path);
     SERVER_START.set(Instant::now()).ok();
 
@@ -600,7 +623,7 @@ fn main() {
     if let Some(addr) = listen_addr {
         // TCP mode: accept multiple connections, one handler thread each.
         let listener = TcpListener::bind(&addr).expect("bind TCP listener");
-        info!(addr = %addr, db = %db_path, "mnemosyne-mcp TCP server ready");
+        info!(addr = %addr, db = %db_path, "aikoql-mcp TCP server ready");
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -613,7 +636,7 @@ fn main() {
         }
     } else {
         // Stdio mode: single connection (original behavior).
-        info!(db = %db_path, protocol = PROTOCOL_VERSION, "mnemosyne-mcp ready");
+        info!(db = %db_path, protocol = PROTOCOL_VERSION, "aikoql-mcp ready");
         let stdout = Arc::new(Mutex::new(std::io::stdout()));
         let mut sub_ids: HashSet<String> = HashSet::new();
         let mut rate_limits: HashMap<String, u64> = HashMap::new();
@@ -659,12 +682,12 @@ fn main() {
 
 fn print_usage() {
     println!(concat!(
-        "Mnemosyne — Knowledge Database Suite\n",
+        "aikoql — Knowledge Database Suite\n",
         "\n",
-        "Usage: mnemosyne-mcp <COMMAND> [OPTIONS]\n",
+        "Usage: aikoql-mcp <COMMAND> [OPTIONS]\n",
         "\n",
         "Commands:\n",
-        "  shell [DB]             Interactive AIKOQL shell (REPL)\n",
+        "  shell [DB]             Interactive aikoql shell (REPL)\n",
         "  serve [OPTIONS] [DB]   Start MCP server (default: stdio mode)\n",
         "  backup [DB]            Create a verified backup\n",
         "  restore BACKUP [DB]    Restore from a backup\n",
@@ -683,22 +706,22 @@ fn print_usage() {
         "  --embedding-api-key K   API key for remote endpoints (omit for Ollama)\n",
         "\n",
         "Examples:\n",
-        "  mnemosyne-mcp shell                           # Interactive shell\n",
-        "  mnemosyne-mcp shell :memory:                  # In-memory shell\n",
-        "  mnemosyne-mcp serve                           # Stdio MCP server\n",
-        "  mnemosyne-mcp serve --listen :9090            # TCP MCP server\n",
-        "  mnemosyne-mcp serve --listen :9090 --metrics-addr :9091 ./kb.redb\n",
-        "  mnemosyne-mcp backup ./kb.redb                # Create backup\n",
-        "  mnemosyne-mcp restore kb.redb.backup.12345    # Restore backup\n",
-        "  mnemosyne-mcp audit                           # Compliance report\n",
-        "  mnemosyne-mcp keygen ./master.key             # Generate key\n",
-        "  mnemosyne-mcp import 'host=localhost db=mydb'   # Import from PostgreSQL\n",
-        "  mnemosyne-mcp ingest-dir                        # Ingest CWD (sequential)\n",
-        "  mnemosyne-mcp ingest-dir ~/my-project            # Ingest specific path\n",
-        "  mnemosyne-mcp ingest-dir . --parallel            # Parallel ingestion\n",
-        "  mnemosyne-mcp ingest-dir . --incremental         # Incremental (git-tracked)\n",
-        "  mnemosyne-mcp report                            # Report on CWD\n",
-        "  mnemosyne-mcp report ~/my-project                # Report on specific path\n",
+        "  aikoql-mcp shell                           # Interactive shell\n",
+        "  aikoql-mcp shell :memory:                  # In-memory shell\n",
+        "  aikoql-mcp serve                           # Stdio MCP server\n",
+        "  aikoql-mcp serve --listen :9090            # TCP MCP server\n",
+        "  aikoql-mcp serve --listen :9090 --metrics-addr :9091 ./kb.redb\n",
+        "  aikoql-mcp backup ./kb.redb                # Create backup\n",
+        "  aikoql-mcp restore kb.redb.backup.12345    # Restore backup\n",
+        "  aikoql-mcp audit                           # Compliance report\n",
+        "  aikoql-mcp keygen ./master.key             # Generate key\n",
+        "  aikoql-mcp import 'host=localhost db=mydb'   # Import from PostgreSQL\n",
+        "  aikoql-mcp ingest-dir                        # Ingest CWD (sequential)\n",
+        "  aikoql-mcp ingest-dir ~/my-project            # Ingest specific path\n",
+        "  aikoql-mcp ingest-dir . --parallel            # Parallel ingestion\n",
+        "  aikoql-mcp ingest-dir . --incremental         # Incremental (git-tracked)\n",
+        "  aikoql-mcp report                            # Report on CWD\n",
+        "  aikoql-mcp report ~/my-project                # Report on specific path\n",
     ));
 }
 
@@ -715,8 +738,20 @@ fn run_backup(db_path: &str) {
         let engine = RedbEngine::open(db_path).expect("open source db");
         let kernel =
             Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
-        let s = kernel.journal_head().unwrap_or((0, [0u8; 32])).0;
-        let n = kernel.scan_heads().unwrap_or_default().len();
+        let s = kernel
+            .journal_head()
+            .unwrap_or_else(|e| {
+                eprintln!("Error reading journal: {}", e);
+                std::process::exit(1);
+            })
+            .0;
+        let n = kernel
+            .scan_heads()
+            .unwrap_or_else(|e| {
+                eprintln!("Error scanning heads: {}", e);
+                std::process::exit(1);
+            })
+            .len();
         (s, n)
     }; // kernel + engine dropped → file lock released.
 
@@ -796,7 +831,7 @@ fn run_audit(db_path: &str) {
 fn run_report(path: &str) {
     eprintln!("Analyzing directory: {}\n", path);
 
-    let result = match mnemosyne_ingestion::ingest_directory(path) {
+    let result = match aikoql_ingestion::ingest_directory(path) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -804,7 +839,7 @@ fn run_report(path: &str) {
         }
     };
 
-    let report = mnemosyne_ingestion::build_report(
+    let report = aikoql_ingestion::build_report(
         &result.ir,
         path,
         result.files_processed,
@@ -812,7 +847,7 @@ fn run_report(path: &str) {
         result.dirs_skipped,
         result.binary_skipped,
     );
-    println!("{}", mnemosyne_ingestion::format_report(&report));
+    println!("{}", aikoql_ingestion::format_report(&report));
 }
 
 fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) {
@@ -820,7 +855,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
 
     let result = if incremental {
         eprintln!("Mode: incremental");
-        match mnemosyne_ingestion::incremental_ingest_directory(path) {
+        match aikoql_ingestion::incremental_ingest_directory(path) {
             Ok((r, full)) => {
                 eprintln!("({} ingest)\n", if full { "full" } else { "incremental" });
                 r
@@ -832,7 +867,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         }
     } else if parallel {
         eprintln!("Mode: parallel");
-        match mnemosyne_ingestion::parallel_ingest_directory(path) {
+        match aikoql_ingestion::parallel_ingest_directory(path) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Error: {}", e);
@@ -840,7 +875,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
             }
         }
     } else {
-        match mnemosyne_ingestion::ingest_directory(path) {
+        match aikoql_ingestion::ingest_directory(path) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Error: {}", e);
@@ -849,7 +884,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         }
     };
 
-    let report = mnemosyne_ingestion::build_report(
+    let report = aikoql_ingestion::build_report(
         &result.ir,
         path,
         result.files_processed,
@@ -857,7 +892,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         result.dirs_skipped,
         result.binary_skipped,
     );
-    println!("{}\n", mnemosyne_ingestion::format_report(&report));
+    println!("{}\n", aikoql_ingestion::format_report(&report));
 
     // Store as a Knowledge Object in the database.
     let engine = RedbEngine::open(db_path).expect("open db");
@@ -888,7 +923,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         expected_version: Some(0),
         idempotency_key: Some(format!("ingest-dir-{}", path)),
         metadata: Metadata {
-            type_name: "mnemosyne:ingested-directory".into(),
+            type_name: "aikoql:ingested-directory".into(),
             tenant: None,
             schema_version: 1,
             tags: vec!["ingest-dir".into(), "auto".into()],
@@ -909,7 +944,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         Ok(r) => {
             println!("Stored as knowledge object:");
             println!("  KOID: {}", r.koid.to_hex());
-            println!("\nQuery with: mnemosyne-mcp shell {} -- then:", db_path);
+            println!("\nQuery with: aikoql-mcp shell {} -- then:", db_path);
             println!("  compile_context \"your task\" {} 3000", r.koid.to_hex());
         }
         Err(e) => {
@@ -925,7 +960,7 @@ fn run_pg_import(
     tenant: Option<&str>,
     table_filter: Option<&str>,
 ) {
-    use mnemosyne_postgres::PostgresConnector;
+    use aikoql_postgres::PostgresConnector;
 
     println!("Connecting to PostgreSQL...");
     let mut connector = match PostgresConnector::connect(conn_str) {
@@ -1024,7 +1059,7 @@ fn run_sqlite_import(
     tenant: Option<&str>,
     table_filter: Option<&str>,
 ) {
-    use mnemosyne_sqlite::SqliteConnector;
+    use aikoql_sqlite::SqliteConnector;
 
     println!("Opening SQLite: {}", source_file);
     let connector = match SqliteConnector::open(source_file) {
@@ -1119,7 +1154,7 @@ fn run_mongo_import(
     tenant: Option<&str>,
     coll_filter: Option<&str>,
 ) {
-    use mnemosyne_mongodb::MongoConnector;
+    use aikoql_mongodb::MongoConnector;
 
     println!("Connecting to MongoDB: {}", uri);
     let connector = match MongoConnector::connect(uri, database) {
@@ -1218,7 +1253,7 @@ fn run_neo4j_import(
     tenant: Option<&str>,
     label_filter: Option<&str>,
 ) {
-    use mnemosyne_neo4j::Neo4jConnector;
+    use aikoql_neo4j::Neo4jConnector;
 
     println!("Connecting to Neo4j: {}", uri);
     let connector = match Neo4jConnector::connect(uri, user, password) {
@@ -1354,7 +1389,7 @@ fn run_neo4j_import(
 }
 
 fn run_keygen(path: &str) {
-    use mnemosyne_kernel::security::crypto::{Aes256Gcm, CryptoProvider};
+    use aikoql_kernel::security::crypto::{Aes256Gcm, CryptoProvider};
     let key = Aes256Gcm::new().generate_key();
     let hex: String = key.iter().map(|b| format!("{:02x}", b)).collect();
     if path == "-" {
@@ -1367,7 +1402,7 @@ fn run_keygen(path: &str) {
         }
         std::fs::write(path, &hex).expect("write key file");
         println!("Key written to: {}", path);
-        println!("Set encryption.key_path in mnemosyne.toml to this path.");
+        println!("Set encryption.key_path in aikoql.toml to this path.");
         println!(
             "Restrict file permissions: chmod 600 {} (Linux) or equivalent.",
             path
@@ -1472,7 +1507,7 @@ fn handle_message(
                         "result": {
                             "protocolVersion": PROTOCOL_VERSION,
                             "capabilities": {"tools": {}},
-                            "serverInfo": {"name": "mnemosyne-mcp", "version": env!("CARGO_PKG_VERSION")}
+                            "serverInfo": {"name": "aikoql-mcp", "version": env!("CARGO_PKG_VERSION")}
                         }
                     }),
                 );
@@ -2307,7 +2342,7 @@ fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
                     req.relationships.push(RelationshipRef {
                         rel_type: rt.into(),
                         target,
-                        direction: mnemosyne_kernel::knowledge::kom::Direction::Outbound,
+                        direction: aikoql_kernel::knowledge::kom::Direction::Outbound,
                     });
                 }
             }
@@ -2432,11 +2467,11 @@ fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
             ops.push(IrOp::Fuse { mode });
         }
         let raw = IrPlan::new(ops).with_description(format!("find_similar type={}", type_name));
-        let plan = mnemosyne_compiler::planner::Planner::optimize(&raw);
+        let plan = aikoql_compiler::planner::Planner::optimize(&raw);
         let result =
-            mnemosyne_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
+            aikoql_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
         return match result {
-            mnemosyne_runtime::RowSet::Scored(scored) => Ok(json!({
+            aikoql_runtime::RowSet::Scored(scored) => Ok(json!({
                 "results": scored.iter().map(|(koid, score, tn, version)| json!({
                     "koid": koid.to_hex(),
                     "score": score,
@@ -2717,10 +2752,10 @@ fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
         .get("subject")
         .and_then(|s| s.as_str())
         .unwrap_or("query-user");
-    let stmt = mnemosyne_compiler::parser::parse(source).map_err(|e| e.to_string())?;
+    let stmt = aikoql_compiler::parser::parse(source).map_err(|e| e.to_string())?;
 
     // CREATE/UPDATE/DELETE are executed directly, not via IR.
-    if let mnemosyne_compiler::parser::ast::Statement::Create(create) = &stmt {
+    if let aikoql_compiler::parser::ast::Statement::Create(create) = &stmt {
         let mut props = PropertyMap::new();
         for (k, v) in &create.properties {
             props.insert(k.clone(), compiler_expr_to_value(v));
@@ -2752,12 +2787,12 @@ fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
         );
     }
 
-    let raw = mnemosyne_compiler::parser::compile_with_subject(source, subject)
+    let raw = aikoql_compiler::parser::compile_with_subject(source, subject)
         .map_err(|e| e.to_string())?;
-    let plan = mnemosyne_compiler::planner::Planner::optimize(&raw);
-    let result = mnemosyne_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
+    let plan = aikoql_compiler::planner::Planner::optimize(&raw);
+    let result = aikoql_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
     match result {
-        mnemosyne_runtime::RowSet::Objects(kos) => Ok(json!({
+        aikoql_runtime::RowSet::Objects(kos) => Ok(json!({
             "results": kos.iter().map(|ko| json!({
                 "koid": ko.koid.to_hex(),
                 "type_name": ko.metadata.type_name,
@@ -2765,7 +2800,7 @@ fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
                 "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
             })).collect::<Vec<_>>()
         })),
-        mnemosyne_runtime::RowSet::Scored(scored) => Ok(json!({
+        aikoql_runtime::RowSet::Scored(scored) => Ok(json!({
             "results": scored.iter().map(|(koid, score, tn, ver)| json!({
                 "koid": koid.to_hex(),
                 "score": score,
@@ -2777,7 +2812,7 @@ fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
     }
 }
 
-/// Execute an AIKOQL query and chunk the results for streaming (MRFC-0040 #5).
+/// Execute an aikoql query and chunk the results for streaming (MRFC-0040 #5).
 /// Returns (chunks, stream_id). Chunk 0 is sent as the JSON-RPC response;
 /// remaining chunks are sent as notification frames.
 fn execute_stream_query(
@@ -2785,19 +2820,19 @@ fn execute_stream_query(
     query: &str,
     subject: &str,
 ) -> Result<(Vec<J>, String), String> {
-    let raw = mnemosyne_compiler::parser::compile_with_subject(query, subject)
+    let raw = aikoql_compiler::parser::compile_with_subject(query, subject)
         .map_err(|e| e.to_string())?;
-    let plan = mnemosyne_compiler::planner::Planner::optimize(&raw);
-    let result = mnemosyne_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
+    let plan = aikoql_compiler::planner::Planner::optimize(&raw);
+    let result = aikoql_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
 
     let rows: Vec<J> = match result {
-        mnemosyne_runtime::RowSet::Objects(kos) => kos.iter().map(|ko| json!({
+        aikoql_runtime::RowSet::Objects(kos) => kos.iter().map(|ko| json!({
             "koid": ko.koid.to_hex(),
             "type_name": ko.metadata.type_name,
             "version": ko.version,
             "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
         })).collect(),
-        mnemosyne_runtime::RowSet::Scored(scored) => scored.iter().map(|(koid, score, tn, ver)| json!({
+        aikoql_runtime::RowSet::Scored(scored) => scored.iter().map(|(koid, score, tn, ver)| json!({
             "koid": koid.to_hex(),
             "score": score,
             "type_name": tn,
@@ -2812,12 +2847,12 @@ fn execute_stream_query(
     Ok((chunks, stream_id))
 }
 
-fn compiler_expr_to_value(e: &mnemosyne_compiler::parser::ast::Expr) -> Value {
+fn compiler_expr_to_value(e: &aikoql_compiler::parser::ast::Expr) -> Value {
     match e {
-        mnemosyne_compiler::parser::ast::Expr::String(s) => Value::Text(s.clone()),
-        mnemosyne_compiler::parser::ast::Expr::Number(n) => Value::Float(*n),
-        mnemosyne_compiler::parser::ast::Expr::Bool(b) => Value::Bool(*b),
-        mnemosyne_compiler::parser::ast::Expr::Null => Value::Null,
+        aikoql_compiler::parser::ast::Expr::String(s) => Value::Text(s.clone()),
+        aikoql_compiler::parser::ast::Expr::Number(n) => Value::Float(*n),
+        aikoql_compiler::parser::ast::Expr::Bool(b) => Value::Bool(*b),
+        aikoql_compiler::parser::ast::Expr::Null => Value::Null,
     }
 }
 
@@ -3034,7 +3069,7 @@ fn tool_deploy_program(k: &Kernel, args: &J) -> Result<J, String> {
     let language = args
         .get("language")
         .and_then(|v| v.as_str())
-        .unwrap_or("AIKOQL");
+        .unwrap_or("aikoql");
     let r = k
         .deploy_program(name, body, language, &subject_of(args))
         .map_err(|e| e.to_string())?;
@@ -3067,7 +3102,7 @@ fn tool_execute_program(k: &Kernel, args: &J) -> Result<J, String> {
     let ko = k
         .get(KnowledgeContext::from(subject.clone()), &koid)
         .map_err(|e| e.to_string())?;
-    if ko.metadata.type_name != "mnemosyne:program" {
+    if ko.metadata.type_name != "aikoql:program" {
         return Err(format!(
             "KO {} is not a program (type={})",
             hex, ko.metadata.type_name
@@ -3081,19 +3116,19 @@ fn tool_execute_program(k: &Kernel, args: &J) -> Result<J, String> {
     for (key, val) in &params {
         query = query.replace(&format!("{{{{{}}}}}", key), &value_to_string(val));
     }
-    let plan = mnemosyne_compiler::parser::compile_with_subject(&query, &exec_subject.name)
+    let plan = aikoql_compiler::parser::compile_with_subject(&query, &exec_subject.name)
         .map_err(|e| format!("compile: {}", e))?;
-    let optimized = mnemosyne_compiler::planner::Planner::optimize(&plan);
+    let optimized = aikoql_compiler::planner::Planner::optimize(&plan);
     let result =
-        mnemosyne_runtime::Interpreter::execute(k, &optimized).map_err(|e| e.to_string())?;
+        aikoql_runtime::Interpreter::execute(k, &optimized).map_err(|e| e.to_string())?;
     match result {
-        mnemosyne_runtime::RowSet::Objects(kos) => Ok(json!({
+        aikoql_runtime::RowSet::Objects(kos) => Ok(json!({
             "results": kos.iter().map(|ko| json!({
                 "koid": ko.koid.to_hex(), "type_name": ko.metadata.type_name, "version": ko.version,
                 "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
             })).collect::<Vec<_>>(), "count": kos.len()
         })),
-        mnemosyne_runtime::RowSet::Scored(scored) => Ok(json!({
+        aikoql_runtime::RowSet::Scored(scored) => Ok(json!({
             "results": scored.iter().map(|(koid, score, tn, ver)| json!({"koid": koid.to_hex(), "score": score, "type_name": tn, "version": ver})).collect::<Vec<_>>(), "count": scored.len()
         })),
         other => Ok(json!({"results": [], "debug": format!("{:?}", other)})),
@@ -3397,7 +3432,7 @@ fn tool_deploy_view(k: &Kernel, args: &J) -> Result<J, String> {
     let r = k
         .deploy_view(name, query, refresh_seconds, &subject_of(args))
         .map_err(|e| e.to_string())?;
-    Ok(json!({"status": "deployed", "koid": r.koid.to_hex(), "type": "mnemosyne:view"}))
+    Ok(json!({"status": "deployed", "koid": r.koid.to_hex(), "type": "aikoql:view"}))
 }
 
 fn tool_list_views(k: &Kernel, args: &J) -> Result<J, String> {
@@ -3433,7 +3468,7 @@ fn tool_deploy_report(k: &Kernel, args: &J) -> Result<J, String> {
     let r = k
         .deploy_report(name, template, format, &parameters, &subject_of(args))
         .map_err(|e| e.to_string())?;
-    Ok(json!({"status": "deployed", "koid": r.koid.to_hex(), "type": "mnemosyne:report"}))
+    Ok(json!({"status": "deployed", "koid": r.koid.to_hex(), "type": "aikoql:report"}))
 }
 
 fn tool_list_reports(k: &Kernel, args: &J) -> Result<J, String> {
@@ -3467,7 +3502,7 @@ fn tool_deploy_benchmark(k: &Kernel, args: &J) -> Result<J, String> {
     let r = k
         .deploy_benchmark(name, target_query, iterations, warmup, &subject_of(args))
         .map_err(|e| e.to_string())?;
-    Ok(json!({"status": "deployed", "koid": r.koid.to_hex(), "type": "mnemosyne:benchmark"}))
+    Ok(json!({"status": "deployed", "koid": r.koid.to_hex(), "type": "aikoql:benchmark"}))
 }
 
 fn tool_list_benchmarks(k: &Kernel, args: &J) -> Result<J, String> {
@@ -3540,7 +3575,7 @@ fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Result<J, String
 
     // D1/D2: Extract text from the stored artifact.
     let (page_count, char_count, status, ocr_stats) =
-        match mnemosyne_ingestion::extract_document(&artifact_path, mime_type) {
+        match aikoql_ingestion::extract_document(&artifact_path, mime_type) {
             Ok(doc) => {
                 // Store extracted text alongside the original artifact.
                 let extracted_path = format!("{}/{}.extracted.txt", artifact_dir, hash);
@@ -3687,7 +3722,7 @@ fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Result<J, Strin
     let mut result = if is_markdown {
         let content =
             std::fs::read_to_string(&artifact_path).map_err(|e| format!("read markdown: {}", e))?;
-        let ir = mnemosyne_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
+        let ir = aikoql_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
             .map_err(|e| format!("markdown compile: {}", e))?;
         let ir_json = serde_json::to_value(&ir).unwrap_or_default();
         serde_json::json!({
@@ -3704,7 +3739,7 @@ fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Result<J, Strin
             "total_candidates": ir.total_candidates()
         })
     } else if is_rust {
-        let ir = mnemosyne_ingestion::compile_rust_file(&artifact_path)
+        let ir = aikoql_ingestion::compile_rust_file(&artifact_path)
             .map_err(|e| format!("rust compile: {}", e))?;
         let ir_json = serde_json::to_value(&ir).unwrap_or_default();
         serde_json::json!({
@@ -3721,9 +3756,9 @@ fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Result<J, Strin
             "total_candidates": ir.total_candidates()
         })
     } else {
-        let doc = mnemosyne_ingestion::extract_document(&artifact_path, &mime_type)
+        let doc = aikoql_ingestion::extract_document(&artifact_path, &mime_type)
             .map_err(|e| format!("extract for compile: {}", e))?;
-        let cr = mnemosyne_ingestion::compile_document_mock(&doc, &[]);
+        let cr = aikoql_ingestion::compile_document_mock(&doc, &[]);
         serde_json::to_value(&cr).map_err(|e| format!("serialize: {}", e))?
     };
 
@@ -3755,8 +3790,8 @@ fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Result<J, String
     let ir = get_ir_for_koid(k, args, db_path)?;
 
     // Compile context package
-    let pkg = mnemosyne_ingestion::compile_context(task, &ir, token_budget);
-    let md = mnemosyne_ingestion::render_context_markdown(&pkg);
+    let pkg = aikoql_ingestion::compile_context(task, &ir, token_budget);
+    let md = aikoql_ingestion::render_context_markdown(&pkg);
 
     let pkg_json = serde_json::to_value(&pkg).unwrap_or_default();
     Ok(serde_json::json!({
@@ -3784,7 +3819,7 @@ fn tool_reconcile(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
 
     let ir = get_ir_for_koid(k, args, db_path)?;
 
-    let report = mnemosyne_ingestion::reconcile(&files, &ir);
+    let report = aikoql_ingestion::reconcile(&files, &ir);
     let report_json = serde_json::to_value(&report).unwrap_or_default();
     Ok(serde_json::json!({
         "report": report_json,
@@ -3808,15 +3843,15 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
 
     let meta = if let Some(tables) = raw_tables {
         // Parse tables from JSON
-        let containers: Vec<mnemosyne_ingestion::ContainerInfo> = tables
+        let containers: Vec<aikoql_ingestion::ContainerInfo> = tables
             .iter()
             .map(|t| {
                 let name = t["name"].as_str().unwrap_or("unknown").to_string();
-                let fields: Vec<mnemosyne_ingestion::FieldInfo> = t["fields"]
+                let fields: Vec<aikoql_ingestion::FieldInfo> = t["fields"]
                     .as_array()
                     .map(|a| {
                         a.iter()
-                            .map(|f| mnemosyne_ingestion::FieldInfo {
+                            .map(|f| aikoql_ingestion::FieldInfo {
                                 name: f["name"].as_str().unwrap_or("?").to_string(),
                                 data_type: f["data_type"].as_str().unwrap_or("text").to_string(),
                                 is_primary_key: f["is_primary_key"].as_bool().unwrap_or(false),
@@ -3826,7 +3861,7 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
                             .collect()
                     })
                     .unwrap_or_default();
-                mnemosyne_ingestion::ContainerInfo {
+                aikoql_ingestion::ContainerInfo {
                     name,
                     fields,
                     row_count: t["row_count"].as_u64(),
@@ -3834,10 +3869,10 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
             })
             .collect();
 
-        let references: Vec<mnemosyne_ingestion::ReferenceInfo> = raw_refs
+        let references: Vec<aikoql_ingestion::ReferenceInfo> = raw_refs
             .map(|a| {
                 a.iter()
-                    .map(|r| mnemosyne_ingestion::ReferenceInfo {
+                    .map(|r| aikoql_ingestion::ReferenceInfo {
                         from_container: r["from_container"].as_str().unwrap_or("?").to_string(),
                         from_fields: r["from_fields"]
                             .as_array()
@@ -3862,7 +3897,7 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
             })
             .unwrap_or_default();
 
-        mnemosyne_ingestion::ConnectorMetadata {
+        aikoql_ingestion::ConnectorMetadata {
             connector_type: connector_type.to_string(),
             label: label.to_string(),
             containers,
@@ -3872,14 +3907,14 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
     } else {
         // ponytail: empty metadata for unknown schemas — agent should call
         // connector's own introspection tool first
-        mnemosyne_ingestion::ConnectorMetadata {
+        aikoql_ingestion::ConnectorMetadata {
             connector_type: connector_type.to_string(),
             label: label.to_string(),
             ..Default::default()
         }
     };
 
-    let ir = mnemosyne_ingestion::connector_metadata_to_ir(&meta);
+    let ir = aikoql_ingestion::connector_metadata_to_ir(&meta);
     let ir_json = serde_json::to_value(&ir).unwrap_or_default();
     Ok(serde_json::json!({
         "knowledge_ir": ir_json,
@@ -3891,14 +3926,14 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
     }))
 }
 
-// A6: AIKOQL Agent Operations — 7 semantic query tools.
+// A6: Aikoql Agent Operations — 7 semantic query tools.
 // All follow the same pattern: get koid → compile KnowledgeIr → run op.
 
 fn get_ir_for_koid(
     k: &Kernel,
     args: &J,
     db_path: &str,
-) -> Result<mnemosyne_ingestion::KnowledgeIr, String> {
+) -> Result<aikoql_ingestion::KnowledgeIr, String> {
     let hex = args
         .get("koid")
         .and_then(|v| v.as_str())
@@ -3927,16 +3962,16 @@ fn get_ir_for_koid(
         {
             let content = std::fs::read_to_string(&artifact_path)
                 .map_err(|e| format!("read markdown: {}", e))?;
-            mnemosyne_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
+            aikoql_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
                 .map_err(|e| format!("markdown compile: {}", e))
         } else if mime_type.contains("rust") || artifact_path.ends_with(".rs") {
-            mnemosyne_ingestion::compile_rust_file(&artifact_path)
+            aikoql_ingestion::compile_rust_file(&artifact_path)
                 .map_err(|e| format!("rust compile: {}", e))
         } else {
-            let doc = mnemosyne_ingestion::extract_document(&artifact_path, &mime_type)
+            let doc = aikoql_ingestion::extract_document(&artifact_path, &mime_type)
                 .map_err(|e| format!("extract: {}", e))?;
-            let cr = mnemosyne_ingestion::compile_document_mock(&doc, &[]);
-            Ok(mnemosyne_ingestion::KnowledgeIr {
+            let cr = aikoql_ingestion::compile_document_mock(&doc, &[]);
+            Ok(aikoql_ingestion::KnowledgeIr {
                 facts: serde_json::from_value(serde_json::to_value(&cr).unwrap_or_default())
                     .unwrap_or_default(),
                 ..Default::default()
@@ -3958,7 +3993,7 @@ fn tool_explain_component(k: &Kernel, args: &J, db_path: &str) -> Result<J, Stri
         .and_then(|v| v.as_str())
         .ok_or("missing: name")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
-    let explanation = mnemosyne_ingestion::explain_component(name, &ir)
+    let explanation = aikoql_ingestion::explain_component(name, &ir)
         .ok_or_else(|| format!("component '{}' not found", name))?;
     Ok(serde_json::to_value(&explanation).unwrap_or_default())
 }
@@ -3969,7 +4004,7 @@ fn tool_explain_decision(k: &Kernel, args: &J, db_path: &str) -> Result<J, Strin
         .and_then(|v| v.as_str())
         .ok_or("missing: name")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
-    let explanation = mnemosyne_ingestion::explain_decision(name, &ir)
+    let explanation = aikoql_ingestion::explain_decision(name, &ir)
         .ok_or_else(|| format!("decision '{}' not found", name))?;
     Ok(serde_json::to_value(&explanation).unwrap_or_default())
 }
@@ -3980,7 +4015,7 @@ fn tool_trace_requirement(k: &Kernel, args: &J, db_path: &str) -> Result<J, Stri
         .and_then(|v| v.as_str())
         .ok_or("missing: requirement")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
-    let trace = mnemosyne_ingestion::trace_requirement(req_id, &ir);
+    let trace = aikoql_ingestion::trace_requirement(req_id, &ir);
     Ok(serde_json::to_value(&trace).unwrap_or_default())
 }
 
@@ -3990,13 +4025,13 @@ fn tool_find_conflicts(k: &Kernel, args: &J, db_path: &str) -> Result<J, String>
         .and_then(|v| v.as_str())
         .ok_or("missing: component")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
-    let conflicts = mnemosyne_ingestion::find_conflicts(component, &ir);
+    let conflicts = aikoql_ingestion::find_conflicts(component, &ir);
     Ok(serde_json::to_value(&conflicts).unwrap_or_default())
 }
 
 fn tool_find_stale(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
     let ir = get_ir_for_koid(k, args, db_path)?;
-    let report = mnemosyne_ingestion::find_stale_documentation(&ir);
+    let report = aikoql_ingestion::find_stale_documentation(&ir);
     Ok(serde_json::to_value(&report).unwrap_or_default())
 }
 
@@ -4006,7 +4041,7 @@ fn tool_validate_change(k: &Kernel, args: &J, db_path: &str) -> Result<J, String
         .and_then(|v| v.as_str())
         .ok_or("missing: change")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
-    let validation = mnemosyne_ingestion::validate_change(description, &ir);
+    let validation = aikoql_ingestion::validate_change(description, &ir);
     Ok(serde_json::to_value(&validation).unwrap_or_default())
 }
 
@@ -4016,11 +4051,11 @@ fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String>
         .and_then(|v| v.as_str())
         .ok_or("missing: action")?;
     let action = match action_str {
-        "add_fact" => mnemosyne_ingestion::ProposalAction::AddFact,
-        "remove_fact" => mnemosyne_ingestion::ProposalAction::RemoveFact,
-        "update_entity" => mnemosyne_ingestion::ProposalAction::UpdateEntity,
-        "add_relation" => mnemosyne_ingestion::ProposalAction::AddRelation,
-        "remove_relation" => mnemosyne_ingestion::ProposalAction::RemoveRelation,
+        "add_fact" => aikoql_ingestion::ProposalAction::AddFact,
+        "remove_fact" => aikoql_ingestion::ProposalAction::RemoveFact,
+        "update_entity" => aikoql_ingestion::ProposalAction::UpdateEntity,
+        "add_relation" => aikoql_ingestion::ProposalAction::AddRelation,
+        "remove_relation" => aikoql_ingestion::ProposalAction::RemoveRelation,
         _ => return Err(format!("unknown action: {}", action_str)),
     };
     let target = args
@@ -4073,7 +4108,7 @@ fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String>
         .to_string();
 
     let ir = get_ir_for_koid(k, args, db_path)?;
-    let proposal = mnemosyne_ingestion::propose_knowledge_update(
+    let proposal = aikoql_ingestion::propose_knowledge_update(
         action,
         target,
         new_facts,
@@ -4088,7 +4123,7 @@ fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String>
 
 fn tool_filter_secrets(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
     let ir = get_ir_for_koid(k, args, db_path)?;
-    let (_redacted, findings) = mnemosyne_ingestion::filter_secrets(&ir);
+    let (_redacted, findings) = aikoql_ingestion::filter_secrets(&ir);
     Ok(serde_json::to_value(&findings).unwrap_or_default())
 }
 
@@ -4225,7 +4260,7 @@ fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> {
                 expected_version: Some(0),
                 idempotency_key: Some(format!("agent-mem-{}-{}", agent_id, mem_key)),
                 metadata: Metadata {
-                    type_name: "mnemosyne:memory".into(),
+                    type_name: "aikoql:memory".into(),
                     tenant: None,
                     schema_version: 1,
                     tags: vec!["agent-memory".into()],
@@ -4250,7 +4285,7 @@ fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> {
     // Read mode: retrieve memories for this agent.
     let subject = subject_of(args);
     let all = kernel
-        .scan_by_type(&subject, "mnemosyne:memory")
+        .scan_by_type(&subject, "aikoql:memory")
         .map_err(|e| e.to_string())?;
     let memories: Vec<J> = all.iter()
         .filter(|ko| ko.properties.get("agent_id") == Some(&Value::Text(agent_id.to_string())))
@@ -4455,7 +4490,8 @@ fn tool_memory_store(args: &J) -> Result<J, String> {
         description
     );
     if index_path.exists() {
-        let existing = std::fs::read_to_string(&index_path).unwrap_or_default();
+        let existing = std::fs::read_to_string(&index_path)
+            .map_err(|e| format!("cannot read MEMORY.md: {}", e))?;
         if !existing.contains(&filename) {
             std::fs::write(&index_path, format!("{}{}", existing, index_line))
                 .map_err(|e| format!("cannot update MEMORY.md: {}", e))?;
@@ -4564,7 +4600,8 @@ fn tool_memory_delete(args: &J) -> Result<J, String> {
     // Remove from MEMORY.md index
     let index_path = std::path::PathBuf::from(&dir).join("MEMORY.md");
     if index_path.exists() {
-        let existing = std::fs::read_to_string(&index_path).unwrap_or_default();
+        let existing = std::fs::read_to_string(&index_path)
+            .map_err(|e| format!("cannot read MEMORY.md: {}", e))?;
         let cleaned: String = existing
             .lines()
             .filter(|l| !l.contains(&filename))
@@ -5260,11 +5297,11 @@ fn aikoql_endpoint(
     if query.trim().is_empty() {
         return Err("empty query".into());
     }
-    // Parse the AIKOQL statement.
-    let stmt = mnemosyne_compiler::parser::parse(query).map_err(|e| e.to_string())?;
+    // Parse the aikoql statement.
+    let stmt = aikoql_compiler::parser::parse(query).map_err(|e| e.to_string())?;
 
     // CREATE mutation.
-    if let mnemosyne_compiler::parser::ast::Statement::Create(create) = &stmt {
+    if let aikoql_compiler::parser::ast::Statement::Create(create) = &stmt {
         if !subject.roles.contains(&"admin".to_string()) {
             return Err("CREATE requires admin role".into());
         }
@@ -5302,7 +5339,7 @@ fn aikoql_endpoint(
 
     // Query: MATCH, TRAVERSE, etc. — ontology-aware compilation.
     let schema = SchemaRegistry::new(); // ponytail: empty registry; ontology handles resolution
-    let plans = mnemosyne_compiler::parser::compile_with_ontology(
+    let plans = aikoql_compiler::parser::compile_with_ontology(
         query,
         &subject.name,
         &schema,
@@ -5312,8 +5349,8 @@ fn aikoql_endpoint(
     // Execute all plans and merge results.
     let mut all_kos: Vec<serde_json::Value> = Vec::new();
     for plan in &plans {
-        match mnemosyne_runtime::Interpreter::execute(k, plan).map_err(|e| e.to_string())? {
-            mnemosyne_runtime::RowSet::Objects(kos) => {
+        match aikoql_runtime::Interpreter::execute(k, plan).map_err(|e| e.to_string())? {
+            aikoql_runtime::RowSet::Objects(kos) => {
                 for ko in kos {
                     all_kos.push(json!({
                         "koid": ko.koid.to_hex(),
@@ -5323,14 +5360,14 @@ fn aikoql_endpoint(
                     }));
                 }
             }
-            mnemosyne_runtime::RowSet::Scored(scored) => {
+            aikoql_runtime::RowSet::Scored(scored) => {
                 for (koid, score, tn, ver) in scored {
                     all_kos.push(json!({
                         "koid": koid.to_hex(), "score": score, "type_name": tn, "version": ver
                     }));
                 }
             }
-            mnemosyne_runtime::RowSet::Traversal(hits) => {
+            aikoql_runtime::RowSet::Traversal(hits) => {
                 for (koid, rt, depth) in hits {
                     all_kos.push(json!({
                         "koid": koid.to_hex(), "rel_type": rt, "depth": depth
@@ -5435,7 +5472,7 @@ fn schema_endpoint(k: &Kernel) -> Result<String, String> {
 // ---------------------------------------------------------------------------
 
 fn explain_endpoint(query: &str) -> Result<String, String> {
-    let plan = mnemosyne_compiler::parser::compile(query).map_err(|e| e.to_string())?;
+    let plan = aikoql_compiler::parser::compile(query).map_err(|e| e.to_string())?;
     Ok(json!({
         "query": query,
         "operators": plan.operators.iter().map(|op| format!("{:?}", op)).collect::<Vec<_>>(),
@@ -5660,18 +5697,18 @@ fn prometheus_metrics(k: &Kernel) -> String {
         .unwrap_or(0.0);
 
     format!(
-        "# HELP mnemosyne_journal_seq Monotonically increasing journal sequence number.\n\
-         # TYPE mnemosyne_journal_seq counter\n\
-         mnemosyne_journal_seq {}\n\
-         # HELP mnemosyne_objects_total Total committed head objects.\n\
-         # TYPE mnemosyne_objects_total gauge\n\
-         mnemosyne_objects_total {}\n\
-         # HELP mnemosyne_objects_active Active (non-deleted) head objects.\n\
-         # TYPE mnemosyne_objects_active gauge\n\
-         mnemosyne_objects_active {}\n\
-         # HELP mnemosyne_uptime_seconds Server uptime in seconds.\n\
-         # TYPE mnemosyne_uptime_seconds gauge\n\
-         mnemosyne_uptime_seconds {:.1}\n",
+        "# HELP aikoql_journal_seq Monotonically increasing journal sequence number.\n\
+         # TYPE aikoql_journal_seq counter\n\
+         aikoql_journal_seq {}\n\
+         # HELP aikoql_objects_total Total committed head objects.\n\
+         # TYPE aikoql_objects_total gauge\n\
+         aikoql_objects_total {}\n\
+         # HELP aikoql_objects_active Active (non-deleted) head objects.\n\
+         # TYPE aikoql_objects_active gauge\n\
+         aikoql_objects_active {}\n\
+         # HELP aikoql_uptime_seconds Server uptime in seconds.\n\
+         # TYPE aikoql_uptime_seconds gauge\n\
+         aikoql_uptime_seconds {:.1}\n",
         seq,
         heads.len(),
         active,
@@ -5761,7 +5798,7 @@ fn tools_list() -> J {
             {"name": "eval_recall", "description": "Measure recall@k against an expected KOID set.", "inputSchema": {"type": "object", "properties": {"subject": subj, "type_name": {"type": "string"}, "text": {"type": "string"}, "vector": {"type": "array"}, "k": {"type": "integer"}, "fusion": {"type": "string"}, "expected": {"type": "array", "items": {"type": "string"}}}, "required": ["expected"]}},
             {"name": "eval_staleness", "description": "Report index_lag_ms distribution for a recall query.", "inputSchema": {"type": "object", "properties": {"subject": subj, "type_name": {"type": "string"}, "text": {"type": "string"}, "vector": {"type": "array"}, "k": {"type": "integer"}, "fusion": {"type": "string"}}}},
             {"name": "eval_contradictions", "description": "Find same-type, high-similarity object pairs whose property values differ.", "inputSchema": {"type": "object", "properties": {"subject": subj, "type_name": {"type": "string"}, "property": {"type": "string"}, "threshold": {"type": "number"}, "max_results": {"type": "integer"}}, "required": ["type_name", "property"]}},
-            {"name": "aikoql", "description": "Execute an AIKOQL query (text-based knowledge query language). Supports MATCH, WHERE, SIMILAR TO, TRAVERSE, RETURN, CREATE, UPDATE, DELETE.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "description": "AIKOQL query text"}, "subject": {"type": "string", "description": "Calling principal for ACL (default: query-user)"}}, "required": ["query"]}},
+            {"name": "aikoql", "description": "Execute an aikoql query (text-based knowledge query language). Supports MATCH, WHERE, SIMILAR TO, TRAVERSE, RETURN, CREATE, UPDATE, DELETE.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "description": "aikoql query text"}, "subject": {"type": "string", "description": "Calling principal for ACL (default: query-user)"}}, "required": ["query"]}},
             {"name": "backup", "description": "Create a timestamped backup of the database.", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "restore", "description": "Restore the database from a backup directory.", "inputSchema": {"type": "object", "properties": {"backup": {"type": "string", "description": "Backup directory name"}}, "required": ["backup"]}},
             {"name": "list_backups", "description": "List available backups in the current directory.", "inputSchema": {"type": "object", "properties": {}}},
@@ -5773,7 +5810,7 @@ fn tools_list() -> J {
             {"name": "infer", "description": "Infer similar knowledge: find objects textually similar to a query within a type.", "inputSchema": {"type": "object", "properties": {"type_name": {"type": "string"}, "text": {"type": "string"}}, "required": ["type_name"]}},
             {"name": "predict", "description": "Predict properties for a target object based on top-k similar objects.", "inputSchema": {"type": "object", "properties": {"type_name": {"type": "string"}, "properties": {"type": "object"}, "k": {"type": "integer"}}, "required": ["type_name"]}},
             {"name": "abi_version", "description": "Return ABI version and exportable audit chain for offline verification.", "inputSchema": {"type": "object", "properties": {}}},
-            {"name": "deploy_program", "description": "Deploy an AIKOQL program as a versioned Knowledge Object (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "body": {"type": "string"}, "language": {"type": "string"}}, "required": ["name", "body"]}},
+            {"name": "deploy_program", "description": "Deploy an aikoql program as a versioned Knowledge Object (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "body": {"type": "string"}, "language": {"type": "string"}}, "required": ["name", "body"]}},
             {"name": "execute_program", "description": "Execute a deployed program KO by KOID with optional parameters.", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "params": {"type": "object"}}, "required": ["koid"]}},
             {"name": "list_programs", "description": "List all deployed program Knowledge Objects.", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "deploy_policy", "description": "Deploy an RBAC policy as a versioned Knowledge Object (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "effect": {"type": "string"}, "principal": {"type": "string"}, "action": {"type": "string"}, "resource_type": {"type": "string"}, "condition": {"type": "string"}}, "required": ["name", "effect", "principal", "action", "resource_type"]}},
@@ -5803,13 +5840,13 @@ fn tools_list() -> J {
             {"name": "reconcile", "description": "Reconcile changed files against a knowledge document. Given a list of changed file paths (e.g., from git diff), returns affected entities, potentially stale facts, and an impact report. (MRFC-0070-A8)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "files": {"type": "array", "items": {"type": "string"}, "description": "List of changed file paths (e.g., from git diff --name-only)"}, "subject": {"type": "string"}}, "required": ["koid", "files"]}},
             {"name": "connector_bridge", "description": "Convert connector schema metadata into KnowledgeIr. Provide connector_type (postgres/sqlite/mongodb/neo4j), label, and optional tables/references arrays. Each table needs name and fields (array of {name, data_type, is_primary_key, nullable, is_unique}). Each reference needs from_container, from_fields, to_container, to_fields, and optional name. (MRFC-0070-A9)", "inputSchema": {"type": "object", "properties": {"connector_type": {"type": "string"}, "label": {"type": "string"}, "tables": {"type": "array"}, "references": {"type": "array"}}, "required": ["connector_type"]}},
             {"name": "filter_secrets", "description": "Scan a knowledge document for secrets, API keys, tokens, emails, credit cards, and PII. Returns a list of findings with type, location, and redacted text. (MRFC-0070-A7)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid"]}},
-            {"name": "explain_component", "description": "Explain a component: purpose, dependencies, dependents, facts, decisions, and tests. AIKOQL: EXPLAIN COMPONENT. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "name": {"type": "string", "description": "Component name"}, "subject": {"type": "string"}}, "required": ["koid", "name"]}},
-            {"name": "explain_decision", "description": "Explain an architectural decision: context, problem, options, selected, rationale, consequences. AIKOQL: EXPLAIN DECISION. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "name": {"type": "string", "description": "ADR name"}, "subject": {"type": "string"}}, "required": ["koid", "name"]}},
-            {"name": "trace_requirement", "description": "Trace a requirement through decisions, components, functions, to tests. AIKOQL: TRACE REQUIREMENT. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "requirement": {"type": "string", "description": "Requirement text or ID"}, "subject": {"type": "string"}}, "required": ["koid", "requirement"]}},
-            {"name": "find_conflicts", "description": "Find contradictory claims and ambiguous facts about a component. AIKOQL: FIND CONFLICTS. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "component": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid", "component"]}},
-            {"name": "find_stale", "description": "Find stale documentation: documentation that has diverged from code. AIKOQL: FIND STALE DOCUMENTATION. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid"]}},
-            {"name": "validate_change", "description": "Validate a proposed change: what knowledge entities, facts, and relations would be affected? Returns risk assessment. AIKOQL: VALIDATE CHANGE. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "change": {"type": "string", "description": "Change description"}, "subject": {"type": "string"}}, "required": ["koid", "change"]}},
-            {"name": "propose_update", "description": "Propose a knowledge update: add/remove facts, update entities, add/remove relations. Enters reconciliation workflow (PROPOSED → VALIDATED → ACCEPTED/REJECTED). AIKOQL: PROPOSE KNOWLEDGE UPDATE. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "action": {"type": "string", "enum": ["add_fact", "remove_fact", "update_entity", "add_relation", "remove_relation"]}, "target_entity": {"type": "string"}, "new_facts": {"type": "array", "items": {"type": "string"}}, "remove_facts": {"type": "array", "items": {"type": "string"}}, "new_relations": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}, "justification": {"type": "string"}, "agent_id": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid", "action"]}},
+            {"name": "explain_component", "description": "Explain a component: purpose, dependencies, dependents, facts, decisions, and tests. aikoql: EXPLAIN COMPONENT. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "name": {"type": "string", "description": "Component name"}, "subject": {"type": "string"}}, "required": ["koid", "name"]}},
+            {"name": "explain_decision", "description": "Explain an architectural decision: context, problem, options, selected, rationale, consequences. aikoql: EXPLAIN DECISION. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "name": {"type": "string", "description": "ADR name"}, "subject": {"type": "string"}}, "required": ["koid", "name"]}},
+            {"name": "trace_requirement", "description": "Trace a requirement through decisions, components, functions, to tests. aikoql: TRACE REQUIREMENT. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "requirement": {"type": "string", "description": "Requirement text or ID"}, "subject": {"type": "string"}}, "required": ["koid", "requirement"]}},
+            {"name": "find_conflicts", "description": "Find contradictory claims and ambiguous facts about a component. aikoql: FIND CONFLICTS. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "component": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid", "component"]}},
+            {"name": "find_stale", "description": "Find stale documentation: documentation that has diverged from code. aikoql: FIND STALE DOCUMENTATION. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid"]}},
+            {"name": "validate_change", "description": "Validate a proposed change: what knowledge entities, facts, and relations would be affected? Returns risk assessment. aikoql: VALIDATE CHANGE. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "change": {"type": "string", "description": "Change description"}, "subject": {"type": "string"}}, "required": ["koid", "change"]}},
+            {"name": "propose_update", "description": "Propose a knowledge update: add/remove facts, update entities, add/remove relations. Enters reconciliation workflow (PROPOSED → VALIDATED → ACCEPTED/REJECTED). aikoql: PROPOSE KNOWLEDGE UPDATE. (MRFC-0070-A6)", "inputSchema": {"type": "object", "properties": {"koid": {"type": "string"}, "action": {"type": "string", "enum": ["add_fact", "remove_fact", "update_entity", "add_relation", "remove_relation"]}, "target_entity": {"type": "string"}, "new_facts": {"type": "array", "items": {"type": "string"}}, "remove_facts": {"type": "array", "items": {"type": "string"}}, "new_relations": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}, "justification": {"type": "string"}, "agent_id": {"type": "string"}, "subject": {"type": "string"}}, "required": ["koid", "action"]}},
             {"name": "discover_schema", "description": "Discover all types and their properties in the database (MRFC-0040 agent experience).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "discover_ontology", "description": "Auto-discover an ontology from all stored Knowledge Objects: classes, properties, relationships, and source mappings (MRFC-0041). Saves the ontology as an Ontology KO.", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "health", "description": "Health check with readiness, journal seq, journal lag, object count, connection pool, uptime (MRFC-0040).", "inputSchema": {"type": "object", "properties": {}}},

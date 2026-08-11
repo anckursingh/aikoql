@@ -5,16 +5,16 @@ description: AES-256-GCM encryption at rest, envelope encryption, field-level po
 
 # Encryption Guide
 
-Mnemosyne provides encryption at rest with AES-256-GCM and ChaCha20-Poly1305, envelope encryption (KEK → DEK → Data), online key rotation, and field-level encryption policies.
+aikoql provides encryption at rest with AES-256-GCM and ChaCha20-Poly1305, envelope encryption (KEK → DEK → Data), online key rotation, and field-level encryption policies.
 
 ## Quick Start
 
 ```bash
 # Generate a master key
-mnemosyne keygen ./master.key
+aikoql keygen ./master.key
 
 # Start with encryption
-MNEMOSYNE_PASSPHRASE="your-passphrase" mnemosyne serve --metrics-addr :9091 ./encrypted.redb
+AIKOQL_PASSPHRASE="your-passphrase" aikoql serve --metrics-addr :9091 ./encrypted.redb
 ```
 
 ## Architecture

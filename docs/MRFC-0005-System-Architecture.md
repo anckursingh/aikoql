@@ -1,5 +1,5 @@
 
-# MRFC-0005: Mnemosyne System Architecture
+# MRFC-0005: Aikoql System Architecture
 
 **RFC ID:** MRFC-0005
 **Status:** Draft
@@ -8,7 +8,7 @@
 
 ## Purpose
 
-This document is the canonical architecture specification for Mnemosyne. It defines the architectural layers, responsibilities, dependency rules, execution flows, workspace layout, and governance rules. Every RFC, crate, module, and pull request SHALL conform to this specification.
+This document is the canonical architecture specification for aikoql. It defines the architectural layers, responsibilities, dependency rules, execution flows, workspace layout, and governance rules. Every RFC, crate, module, and pull request SHALL conform to this specification.
 
 ## Current Implementation Status (2026-08-05)
 
@@ -21,11 +21,11 @@ Phase 1 (Trustworthy Memory Substrate) is **complete**. The system ships as an e
 | Compiler Layer | ❌ Phase 3 | No parser, IR, planner, optimizer |
 | Runtime Layer | ❌ Phase 3 | No KVM, executor — MCP tools call kernel directly |
 | Knowledge Services | ⚠️ 3 of 10 | Graph ✅, Vector ✅, Indexing (partial via scheduler). Reasoning, Semantic, OCR, NER, Embedding, Ontology, Ingestion: future |
-| Knowledge Kernel | ⚠️ 4 of 8 managers | AuthManager ✅, SchemaRegistry ✅, EventManager ✅, IndexCoordinator ⚠️. Object/Relationship/Lifecycle/Subscription: embedded in orchestrator. Kernel Scheduler: in `mnemosyne-scheduler` |
+| Knowledge Kernel | ⚠️ 4 of 8 managers | AuthManager ✅, SchemaRegistry ✅, EventManager ✅, IndexCoordinator ⚠️. Object/Relationship/Lifecycle/Subscription: embedded in orchestrator. Kernel Scheduler: in `aikoql-scheduler` |
 | Storage Kernel | ⚠️ In kernel crate | MVCC ✅, StorageEngine trait ✅, WAL/Recovery/Checkpoint/Buffer/Compression/Encryption: future |
 | Physical Storage | ✅ | redb (durable, embedded), MemoryEngine (test) |
 
-**Active crates (6):** `mnemosyne-kernel`, `mnemosyne-graph`, `mnemosyne-vector`, `mnemosyne-scheduler`, `mnemosyne-mcp`, `mnemosyne-py` (Python SDK).
+**Active crates (6):** `aikoql-kernel`, `aikoql-graph`, `aikoql-vector`, `aikoql-scheduler`, `aikoql-mcp`, `aikoql-py` (Python SDK).
 
 **Key architectural pattern:** Kernel defines traits (`StorageEngine`, `VectorIndex`, `TextIndex`, `IndexMaintainerApi`). Engine/Service crates provide implementations behind those traits. The kernel never depends on engine crates at runtime. Tests use dev-dependencies.
 
@@ -33,7 +33,7 @@ Phase 1 (Trustworthy Memory Substrate) is **complete**. The system ships as an e
 
 ## Vision
 
-Mnemosyne is a **Knowledge Computing Platform**, not merely a multi-model database. The canonical abstraction is the **Knowledge Object (KO)**. Rows, graphs, vectors, documents, and events are representations or projections of knowledge rather than primary storage abstractions.
+aikoql is a **Knowledge Computing Platform**, not merely a multi-model database. The canonical abstraction is the **Knowledge Object (KO)**. Rows, graphs, vectors, documents, and events are representations or projections of knowledge rather than primary storage abstractions.
 
 ## Architectural Principles
 
@@ -90,7 +90,7 @@ Responsibilities:
 - Rate limiting
 
 Protocols:
-REST, gRPC, GraphQL, AIKOQL, WebSocket
+REST, gRPC, GraphQL, aikoql, WebSocket
 
 ### Compiler Layer
 **Phase:** 3 (post-Knowledge-Services). No code exists. The Knowledge IR requires at least two query frontends to justify its existence; currently only MCP exists.
@@ -122,9 +122,9 @@ Responsible only for execution.
 
 | Service | Status | Crate |
 |---------|--------|-------|
-| Graph | ✅ Done | `mnemosyne-graph` — relate, traverse with relationship indexes |
-| Vector | ✅ Done | `mnemosyne-vector` — HNSW ANN, Tantivy BM25 behind kernel traits |
-| Indexing | ⚠️ Partial | `mnemosyne-scheduler` — IndexMaintainer does KE-driven async maintenance |
+| Graph | ✅ Done | `aikoql-graph` — relate, traverse with relationship indexes |
+| Vector | ✅ Done | `aikoql-vector` — HNSW ANN, Tantivy BM25 behind kernel traits |
+| Indexing | ⚠️ Partial | `aikoql-scheduler` — IndexMaintainer does KE-driven async maintenance |
 | Reasoning | ❌ Phase 3 | Rule execution, ontology, inference |
 | Semantic | ❌ Phase 3 | NER, summarization, classification |
 | Embedding | ❌ Phase 3 | Background embedding generation via scheduler |
@@ -195,7 +195,7 @@ Application
 
 ## Query Flow
 
-AIKOQL/SDK
+aikoql/SDK
 → Parser
 → KIR
 → Planner
@@ -231,7 +231,7 @@ Commit
 
 ## Scheduler Model
 
-*Current state: one `IndexMaintainer` in `mnemosyne-scheduler` handles re-indexing and catch-up. Decomposes into three schedulers when workload diversity demands it (Phase 3+).*
+*Current state: one `IndexMaintainer` in `aikoql-scheduler` handles re-indexing and catch-up. Decomposes into three schedulers when workload diversity demands it (Phase 3+).*
 
 Kernel Scheduler *(Phase 3)*:
 - Cleanup
@@ -263,7 +263,7 @@ Forbidden:
 ## Workspace Layout
 
 ```text
-mnemosyne/
+aikoql/
 ├── crates/
 │   ├── compiler/
 │   ├── runtime/

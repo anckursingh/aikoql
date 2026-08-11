@@ -8,16 +8,16 @@
 //! - Primary key → deterministic KOID (table_name || PK_value)
 //! - Non-PK columns → PropertyMap
 //! - Foreign keys → RelationshipRef (deferred: import all tables first, then link)
-//! - PG types mapped to Mnemosyne Value types
+//! - PG types mapped to Aikoql Value types
 //!
 //! ponytail: synchronous, single-threaded. Batch imports land when throughput
 //! matters (>100k rows). Foreign key relationship creation lands in Phase 2.
 
-use mnemosyne_kernel::knowledge::kom::*;
+use aikoql_kernel::knowledge::kom::*;
 use postgres::{Client, NoTls};
 
 // ---------------------------------------------------------------------------
-// PG type → Mnemosyne Value mapping
+// PG type → Aikoql Value mapping
 // ---------------------------------------------------------------------------
 
 /// A column as discovered from information_schema.
@@ -218,7 +218,7 @@ impl PostgresConnector {
 // Value mapping helpers
 // ---------------------------------------------------------------------------
 
-/// Convert a PostgreSQL cell to a Mnemosyne Value.
+/// Convert a PostgreSQL cell to a Aikoql Value.
 fn pg_cell_to_value(row: &postgres::Row, col_idx: usize, pg_type: &str, nullable: bool) -> Value {
     // Try each target type; if the column is NULL, return Value::Null.
     if nullable && try_is_null(row, col_idx) {

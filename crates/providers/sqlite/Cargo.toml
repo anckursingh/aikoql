@@ -1,5 +1,5 @@
 [package]
-name = "mnemosyne-sqlite"
+name = "aikoql-sqlite"
 description = "SQLite import connector — schema discovery, row-to-KO mapping, bulk import"
 version.workspace = true
 edition.workspace = true
@@ -7,5 +7,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-mnemosyne-kernel = { path = "../../kernel" }
+aikoql-kernel = { path = "../../kernel" }
 rusqlite = { version = "0.31", features = ["bundled"] }

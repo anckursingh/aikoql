@@ -1,4 +1,4 @@
-//! mnemosyne-kernel — the Knowledge Kernel for AI.
+//! aikoql-kernel — the Knowledge Kernel for AI.
 #![allow(clippy::len_without_is_empty)]
 #![allow(clippy::should_implement_trait)]
 #![allow(clippy::too_many_arguments)]

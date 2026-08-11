@@ -8,9 +8,9 @@ description: TCP JSON-RPC client for Go
 Standard library only — zero external dependencies.
 
 ```go
-import "github.com/ancku/mnemosyne-sdk"
+import "github.com/ancku/aikoql-sdk"
 
-client := mnemosyne.NewClient("127.0.0.1:9090")
+client := aikoql.NewClient("127.0.0.1:9090")
 client.Connect()
 
 // Create

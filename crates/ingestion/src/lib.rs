@@ -1,4 +1,4 @@
-//! Mnemosyne Document Ingestion Plugin SDK — Phase 5 Multi-Modal.
+//! Aikoql Document Ingestion Plugin SDK — Phase 5 Multi-Modal.
 #![allow(clippy::new_without_default)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::type_complexity)]
@@ -7,10 +7,10 @@
 //! Reference implementations (PDF → OCR → KO) live in separate crates
 //! so the kernel stays free of heavy dependencies (poppler, tesseract, etc.).
 //!
-//! The AIKOQL `INGEST` statement compiles to a workflow that calls these plugins.
+//! The aikoql `INGEST` statement compiles to a workflow that calls these plugins.
 
-use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::transaction::kernel::Kernel;
+use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::transaction::kernel::Kernel;
 
 /// Result of ingesting one document.
 #[derive(Clone, Debug)]
@@ -284,7 +284,7 @@ fn extract_pdf(path: &str) -> Result<DocumentModel, String> {
 
     // D2: For pages with insufficient native text, attempt OCR.
     let work_dir = std::env::temp_dir().join(format!(
-        "mnemosyne-ocr-{}",
+        "aikoql-ocr-{}",
         std::path::Path::new(path)
             .file_stem()
             .map(|n| n.to_string_lossy())
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn extract_plain_text() {
-        let dir = std::env::temp_dir().join("mnemosyne-d1-test");
+        let dir = std::env::temp_dir().join("aikoql-d1-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.txt");
         std::fs::write(&path, "Hello world\n\nThis is a test.\n").unwrap();
@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn extract_html_strips_tags() {
-        let dir = std::env::temp_dir().join("mnemosyne-d1-html");
+        let dir = std::env::temp_dir().join("aikoql-d1-html");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.html");
         std::fs::write(
@@ -468,7 +468,7 @@ mod tests {
 
     #[test]
     fn extract_docx_text() {
-        let dir = std::env::temp_dir().join("mnemosyne-d1-docx");
+        let dir = std::env::temp_dir().join("aikoql-d1-docx");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.docx");
         write_minimal_docx(&path);
@@ -579,7 +579,7 @@ mod tests {
             return;
         }
 
-        let work_dir = std::env::temp_dir().join("mnemosyne-real-ocr-test");
+        let work_dir = std::env::temp_dir().join("aikoql-real-ocr-test");
         std::fs::create_dir_all(&work_dir).unwrap();
 
         // Rasterize page 1 and OCR it with confidence.

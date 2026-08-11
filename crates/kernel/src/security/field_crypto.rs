@@ -83,7 +83,7 @@ impl FieldCrypto {
     /// Generate a compliance summary for audit reporting (MRFC-0020 Phase 4).
     pub fn compliance_summary(&self) -> Result<ComplianceSummary, String> {
         let audit_events = if let Some(ref audit) = *self.audit.read().unwrap() {
-            audit.counts_by_kind().unwrap_or_default()
+            audit.counts_by_kind()?
         } else {
             vec![]
         };

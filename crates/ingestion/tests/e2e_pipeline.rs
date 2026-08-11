@@ -3,7 +3,7 @@
 //! Markdown compile → Code compile → Merge → Staleness detect → Context compile.
 //! Validates that all phases work together end-to-end.
 
-use mnemosyne_ingestion::{
+use aikoql_ingestion::{
     compile_context, compile_markdown_string, compile_rust_source, detect_staleness,
     merge_knowledge_ir, render_context_markdown,
 };
@@ -11,9 +11,9 @@ use mnemosyne_ingestion::{
 #[test]
 fn e2e_full_pipeline_markdown_plus_code() {
     // Simulate a real project: CLAUDE.md + Rust source
-    let markdown = r#"# Mnemosyne
+    let markdown = r#"# aikoql
 
-Mnemosyne is an Agent-first Knowledge Database that turns documents
+aikoql is an Agent-first Knowledge Database that turns documents
 and code into queryable, type-checked Knowledge Objects.
 
 ## Architecture
@@ -28,7 +28,7 @@ All writes go through the TransactionEngine which validates constraints.
 - should document all public APIs
 "#;
 
-    let rust_code = r#"//! Mnemosyne kernel — Agent-first Knowledge Database.
+    let rust_code = r#"//! aikoql kernel — Agent-first Knowledge Database.
 
 /// The transaction engine handles all write operations with MVCC isolation.
 pub struct TransactionEngine {

@@ -5,14 +5,14 @@ import tempfile
 
 import pytest
 
-from mnemosyne import Mnemosyne, MnemosyneCrewAIMemory, MnemosyneLangGraphSaver
+from aikoql import aikoql, AikoqlCrewAIMemory, AikoqlLangGraphSaver
 
 
 @pytest.fixture
-def tmp_mnemosyne():
-    d = tempfile.mkdtemp(prefix="mnemosyne-py-test-")
+def tmp_aikoql():
+    d = tempfile.mkdtemp(prefix="aikoql-py-test-")
     path = os.path.join(d, "test.redb")
-    client = Mnemosyne(path, salt=42)
+    client = aikoql(path, salt=42)
     try:
         yield client
     finally:
@@ -20,8 +20,8 @@ def tmp_mnemosyne():
         shutil.rmtree(d, ignore_errors=True)
 
 
-def test_langgraph_saver_roundtrip(tmp_mnemosyne):
-    saver = MnemosyneLangGraphSaver.from_client(tmp_mnemosyne)
+def test_langgraph_saver_roundtrip(tmp_aikoql):
+    saver = AikoqlLangGraphSaver.from_client(tmp_aikoql)
 
     config = {"configurable": {"thread_id": "thread-a"}}
     cp = {"id": "chk-1", "ts": "1", "channel_values": {"x": 1}}
@@ -42,8 +42,8 @@ def test_langgraph_saver_roundtrip(tmp_mnemosyne):
     saver.close()
 
 
-def test_langgraph_saver_async_roundtrip(tmp_mnemosyne):
-    saver = MnemosyneLangGraphSaver.from_client(tmp_mnemosyne)
+def test_langgraph_saver_async_roundtrip(tmp_aikoql):
+    saver = AikoqlLangGraphSaver.from_client(tmp_aikoql)
 
     async def _run():
         config = {"configurable": {"thread_id": "thread-b"}}
@@ -58,8 +58,8 @@ def test_langgraph_saver_async_roundtrip(tmp_mnemosyne):
     saver.close()
 
 
-def test_crewai_memory_save_search_reset(tmp_mnemosyne):
-    mem = MnemosyneCrewAIMemory.from_client(tmp_mnemosyne, role="researcher")
+def test_crewai_memory_save_search_reset(tmp_aikoql):
+    mem = AikoqlCrewAIMemory.from_client(tmp_aikoql, role="researcher")
 
     mem.save("cats are mammals", {"source": "biology"})
     mem.save("dogs are mammals", {"source": "biology"})
@@ -75,11 +75,11 @@ def test_crewai_memory_save_search_reset(tmp_mnemosyne):
     mem.close()
 
 
-def test_legacy_checkpointer_alias(tmp_mnemosyne):
+def test_legacy_checkpointer_alias(tmp_aikoql):
     # The old import path must keep working.
-    from mnemosyne.checkpointer import MnemosyneCheckpointer
+    from aikoql.checkpointer import AikoqlCheckpointer
 
-    cp = MnemosyneCheckpointer.from_client(tmp_mnemosyne)
+    cp = AikoqlCheckpointer.from_client(tmp_aikoql)
     config = {"configurable": {"thread_id": "legacy"}}
     cp.put(config, {"id": "c1", "ts": "1", "channel_values": {}})
     assert cp.get(config)["id"] == "c1"

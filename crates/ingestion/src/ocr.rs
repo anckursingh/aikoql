@@ -551,7 +551,7 @@ pub fn ocr_pdf_pages_with(
     let total_chars: usize = merged.iter().map(|p| p.char_count).sum();
 
     eprintln!(
-        "mnemosyne-ocr: {} pages total, {} OCR attempted, {} succeeded, {} failed, avg conf {:.1}",
+        "aikoql-ocr: {} pages total, {} OCR attempted, {} succeeded, {} failed, avg conf {:.1}",
         merged.len(),
         stats.pages_ocr_attempted,
         stats.pages_ocr_succeeded,

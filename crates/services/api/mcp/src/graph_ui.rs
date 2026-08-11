@@ -1,14 +1,14 @@
 //! Graph Browser UI — Neo4j-style visualization with query runner + auth.
 //!
 //! Served at `/ui`. Features: tenant-filtered graph, interactive vis-network,
-//! AIKOQL query editor with results table, login/auth with role-based access.
+//! aikoql query editor with results table, login/auth with role-based access.
 
 pub const GRAPH_UI_HTML: &str = r##"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mnemosyne Graph Browser</title>
+<title>Aikoql Graph Browser</title>
 <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -87,7 +87,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 <!-- Login overlay -->
 <div id="login-overlay">
   <div id="login-box">
-    <h2>Mnemosyne</h2>
+    <h2>aikoql</h2>
     <input type="text" id="login-user" placeholder="Username" value="admin" />
     <input type="password" id="login-pass" placeholder="Password" value="admin" />
     <button onclick="doLogin()">Sign In</button>
@@ -99,7 +99,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 <!-- Main layout (hidden until login) -->
 <div id="main-layout" style="display:none;height:100vh;width:100vw;display:none;">
 <div id="sidebar">
-  <h2>Mnemosyne Graph <span id="version-tag"></span></h2>
+  <h2>Aikoql Graph <span id="version-tag"></span></h2>
   <div id="toolbar">
     <input type="text" id="koid-input" placeholder="KOID hex or type name..." />
     <select id="tenant-select" onchange="loadGraph()">
@@ -112,7 +112,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   </div>
   <div id="tabs">
     <button class="active" onclick="switchTab('inspector')">Inspector</button>
-    <button onclick="switchTab('query')">AIKOQL</button>
+    <button onclick="switchTab('query')">aikoql</button>
     <button onclick="switchTab('schema')">Schema</button>
   </div>
   <div id="tab-inspector" class="tab-content active">
@@ -341,7 +341,7 @@ async function loadNodeDetail(koid) {
   } catch(e) { document.getElementById('info').innerHTML='<p style="color:#ff5555;">'+e.message+'</p>'; }
 }
 
-// ---- AIKOQL Query Runner ----
+// ---- Aikoql Query Runner ----
 async function runQuery() {
   const query = document.getElementById('query-text').value.trim();
   if(!query) return;

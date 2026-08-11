@@ -1,7 +1,7 @@
-# Mnemosyne — Agent-first Knowledge Database (MRFC-0040)
+# aikoql — Agent-first Knowledge Database (MRFC-0040)
 # Architecture: foundation → knowledge → kernel → storage
 # Dependency DAG: providers → kernel, engines → kernel, compiler → kernel → storage
-# All crates depend on mnemosyne-kernel (types + storage + security + transaction).
+# All crates depend on aikoql-kernel (types + storage + security + transaction).
 
 [workspace]
 resolver = "2"
@@ -31,7 +31,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/anckursingh/mnemosyne"
+repository = "https://github.com/anckursingh/aikoql"
 
 [profile.dev]
 # Faster incremental builds for the conformance loop.

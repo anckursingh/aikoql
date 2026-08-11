@@ -3,6 +3,28 @@
 //! Owns the persisted key schema and all low-level encode/decode details so the
 //! transaction orchestrator in `transaction::kernel` does not know how keys are
 //! laid out.
+//!
+//! ## Key layout (R6 remediation)
+//!
+//! All persistent state lives in a flat keyspace with namespace prefixes.
+//! BTree `range()` scans are naturally prefix-bounded — O(log N + matches).
+//!
+//! | Prefix    | Key format                          | Purpose                  |
+//! |-----------|-------------------------------------|--------------------------|
+//! | `ko/`     | `ko/<koid(16)>/<ts(8)>`            | Object versions (MVCC)   |
+//! | `head/`   | `head/<koid(16)>`                   | Current head pointer     |
+//! | `ke/`     | `ke/<seq(8)>`                       | Knowledge event journal  |
+//! | `tomb/`   | `tomb/<koid(16)>`                   | Tombstone markers        |
+//! | `idem/`   | `idem/<key>`                        | Idempotency dedup        |
+//! | `sub/`    | `sub/<sub_id>`                      | Event subscriptions      |
+//! | `relo/`   | `relo/<src(16)>/<rel>/<dst(16)>`   | Outbound relationship idx|
+//! | `reli/`   | `reli/<dst(16)>/<rel>/<src(16)>`   | Inbound relationship idx |
+//! | `meta/`   | `meta/journal`                      | Journal head counter     |
+//!
+//! ponytail: type-scoped scan (`scan_by_type`) uses `P_HEAD` prefix + in-memory
+//! filter. A secondary index on `type_name` would eliminate the scan, but the
+//! BTree range over heads is already namespace-bounded; add when single-type
+//! scan latency measurably exceeds SLA.
 
 use crate::knowledge::codec::{self, Dec, Enc};
 use crate::knowledge::kom::*;

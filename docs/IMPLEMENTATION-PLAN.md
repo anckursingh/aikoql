@@ -1,9 +1,9 @@
-# Mnemosyne — Implementation Plan
+# aikoql — Implementation Plan
 
-**Architecture:** [MRFC-0005](MRFC-0005-System-Architecture.md) | [MRFC-0010](MRFC-0010-AIKOQL-Parser-Architecture-v2.md) | [MRFC-0020](MRFC-0020-Encryption-Key-Management-Architecture.md) | [MRFC-0030](#mrf-0030-active-knowledge-objects--the-knowledge-operating-system) — Active Knowledge Objects | [MRFC-0050](#mrf-0050-document-ocr--knowledge-ingestion) — Document OCR & Ingestion | [MRFC-0060](#mrf-0060-constraint-engine) — Schema, Constraint & Integrity Engine | **NEW: [MRFC-0070](#mrf-0070-agent-knowledge-interface--engineering-knowledge-compiler) — Agent Knowledge Interface & Engineering Knowledge Compiler**  
+**Architecture:** [MRFC-0005](MRFC-0005-System-Architecture.md) | [MRFC-0010](MRFC-0010-aikoql-Parser-Architecture-v2.md) | [MRFC-0020](MRFC-0020-Encryption-Key-Management-Architecture.md) | [MRFC-0030](#mrf-0030-active-knowledge-objects--the-knowledge-operating-system) — Active Knowledge Objects | [MRFC-0050](#mrf-0050-document-ocr--knowledge-ingestion) — Document OCR & Ingestion | [MRFC-0060](#mrf-0060-constraint-engine) — Schema, Constraint & Integrity Engine | **NEW: [MRFC-0070](#mrf-0070-agent-knowledge-interface--engineering-knowledge-compiler) — Agent Knowledge Interface & Engineering Knowledge Compiler**  
 **Conceptual Model:** [Universal Conceptual Model for Engineering Agents](Universal-Conceptual-Model-for-Engineering-Agents.md)  
 **Status:** Phases 1–5 complete, MRFC-0020 complete, API Layer done, MRFC-0030 Phase 7a–7d complete (9/9 Active KOs + Agent Runtime), MRFC-0040 complete, Studio Phase S2/S3/S4 complete (Document Compiler UI), MRFC-0050 Phase D1–D9 complete (full Document Knowledge Compiler pipeline), MRFC-0060 Phase C1–C9 + gap-filling complete (~95%), MRFC-0070 Phases A0–A10 complete (full Agent Knowledge Interface + Context Compiler).  
-**Last updated:** 2026-08-11 (R13 complete — AIKOQL hybrid retrieval)  
+**Last updated:** 2026-08-11 (R13 complete — aikoql hybrid retrieval)  
 **Next session:** Remaining remediation phases R4, R6, R7, R8, R9, R14 (see §Skipped Work below)
 
 ---
@@ -15,7 +15,7 @@ Restructured per advisor architecture review. Dependency direction: **foundation
 ```
 crates/
 ├── kernel/               ← Core: KO model, storage, security, transaction
-├── compiler/             ← AIKOQL: lexer → parser → AST → KIR → planner
+├── compiler/             ← aikoql: lexer → parser → AST → KIR → planner
 ├── runtime/              ← KVM: interpreter + execution engine
 ├── engines/              ← Knowledge engines
 │   ├── graph/            ← Relationship traversal
@@ -64,11 +64,11 @@ benchmarks/               ← Load + micro-benchmarks (moved from crates/)
 
 ## MVP Readiness Assessment (2026-08-08)
 
-**Mnemosyne is MVP-ready for development/agent use.** Production deployment requires MRFC-0060 Constraint Engine (C1-C5) to guarantee data correctness — property types, uniqueness, cardinality, and referential integrity are currently unenforced at the canonical level.
+**aikoql is MVP-ready for development/agent use.** Production deployment requires MRFC-0060 Constraint Engine (C1-C5) to guarantee data correctness — property types, uniqueness, cardinality, and referential integrity are currently unenforced at the canonical level.
 
 ### What's solid (don't touch)
 - Kernel: MVCC, OCC, HLC, SHA-256 audit chain, RBAC, encryption at rest
-- AIKOQL: Lexer → Parser → AST → KIR → Planner → Runtime interpreter
+- aikoql: Lexer → Parser → AST → KIR → Planner → Runtime interpreter
 - 49 MCP tools: remember, get, find_similar, aikoql, trace, explain, prove, batch, decide, deploy_program/list_programs, deploy_policy/evaluate_policies, deploy_workflow, deploy_trigger, deploy_agent/list_agents, deploy_connector/list_connectors, deploy_view/list_views, deploy_report/list_reports, deploy_benchmark/list_benchmarks, streaming, etc.
 - REST API: 24+ endpoints, Graph browser UI, Prometheus metrics
 - Python SDK: PyO3 embedded + pure-Python MCP client + unified Agent.connect()
@@ -93,11 +93,11 @@ The `StorageEngine` trait is 3 methods (`get`, `scan`, `write_batch`). Swapping 
 docker compose up -d
 
 # Binary (development)
-cargo build -p mnemosyne-mcp --release
-./target/release/mnemosyne-mcp serve ./kb.redb --listen 0.0.0.0:9090
+cargo build -p aikoql-mcp --release
+./target/release/aikoql-mcp serve ./kb.redb --listen 0.0.0.0:9090
 
 # Python client
-from mnemosyne import Agent
+from aikoql import Agent
 db = Agent.connect("localhost:9090")
 ```
 
@@ -129,7 +129,7 @@ MVCC, OCC, HLC, SHA-256 audit chain, redb backend, MemoryEngine, AuthManager (RB
 ## Phase 3: Compiler + Runtime ✅
 
 - Knowledge IR — 7 operators, IrPlan + validation, range predicates (Gt/Lt/Gte/Lte)
-- AIKOQL parser — hand-written lexer, recursive-descent parser, 5 statement types
+- aikoql parser — hand-written lexer, recursive-descent parser, 5 statement types
 - AST → KIR compiler — compile(), compile_with_subject(), compile_with_schema()
 - Semantic Analyzer — entity resolution, property validation, open/closed schema, 8 tests
 - Planner — filter merge, filter pushdown
@@ -266,11 +266,11 @@ crates/security/
 - [x] Crypto agility — two independent providers implementing the same `CryptoProvider` trait
 - [x] `--help` / `--version` CLI flags for MCP server discoverability
 - [x] Build scripts: `scripts/build-release.bat` (Windows), `scripts/build-release.sh` (Linux), `scripts/build-all.bat` (cross-platform). Each generates SHA256 checksums, versioned distribution archives (.zip/.tar.gz), and BUILD_INFO.txt.
-- [x] Example config file: `mnemosyne.toml` (database, server, encryption, logging sections)
+- [x] Example config file: `aikoql.toml` (database, server, encryption, logging sections)
 - [x] End-user quickstart: `QUICKSTART.md` (5-second start, tool reference, SDK examples, encryption setup)
 - [x] Go SDK: `go.mod` module definition
 - [x] `.gitignore`: backup directory and encryption key patterns
-- [x] Interactive AIKOQL shell — `mnemosyne-mcp shell [DB]` (REPL with dot-commands)
+- [x] Interactive aikoql shell — `aikoql-mcp shell [DB]` (REPL with dot-commands)
 - [x] CLI subcommands — `serve`, `shell`, `backup`, `restore`, `audit`, `keygen`
 - [x] Shell dot-commands: `.help`, `.tables`, `.count`, `.schema`, `.backup`, `.audit`, `.metrics`, `.exit`
 - [x] Shell mutation routing: CREATE → `kernel.remember()`, MATCH/TRAVERSE → `Interpreter.execute()`
@@ -390,7 +390,7 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
 16. **Post-quantum cryptography** (NIST PQC integration)
 17. **Knowledge Network** (federated mesh, cross-org exchange, marketplace)
 18. **Knowledge VM** (bytecode compiler, parallel execution)
-19. **Natural-language frontend** (LLM → AIKOQL)
+19. **Natural-language frontend** (LLM → aikoql)
 
 ### Summary
 
@@ -450,7 +450,7 @@ Knowledge Objects  (commit to kernel)
    ↓
 Graph + Vector + Provenance
    ↓
-AIKOQL → Agent → Answer + Evidence
+aikoql → Agent → Answer + Evidence
 ```
 
 ### What We Have (mapped to v2 phases)
@@ -466,7 +466,7 @@ AIKOQL → Agent → Answer + Evidence
 | **D6 — Entity Resolution** | Cross-source linking, confidence scoring, evidence aggregation, embedding infrastructure, vector similarity resolver | ✅ |
 | **D7 — Knowledge Commit** | Reconciliation, conflict detection, validated KOs committed | ✅ |
 | **D8 — Vector + Retrieval** | Semantic chunking, contextualization, embedding, HNSW+BM25, reranking | ✅ |
-| **D9 — Agent + Studio** | Document Explorer panel, evidence viewer, AIKOQL SEARCH DOCUMENTS, explainability, end-to-end compiler pipeline | ✅ |
+| **D9 — Agent + Studio** | Document Explorer panel, evidence viewer, Aikoql SEARCH DOCUMENTS, explainability, end-to-end compiler pipeline | ✅ |
 
 ### What Already Exists (Reuse, Don't Rebuild)
 
@@ -623,7 +623,7 @@ Implemented in full. See `crates/ingestion/src/` — `ontology.rs` (D5), `resolu
 
 ### Architecture Assessment
 
-MRFC-0060 is the most critical gap between Mnemosyne's current state and production readiness. The proposal frames constraints as the **missing correctness layer** between Ontology (semantics), Schema (structure), and Transaction (state transition). This is architecturally sound — every production database has this layer, and Mnemosyne currently has only a minimal stub.
+MRFC-0060 is the most critical gap between aikoql's current state and production readiness. The proposal frames constraints as the **missing correctness layer** between Ontology (semantics), Schema (structure), and Transaction (state transition). This is architecturally sound — every production database has this layer, and aikoql currently has only a minimal stub.
 
 **Central principle:**
 
@@ -685,7 +685,7 @@ This is not a feature gap — it's a **correctness gap**. The current system can
 5. **Reject invalid state**: no declarative checks (`balance >= 0`, `end_date >= start_date`)
 6. **Ensure cross-tenant isolation**: no enforced tenant-scoping on references
 
-For a database that positions itself as a knowledge system of record, missing these is a production blocker. Every connector (PostgreSQL, Neo4j, MongoDB) already enforces its own constraints — but Mnemosyne has no canonical constraint model to reconcile them against.
+For a database that positions itself as a knowledge system of record, missing these is a production blocker. Every connector (PostgreSQL, Neo4j, MongoDB) already enforces its own constraints — but aikoql has no canonical constraint model to reconcile them against.
 
 ### Integration Points (Where the Code Goes)
 
@@ -722,7 +722,7 @@ The `SchemaRegistry` pattern (`Arc<RwLock<SchemaRegistry>>` at kernel.rs:455) is
 
 ### Recommended Implementation Phases
 
-MRFC-0060 §86 proposes 9 phases (C1-C9). The following adapts those to Mnemosyne's architecture, prioritizing what provides correctness guarantees fastest:
+MRFC-0060 §86 proposes 9 phases (C1-C9). The following adapts those to aikoql's architecture, prioritizing what provides correctness guarantees fastest:
 
 #### Phase C1: Property Type System (1-2 weeks)
 
@@ -884,10 +884,10 @@ MRFC-0060 §86 proposes 9 phases (C1-C9). The following adapts those to Mnemosyn
 
 ```
 BEFORE (current):
-  AIKOQL → Authorization → SchemaRegistry → Transaction → Commit
+  aikoql → Authorization → SchemaRegistry → Transaction → Commit
 
 AFTER (with C1-C5):
-  AIKOQL → Authorization → SchemaRegistry → ConstraintEngine → Transaction → Commit
+  aikoql → Authorization → SchemaRegistry → ConstraintEngine → Transaction → Commit
                                 │                   │
                           type + required      uniqueness + cardinality
                                                 + domains + checks
@@ -961,7 +961,7 @@ MRFC-0070 is not another feature. It is the culmination of every other MRFC:
 MRFC-0001 (KO Model)     ──┐
 MRFC-0005 (Architecture) ──┤
 MRFC-0008 (Commit/Journal)──┤
-MRFC-0010 (AIKOQL)       ──┤
+MRFC-0010 (aikoql)       ──┤
 MRFC-0011 (Syscall ABI)  ──┤
 MRFC-0020 (Encryption)   ──┤── All building toward MRFC-0070
 MRFC-0030 (Active KOs)   ──┤
@@ -1002,7 +1002,7 @@ ARTIFACT     — SourceFile, Markdown, RFC, ADR, Test, Config, Dockerfile, Commi
 RELATIONSHIP — DEPENDS_ON, IMPLEMENTS, TESTED_BY, GOVERNED_BY, CALLS, IMPORTS...
 CLAIM        — "ConstraintEngine uses MVCC" (with source, authority, confidence)
 RULE         — "New Kernel code must be written in Rust"
-REQUIREMENT  — "AIKOQL must support graph traversal"
+REQUIREMENT  — "aikoql must support graph traversal"
 DECISION     — "Use HNSW for vector indexing" (with context, options, rationale)
 TASK         — "Implement deferred constraints" (affects components, satisfies requirements)
 EVIDENCE     — Source code, test results, commits, CI results, ADRs, telemetry
@@ -1035,7 +1035,7 @@ MRFC-0070 leverages massive existing infrastructure:
 | **Authority model** — `Authority` enum with 8 levels | `Confidence` scoring in knowledge model | ⚠️ Needs `Authority` enum + policy |
 | **Scope** — per-KO scoping | `TenantManager` + tenant-scoped uniqueness | ⚠️ Needs `Scope` enum + resolution |
 | **Vector + Graph retrieval** | HNSW + BM25 hybrid, `find_similar`, graph traversal | ✅ Production |
-| **AIKOQL query language** | Lexer → Parser → AST → KIR → Planner → Runtime | ✅ 5 statement types, 6 operators |
+| **aikoql query language** | Lexer → Parser → AST → KIR → Planner → Runtime | ✅ 5 statement types, 6 operators |
 | **MCP server** | 49 tools, stdio + TCP, streaming | ✅ Production |
 | **REST API** | 37 endpoints under `/api/v1/` | ✅ Production |
 | **Document ingestion** | D1-D9 pipeline: parse → AST → KIR → ontology → resolve → commit | ✅ 195 tests |
@@ -1076,7 +1076,7 @@ Ranked by impact on agent token reduction:
 
 #### Tier 3 — Agent Interface
 
-15. **AIKOQL agent operations** — `GET CONTEXT FOR TASK`, `EXPLAIN COMPONENT`, `TRACE REQUIREMENT TO CODE`, `FIND CONFLICTS`, `FIND STALE DOCUMENTATION`, `VALIDATE CHANGE`, `PROPOSE KNOWLEDGE UPDATE`
+15. **aikoql agent operations** — `GET CONTEXT FOR TASK`, `EXPLAIN COMPONENT`, `TRACE REQUIREMENT TO CODE`, `FIND CONFLICTS`, `FIND STALE DOCUMENTATION`, `VALIDATE CHANGE`, `PROPOSE KNOWLEDGE UPDATE`
 16. **Agent Gateway** — Authentication, agent identity, authorization, rate limiting, audit, protocol adaptation (MCP/REST/gRPC).
 17. **Agent proposal workflow** — Agent submits Proposal KO → validation against evidence + constraints → ACCEPT / REJECT / NEEDS_REVIEW. Never auto-promote to authoritative.
 18. **Post-change reconciliation** — Git diff → affected artifacts → affected entities → affected relationships → affected claims → impact report.
@@ -1237,9 +1237,9 @@ Each phase targets specific acceptance criteria from MRFC-0070 §89 (AKI-001 thr
 
 **Token impact:** This is the 40-60% reduction engine. Instead of agents reading 20K-80K tokens of raw documentation + code, they get a 2K-8K pre-compiled context package with exactly what they need.
 
-#### Phase A6: AIKOQL Agent Operations (2 weeks)
+#### Phase A6: Aikoql Agent Operations (2 weeks)
 
-**Goal:** Expose agent knowledge operations through AIKOQL. These become the semantic query primitives.
+**Goal:** Expose agent knowledge operations through aikoql. These become the semantic query primitives.
 
 - [x] `GET CONTEXT FOR TASK "description"` — full Context Compiler pipeline (via MCP `compile_context`)
 - [x] `EXPLAIN COMPONENT "name"` — purpose, architecture, dependencies, constraints, requirements, decisions, implementation, tests, recent changes, conflicts (A6 deferred)
@@ -1252,7 +1252,7 @@ Each phase targets specific acceptance criteria from MRFC-0070 §89 (AKI-001 thr
 
 **Exit criteria:** AKI-022, AKI-023, AKI-024
 
-**Integration:** MCP tool `compile_context` (koid + task + token_budget) → context package with markdown rendering. AIKOQL parser extensions deferred. ~300 lines in `crates/ingestion/src/context.rs` + MCP integration.
+**Integration:** MCP tool `compile_context` (koid + task + token_budget) → context package with markdown rendering. aikoql parser extensions deferred. ~300 lines in `crates/ingestion/src/context.rs` + MCP integration.
 
 #### Phase A7: Agent Gateway & Security (2 weeks) ✅ COMPLETE
 
@@ -1337,7 +1337,7 @@ Phase A4 (Conflict+Temporal) ──┤                                  │
     ↓                          │                                  │
 Phase A5 (Context Compiler) ◄──┘                                  │
     ↓                                                             │
-Phase A6 (AIKOQL Agent Ops) ◄── depends on A5                    │
+Phase A6 (Aikoql Agent Ops) ◄── depends on A5                    │
     ↓                                                             │
 Phase A7 (Agent Gateway) ──────┤── parallel                       │
 Phase A8 (Change Reconciliation)┘                                 │
@@ -1358,11 +1358,11 @@ Compile Knowledge (A0-A4)
     ↓
 Agent requests context (A5-A6)
     ↓
-Mnemosyne returns ContextPackage (A5)
+aikoql returns ContextPackage (A5)
     ↓
 Agent modifies code
     ↓
-Mnemosyne detects affected knowledge (A8)
+aikoql detects affected knowledge (A8)
     ↓
 Agent proposes knowledge update (A7)
     ↓
@@ -1383,10 +1383,10 @@ Validation → Committed
 MRFC-0060 Phase C1-C9 + gap-filling is ~95% complete. The remaining 5% (index-backed uniqueness, conditional uniqueness, constraint pushdown verification) are optimization and polish.
 
 MRFC-0070 is the feature that:
-1. **Differentiates Mnemosyne from every other database** — no one has a Context Compiler
+1. **Differentiates aikoql from every other database** — no one has a Context Compiler
 2. **Reduces agent token usage by 40-60%** — direct cost savings for users
 3. **Makes every other feature more valuable** — constraints, ontology, provenance, encryption all feed into the context package
-4. **Positions Mnemosyne as the knowledge layer for the agent era** — not a better Postgres, not a better vector DB, a new category
+4. **Positions aikoql as the knowledge layer for the agent era** — not a better Postgres, not a better vector DB, a new category
 
 ### Crate Structure
 
@@ -1408,7 +1408,7 @@ crates/kernel/src/knowledge/
 ├── scope.rs        ← NEW: Scope enum + resolution
 └── status.rs       ← EXTEND: Full lifecycle states
 
-crates/compiler/    ← EXTEND: New AIKOQL agent statement types
+crates/compiler/    ← EXTEND: New aikoql agent statement types
 crates/services/api/
 ├── agent_gateway/  ← NEW: Agent Gateway HTTP + MCP handlers
 └── ...
@@ -1416,7 +1416,7 @@ crates/services/api/
 
 ### Key Design Decisions
 
-1. **Knowledge Model ≠ Agent Runtime.** Mnemosyne provides the knowledge layer; Claude Code/Codex/Cline provide the agent runtime. The universal model is the contract between them.
+1. **Knowledge Model ≠ Agent Runtime.** aikoql provides the knowledge layer; Claude Code/Codex/Cline provide the agent runtime. The universal model is the contract between them.
 
 2. **Markdown is a projection, not the truth.** Markdown remains important for human editing. But the canonical representation is the Knowledge Object. Markdown is one projection of it.
 
@@ -1428,9 +1428,9 @@ crates/services/api/
 
 6. **Context is a projection, not the knowledge store.** Different agents get different projections of the same knowledge graph based on task, scope, authorization.
 
-7. **Transport does not define the semantic model.** MCP, REST, gRPC are transports. AIKOQL is the semantic query language. The model is protocol-independent.
+7. **Transport does not define the semantic model.** MCP, REST, gRPC are transports. aikoql is the semantic query language. The model is protocol-independent.
 
-8. **Ponytail:** Build the Context Compiler first for Mnemosyne's own repository as the benchmark fixture. Self-host: Mnemosyne's own knowledge (MRFCs, architecture, code) compiled by its own Context Compiler. Eat our own dogfood from day one.
+8. **Ponytail:** Build the Context Compiler first for aikoql's own repository as the benchmark fixture. Self-host: aikoql's own knowledge (MRFCs, architecture, code) compiled by its own Context Compiler. Eat our own dogfood from day one.
 
 ### What Changes for Claude Code / Codex / Cline
 
@@ -1458,7 +1458,7 @@ MRFC-0070 defines 45 acceptance criteria (AKI-001 through AKI-045). Phase mappin
 | A3 — Knowledge Graph | AKI-003, AKI-004, AKI-018, AKI-019 | 4 |
 | A4 — Conflict+Temporal | AKI-006, AKI-007, AKI-008, AKI-009, AKI-043 | 5 |
 | A5 — Context Compiler | AKI-013, AKI-014, AKI-015, AKI-016, AKI-038, AKI-039, AKI-040, AKI-041, AKI-042 | 9 |
-| A6 — AIKOQL Agent Ops | AKI-022, AKI-023, AKI-024 | 3 |
+| A6 — Aikoql Agent Ops | AKI-022, AKI-023, AKI-024 | 3 |
 | A7 — Agent Gateway | AKI-025, AKI-026, AKI-027, AKI-028, AKI-045 | 5 |
 | A8 — Reconciliation | AKI-020, AKI-021 | 2 |
 | A9 — Connector Integration | AKI-035, AKI-036 | 2 |
@@ -1481,7 +1481,7 @@ Three landmark systems unified their domain through a single abstraction:
 | **Kubernetes** | Resource | Deployment, Service, ConfigMap, Secret |
 | **Unix** | File | Data, Device, Socket, Process |
 
-**Mnemosyne** introduces the fourth:
+**aikoql** introduces the fourth:
 
 > **Everything is a Knowledge Object.**
 
@@ -1510,37 +1510,37 @@ Data, code, prompts, workflows, agents, policies, benchmarks, connectors — all
 
 ### Active Knowledge Object Type Hierarchy
 
-Every Active KO is a `KnowledgeObject` with `type_name` in the `mnemosyne:` namespace:
+Every Active KO is a `KnowledgeObject` with `type_name` in the `aikoql:` namespace:
 
 ```
 KnowledgeObject
 ├── Passive (data): Person, Project, Document, Invoice...
 │
 └── Active (executable):     ← MRFC-0030 scope
-    ├── mnemosyne:program       Executable AIKOQL code
-    ├── mnemosyne:workflow      DAG of programs
-    ├── mnemosyne:policy        RBAC rule as KO
-    ├── mnemosyne:agent         AI agent definition
-    ├── mnemosyne:prompt        LLM prompt template
-    ├── mnemosyne:trigger       Event → Condition → Action
-    ├── mnemosyne:connector     Import/export plugin definition
-    ├── mnemosyne:benchmark     Performance test as KO
-    ├── mnemosyne:query         Saved AIKOQL query
-    ├── mnemosyne:view          Materialized knowledge view
-    ├── mnemosyne:report        Compliance/analytics report definition
-    └── mnemosyne:ontology      Type system as KO
+    ├── aikoql:program       Executable aikoql code
+    ├── aikoql:workflow      DAG of programs
+    ├── aikoql:policy        RBAC rule as KO
+    ├── aikoql:agent         AI agent definition
+    ├── aikoql:prompt        LLM prompt template
+    ├── aikoql:trigger       Event → Condition → Action
+    ├── aikoql:connector     Import/export plugin definition
+    ├── aikoql:benchmark     Performance test as KO
+    ├── aikoql:query         Saved aikoql query
+    ├── aikoql:view          Materialized knowledge view
+    ├── aikoql:report        Compliance/analytics report definition
+    └── aikoql:ontology      Type system as KO
 ```
 
-### 1. Program KO (`mnemosyne:program`)
+### 1. Program KO (`aikoql:program`)
 
-A `Program` is AIKOQL code wrapped as a versioned Knowledge Object.
+A `Program` is aikoql code wrapped as a versioned Knowledge Object.
 
 ```yaml
 KnowledgeObject:
-  type_name: mnemosyne:program
+  type_name: aikoql:program
   properties:
     name: CalculateSalary
-    language: AIKOQL
+    language: aikoql
     version: 3
     input_type: Employee
     output_type: SalaryReport
@@ -1552,9 +1552,9 @@ KnowledgeObject:
       - name: dept
         type: Text
     dependencies:
-      - type: mnemosyne:schema
+      - type: aikoql:schema
         ref: Employee
-      - type: mnemosyne:program
+      - type: aikoql:program
         ref: BonusCalculator
     security:
       owner: hr-admin
@@ -1564,8 +1564,8 @@ KnowledgeObject:
 **Lifecycle:** Draft → Active → Deprecated → Archived
 
 **Key properties:**
-- `body` — AIKOQL source code
-- `language` — AIKOQL (future: Python, WASM)
+- `body` — aikoql source code
+- `language` — aikoql (future: Python, WASM)
 - `parameters` — typed input parameters
 - `dependencies` — schemas, ontologies, other programs
 - `input_type` / `output_type` — contract
@@ -1575,13 +1575,13 @@ KnowledgeObject:
 Program KO → Compiler → Knowledge IR → Planner → KVM Bytecode → Execute
 ```
 
-### 2. Workflow KO (`mnemosyne:workflow`)
+### 2. Workflow KO (`aikoql:workflow`)
 
 A DAG of Program KOs forming a pipeline.
 
 ```yaml
 KnowledgeObject:
-  type_name: mnemosyne:workflow
+  type_name: aikoql:workflow
   properties:
     name: DocumentIngestion
     steps:
@@ -1610,13 +1610,13 @@ KnowledgeObject:
 - `timeout` — per-step and global
 - `checkpoint` — resume from last successful step
 
-### 3. Policy KO (`mnemosyne:policy`)
+### 3. Policy KO (`aikoql:policy`)
 
 RBAC rules as KOs — themselves subject to access control.
 
 ```yaml
 KnowledgeObject:
-  type_name: mnemosyne:policy
+  type_name: aikoql:policy
   properties:
     name: HRTeamCanReadEmployeeData
     effect: Allow
@@ -1628,18 +1628,18 @@ KnowledgeObject:
 
 **Why Policy-as-KO matters:** Policies are versioned, auditable, and can reference other KOs. A policy change is a `KnowledgeEvent`. You can `trace` a policy. You can `prove` who changed it and when.
 
-### 4. Agent KO (`mnemosyne:agent`)
+### 4. Agent KO (`aikoql:agent`)
 
 An AI agent definition with prompt, memory, skills, tools, and policies.
 
 ```yaml
 KnowledgeObject:
-  type_name: mnemosyne:agent
+  type_name: aikoql:agent
   properties:
     name: HRSupportAgent
     prompt: "You are an HR assistant. Answer questions about company policies."
     memory:
-      type: mnemosyne:knowledge_view
+      type: aikoql:knowledge_view
       ref: EmployeeKnowledgeBase
     skills:
       - program: SearchEmployeeRecords
@@ -1655,13 +1655,13 @@ KnowledgeObject:
       - Never expose salary data to non-managers
 ```
 
-### 5. Trigger KO (`mnemosyne:trigger`)
+### 5. Trigger KO (`aikoql:trigger`)
 
 Event-Condition-Action as a KO.
 
 ```yaml
 KnowledgeObject:
-  type_name: mnemosyne:trigger
+  type_name: aikoql:trigger
   properties:
     name: OnNewEmployeeRunOCR
     event:
@@ -1675,16 +1675,16 @@ KnowledgeObject:
         document_id: "{{event.object.koid}}"
 ```
 
-### 6. Connector KO (`mnemosyne:connector`)
+### 6. Connector KO (`aikoql:connector`)
 
 Import/export plugins as versioned KOs.
 
 ```yaml
 KnowledgeObject:
-  type_name: mnemosyne:connector
+  type_name: aikoql:connector
   properties:
     name: PostgreSQLImport
-    plugin: mnemosyne-postgres
+    plugin: aikoql-postgres
     config:
       host: localhost
       port: 5432
@@ -1714,12 +1714,12 @@ KOs (passive + active) → Knowledge Runtime → Kernel → Storage
                           └─ Auth → Policy Engine
 ```
 
-The Knowledge Runtime is the execution layer that interprets Active KOs. It's the Mnemosyne equivalent of the Linux kernel's process scheduler + memory manager — it knows how to execute programs, orchestrate workflows, enforce policies, and schedule triggers.
+The Knowledge Runtime is the execution layer that interprets Active KOs. It's the aikoql equivalent of the Linux kernel's process scheduler + memory manager — it knows how to execute programs, orchestrate workflows, enforce policies, and schedule triggers.
 
 ### KVM — Knowledge Virtual Machine
 
 ```
-Program KO (AIKOQL)
+Program KO (aikoql)
     ↓
 compiler::compile()   — parse + semantic analysis
     ↓
@@ -1772,21 +1772,21 @@ This means: `TRAVERSE ProgramX DEPENDS_ON` shows the full dependency tree. `SHOW
 
 ```aikoql
 -- List all programs
-MATCH mnemosyne:program RETURN name, version, language
+MATCH aikoql:program RETURN name, version, language
 
 -- Show execution history
-MATCH mnemosyne:program WHERE name = "CalculateSalary"
+MATCH aikoql:program WHERE name = "CalculateSalary"
 RETURN version, lifecycle.state, commit_ts
 
 -- Find all active triggers
-MATCH mnemosyne:trigger WHERE lifecycle.state = "active"
+MATCH aikoql:trigger WHERE lifecycle.state = "active"
 RETURN name, event.kind, action.program
 
 -- Trace dependencies
 TRAVERSE CalculateSalary DEPENDS_ON DEPTH 3
 
 -- Audit policy changes
-MATCH mnemosyne:policy WHERE resource_type = "Employee"
+MATCH aikoql:policy WHERE resource_type = "Employee"
 TRACE EACH
 ```
 
@@ -1796,9 +1796,9 @@ TRACE EACH
 
 - [x] `kernel.deploy_program(name, body, language, subject)` — creates Program KO via `remember()`
 - [x] `kernel.update_program(koid, new_body, subject)` — versions Program KO (increments version counter)
-- [x] `kernel.list_programs(subject)` — scans `mnemosyne:program` type
-- [x] Program KO: `type_name: mnemosyne:program`, properties: name, body, language, version
-- [x] Execution: MCP server loads Program KO, substitutes `{{param}}` placeholders, compiles AIKOQL, executes via runtime interpreter
+- [x] `kernel.list_programs(subject)` — scans `aikoql:program` type
+- [x] Program KO: `type_name: aikoql:program`, properties: name, body, language, version
+- [x] Execution: MCP server loads Program KO, substitutes `{{param}}` placeholders, compiles aikoql, executes via runtime interpreter
 - [x] Subject-based ACL: programs execute with caller's identity
 - [x] MCP tools: `deploy_program`, `execute_program`, `list_programs`
 - [x] REST API: `/api/v1/deploy-program`, `/api/v1/execute-program`, `/api/v1/list-programs`
@@ -1808,21 +1808,21 @@ TRACE EACH
 
 #### Phase 7b: Active Object Types ✅ (all 9 types done)
 
-- [x] `mnemosyne:policy` — `deploy_policy()` + `evaluate_policies()` evaluation engine
+- [x] `aikoql:policy` — `deploy_policy()` + `evaluate_policies()` evaluation engine
 - [x] Policy evaluation: matches (principal, action, resource_type) against all Policy KOs
 - [x] Policy effects: Allow (permit) / Deny (block) with reason string
-- [x] `mnemosyne:workflow` — `deploy_workflow()` with JSON step DAG
-- [x] `mnemosyne:trigger` — `deploy_trigger()` with event_kind + type_filter + program_koid
+- [x] `aikoql:workflow` — `deploy_workflow()` with JSON step DAG
+- [x] `aikoql:trigger` — `deploy_trigger()` with event_kind + type_filter + program_koid
 - [x] `add_dependency` — DEPENDS_ON relationships between Active KOs
 - [x] MCP tools: `deploy_policy`, `evaluate_policies`, `deploy_workflow`, `deploy_trigger`, `add_dependency`
 - [x] REST API: 6 new endpoints
 - [x] Verified: Allow/Deny policy evaluation, Workflow deployment, Trigger deployment
-- [x] `mnemosyne:agent` — `deploy_agent()` + `list_agents()` MCP tools + REST API (2026-08-08)
-- [x] `mnemosyne:connector` — `deploy_connector()` + `list_connectors()` MCP tools + REST API (2026-08-08)
-- [x] `mnemosyne:view` — `deploy_view()` + `list_views()` MCP tools + REST API (2026-08-09)
-- [x] `mnemosyne:report` — `deploy_report()` + `list_reports()` MCP tools + REST API (2026-08-09)
-- [x] `mnemosyne:benchmark` — `deploy_benchmark()` + `list_benchmarks()` MCP tools + REST API (2026-08-09)
-- [x] `mnemosyne:ontology` — OntologyDef, OntologyRegistry, `discover_ontology()` MCP tool (2026-08-08)
+- [x] `aikoql:agent` — `deploy_agent()` + `list_agents()` MCP tools + REST API (2026-08-08)
+- [x] `aikoql:connector` — `deploy_connector()` + `list_connectors()` MCP tools + REST API (2026-08-08)
+- [x] `aikoql:view` — `deploy_view()` + `list_views()` MCP tools + REST API (2026-08-09)
+- [x] `aikoql:report` — `deploy_report()` + `list_reports()` MCP tools + REST API (2026-08-09)
+- [x] `aikoql:benchmark` — `deploy_benchmark()` + `list_benchmarks()` MCP tools + REST API (2026-08-09)
+- [x] `aikoql:ontology` — OntologyDef, OntologyRegistry, `discover_ontology()` MCP tool (2026-08-08)
 
 #### Phase 7c: Knowledge Runtime ✅ (core runtime done)
 
@@ -1847,7 +1847,7 @@ TRACE EACH
 - [x] Unit test: dedup_consecutive_scans_on_same_type (31 compiler tests, all green)
 - [x] MCP tool: `execution_stats` (program count, rows, timing, cache hit %)
 - [ ] JIT compiler (Cranelift/LLVM) — deferred: tree-walking interpreter is sufficient for v1
-- [ ] WASM/Python language support — deferred: AIKOQL is the primary language
+- [ ] WASM/Python language support — deferred: aikoql is the primary language
 - [ ] Streaming results — deferred: batch execution sufficient for current workloads
 - [ ] Parallel execution — deferred: sequential execution with cached plans is fast enough
 
@@ -1866,7 +1866,7 @@ TRACE EACH
 
 Traditional databases separate data from code. You have `CREATE TABLE` for data and `CREATE FUNCTION` for code. They live in different namespaces, have different versioning (or none), and different security models. Code is second-class.
 
-MRFC-0030 says: **code IS data**. A program is just a KnowledgeObject with `type_name: mnemosyne:program`. It gets the same:
+MRFC-0030 says: **code IS data**. A program is just a KnowledgeObject with `type_name: aikoql:program`. It gets the same:
 - **Identity**: immutable KOID
 - **Versioning**: MVCC, every change is a new version
 - **Provenance**: who wrote it, when, why
@@ -1877,7 +1877,7 @@ MRFC-0030 says: **code IS data**. A program is just a KnowledgeObject with `type
 
 This is how Git works. A commit is an object. A tree is an object. A blob is an object. They all live in the same content-addressable store with the same lifecycle. Git doesn't have a separate "code store" and "data store" — everything is an object.
 
-Mnemosyne should work the same way. Everything is a Knowledge Object.
+aikoql should work the same way. Everything is a Knowledge Object.
 
 ---
 
@@ -1899,7 +1899,7 @@ Mnemosyne should work the same way. Everything is a Knowledge Object.
 | eval_recall | Measure recall@k |
 | eval_staleness | Index lag distribution |
 | eval_contradictions | Find conflicting KOs |
-| aikoql | Execute AIKOQL query |
+| aikoql | Execute aikoql query |
 | backup | Create verified backup |
 | verify_backup | Check backup integrity |
 | restore | Restore from backup (with PITR metadata) |
@@ -1936,7 +1936,7 @@ Mnemosyne should work the same way. Everything is a Knowledge Object.
 | 7 | Schema Discovery as MCP Tool | ✅ Implemented | `discover_schema` MCP tool returns types + counts |
 | 8 | Decision/Provenance Tool | ✅ Implemented | `decide` MCP tool with rationale, confidence, provenance-tagged version |
 | 9 | Health/Ready Endpoint | ✅ Implemented | `health` MCP tool: status, ready, journal_seq, journal_lag_ms, object_count, connection_pool, audit_hash, uptime |
-| 10 | Agent Memory Pattern | ✅ Implemented | `agent_memory` MCP tool with `mnemosyne:memory` type. TTL stored but not enforced on read |
+| 10 | Agent Memory Pattern | ✅ Implemented | `agent_memory` MCP tool with `aikoql:memory` type. TTL stored but not enforced on read |
 | 11 | Auto-Embedding | ✅ Implemented | `embed: true` in remember. SemanticEngine handles async enrichment. Pending status returned to caller |
 | 12 | Unified Python SDK | ✅ Implemented | `agent.py`: `Agent.connect()` dual-mode (embedded + server). Combined with #1 |
 
@@ -1952,9 +1952,9 @@ Mnemosyne should work the same way. Everything is a Knowledge Object.
 - **Health fields (#9):** Added `journal_lag_ms` (0 for single-node) and `connection_pool` (atomic counter tracking TCP connections)
 
 - **Python MCP Client SDK (#1) + Unified Python SDK (#12):** Combined deliverable:
-  - `mnemosyne/mcp_client.py` — pure Python MCP JSON-RPC client over TCP. No native deps. Tool wrappers for all 20+ tools.
-  - `mnemosyne/agent.py` — `Agent.connect()` auto-detects mode:
-    - `Agent.connect("./kb.redb")` → embedded (PyO3 `Mnemosyne`)
+  - `aikoql/mcp_client.py` — pure Python MCP JSON-RPC client over TCP. No native deps. Tool wrappers for all 20+ tools.
+  - `aikoql/agent.py` — `Agent.connect()` auto-detects mode:
+    - `Agent.connect("./kb.redb")` → embedded (PyO3 `aikoql`)
     - `Agent.connect("localhost:9090")` → server (MCP TCP)
     - `Agent.connect(("localhost", 9090))` → server (MCP TCP)
   - `McpError` — structured error with code, message, retryable, suggestion
@@ -1977,7 +1977,7 @@ Mnemosyne should work the same way. Everything is a Knowledge Object.
 
 ---
 
-## Mnemosyne Studio — The Knowledge OS Desktop
+## Aikoql Studio — The Knowledge OS Desktop
 
 **Status:** ✅ Phase S1 complete (6 core panels, 2026-08-08), ✅ Phase S2 complete (4 differentiator panels + GET API aliases, 2026-08-09), ✅ Phase S3 complete (Profiler + Provider Manager + Admin upgrade, 2026-08-09)  
 **Last updated:** 2026-08-09
@@ -1986,11 +1986,11 @@ Mnemosyne should work the same way. Everything is a Knowledge Object.
 
 The current Graph Browser (`graph_ui.rs`, 440-line HTML) is a Neo4j Browser clone — graph viz, query editor, schema tab. It shows nodes and edges. It doesn't show that a node has a cryptographic audit trail, 12 lifecycle versions, field-level encryption, or that it's actually an executable Program with a compiled KVM plan.
 
-Mnemosyne Studio is the UI for the **Knowledge Operating System**, not just a graph database. Every panel maps to existing REST API endpoints — zero new backend code.
+Aikoql Studio is the UI for the **Knowledge Operating System**, not just a graph database. Every panel maps to existing REST API endpoints — zero new backend code.
 
 ### Differentiation: What No Competitor Has
 
-| Capability | Neo4j Browser | Databricks | MongoDB Compass | Mnemosyne Studio |
+| Capability | Neo4j Browser | Databricks | MongoDB Compass | Aikoql Studio |
 |---|---|---|---|---|
 | Graph viz + query | ✅ | — | — | ✅ |
 | Schema browser | Labels | Tables | Collections | Ontology + type hierarchy |
@@ -2014,12 +2014,12 @@ Five capabilities are completely unique — no graph DB, analytics platform, or 
 
 3. **Agent OS control panel** — Not a query tool for humans. A place where AI agents inspect their own memory (`agent_memory`), debug their programs (`execution_stats`, `explain`), and verify their knowledge (`prove`).
 
-4. **Programs are first-class citizens** — Deploy AIKOQL code, see it compiled to KVM bytecode, step through execution, check cache hit rates. Programs, workflows, policies — all visible in the same Studio as the data they operate on.
+4. **Programs are first-class citizens** — Deploy aikoql code, see it compiled to KVM bytecode, step through execution, check cache hit rates. Programs, workflows, policies — all visible in the same Studio as the data they operate on.
 
 ### Architecture
 
 ```
-Mnemosyne Studio (SPA: ~2000 lines HTML/CSS/JS)
+Aikoql Studio (SPA: ~2000 lines HTML/CSS/JS)
 │
 ├── /api/v1/*           ← 24 REST endpoints (existing)
 ├── /api/graph          ← Graph data + relationships (existing)
@@ -2038,9 +2038,9 @@ Zero new backend endpoints. The Studio is a UI shell over the existing API. Ever
 ### Panels
 
 ```
-Mnemosyne Studio
+Aikoql Studio
 │
-├── Query Editor          AIKOQL with syntax highlighting, history, favorites, streaming results
+├── Query Editor          aikoql with syntax highlighting, history, favorites, streaming results
 ├── Knowledge Graph       Force-directed vis.js graph, KO-aware (lifecycle colors, encryption badges, tenant badges)
 ├── Knowledge Explorer    File-tree browser: types → tenants → KOs. Filter by lifecycle state, encryption status, age
 ├── Schema Explorer       Types + properties + relationship kinds + policy bindings. Click-through to KOs
@@ -2062,7 +2062,7 @@ Mnemosyne Studio
 Replace `graph_ui.rs` with Studio shell + 6 panels:
 
 - [x] **Studio shell** — Left sidebar nav + tabbed main area. Dark theme (current colors), responsive. Login/auth from existing graph UI.
-- [x] **Query Editor** — Upgrade existing AIKOQL tab: CodeMirror 6 (AIKOQL syntax highlighting), Ctrl+Enter run, query history (localStorage), favorites, streaming toggle (chunked results).
+- [x] **Query Editor** — Upgrade existing aikoql tab: CodeMirror 6 (aikoql syntax highlighting), Ctrl+Enter run, query history (localStorage), favorites, streaming toggle (chunked results).
 - [x] **Knowledge Graph** — Existing graph viz + KO-aware rendering: lifecycle state → border style (solid=active, dashed=archived), encryption → lock icon badge, tenant → color tint.
 - [x] **Knowledge Explorer** — Tree view: fetch `/api/schema` → type list → click type → fetch KOs of that type → list with mini-inspector. Filter bar (type, tenant, lifecycle, has-embeddings).
 - [x] **Schema Explorer** — Enhance existing schema tab: add relationship types, policy bindings per type, click type → show all KOs. Ontology view: type inheritance tree.
@@ -2075,19 +2075,19 @@ The panels no competitor has:
 - [x] **Timeline** — MVCC time travel. KOID input → fetch `/api/v1/trace/{koid}` → renders version history with KOID, version, lifecycle state, HLC timestamp, mutation source, and property diff per event. Styled as vertical timeline with alternating cards.
 - [x] **Provenance** — `git log` for knowledge. Trace chain input + "Prove Chain" button → fetch `/api/v1/trace/{koid}` → render audit events. "Verify" button → `/api/v1/prove` → audit chain integrity check with green checkmark. Visual chain with event nodes.
 - [x] **Program Debugger** — Dropdown populated via `/api/v1/list-programs` (GET). Select program → show KOID, language, version, lifecycle, source code preview. Dependency display (program's own koid). Execution stats panel (placeholder for runtime stats).
-- [x] **Benchmark Center** — List via `/api/v1/list-benchmarks` (GET). Deploy form: name + query + SLA fields → POST `/api/v1/deploy-benchmark`. Run button → execute AIKOQL query and show results + timing. History: re-fetches benchmark list.
+- [x] **Benchmark Center** — List via `/api/v1/list-benchmarks` (GET). Deploy form: name + query + SLA fields → POST `/api/v1/deploy-benchmark`. Run button → execute aikoql query and show results + timing. History: re-fetches benchmark list.
 
 #### Phase S3: Operations (1 week)
 
 - [x] **Document Explorer** — Upload, list, compile documents via REST API. D0-D9 pipeline integrated. (Studio panel: 📄 Documents)
 - [x] **Provider Manager** — connector list table (koid, name, plugin, lifecycle), deploy form (name + plugin → POST `/api/v1/deploy-connector`), auto-refresh on deploy. Panel: 🔌 Providers.
-- [x] **Query Profiler** — AIKOQL query textarea + "Profile" button (POST `/api/v1/aikoql`), KOID input + "Explain KO" button (GET `/api/v1/explain/{koid}`). Renders result rows, timing, evidence chain. Panel: 📊 Profiler.
+- [x] **Query Profiler** — aikoql query textarea + "Profile" button (POST `/api/v1/aikoql`), KOID input + "Explain KO" button (GET `/api/v1/explain/{koid}`). Renders result rows, timing, evidence chain. Panel: 📊 Profiler.
 - [x] **Administration** — upgraded with: encryption compliance card (field encryption status, tenant keys, policies), "Create Backup" + "Verify" + "Restore" buttons (POST `/api/v1/backup` etc.), fixed backup table columns (meta.object_count, meta.journal_seq). Added `apiPost()` helper for mutations.
 
 ### Why a Single SPA (Not a Frontend Framework)
 
 1. **Zero build step** — Same as current `graph_ui.rs`: one `const GRAPH_UI_HTML: &str` in Rust, served inline. No npm, no webpack, no node_modules.
-2. **MCP server ships self-contained** — `mnemosyne-mcp serve` includes Studio. No CDN dependency except vis-network + CodeMirror (both have integrity hashes).
+2. **MCP server ships self-contained** — `aikoql-mcp serve` includes Studio. No CDN dependency except vis-network + CodeMirror (both have integrity hashes).
 3. **Agents can drive the same API** — The Studio uses the same REST API that agents use. Nothing special. If an agent can call it, the Studio can show it.
 4. **ponytail:** A React/Next.js app for a database UI is overkill. The Studio needs 13 panels, each ~100-200 lines of vanilla JS. Total: ~2000-3000 lines. One file, no build, instant load.
 
@@ -2097,7 +2097,7 @@ Served at `/studio` (existing `/ui` stays as lightweight alternative for quick g
 
 ## Bugs — E2E Dogfooding Findings (2026-08-10)
 
-Full end-to-end test of the Mnemosyne MCP plugin against the Mnemosyne project itself. 48 tools tested. 15 objects created across 10 types, 22 journal events.
+Full end-to-end test of the Aikoql MCP plugin against the aikoql project itself. 48 tools tested. 15 objects created across 10 types, 22 journal events.
 
 ### Bug #1 — 34-Character KOID Generation [HIGH]
 
@@ -2117,7 +2117,7 @@ Full end-to-end test of the Mnemosyne MCP plugin against the Mnemosyne project i
 
 **Tested input:**
 ```json
-[{"op":"remember","type_name":"Fact","properties":{"statement":"Mnemosyne has 59 MCP tools","confidence":0.99}}]
+[{"op":"remember","type_name":"Fact","properties":{"statement":"aikoql has 59 MCP tools","confidence":0.99}}]
 ```
 
 **Impact:** Atomic batch operations are non-functional. The tool exists but no operation type is recognized.
@@ -2154,7 +2154,7 @@ Full end-to-end test of the Mnemosyne MCP plugin against the Mnemosyne project i
 
 ### Bug #7 — Studio UI: Knowledge Explorer Shows Types With Zero Objects [MEDIUM]
 
-**Symptom:** The knowledge explorer sidebar lists types (e.g., `mnemosyne:agent`) but clicking on them shows "No objects of type mnemosyne:agent found" even when objects exist. Also happens with other types.
+**Symptom:** The knowledge explorer sidebar lists types (e.g., `aikoql:agent`) but clicking on them shows "No objects of type aikoql:agent found" even when objects exist. Also happens with other types.
 
 **Impact:** Studio UI type listing and object listing are inconsistent — types appear in the sidebar that have no visible objects, and objects exist that aren't shown.
 
@@ -2183,7 +2183,7 @@ Full end-to-end test of the Mnemosyne MCP plugin against the Mnemosyne project i
 
 ## Code Review Remediation — Implementation Phases
 
-**Source:** `MNEMOSYNE_CODE_REVIEW_FINDINGS.md` (16 findings, P0–P2) + 3 remaining E2E bugs (#5, #6, #8)  
+**Source:** `AIKOQL_CODE_REVIEW_FINDINGS.md` (16 findings, P0–P2) + 3 remaining E2E bugs (#5, #6, #8)  
 **Review date:** 2026-08-10  
 **Principle:** Each phase is self-contained, produces a green CI, and ships as one commit. Execute in order — each phase reduces risk for the next.
 
@@ -2194,7 +2194,7 @@ R1 (Bugs) ──► R2 (KMS) ──► R3 (CI) ──► R10.1 (Incremental) ─
                                                                       │
                                           ┌───────────────────────────┘
                                           ▼
-                                  R12 (Provenance) ──► R13 (AIKOQL) ──► R15 (Rate limit docs)
+                                  R12 (Provenance) ──► R13 (aikoql) ──► R15 (Rate limit docs)
                                           
 SKIPPED: R4 (Error audit)  R6 (Storage prefix)  R7 (MCP modularize)  R8 (Security tests)  R9 (Auth/query)  R5 final (1 assertion)  R10.2 (Parallel extraction)  R14 (Benchmarks)
 ```
@@ -2315,7 +2315,7 @@ SKIPPED: R4 (Error audit)  R6 (Storage prefix)  R7 (MCP modularize)  R8 (Securit
 
 **Finding #4 from review.** Audit all `unwrap()`, `expect()`, `unwrap_or_default()` in production paths. `unwrap_or_default()` is especially dangerous in a knowledge DB — it can silently convert storage errors into "no results found."
 
-**Why skipped:** The audit requires careful categorization of every unwrap site (justified vs needs_error vs needs_review), defining domain error types where gaps exist, and replacing call sites with proper `Result` propagation. Estimated ~1 week of focused work. Was deferred in favor of user-facing features (R10 incremental ingestion, R12 provenance, R13 AIKOQL).
+**Why skipped:** The audit requires careful categorization of every unwrap site (justified vs needs_error vs needs_review), defining domain error types where gaps exist, and replacing call sites with proper `Result` propagation. Estimated ~1 week of focused work. Was deferred in favor of user-facing features (R10 incremental ingestion, R12 provenance, R13 aikoql).
 
 **Current state:** Zero `// justified:` comments found. `unwrap_or_default()` still present in kernel hot paths (index.rs, kernel.rs, field_crypto.rs, signing.rs, tenant.rs).
 
@@ -2595,7 +2595,7 @@ Result
 
 ### Phase R11: Distribution Hardening (P1, ~4 hours) ✅ DONE (2026-08-10)
 
-**Finding #12 from review.** `npm install -g mnemosyne-mcp` downloads a binary from GitHub Releases without integrity verification.
+**Finding #12 from review.** `npm install -g aikoql-mcp` downloads a binary from GitHub Releases without integrity verification.
 
 #### Current Flow
 ```
@@ -2610,10 +2610,10 @@ release → SHA-256 checksum → npm installer verifies → execute
 #### Tasks
 
 1. **Publish SHA-256 checksums.** Release workflow already generates them (`scripts/build-release.{bat,sh}`). Verify they're uploaded as release assets alongside binaries.
-2. **Add checksum file to release.** `mnemosyne-mcp-{version}-{target}.sha256` alongside each binary.
+2. **Add checksum file to release.** `aikoql-mcp-{version}-{target}.sha256` alongside each binary.
 3. **Verify in run.js.** After downloading the binary, compute its SHA-256. Compare against the published checksum. Fail with clear error on mismatch.
    ```js
-   const expected = await fetch(`${releaseUrl}/mnemosyne-mcp-${version}-${target}.sha256`)
+   const expected = await fetch(`${releaseUrl}/aikoql-mcp-${version}-${target}.sha256`)
    const actual = crypto.createHash('sha256').update(downloaded).digest('hex')
    if (expected !== actual) throw new Error(`Checksum mismatch`)
    ```
@@ -2665,9 +2665,9 @@ Provenance is stored but not **immutable** — there's no enforcement that `Sema
 
 ---
 
-### Phase R13: AIKOQL Evolution Toward Hybrid Retrieval (P2, ~3 weeks) ✅ DONE (2026-08-10)
+### Phase R13: Aikoql Evolution Toward Hybrid Retrieval (P2, ~3 weeks) ✅ DONE (2026-08-10)
 
-**Finding #13 from review.** Current AIKOQL uses heuristic matching (lowercase, contains, Jaccard). The target is hybrid lexical + vector + graph retrieval.
+**Finding #13 from review.** Current aikoql uses heuristic matching (lowercase, contains, Jaccard). The target is hybrid lexical + vector + graph retrieval.
 
 **Commit:** `89a5830` — 10 files changed, 716 insertions(+), 53 deletions(-)
 
@@ -2683,9 +2683,9 @@ Provenance is stored but not **immutable** — there's no enforcement that `Sema
 
 #### What Was Implemented
 
-1. **`SCORE BM25` clause in AIKOQL** — New tokens (Score, Bm25), parser support via `parse_similarity_options()`, AST `SimilarityClause` with `ScoringMethod::Bm25` enum, IrOp `TextSearch.scoring: Some("bm25")`. At runtime: delegates to `Kernel::type_scoped_text_search()` → `IndexCoordinator::search()` → Tantivy BM25 (with Jaccard fallback when maintainer not attached).
+1. **`SCORE BM25` clause in aikoql** — New tokens (Score, Bm25), parser support via `parse_similarity_options()`, AST `SimilarityClause` with `ScoringMethod::Bm25` enum, IrOp `TextSearch.scoring: Some("bm25")`. At runtime: delegates to `Kernel::type_scoped_text_search()` → `IndexCoordinator::search()` → Tantivy BM25 (with Jaccard fallback when maintainer not attached).
 
-2. **`USING EMBEDDING` clause in AIKOQL** — New tokens (Using, Embedding), parser support, AST `UsingMethod::Embedding` enum, IrOp `AnnSearch.query_text`. At runtime: graceful degradation to text search (embedding provider not yet wired into kernel). Syntax is forward-compatible.
+2. **`USING EMBEDDING` clause in aikoql** — New tokens (Using, Embedding), parser support, AST `UsingMethod::Embedding` enum, IrOp `AnnSearch.query_text`. At runtime: graceful degradation to text search (embedding provider not yet wired into kernel). Syntax is forward-compatible.
 
 3. **Hybrid Fuse operator** — When both `SCORE BM25` and `USING EMBEDDING` are present, the planner emits AnnSearch + TextSearch + Fuse (RRF or Weighted). Runtime `fuse_scored()` implements RRF (reciprocal rank fusion, only present entries), Weighted (wv * vector_score + wt * text_score), VectorOnly, TextOnly. Stateful interpreter (`cached_objects`, `cached_subject`, `prev_scored`) handles chaining search ops.
 
@@ -2703,7 +2703,7 @@ Provenance is stored but not **immutable** — there's no enforcement that `Sema
 
 #### Acceptance Criteria
 
-- [x] BM25 scoring available via `SCORE BM25` in AIKOQL
+- [x] BM25 scoring available via `SCORE BM25` in aikoql
 - [x] Embedding retrieval available via `SIMILAR TO` with `USING EMBEDDING` (syntax ready, gracefully degrades)
 - [x] Deterministic queries unaffected
 - [ ] Hybrid fusion produces better recall than lexical-only (deferred — needs embedding provider for meaningful measurement)
@@ -2725,7 +2725,7 @@ Provenance is stored but not **immutable** — there's no enforcement that `Sema
    - **Mixed R/W:** 80% reads, 20% writes, measure throughput
    - **Prefix queries:** measure before/after R6 optimization
    - **Relationship traversal:** BFS at depth 1/2/3 on 100K-edge graph
-   - **AIKOQL queries:** 5 canonical query patterns, measure planning + execution time
+   - **aikoql queries:** 5 canonical query patterns, measure planning + execution time
 2. **Track metrics:**
    - writes/sec, reads/sec
    - query latency: p50, p95, p99
@@ -2761,7 +2761,7 @@ Provenance is stored but not **immutable** — there's no enforcement that `Sema
    /// shared Redis-backed limiter or a gateway-level rate limiter.
    /// ...
    ```
-2. **Add configuration clarity.** In `mnemosyne.toml`:
+2. **Add configuration clarity.** In `aikoql.toml`:
    ```toml
    [rate_limit]
    enabled = true
@@ -2803,7 +2803,7 @@ Provenance is stored but not **immutable** — there's no enforcement that `Sema
 | **R10** | P1 | ~2w | Incremental + parallel ingestion | ⚠️ PARTIAL — incremental done (ingest_incremental.rs), parallel extraction skipped |
 | **R11** | P1 | ~4h | npm binary integrity verification (SHA-256 checksums in run.js) | ✅ DONE (2026-08-10) |
 | **R12** | P2 | ~1w | Provenance immutability | ✅ DONE (2026-08-10) |
-| **R13** | P2 | ~3w | AIKOQL hybrid retrieval evolution (SCORE BM25, USING EMBEDDING, Fuse) | ✅ DONE (2026-08-10) — see §R13 skipped items |
+| **R13** | P2 | ~3w | aikoql hybrid retrieval evolution (SCORE BM25, USING EMBEDDING, Fuse) | ✅ DONE (2026-08-10) — see §R13 skipped items |
 | **R14** | P2 | ~1w | Benchmark infrastructure (10K/100K/1M scale, Criterion, historical regression) | ❌ NOT STARTED |
 | **R15** | P2 | ~2h | Rate limiting documentation + trait | ✅ DONE (2026-08-10) |
 
@@ -2864,7 +2864,7 @@ The following phases were explicitly planned but skipped during the remediation 
 
 **What remains:** `ingest-dir` extraction is sequential. The plan specified a worker pool (num_cpus threads) with channel-based backpressure and `KnowledgeIr` fragment merging. File discovery + parallel extraction + sequential merge pipeline.
 
-#### R13: AIKOQL Hybrid Retrieval — Known Ceilings
+#### R13: Aikoql Hybrid Retrieval — Known Ceilings
 
 Three intentional ceilings documented as `ponytail:` comments:
 
@@ -2878,7 +2878,7 @@ Three intentional ceilings documented as `ponytail:` comments:
 
 ### Definition of Done (from Code Review)
 
-Mnemosyne is not hardened until:
+aikoql is not hardened until:
 
 - [x] KMS uses standard authenticated encryption (R2)
 - [x] Wrong passphrases fail deterministically (R2)
@@ -2896,7 +2896,7 @@ Mnemosyne is not hardened until:
 - [ ] Ingestion concurrency is bounded (R10 — parallel extraction skipped)
 - [x] Native binaries have integrity verification (R11)
 - [x] Provenance retained for derived knowledge (R12)
-- [x] AIKOQL has clear path toward hybrid retrieval (R13 — with 3 known ceilings)
+- [x] aikoql has clear path toward hybrid retrieval (R13 — with 3 known ceilings)
 - [ ] Benchmark infrastructure measures scalability (R14 — not started)
 - [x] Rate limiting scope documented (R15)
 

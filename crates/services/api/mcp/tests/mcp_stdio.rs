@@ -20,12 +20,12 @@ struct McpClient {
 impl McpClient {
     fn start(db: &PathBuf) -> Self {
         let mut exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        exe.push("../../../../target/debug/mnemosyne-mcp");
+        exe.push("../../../../target/debug/aikoql-mcp");
         #[cfg(windows)]
         exe.set_extension("exe");
         assert!(
             exe.exists(),
-            "mnemosyne-mcp not built at {:?}; run cargo build first",
+            "aikoql-mcp not built at {:?}; run cargo build first",
             exe
         );
         let mut child = Command::new(&exe)
@@ -34,7 +34,7 @@ impl McpClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn mnemosyne-mcp");
+            .expect("spawn aikoql-mcp");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         McpClient {
@@ -133,7 +133,7 @@ impl Drop for McpClient {
 fn tmp_db(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "mnemosyne_mcp_{}_{}.redb",
+        "aikoql_mcp_{}_{}.redb",
         name,
         std::process::id()
     ));
@@ -150,7 +150,7 @@ fn m01_initialize_and_tools_list() {
         json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}}),
     );
     assert_eq!(init["protocolVersion"], "2024-11-05");
-    assert_eq!(init["serverInfo"]["name"], "mnemosyne-mcp");
+    assert_eq!(init["serverInfo"]["name"], "aikoql-mcp");
     c.notify("notifications/initialized");
 
     let list = c.request("tools/list", json!({}));
@@ -389,7 +389,7 @@ fn m05_cross_agent_acl_policy_and_role_inheritance() {
         json!({
             "subject": "admin",
             "roles": ["admin"],
-            "type_name": "mnemosyne:role",
+            "type_name": "aikoql:role",
             "properties": {"name": "senior", "parents": []}
         }),
     );
@@ -398,7 +398,7 @@ fn m05_cross_agent_acl_policy_and_role_inheritance() {
         json!({
             "subject": "admin",
             "roles": ["admin"],
-            "type_name": "mnemosyne:role",
+            "type_name": "aikoql:role",
             "properties": {"name": "junior", "parents": ["senior"]}
         }),
     );
@@ -407,7 +407,7 @@ fn m05_cross_agent_acl_policy_and_role_inheritance() {
         json!({
             "subject": "admin",
             "roles": ["admin"],
-            "type_name": "mnemosyne:policy",
+            "type_name": "aikoql:policy",
             "properties": {
                 "target_type": "shared_note",
                 "rules": [{"principal": "senior", "action": "read", "effect": "allow"}]
@@ -805,7 +805,7 @@ fn m12_agent_runtime_execute_agent_with_skills() {
         json!({
             "name": "FindEngPeople",
             "body": "MATCH Person WHERE dept == \"Eng\" RETURN name",
-            "language": "AIKOQL",
+            "language": "aikoql",
             "subject": "tester"
         }),
     );
@@ -941,32 +941,32 @@ fn m13_document_ingest_and_extract_text() {
 fn m14_document_ocr_detection_and_source_tagging() {
     // D2 acceptance: verify pages are tagged with source="native" for native text,
     // and OCR tools are detected/absent gracefully.
-    let dir = std::env::temp_dir().join("mnemosyne-d2-test");
+    let dir = std::env::temp_dir().join("aikoql-d2-test");
     std::fs::create_dir_all(&dir).unwrap();
 
     // Write a text file and verify source tagging.
     let txt_path = dir.join("source-test.txt");
     std::fs::write(&txt_path, "Hello from D2 test.\nThis has two lines.\n").unwrap();
     let doc =
-        mnemosyne_ingestion::extract_document(&txt_path.to_string_lossy(), "text/plain").unwrap();
+        aikoql_ingestion::extract_document(&txt_path.to_string_lossy(), "text/plain").unwrap();
     assert_eq!(doc.page_count, 1);
     assert_eq!(doc.pages[0].source, "native");
     assert!(doc.pages[0].text.contains("Hello from D2 test"));
 
     // Verify OCR decision heuristic is wired (empty page needs OCR).
-    assert!(mnemosyne_ingestion::page_needs_ocr("", 10));
-    assert!(!mnemosyne_ingestion::page_needs_ocr(
+    assert!(aikoql_ingestion::page_needs_ocr("", 10));
+    assert!(!aikoql_ingestion::page_needs_ocr(
         "This is a full page of text.",
         10
     ));
 
     // Verify tool_available returns false for garbage, true for a real command.
-    assert!(!mnemosyne_ingestion::tool_available(
+    assert!(!aikoql_ingestion::tool_available(
         "nonexistent-tool-xyzzy-12345"
     ));
     // cmd.exe or sh must exist.
     assert!(
-        mnemosyne_ingestion::tool_available("cmd") || mnemosyne_ingestion::tool_available("sh")
+        aikoql_ingestion::tool_available("cmd") || aikoql_ingestion::tool_available("sh")
     );
 
     std::fs::remove_dir_all(&dir).ok();

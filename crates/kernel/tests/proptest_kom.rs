@@ -3,8 +3,8 @@
 //! These tests exercise the deterministic binary codec with randomized values
 //! to catch round-trip and canonicalization bugs that example-based tests miss.
 
-use mnemosyne_kernel::codec::{decode_ke, decode_ko, encode_ke, encode_ko};
-use mnemosyne_kernel::kom::{
+use aikoql_kernel::codec::{decode_ke, decode_ko, encode_ke, encode_ko};
+use aikoql_kernel::kom::{
     AclEntry, Action, Direction, Effect, EventKind, EventRef, IdGen, KnowledgeEvent,
     KnowledgeObject, Lifecycle, LifecycleState, Metadata, Origin, RelationshipRef,
     SecurityDescriptor, SemanticBlock, Value, KOID, KOID_LEN,

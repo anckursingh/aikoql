@@ -4,12 +4,12 @@
 //! - Indexes are SECONDARY structures maintained asynchronously from the
 //!   Knowledge Event stream — never written on the commit path (Determinism Law).
 //! - The `IndexMaintainerApi` trait defines the contract for KE-driven index
-//!   maintenance. The concrete `IndexMaintainer` lives in `mnemosyne-scheduler`
+//!   maintenance. The concrete `IndexMaintainer` lives in `aikoql-scheduler`
 //!   (HLD: engines around the kernel).
 //! - `find_similar` routes through `IndexCoordinator`, which orchestrates
 //!   hybrid recall across `VectorIndex` / `TextIndex` traits.
 //! - Lightweight exact implementations live here (BruteForce, TokenText).
-//!   Heavy ANN/BM25 implementations live in `mnemosyne-vector` (HNSW, Tantivy)
+//!   Heavy ANN/BM25 implementations live in `aikoql-vector` (HNSW, Tantivy)
 //!   and are injected via the same traits — following the HLD engine pattern.
 
 use crate::knowledge::kom::*;
@@ -27,7 +27,7 @@ pub use coordinator::IndexCoordinator;
 // ---------------------------------------------------------------------------
 
 /// Minimal trait for the coordinator to interact with a background index
-/// maintainer. The concrete implementation lives in `mnemosyne-scheduler`;
+/// maintainer. The concrete implementation lives in `aikoql-scheduler`;
 /// the kernel only knows this interface.
 pub trait IndexMaintainerApi: Send + Sync {
     /// Events committed but not yet applied to the indexes.
@@ -214,7 +214,7 @@ impl TextIndex for TokenTextIndex {
 }
 
 // ---------------------------------------------------------------------------
-// Tests (lightweight impls only; HNSW/Tantivy tests live in mnemosyne-vector)
+// Tests (lightweight impls only; HNSW/Tantivy tests live in aikoql-vector)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]

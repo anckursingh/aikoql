@@ -4,9 +4,9 @@
 //! a new master KEK. This is online rotation — no data re-encryption needed.
 
 use crate::SchedulerJob;
-use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::security::envelope::Envelope;
-use mnemosyne_kernel::transaction::kernel::Kernel;
+use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::security::envelope::Envelope;
+use aikoql_kernel::transaction::kernel::Kernel;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -89,12 +89,12 @@ impl SchedulerJob for KeyRotationJob {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mnemosyne_kernel::security::crypto::{Aes256Gcm, Crypto};
-    use mnemosyne_kernel::security::kms::LocalKms;
+    use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto};
+    use aikoql_kernel::security::kms::LocalKms;
 
     #[test]
     fn key_rotation_job_has_name_and_starts() {
-        let tmp = std::env::temp_dir().join(format!("mnemosyne-kr-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("aikoql-kr-{}", std::process::id()));
         let kms = LocalKms::new(tmp.to_str().unwrap());
         let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
         let env = Arc::new(Envelope::init(&kms, "pw", crypto).unwrap());

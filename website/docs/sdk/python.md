@@ -1,6 +1,6 @@
 ---
 title: Python SDK
-description: PyO3 native bindings for Mnemosyne
+description: PyO3 native bindings for aikoql
 ---
 
 # Python SDK
@@ -10,16 +10,16 @@ Native Python bindings via PyO3. Direct access to the Knowledge Kernel.
 ## Installation
 
 ```bash
-pip install mnemosyne
+pip install aikoql
 ```
 
 ## Usage
 
 ```python
-import mnemosyne_py
+import aikoql_py
 
 # Open a database
-kernel = mnemosyne_py.Kernel.open("./kb.redb")
+kernel = aikoql_py.Kernel.open("./kb.redb")
 
 # Create an object
 result = kernel.remember({
@@ -37,7 +37,7 @@ results = kernel.find_similar({
 for r in results:
     print(f"{r.koid}: {r.score}")
 
-# AIKOQL
+# aikoql
 result = kernel.aikoql("MATCH Employee RETURN name, role")
 ```
 
@@ -46,7 +46,7 @@ result = kernel.aikoql("MATCH Employee RETURN name, role")
 Built-in adapters for AI agent frameworks:
 
 ```python
-from mnemosyne_py.adapters import LangGraphCheckpointer
+from aikoql_py.adapters import LangGraphCheckpointer
 
 checkpointer = LangGraphCheckpointer(kernel)
 # Use as LangGraph's checkpointer for agent state persistence

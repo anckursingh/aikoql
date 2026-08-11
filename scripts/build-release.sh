@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mnemosyne Linux Release Build
+# Aikoql Linux Release Build
 # Produces: build/linux/  (binary + checksum + archive)
 # Requires: Rust toolchain (https://rustup.rs)
 #
@@ -39,9 +39,9 @@ VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
 VERSION="${VERSION:-0.1.0}"
 
 PLATFORM="${MUSL_FLAG:-gnu}"
-ARCHIVE_NAME="mnemosyne-linux-x86_64-${PLATFORM}-${VERSION}.tar.gz"
+ARCHIVE_NAME="aikoql-linux-x86_64-${PLATFORM}-${VERSION}.tar.gz"
 
-echo "=== Mnemosyne Linux Release Build ==="
+echo "=== Aikoql Linux Release Build ==="
 echo "Version: $VERSION"
 if [[ -n "$TARGET" ]]; then
     echo "Target: $TARGET"
@@ -57,7 +57,7 @@ if ! command -v cargo &>/dev/null; then
 fi
 
 echo "[1/5] Running tests..."
-cargo test -p mnemosyne-mcp -- --test-threads=1 2>&1 | grep "test result" || echo "WARNING: Tests had issues, continuing..."
+cargo test -p aikoql-mcp -- --test-threads=1 2>&1 | grep "test result" || echo "WARNING: Tests had issues, continuing..."
 
 echo "[2/5] Updating dependencies..."
 cargo update
@@ -67,11 +67,11 @@ if [[ -n "$TARGET" ]]; then
     rustup target add "$TARGET"
 
     echo "[4/5] Building release binary for $TARGET..."
-    cargo build --release --target "$TARGET" -p mnemosyne-mcp
+    cargo build --release --target "$TARGET" -p aikoql-mcp
 else
     echo "[3/5] Skipping target install (native build)"
     echo "[4/5] Building release binary (native)..."
-    cargo build --release -p mnemosyne-mcp
+    cargo build --release -p aikoql-mcp
 fi
 
 echo "[5/5] Collecting artifacts..."
@@ -79,16 +79,16 @@ OUTDIR="build/linux"
 rm -rf "$OUTDIR"
 mkdir -p "$OUTDIR"
 
-cp "target/$TARGET_DIR/mnemosyne-mcp" "$OUTDIR/"
+cp "target/$TARGET_DIR/aikoql-mcp" "$OUTDIR/"
 cp QUICKSTART.md "$OUTDIR/"
-cp mnemosyne.toml "$OUTDIR/"
+cp aikoql.toml "$OUTDIR/"
 
 # Version stamp
 echo "$VERSION" > "$OUTDIR/VERSION"
 echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OUTDIR/BUILD_INFO.txt"
 
 # SHA256 checksum
-sha256sum "$OUTDIR/mnemosyne-mcp" | cut -d' ' -f1 > "$OUTDIR/mnemosyne-mcp.sha256"
+sha256sum "$OUTDIR/aikoql-mcp" | cut -d' ' -f1 > "$OUTDIR/aikoql-mcp.sha256"
 
 # Distribution tarball
 tar -czf "build/$ARCHIVE_NAME" -C build linux/
@@ -96,13 +96,13 @@ tar -czf "build/$ARCHIVE_NAME" -C build linux/
 echo ""
 echo "=== Build complete ==="
 echo "Version: $VERSION"
-echo "Binary: $OUTDIR/mnemosyne-mcp"
-file "$OUTDIR/mnemosyne-mcp" 2>/dev/null || true
-ls -lh "$OUTDIR/mnemosyne-mcp"
+echo "Binary: $OUTDIR/aikoql-mcp"
+file "$OUTDIR/aikoql-mcp" 2>/dev/null || true
+ls -lh "$OUTDIR/aikoql-mcp"
 echo "Archive: build/$ARCHIVE_NAME"
 echo ""
 echo "Usage:"
-echo "  mnemosyne-mcp shell                 Interactive shell"
-echo "  mnemosyne-mcp                       Start server (MCP TCP + HTTP metrics)"
-echo "  mnemosyne-mcp --metrics-addr 127.0.0.1:9181 my.db"
-echo "  mnemosyne-mcp import --help         Import data"
+echo "  aikoql-mcp shell                 Interactive shell"
+echo "  aikoql-mcp                       Start server (MCP TCP + HTTP metrics)"
+echo "  aikoql-mcp --metrics-addr 127.0.0.1:9181 my.db"
+echo "  aikoql-mcp import --help         Import data"

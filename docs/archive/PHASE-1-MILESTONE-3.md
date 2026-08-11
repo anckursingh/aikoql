@@ -3,7 +3,7 @@
 **Status:** ✅ SHIPPED — **all four Phase-1 gates now pass**.  
 **Date:** 2026-08-03 (architectural refresh completed 2026-08-04)  
 **Implements:** MRFC-0009 (Index Lifecycle, draft) + MRFC-0011 Class A syscalls + agent-facing MCP surface + HLD-aligned kernel refactor  
-**Crates:** `mnemosyne-kernel` v0.1.0, `mnemosyne-mcp` v0.1.0  
+**Crates:** `aikoql-kernel` v0.1.0, `aikoql-mcp` v0.1.0  
 **New deps:** `tokio 1` (async facade), `serde_json 1` (MCP protocol), `hnsw = { package = "fast-hnsw" }` (ANN vector index), `tantivy 0.22` (BM25 text index), `pyo3 0.22` with `abi3-py39` (Python SDK), `sha2 0.10` + `hmac 0.12` (at-rest signatures)
 
 ---
@@ -21,12 +21,12 @@ In addition, the kernel was refactored to match the HLD workspace layout and the
 | `storage` | `crates/kernel/src/storage/mod.rs` | `StorageEngine` trait + `MemoryEngine`/`RedbEngine` + `KnowledgeRepository` (hides key layout) + optional `KnowledgeCache` |
 | `transaction::kernel` | `crates/kernel/src/transaction/kernel.rs` | Single-writer commit pipeline (MVCC, OCC, HLC), KS-ABI Class A syscalls, journal/audit chain, `KnowledgeContext`, orchestrator only |
 | `event` | `crates/kernel/src/event.rs` | `EventManager`: durable CDC subscriptions, live broadcast, replay/ack |
-| `security::auth` | `crates/kernel/src/security/auth.rs` | **`AuthManager`**: in-memory role-inheritance graph + per-type policies loaded from persisted `mnemosyne:role` / `mnemosyne:policy` KOs |
+| `security::auth` | `crates/kernel/src/security/auth.rs` | **`AuthManager`**: in-memory role-inheritance graph + per-type policies loaded from persisted `aikoql:role` / `aikoql:policy` KOs |
 | `lifecycle::schema` | `crates/kernel/src/lifecycle/schema.rs` | **`SchemaRegistry`**: in-memory type schemas; object validation |
 | `index` | `crates/kernel/src/index.rs` + `index/coordinator.rs` | `VectorIndex` / `TextIndex` traits; exact oracles; **`IndexMaintainer`** (KE-driven async maintenance, catch-up, live apply, high-water mark, checkpoint/resume); **`IndexCoordinator`** (owns hybrid recall scoring + `find_similar` delegation); `HnswVectorIndex` / `TantivyTextIndex` |
 | `async_kernel` | `crates/kernel/src/async_kernel.rs` | `AsyncKernel` tokio facade — identical semantics via `spawn_blocking` |
-| `mcp` | `crates/services/api/mcp/` | `mnemosyne-mcp` server: stdio MCP, 12+ Class A syscall + eval tools, durable CDC notifications |
-| `python` | `crates/sdk/python/` | `mnemosyne-py` PyO3 extension + pure-Python package + LangGraph/CrewAI adapters |
+| `mcp` | `crates/services/api/mcp/` | `aikoql-mcp` server: stdio MCP, 12+ Class A syscall + eval tools, durable CDC notifications |
+| `python` | `crates/sdk/python/` | `aikoql-py` PyO3 extension + pure-Python package + LangGraph/CrewAI adapters |
 | `graph` | `crates/engines/graph/` | `GraphEngine`: stateless relationship edge mutation (`relate`) and traversal (`traverse`) through the public `Kernel` API |
 
 **Security / audit hardening:**
@@ -62,7 +62,7 @@ cargo test --workspace
   total active:           123 passed, 0 failed, 0 warnings
 ```
 
-`cargo test -p mnemosyne-kernel --test durability -- --ignored d07` reports **P99 = 83.1 µs** on the 500-KO redb dataset (120× headroom vs 10 ms).
+`cargo test -p aikoql-kernel --test durability -- --ignored d07` reports **P99 = 83.1 µs** on the 500-KO redb dataset (120× headroom vs 10 ms).
 
 Key acceptance evidence:
 
@@ -76,14 +76,14 @@ Key acceptance evidence:
 | **HNSW recall parity with exact path** | `indexes i06` | top-k overlap >= k-1, score \|Δ\| < 1e-3 vs exact RRF fusion |
 | **Tantivy/BM25 recall parity with exact path** | `indexes i07` | top-k overlap >= k-1 vs exact RRF fusion |
 | **Checkpoint resume skips replay and stays live** | `indexes i08` | HNSW + Tantivy checkpointed, loaded, `start_at(water)` resumes; live commit advances water |
-| Python SDK: remember/get + find_similar + forget | `python test_sdk` | PyO3 `Mnemosyne` round-trips typed properties, text recall, tombstones against durable redb store |
-| LangGraph native checkpoint saver | `python test_adapters` | `MnemosyneLangGraphSaver` `put`/`get`/`list` round-trip checkpoints by `thread_id`; async wrappers work |
-| CrewAI memory adapter | `python test_adapters` | `MnemosyneCrewAIMemory` saves role-scoped memories, searches by text, resets by tombstoning |
-| Legacy checkpointer alias | `python test_adapters` | `from mnemosyne.checkpointer import MnemosyneCheckpointer` still works |
+| Python SDK: remember/get + find_similar + forget | `python test_sdk` | PyO3 `aikoql` round-trips typed properties, text recall, tombstones against durable redb store |
+| LangGraph native checkpoint saver | `python test_adapters` | `AikoqlLangGraphSaver` `put`/`get`/`list` round-trip checkpoints by `thread_id`; async wrappers work |
+| CrewAI memory adapter | `python test_adapters` | `AikoqlCrewAIMemory` saves role-scoped memories, searches by text, resets by tombstoning |
+| Legacy checkpointer alias | `python test_adapters` | `from aikoql.checkpointer import AikoqlCheckpointer` still works |
 | MCP handshake + tool surface | `mcp m01` | protocolVersion 2024-11-05; all 12 tools listed |
 | **Flagship: "why did the agent know this?"** | `mcp m02` | agent commits claim w/ provenance → evolve to verified → `explain` returns source/confidence/verified/lineage; `prove` chain valid; state + proof survive MCP server restart |
 | ACL enforced through protocol | `mcp m03` | non-owner `get` → `ACCESS_DENIED` via tools/call error |
-| **Cross-agent ACL policy + role inheritance over MCP** | `mcp m05` | admin commits `mnemosyne:role` (junior→senior) + `mnemosyne:policy` (senior reads `shared_note`); bob reads alice's note; carol denied |
+| **Cross-agent ACL policy + role inheritance over MCP** | `mcp m05` | admin commits `aikoql:role` (junior→senior) + `aikoql:policy` (senior reads `shared_note`); bob reads alice's note; carol denied |
 | **Durable CDC over MCP** | `mcp m04` | `notifications/subscribe` receives live `Created` events; `notifications/ack` advances watermark; server restart replays un-acked events |
 | **Memory Evals over MCP** | `mcp m06` | `eval_recall` hits expected set; `eval_staleness` reports lag; `eval_contradictions` finds conflicting property on similar claims |
 | Durable subscription registry | `kernel::durable_subscription_*` | persisted `sub/<id>` records survive `Kernel` reopen; replay respects `last_seq` |
@@ -153,31 +153,31 @@ Pick the first prioritized Phase-2 deliverable from `VISION-AND-STRATEGY`:
 
 ```bash
 cargo test --workspace                # 123 active Rust tests green, zero warnings
-cargo test -p mnemosyne-kernel --test durability -- --ignored d07   # P99 bench gate
+cargo test -p aikoql-kernel --test durability -- --ignored d07   # P99 bench gate
 cd crates/sdk/python && python -m venv .venv && .venv\Scripts\Activate.ps1
 python -m pip install maturin pytest
 python -m maturin develop             # build & install editable Python SDK
 python -m pytest tests/test_sdk.py tests/test_adapters.py -v # Python SDK tests
-.\target\debug\mnemosyne-mcp my.redb  # MCP server on stdio; connect any MCP client
+.\target\debug\aikoql-mcp my.redb  # MCP server on stdio; connect any MCP client
 ```
 
 Python SDK quick-start:
 
 ```python
-from mnemosyne import Mnemosyne, MnemosyneLangGraphSaver, MnemosyneCrewAIMemory
+from aikoql import aikoql, AikoqlLangGraphSaver, AikoqlCrewAIMemory
 
-m = Mnemosyne("memory.redb")
+m = aikoql("memory.redb")
 r = m.remember("alice", "claim", {"body": "AGI is possible"}, semantic={"confidence": 0.95})
 ko = m.get("alice", r["koid"])
 hits = m.find_similar("alice", text="AGI", k=5)
 
 # LangGraph
-cp = MnemosyneLangGraphSaver("checkpoints.redb")
+cp = AikoqlLangGraphSaver("checkpoints.redb")
 config = {"configurable": {"thread_id": "thread-1"}}
 cp.put(config, {"id": "c1", "channel_values": {"x": 1}})
 
 # CrewAI
-mem = MnemosyneCrewAIMemory("crew_memory.redb", role="researcher")
+mem = AikoqlCrewAIMemory("crew_memory.redb", role="researcher")
 mem.save("Revenue grew 12% YoY")
 mem.search("revenue", limit=3)
 ```
@@ -191,4 +191,4 @@ Example MCP exchange (the flagship):
 // <- {"source":"sec-10k","confidence":0.99,"verified":false,"evidence":[],…}
 ```
 
-Repository: https://github.com/anckursingh/mnemosyne
+Repository: https://github.com/anckursingh/aikoql

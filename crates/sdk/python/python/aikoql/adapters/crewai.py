@@ -1,4 +1,4 @@
-"""CrewAI memory adapter backed by Mnemosyne.
+"""CrewAI memory adapter backed by aikoql.
 
 Presents the small surface CrewAI expects from a memory backend:
 `save(value, metadata)`, `search(query, limit)`, and `reset()`.
@@ -9,11 +9,11 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from mnemosyne._mnemosyne import Mnemosyne
+from aikoql._aikoql import aikoql
 
 
-class MnemosyneCrewAIMemory:
-    """Long-term memory backend for a CrewAI agent/role using Mnemosyne."""
+class AikoqlCrewAIMemory:
+    """Long-term memory backend for a CrewAI agent/role using aikoql."""
 
     def __init__(
         self,
@@ -22,7 +22,7 @@ class MnemosyneCrewAIMemory:
         role: str = "memory",
         salt: int = 0,
     ) -> None:
-        self.client = Mnemosyne(path, salt)
+        self.client = aikoql(path, salt)
         self.subject = subject
         self.role = role
         self._type_name = "crewai_memory"
@@ -30,11 +30,11 @@ class MnemosyneCrewAIMemory:
     @classmethod
     def from_client(
         cls,
-        client: Mnemosyne,
+        client: aikoql,
         subject: str = "crewai",
         role: str = "memory",
-    ) -> "MnemosyneCrewAIMemory":
-        """Wrap an existing Mnemosyne client (useful for tests)."""
+    ) -> "AikoqlCrewAIMemory":
+        """Wrap an existing aikoql client (useful for tests)."""
         inst = cls.__new__(cls)
         inst.client = client
         inst.subject = subject

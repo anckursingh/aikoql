@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use mnemosyne_kernel::codec::{decode_ko, encode_ko};
-use mnemosyne_kernel::kom::{
+use aikoql_kernel::codec::{decode_ko, encode_ko};
+use aikoql_kernel::kom::{
     AclEntry, Action, Direction, Effect, EventKind, EventRef, IdGen, KnowledgeObject, Lifecycle,
     LifecycleState, Metadata, Origin, RelationshipRef, SecurityDescriptor, SemanticBlock, Value,
     KOID,
@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 fn sample_ko() -> KnowledgeObject {
     let mut properties = BTreeMap::new();
-    properties.insert("name".into(), Value::Text("mnemosyne".into()));
+    properties.insert("name".into(), Value::Text("aikoql".into()));
     properties.insert("score".into(), Value::Float(0.99));
     properties.insert("rank".into(), Value::Int(-7));
     properties.insert(

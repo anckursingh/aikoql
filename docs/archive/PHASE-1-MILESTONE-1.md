@@ -114,8 +114,8 @@ and the "knowledge microkernel" direction from `docs/knowledge-kernel-review.md`
 - **`KnowledgeRepository`** — `crates/kernel/src/storage/repository.rs`. Hides all
   key prefixes, journal encoding, and `WriteBatch` layout from the orchestrator.
 - **`AuthManager`** — `crates/kernel/src/security/auth.rs`. In-memory role
-  inheritance + per-type ACL policies loaded from persisted `mnemosyne:role` /
-  `mnemosyne:policy` objects.
+  inheritance + per-type ACL policies loaded from persisted `aikoql:role` /
+  `aikoql:policy` objects.
 - **`SchemaRegistry`** — `crates/kernel/src/lifecycle/schema.rs`. In-memory type
   schemas; validation is called by the commit pipeline.
 - **`IndexCoordinator`** — `crates/kernel/src/index/coordinator.rs`. Owns hybrid
@@ -137,7 +137,7 @@ Additional later enhancements now reflected in the codebase:
 - **SHA-256 audit hashing** for every `KnowledgeEvent`.
 - **Optional HMAC-SHA256 at-rest version signatures** via `Kernel::with_signing_key`.
 - **Crash-fuzz durability gate** `d04b`.
-- **Root `.gitignore` consolidation** (stray `mnemosyne/.gitignore` merged up).
+- **Root `.gitignore` consolidation** (stray `aikoql/.gitignore` merged up).
 
 As of this refresh:
 
@@ -165,4 +165,4 @@ cargo test --workspace          # current: 115 active Rust tests, all green
 cargo build --workspace         # zero warnings
 ```
 
-Repository: https://github.com/anckursingh/mnemosyne
+Repository: https://github.com/anckursingh/aikoql

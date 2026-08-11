@@ -1,6 +1,6 @@
-// Mnemosyne TypeScript SDK — MCP JSON-RPC client over TCP.
+// Aikoql TypeScript SDK — MCP JSON-RPC client over TCP.
 // Usage:
-//   const db = new MnemosyneClient({ host: "127.0.0.1", port: 9090 });
+//   const db = new AikoqlClient({ host: "127.0.0.1", port: 9090 });
 //   await db.initialize();
 //   const ko = await db.remember({ type_name: "fact", properties: { x: 1 } });
 
@@ -65,7 +65,7 @@ export interface Metrics {
 
 // ---- Client ---------------------------------------------------------------
 
-export class MnemosyneClient {
+export class AikoqlClient {
   private socket: net.Socket | null = null;
   private buffer = "";
   private nextId = 0;
@@ -102,7 +102,7 @@ export class MnemosyneClient {
     await this.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "mnemosyne-ts-sdk", version: "0.1.0" },
+      clientInfo: { name: "aikoql-ts-sdk", version: "0.1.0" },
     });
   }
 
@@ -190,7 +190,7 @@ export class MnemosyneClient {
     return this.callTool("traverse", { koid, ...(rel_type ? { rel_type } : {}), ...(depth ? { depth } : {}) });
   }
 
-  // ---- AIKOQL --------------------------------------------------------------
+  // ---- aikoql --------------------------------------------------------------
 
   async aikoql(query: string, subject?: string): Promise<unknown> {
     return this.callTool("aikoql", { query, subject: subject ?? "sdk-user" });

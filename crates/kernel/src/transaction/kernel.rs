@@ -8,6 +8,12 @@
 //! - Determinism Law (MRFC-0011 §7): no wall-clock reads except via the
 //!   injected `Clock`; no external calls anywhere in this file.
 //! - ACL enforcement lives HERE (kernel boundary), not in adapters (MRFC-0001 §12).
+//! - R4 remediation: all `.lock().unwrap()` on Mutex/RwLock are **justified** —
+//!   Mutex poisoning means another thread panicked while holding the lock, the
+//!   process is already unrecoverable, and crashing is the correct response.
+//!   Similarly, `.as_ref().unwrap()` on head pointers inside `remember()` is
+//!   **justified** — the preceding branch guarantees Some; a None here would be
+//!   a logic bug that should crash.
 
 use crate::embedding::EmbeddingProvider;
 use crate::event::EventManager;
@@ -2152,8 +2158,8 @@ impl Kernel {
 
     // ---- Programs-as-KOs (MRFC-0030 Phase 7a) ----------------------------
 
-    /// Deploy a Program KO. The program is AIKOQL stored as a Knowledge Object
-    /// of type `mnemosyne:program`. Like any KO, it gets versioning, provenance,
+    /// Deploy a Program KO. The program is aikoql stored as a Knowledge Object
+    /// of type `aikoql:program`. Like any KO, it gets versioning, provenance,
     /// access control, and audit trail.
     pub fn deploy_program(
         &self,
@@ -2173,7 +2179,7 @@ impl Kernel {
             expected_version: Some(0),
             idempotency_key: Some(format!("deploy-program-{}", name)),
             metadata: Metadata {
-                type_name: "mnemosyne:program".into(),
+                type_name: "aikoql:program".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec!["program".into(), "active-object".into()],
@@ -2202,7 +2208,7 @@ impl Kernel {
     ) -> KResult<Remembered> {
         let ctx = KnowledgeContext::from(subject.clone());
         let ko = self.get(ctx, koid)?;
-        if ko.metadata.type_name != "mnemosyne:program" {
+        if ko.metadata.type_name != "aikoql:program" {
             return Err(KError::InvalidObject("not a program".into()));
         }
         let cur_ver = match ko.properties.get("version") {
@@ -2231,7 +2237,7 @@ impl Kernel {
 
     /// List all deployed programs.
     pub fn list_programs(&self, subject: &Subject) -> KResult<Vec<KnowledgeObject>> {
-        self.scan_by_type(subject, "mnemosyne:program")
+        self.scan_by_type(subject, "aikoql:program")
     }
 
     // ---- Policy-as-KO (MRFC-0030 Phase 7b) --------------------------------
@@ -2265,7 +2271,7 @@ impl Kernel {
             expected_version: Some(0),
             idempotency_key: Some(format!("deploy-policy-{}", name)),
             metadata: Metadata {
-                type_name: "mnemosyne:policy".into(),
+                type_name: "aikoql:policy".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec!["policy".into(), "active-object".into()],
@@ -2295,7 +2301,7 @@ impl Kernel {
         resource_type: &str,
         subject: &Subject,
     ) -> KResult<Option<String>> {
-        let policies = self.scan_by_type(subject, "mnemosyne:policy")?;
+        let policies = self.scan_by_type(subject, "aikoql:policy")?;
         for p in policies.iter() {
             let pol_principal = match p.properties.get("principal").and_then(|v| match v {
                 Value::Text(s) => Some(s.as_str()),
@@ -2364,7 +2370,7 @@ impl Kernel {
             expected_version: Some(0),
             idempotency_key: Some(format!("deploy-workflow-{}", name)),
             metadata: Metadata {
-                type_name: "mnemosyne:workflow".into(),
+                type_name: "aikoql:workflow".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec!["workflow".into(), "active-object".into()],
@@ -2406,7 +2412,7 @@ impl Kernel {
             expected_version: Some(0),
             idempotency_key: Some(format!("deploy-trigger-{}", name)),
             metadata: Metadata {
-                type_name: "mnemosyne:trigger".into(),
+                type_name: "aikoql:trigger".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec!["trigger".into(), "active-object".into()],
@@ -2451,7 +2457,7 @@ impl Kernel {
             expected_version: Some(0),
             idempotency_key: Some(format!("deploy-agent-{}", name)),
             metadata: Metadata {
-                type_name: "mnemosyne:agent".into(),
+                type_name: "aikoql:agent".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec!["agent".into(), "active-object".into()],
@@ -2473,7 +2479,7 @@ impl Kernel {
 
     /// List all deployed agents.
     pub fn list_agents(&self, subject: &Subject) -> KResult<Vec<KnowledgeObject>> {
-        self.scan_by_type(subject, "mnemosyne:agent")
+        self.scan_by_type(subject, "aikoql:agent")
     }
 
     // ---- Connector KO (MRFC-0030 Phase 7b) --------------------------------
@@ -2498,7 +2504,7 @@ impl Kernel {
             expected_version: Some(0),
             idempotency_key: Some(format!("deploy-connector-{}", name)),
             metadata: Metadata {
-                type_name: "mnemosyne:connector".into(),
+                type_name: "aikoql:connector".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec!["connector".into(), "active-object".into()],
@@ -2520,7 +2526,7 @@ impl Kernel {
 
     /// List all deployed connectors.
     pub fn list_connectors(&self, subject: &Subject) -> KResult<Vec<KnowledgeObject>> {
-        self.scan_by_type(subject, "mnemosyne:connector")
+        self.scan_by_type(subject, "aikoql:connector")
     }
 
     // ---- View KO (MRFC-0030 Phase 7b) -----------------------------------
@@ -2545,7 +2551,7 @@ impl Kernel {
             expected_version: Some(0),
             idempotency_key: Some(format!("deploy-view-{}", name)),
             metadata: Metadata {
-                type_name: "mnemosyne:view".into(),
+                type_name: "aikoql:view".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec!["view".into(), "active-object".into()],
@@ -2567,7 +2573,7 @@ impl Kernel {
 
     /// List all deployed views.
     pub fn list_views(&self, subject: &Subject) -> KResult<Vec<KnowledgeObject>> {
-        self.scan_by_type(subject, "mnemosyne:view")
+        self.scan_by_type(subject, "aikoql:view")
     }
 
     // ---- Report KO (MRFC-0030 Phase 7b) ---------------------------------
@@ -2595,7 +2601,7 @@ impl Kernel {
             expected_version: Some(0),
             idempotency_key: Some(format!("deploy-report-{}", name)),
             metadata: Metadata {
-                type_name: "mnemosyne:report".into(),
+                type_name: "aikoql:report".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec!["report".into(), "active-object".into()],
@@ -2617,7 +2623,7 @@ impl Kernel {
 
     /// List all deployed reports.
     pub fn list_reports(&self, subject: &Subject) -> KResult<Vec<KnowledgeObject>> {
-        self.scan_by_type(subject, "mnemosyne:report")
+        self.scan_by_type(subject, "aikoql:report")
     }
 
     // ---- Benchmark KO (MRFC-0030 Phase 7b) -------------------------------
@@ -2644,7 +2650,7 @@ impl Kernel {
             expected_version: Some(0),
             idempotency_key: Some(format!("deploy-benchmark-{}", name)),
             metadata: Metadata {
-                type_name: "mnemosyne:benchmark".into(),
+                type_name: "aikoql:benchmark".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec!["benchmark".into(), "active-object".into()],
@@ -2666,7 +2672,7 @@ impl Kernel {
 
     /// List all deployed benchmarks.
     pub fn list_benchmarks(&self, subject: &Subject) -> KResult<Vec<KnowledgeObject>> {
-        self.scan_by_type(subject, "mnemosyne:benchmark")
+        self.scan_by_type(subject, "aikoql:benchmark")
     }
 
     // ---- Document ingestion (MRFC-0050) ---------------------------------
@@ -2691,13 +2697,19 @@ impl Kernel {
         props.insert("page_count".into(), Value::Int(page_count));
         props.insert("char_count".into(), Value::Int(char_count));
         props.insert("status".into(), Value::Text(status.into()));
+        // R8: mark document-ingested content as untrusted
+        let mut extensions = ExtensionMap::new();
+        extensions.insert(
+            KnowledgeObject::EXT_CONTENT_TRUST.into(),
+            Value::Text(ContentTrust::Untrusted.as_str().into()),
+        );
         self.remember(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
             idempotency_key: Some(format!("deploy-document-{}", sha256)),
             metadata: Metadata {
-                type_name: "mnemosyne:document".into(),
+                type_name: "aikoql:document".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec!["document".into(), "ingestion".into()],
@@ -2710,7 +2722,7 @@ impl Kernel {
                 acl: vec![],
                 classification: None,
             }),
-            extensions: ExtensionMap::new(),
+            extensions,
             origin: Origin::Human,
             note: Some(format!("Ingested document: {}", filename)),
             referential_policy: ReferentialPolicy::Permissive,
@@ -2719,7 +2731,7 @@ impl Kernel {
 
     /// List all ingested documents.
     pub fn list_documents(&self, subject: &Subject) -> KResult<Vec<KnowledgeObject>> {
-        self.scan_by_type(subject, "mnemosyne:document")
+        self.scan_by_type(subject, "aikoql:document")
     }
 
     // ---- ABI version (MRFC-0011 §9) --------------------------------------
@@ -2976,7 +2988,7 @@ mod tests {
     #[test]
     fn durable_subscription_survives_reopen() {
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("mnemosyne_sub_reopen_{}.redb", std::process::id()));
+        let path = dir.join(format!("aikoql_sub_reopen_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&path);
 
         let clock = Arc::new(ManualClock::new(1_000));

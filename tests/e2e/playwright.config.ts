@@ -5,7 +5,7 @@ export default defineConfig({
   timeout: 120000,
   retries: 0,
   use: {
-    baseURL: process.env.MNEMOSYNE_URL || 'http://127.0.0.1:9181',
+    baseURL: process.env.aikoql_URL || 'http://127.0.0.1:9181',
     headless: true,
     viewport: { width: 1280, height: 900 },
   },

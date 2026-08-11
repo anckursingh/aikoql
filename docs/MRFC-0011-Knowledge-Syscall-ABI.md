@@ -1,7 +1,7 @@
 # MRFC-0011: Knowledge Syscall ABI (KS-ABI)
 
 - **Status:** Draft v1.0
-- **Project:** Mnemosyne
+- **Project:** aikoql
 - **Category:** Foundation / API
 - **Depends on:** MRFC-0001 (Knowledge Object Model), MRFC-0002 (Knowledge Relationship), MRFC-0003 (Knowledge Event), MRFC-0010 (Consistency & Isolation Levels)
 - **Supersedes:** None
@@ -12,7 +12,7 @@
 
 # 1. Abstract
 
-The Knowledge Syscall ABI (KS-ABI) defines the primary, stable programming interface of the Mnemosyne Knowledge Kernel. All other interfaces — SQL, Cypher, GraphQL, REST, natural language, MCP — are adapters that MUST compile down to KS-ABI operations. The ABI is deliberately small, semantically frozen, and governed by a never-break-userspace rule. It is the contract on which the Mnemosyne ecosystem is built.
+The Knowledge Syscall ABI (KS-ABI) defines the primary, stable programming interface of the Aikoql Knowledge Kernel. All other interfaces — SQL, Cypher, GraphQL, REST, natural language, MCP — are adapters that MUST compile down to KS-ABI operations. The ABI is deliberately small, semantically frozen, and governed by a never-break-userspace rule. It is the contract on which the aikoql ecosystem is built.
 
 ---
 

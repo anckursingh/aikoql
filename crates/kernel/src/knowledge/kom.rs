@@ -182,7 +182,7 @@ pub type PropertyMap = BTreeMap<String, Value>;
 // ---------------------------------------------------------------------------
 
 impl Value {
-    /// Return the Mnemosyne type name for this value.
+    /// Return the aikoql type name for this value.
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Null => "Null",
@@ -759,6 +759,8 @@ impl KnowledgeObject {
     pub const EXT_AUTHORITY: &str = "authority";
     /// Extension key for `Scope` value.
     pub const EXT_SCOPE: &str = "scope";
+    /// Extension key for `ContentTrust` value (R8 remediation).
+    pub const EXT_CONTENT_TRUST: &str = "content_trust";
 
     /// Get the Authority level from extensions, if set.
     pub fn authority(&self) -> Option<crate::knowledge::authority::Authority> {
@@ -788,6 +790,64 @@ impl KnowledgeObject {
     pub fn set_scope(&mut self, s: crate::knowledge::scope::Scope) {
         self.extensions
             .insert(Self::EXT_SCOPE.into(), Value::Text(s.as_str().into()));
+    }
+
+    /// Get the ContentTrust level from extensions, if set.
+    /// Default: `Unknown` (conservative — treat as untrusted until proven otherwise).
+    pub fn content_trust(&self) -> ContentTrust {
+        self.extensions
+            .get(Self::EXT_CONTENT_TRUST)
+            .and_then(|v| match v {
+                Value::Text(s) => ContentTrust::from_str(s),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    /// Set the ContentTrust level in extensions.
+    pub fn set_content_trust(&mut self, ct: ContentTrust) {
+        self.extensions
+            .insert(Self::EXT_CONTENT_TRUST.into(), Value::Text(ct.as_str().into()));
+    }
+}
+
+// ---- R8 ContentTrust: trust level for ingested content ----
+
+/// Trust level for content ingested from external sources.
+/// Stored in `KnowledgeObject.extensions` under `EXT_CONTENT_TRUST`.
+/// Used by secret filtering, prompt-injection guards, and audit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ContentTrust {
+    /// Authenticated system/admin input — highest trust.
+    Trusted,
+    /// External document/connector content — treat with caution.
+    Untrusted,
+    /// Trust level not explicitly set — conservative default (same as Untrusted).
+    Unknown,
+}
+
+impl Default for ContentTrust {
+    fn default() -> Self {
+        ContentTrust::Unknown
+    }
+}
+
+impl ContentTrust {
+    pub fn as_str(&self) -> &str {
+        match self {
+            ContentTrust::Trusted => "trusted",
+            ContentTrust::Untrusted => "untrusted",
+            ContentTrust::Unknown => "unknown",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "trusted" => Some(ContentTrust::Trusted),
+            "untrusted" => Some(ContentTrust::Untrusted),
+            "unknown" => Some(ContentTrust::Unknown),
+            _ => None,
+        }
     }
 }
 
@@ -963,7 +1023,7 @@ pub struct Schema {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SchemaProperty {
     pub name: String,
-    /// Expected Mnemosyne value type: "Text", "Int", "Float", "Bool", "Bytes", "List", "Map".
+    /// Expected aikoql value type: "Text", "Int", "Float", "Bool", "Bytes", "List", "Map".
     pub value_type: String,
     /// If true, the property must be present in every write.
     pub required: bool,
@@ -2287,7 +2347,7 @@ mod tests {
     fn fnv_known_vectors() {
         assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
         assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
-        assert_eq!(fnv1a64(b"mnemosyne"), fnv1a64(b"mnemosyne"));
+        assert_eq!(fnv1a64(b"aikoql"), fnv1a64(b"aikoql"));
         assert_ne!(fnv1a64(b"a"), fnv1a64(b"b"));
     }
 

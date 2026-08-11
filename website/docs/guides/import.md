@@ -5,15 +5,15 @@ description: Import from PostgreSQL, SQLite, MongoDB, Neo4j
 
 # Cross-DB Import
 
-Mnemosyne ships with 4 database connectors for importing existing data.
+aikoql ships with 4 database connectors for importing existing data.
 
 ## PostgreSQL
 
 ```bash
-mnemosyne import postgres 'host=localhost user=postgres dbname=hr_db' --tenant acme
+aikoql import postgres 'host=localhost user=postgres dbname=hr_db' --tenant acme
 
 # Specific table only
-mnemosyne import postgres 'host=localhost dbname=prod' --table employees
+aikoql import postgres 'host=localhost dbname=prod' --table employees
 ```
 
 **Mapping:** Table → type_name, PK → deterministic KOID, columns → PropertyMap. PG types mapped: integer→Int, text→Text, boolean→Bool, json→Text, timestamp→Text.
@@ -21,10 +21,10 @@ mnemosyne import postgres 'host=localhost dbname=prod' --table employees
 ## SQLite
 
 ```bash
-mnemosyne import sqlite ./employees.db --tenant acme
+aikoql import sqlite ./employees.db --tenant acme
 
 # Specific table
-mnemosyne import sqlite ./app.db --table users
+aikoql import sqlite ./app.db --table users
 ```
 
 **Mapping:** Same as PostgreSQL. SQLite types: INTEGER→Int, REAL→Float, TEXT→Text, BLOB→Bytes.
@@ -32,10 +32,10 @@ mnemosyne import sqlite ./app.db --table users
 ## MongoDB
 
 ```bash
-mnemosyne import mongodb mongodb://localhost:27017 --db hr_app --tenant acme
+aikoql import mongodb mongodb://localhost:27017 --db hr_app --tenant acme
 
 # Specific collection
-mnemosyne import mongodb mongodb://localhost:27017 --db prod --collection users
+aikoql import mongodb mongodb://localhost:27017 --db prod --collection users
 ```
 
 **Mapping:** Collection → type_name, `_id` (ObjectId) → hex string → deterministic KOID. BSON types: Double→Float, String→Text, Int32/Int64→Int, Bool→Bool, Document→Map, Array→List, Binary→Bytes, ObjectId→Text(hex).
@@ -45,10 +45,10 @@ Nested documents are flattened with dot-notation (`address.city`).
 ## Neo4j
 
 ```bash
-mnemosyne import neo4j http://localhost:7474 --user neo4j --password secret
+aikoql import neo4j http://localhost:7474 --user neo4j --password secret
 
 # Specific label
-mnemosyne import neo4j http://localhost:7474 --label Person
+aikoql import neo4j http://localhost:7474 --label Person
 ```
 
 **Two-phase import:**
@@ -58,7 +58,7 @@ mnemosyne import neo4j http://localhost:7474 --label Person
 ## Import Architecture
 
 ```
-Source DB → Connector → Schema Discovery → Row/Node Mapping → KO Creation → Mnemosyne
+Source DB → Connector → Schema Discovery → Row/Node Mapping → KO Creation → aikoql
 ```
 
 All imports are:
@@ -72,12 +72,12 @@ All imports are:
 After import, use the shell or graph browser to verify:
 
 ```bash
-mnemosyne shell ./kb.redb
+aikoql shell ./kb.redb
 
-Mnemosyne> .tables
+aikoql> .tables
   employees
   projects
 
-Mnemosyne> MATCH employees RETURN *
+aikoql> MATCH employees RETURN *
 ── 1042 rows ──
 ```

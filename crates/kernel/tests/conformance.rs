@@ -4,8 +4,8 @@
 //! Deterministic by construction: ManualClock + fixed IdGen salt => identical
 //! journals across runs (Determinism Law, MRFC-0011 §7).
 
-use mnemosyne_kernel::codec;
-use mnemosyne_kernel::*;
+use aikoql_kernel::codec;
+use aikoql_kernel::*;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 

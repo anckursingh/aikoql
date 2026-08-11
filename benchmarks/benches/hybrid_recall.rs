@@ -1,14 +1,14 @@
 //! Benchmark: hybrid recall (vector + text + RRF fusion).
 //!
 //! Measures P50/P99 latency for `find_similar` at increasing dataset sizes.
-//! Run with: `cargo bench -p mnemosyne-benchmarks`
+//! Run with: `cargo bench -p aikoql-benchmarks`
 //!
 //! Hardware note: results are machine-dependent. Gate thresholds must be
 //! defined on a fixed instance type (per MRFC-0005 §NFRs).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use mnemosyne_kernel::*;
-use mnemosyne_vector::HnswVectorIndex;
+use aikoql_kernel::*;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,7 +19,7 @@ fn bench_hybrid_recall(c: &mut Criterion) {
 
     for n in [100u64, 1000, 10_000] {
         let clock = Arc::new(ManualClock::new(20_000));
-        let kernel = Kernel::open(Arc::new(MemoryEngine::new()), clock, 0xBENCH).unwrap();
+        let kernel = Kernel::open(Arc::new(MemoryEngine::new()), clock, 0xC0FFEE).unwrap();
         let alice = Subject::new("alice");
 
         // Populate N KOs with random 128-dim vectors.

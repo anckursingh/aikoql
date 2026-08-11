@@ -7,7 +7,7 @@ description: The Knowledge Operating System architecture
 
 ## The Knowledge OS Stack
 
-Mnemosyne is organized as a layered operating system for knowledge:
+aikoql is organized as a layered operating system for knowledge:
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -37,7 +37,7 @@ Inspired by three landmark systems:
 | Git | Object | Commit, Blob, Tree, Tag |
 | Kubernetes | Resource | Deployment, Service, ConfigMap |
 | Unix | File | Data, Device, Socket, Process |
-| **Mnemosyne** | **Knowledge Object** | Data, Program, Policy, Agent, Trigger |
+| **aikoql** | **Knowledge Object** | Data, Program, Policy, Agent, Trigger |
 
 A Knowledge Object has:
 - **Identity** — immutable KOID
@@ -85,7 +85,7 @@ Subscribers receive events via durable subscriptions with replay and checkpoint.
 ### Compiler Pipeline
 
 ```
-AIKOQL Source → Lexer → Parser → AST → Semantic Analyzer → KIR → Planner → Runtime
+Aikoql Source → Lexer → Parser → AST → Semantic Analyzer → KIR → Planner → Runtime
 ```
 
 ### Planner Optimizations
@@ -97,7 +97,7 @@ AIKOQL Source → Lexer → Parser → AST → Semantic Analyzer → KIR → Pla
 ### KVM — Knowledge Virtual Machine
 
 ```
-Program KO (AIKOQL)
+Program KO (aikoql)
     ↓
 Compiler → Knowledge IR (KIR)
     ↓
@@ -114,12 +114,12 @@ v1 is a tree-walking interpreter. JIT compilation (Cranelift) and WASM support a
 
 | Type | Purpose |
 |---|---|
-| `mnemosyne:program` | AIKOQL code as versioned KO |
-| `mnemosyne:workflow` | DAG of programs |
-| `mnemosyne:policy` | RBAC rule as KO |
-| `mnemosyne:trigger` | Event → Condition → Action |
-| `mnemosyne:agent` | AI agent with prompt + memory + tools |
-| `mnemosyne:connector` | Import/export plugin definition |
+| `aikoql:program` | aikoql code as versioned KO |
+| `aikoql:workflow` | DAG of programs |
+| `aikoql:policy` | RBAC rule as KO |
+| `aikoql:trigger` | Event → Condition → Action |
+| `aikoql:agent` | AI agent with prompt + memory + tools |
+| `aikoql:connector` | Import/export plugin definition |
 
 Every Active KO shares the same lifecycle as data: identity, versioning, provenance, access control, audit.
 
@@ -175,10 +175,10 @@ Upload (PDF/DOCX/MD) → D1-D3 (OCR, AST, Classify)
 
 | Entry Point | Protocol | Use Case |
 |---|---|---|
-| `mnemosyne serve` | MCP (JSON-RPC) over stdio/TCP | AI agents (59 tools) |
+| `aikoql serve` | MCP (JSON-RPC) over stdio/TCP | AI agents (59 tools) |
 | `:9091/api/v1/*` | REST (HTTP/JSON) | Web apps, curl (40+ endpoints) |
 | `:9091/studio` | Studio SPA (14 panels) | Full management UI |
-| `mnemosyne shell` | Interactive REPL (9 commands) | Human queries |
+| `aikoql shell` | Interactive REPL (9 commands) | Human queries |
 | `:9091/health` | HTTP health check | Kubernetes probes |
 | `:9091/metrics` | Prometheus text format | Monitoring |
 
@@ -199,7 +199,7 @@ Remember → Property Types → Uniqueness → Cardinality → Domain → Check 
 ```
 crates/
 ├── kernel/           Knowledge Kernel (MVCC, OCC, HLC, RBAC, audit)
-├── compiler/         AIKOQL parser, semantic analyzer, planner
+├── compiler/         aikoql parser, semantic analyzer, planner
 ├── runtime/          Physical plan interpreter
 ├── constraints/      Constraint engine (C1-C9, ~95% complete)
 ├── engines/

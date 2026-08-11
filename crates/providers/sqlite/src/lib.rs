@@ -7,11 +7,11 @@
 //! - Table → type_name
 //! - Primary key / rowid → deterministic KOID
 //! - Columns → PropertyMap
-//! - SQLite types flexibly mapped to Mnemosyne Value types
+//! - SQLite types flexibly mapped to Aikoql Value types
 //!
 //! ponytail: synchronous, no tokio. `rusqlite` with bundled SQLite.
 
-use mnemosyne_kernel::knowledge::kom::*;
+use aikoql_kernel::knowledge::kom::*;
 use rusqlite::{Connection, OpenFlags};
 
 // ---------------------------------------------------------------------------
@@ -239,7 +239,7 @@ impl SqliteConnector {
 }
 
 // ---------------------------------------------------------------------------
-// Value mapping: SQLite → Mnemosyne Value
+// Value mapping: SQLite → Aikoql Value
 // ---------------------------------------------------------------------------
 
 fn sqlite_cell_to_value(row: &rusqlite::Row, col_idx: usize, sqlite_type: &str) -> Value {

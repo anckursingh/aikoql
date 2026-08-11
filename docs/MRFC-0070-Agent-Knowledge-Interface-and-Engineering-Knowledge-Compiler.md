@@ -3,16 +3,16 @@
 **Status:** Proposed  
 **Category:** Architecture / Knowledge Infrastructure / Agentic AI  
 **Priority:** Strategic / Tier-1  
-**Target:** Mnemosyne + AIKOQL  
+**Target:** aikoql + aikoql  
 **Version:** 1.0  
-**Depends on:** Knowledge Kernel, Ontology Engine, Provenance, Constraint Engine, Document Intelligence, AIKOQL, Connectors, Program-as-KO  
+**Depends on:** Knowledge Kernel, Ontology Engine, Provenance, Constraint Engine, Document Intelligence, aikoql, Connectors, Program-as-KO  
 **Primary consumers:** Coding agents, software-engineering agents, SRE agents, DevOps agents, security agents, architecture agents, data-engineering agents, autonomous engineering agents
 
 ---
 
 # 1. Executive Summary
 
-This MRFC defines the **Agent Knowledge Interface (AKI)** and **Engineering Knowledge Compiler (EKC)** for Mnemosyne.
+This MRFC defines the **Agent Knowledge Interface (AKI)** and **Engineering Knowledge Compiler (EKC)** for aikoql.
 
 The objective is to provide a universal, agent-independent semantic knowledge layer beneath modern engineering agents.
 
@@ -43,7 +43,7 @@ Version
 Status
 ```
 
-Mnemosyne becomes capable of transforming engineering artifacts into structured Knowledge Objects (KOs), resolving their relationships, tracking provenance and temporal state, detecting conflicts and stale knowledge, and compiling task-specific knowledge into an optimized context package for any engineering agent.
+aikoql becomes capable of transforming engineering artifacts into structured Knowledge Objects (KOs), resolving their relationships, tracking provenance and temporal state, detecting conflicts and stale knowledge, and compiling task-specific knowledge into an optimized context package for any engineering agent.
 
 The resulting architecture is:
 
@@ -81,7 +81,7 @@ Typed Knowledge Objects
 Engineering Knowledge Graph
        |
        v
-AIKOQL / Agent Knowledge Interface
+aikoql / Agent Knowledge Interface
        |
        v
 Context Compiler
@@ -99,7 +99,7 @@ Validation
 Knowledge Reconciliation
 ```
 
-The strategic objective is to make Mnemosyne a **knowledge infrastructure layer for autonomous engineering**, rather than another coding agent.
+The strategic objective is to make aikoql a **knowledge infrastructure layer for autonomous engineering**, rather than another coding agent.
 
 ---
 
@@ -135,7 +135,7 @@ This creates recurring problems:
 9. Agent-generated knowledge is difficult to validate and persist.
 10. There is no universal semantic contract between an engineering knowledge system and arbitrary agents.
 
-The proposed system addresses these problems without requiring Mnemosyne to become an agent runtime.
+The proposed system addresses these problems without requiring aikoql to become an agent runtime.
 
 ---
 
@@ -158,7 +158,7 @@ The system SHALL:
 11. Detect stale documentation and stale claims.
 12. Compile task-specific context for agents.
 13. Optimize context under token and latency budgets.
-14. Expose knowledge through AIKOQL.
+14. Expose knowledge through aikoql.
 15. Expose knowledge through an agent integration interface.
 16. Support agent-generated knowledge proposals.
 17. Validate proposed knowledge before promotion.
@@ -185,7 +185,7 @@ This MRFC does NOT define:
 - a requirement that every artifact become a KO
 - a universal authorization system for every external agent
 
-Mnemosyne provides the knowledge layer.
+aikoql provides the knowledge layer.
 
 ---
 
@@ -244,7 +244,7 @@ Knowledge SHALL support:
 
 ```text
 Markdown
-AIKOQL
+aikoql
 API
 SDK
 Agent Context
@@ -632,7 +632,7 @@ The system SHALL NOT silently discard conflicting evidence.
 
 # 15. Stale Knowledge Detection
 
-Mnemosyne SHALL be able to identify likely stale documentation.
+Aikoql SHALL be able to identify likely stale documentation.
 
 Example:
 
@@ -983,7 +983,7 @@ Knowledge Objects SHALL NOT bypass the Knowledge Kernel's transactional guarante
 ```text
                 Agent Knowledge Interface
                          |
-                       AIKOQL
+                       aikoql
                          |
                   Query / Context API
                          |
@@ -1022,7 +1022,7 @@ The Agent Knowledge Interface provides an agent-neutral access layer.
                        |
              +---------+---------+
              |                   |
-           AIKOQL               API
+           aikoql               API
              |                   |
              +---------+---------+
                        |
@@ -1038,7 +1038,7 @@ The Agent Knowledge Interface provides an agent-neutral access layer.
                        |
               Knowledge Query Layer
                        |
-                  Mnemosyne
+                  aikoql
 ```
 
 MCP may be implemented as one transport/adapter.
@@ -1213,9 +1213,9 @@ This prevents unnecessary context consumption.
 
 ---
 
-# 35. AIKOQL Integration
+# 35. Aikoql Integration
 
-AIKOQL SHALL expose universal knowledge operations.
+Aikoql SHALL expose universal knowledge operations.
 
 Examples:
 
@@ -1247,7 +1247,7 @@ GET CONTEXT FOR TASK
 "Implement deferred referential integrity"
 ```
 
-The syntax is illustrative; the parser specification remains governed by the AIKOQL language design.
+The syntax is illustrative; the parser specification remains governed by the aikoql language design.
 
 ---
 
@@ -1873,12 +1873,12 @@ The compiler SHALL prefer the lowest-cost representation that satisfies the cont
 
 ---
 
-# 62. AIKOQL Execution
+# 62. Aikoql Execution
 
-AIKOQL requests SHALL be compiled:
+aikoql requests SHALL be compiled:
 
 ```text
-AIKOQL
+aikoql
   ↓
 Lexer
   ↓
@@ -1897,7 +1897,7 @@ Knowledge Engine
 Indexes / Graph / Storage
 ```
 
-The existing AIKOQL architecture remains authoritative for language parsing.
+The existing aikoql architecture remains authoritative for language parsing.
 
 This MRFC defines the semantic operations exposed to agents.
 
@@ -1924,7 +1924,7 @@ Transport may also be exposed through:
 MCP
 gRPC
 SDK
-AIKOQL
+aikoql
 ```
 
 ---
@@ -2065,7 +2065,7 @@ It submits:
 ProposalKO
 ```
 
-Mnemosyne checks:
+aikoql checks:
 
 ```text
 source code
@@ -2094,7 +2094,7 @@ Agent changes:
 crates/kernel/constraints/
 ```
 
-Mnemosyne computes:
+aikoql computes:
 
 ```text
 Affected:
@@ -2752,9 +2752,9 @@ After a code/document change, stale or affected KOs SHALL be identified.
 
 ---
 
-## AKI-022 — AIKOQL Integration
+## AKI-022 — Aikoql Integration
 
-AIKOQL SHALL execute supported universal knowledge operations.
+Aikoql SHALL execute supported universal knowledge operations.
 
 **Pass:** all mandatory certification queries parse, plan, execute, and return expected results.
 
@@ -2764,7 +2764,7 @@ AIKOQL SHALL execute supported universal knowledge operations.
 
 The semantic model SHALL remain unchanged when transport changes.
 
-**Pass:** identical semantic request through AIKOQL and API returns equivalent results.
+**Pass:** identical semantic request through aikoql and API returns equivalent results.
 
 ---
 
@@ -3049,7 +3049,7 @@ Agent + traditional RAG
 against:
 
 ```text
-Agent + Mnemosyne Agent Knowledge Interface
+Agent + Aikoql Agent Knowledge Interface
 ```
 
 Metrics:
@@ -3273,7 +3273,7 @@ AKI-039
 
 ---
 
-## Phase 6 — AIKOQL Agent Interface
+## Phase 6 — Aikoql Agent Interface
 
 Implement:
 
@@ -3399,7 +3399,7 @@ Knowledge Object model
 Provenance
 Ontology
 Graph relationships
-AIKOQL queries
+aikoql queries
 Context Compiler
 GET CONTEXT
 EXPLAIN
@@ -3420,11 +3420,11 @@ Compile Knowledge
  ↓
 Agent asks for context
  ↓
-Mnemosyne returns context
+aikoql returns context
  ↓
 Agent modifies code
  ↓
-Mnemosyne detects affected knowledge
+aikoql detects affected knowledge
  ↓
 Agent updates/proposes knowledge
  ↓
@@ -3569,7 +3569,7 @@ MRFC-0070 is considered implemented when:
 [ ] Conflict detection implemented
 [ ] Stale detection implemented
 [ ] Context Compiler implemented
-[ ] AIKOQL agent operations implemented
+[ ] aikoql agent operations implemented
 [ ] Agent proposal workflow implemented
 [ ] Agent Gateway implemented
 [ ] MCP/API adapter implemented
@@ -3588,7 +3588,7 @@ MRFC-0070 is considered implemented when:
 
 # 103. Strategic Outcome
 
-After this MRFC, Mnemosyne should be positioned as:
+After this MRFC, aikoql should be positioned as:
 
 ```text
               ENGINEERING AGENTS
@@ -3598,7 +3598,7 @@ After this MRFC, Mnemosyne should be positioned as:
        |           |           |           |
        +-----------+-----------+-----------+
                        |
-                  AIKOQL / API / MCP
+                  aikoql / API / MCP
                        |
               AGENT KNOWLEDGE INTERFACE
                        |
@@ -3614,7 +3614,7 @@ After this MRFC, Mnemosyne should be positioned as:
                        |
                 KNOWLEDGE KERNEL
                        |
-                 Mnemosyne DB
+                 Aikoql DB
 ```
 
 The strategic product is therefore not:
@@ -3625,7 +3625,7 @@ It is:
 
 > **A universal, evidence-backed engineering knowledge infrastructure that compiles software-system knowledge into the minimum sufficient context required by autonomous engineering agents.**
 
-AIKOQL becomes the semantic query language over that knowledge.
+aikoql becomes the semantic query language over that knowledge.
 
 Programs-as-KO becomes executable knowledge.
 

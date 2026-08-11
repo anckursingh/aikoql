@@ -6,8 +6,8 @@
 //! The `golden_match_simple` test uses exact Debug-format matching as a
 //! full-snapshot canary. The rest use structural assertions.
 
-use mnemosyne_compiler::parser;
-use mnemosyne_compiler::parser::ast::*;
+use aikoql_compiler::parser;
+use aikoql_compiler::parser::ast::*;
 
 // Helper: extract a MatchStatement from a parsed Statement.
 fn as_match(stmt: &Statement) -> &MatchStatement {

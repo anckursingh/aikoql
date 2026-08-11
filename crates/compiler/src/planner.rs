@@ -8,7 +8,7 @@
 //! v1 is purely rule-based. Cost-based optimization (CBO) arrives post-1.0
 //! when workload statistics exist (per Architecture Review R2).
 
-use mnemosyne_kernel::ir::*;
+use aikoql_kernel::ir::*;
 
 pub struct Planner;
 
@@ -87,10 +87,10 @@ mod tests {
                 subject: "a".into(),
             },
             IrOp::Filter {
-                predicates: vec![Predicate::eq("x", mnemosyne_kernel::Value::Int(1))],
+                predicates: vec![Predicate::eq("x", aikoql_kernel::Value::Int(1))],
             },
             IrOp::Filter {
-                predicates: vec![Predicate::eq("y", mnemosyne_kernel::Value::Int(2))],
+                predicates: vec![Predicate::eq("y", aikoql_kernel::Value::Int(2))],
             },
         ]);
         let opt = Planner::optimize(&plan);
@@ -111,7 +111,7 @@ mod tests {
             IrOp::Filter {
                 predicates: vec![Predicate::eq(
                     "dept",
-                    mnemosyne_kernel::Value::Text("Eng".into()),
+                    aikoql_kernel::Value::Text("Eng".into()),
                 )],
             },
             IrOp::Scan {
@@ -121,7 +121,7 @@ mod tests {
             IrOp::Filter {
                 predicates: vec![Predicate::eq(
                     "salary",
-                    mnemosyne_kernel::Value::Int(100000),
+                    aikoql_kernel::Value::Int(100000),
                 )],
             },
         ]);
@@ -145,7 +145,7 @@ mod tests {
                 subject: "a".into(),
             },
             IrOp::Filter {
-                predicates: vec![Predicate::eq("x", mnemosyne_kernel::Value::Int(1))],
+                predicates: vec![Predicate::eq("x", aikoql_kernel::Value::Int(1))],
             },
             IrOp::TextSearch {
                 query: "test".into(),

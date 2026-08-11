@@ -1,4 +1,4 @@
-//! AIKOQL Diagnostics Catalog — stable error codes per MRFC-0010 §10.
+//! Aikoql Diagnostics Catalog — stable error codes per MRFC-0010 §10.
 //!
 //! Every parser/compiler error gets a stable code. Codes never change;
 //! messages can be improved. External tools can rely on codes for

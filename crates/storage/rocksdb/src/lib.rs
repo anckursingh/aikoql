@@ -1,4 +1,4 @@
-//! RocksDB storage backend for Mnemosyne (MVP).
+//! RocksDB storage backend for aikoql (MVP).
 //!
 //! Implements the `StorageEngine` trait using RocksDB — a battle-tested
 //! LSM-tree engine with concurrent readers AND writers (unlike redb's
@@ -12,8 +12,8 @@
 //!   ascending by RocksDB's internal comparator (lexicographic byte order).
 //! - `get` → single-key point lookup.
 
-use mnemosyne_kernel::knowledge::kom::{KError, KResult};
-use mnemosyne_kernel::storage::store::{StorageEngine, WriteBatch};
+use aikoql_kernel::knowledge::kom::{KError, KResult};
+use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
 use rocksdb::{Options, WriteBatch as Rwb, WriteOptions, DB};
 use std::path::Path;
 
@@ -92,7 +92,7 @@ mod tests {
     fn tmp(name: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!(
-            "mnemosyne_rocksdb_unit_{}_{}",
+            "aikoql_rocksdb_unit_{}_{}",
             name,
             std::process::id()
         ));

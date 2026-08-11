@@ -9,7 +9,7 @@
 //!
 //! Fixture files in `tests/fixtures/` show the schemas these proposals simulate.
 
-use mnemosyne_ingestion::{
+use aikoql_ingestion::{
     merge_proposals, ClassProposal, Evidence, OntologyProposal, PropertyProposal,
     RelationshipProposal,
 };

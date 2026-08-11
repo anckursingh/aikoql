@@ -1,4 +1,4 @@
-//! AIKOQL Text Parser — Lexer → AST → KIR per MRFC-0010.
+//! Aikoql Text Parser — Lexer → AST → KIR per MRFC-0010.
 //!
 //! Entry point: `compile(source)` — tokenizes, parses, and compiles to `IrPlan`.
 
@@ -7,20 +7,20 @@ pub mod diagnostics;
 pub mod lexer;
 pub mod parser;
 
-use mnemosyne_kernel::ir::*;
-use mnemosyne_kernel::knowledge::ontology::OntologyRegistry;
-use mnemosyne_kernel::lifecycle::schema::SchemaRegistry;
-use mnemosyne_kernel::Value;
+use aikoql_kernel::ir::*;
+use aikoql_kernel::knowledge::ontology::OntologyRegistry;
+use aikoql_kernel::lifecycle::schema::SchemaRegistry;
+use aikoql_kernel::Value;
 use parser::Parser;
 
-/// Parse AIKOQL source into an AST (without compiling to IR).
+/// Parse aikoql source into an AST (without compiling to IR).
 /// Useful for statement-type dispatch (CREATE executes directly, MATCH compiles to IR).
 pub fn parse(source: &str) -> Result<ast::Statement, String> {
     let mut p = Parser::new(source);
     p.parse_statement().map_err(|e| e.to_string())
 }
 
-/// Compile AIKOQL source text into a validated `IrPlan`.
+/// Compile aikoql source text into a validated `IrPlan`.
 pub fn compile(source: &str) -> Result<IrPlan, String> {
     compile_with_subject(source, "query-user")
 }
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn ontology_expands_to_physical_scans() {
-        use mnemosyne_kernel::knowledge::ontology::*;
+        use aikoql_kernel::knowledge::ontology::*;
         let mut classes = std::collections::BTreeMap::new();
         classes.insert(
             "Employee".into(),
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn ontology_without_mappings_returns_single_plan() {
-        use mnemosyne_kernel::knowledge::ontology::*;
+        use aikoql_kernel::knowledge::ontology::*;
         let mut classes = std::collections::BTreeMap::new();
         classes.insert(
             "Employee".into(),

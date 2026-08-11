@@ -1,15 +1,15 @@
-//! Mnemosyne Compiler — AIKOQL → Knowledge IR.
+//! Aikoql Compiler — aikoql → Knowledge IR.
 #![allow(clippy::module_inception)]
 //!
 //! Two frontends, one target:
-//! - `Compiler::compile(json)` — JSON-based AIKOQL (simple, agent-friendly)
-//! - `parser::compile(source)` — text-based AIKOQL (human-friendly, per MRFC-0010)
+//! - `Compiler::compile(json)` — JSON-based aikoql (simple, agent-friendly)
+//! - `parser::compile(source)` — text-based aikoql (human-friendly, per MRFC-0010)
 //!
 //! Both produce `IrPlan` for execution by the runtime.
 //!
 //! MRFC-0005 §Compiler Layer, MRFC-0010 §Parser Architecture.
 
-use mnemosyne_kernel::ir::*;
+use aikoql_kernel::ir::*;
 use serde::Deserialize;
 
 pub mod parser;
@@ -17,7 +17,7 @@ pub mod planner;
 pub mod semantic;
 
 // ---------------------------------------------------------------------------
-// AIKOQL JSON schema
+// Aikoql JSON schema
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -84,7 +84,7 @@ fn default_k() -> usize {
 pub struct Compiler;
 
 impl Compiler {
-    /// Compile an AIKOQL JSON string into a validated `IrPlan`.
+    /// Compile an Aikoql JSON string into a validated `IrPlan`.
     pub fn compile(json: &str) -> Result<IrPlan, String> {
         let query: AiKoqlQuery =
             serde_json::from_str(json).map_err(|e| format!("parse error: {}", e))?;
@@ -96,9 +96,9 @@ impl Compiler {
 
         // Must have either scan or traverse.
         match (&q.scan, &q.traverse) {
-            (None, None) => return Err("AIKOQL: either 'scan' or 'traverse' is required".into()),
+            (None, None) => return Err("aikoql: either 'scan' or 'traverse' is required".into()),
             (Some(_), Some(_)) => {
-                return Err("AIKOQL: 'scan' and 'traverse' are mutually exclusive".into())
+                return Err("aikoql: 'scan' and 'traverse' are mutually exclusive".into())
             }
             _ => {}
         }
@@ -136,7 +136,7 @@ impl Compiler {
         if let Some(search) = &q.search {
             if let Some(ref v) = search.vector {
                 if q.scan.is_none() {
-                    return Err("AIKOQL: vector search requires 'scan'".into());
+                    return Err("aikoql: vector search requires 'scan'".into());
                 }
                 ops.push(IrOp::AnnSearch {
                     vector: v.clone(),
@@ -147,7 +147,7 @@ impl Compiler {
             }
             if let Some(ref t) = search.text {
                 if q.scan.is_none() {
-                    return Err("AIKOQL: text search requires 'scan'".into());
+                    return Err("aikoql: text search requires 'scan'".into());
                 }
                 ops.push(IrOp::TextSearch {
                     query: t.clone(),
@@ -162,27 +162,27 @@ impl Compiler {
             let has_vector = q.search.as_ref().and_then(|s| s.vector.as_ref()).is_some();
             let has_text = q.search.as_ref().and_then(|s| s.text.as_ref()).is_some();
             if !has_vector || !has_text {
-                return Err("AIKOQL: 'fuse' requires both vector and text search".into());
+                return Err("aikoql: 'fuse' requires both vector and text search".into());
             }
             let mode = match fuse.as_str() {
                 "rrf" => FuseMode::Rrf { k0: 60 },
                 "weighted" => FuseMode::Weighted { wv: 0.5, wt: 0.5 },
                 "vector" => FuseMode::VectorOnly,
                 "text" => FuseMode::TextOnly,
-                other => return Err(format!("AIKOQL: unknown fuse mode '{}'", other)),
+                other => return Err(format!("aikoql: unknown fuse mode '{}'", other)),
             };
             ops.push(IrOp::Fuse { mode });
         }
 
-        let plan = IrPlan::new(ops).with_description("AIKOQL query".to_string());
+        let plan = IrPlan::new(ops).with_description("aikoql query".to_string());
         plan.validate()
             .map_err(|e| format!("AIKOQL1014: conflicting clauses — {}", e))?;
         Ok(plan)
     }
 }
 
-fn json_to_value(v: &serde_json::Value) -> Result<mnemosyne_kernel::Value, String> {
-    use mnemosyne_kernel::Value;
+fn json_to_value(v: &serde_json::Value) -> Result<aikoql_kernel::Value, String> {
+    use aikoql_kernel::Value;
     Ok(match v {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(*b),

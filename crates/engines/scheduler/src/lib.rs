@@ -1,4 +1,4 @@
-//! Mnemosyne Scheduler Engine — background job execution.
+//! Aikoql Scheduler Engine — background job execution.
 #![allow(clippy::len_without_is_empty)]
 //!
 //! Provides the `Scheduler` that manages pluggable background jobs, and
@@ -15,10 +15,10 @@ pub mod key_rotation;
 pub use compaction::CompactionJob;
 pub use key_rotation::KeyRotationJob;
 
-use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::knowledge::scoring::{ko_text, tokenize};
-use mnemosyne_kernel::transaction::kernel::Kernel;
-use mnemosyne_kernel::{EventFilter, IndexMaintainerApi, TextIndex, VectorIndex};
+use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::knowledge::scoring::{ko_text, tokenize};
+use aikoql_kernel::transaction::kernel::Kernel;
+use aikoql_kernel::{EventFilter, IndexMaintainerApi, TextIndex, VectorIndex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
@@ -359,7 +359,7 @@ impl Drop for IndexMaintainer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mnemosyne_kernel::{
+    use aikoql_kernel::{
         BruteForceVectorIndex, ManualClock, MemoryEngine, Metadata, RememberRequest, Subject,
         TokenTextIndex,
     };

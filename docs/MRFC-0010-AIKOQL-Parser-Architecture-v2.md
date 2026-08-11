@@ -1,5 +1,5 @@
 
-# MRFC-0010: AIKOQL Parser & Front-End Compiler Specification
+# MRFC-0010: Aikoql Parser & Front-End Compiler Specification
 
 **RFC ID:** MRFC-0010
 **Version:** 2.0
@@ -10,11 +10,11 @@
 
 # 1. Purpose
 
-This RFC specifies the complete architecture of the AIKOQL parser and its position within the Mnemosyne compiler pipeline.
+This RFC specifies the complete architecture of the aikoql parser and its position within the aikoql compiler pipeline.
 
 The parser is **not** a standalone SQL parser. It is the first compiler stage of the Knowledge Computing Platform.
 
-Its responsibility is to transform AIKOQL source into a deterministic Abstract Syntax Tree (AST), which is then progressively transformed into Knowledge Intermediate Representation (KIR), optimized, compiled into Knowledge Bytecode, and executed by the Knowledge Virtual Machine.
+Its responsibility is to transform aikoql source into a deterministic Abstract Syntax Tree (AST), which is then progressively transformed into Knowledge Intermediate Representation (KIR), optimized, compiled into Knowledge Bytecode, and executed by the Knowledge Virtual Machine.
 
 The parser SHALL NOT execute queries, resolve schemas, access storage, invoke AI services, or communicate with the Knowledge Kernel.
 
@@ -25,7 +25,7 @@ The parser SHALL NOT execute queries, resolve schemas, access storage, invoke AI
 ```text
 Applications
       │
-REST / gRPC / SDK / MCP / AIKOQL
+REST / gRPC / SDK / MCP / aikoql
       │
 API Layer
       │
@@ -256,7 +256,7 @@ LLM Frontend
 
 ↓
 
-AIKOQL
+aikoql
 
 ↓
 
@@ -376,4 +376,4 @@ This preserves the downward dependency model defined in MRFC-0005.
 
 # 14. Summary
 
-The AIKOQL parser is a pure compiler component. It converts AIKOQL syntax into an AST and hands it to the Semantic Analyzer. Every execution concern belongs to later compiler stages. This strict separation aligns with the layered architecture defined in MRFC-0005 and ensures a deterministic, testable, extensible compiler foundation.
+The aikoql parser is a pure compiler component. It converts aikoql syntax into an AST and hands it to the Semantic Analyzer. Every execution concern belongs to later compiler stages. This strict separation aligns with the layered architecture defined in MRFC-0005 and ensures a deterministic, testable, extensible compiler foundation.

@@ -23,7 +23,7 @@ pub struct TrackState {
     pub last_sha: String,
 }
 
-const TRACK_FILE: &str = ".mnemosyne-track.json";
+const TRACK_FILE: &str = ".aikoql-track.json";
 
 /// Read the tracking state from a directory. Returns None if no previous run.
 fn read_track_state(root: &Path) -> Option<TrackState> {
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn track_state_roundtrip() {
-        let tmp = std::env::temp_dir().join("mnemosyne-track-test");
+        let tmp = std::env::temp_dir().join("aikoql-track-test");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn incremental_falls_back_to_full_when_no_track_state() {
-        let tmp = std::env::temp_dir().join("mnemosyne-incr-fallback");
+        let tmp = std::env::temp_dir().join("aikoql-incr-fallback");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         // Write a small markdown file so ingest doesn't fail with "no source files"
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn incremental_same_revision_noop() {
         // In a git repo, if the SHA hasn't changed, we return Err to indicate no work.
-        let tmp = std::env::temp_dir().join("mnemosyne-incr-git");
+        let tmp = std::env::temp_dir().join("aikoql-incr-git");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join("README.md"), "# Test\nContent.\n").unwrap();
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn full_and_incremental_produce_equivalent_entity_count() {
-        let tmp = std::env::temp_dir().join("mnemosyne-incr-equiv");
+        let tmp = std::env::temp_dir().join("aikoql-incr-equiv");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         fs::write(

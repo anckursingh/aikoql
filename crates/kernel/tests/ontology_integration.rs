@@ -4,20 +4,20 @@
 //!   1. Define ontology (classes, relationships, mappings)
 //!   2. Import heterogeneous data as KOs
 //!   3. Conform KOs to ontology
-//!   4. Query with ontology-aware AIKOQL (inheritance, cross-source)
+//!   4. Query with ontology-aware aikoql (inheritance, cross-source)
 //!   5. Set-based TRAVERSE with ontology relationships
 //!
 //! Uses in-memory storage — no Docker/containers required.
 
-use mnemosyne_compiler::parser::compile_with_ontology;
-use mnemosyne_graph::{GraphEngineApi, RelateRequest};
-use mnemosyne_kernel::ir::IrOp;
-use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::knowledge::ontology::*;
-use mnemosyne_kernel::lifecycle::schema::SchemaRegistry;
-use mnemosyne_kernel::storage::store::MemoryEngine;
-use mnemosyne_kernel::transaction::kernel::{Kernel, ManualClock, RememberRequest, Subject};
-use mnemosyne_runtime::Interpreter;
+use aikoql_compiler::parser::compile_with_ontology;
+use aikoql_graph::{GraphEngineApi, RelateRequest};
+use aikoql_kernel::ir::IrOp;
+use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::knowledge::ontology::*;
+use aikoql_kernel::lifecycle::schema::SchemaRegistry;
+use aikoql_kernel::storage::store::MemoryEngine;
+use aikoql_kernel::transaction::kernel::{Kernel, ManualClock, RememberRequest, Subject};
+use aikoql_runtime::Interpreter;
 use std::sync::Arc;
 
 fn make_kernel() -> Kernel {
@@ -423,10 +423,10 @@ fn e2e_full_pipeline_with_kernel() {
 
     // 6. Direct physical query — Alice (use admin subject for ACL)
     let plan =
-        mnemosyne_compiler::parser::compile_with_subject("MATCH employees RETURN *", "admin")
+        aikoql_compiler::parser::compile_with_subject("MATCH employees RETURN *", "admin")
             .unwrap();
     let result = Interpreter::execute(&kernel, &plan).unwrap();
-    if let mnemosyne_runtime::RowSet::Objects(kos) = result {
+    if let aikoql_runtime::RowSet::Objects(kos) = result {
         assert_eq!(kos.len(), 1);
         assert_eq!(kos[0].metadata.type_name, "employees");
     } else {
@@ -440,7 +440,7 @@ fn e2e_full_pipeline_with_kernel() {
     assert_eq!(plans.len(), 2);
     let mut total = 0;
     for plan in &plans {
-        if let mnemosyne_runtime::RowSet::Objects(kos) =
+        if let aikoql_runtime::RowSet::Objects(kos) =
             Interpreter::execute(&kernel, plan).unwrap()
         {
             total += kos.len();
@@ -449,13 +449,13 @@ fn e2e_full_pipeline_with_kernel() {
     assert_eq!(total, 2);
 
     // 8. Set-based TRAVERSE
-    let tra_plan = mnemosyne_compiler::parser::compile_with_subject(
+    let tra_plan = aikoql_compiler::parser::compile_with_subject(
         "MATCH employees TRAVERSE belongsTo RETURN *",
         "admin",
     )
     .unwrap();
     let result = Interpreter::execute(&kernel, &tra_plan).unwrap();
-    if let mnemosyne_runtime::RowSet::Traversal(hits) = result {
+    if let aikoql_runtime::RowSet::Traversal(hits) = result {
         assert!(hits.iter().any(|(koid, _rt, _d)| *koid == dept_koid));
     } else {
         panic!("expected Traversal");

@@ -1,4 +1,4 @@
-//! Mnemosyne Vector Engine — ANN + BM25 index implementations.
+//! Aikoql Vector Engine — ANN + BM25 index implementations.
 //!
 //! Provides heavy index implementations behind the kernel's `VectorIndex` and
 //! `TextIndex` traits. The traits themselves live in the kernel (like
@@ -9,8 +9,8 @@
 //! path. All indexes here are secondary structures, maintained asynchronously
 //! from the Knowledge Event stream.
 
-use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::{TextIndex, VectorIndex};
+use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::{TextIndex, VectorIndex};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, RwLock};
 use tantivy::collector::TopDocs;
@@ -20,7 +20,7 @@ use tantivy::schema::{Field, Schema, STORED, STRING, TEXT};
 use tantivy::{doc, Index, IndexWriter, TantivyDocument, Term};
 
 // Re-export the kernel's lightweight impls for convenience.
-pub use mnemosyne_kernel::{BruteForceVectorIndex, TokenTextIndex};
+pub use aikoql_kernel::{BruteForceVectorIndex, TokenTextIndex};
 
 // ---------------------------------------------------------------------------
 // HnswVectorIndex — approximate nearest-neighbor (fast-hnsw)
@@ -305,6 +305,11 @@ impl Default for TantivyTextIndex {
 }
 
 impl TextIndex for TantivyTextIndex {
+    // ponytail: these two methods panic on tantivy write errors (disk full,
+    // permission denied, etc.). The TextIndex trait returns () so we can't
+    // propagate. The index is async-secondary — a panic here kills the
+    // maintainer but the kernel survives. Change trait to KResult<()> when
+    // something besides TokenTextIndex needs the result.
     fn upsert(&self, koid: KOID, tokens: &BTreeSet<String>) {
         let key = koid.to_hex();
         let text = tokens.iter().cloned().collect::<Vec<_>>().join(" ");

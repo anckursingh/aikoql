@@ -1,7 +1,7 @@
 {
-  "name": "mnemosyne-mcp",
+  "name": "aikoql-mcp",
   "version": "0.1.3",
-  "description": "Mnemosyne — The Agent-First Knowledge Database. Single binary, zero deps. 59 MCP tools.",
+  "description": "Aikoql — The Agent-First Knowledge Database. Single binary, zero deps. 59 MCP tools.",
   "license": "Apache-2.0",
   "author": {
     "name": "Anckur Singh",
@@ -9,11 +9,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/anckursingh/mnemosyne.git"
+    "url": "git+https://github.com/anckursingh/aikoql.git"
   },
-  "homepage": "https://github.com/anckursingh/mnemosyne",
+  "homepage": "https://github.com/anckursingh/aikoql",
   "keywords": [
-    "mnemosyne",
+    "aikoql",
     "knowledge-graph",
     "knowledge-database",
     "mcp",
@@ -23,7 +23,7 @@
     "claude-code"
   ],
   "bin": {
-    "mnemosyne-mcp": "./run.js"
+    "aikoql-mcp": "./run.js"
   },
   "files": [
     "run.js"

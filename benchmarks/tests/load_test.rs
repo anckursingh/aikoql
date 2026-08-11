@@ -5,8 +5,8 @@
 //! ponytail: 500 KOs, 128-dim vectors. Scale to 100K when profiling
 //! justifies longer test times (add `--ignored` gate).
 
-use mnemosyne_kernel::*;
-use mnemosyne_scheduler::IndexMaintainer;
+use aikoql_kernel::*;
+use aikoql_scheduler::IndexMaintainer;
 use std::sync::Arc;
 use std::time::Duration;
 

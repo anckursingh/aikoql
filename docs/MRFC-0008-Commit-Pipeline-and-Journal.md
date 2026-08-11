@@ -1,7 +1,7 @@
 # MRFC-0008: Commit Pipeline & Journal
 
 - **Status:** Draft v1.0 (implemented behavior — codifies Phase 1 Inc-1/2)
-- **Project:** Mnemosyne
+- **Project:** aikoql
 - **Category:** Foundation / Storage
 - **Depends on:** MRFC-0001 (KOM)
 - **Supersedes:** None
@@ -12,7 +12,7 @@
 
 # 1. Abstract
 
-The commit pipeline is the single source of truth in Mnemosyne. This RFC defines the storage-engine abstraction, the atomic commit batch, the append-only journal, the hybrid logical clock (HLC), and the crash-recovery contract that makes every other subsystem deterministic and replayable.
+The commit pipeline is the single source of truth in aikoql. This RFC defines the storage-engine abstraction, the atomic commit batch, the append-only journal, the hybrid logical clock (HLC), and the crash-recovery contract that makes every other subsystem deterministic and replayable.
 
 ---
 

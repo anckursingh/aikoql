@@ -1,14 +1,14 @@
-# Mnemosyne MVP — development & production compose
+# Aikoql MVP — development & production compose
 version: "3.8"
 
 services:
-  mnemosyne:
+  aikoql:
     build: .
     ports:
       - "9090:9090"   # MCP TCP
       - "9091:9091"   # HTTP /metrics + /health + Graph UI
     volumes:
-      - mnemosyne_data:/data
+      - aikoql_data:/data
     environment:
       - RUST_LOG=info
     restart: unless-stopped
@@ -19,8 +19,8 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: mnemosyne
-      POSTGRES_PASSWORD: mnemosyne
+      POSTGRES_USER: aikoql
+      POSTGRES_PASSWORD: aikoql
       POSTGRES_DB: knowledge
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -39,6 +39,6 @@ services:
     profiles: [full]
 
 volumes:
-  mnemosyne_data:
+  aikoql_data:
   postgres_data:
   neo4j_data:

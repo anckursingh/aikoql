@@ -1,16 +1,16 @@
-//! Mnemosyne Reasoning Engine — rule execution over Knowledge Objects.
+//! Aikoql Reasoning Engine — rule execution over Knowledge Objects.
 //!
 //! Consumes Knowledge Events from the scheduler, evaluates registered rules
 //! against committed KOs, and writes back provenance-tagged claims with
-//! `origin=Reason`. Rules are themselves KOs of type `mnemosyne:rule`.
+//! `origin=Reason`. Rules are themselves KOs of type `aikoql:rule`.
 //!
 //! MRFC-0005 §Knowledge Services: Rule execution, ontology processing,
 //! provenance and inference. All work is async, off the commit path, and
 //! writes back versioned claims — never silent mutation.
 
-use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::transaction::kernel::{Kernel, RememberRequest, Subject};
-use mnemosyne_scheduler::SchedulerJob;
+use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::transaction::kernel::{Kernel, RememberRequest, Subject};
+use aikoql_scheduler::SchedulerJob;
 use std::sync::RwLock;
 
 // ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ impl ReasoningEngine {
         }
     }
 
-    /// Load a rule from a KO of type `mnemosyne:rule`.
+    /// Load a rule from a KO of type `aikoql:rule`.
     /// Expected properties: `if` (list of {property, value} maps) and
     /// `then_type` (string) + `then` (property map for the conclusion).
     fn load_rule(&self, ko: &KnowledgeObject) -> KResult<()> {
@@ -103,7 +103,7 @@ impl ReasoningEngine {
             }
             // Assert conclusion.
             let mut req = RememberRequest::create(
-                mnemosyne_kernel::Subject::new("reasoning-engine"),
+                aikoql_kernel::Subject::new("reasoning-engine"),
                 Metadata {
                     type_name: rule.conclusion_type.clone(),
                     tenant: None,
@@ -135,7 +135,7 @@ impl SchedulerJob for ReasoningEngine {
     fn start(&self, kernel: &Kernel) -> KResult<()> {
         let subject = Subject::new("reasoning-engine");
         // Load all existing rules.
-        for rule_ko in kernel.scan_by_type(&subject, "mnemosyne:rule")? {
+        for rule_ko in kernel.scan_by_type(&subject, "aikoql:rule")? {
             self.load_rule(&rule_ko)?;
         }
         // Evaluate all non-rule KOs against loaded rules.
@@ -169,8 +169,8 @@ impl SchedulerJob for ReasoningEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mnemosyne_kernel::{ManualClock, MemoryEngine, Metadata, RememberRequest};
-    use mnemosyne_scheduler::Scheduler;
+    use aikoql_kernel::{ManualClock, MemoryEngine, Metadata, RememberRequest};
+    use aikoql_scheduler::Scheduler;
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
@@ -208,7 +208,7 @@ mod tests {
             expected_version: Some(0),
             idempotency_key: None,
             metadata: Metadata {
-                type_name: "mnemosyne:rule".into(),
+                type_name: "aikoql:rule".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec![],
@@ -289,7 +289,7 @@ mod tests {
             expected_version: Some(0),
             idempotency_key: None,
             metadata: Metadata {
-                type_name: "mnemosyne:rule".into(),
+                type_name: "aikoql:rule".into(),
                 tenant: None,
                 schema_version: 1,
                 tags: vec![],

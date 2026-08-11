@@ -11,13 +11,13 @@ const INVOICE_PDF = path.join(INVOICE_DIR, 'invoice_9655.pdf');
 
 function findBinary(): string {
   const candidates = [
-    path.resolve(__dirname, '../../target/release/mnemosyne-mcp.exe'),
-    path.resolve(__dirname, '../../target/debug/mnemosyne-mcp.exe'),
+    path.resolve(__dirname, '../../target/release/aikoql-mcp.exe'),
+    path.resolve(__dirname, '../../target/debug/aikoql-mcp.exe'),
   ];
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
-  throw new Error('mnemosyne-mcp binary not found. Run cargo build --release first.');
+  throw new Error('aikoql-mcp binary not found. Run cargo build --release first.');
 }
 
 let server: ChildProcess | null = null;

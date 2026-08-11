@@ -1,10 +1,10 @@
 # MRFC-0060 — Schema, Constraint & Integrity Engine
 
 **Status:** Proposed  
-**Target:** Mnemosyne MVP → Production  
+**Target:** Aikoql MVP → Production  
 **Type:** Architecture / HLD / LLD / NFR / Acceptance Criteria  
 **Primary owners:** Knowledge Kernel, Schema/Ontology Layer, Transaction Engine  
-**Related architecture:** AIKOQL, Knowledge Objects, Ontology Discovery, Connectors, Document Knowledge Compiler, Programs-as-KO, Transactions, Security, Provenance
+**Related architecture:** aikoql, Knowledge Objects, Ontology Discovery, Connectors, Document Knowledge Compiler, Programs-as-KO, Transactions, Security, Provenance
 
 ---
 
@@ -12,7 +12,7 @@
 
 A production database cannot rely only on an ontology or on the capabilities of an underlying connector.
 
-Mnemosyne needs its own **canonical schema and constraint contract** so that PostgreSQL, Neo4j, MongoDB, documents, vector indexes, and future storage engines participate in a consistent logical data model.
+aikoql needs its own **canonical schema and constraint contract** so that PostgreSQL, Neo4j, MongoDB, documents, vector indexes, and future storage engines participate in a consistent logical data model.
 
 The Constraint Engine is responsible for determining whether a proposed state transition is legal according to:
 
@@ -42,7 +42,7 @@ The central architectural principle is:
 The canonical flow is:
 
 ```text
-AIKOQL / API / Agent / Connector
+aikoql / API / Agent / Connector
               |
               v
         Authorization
@@ -73,7 +73,7 @@ AIKOQL / API / Agent / Connector
 
 ---
 
-# 2. Why Mnemosyne Needs Its Own Constraint Layer
+# 2. Why Aikoql Needs Its Own Constraint Layer
 
 Underlying databases already have constraints, but their semantics differ.
 
@@ -85,7 +85,7 @@ Vector stores    index-level constraints
 Documents        no native schema
 ```
 
-If Mnemosyne simply delegates constraint enforcement to each backend, the logical database becomes inconsistent.
+If aikoql simply delegates constraint enforcement to each backend, the logical database becomes inconsistent.
 
 Example:
 
@@ -100,7 +100,7 @@ Document:
 Customer email appears multiple times
 ```
 
-Mnemosyne must define the canonical rule:
+aikoql must define the canonical rule:
 
 ```text
 Customer.email = UNIQUE
@@ -115,7 +115,7 @@ Can it only be validated?
 Is it advisory?
 ```
 
-The logical constraint belongs to Mnemosyne.
+The logical constraint belongs to aikoql.
 
 ---
 
@@ -227,7 +227,7 @@ Programs-as-KO can provide programmable constraint logic, but execution must rem
 
 # 6. Constraint Taxonomy
 
-Mnemosyne should support the following constraint classes.
+aikoql should support the following constraint classes.
 
 ```text
 Schema Constraints
@@ -769,7 +769,7 @@ Constraint evaluation must detect cycles and avoid unbounded traversal.
 
 # 23. Graph Constraints
 
-Mnemosyne requires constraints particularly suited to graph data.
+aikoql requires constraints particularly suited to graph data.
 
 Examples:
 
@@ -872,7 +872,7 @@ recorded_at
 superseded_at
 ```
 
-This is useful when a document says something became true in the past but Mnemosyne learned it later.
+This is useful when a document says something became true in the past but aikoql learned it later.
 
 ---
 
@@ -1077,7 +1077,7 @@ Ontology
       └── Constraint
 ```
 
-It also makes constraints queryable through AIKOQL.
+It also makes constraints queryable through aikoql.
 
 ---
 
@@ -1434,7 +1434,7 @@ Customer.email = 'a@example.com'
 
 can become a PostgreSQL predicate.
 
-But semantic constraints that the backend cannot guarantee remain in Mnemosyne.
+But semantic constraints that the backend cannot guarantee remain in aikoql.
 
 Pushdown is an optimization, not a semantic authority.
 
@@ -1497,7 +1497,7 @@ An unsafe constraint must not be enabled blindly.
 
 # 48. Constraint Discovery
 
-Mnemosyne should eventually infer constraints from:
+aikoql should eventually infer constraints from:
 
 ```text
 database metadata
@@ -1587,7 +1587,7 @@ A violation should be machine-readable, not only a string.
 
 # 51. Explainability
 
-AIKOQL/Studio should be able to answer:
+aikoql/Studio should be able to answer:
 
 ```text
 WHY WAS THIS WRITE REJECTED?
@@ -1623,7 +1623,7 @@ explain constraint
 
 ---
 
-# 52. AIKOQL Constraint Queries
+# 52. Aikoql Constraint Queries
 
 Examples:
 
@@ -1651,7 +1651,7 @@ FIND INFERRED CONSTRAINTS
 VALIDATE CONSTRAINT CustomerEmailUnique
 ```
 
-Actual syntax should follow the AIKOQL grammar and parser architecture.
+Actual syntax should follow the aikoql grammar and parser architecture.
 
 ---
 
@@ -1759,7 +1759,7 @@ A temporary analytics/index failure should not necessarily prevent a write if th
 
 Conversely:
 
-> An `ENFORCED` constraint must fail closed if Mnemosyne cannot safely determine whether the write is valid.
+> An `ENFORCED` constraint must fail closed if aikoql cannot safely determine whether the write is valid.
 
 ---
 
@@ -2180,7 +2180,7 @@ AND
 tenant scope is preserved
 ```
 
-Otherwise evaluate in Mnemosyne.
+Otherwise evaluate in aikoql.
 
 ---
 
@@ -2392,7 +2392,7 @@ constraint parser
 expression compiler
 schema migration
 constraint serialization
-AIKOQL constraint syntax
+aikoql constraint syntax
 ```
 
 ---
@@ -2477,7 +2477,7 @@ Constraint violations expose machine-readable details.
 
 ### AC-20
 
-AIKOQL can inspect constraints and violations.
+aikoql can inspect constraints and violations.
 
 ### AC-21
 
@@ -2536,7 +2536,7 @@ CREATE Customer {
 Pipeline:
 
 ```text
-AIKOQL
+aikoql
   ↓
 Parser
   ↓
@@ -2663,7 +2663,7 @@ Observed:
 0 violations
 ```
 
-Mnemosyne proposes:
+aikoql proposes:
 
 ```text
 Constraint:
@@ -2831,7 +2831,7 @@ programmable constraints
 The database correctness layer should ultimately be:
 
 ```text
-                         AIKOQL
+                         aikoql
                             |
                      Query / Mutation
                             |
@@ -2894,14 +2894,14 @@ Documents / Databases / APIs
           ↓
 Graph + Vector + Evidence
           ↓
-        AIKOQL
+        aikoql
 ```
 
 ---
 
 # 88. Final Architectural Position
 
-Mnemosyne should not merely ask:
+aikoql should not merely ask:
 
 > "What does this data mean?"
 
@@ -2943,7 +2943,7 @@ Storage Engines
 Provenance
     = evidence
 
-AIKOQL
+aikoql
     = query/mutation language
 
 Agents

@@ -1,13 +1,13 @@
-"""Unified Agent interface for Mnemosyne (MRFC-0040 items #1 + #12).
+"""Unified Agent interface for aikoql (MRFC-0040 items #1 + #12).
 
 Supports both embedded (PyO3) and server (MCP TCP) modes transparently.
 
-    from mnemosyne import Agent
+    from aikoql import Agent
 
     # Embedded mode (in-process, requires compiled PyO3 extension):
     db = Agent.connect("./kb.redb")
 
-    # Server mode (talks to mnemosyne-mcp over TCP):
+    # Server mode (talks to aikoql-mcp over TCP):
     db = Agent.connect("localhost:9090")
 
     # Server mode (tuple):
@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 class Agent:
-    """Unified Mnemosyne agent interface.
+    """Unified aikoql agent interface.
 
     Auto-detects connection mode:
     - Path ending in .redb → embedded mode (PyO3)
@@ -33,7 +33,7 @@ class Agent:
 
     @staticmethod
     def connect(target: Union[str, Tuple[str, int]], **kwargs) -> "Agent":
-        """Connect to Mnemosyne. Auto-detects mode from target format."""
+        """Connect to aikoql. Auto-detects mode from target format."""
         agent = Agent()
         if isinstance(target, tuple):
             host, port = target
@@ -41,7 +41,7 @@ class Agent:
             from .mcp_client import McpClient
             agent._backend = McpClient(host, port).connect(timeout=kwargs.get("timeout", 5.0))
             agent._backend.initialize(
-                kwargs.get("client_name", "mnemosyne-py"),
+                kwargs.get("client_name", "aikoql-py"),
                 kwargs.get("client_version", "0.1.0"),
             )
         elif isinstance(target, str):
@@ -49,11 +49,11 @@ class Agent:
                 # Embedded mode: use PyO3 native extension.
                 agent._mode = "embedded"
                 try:
-                    from ._mnemosyne import Mnemosyne
-                    agent._backend = Mnemosyne(target)
+                    from ._aikoql import aikoql
+                    agent._backend = aikoql(target)
                 except ImportError:
                     raise ImportError(
-                        "Embedded mode requires the compiled PyO3 extension (_mnemosyne). "
+                        "Embedded mode requires the compiled PyO3 extension (_aikoql). "
                         "Build with: pip install maturin && maturin develop --release\n"
                         "Or use server mode: Agent.connect('localhost:9090')"
                     )
@@ -64,7 +64,7 @@ class Agent:
                 from .mcp_client import McpClient
                 agent._backend = McpClient(host, int(port)).connect(timeout=kwargs.get("timeout", 5.0))
                 agent._backend.initialize(
-                    kwargs.get("client_name", "mnemosyne-py"),
+                    kwargs.get("client_name", "aikoql-py"),
                     kwargs.get("client_version", "0.1.0"),
                 )
         else:

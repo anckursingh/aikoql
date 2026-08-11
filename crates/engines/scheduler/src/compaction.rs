@@ -5,8 +5,8 @@
 //! reclaiming disk space.
 
 use crate::SchedulerJob;
-use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::transaction::kernel::{ForgetMode, Kernel, KnowledgeContext, Subject};
+use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::transaction::kernel::{ForgetMode, Kernel, KnowledgeContext, Subject};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;

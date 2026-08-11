@@ -1,6 +1,6 @@
-"""Pure Python MCP JSON-RPC client for Mnemosyne (MRFC-0040).
+"""Pure Python MCP JSON-RPC client for aikoql (MRFC-0040).
 
-Talks to a mnemosyne-mcp server over TCP. No native dependencies.
+Talks to a aikoql-mcp server over TCP. No native dependencies.
 """
 
 import json
@@ -30,7 +30,7 @@ class McpError(Exception):
 
 
 class McpClient:
-    """JSON-RPC 2.0 client for mnemosyne-mcp over TCP."""
+    """JSON-RPC 2.0 client for aikoql-mcp over TCP."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 9090):
         self.host = host
@@ -95,7 +95,7 @@ class McpClient:
 
     # -- MCP protocol ---------------------------------------------------
 
-    def initialize(self, client_name: str = "mnemosyne-py", client_version: str = "0.1.0"):
+    def initialize(self, client_name: str = "aikoql-py", client_version: str = "0.1.0"):
         return self._rpc("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},

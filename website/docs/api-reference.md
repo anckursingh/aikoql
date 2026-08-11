@@ -5,7 +5,7 @@ description: Complete reference for all MCP tools and REST endpoints
 
 # API Reference
 
-Mnemosyne exposes 59 MCP tools and 40+ REST endpoints.
+aikoql exposes 59 MCP tools and 40+ REST endpoints.
 
 ## Authentication
 
@@ -109,7 +109,7 @@ MCP: find_similar
 | `fusion` | string | `rrf`, `weighted`, `vector`, `text` |
 | `k` | integer | Result count (default: 10) |
 
-### `aikoql` — Execute AIKOQL query
+### `aikoql` — Execute aikoql query
 
 ```
 POST /api/v1/aikoql
@@ -176,7 +176,7 @@ MCP: abi_version
 
 ## Programs-as-KOs (MRFC-0030)
 
-### `deploy_program` — Deploy AIKOQL as versioned KO
+### `deploy_program` — Deploy aikoql as versioned KO
 
 ```
 POST /api/v1/deploy-program
@@ -184,7 +184,7 @@ MCP: deploy_program
 ```
 
 ```json
-{"name": "FindEngineers", "body": "MATCH Employee WHERE dept == \"Engineering\" RETURN *", "language": "AIKOQL"}
+{"name": "FindEngineers", "body": "MATCH Employee WHERE dept == \"Engineering\" RETURN *", "language": "aikoql"}
 ```
 
 ### `execute_program` — Execute a program by KOID
@@ -251,7 +251,7 @@ MCP: deploy_trigger
 ```
 POST /api/v1/backup
 MCP: backup
-CLI: mnemosyne backup ./kb.redb
+CLI: aikoql backup ./kb.redb
 ```
 
 ### `restore` — PITR restore
@@ -259,7 +259,7 @@ CLI: mnemosyne backup ./kb.redb
 ```
 POST /api/v1/restore
 MCP: restore
-CLI: mnemosyne restore kb.redb.backup.12345
+CLI: aikoql restore kb.redb.backup.12345
 ```
 
 ### `backups` — List available backups

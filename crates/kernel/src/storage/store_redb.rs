@@ -14,7 +14,7 @@ use crate::storage::store::{StorageEngine, WriteBatch};
 use redb::{Database, TableDefinition};
 use std::path::Path;
 
-const TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("mnemosyne_kv");
+const TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("aikoql_kv");
 
 fn se(e: impl std::fmt::Display) -> KError {
     KError::Store(format!("redb: {}", e))
@@ -84,7 +84,7 @@ mod tests {
     fn tmp(name: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!(
-            "mnemosyne_redb_unit_{}_{}.redb",
+            "aikoql_redb_unit_{}_{}.redb",
             name,
             std::process::id()
         ));

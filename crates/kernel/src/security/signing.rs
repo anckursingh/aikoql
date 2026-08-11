@@ -38,7 +38,7 @@ impl SigningKey {
         // Mix in more entropy from a second hash
         let mut h2 = DefaultHasher::new();
         entropy.hash(&mut h2);
-        "mnemosyne-ed25519-seed".hash(&mut h2);
+        "aikoql-ed25519-seed".hash(&mut h2);
         let e2 = h2.finish();
         seed[16..24].copy_from_slice(&e2.to_le_bytes());
         seed[24..32].copy_from_slice(&e2.to_be_bytes());

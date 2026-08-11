@@ -1,8 +1,8 @@
-# Mnemosyne — Production-Grade Architecture Review & Viability Assessment
+# aikoql — Production-Grade Architecture Review & Viability Assessment
 
 **Reviewer:** Senior Database Design Architect (Rust)
 **Scope:** `docs/PRD.md`, `docs/HLD.md`, `docs/MRFC-0001-Knowledge-Object-Model.md`
-**Status:** Advisory — for the Mnemosyne Architecture Team
+**Status:** Advisory — for the Aikoql Architecture Team
 
 ---
 
@@ -18,11 +18,11 @@ The single most important correction: **stop selling "one database to replace th
 
 # 2. What the Documents Get Right (keep these)
 
-1. **Specification-first (MRFC) governance.** Normative RFC-2119 language, invariants, error model, conformance-test mandates, and an "AI implementation checklist" are exactly right for an open-source infra project in 2026 — both for human contributors and for coding agents. This is Mnemosyne's most differentiating *process* asset. Few competitors do this.
+1. **Specification-first (MRFC) governance.** Normative RFC-2119 language, invariants, error model, conformance-test mandates, and an "AI implementation checklist" are exactly right for an open-source infra project in 2026 — both for human contributors and for coding agents. This is aikoql's most differentiating *process* asset. Few competitors do this.
 2. **Canonical model + projections.** One canonical object (KO) with relational/graph/vector/document projections is the correct data architecture. It eliminates the dual-write/sync problem at the root instead of managing it with connectors. This is the same insight behind FoundationDB layers and Datomic's universal index — and it is proven.
 3. **Strict dependency direction.** `API -> Query -> Planner -> KVM -> Kernel -> Storage` with forbidden back-edges prevents the architectural rot that kills most multi-model DBs (feature teams reaching into storage internals). Enforce it in CI via `cargo` workspace boundaries — deny cross-crate imports that violate the DAG.
 4. **Storage is AI-agnostic (MRFC-0001 §13).** Embeddings/LLM calls must never live in the storage path — this keeps the storage kernel deterministic, testable, and portable. Correct boundary; do not compromise it under feature pressure.
-5. **Append-only Knowledge Events + provenance as first-class.** For AI agents, an immutable, queryable memory stream is the actual product. Most competitors bolt this on; Mnemosyne has it in the object model.
+5. **Append-only Knowledge Events + provenance as first-class.** For AI agents, an immutable, queryable memory stream is the actual product. Most competitors bolt this on; aikoql has it in the object model.
 6. **Unknown-extension round-trip preservation (MRFC-0001 req. 9).** This is a subtle, expert-level requirement that enables schema evolution without coordination — the property that makes protobuf successful. Good.
 7. **MVCC snapshot isolation for readers, OCC for writers.** Matches MRFC-0001 §8 and is the least-regret concurrency choice for read-heavy AI workloads.
 
@@ -34,7 +34,7 @@ The single most important correction: **stop selling "one database to replace th
 The PRD commits to: relational + graph + vector + document + full-text + hybrid optimizer + ACID + event sourcing + distributed cluster + RBAC/ACL/audit + plugins + 5 SDKs + MCP + cloud. Reference effort from history: FoundationDB ≈ 8 years to a stable core; CockroachDB ≈ 5 years to credible production; SurrealDB (the closest analog) has 30+ engineers and years of runway and is *still* maturing. **Mitigation:** §5 re-sequences this into a survivable plan.
 
 ## R2 — The hybrid optimizer is an open research problem (CRITICAL)
-- **Filtered vector search** (predicate + ANN) has no universally good answer: post-filtering starves recall on selective predicates; pre-filtering destroys index connectivity. State of the art (ACORN, Filtered-DiskANN, partitioned indexes) is from 2023–2024 research. Mnemosyne must pick a pragmatic stance: post-filter with over-fetch for v1, in-filter (ACORN-style) for v2.
+- **Filtered vector search** (predicate + ANN) has no universally good answer: post-filtering starves recall on selective predicates; pre-filtering destroys index connectivity. State of the art (ACORN, Filtered-DiskANN, partitioned indexes) is from 2023–2024 research. aikoql must pick a pragmatic stance: post-filter with over-fetch for v1, in-filter (ACORN-style) for v2.
 - **Graph traversal cardinality estimation** is the weakest area of *all* database optimizers (path cardinalities are routinely off by 10ⁿ). A cost model spanning relational + graph + vector + semantic in v1 is fantasy. **Stance:** rule-based planner with per-operator hints and a `QUERY PROFILE` facility; CBO arrives only after workload statistics exist (post-1.0).
 
 ## R3 — WAL vs. Knowledge Journal dual-write ambiguity (HIGH)
@@ -108,7 +108,7 @@ pub trait StorageEngine: Send + Sync {
 - Serializable isolation via SSI: defer to post-1.0; document SI anomalies (write skew) honestly.
 
 ## 4.4 Query Engine / IR / Planner
-- SQL frontend: `sqlparser-rs` with a `MnemosyneDialect` extension — do not write a parser.
+- SQL frontend: `sqlparser-rs` with a `AikoqlDialect` extension — do not write a parser.
 - Knowledge IR: a typed operator DAG (Scan | Filter | Project | Join | Traverse | AnnSearch | TextSearch | Fuse | Enrich). This is the boundary every frontend (SQL/GraphQL/MCP/SDK) compiles to and the only thing the planner sees. Keep it small and versioned.
 - Execution: Volcano-with-batches over `arrow-rs` RecordBatches; Morsel-driven parallelism via `tokio` tasks. No bytecode in v1 (see R11).
 - Planner: rule-based rewrite (predicate pushdown into index operators; fusion operator selection) + cost overlay behind a feature flag. Ship `EXPLAIN`/`PROFILE` from day one — your users *are* developers debugging agent memory queries; observability of plans is a feature.
@@ -176,7 +176,7 @@ Adopt **deterministic simulation testing** of the commit pipeline early — it i
 AI/agent stacks today glue together Postgres + pgvector + a graph DB + Elasticsearch + Redis + Kafka + S3. Every team building "agent memory" re-implements: identity, versioning, provenance, hybrid recall, and event streams — badly, without transactions. A single transactional store with native events and hybrid retrieval addresses a genuine, growing, and currently *unsatisfied* need.
 
 ## 6.2 Competitive field
-| Competitor | Overlap | Mnemosyne's edge | Threat level |
+| Competitor | Overlap | aikoql's edge | Threat level |
 |---|---|---|---|
 | **Postgres + pgvector (+AGE, ParadeDB)** | relational+vector+some graph | Events/provenance first-class; agent semantics; hybrid IR | **Severe** — the default "boring" answer with unmatched trust/ops |
 | **SurrealDB** (Rust, multi-model, graph+vector+events, ACID) | Highest conceptual overlap | Spec-first governance; agent-memory semantics; MCP-native; embedded-first | **Severe** — years ahead, funded; must out-focus, not out-feature |
@@ -185,7 +185,7 @@ AI/agent stacks today glue together Postgres + pgvector + a graph DB + Elasticse
 | **CozoDB** | embedded Rust, Datalog+vector+graph+FTS | Server mode, ACID+cluster path, MCP/agent framing | Medium (validates the concept!) |
 | **Datomic / XTDB** | immutability, time, bitemporal, provenance | AI-native semantics, vector/hybrid, Rust embeddability | Medium |
 | **TypeDB / TerminusDB** | "knowledge graph" framing, reasoning | Hybrid retrieval + agent memory + modern DX | Medium |
-| **Mem0 / Zep / Letta** | agent memory *products* | They are infra **consumers** — Mnemosyne can power them | Partners, not rivals |
+| **Mem0 / Zep / Letta** | agent memory *products* | They are infra **consumers** — aikoql can power them | Partners, not rivals |
 
 ## 6.3 Structural risks
 1. **"Jack of all trades" failure mode:** each projection will be worse than the specialist for years (vector recall vs Qdrant, SQL compat vs Postgres, graph vs Neo4j). Buyers who need one thing buy the specialist.
@@ -196,7 +196,7 @@ AI/agent stacks today glue together Postgres + pgvector + a graph DB + Elasticse
 ## 6.4 Why it can still win — the viable wedge
 1. **Agent memory is the wedge, not "database replacement."** Episodic + semantic memory, provenance, time-travel, and event streams for agents — exposed **MCP-native** — is a product category with no incumbent database-shaped answer. Integrate LangGraph/CrewAI/AutoGen adapters early.
 2. **Embedded-first distribution** (library + server modes, DuckDB/LanceDB/CozoDB precedent): zero-ops adoption, Python bindings, then graduate to server. This collapses the adoption funnel that kills infra startups.
-3. **Spec-first + agent-implementable repo** is genuinely novel: the MRFC corpus makes Mnemosyne the most coding-agent-legible DB project in existence — a compounding contributor multiplier and great marketing in 2026.
+3. **Spec-first + agent-implementable repo** is genuinely novel: the MRFC corpus makes aikoql the most coding-agent-legible DB project in existence — a compounding contributor multiplier and great marketing in 2026.
 4. **Compliance angle:** provenance + hash-chained audit + PITR on *knowledge* (not just rows) is an enterprise AI governance story nobody else tells well.
 
 ## 6.5 Viability verdict
@@ -233,7 +233,7 @@ AI/agent stacks today glue together Postgres + pgvector + a graph DB + Elasticse
 
 # 8. Bottom Line
 
-The architecture is the work of people who understand databases: canonical model, projections, strict layering, spec-first. **The plan, however, is the work of optimists about calendar time.** Production-grade Mnemosyne is achievable — as an embedded-first, MCP-native, transactional knowledge-memory store that *earns* clustering and cloud later. Ship M1+M2 exceptionally well, win the agent-memory wedge, and the rest of the PRD becomes fundable instead of fatal.
+The architecture is the work of people who understand databases: canonical model, projections, strict layering, spec-first. **The plan, however, is the work of optimists about calendar time.** Production-grade aikoql is achievable — as an embedded-first, MCP-native, transactional knowledge-memory store that *earns* clustering and cloud later. Ship M1+M2 exceptionally well, win the agent-memory wedge, and the rest of the PRD becomes fundable instead of fatal.
 
 ---
 
@@ -253,13 +253,13 @@ No single feature is defensible — pgvector copies vector search, Neo4j shipped
 
 ## 9.3 Improvement over each market leader
 
-| Market leader | Their gap (the pain they leave) | Mnemosyne's concrete improvement |
+| Market leader | Their gap (the pain they leave) | aikoql's concrete improvement |
 |---|---|---|
 | **Postgres + pgvector/AGE/ParadeDB** | No first-class knowledge event stream (bolt on Debezium/Kafka); no native provenance/time-travel; graph support is half-maintained; hybrid recall composed by hand in application code | One transaction spans row + edge + vector + event; memory streams and audit native; hybrid recall is one operator, not 3-system orchestration. Postgres still wins on trust/ops/SQL completeness — do not fight there; win where Postgres isn't: agent memory semantics |
 | **SurrealDB** (closest analog) | General-purpose multi-model; knowledge/agent concepts are conventions over generic documents; ad-hoc spec process | Opinionated knowledge model (KO/KR/KE lifecycle, provenance, semantic blocks as first-class citizens); spec-first MRFC repo → the most coding-agent-legible DB project in existence (contribution velocity + correctness discipline); MCP-native from day one |
 | **Qdrant / Weaviate / Milvus** | ANN + payload filters only; no cross-entity ACID, no graph, no event log, no provenance — every agent team adds Postgres beside them (the original fragmentation) | Hybrid recall + relational/graph context + ACID + audit in a single commit; embedding-model migration as a managed procedure, not an incident |
 | **Neo4j** | Graph-first, vector bolted on; no document/relational projection; no event sourcing; costly clustering | Graph is a *projection* of the same objects — traversal + vector + filters execute under one MVCC snapshot; zero ETL between "the graph" and "the search index" |
-| **Mem0 / Zep / Letta** (agent memory products) | SaaS/library layers glued onto vector stores + Postgres — no transactions underneath, thin provenance, hosted lock-in | Mnemosyne is the substrate these products should run on: self-hostable, transactional, queryable, compliance-grade memory. Position as "the database under agent memory" — they become partners or get displaced by OSS |
+| **Mem0 / Zep / Letta** (agent memory products) | SaaS/library layers glued onto vector stores + Postgres — no transactions underneath, thin provenance, hosted lock-in | aikoql is the substrate these products should run on: self-hostable, transactional, queryable, compliance-grade memory. Position as "the database under agent memory" — they become partners or get displaced by OSS |
 | **Datomic / XTDB** | Bitemporal/provenance pioneers but no vector/hybrid retrieval, JVM/Clojure gravity, not AI-native | Their time-model + AI-native hybrid retrieval + Rust embeddability + Python-first DX |
 
 ## 9.4 Improvements users will actually feel
@@ -278,19 +278,19 @@ Build it as the open-source transactional memory substrate for AI agents — emb
 
 # 10. The Knowledge Kernel Thesis — Stress-Tested (Response to the Vision Review)
 
-The stakeholder vision repositions Mnemosyne from "unified database" to **Knowledge Kernel for AI**, with 7 claimed innovations, knowledge syscalls, SQL demoted to an adapter, and a 3-generation, 10-year arc. This section is the architect's verdict on that thesis: what is accepted, what must be hardened, and what concretely changes.
+The stakeholder vision repositions aikoql from "unified database" to **Knowledge Kernel for AI**, with 7 claimed innovations, knowledge syscalls, SQL demoted to an adapter, and a 3-generation, 10-year arc. This section is the architect's verdict on that thesis: what is accepted, what must be hardened, and what concretely changes.
 
 ## 10.1 Accepted without amendment
 
 1. **"Multi-model will be table stakes" is correct** — it is the same conclusion as §6.3 (incumbent absorption). SQL + vector + graph in one product is not a moat; it is a checklist item by 2028.
 2. **Category creation beats feature competition.** "Knowledge Kernel for AI" is stronger positioning than "AI database." Adopted. Kernels become platforms; platforms become ecosystems; databases become commodities — strategically sound.
-3. **Provenance + evolution is the one non-absorbable moat — and this is the deepest insight in the vision.** Here is the asymmetry that makes it true: vector search was *retrofittable* into Postgres (an index type + an operator); provenance is **not retrofittable**, because it lives in the *write path* — in the object model, the commit pipeline, and the version semantics. A store that did not capture provenance at commit time cannot reconstruct it afterward. Mnemosyne bakes it into MRFC-0001's object model and §4.3's commit pipeline. This is the one thing the incumbents structurally cannot copy without rewriting their cores. Guard it above all else.
+3. **Provenance + evolution is the one non-absorbable moat — and this is the deepest insight in the vision.** Here is the asymmetry that makes it true: vector search was *retrofittable* into Postgres (an index type + an operator); provenance is **not retrofittable**, because it lives in the *write path* — in the object model, the commit pipeline, and the version semantics. A store that did not capture provenance at commit time cannot reconstruct it afterward. aikoql bakes it into MRFC-0001's object model and §4.3's commit pipeline. This is the one thing the incumbents structurally cannot copy without rewriting their cores. Guard it above all else.
 4. **SQL as just another adapter** is correct — it is already implied by the Knowledge IR design (§4.4). Make it explicit: the **Knowledge API is the primary interface**; SQL/Cypher/GraphQL/NL/MCP compile down to it.
 5. **The Knowledge Scheduler as kernel behavior** (insert → embed → extract → relate → index → publish) is the right "OS-like" differentiator — it already exists in the HLD as the Scheduler; the vision correctly elevates it from maintenance daemon to first-class subsystem.
 
 ## 10.2 Where the vision must be hardened (brutal answers)
 
-1. **Kernels win by owning a resource every program must pass through.** Linux owns the hardware. Mnemosyne owns nothing unless it owns the *write path of knowledge*. The syscall names (`remember()`, `reason()`, …) are copyable in an afternoon — any framework can define them. The moat is not the syscall vocabulary; it is being **the default store those syscalls persist into**, with provenance and evolution that cannot be reconstructed anywhere else. Strategy consequence: the ABI matters less than the commit pipeline beneath it.
+1. **Kernels win by owning a resource every program must pass through.** Linux owns the hardware. aikoql owns nothing unless it owns the *write path of knowledge*. The syscall names (`remember()`, `reason()`, …) are copyable in an afternoon — any framework can define them. The moat is not the syscall vocabulary; it is being **the default store those syscalls persist into**, with provenance and evolution that cannot be reconstructed anywhere else. Strategy consequence: the ABI matters less than the commit pipeline beneath it.
 2. **Do not compete with LangGraph / CrewAI / Temporal — be adopted by them.** This is the one place the vision's enemy list is wrong. Frameworks are free, code-level, and gravity-less; databases have gravity. A "Knowledge OS" that fights frameworks enters a zero-gravity knife fight; a Knowledge Kernel that *serves* frameworks inherits their distribution. Ship: LangGraph checkpointer, CrewAI memory backend, MCP server, Temporal activity store. The competitor set from §6.2 stands; the framework set is the **channel**, not the enemy.
 3. **The syscall set must be split by physics: deterministic vs probabilistic.** `reason()`, `infer()`, `predict()`, `merge()`, `split()` are LLM-in-the-loop — non-deterministic, seconds-to-minutes, cost-bearing. They must never sit on the commit path (§4.8's boundary, now elevated to syscall law). `trace()`, `explain()`, `prove()`, `verify()` are pure queries over provenance — fast, deterministic, cheap. Conflating the two classes in one synchronous API is how the kernel becomes undebuggable and unbillable. Taxonomy in §10.3.
 4. **"Knowledge VM = moat" is weak as stated — every query engine has a VM.** The defensible version: **knowledge programs are themselves KOs** — durable, versioned, provenance-tracked, shareable between agents. Temporal has durable execution but not knowledge-native execution; no one has *programs-as-knowledge*. That is the real Gen-2 differentiator; the bytecode is plumbing (§R11 applies: interpreter first, bytecode when profiling demands it).
@@ -319,7 +319,7 @@ The split is the architecture: **the commit domain stays deterministic and fast;
 
 ## 10.4 What becomes possible (answering the right question)
 
-The vision's closing question — *"what becomes possible because Mnemosyne exists?"* — has five concrete answers worth building the company on:
+The vision's closing question — *"what becomes possible because aikoql exists?"* — has five concrete answers worth building the company on:
 
 1. **"Why did the agent do X?" becomes a query** (`trace`/`explain` over provenance + versions + events), not a week-long investigation across three systems' logs.
 2. **Organizational memory that does not rot:** contradiction and supersession are handled as data (`merge`/`split`/`evolve`) instead of silent `UPDATE`-and-destroy.
@@ -329,7 +329,7 @@ The vision's closing question — *"what becomes possible because Mnemosyne exis
 
 ## 10.5 What changes in the plan (deltas, not rewrites)
 
-1. **Positioning:** Adopt "Mnemosyne — The Knowledge Kernel for AI." Gen-1 product truth remains: the provenance-native memory substrate, embedded-first, MCP-native. The category claim runs ahead of the product; the capability claims never do.
+1. **Positioning:** Adopt "aikoql — The Knowledge Kernel for AI." Gen-1 product truth remains: the provenance-native memory substrate, embedded-first, MCP-native. The category claim runs ahead of the product; the capability claims never do.
 2. **PRD:** primary interface = Knowledge API (syscalls); SQL/Cypher/GraphQL/NL/MCP demoted to adapters — explicitly.
 3. **New MRFC-0011:** Knowledge Syscall ABI (frozen surface per §10.3, never-break-userspace rule).
 4. **HLD:** elevate Scheduler to a kernel-grade subsystem (it is the OS-behavior differentiator, not a janitor); add "programs-as-KOs" to the Gen-2 design backlog.

@@ -6,7 +6,7 @@
 //! doc comments (`///`, `//!`) → Claim facts.
 
 use crate::ir::{EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate};
-use mnemosyne_kernel::knowledge::kom;
+use aikoql_kernel::knowledge::kom;
 
 /// Compile a Rust source file into KnowledgeIr.
 ///

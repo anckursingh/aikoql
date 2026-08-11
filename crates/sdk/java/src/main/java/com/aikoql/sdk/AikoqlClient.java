@@ -1,19 +1,19 @@
-// Mnemosyne Java SDK — MCP JSON-RPC client over TCP.
+// Aikoql Java SDK — MCP JSON-RPC client over TCP.
 // Zero dependencies: compiles with plain javac, uses manual JSON.
 //
 // Usage:
-//   MnemosyneClient db = new MnemosyneClient("127.0.0.1", 9090);
+//   AikoqlClient db = new AikoqlClient("127.0.0.1", 9090);
 //   db.initialize();
 //   String ko = db.remember("fact", "{\"x\": 1}");
 
-package com.mnemosyne.sdk;
+package com.aikoql.sdk;
 
 import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
-/** Minimal zero-dependency MCP JSON-RPC client for Mnemosyne. */
-public class MnemosyneClient implements AutoCloseable {
+/** Minimal zero-dependency MCP JSON-RPC client for aikoql. */
+public class AikoqlClient implements AutoCloseable {
     private final String host;
     private final int port;
     private Socket socket;
@@ -21,7 +21,7 @@ public class MnemosyneClient implements AutoCloseable {
     private BufferedWriter writer;
     private int nextId;
 
-    public MnemosyneClient(String host, int port) {
+    public AikoqlClient(String host, int port) {
         this.host = host;
         this.port = port;
     }
@@ -34,7 +34,7 @@ public class MnemosyneClient implements AutoCloseable {
 
     public void initialize() throws IOException {
         request("initialize",
-            "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"mnemosyne-java-sdk\",\"version\":\"0.1\"}}");
+            "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"aikoql-java-sdk\",\"version\":\"0.1\"}}");
     }
 
     @Override
@@ -142,10 +142,10 @@ public class MnemosyneClient implements AutoCloseable {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
-            System.out.println("Usage: MnemosyneClient <host> <port>");
+            System.out.println("Usage: AikoqlClient <host> <port>");
             return;
         }
-        try (MnemosyneClient db = new MnemosyneClient(args[0], Integer.parseInt(args[1]))) {
+        try (AikoqlClient db = new AikoqlClient(args[0], Integer.parseInt(args[1]))) {
             db.connect();
             db.initialize();
             System.out.println("metrics: " + db.metrics());

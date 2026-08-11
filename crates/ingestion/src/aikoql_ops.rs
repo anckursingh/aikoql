@@ -1,4 +1,4 @@
-//! MRFC-0070 Phase A6: AIKOQL Agent Operations — full implementation.
+//! MRFC-0070 Phase A6: Aikoql Agent Operations — full implementation.
 //!
 //! Seven semantic query primitives exposed as library functions and MCP tools:
 //! EXPLAIN, TRACE, FIND CONFLICTS, FIND STALE, VALIDATE CHANGE, PROPOSE UPDATE.

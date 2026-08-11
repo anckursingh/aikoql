@@ -1,15 +1,15 @@
-//! Mnemosyne Graph Engine.
+//! Aikoql Graph Engine.
 //!
 //! Relationship edge mutation and traversal. The engine is stateless and routes
-//! every storage access through the public `mnemosyne_kernel::Kernel` API; it
+//! every storage access through the public `aikoql_kernel::Kernel` API; it
 //! never touches `StorageEngine` or `KnowledgeRepository` directly (HLD §6,
 //! review R3).
 
-use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::transaction::kernel::{Kernel, KnowledgeContext, RememberRequest};
+use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::transaction::kernel::{Kernel, KnowledgeContext, RememberRequest};
 use std::collections::{HashSet, VecDeque};
 
-pub use mnemosyne_kernel::knowledge::kom::Direction;
+pub use aikoql_kernel::knowledge::kom::Direction;
 
 // ---------------------------------------------------------------------------
 // Requests & results
@@ -185,13 +185,11 @@ impl GraphEngine {
                 continue;
             }
             let mut edges: Vec<(String, KOID)> = kernel
-                .outbound_edges(&cur, q.rel_type.as_deref())
-                .unwrap_or_default();
+                .outbound_edges(&cur, q.rel_type.as_deref())?;
             // Merge inbound edges when direction is None (both) or Inbound.
             if q.direction != Some(Direction::Outbound) {
                 let inbound = kernel
-                    .inbound_edges(&cur, q.rel_type.as_deref())
-                    .unwrap_or_default();
+                    .inbound_edges(&cur, q.rel_type.as_deref())?;
                 edges.extend(inbound);
             }
             for (rel_type, target) in edges {
@@ -331,7 +329,7 @@ fn remember_request_from_object(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mnemosyne_kernel::{ManualClock, MemoryEngine, Metadata, RememberRequest, Subject};
+    use aikoql_kernel::{ManualClock, MemoryEngine, Metadata, RememberRequest, Subject};
     use std::sync::Arc;
 
     fn meta(t: &str) -> Metadata {

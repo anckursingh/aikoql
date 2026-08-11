@@ -1,20 +1,20 @@
 [package]
-name = "mnemosyne-py"
-description = "Python SDK for Mnemosyne Knowledge Kernel (PyO3) with LangGraph checkpointer spike"
+name = "aikoql-py"
+description = "Python SDK for Aikoql Knowledge Kernel (PyO3) with LangGraph checkpointer spike"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [lib]
-name = "_mnemosyne"
+name = "_aikoql"
 crate-type = ["cdylib"]
 
 [dependencies]
-mnemosyne-kernel = { path = "../../kernel" }
-mnemosyne-graph = { path = "../../engines/graph" }
-mnemosyne-compiler = { path = "../../compiler" }
-mnemosyne-runtime = { path = "../../runtime" }
+aikoql-kernel = { path = "../../kernel" }
+aikoql-graph = { path = "../../engines/graph" }
+aikoql-compiler = { path = "../../compiler" }
+aikoql-runtime = { path = "../../runtime" }
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
 
 [features]

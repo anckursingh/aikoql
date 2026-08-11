@@ -41,7 +41,7 @@ pub struct PropertyProposal {
     pub name: String,
     /// The class this property belongs to.
     pub class_name: String,
-    /// Mnemosyne value type: "Text", "Int", "Float", "Bool", "DateTime".
+    /// aikoql value type: "Text", "Int", "Float", "Bool", "DateTime".
     pub value_type: String,
     /// Whether this property is required.
     pub required: bool,

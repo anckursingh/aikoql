@@ -2,7 +2,7 @@
 //!
 //! Like `IndexMaintainerApi`: trait lives in the kernel, implementations live
 //! in engine crates with their own deps (HTTP clients, ML runtimes).
-//! ponytail: trait-only module, impls in mnemosyne-semantic.
+//! ponytail: trait-only module, impls in aikoql-semantic.
 
 use crate::knowledge::kom::KResult;
 

@@ -3,10 +3,10 @@
 //! Measures write throughput overhead of EncryptedStore vs plain redb.
 //! Gate: encryption overhead <10% of total write time per MRFC-0020.
 
-use mnemosyne_kernel::security::crypto::{Aes256Gcm, Crypto};
-use mnemosyne_kernel::storage::encrypted::EncryptedStore;
-use mnemosyne_kernel::storage::store::{StorageEngine, WriteBatch};
-use mnemosyne_kernel::storage::store_redb::RedbEngine;
+use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto};
+use aikoql_kernel::storage::encrypted::EncryptedStore;
+use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
+use aikoql_kernel::storage::store_redb::RedbEngine;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -17,7 +17,7 @@ const VALUE_SIZE: usize = 256;
 #[cfg_attr(debug_assertions, ignore)]
 fn load_encryption_overhead_with_redb() {
     let path_base = format!(
-        "{}/mnemosyne-load-{}",
+        "{}/aikoql-load-{}",
         std::env::temp_dir().display(),
         std::process::id()
     );

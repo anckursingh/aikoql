@@ -108,14 +108,26 @@ fn detect_secret(text: &str) -> Option<SecretKind> {
     }
     if contains_pattern(text, "api_key=")
         || contains_pattern(text, "apikey=")
-        || contains_pattern(text, "api-key")
+        || contains_pattern(text, "api-key=")
+        || contains_pattern(text, "api-key:")
     {
         return Some(SecretKind::ApiKey);
     }
+    // GitHub PATs
+    if text.contains("github_pat_") || text.contains("ghp_") {
+        return Some(SecretKind::ApiKey);
+    }
 
-    // Bearer tokens
-    if contains_pattern(text, "Bearer ") || contains_pattern(text, "bearer ") {
-        return Some(SecretKind::BearerToken);
+    // Bearer tokens — require ≥20 contiguous non-whitespace chars after
+    // "Bearer " to avoid matching prose like "Bearer of good news".
+    if let Some(idx) = text.to_lowercase().find("bearer ") {
+        let first_token: String = text[idx + 7..]
+            .chars()
+            .take_while(|c| !c.is_whitespace())
+            .collect();
+        if first_token.len() >= 20 {
+            return Some(SecretKind::BearerToken);
+        }
     }
 
     // JWT tokens (header.payload.signature pattern)
@@ -371,5 +383,142 @@ mod tests {
         let (_, findings) = filter_secrets(&ir);
         assert!(!findings.is_empty());
         assert_eq!(findings[0].kind, SecretKind::AwsKey);
+    }
+
+    // ---- adversarial / edge-case tests (R8 remediation) ----
+
+    #[test]
+    fn base64_encoded_api_key_is_redacted() {
+        // base64("sk-proj-" + 30 random chars) ≈ 50-54 chars ending with =
+        let encoded = "c2stcHJvai1hYmNkZWYxMjM0NTY3ODkwYWJjZGVmMTIzNDU2Nzg5MA==";
+        assert!(encoded.len() > 50);
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement: encoded.into(),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        // Long base64 with suffix = is flagged GenericToken
+        assert!(!findings.is_empty());
+    }
+
+    #[test]
+    fn short_base64_passes_through() {
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement: "aGVsbG8=".into(), // base64("hello") — only 8 chars
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        // Short base64 should not trigger GenericToken (below 40-char threshold)
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn multi_line_private_key_is_redacted() {
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----".into(),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        assert!(!findings.is_empty());
+        assert_eq!(findings[0].kind, SecretKind::PrivateKey);
+    }
+
+    #[test]
+    fn bearer_in_prose_passes_through() {
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement: "Bearer of good news to the entire team".into(),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        // "Bearer " followed by short prose should NOT trigger BearerToken
+        for f in &findings {
+            assert_ne!(f.kind, SecretKind::BearerToken);
+        }
+    }
+
+    #[test]
+    fn api_key_in_prose_passes_through() {
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement: "the api-key is not a secret here".into(),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        // Bare "api-key" in prose (no = or :) should NOT trigger ApiKey
+        for f in &findings {
+            assert_ne!(f.kind, SecretKind::ApiKey);
+        }
+    }
+
+    #[test]
+    fn github_pat_is_redacted() {
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement: "github_pat_11ABCDEFG1234567890abcdefghijklmnopqrstuv".into(),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        assert!(!findings.is_empty());
+        assert_eq!(findings[0].kind, SecretKind::ApiKey);
+    }
+
+    #[test]
+    fn clean_uuid_passes_through() {
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement: "550e8400-e29b-41d4-a716-446655440000".into(),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        // UUIDs have dashes but aren't SSNs; shouldn't match anything
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn credit_card_with_spaces_is_redacted() {
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement: "4111 1111 1111 1111".into(),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        assert!(!findings.is_empty());
+        assert_eq!(findings[0].kind, SecretKind::CreditCard);
     }
 }

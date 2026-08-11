@@ -1,13 +1,13 @@
 //! Encryption acceptance tests — MRFC-0020 Phase 1 & Phase 3 gates.
 
-use mnemosyne_kernel::security::crypto::{Aes256Gcm, Crypto, CryptoProvider};
-use mnemosyne_kernel::security::envelope::Envelope;
-use mnemosyne_kernel::security::field_crypto::{EncryptionPolicy, FieldCrypto};
-use mnemosyne_kernel::security::kms::KeyManager;
-use mnemosyne_kernel::storage::encrypted::EncryptedStore;
-use mnemosyne_kernel::storage::store::{MemoryEngine, StorageEngine, WriteBatch};
-use mnemosyne_kernel::storage::store_redb::RedbEngine;
-use mnemosyne_kernel::{
+use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto, CryptoProvider};
+use aikoql_kernel::security::envelope::Envelope;
+use aikoql_kernel::security::field_crypto::{EncryptionPolicy, FieldCrypto};
+use aikoql_kernel::security::kms::KeyManager;
+use aikoql_kernel::storage::encrypted::EncryptedStore;
+use aikoql_kernel::storage::store::{MemoryEngine, StorageEngine, WriteBatch};
+use aikoql_kernel::storage::store_redb::RedbEngine;
+use aikoql_kernel::{
     Kernel, ManualClock, Metadata, Origin, ReferentialPolicy, RememberRequest, Subject, Value,
 };
 use std::collections::BTreeMap;
@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock};
 
 fn temp_path(label: &str) -> String {
     format!(
-        "{}/mnemosyne-enc-{}-{}",
+        "{}/aikoql-enc-{}-{}",
         std::env::temp_dir().display(),
         label,
         std::process::id()
@@ -318,7 +318,7 @@ fn e07_crash_safe_rotation_field_crypto_survives() {
 #[test]
 fn e08_encrypted_backup_restore() {
     let path = format!(
-        "{}/mnemosyne-enc-e08-{}",
+        "{}/aikoql-enc-e08-{}",
         std::env::temp_dir().display(),
         std::process::id()
     );

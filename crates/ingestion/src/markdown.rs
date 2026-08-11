@@ -1130,9 +1130,9 @@ mod tests {
 
     #[test]
     fn compile_markdown_string_produces_entities_and_facts() {
-        let md = r#"# Mnemosyne
+        let md = r#"# aikoql
 
-Mnemosyne is an Agent-first Knowledge Database.
+aikoql is an Agent-first Knowledge Database.
 
 ## Requirements
 
@@ -1296,9 +1296,9 @@ mod projection_tests {
 
     #[test]
     fn round_trip_preserves_entities() {
-        let md = r#"# Mnemosyne Architecture
+        let md = r#"# Aikoql Architecture
 
-Mnemosyne is an Agent-first Knowledge Database.
+aikoql is an Agent-first Knowledge Database.
 
 ## Architecture
 
@@ -1337,7 +1337,7 @@ Status: Accepted
         assert!(
             names2
                 .iter()
-                .any(|n| n.contains("Mnemosyne") || n.contains("Architecture")),
+                .any(|n| n.contains("aikoql") || n.contains("Architecture")),
             "architecture entity should survive round-trip"
         );
 

@@ -1,7 +1,7 @@
 # MRFC-0010: Consistency & Isolation Levels
 
 - **Status:** Draft v1.0 (implemented behavior — codifies Phase 1 Inc-1/2)
-- **Project:** Mnemosyne
+- **Project:** aikoql
 - **Category:** Foundation / Concurrency
 - **Depends on:** MRFC-0001 (KOM), MRFC-0008 (Commit Pipeline & Journal)
 - **Supersedes:** None
@@ -12,7 +12,7 @@
 
 # 1. Abstract
 
-This RFC defines the consistency and isolation semantics exposed by the Mnemosyne Knowledge Kernel: a single-writer commit pipeline, snapshot isolation for readers, optimistic concurrency control for writers, and idempotency for retry-safe clients. These semantics are implemented directly by the storage pipeline and observable through the syscall ABI (MRFC-0011).
+This RFC defines the consistency and isolation semantics exposed by the Aikoql Knowledge Kernel: a single-writer commit pipeline, snapshot isolation for readers, optimistic concurrency control for writers, and idempotency for retry-safe clients. These semantics are implemented directly by the storage pipeline and observable through the syscall ABI (MRFC-0011).
 
 ---
 
@@ -49,7 +49,7 @@ This RFC defines the consistency and isolation semantics exposed by the Mnemosyn
 
 # 4. Consistency Model
 
-Mnemosyne provides **causal+ total order** within a single kernel:
+aikoql provides **causal+ total order** within a single kernel:
 
 1. All successful commits form a single, gapless sequence of `seq` values.
 2. Every KE carries a monotone HLC `commit_ts`.

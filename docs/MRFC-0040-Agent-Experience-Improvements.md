@@ -4,7 +4,7 @@
 **Last updated:** 2026-08-08
 **Last updated:** 2026-08-08
 **Based on:** Real-world MCP integration testing + Aethel SDLC agent system analysis  
-**Target:** Make Mnemosyne the best database for AI agents to use programmatically
+**Target:** Make aikoql the best database for AI agents to use programmatically
 
 ## The 12 Real Frictions I Hit As an Agent Developer
 
@@ -27,14 +27,14 @@ class McpClient:
 
 ```python
 # What an agent developer should write:
-from mnemosyne import Agent
+from aikoql import Agent
 
 db = Agent.connect("./aethel.redb")  # or Agent.connect("localhost:9090")
 result = db.remember(type_name="Task", properties={"title": "Fix auth bug"})
 tasks = db.aikoql("MATCH Task WHERE status == 'open' RETURN *")
 ```
 
-**Fix:** Ship a proper `mnemosyne` Python package with MCP client, async support, auto-reconnect, and typed models.
+**Fix:** Ship a proper `aikoql` Python package with MCP client, async support, auto-reconnect, and typed models.
 
 ### 2. No Agent Identity & Run Context
 
@@ -210,7 +210,7 @@ health = db.call("health", {})
 
 ### 10. Agent Memory Should Be a Built-In Pattern
 
-The Aethel analysis found the entire agent memory subsystem is ephemeral. Mnemosyne should provide a persistent agent memory pattern out of the box.
+The Aethel analysis found the entire agent memory subsystem is ephemeral. aikoql should provide a persistent agent memory pattern out of the box.
 
 ```python
 # Current: agent must build its own memory store
@@ -218,7 +218,7 @@ The Aethel analysis found the entire agent memory subsystem is ephemeral. Mnemos
 
 # Needed: built-in agent memory
 db.call("remember", {
-    "type_name": "mnemosyne:memory",
+    "type_name": "aikoql:memory",
     "properties": {
         "agent_id": "pm-agent-7",
         "run_id": "run-42",
@@ -236,11 +236,11 @@ memories = db.call("agent_memory", {
 })
 ```
 
-**Fix:** Pre-register `mnemosyne:memory` type. Add `agent_memory` MCP tool with TTL-based expiry.
+**Fix:** Pre-register `aikoql:memory` type. Add `agent_memory` MCP tool with TTL-based expiry.
 
 ### 11. Vector Embedding Generation is External
 
-Agents must generate embeddings externally (OpenAI API, sentence-transformers) and pass them to Mnemosyne. This should be integrated.
+Agents must generate embeddings externally (OpenAI API, sentence-transformers) and pass them to aikoql. This should be integrated.
 
 ```python
 # Current:
@@ -249,7 +249,7 @@ db.call("remember", {"type_name": "Doc", "properties": {"text": text}, "semantic
 
 # Needed:
 db.call("remember", {"type_name": "Doc", "properties": {"text": text}, "embed": true})
-# Mnemosyne calls the configured embedding model automatically
+# aikoql calls the configured embedding model automatically
 ```
 
 **Fix:** Wire `SemanticEngine` as a first-class service. Configure embedding model once — all `remember` calls with `embed: true` auto-generate vectors.
@@ -257,26 +257,26 @@ db.call("remember", {"type_name": "Doc", "properties": {"text": text}, "embed": 
 ### 12. The Two-SDK Problem (PyO3 vs MCP)
 
 Python has two incompatible SDKs:
-- `mnemosyne_py` (PyO3) — opens its own redb file. Embedded.
+- `aikoql_py` (PyO3) — opens its own redb file. Embedded.
 - Raw MCP client (stdio/TCP) — talks to a server. Needs manual implementation.
 
 Agents don't know which to use and they can't share data.
 
 ```python
 # Current: two incompatible paths
-import mnemosyne_py  # Embedded — opens ./kb.redb directly
-kernel = mnemosyne_py.Kernel.open("./kb.redb")
+import aikoql_py  # Embedded — opens ./kb.redb directly
+kernel = aikoql_py.Kernel.open("./kb.redb")
 
 # vs
 
 import subprocess, json  # MCP — talks to a server
-proc = subprocess.Popen(["mnemosyne-mcp", "serve", "./kb.redb"], ...)
+proc = subprocess.Popen(["aikoql-mcp", "serve", "./kb.redb"], ...)
 ```
 
-**Fix:** Unify. Ship ONE `mnemosyne` Python package that supports both modes transparently:
+**Fix:** Unify. Ship ONE `aikoql` Python package that supports both modes transparently:
 
 ```python
-from mnemosyne import Agent
+from aikoql import Agent
 
 # Embedded mode (same process):
 db = Agent.connect("./kb.redb")

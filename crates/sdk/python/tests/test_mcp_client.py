@@ -1,6 +1,6 @@
-"""Integration tests for the Mnemosyne Python MCP Client (MRFC-0040).
+"""Integration tests for the Aikoql Python MCP Client (MRFC-0040).
 
-Requires: mnemosyne-mcp binary built (cargo build -p mnemosyne-mcp).
+Requires: aikoql-mcp binary built (cargo build -p aikoql-mcp).
 Run: pytest tests/test_mcp_client.py -v
 """
 
@@ -16,24 +16,24 @@ import pytest
 
 # Ensure the package is importable.
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
-from mnemosyne import Agent, McpClient, McpError
+from aikoql import Agent, McpClient, McpError
 
 
 def find_binary():
-    """Find the mnemosyne-mcp binary."""
+    """Find the aikoql-mcp binary."""
     candidates = [
-        Path(__file__).parent.parent.parent.parent.parent / "target" / "debug" / "mnemosyne-mcp",
-        Path(__file__).parent.parent.parent.parent.parent / "target" / "debug" / "mnemosyne-mcp.exe",
+        Path(__file__).parent.parent.parent.parent.parent / "target" / "debug" / "aikoql-mcp",
+        Path(__file__).parent.parent.parent.parent.parent / "target" / "debug" / "aikoql-mcp.exe",
     ]
     for c in candidates:
         if c.exists():
             return str(c)
-    pytest.skip("mnemosyne-mcp binary not built. Run: cargo build -p mnemosyne-mcp")
+    pytest.skip("aikoql-mcp binary not built. Run: cargo build -p aikoql-mcp")
 
 
 @pytest.fixture
 def mcp_server():
-    """Start a temporary mnemosyne-mcp server on a free port."""
+    """Start a temporary aikoql-mcp server on a free port."""
     import socket
     binary = find_binary()
     # Find a free port.
@@ -73,7 +73,7 @@ class TestMcpClient:
         try:
             result = c.initialize()
             assert result["protocolVersion"] == "2024-11-05"
-            assert result["serverInfo"]["name"] == "mnemosyne-mcp"
+            assert result["serverInfo"]["name"] == "aikoql-mcp"
         finally:
             c.close()
 

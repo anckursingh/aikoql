@@ -13,7 +13,7 @@ const SKIP_DIRS: &[&str] = &[
     "target",
     "debug",
     "release",
-    ".mnemosyne",
+    ".aikoql",
     "__pycache__",
     ".venv",
     "venv",
@@ -690,7 +690,7 @@ pub fn build_report(
 pub fn format_report(report: &IngestReport) -> String {
     let w = 48; // box width
     let hr = "─".repeat(w);
-    let title = "MNEMOSYNE KNOWLEDGE REPORT";
+    let title = "Aikoql KNOWLEDGE REPORT";
     let pad = (w - title.len()) / 2;
     let pad_r = w - title.len() - pad;
 
@@ -800,7 +800,7 @@ mod tests {
 
     #[test]
     fn ingest_temp_dir_mixed() {
-        let tmp = std::env::temp_dir().join("mnemosyne-ingest-test");
+        let tmp = std::env::temp_dir().join("aikoql-ingest-test");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(tmp.join("src")).unwrap();
         fs::create_dir_all(tmp.join("docs")).unwrap();
@@ -867,7 +867,7 @@ mod tests {
 
     #[test]
     fn empty_dir_errors() {
-        let tmp = std::env::temp_dir().join("mnemosyne-ingest-empty");
+        let tmp = std::env::temp_dir().join("aikoql-ingest-empty");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         let result = ingest_directory(&tmp.to_string_lossy());
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn binary_detection() {
-        let tmp = std::env::temp_dir().join("mnemosyne-bin-test");
+        let tmp = std::env::temp_dir().join("aikoql-bin-test");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
         // text file

@@ -12,7 +12,7 @@
 //!
 //! ponytail: HTTP API over Bolt driver — avoids native driver + tokio deps.
 
-use mnemosyne_kernel::knowledge::kom::*;
+use aikoql_kernel::knowledge::kom::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -265,7 +265,7 @@ impl Neo4jConnector {
 }
 
 // ---------------------------------------------------------------------------
-// Neo4j JSON → Mnemosyne Value
+// Neo4j JSON → Aikoql Value
 // ---------------------------------------------------------------------------
 
 fn neo4j_json_to_value(v: &serde_json::Value) -> Value {

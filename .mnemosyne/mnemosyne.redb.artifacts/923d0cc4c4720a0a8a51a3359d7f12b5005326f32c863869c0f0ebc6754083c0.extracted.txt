@@ -1,0 +1,1858 @@
+--- Page 1 [native] ---
+# Universal Conceptual Model for Engineering Agents
+
+**Status:** Proposed Reference Model  
+**Scope:** Coding agents, software-engineering agents, DevOps agents, SRE agents, architecture agents, security agents, data-engineering agents, and future autonomous engineering agents  
+**Primary use in Mnemosyne:** Define the agent-independent knowledge contract that AIKOQL/Mnemosyne can provide to any engineering agent.
+
+---
+
+## 1. Purpose
+
+Modern engineering agents differ in model, tools, orchestration, UI, memory implementation, and execution environment. Their underlying information requirements are nevertheless remarkably similar.
+
+An engineering agent needs to understand:
+
+- what exists
+- why it exists
+- how it works
+- what rules govern it
+- what is allowed
+- what changed
+- what is currently true
+- what is historical
+- what is uncertain
+- where the evidence comes from
+- what it should do
+- what it is allowed to change
+- what must remain unchanged
+- how to validate its changes
+
+Therefore this document defines a **universal conceptual model**, rather than an agent-specific model.
+
+The objective is not to replace an agent's own runtime, planning, or memory. The objective is to define a common semantic model through which any engineering agent can consume and produce engineering knowledge.
+
+---
+
+## 2. Core Principle
+
+```text
+Engineering System
+        |
+        +-------------------------+
+        |                         |
+     Artifacts                 Knowledge
+        |                         |
+        |                   +-----+-----+
+        |                   |           |
+        |                Semantic     Operational
+        |                Knowledge    Knowledge
+        |                   |           |
+        +---------+---------+-----------+
+                  |
+             Agent Context
+                  |
+                Agent
+                  |
+             Action / Change
+                  |
+             Validation
+                  |
+          Knowledge Evolution
+```
+
+An agent is a consumer and producer of knowledge operating against an engineering system.
+
+---
+
+## 3. Universal Knowledge Primitives
+
+The core model contains:
+
+```text
+1. Entity
+2. Artifact
+3. Relationship
+4. Claim / Fact
+5. Rule
+6. Requirement
+7. Decision
+8. Task
+9. Evidence
+10. Event
+```
+
+Specialized concepts such as constraints, instructions, proposals, observations, incidents, memories, and policies are typed forms or extensions of these primitives.
+
+---
+
+## 4. Entity
+
+An **Entity** is something that exists as a meaningful object in the engineering system.
+
+Examples:
+
+```text
+Project
+Repository
+Service
+Component
+Module
+Class
+Function
+API
+Database
+Table
+Schema
+Knowledge Object
+Agent
+Environment
+Infrastructure
+Team
+Dependency
+Package
+```
+
+An entity has:
+
+```text
+identity
+type
+properties
+lifecycle
+scope
+relationships
+```
+
+Example:
+
+```yaml
+type: Component
+id: component:constraint-engine
+name: Constraint Engine
+status: ACTIVE
+repository: mnemosyne
+```
+
+---
+
+## 5. Artifact
+
+An **Artifact** is a concrete representation or physical manifestation of engineering work.
+
+Examples:
+
+```text
+source file
+Markdown file
+RFC
+ADR
+PRD
+test
+configuration
+Dockerfile
+Terraform
+OpenAPI specification
+database migration
+binary
+container image
+CI workflow
+log
+trace
+commit
+pull request
+release
+```
+
+An artifact is not automatically semantic truth. It is evidence or a representation from which knowledge can be derived.
+
+Example:
+
+```text
+docs/MRFC-0060.md
+```
+
+may describe:
+
+```text
+Constraint Engine
+```
+
+while:
+
+```text
+crates/kernel/constraints/engine.rs
+```
+
+implements it.
+
+Both are artifacts.
+
+---
+
+## 6. Relationship
+
+A **Relationship** describes how two entities or artifacts are connected.
+
+Examples:
+
+```text
+DEPENDS_ON
+IMPLEMENTS
+TESTED_BY
+DOCUMENTED_BY
+GOVERNED_BY
+CONSTRAINED_BY
+CALLS
+IMPORTS
+OWNS
+CREATED_BY
+MODIFIES
+SUPERSEDES
+CONTRADICTS
+DERIVED_FROM
+```
+
+Example:
+
+```text
+Constraint Engine
+    |
+    +-- IMPLEMENTED_BY --> engine.rs
+    +-- TESTED_BY -------> constraint_test.rs
+    +-- GOVERNED_BY -----> MRFC-0060
+    +-- DEPENDS_ON ------> Transaction Engine
+```
+
+Relationships should carry provenance and, where relevant:
+
+```text
+confidence
+validity
+version
+scope
+```
+
+---
+
+## 7. Claim / Fact
+
+A **Claim** represents a statement believed to describe the engineering system.
+
+Examples:
+
+```text
+Knowledge Kernel is implemented in Rust.
+Constraint Engine uses transaction snapshots.
+Neo4j is a supported connector.
+HNSW is used by the Vector Engine.
+```
+
+A claim should carry:
+
+```text
+source
+authority
+confidence
+validity
+observed_at
+verified_at
+```
+
+Example:
+
+```yaml
+subject: Vector Engine
+predicate: USES_INDEX
+object: HNSW
+
+source:
+  artifact: crates/engines/vector/
+
+authority: CODE
+confidence: 0.99
+
+valid_from: 2026-01-01
+```
+
+A **Fact** is a claim whose status/policy considers it sufficiently verified.
+
+This distinction allows Mnemosyne to represent uncertainty without prematurely converting inference into truth.
+
+---
+
+## 8. Rule
+
+A **Rule** describes behavior that an engineering agent or system should follow.
+
+Examples:
+
+```text
+Run tests before commit.
+Do not modify generated files.
+All database writes must pass authorization.
+Production deployments require approval.
+All public APIs require documentation.
+```
+
+Rules differ from facts.
+
+```text
+FACT:
+The project uses Rust.
+
+RULE:
+New Kernel code must be written in Rust.
+```
+
+Rules may be:
+
+```text
+repository-level
+directory-level
+component-level
+task-level
+organization-level
+security-level
+environment-level
+```
+
+Rules must have explicit scope and authority.
+
+---
+
+## 9. Requirement
+
+A **Requirement** defines a desired system property or outcome.
+
+Examples:
+
+```text
+AIKOQL must support graph traversal.
+Constraint validation must be atomic.
+Document ingestion must preserve provenance.
+The service must support 10,000 requests per second.
+```
+
+Requirements may be:
+
+```text
+functional
+non-functional
+security
+performance
+compliance
+operational
+product
+architectural
+```
+
+A requirement should connect to implementation and validation:
+
+```text
+Requirement
+   |
+   +-- IMPLEMENTED_BY --> Component
+   +-- VALIDATED_BY ---> Test
+   +-- GOVERNED_BY ----> Decision
+```
+
+---
+
+## 10. Decision
+
+A **Decision** records an intentional engineering choice.
+
+Examples:
+
+```text
+Use Rust for the Knowledge Kernel.
+Use HNSW for vector indexing.
+Use PostgreSQL as a connector rather than the canonical storage model.
+Use MVCC for transaction isolation.
+```
+
+A Decision should contain:
+
+```text
+context
+problem
+options
+selected option
+rationale
+consequences
+status
+author
+date
+supersedes
+```
+
+An ADR is an artifact representing a Decision. The Decision is the semantic object.
+
+---
+
+## 11. Task
+
+A **Task** represents intended engineering work.
+
+Examples:
+
+```text
+Implement deferred constraints.
+Add Neo4j connector.
+Fix HNSW persistence bug.
+Update authentication middleware.
+```
+
+A task should connect:
+
+```text
+Task
+ |
+ +-- AFFECTS ------> Component
+ +-- SATISFIES ----> Requirement
+ +-- GOVERNED_BY --> Rule / Decision
+ +-- PRODUCES -----> Change
+ +-- VALIDATED_BY -> Test
+```
+
+The task is often the starting point for agent context retrieval.
+
+---
+
+## 12. Evidence
+
+**Evidence** establishes why a piece of knowledge should be trusted.
+
+Examples:
+
+```text
+source code
+test result
+commit
+CI result
+documentation
+ADR
+RFC
+database record
+production telemetry
+human approval
+agent observation
+```
+
+Example:
+
+```yaml
+claim:
+  subject: ConstraintEngine
+  predicate: USES_MVCC
+
+evidence:
+  - artifact: crates/kernel/transaction/
+  - test: integration-tests/transaction/mvcc.rs
+  - decision: ADR-012
+```
+
+Evidence enables explainability, auditing, reprocessing, conflict detection, and trust evaluation.
+
+---
+
+## 13. Event
+
+An **Event** describes something that happened.
+
+Examples:
+
+```text
+commit created
+PR merged
+deployment completed
+schema changed
+incident occurred
+document updated
+constraint changed
+agent modified code
+test failed
+release created
+```
+
+Events are essential for temporal reasoning.
+
+```text
+Event
+  |
+  +-- changes --> Entity
+  +-- produces --> Artifact
+  +-- supersedes --> Knowledge
+```
+
+---
+
+## 14. Constraint
+
+A **Constraint** defines an invariant that must hold.
+
+Examples:
+
+```text
+Customer.email must be unique.
+Account must belong to exactly one Customer.
+Production code cannot import test-only packages.
+A public API must have authentication.
+A transaction must not commit with an invalid reference.
+```
+
+Constraints can apply to:
+
+```text
+data
+architecture
+code
+security
+operations
+dependencies
+schema
+deployment
+```
+
+Therefore constraints are a universal engineering concept, not merely a database feature.
+
+---
+
+## 15. Instruction
+
+An **Instruction** is an actionable directive for an agent.
+
+Example:
+
+```text
+Run cargo test before committing.
+Do not edit generated files.
+Use the existing repository abstraction.
+Follow the project's logging conventions.
+```
+
+Instructions differ from constraints:
+
+```text
+Instruction:
+Use the existing repository abstraction.
+
+Constraint:
+All repository access must go through Repository trait.
+```
+
+The first guides behavior. The second defines an invariant.
+
+---
+
+## 16. Proposal
+
+A **Proposal** represents unaccepted knowledge.
+
+Examples:
+
+```text
+potential architecture improvement
+potential constraint
+potential refactoring
+potential ontology mapping
+potential documentation correction
+```
+
+Lifecycle:
+
+```text
+PROPOSED
+   ↓
+REVIEWING
+   ↓
+ACCEPTED
+   OR
+REJECTED
+   OR
+SUPERSEDED
+```
+
+Proposals must not automatically be treated as authoritative facts.
+
+---
+
+## 17. Observation
+
+An **Observation** is raw evidence captured by an agent or system.
+
+Examples:
+
+```text
+Test failed.
+Function X calls service Y.
+File Z has no tests.
+Documentation contradicts implementation.
+Production latency increased.
+```
+
+An observation can later produce:
+
+```text
+Fact
+Issue
+Proposal
+Decision input
+```
+
+Conceptually:
+
+```text
+Observation
+    ↓
+Analysis
+    ↓
+Fact / Issue / Proposal
+```
+
+---
+
+## 18. Knowledge State
+
+The engineering system should be represented as a versioned knowledge state.
+
+```text
+Knowledge State(t)
+```
+
+is derived from:
+
+```text
+facts
+decisions
+requirements
+rules
+artifacts
+events
+relationships
+constraints
+observations
+```
+
+Therefore:
+
+```text
+CURRENT KNOWLEDGE
+```
+
+is not the same as:
+
+```text
+ALL KNOWLEDGE EVER OBSERVED
+```
+
+Agents need both current and historical views.
+
+---
+
+## 19. Temporal Model
+
+Important knowledge objects should support temporal semantics:
+
+```text
+created_at
+observed_at
+valid_from
+valid_to
+superseded_at
+```
+
+Example:
+
+```text
+HNSW decision
+
+valid:
+2026-02-01 → present
+```
+
+Previous:
+
+```text
+FAISS decision
+
+valid:
+2025-01-01 → 2026-02-01
+```
+
+This lets an agent answer both:
+
+```text
+What is true now?
+```
+
+and:
+
+```text
+What was true when this code was written?
+```
+
+---
+
+## 20. Scope
+
+Knowledge must have scope.
+
+Possible scopes:
+
+```text
+GLOBAL
+ORGANIZATION
+PROJECT
+REPOSITORY
+BRANCH
+DIRECTORY
+COMPONENT
+TASK
+SESSION
+AGENT
+USER
+ENVIRONMENT
+```
+
+Example:
+
+```text
+"Run integration tests before commit."
+```
+
+may apply to:
+
+```text
+repository = mnemosyne
+```
+
+while:
+
+```text
+"Never modify this generated file."
+```
+
+may apply only to:
+
+```text
+directory = generated/
+```
+
+Scope resolution is essential for agent correctness.
+
+---
+
+## 21. Authority
+
+Knowledge must have authority.
+
+Possible sources:
+
+```text
+HUMAN_APPROVED
+ORGANIZATION_POLICY
+ARCHITECTURE_DECISION
+SOURCE_CODE
+TEST_VERIFIED
+CI_VERIFIED
+DEPLOYMENT_OBSERVED
+DOCUMENTATION
+AGENT_DERIVED
+LLM_INFERRED
+UNTRUSTED_EXTERNAL
+```
+
+Authority answers:
+
+> Who or what is the source?
+
+Authority is not the same as confidence.
+
+---
+
+## 22. Confidence
+
+Confidence answers:
+
+> How certain are we?
+
+Example:
+
+```text
+Source:
+Source code
+
+Authority:
+HIGH
+
+Confidence:
+0.99
+```
+
+Another:
+
+```text
+Source:
+LLM inference
+
+Authority:
+LOW
+
+Confidence:
+0.82
+```
+
+A high-confidence inference does not automatically become authoritative.
+
+---
+
+## 23. Provenance
+
+Every derived knowledge object should retain provenance.
+
+```text
+Knowledge Object
+      |
+      +-- DERIVED_FROM
+             |
+             +-- source artifact
+             +-- source location
+             +-- extraction method
+             +-- model/provider
+             +-- timestamp
+```
+
+Example:
+
+```yaml
+source:
+  file: docs/architecture.md
+  section: "Vector Engine"
+  lines: 120-132
+
+extraction:
+  method: semantic-analysis
+  model: provider/version
+```
+
+---
+
+## 24. Universal Knowledge Object Envelope
+
+A universal KO can use this envelope:
+
+```yaml
+KnowledgeObject:
+  id:
+  type:
+
+  subject:
+  predicate:
+  object:
+
+  properties:
+
+  scope:
+
+  authority:
+  confidence:
+
+  provenance:
+
+  temporal:
+    valid_from:
+    valid_to:
+    observed_at:
+
+  status:
+
+  relationships:
+
+  version:
+
+  created_at:
+  updated_at:
+```
+
+The `type` provides the semantic specialization.
+
+---
+
+## 25. Typed Knowledge Objects
+
+Examples:
+
+```text
+ProjectKO
+ComponentKO
+RequirementKO
+DecisionKO
+ConstraintKO
+RuleKO
+TaskKO
+ArtifactKO
+FactKO
+ObservationKO
+EventKO
+TestKO
+DependencyKO
+IncidentKO
+```
+
+An agent does not need to understand every type. It consumes the subset relevant to its task.
+
+---
+
+## 26. Agent Context Model
+
+An agent should not receive the entire knowledge graph.
+
+Instead:
+
+```text
+Task
+  ↓
+Task Understanding
+  ↓
+Knowledge Retrieval
+  ↓
+Relevance Filtering
+  ↓
+Authority Filtering
+  ↓
+Temporal Filtering
+  ↓
+Scope Resolution
+  ↓
+Conflict Detection
+  ↓
+Context Ranking
+  ↓
+Context Budgeting
+  ↓
+Agent Context
+```
+
+This is the **Agent Context Compiler**.
+
+---
+
+## 27. Context Is a Projection
+
+The knowledge graph is not the agent context.
+
+Context is a task-specific projection:
+
+```text
+Knowledge Graph
+      ↓
+Task
+      ↓
+Policy
+      ↓
+Context Compiler
+      ↓
+Agent Context
+```
+
+Different agents can receive different projections of the same knowledge.
+
+```text
+Coding Agent
+    → implementation context
+
+Security Agent
+    → security context
+
+SRE Agent
+    → operational context
+
+Architecture Agent
+    → architecture context
+```
+
+No separate conceptual knowledge model is required for each agent.
+
+---
+
+## 28. Universal Agent Loop
+
+Any engineering agent can conceptually be modeled as:
+
+```text
+OBSERVE
+   ↓
+UNDERSTAND
+   ↓
+PLAN
+   ↓
+RETRIEVE KNOWLEDGE
+   ↓
+ACT
+   ↓
+VALIDATE
+   ↓
+OBSERVE RESULT
+   ↓
+UPDATE KNOWLEDGE
+   ↓
+REPLAN
+```
+
+This applies to:
+
+```text
+coding agents
+SRE agents
+DevOps agents
+security agents
+data agents
+architecture agents
+```
+
+The tools and policies change; the conceptual loop does not.
+
+---
+
+## 29. Agent Actions
+
+An action should contain:
+
+```text
+actor
+intent
+target
+operation
+authorization
+preconditions
+expected outcome
+actual outcome
+evidence
+```
+
+Example:
+
+```yaml
+actor: agent:codex
+intent: implement
+target: ConstraintEngine
+
+operation:
+  modify:
+    - crates/kernel/constraints/
+
+preconditions:
+  - MRFC-0060 applicable
+  - tests available
+
+expected:
+  deferred constraints supported
+```
+
+---
+
+## 30. Agent Authorization and Capability
+
+Knowledge does not imply permission.
+
+```text
+Knowledge:
+Agent knows how production deployment works.
+
+Authorization:
+Agent may deploy production.
+```
+
+These are separate.
+
+Agents have capabilities such as:
+
+```text
+READ_REPOSITORY
+WRITE_REPOSITORY
+RUN_TESTS
+RUN_SHELL
+CREATE_PR
+DEPLOY_STAGING
+DEPLOY_PRODUCTION
+MODIFY_SCHEMA
+QUERY_PRODUCTION
+```
+
+Authorization determines which capabilities are actually usable.
+
+---
+
+## 31. Policy
+
+Policy defines allowed behavior.
+
+Examples:
+
+```text
+Production deployment requires human approval.
+Agents cannot access production secrets.
+Security-sensitive files require review.
+Database migrations require validation.
+```
+
+Policy can be represented through Rules and Constraints, but policy enforcement remains an authorization/runtime concern.
+
+---
+
+## 32. Knowledge Conflict
+
+The system must explicitly model contradictions.
+
+Example:
+
+```text
+Code:
+HNSW
+
+README:
+FAISS
+
+ADR:
+HNSW
+```
+
+The system should produce a conflict rather than silently merge the claims.
+
+```text
+ConflictKO
+  |
+  +-- claim A
+  +-- claim B
+  +-- sources
+  +-- authority
+  +-- temporal context
+  +-- resolution
+```
+
+Possible resolution states:
+
+```text
+CURRENT_TRUTH
+STALE
+CONFLICTED
+UNRESOLVED
+SUPERSEDED
+```
+
+---
+
+## 33. Knowledge Resolution
+
+A generic resolution process is:
+
+```text
+Claims
+  ↓
+Authority
+  ↓
+Temporal validity
+  ↓
+Evidence
+  ↓
+Scope
+  ↓
+Policy
+  ↓
+Resolution
+```
+
+This is particularly important when code, documentation, ADRs, generated files, and agent-generated knowledge disagree.
+
+---
+
+## 34. Code and Documentation as Projections
+
+The same semantic knowledge can have multiple representations:
+
+```text
+Knowledge Object
+      |
+      +---- Markdown
+      +---- JSON
+      +---- AIKOQL
+      +---- API
+      +---- Agent Context
+      +---- UI
+```
+
+Markdown should therefore be treated as a human-readable projection, not necessarily the canonical knowledge store.
+
+Likewise, source code is an authoritative evidence source for some claims, but it is not automatically the complete semantic representation of the system.
+
+---
+
+## 35. Bidirectional Knowledge Flow
+
+```text
+Artifacts
+   ↓
+Knowledge Extraction
+   ↓
+Knowledge Objects
+   ↓
+Agent Context
+   ↓
+Agent
+   ↓
+Engineering Change
+   ↓
+Artifacts
+   ↓
+Knowledge Reconciliation
+```
+
+This creates a continuous knowledge lifecycle.
+
+---
+
+## 36. Knowledge Lifecycle
+
+```text
+DISCOVERED
+    ↓
+EXTRACTED
+    ↓
+PROPOSED
+    ↓
+VALIDATED
+    ↓
+ACCEPTED
+    ↓
+ACTIVE
+    ↓
+UPDATED
+    ↓
+SUPERSEDED
+    ↓
+ARCHIVED
+```
+
+Agent-generated knowledge should generally begin at `PROPOSED` unless source and policy explicitly allow automatic publication.
+
+---
+
+## 37. Repository Knowledge Compiler
+
+A universal implementation can compile:
+
+```text
+Source Code
+Markdown
+Configuration
+CI/CD
+Tests
+Issues
+PRs
+Commits
+Telemetry
+Schemas
+Architecture
+```
+
+into:
+
+```text
+Engineering Knowledge Graph
+```
+
+Conceptually:
+
+```text
+Repository
+    ↓
+Parsers
+    ↓
+AST / Document AST
+    ↓
+Knowledge IR
+    ↓
+Ontology Mapping
+    ↓
+Entity Resolution
+    ↓
+Knowledge Objects
+    ↓
+Knowledge Graph
+```
+
+---
+
+## 38. Knowledge Retrieval
+
+Retrieval should be multi-modal:
+
+```text
+Task
+  |
+  +-- lexical
+  +-- vector
+  +-- graph
+  +-- structural
+  +-- temporal
+  +-- ontology
+  +-- provenance
+  +-- authority
+  +-- code-symbol
+  +-- dependency
+```
+
+Candidate results are fused and reranked.
+
+---
+
+## 39. Context Ranking and Budgeting
+
+Conceptually:
+
+```text
+ContextScore =
+    relevance
+  × authority
+  × freshness
+  × task_utility
+  × evidence_quality
+  × scope_match
+  × temporal_match
+  × dependency_relevance
+```
+
+subject to:
+
+```text
+token_budget
+latency_budget
+security_policy
+```
+
+The exact scoring model should be benchmarked rather than fixed prematurely.
+
+---
+
+## 40. Context Compression and Expansion
+
+Knowledge can be represented at multiple levels:
+
+```text
+Level 0:
+identifier
+
+Level 1:
+summary
+
+Level 2:
+structured facts
+
+Level 3:
+relationships
+
+Level 4:
+evidence
+
+Level 5:
+source artifact
+```
+
+The context compiler should choose the minimum sufficient representation.
+
+If deeper evidence is needed:
+
+```text
+KO
+ ↓
+relationship
+ ↓
+artifact
+ ↓
+source region
+```
+
+This supports progressive context expansion during an agent loop.
+
+---
+
+## 41. Context Contract
+
+An agent request can conceptually specify:
+
+```yaml
+context_request:
+  task: "implement deferred constraints"
+
+  required:
+    - architecture
+    - constraints
+    - transaction
+    - tests
+
+  optional:
+    - historical_decisions
+
+  exclude:
+    - unrelated_components
+
+  token_budget:
+    max: 50000
+```
+
+The knowledge system returns a context package optimized for that task.
+
+---
+
+## 42. Universal Agent Knowledge Interface
+
+Any engineering agent should conceptually be able to request:
+
+```text
+GET KNOWLEDGE
+GET CONTEXT
+EXPLAIN
+TRACE
+SEARCH
+VALIDATE
+PROPOSE
+UPDATE
+```
+
+Examples:
+
+```text
+GET CONTEXT FOR TASK
+EXPLAIN COMPONENT
+TRACE REQUIREMENT TO CODE
+FIND CONFLICTS
+FIND STALE KNOWLEDGE
+VALIDATE CHANGE
+PROPOSE KNOWLEDGE UPDATE
+```
+
+AIKOQL can provide the query language. MCP, APIs, SDKs, or other protocols can provide transport.
+
+---
+
+## 43. Universal Agent Knowledge Operations
+
+The semantic operations are:
+
+```text
+READ
+QUERY
+TRAVERSE
+EXPLAIN
+COMPARE
+VALIDATE
+PROPOSE
+CREATE
+UPDATE
+SUPERSEDE
+LINK
+UNLINK
+ARCHIVE
+```
+
+Agents should not necessarily have all operations. Authorization determines what each agent may perform.
+
+---
+
+## 44. Mnemosyne's Role
+
+Mnemosyne should not become a coding agent.
+
+Its role is:
+
+```text
+                    AGENTS
+        +-------------+-------------+
+        |             |             |
+      Codex       Claude Code     Cline
+        |             |             |
+        +-------------+-------------+
+                      |
+               Agent Interface
+                      |
+                  AIKOQL / MCP
+                      |
+                  Mnemosyne
+                      |
+      +---------------+---------------+
+      |               |               |
+  Knowledge       Ontology        Provenance
+    Kernel          Engine           Engine
+      |               |               |
+      +---------------+---------------+
+                      |
+              Engineering Knowledge
+```
+
+Mnemosyne provides shared semantic memory and context infrastructure.
+
+---
+
+## 45. Markdown's Role
+
+Markdown remains an important portable human-readable interchange format.
+
+The conceptual relationship becomes:
+
+```text
+Knowledge Object
+      ↕
+Markdown Projection
+```
+
+A developer can edit Markdown. Mnemosyne can parse the changes. An agent can query the structured representation.
+
+---
+
+## 46. Why the Model Is Universal
+
+The model does not assume:
+
+```text
+Codex
+Claude
+Cline
+Cursor
+Aider
+OpenAI
+Anthropic
+specific LLM
+specific IDE
+specific protocol
+```
+
+It assumes only:
+
+```text
+An engineering agent:
+    observes a system,
+    consumes knowledge,
+    reasons about a task,
+    takes actions,
+    observes results,
+    and iteratively changes the system.
+```
+
+Therefore the model is independent of the agent implementation.
+
+---
+
+## 47. What Changes Between Agents
+
+The universal knowledge model remains stable.
+
+Agent implementations differ in:
+
+```text
+LLM
+context window
+planning
+memory mechanism
+tool calling
+sandbox
+MCP support
+subagent architecture
+approval model
+execution model
+UI
+```
+
+These belong to the Agent Runtime, not the Knowledge Model.
+
+```text
+             UNIVERSAL KNOWLEDGE MODEL
+                       |
+       +---------------+---------------+
+       |               |               |
+     Codex          Claude Code      Cline
+       |               |               |
+       +---------------+---------------+
+                       |
+                 Agent Runtime
+                       |
+                 Knowledge API
+                       |
+                 Mnemosyne
+```
+
+---
+
+## 48. Separation of Concerns
+
+The universal architecture deliberately separates:
+
+```text
+Knowledge Model
+      ≠
+Agent Runtime
+      ≠
+Tool Protocol
+      ≠
+Storage Engine
+      ≠
+LLM
+```
+
+The Knowledge Model should survive multiple generations of agent architectures.
+
+---
+
+## 49. Minimal Universal Model
+
+If the model must be reduced to the smallest useful conceptual core:
+
+```text
+ENTITY
+ARTIFACT
+RELATIONSHIP
+CLAIM
+RULE
+REQUIREMENT
+DECISION
+TASK
+EVIDENCE
+EVENT
+```
+
+Everything else can be represented through:
+
+```text
+type
+scope
+authority
+confidence
+provenance
+temporal validity
+status
+relationships
+```
+
+This keeps the semantic foundation intentionally small.
+
+---
+
+## 50. Universal Architecture
+
+```text
+                         ENGINEERING WORLD
+                                |
+             +------------------+------------------+
+             |                  |                  |
+           CODE             DOCUMENTS          OPERATIONS
+             |                  |                  |
+             +------------------+------------------+
+                                |
+                         KNOWLEDGE OBJECTS
+                                |
+      +---------+---------+-----+-----+---------+---------+
+      |         |         |           |         |         |
+    Entity   Claim      Rule      Requirement Decision  Task
+      |         |         |           |         |         |
+      +---------+---------+-----------+---------+---------+
+                                |
+                         Relationships
+                                |
+                         Evidence / Events
+                                |
+                    Scope / Authority / Time
+                                |
+                         Knowledge Graph
+                                |
+                       Context Compiler
+                                |
+                              AGENT
+                                |
+                           ACTION
+                                |
+                          OBSERVATION
+                                |
+                     Knowledge Evolution
+```
+
+---
+
+## 51. Universal Agent Loop
+
+```text
+                    +------------------+
+                    |   ENGINEERING    |
+                    |     SYSTEM       |
+                    +--------+---------+
+                             |
+                         OBSERVE
+                             |
+                             v
+                      +-------------+
+                      |  KNOWLEDGE  |
+                      +------+------+
+                             |
+                         RETRIEVE
+                             |
+                             v
+                     +---------------+
+                     |    CONTEXT    |
+                     |    COMPILER   |
+                     +-------+-------+
+                             |
+                             v
+                         AGENT
+                             |
+                         PLAN / ACT
+                             |
+                             v
+                    ENGINEERING CHANGE
+                             |
+                         VALIDATE
+                             |
+                             v
+                        OBSERVE
+                             |
+                    KNOWLEDGE UPDATE
+                             |
+                             +---------> next loop
+```
+
+---
+
+## 52. Design Principle
+
+> **Do not model what today's coding agents happen to look like. Model the knowledge required by any autonomous engineering process.**
+
+Agents will change.
+
+Models will change.
+
+Tool protocols will change.
+
+IDEs will change.
+
+Context windows will change.
+
+The underlying engineering knowledge remains:
+
+```text
+entities
+relationships
+claims
+rules
+requirements
+decisions
+tasks
+evidence
+events
+constraints
+```
+
+That is what Mnemosyne should standardize.
+
+---
+
+## 53. Implication for AIKOQL
+
+AIKOQL can become the language that queries this universal engineering knowledge.
+
+Conceptually:
+
+```aikoql
+EXPLAIN COMPONENT "ConstraintEngine"
+```
+
+```aikoql
+FIND REQUIREMENTS
+WHERE status = "UNIMPLEMENTED"
+```
+
+```aikoql
+TRACE REQUIREMENT "REQ-042"
+TO CODE
+```
+
+```aikoql
+FIND CONFLICTS
+WHERE component = "VectorEngine"
+```
+
+```aikoql
+FIND STALE DOCUMENTATION
+```
+
+```aikoql
+GET CONTEXT FOR TASK
+"Implement deferred referential integrity"
+```
+
+The final query does not ask:
+
+> Give me the most similar chunks.
+
+It asks:
+
+> **Construct the minimum sufficient, authoritative engineering context required for this task.**
+
+---
+
+## 54. Final Conceptual Contract
+
+The universal model can be summarized as:
+
+```text
+ENGINEERING SYSTEM
+       ↓
+OBSERVATION
+       ↓
+KNOWLEDGE
+       ↓
+CONTEXT
+       ↓
+AGENT REASONING
+       ↓
+ACTION
+       ↓
+VALIDATION
+       ↓
+KNOWLEDGE EVOLUTION
+```
+
+with:
+
+```text
+Knowledge =
+Entities
++ Relationships
++ Claims
++ Rules
++ Requirements
++ Decisions
++ Tasks
++ Evidence
++ Events
++ Constraints
+```
+
+and important knowledge carrying:
+
+```text
+Identity
+Type
+Scope
+Authority
+Confidence
+Provenance
+Temporal validity
+Version
+Status
+Relationships
+```
+
+This is the universal conceptual contract.
+
+Codex, Claude Code, Cline, Cursor, future autonomous SWE agents, SRE agents, security agents, and other engineering agents can all consume this model without Mnemosyne needing to know how the agent itself is implemented.
+
+The agent-specific implementation belongs above this contract; Mnemosyne's job is to provide the durable, queryable, evidence-backed engineering knowledge underneath it.

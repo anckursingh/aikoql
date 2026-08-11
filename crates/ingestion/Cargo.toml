@@ -1,13 +1,13 @@
 [package]
-name = "mnemosyne-ingestion"
-description = "Mnemosyne Document Ingestion Plugin SDK — extension point for PDF/OCR/etc."
+name = "aikoql-ingestion"
+description = "Aikoql Document Ingestion Plugin SDK — extension point for PDF/OCR/etc."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-mnemosyne-kernel = { path = "../kernel" }
+aikoql-kernel = { path = "../kernel" }
 pdf-extract = "0.9"
 zip = "0.6"
 serde = { version = "1", features = ["derive"] }

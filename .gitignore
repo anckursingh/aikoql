@@ -38,10 +38,10 @@ build/
 *.whl
 .DS_Store
 
-# Mnemosyne runtime artifacts
+# Aikoql runtime artifacts
 *.key
 *.backup.*/
-/mnemosyne/
+/aikoql/
 
 # Playwright / E2E test artifacts
 .playwright-mcp/
@@ -52,4 +52,4 @@ tests/e2e/test-results/
 # Test database artifacts
 test-*.db
 --version
-.mnemosyne/
+.aikoql/

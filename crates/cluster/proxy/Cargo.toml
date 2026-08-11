@@ -1,13 +1,13 @@
 [package]
-name = "mnemosyne-proxy"
-description = "Mnemosyne Cluster Proxy: hash-based shard router. Fans out MCP requests to N shards."
+name = "aikoql-proxy"
+description = "Aikoql Cluster Proxy: hash-based shard router. Fans out MCP requests to N shards."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "mnemosyne-proxy"
+name = "aikoql-proxy"
 path = "src/main.rs"
 
 [dependencies]

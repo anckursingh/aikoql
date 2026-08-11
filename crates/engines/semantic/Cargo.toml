@@ -1,14 +1,14 @@
 [package]
-name = "mnemosyne-semantic"
-description = "Mnemosyne Semantic Engine: embedding generation, summarization, classification. AI provider plugins, async via Scheduler."
+name = "aikoql-semantic"
+description = "Aikoql Semantic Engine: embedding generation, summarization, classification. AI provider plugins, async via Scheduler."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-mnemosyne-kernel = { path = "../../kernel" }
-mnemosyne-scheduler = { path = "../../engines/scheduler" }
+aikoql-kernel = { path = "../../kernel" }
+aikoql-scheduler = { path = "../../engines/scheduler" }
 ureq = { version = "2", optional = true }
 serde_json = { version = "1", optional = true }
 candle-core = { version = "0.9", optional = true }

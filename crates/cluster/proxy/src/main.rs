@@ -1,7 +1,7 @@
-//! Mnemosyne Cluster Proxy — hash-based MCP request router.
+//! Aikoql Cluster Proxy — hash-based MCP request router.
 //!
 //! Usage:
-//!   mnemosyne-proxy --listen 127.0.0.1:8080 127.0.0.1:9091 127.0.0.1:9092
+//!   aikoql-proxy --listen 127.0.0.1:8080 127.0.0.1:9091 127.0.0.1:9092
 //!
 //! Routes writes by KOID hash, broadcasts reads, merges results. Maintains
 //! persistent connections to shards with retry on failure.
@@ -209,7 +209,7 @@ fn handle_client(mut stream: TcpStream, shards: Arc<Vec<Arc<Shard>>>) {
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "mnemosyne-proxy", "version": "0.1"}
+                    "serverInfo": {"name": "aikoql-proxy", "version": "0.1"}
                 }
             }),
             "tools/list" => {
@@ -252,7 +252,7 @@ fn main() {
     }
 
     if shard_addrs.is_empty() {
-        eprintln!("Usage: mnemosyne-proxy [--listen addr] <shard1> <shard2> ...");
+        eprintln!("Usage: aikoql-proxy [--listen addr] <shard1> <shard2> ...");
         std::process::exit(1);
     }
 

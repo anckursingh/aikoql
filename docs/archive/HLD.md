@@ -1,14 +1,14 @@
-# Mnemosyne High Level Design (HLD)
+# Aikoql High Level Design (HLD)
 
 **Version:** 1.0  
 **Status:** Draft  
-**Project:** Mnemosyne – The Knowledge Operating System for AI
+**Project:** aikoql – The Knowledge Operating System for AI
 
 ---
 
 # 1. Purpose
 
-This document defines the high-level architecture of Mnemosyne. It is the authoritative architectural blueprint for implementation teams and AI coding agents.
+This document defines the high-level architecture of aikoql. It is the authoritative architectural blueprint for implementation teams and AI coding agents.
 
 ## Scope
 
@@ -70,7 +70,7 @@ Filesystem / Cloud Storage
 # 4. Cargo Workspace Layout
 
 ```text
-mnemosyne/
+aikoql/
 ├── crates/
 │   ├── kernel/
 │   │   ├── knowledge/

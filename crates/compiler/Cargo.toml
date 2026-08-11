@@ -1,13 +1,13 @@
 [package]
-name = "mnemosyne-compiler"
-description = "Mnemosyne Compiler: AIKOQL JSON query language → Knowledge IR. Frontend-agnostic, compiles to IrPlan."
+name = "aikoql-compiler"
+description = "Aikoql Compiler: Aikoql JSON query language → Knowledge IR. Frontend-agnostic, compiles to IrPlan."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-mnemosyne-kernel = { path = "../kernel" }
+aikoql-kernel = { path = "../kernel" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

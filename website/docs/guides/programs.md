@@ -5,7 +5,7 @@ description: Deploy, execute, version, and audit knowledge programs
 
 # Programs-as-KOs
 
-Programs in Mnemosyne are **first-class Knowledge Objects**. They have identity, versioning, provenance, access control, and audit trail — just like any other KO.
+Programs in aikoql are **first-class Knowledge Objects**. They have identity, versioning, provenance, access control, and audit trail — just like any other KO.
 
 ## Deploy a Program
 
@@ -16,16 +16,16 @@ curl -X POST http://localhost:9091/api/v1/deploy-program \
   -d '{
     "name": "FindEngineers",
     "body": "MATCH Employee WHERE dept == \"Engineering\" RETURN *",
-    "language": "AIKOQL"
+    "language": "aikoql"
   }'
 ```
 
 Response:
 ```json
-{"data": {"koid": "019fdc...", "version": 1, "name": "FindEngineers", "language": "AIKOQL"}}
+{"data": {"koid": "019fdc...", "version": 1, "name": "FindEngineers", "language": "aikoql"}}
 ```
 
-The program is now stored as a Knowledge Object of type `mnemosyne:program`. You can query it, trace it, and audit it.
+The program is now stored as a Knowledge Object of type `aikoql:program`. You can query it, trace it, and audit it.
 
 ## Execute a Program
 
@@ -72,7 +72,7 @@ Programs are versioned like any KO. To update:
 # Update the body (v1 → v2)
 curl -X POST http://localhost:9091/api/v1/remember \
   -H 'Authorization: Bearer TOKEN' \
-  -d '{"koid":"019fdc...","type_name":"mnemosyne:program","properties":{"body":"MATCH Employee WHERE dept == \"Design\" RETURN *","version":2},"expected_version":1}'
+  -d '{"koid":"019fdc...","type_name":"aikoql:program","properties":{"body":"MATCH Employee WHERE dept == \"Design\" RETURN *","version":2},"expected_version":1}'
 ```
 
 Every version remains queryable:
@@ -129,7 +129,7 @@ Programs execute with the **caller's identity**. If the caller doesn't have Read
 Every program execution is recorded:
 
 ```aikoql
-MATCH mnemosyne:program WHERE name == "FindEngineers"
+MATCH aikoql:program WHERE name == "FindEngineers"
 TRACE EACH
 ```
 
@@ -137,7 +137,7 @@ Shows who deployed it, who executed it, when, and what versions exist.
 
 ## Why Programs-as-KOs?
 
-| Traditional DB | Mnemosyne |
+| Traditional DB | aikoql |
 |---|---|
 | `CREATE FUNCTION` — separate namespace | Program is a KO — same namespace as data |
 | No versioning for functions | Every program change is a new version |

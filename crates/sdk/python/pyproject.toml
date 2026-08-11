@@ -3,9 +3,9 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "mnemosyne"
+name = "aikoql"
 version = "0.1.0"
-description = "Python SDK for the Mnemosyne Knowledge Kernel"
+description = "Python SDK for the Aikoql Knowledge Kernel"
 requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Rust",
@@ -14,5 +14,5 @@ classifiers = [
 
 [tool.maturin]
 python-source = "python"
-module-name = "mnemosyne._mnemosyne"
+module-name = "aikoql._aikoql"
 manifest-path = "Cargo.toml"

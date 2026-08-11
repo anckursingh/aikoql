@@ -8,7 +8,7 @@ description: Zero-dependency JSON-RPC client for Java
 Zero dependencies — compiles with plain `javac`.
 
 ```java
-MnemosyneClient client = new MnemosyneClient("127.0.0.1", 9090);
+AikoqlClient client = new AikoqlClient("127.0.0.1", 9090);
 client.connect();
 
 String result = client.remember(

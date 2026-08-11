@@ -7,7 +7,7 @@
 //! - write batches are all-or-nothing on disk;
 //! - P99 point-read latency below the NFR threshold on the bench dataset.
 
-use mnemosyne_kernel::*;
+use aikoql_kernel::*;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 fn tmp_db(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "mnemosyne_dur_{}_{}_{}.redb",
+        "aikoql_dur_{}_{}_{}.redb",
         name,
         std::process::id(),
         std::time::SystemTime::now()
@@ -319,7 +319,7 @@ fn d06_concurrent_writers_gapless_journal_on_disk() {
 
 // ---------------------------------------------------------------------------
 // P99 latency gate (NFR: point read < 10 ms) — run explicitly:
-//   cargo test -p mnemosyne-kernel --test durability -- --ignored d07
+//   cargo test -p aikoql-kernel --test durability -- --ignored d07
 // ---------------------------------------------------------------------------
 
 #[test]

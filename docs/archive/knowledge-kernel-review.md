@@ -506,7 +506,7 @@ write()
 fork()
 ```
 
-Mnemosyne should expose
+aikoql should expose
 
 ```text
 remember()
@@ -644,7 +644,7 @@ Otherwise invariants get broken.
 
 # What I think the Knowledge Kernel should ultimately become
 
-If PostgreSQL's kernel is responsible for **data consistency**, then Mnemosyne's kernel should be responsible for **knowledge consistency**.
+If PostgreSQL's kernel is responsible for **data consistency**, then aikoql's kernel should be responsible for **knowledge consistency**.
 
 That means it should enforce invariants such as:
 
@@ -658,4 +658,4 @@ That means it should enforce invariants such as:
 
 Everything else—vector search, graph traversal, reasoning, embedding generation, schedulers, plugins—should be implemented as services **around** the kernel, not **inside** it.
 
-I actually think this kernel is becoming the defining component of Mnemosyne. If we keep refining it into a small, rigorously specified "knowledge microkernel" with stable ABI and strict invariants, it could become the equivalent of what the Linux kernel is for operating systems: the trusted core upon which the rest of the platform is built.
+I actually think this kernel is becoming the defining component of aikoql. If we keep refining it into a small, rigorously specified "knowledge microkernel" with stable ABI and strict invariants, it could become the equivalent of what the Linux kernel is for operating systems: the trusted core upon which the rest of the platform is built.

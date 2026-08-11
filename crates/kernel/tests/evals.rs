@@ -1,15 +1,15 @@
 //! Memory Evals acceptance suite — recall, staleness, contradiction metrics as queries.
 
-use mnemosyne_kernel::{
+use aikoql_kernel::{
     EvalContradictionQuery, EvalRecallQuery, EvalStalenessQuery, Fusion, Kernel, KnowledgeContext,
     ManualClock, RememberRequest, Subject,
 };
-use mnemosyne_kernel::{SemanticBlock, TokenTextIndex, Value};
-use mnemosyne_scheduler::IndexMaintainer;
+use aikoql_kernel::{SemanticBlock, TokenTextIndex, Value};
+use aikoql_scheduler::IndexMaintainer;
 use std::sync::Arc;
 
-fn meta(t: &str) -> mnemosyne_kernel::Metadata {
-    mnemosyne_kernel::Metadata {
+fn meta(t: &str) -> aikoql_kernel::Metadata {
+    aikoql_kernel::Metadata {
         type_name: t.into(),
         tenant: None,
         schema_version: 1,
@@ -17,7 +17,7 @@ fn meta(t: &str) -> mnemosyne_kernel::Metadata {
     }
 }
 
-fn fact(k: &Kernel, body: &str, embedding: &[f32]) -> mnemosyne_kernel::KOID {
+fn fact(k: &Kernel, body: &str, embedding: &[f32]) -> aikoql_kernel::KOID {
     let mut req = RememberRequest::create(Subject::new("eval"), meta("fact"));
     req.properties
         .insert("body".into(), Value::Text(body.into()));
@@ -34,7 +34,7 @@ fn fact(k: &Kernel, body: &str, embedding: &[f32]) -> mnemosyne_kernel::KOID {
 #[test]
 fn e01_recall_at_k_against_expected_set() {
     let clock = Arc::new(ManualClock::new(1_000));
-    let k = Kernel::open(Arc::new(mnemosyne_kernel::MemoryEngine::new()), clock, 1).unwrap();
+    let k = Kernel::open(Arc::new(aikoql_kernel::MemoryEngine::new()), clock, 1).unwrap();
     let a = fact(&k, "red ball", &[1.0, 0.0]);
     let b = fact(&k, "blue cube", &[0.0, 1.0]);
     let c = fact(&k, "red cube", &[0.9, 0.1]);
@@ -58,7 +58,7 @@ fn e01_recall_at_k_against_expected_set() {
 #[test]
 fn e02_staleness_reports_lag_distribution() {
     let clock = Arc::new(ManualClock::new(1_000));
-    let engine = Arc::new(mnemosyne_kernel::MemoryEngine::new());
+    let engine = Arc::new(aikoql_kernel::MemoryEngine::new());
     let k = Kernel::open(engine.clone(), clock.clone(), 1).unwrap();
 
     // Without indexes the exact path reports zero lag.
@@ -79,7 +79,7 @@ fn e02_staleness_reports_lag_distribution() {
 
     // With an async maintainer attached but empty at start, a new commit is
     // still being processed so lag is reported as non-negative (often > 0).
-    let vec_idx = Arc::new(mnemosyne_kernel::BruteForceVectorIndex::new());
+    let vec_idx = Arc::new(aikoql_kernel::BruteForceVectorIndex::new());
     let txt_idx = Arc::new(TokenTextIndex::new());
     let maintainer = IndexMaintainer::start(&k, vec_idx.clone(), txt_idx.clone()).unwrap();
     k.attach_indexes(maintainer.clone());
@@ -106,7 +106,7 @@ fn e02_staleness_reports_lag_distribution() {
 #[test]
 fn e03_contradictions_between_similar_claims() {
     let clock = Arc::new(ManualClock::new(1_000));
-    let k = Kernel::open(Arc::new(mnemosyne_kernel::MemoryEngine::new()), clock, 1).unwrap();
+    let k = Kernel::open(Arc::new(aikoql_kernel::MemoryEngine::new()), clock, 1).unwrap();
 
     let mut yes = RememberRequest::create(Subject::new("eval"), meta("claim"));
     yes.properties

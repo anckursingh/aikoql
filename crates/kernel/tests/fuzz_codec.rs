@@ -5,8 +5,8 @@
 //! same coverage guarantees against panics and invalid success for malformed
 //! input.
 
-use mnemosyne_kernel::codec::{decode_ke, decode_ko};
-use mnemosyne_kernel::kom::{EventKind, KError, KnowledgeObject, LifecycleState, Metadata, KOID};
+use aikoql_kernel::codec::{decode_ke, decode_ko};
+use aikoql_kernel::kom::{EventKind, KError, KnowledgeObject, LifecycleState, Metadata, KOID};
 use proptest::prelude::*;
 
 proptest! {
@@ -17,7 +17,7 @@ proptest! {
         match decode_ko(&bytes) {
             Ok(ko) => {
                 // If it decoded, re-encode must round-trip exactly.
-                let reencoded = mnemosyne_kernel::codec::encode_ko(&ko);
+                let reencoded = aikoql_kernel::codec::encode_ko(&ko);
                 assert_eq!(
                     bytes, reencoded,
                     "valid decode from arbitrary bytes must be canonical"
@@ -37,7 +37,7 @@ proptest! {
     fn decode_ke_never_panics_on_arbitrary_input(bytes in proptest::collection::vec(any::<u8>(), 0..4096)) {
         match decode_ke(&bytes) {
             Ok(ke) => {
-                let reencoded = mnemosyne_kernel::codec::encode_ke(&ke);
+                let reencoded = aikoql_kernel::codec::encode_ke(&ke);
                 assert_eq!(
                     bytes, reencoded,
                     "valid decode from arbitrary bytes must be canonical"
@@ -78,7 +78,7 @@ proptest! {
                 schema_version: 0,
                 tags: vec![],
             },
-            mnemosyne_kernel::kom::SecurityDescriptor {
+            aikoql_kernel::kom::SecurityDescriptor {
                 owner: owner.unwrap_or_default(),
                 acl: vec![],
                 classification: None,

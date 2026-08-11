@@ -2,7 +2,7 @@
 
 **Status:** Proposed Reference Model  
 **Scope:** Coding agents, software-engineering agents, DevOps agents, SRE agents, architecture agents, security agents, data-engineering agents, and future autonomous engineering agents  
-**Primary use in Mnemosyne:** Define the agent-independent knowledge contract that AIKOQL/Mnemosyne can provide to any engineering agent.
+**Primary use in aikoql:** Define the agent-independent knowledge contract that aikoql/aikoql can provide to any engineering agent.
 
 ---
 
@@ -130,7 +130,7 @@ type: Component
 id: component:constraint-engine
 name: Constraint Engine
 status: ACTIVE
-repository: mnemosyne
+repository: aikoql
 ```
 
 ---
@@ -276,7 +276,7 @@ valid_from: 2026-01-01
 
 A **Fact** is a claim whose status/policy considers it sufficiently verified.
 
-This distinction allows Mnemosyne to represent uncertainty without prematurely converting inference into truth.
+This distinction allows aikoql to represent uncertainty without prematurely converting inference into truth.
 
 ---
 
@@ -327,7 +327,7 @@ A **Requirement** defines a desired system property or outcome.
 Examples:
 
 ```text
-AIKOQL must support graph traversal.
+aikoql must support graph traversal.
 Constraint validation must be atomic.
 Document ingestion must preserve provenance.
 The service must support 10,000 requests per second.
@@ -724,7 +724,7 @@ Example:
 may apply to:
 
 ```text
-repository = mnemosyne
+repository = aikoql
 ```
 
 while:
@@ -1176,7 +1176,7 @@ Knowledge Object
       |
       +---- Markdown
       +---- JSON
-      +---- AIKOQL
+      +---- aikoql
       +---- API
       +---- Agent Context
       +---- UI
@@ -1432,7 +1432,7 @@ VALIDATE CHANGE
 PROPOSE KNOWLEDGE UPDATE
 ```
 
-AIKOQL can provide the query language. MCP, APIs, SDKs, or other protocols can provide transport.
+aikoql can provide the query language. MCP, APIs, SDKs, or other protocols can provide transport.
 
 ---
 
@@ -1460,9 +1460,9 @@ Agents should not necessarily have all operations. Authorization determines what
 
 ---
 
-## 44. Mnemosyne's Role
+## 44. aikoql's Role
 
-Mnemosyne should not become a coding agent.
+aikoql should not become a coding agent.
 
 Its role is:
 
@@ -1476,9 +1476,9 @@ Its role is:
                       |
                Agent Interface
                       |
-                  AIKOQL / MCP
+                  aikoql / MCP
                       |
-                  Mnemosyne
+                  aikoql
                       |
       +---------------+---------------+
       |               |               |
@@ -1490,7 +1490,7 @@ Its role is:
               Engineering Knowledge
 ```
 
-Mnemosyne provides shared semantic memory and context infrastructure.
+aikoql provides shared semantic memory and context infrastructure.
 
 ---
 
@@ -1506,7 +1506,7 @@ Knowledge Object
 Markdown Projection
 ```
 
-A developer can edit Markdown. Mnemosyne can parse the changes. An agent can query the structured representation.
+A developer can edit Markdown. aikoql can parse the changes. An agent can query the structured representation.
 
 ---
 
@@ -1578,7 +1578,7 @@ These belong to the Agent Runtime, not the Knowledge Model.
                        |
                  Knowledge API
                        |
-                 Mnemosyne
+                 aikoql
 ```
 
 ---
@@ -1749,13 +1749,13 @@ events
 constraints
 ```
 
-That is what Mnemosyne should standardize.
+That is what aikoql should standardize.
 
 ---
 
-## 53. Implication for AIKOQL
+## 53. Implication for aikoql
 
-AIKOQL can become the language that queries this universal engineering knowledge.
+aikoql can become the language that queries this universal engineering knowledge.
 
 Conceptually:
 
@@ -1852,6 +1852,6 @@ Relationships
 
 This is the universal conceptual contract.
 
-Codex, Claude Code, Cline, Cursor, future autonomous SWE agents, SRE agents, security agents, and other engineering agents can all consume this model without Mnemosyne needing to know how the agent itself is implemented.
+Codex, Claude Code, Cline, Cursor, future autonomous SWE agents, SRE agents, security agents, and other engineering agents can all consume this model without aikoql needing to know how the agent itself is implemented.
 
-The agent-specific implementation belongs above this contract; Mnemosyne's job is to provide the durable, queryable, evidence-backed engineering knowledge underneath it.
+The agent-specific implementation belongs above this contract; aikoql's job is to provide the durable, queryable, evidence-backed engineering knowledge underneath it.

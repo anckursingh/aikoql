@@ -1,4 +1,4 @@
-//! Mnemosyne Provider SDK — trait-based interface for external data system connectors.
+//! Aikoql Provider SDK — trait-based interface for external data system connectors.
 //!
 //! Providers connect external systems (PostgreSQL, Neo4j, MongoDB, etc.) to the
 //! Knowledge Kernel. They implement the `Provider` trait and expose schema
@@ -13,15 +13,15 @@
 //! A provider MUST NOT directly manipulate storage internals. All data flows
 //! through the Knowledge Kernel's `remember` / `forget` / `relate` syscalls.
 
-use mnemosyne_kernel::knowledge::kom::KResult;
+use aikoql_kernel::knowledge::kom::KResult;
 use std::collections::HashMap;
 
-/// Schema mapping from external system to Mnemosyne types.
+/// Schema mapping from external system to aikoql types.
 #[derive(Clone, Debug, Default)]
 pub struct ProviderSchema {
-    /// External table/collection name → Mnemosyne type_name.
+    /// External table/collection name → aikoql type_name.
     pub type_mappings: HashMap<String, String>,
-    /// External column/field name → Mnemosyne property name per type.
+    /// External column/field name → aikoql property name per type.
     pub property_mappings: HashMap<String, HashMap<String, String>>,
 }
 
@@ -50,7 +50,7 @@ pub trait Provider: Send + Sync {
     /// Each row becomes a Knowledge Object via `kernel.remember()`.
     fn ingest(
         &self,
-        kernel: &mnemosyne_kernel::transaction::kernel::Kernel,
+        kernel: &aikoql_kernel::transaction::kernel::Kernel,
         schema: &ProviderSchema,
     ) -> KResult<IngestStats>;
 

@@ -1,4 +1,4 @@
-//! AIKOQL Lexer — tokenizer per MRFC-0010 §3 (Lexer).
+//! Aikoql Lexer — tokenizer per MRFC-0010 §3 (Lexer).
 //!
 //! Hand-written, zero-allocation where possible. Produces a `Token` stream
 //! with source spans for diagnostics.

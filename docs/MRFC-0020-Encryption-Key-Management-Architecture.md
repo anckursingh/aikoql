@@ -5,7 +5,7 @@
 **Status:** Draft
 
 ## Purpose
-Defines the layered encryption architecture for Mnemosyne. Encryption is treated as a platform subsystem rather than a storage feature.
+Defines the layered encryption architecture for aikoql. Encryption is treated as a platform subsystem rather than a storage feature.
 
 ## Goals
 - Zero Trust

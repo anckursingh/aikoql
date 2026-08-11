@@ -6,7 +6,7 @@
 //! kill -9 at the commit boundary. If `crash_after` is supplied, the process
 //! exits after exactly that many commits, testing prefix-atomicity.
 
-use mnemosyne_kernel::*;
+use aikoql_kernel::*;
 use std::sync::Arc;
 
 fn main() {

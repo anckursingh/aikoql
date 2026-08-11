@@ -36,7 +36,7 @@ cargo test --workspace
   durability suite:         6 passed + 1 bench (ignored by default)
   warnings:                 0
 
-cargo test -p mnemosyne-kernel --test durability -- --ignored d07
+cargo test -p aikoql-kernel --test durability -- --ignored d07
   BENCH point-read n=500  p50=44.4µs  p99=83.1µs  (engine=redb, dataset=500 KOs)
 ```
 
@@ -97,8 +97,8 @@ the HLD workspace layout and the "knowledge microkernel" direction from
 - **`KnowledgeRepository`** (`storage/repository.rs`) hides all key prefixes,
   encodings, and `WriteBatch` details from the transaction orchestrator.
 - **`AuthManager`** extracted to `security/auth.rs` — owns role inheritance and
-  per-type ACL policies loaded from persisted `mnemosyne:role` /
-  `mnemosyne:policy` objects.
+  per-type ACL policies loaded from persisted `aikoql:role` /
+  `aikoql:policy` objects.
 - **`SchemaRegistry`** extracted to `lifecycle/schema.rs` — owns in-memory type
   schemas and validation.
 - **`IndexCoordinator`** extracted to `index/coordinator.rs` — owns hybrid recall
@@ -141,8 +141,8 @@ cargo test --workspace
 
 ```bash
 cargo test --workspace                                              # current: 115 active tests, all green
-cargo test -p mnemosyne-kernel --test durability -- --ignored d07   # P99 bench gate
+cargo test -p aikoql-kernel --test durability -- --ignored d07   # P99 bench gate
 cargo build --workspace                                             # zero warnings
 ```
 
-Repository: https://github.com/anckursingh/mnemosyne
+Repository: https://github.com/anckursingh/aikoql

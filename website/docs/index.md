@@ -1,23 +1,23 @@
 ---
-title: Mnemosyne
+title: aikoql
 description: The Agent-First Knowledge Database
 ---
 
-# Mnemosyne
+# aikoql
 
 **The Knowledge Operating System for AI agents.**
 
-Mnemosyne is an embedded knowledge database that treats **everything as a Knowledge Object** — data, programs, workflows, policies, agents, prompts, and connectors all share the same lifecycle: identity, versioning, provenance, access control, audit trail.
+aikoql is an embedded knowledge database that treats **everything as a Knowledge Object** — data, programs, workflows, policies, agents, prompts, and connectors all share the same lifecycle: identity, versioning, provenance, access control, audit trail.
 
 ```bash
 # 5 seconds to start
-curl -L https://mnemosyne.dev/install | bash
-mnemosyne shell :memory:
+curl -L https://aikoql.dev/install | bash
+aikoql shell :memory:
 ```
 
-## Why Mnemosyne?
+## Why aikoql?
 
-| Problem | Mnemosyne Solution |
+| Problem | Aikoql Solution |
 |---|---|
 | AI agents need schema discovery before queries | `GET /api/v1/schema` — auto-discovers types and properties |
 | Agents retry — idempotency matters | Every mutation has a `idempotency_key` |
@@ -40,13 +40,13 @@ mnemosyne shell :memory:
 
 ### For Knowledge Engineers
 
-- **AIKOQL** — Purpose-built query language for knowledge graphs.
+- **aikoql** — Purpose-built query language for knowledge graphs.
   ```aikoql
   MATCH Employee WHERE dept == "Engineering" RETURN name, salary
   ```
 - **Hybrid Search** — Vector (HNSW) + text (BM25) with RRF fusion.
 - **Graph Traversal** — Relationship-first queries with depth and direction.
-- **Programs-as-KOs** — Deploy AIKOQL programs as versioned objects. Execute with `{{param}}` substitution.
+- **Programs-as-KOs** — Deploy aikoql programs as versioned objects. Execute with `{{param}}` substitution.
 - **Knowledge Compiler** — Markdown + Rust code → KnowledgeIr. Multi-source merging. Staleness detection.
 - **Document Pipeline (D1-D9)** — Upload PDF/DOCX/Markdown → OCR → Document AST → KnowledgeIr → KOs.
 - **Connector Bridge** — PostgreSQL, SQLite, MongoDB, Neo4j schemas → KnowledgeIr conversion.
@@ -59,7 +59,7 @@ mnemosyne shell :memory:
 - **Multi-Tenancy** — Tenant-aware quotas, per-tenant encryption keys.
 - **RBAC** — Roles, policies, ACLs. Policies are themselves Knowledge Objects.
 - **Backup/Restore** — Verified backups with PITR metadata.
-- **Graph Browser** — Neo4j-style visualization with tenant filtering, AIKOQL query runner.
+- **Graph Browser** — Neo4j-style visualization with tenant filtering, aikoql query runner.
 
 ## Architecture
 

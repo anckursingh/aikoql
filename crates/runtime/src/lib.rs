@@ -1,4 +1,4 @@
-//! Mnemosyne Runtime — physical-plan interpreter for Knowledge IR.
+//! Aikoql Runtime — physical-plan interpreter for Knowledge IR.
 //!
 //! Executes `IrPlan` operators against the Knowledge Kernel. v1 is a
 //! tree-walking interpreter over a linear pipeline; bytecode compilation
@@ -7,10 +7,10 @@
 //! MRFC-0005 §Runtime Layer: executes plans, schedules operators,
 //! coordinates with the kernel. The interpreter is the runtime.
 
-use mnemosyne_kernel::ir::*;
-use mnemosyne_kernel::knowledge::kom::*;
-use mnemosyne_kernel::knowledge::scoring::{cosine, jaccard, ko_text, tokenize};
-use mnemosyne_kernel::transaction::kernel::{Kernel, Subject};
+use aikoql_kernel::ir::*;
+use aikoql_kernel::knowledge::kom::*;
+use aikoql_kernel::knowledge::scoring::{cosine, jaccard, ko_text, tokenize};
+use aikoql_kernel::transaction::kernel::{Kernel, Subject};
 use std::cmp::Ordering;
 
 // ---------------------------------------------------------------------------
@@ -471,7 +471,7 @@ impl Runtime {
         Runtime {
             rt: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(4)
-                .thread_name("mnemosyne-runtime")
+                .thread_name("aikoql-runtime")
                 .build()
                 .expect("build tokio runtime"),
         }
@@ -511,7 +511,7 @@ impl Default for Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mnemosyne_kernel::{ManualClock, MemoryEngine, Metadata, RememberRequest, SemanticBlock};
+    use aikoql_kernel::{ManualClock, MemoryEngine, Metadata, RememberRequest, SemanticBlock};
     use std::sync::Arc;
 
     fn mk() -> Kernel {
@@ -729,7 +729,7 @@ mod tests {
 
     #[test]
     fn fuse_rrf_combines_two_scored_sets() {
-        use mnemosyne_kernel::ir::FuseMode;
+        use aikoql_kernel::ir::FuseMode;
         let k1 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1").unwrap();
         let k2 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2").unwrap();
         let k3 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa3").unwrap();
@@ -753,7 +753,7 @@ mod tests {
 
     #[test]
     fn fuse_weighted_combines_scores() {
-        use mnemosyne_kernel::ir::FuseMode;
+        use aikoql_kernel::ir::FuseMode;
         let k1 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1").unwrap();
         let k2 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2").unwrap();
         let a = vec![(k1, 1.0, "note".into(), 1u64)];
@@ -769,7 +769,7 @@ mod tests {
 
     #[test]
     fn fuse_vector_only_picks_first() {
-        use mnemosyne_kernel::ir::FuseMode;
+        use aikoql_kernel::ir::FuseMode;
         let k1 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1").unwrap();
         let k2 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2").unwrap();
         let a = vec![(k1, 0.9, "note".into(), 1u64)];
@@ -781,7 +781,7 @@ mod tests {
 
     #[test]
     fn fuse_text_only_picks_second() {
-        use mnemosyne_kernel::ir::FuseMode;
+        use aikoql_kernel::ir::FuseMode;
         let k1 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1").unwrap();
         let k2 = KOID::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2").unwrap();
         let a = vec![(k1, 0.9, "note".into(), 1u64)];
@@ -923,6 +923,112 @@ mod tests {
                 assert!(scored[0].1 > 0.0);
             }
             _ => panic!("expected Scored from hybrid pipeline"),
+        }
+    }
+
+    #[test]
+    fn ann_search_with_provider_uses_real_embedding() {
+        use aikoql_semantic::provider::MockEmbeddingProvider;
+        use std::sync::Arc;
+
+        // Build kernel with a MockEmbeddingProvider wired in.
+        let clock = Arc::new(ManualClock::new(20_000));
+        let k = Kernel::open(Arc::new(MemoryEngine::new()), clock, 0xCAFE)
+            .unwrap()
+            .with_embedding_provider(Arc::new(MockEmbeddingProvider::with_dim(3)));
+        let alice = Subject::new("alice");
+
+        // KO with an embedding similar to what MockEmbeddingProvider produces.
+        let mut p1 = PropertyMap::new();
+        p1.insert("body".into(), Value::Text("cats are great".into()));
+        let sem1 = SemanticBlock {
+            embedding: Some(vec![0.1, 0.1, 0.1]), // matches mock ([0.1; 3])
+            embedding_model: None,
+            summary: None,
+            confidence: None,
+            source: None,
+        };
+        create_ko(&k, &alice, "note", p1, Some(sem1));
+
+        // KO with an opposite embedding.
+        let mut p2 = PropertyMap::new();
+        p2.insert("body".into(), Value::Text("unrelated fish".into()));
+        let sem2 = SemanticBlock {
+            embedding: Some(vec![-1.0, -1.0, -1.0]), // opposite direction
+            embedding_model: None,
+            summary: None,
+            confidence: None,
+            source: None,
+        };
+        create_ko(&k, &alice, "note", p2, Some(sem2));
+
+        // AnnSearch with query_text → kernel.embed_text("cats") → [0.1; 3].
+        // Cosine([0.1,0.1,0.1], [0.1,0.1,0.1]) > cosine([0.1,0.1,0.1], [-1,-1,-1]).
+        let plan = IrPlan::new(vec![
+            IrOp::Scan {
+                type_name: "note".into(),
+                subject: "alice".into(),
+            },
+            IrOp::AnnSearch {
+                vector: vec![],
+                query_text: Some("cats".into()),
+                embedding_model: None,
+                k: 5,
+            },
+        ]);
+
+        let result = Interpreter::execute(&k, &plan).unwrap();
+        match result {
+            RowSet::Scored(scored) => {
+                assert_eq!(scored.len(), 2, "both KOs have embeddings, both should match");
+                // The "cats" KO (matching embedding) must rank higher.
+                assert!(
+                    scored[0].1 > scored[1].1,
+                    "matching embedding should score higher than opposite: {:?}",
+                    scored
+                );
+            }
+            _ => panic!("expected Scored from AnnSearch with provider"),
+        }
+    }
+
+    #[test]
+    fn ann_search_without_provider_falls_back_to_jaccard() {
+        // Same as ann_search_with_query_text_falls_back_to_text but making the
+        // graceful-degrade contract explicit: when no EmbeddingProvider is
+        // configured, AnnSearch with query_text uses Jaccard text search.
+        let k = mk();
+        let alice = Subject::new("alice");
+
+        let mut p1 = PropertyMap::new();
+        p1.insert("body".into(), Value::Text("cats are great".into()));
+        create_ko(&k, &alice, "note", p1, None);
+
+        let mut p2 = PropertyMap::new();
+        p2.insert("body".into(), Value::Text("unrelated fish".into()));
+        create_ko(&k, &alice, "note", p2, None);
+
+        let plan = IrPlan::new(vec![
+            IrOp::Scan {
+                type_name: "note".into(),
+                subject: "alice".into(),
+            },
+            IrOp::AnnSearch {
+                vector: vec![],
+                query_text: Some("cats".into()),
+                embedding_model: None,
+                k: 5,
+            },
+        ]);
+
+        let result = Interpreter::execute(&k, &plan).unwrap();
+        match result {
+            RowSet::Scored(scored) => {
+                assert!(!scored.is_empty());
+                // "cats are great" should score higher via Jaccard.
+                assert!(scored[0].1 > 0.0);
+            }
+            _ => panic!("expected Scored"),
         }
     }
 }

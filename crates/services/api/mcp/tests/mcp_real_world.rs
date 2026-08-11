@@ -31,8 +31,8 @@ impl McpClient {
             .unwrap()
             .parent()
             .unwrap();
-        let release_bin = workspace_root.join("target/release/mnemosyne-mcp.exe");
-        let debug_bin = workspace_root.join("target/debug/mnemosyne-mcp.exe");
+        let release_bin = workspace_root.join("target/release/aikoql-mcp.exe");
+        let debug_bin = workspace_root.join("target/debug/aikoql-mcp.exe");
         let bin = if release_bin.exists() {
             release_bin
         } else {
@@ -143,7 +143,7 @@ fn real_world_agent_workflow() {
 
     let proj = c.call("remember", &json!({
         "subject": "admin", "type_name": "Project", "tenant": "acme",
-        "properties": {"title": "Mnemosyne Core", "status": "active", "priority": 1, "budget": 500000.0}
+        "properties": {"title": "Aikoql Core", "status": "active", "priority": 1, "budget": 500000.0}
     }));
     let _proj_koid = proj["koid"].as_str().unwrap().to_string();
 
@@ -190,7 +190,7 @@ fn real_world_agent_workflow() {
     );
     assert!(found["results"].as_array().unwrap().len() >= 1);
 
-    // ── Phase 5: AIKOQL Query ────────────────────────────────────────────
+    // ── Phase 5: Aikoql Query ────────────────────────────────────────────
 
     let query = format!("MATCH Employee WHERE dept == \"Engineering\" RETURN *");
     let results = c.call("aikoql", &json!({"query": query, "subject": "admin"}));
@@ -203,7 +203,7 @@ fn real_world_agent_workflow() {
         &json!({
             "subject": "admin", "name": "FindEngineers",
             "body": "MATCH Employee WHERE dept == \"Engineering\" RETURN *",
-            "language": "AIKOQL"
+            "language": "aikoql"
         }),
     );
     let prog_koid = prog["koid"].as_str().unwrap().to_string();

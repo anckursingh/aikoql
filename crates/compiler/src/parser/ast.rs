@@ -1,4 +1,4 @@
-//! AIKOQL AST types per MRFC-0010 §3 (Parser).
+//! Aikoql AST types per MRFC-0010 §3 (Parser).
 //!
 //! The AST represents the syntactic structure of a query before semantic
 //! analysis. It preserves source spans for diagnostics.

@@ -1,7 +1,7 @@
 # MRFC-0001: Knowledge Object Model (KOM)
 
 - **Status:** Draft v1.0
-- **Project:** Mnemosyne
+- **Project:** aikoql
 - **Category:** Foundation
 - **Depends on:** None
 - **Supersedes:** None
@@ -12,7 +12,7 @@
 
 # 1. Abstract
 
-The Knowledge Object Model (KOM) defines the canonical semantic representation for every entity managed by Mnemosyne. Every subsystem MUST depend on this model rather than on storage layouts, query languages, or AI providers.
+The Knowledge Object Model (KOM) defines the canonical semantic representation for every entity managed by aikoql. Every subsystem MUST depend on this model rather than on storage layouts, query languages, or AI providers.
 
 ---
 

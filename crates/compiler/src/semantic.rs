@@ -8,9 +8,9 @@
 //! Error codes: AIKOQL1030 (unknown type), AIKOQL1031 (unknown property),
 //! AIKOQL1032 (type mismatch), AIKOQL1033 (unknown relationship).
 
-use mnemosyne_kernel::knowledge::kom::Schema;
-use mnemosyne_kernel::knowledge::ontology::OntologyRegistry;
-use mnemosyne_kernel::lifecycle::schema::SchemaRegistry;
+use aikoql_kernel::knowledge::kom::Schema;
+use aikoql_kernel::knowledge::ontology::OntologyRegistry;
+use aikoql_kernel::lifecycle::schema::SchemaRegistry;
 
 use super::parser::ast::*;
 use super::parser::diagnostics::{self, Diagnostic};
@@ -105,8 +105,8 @@ impl<'a> SemanticAnalyzer<'a> {
 
     fn resolve_entity(&self, name: &str) -> Result<Option<&Schema>, Diagnostic> {
         // Built-in types always pass validation.
-        if name == mnemosyne_kernel::knowledge::ontology::ONTOLOGY_TYPE
-            || name.starts_with("mnemosyne:")
+        if name == aikoql_kernel::knowledge::ontology::ONTOLOGY_TYPE
+            || name.starts_with("aikoql:")
         {
             return Ok(None);
         }
@@ -165,7 +165,7 @@ impl<'a> SemanticAnalyzer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mnemosyne_kernel::knowledge::kom::Schema;
+    use aikoql_kernel::knowledge::kom::Schema;
 
     fn registry_with_person() -> SchemaRegistry {
         let mut r = SchemaRegistry::new();

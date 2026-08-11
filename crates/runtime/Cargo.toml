@@ -1,11 +1,14 @@
 [package]
-name = "mnemosyne-runtime"
-description = "Mnemosyne Runtime: physical-plan interpreter for Knowledge IR. Executes IR plans against the Knowledge Kernel."
+name = "aikoql-runtime"
+description = "Aikoql Runtime: physical-plan interpreter for Knowledge IR. Executes IR plans against the Knowledge Kernel."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-mnemosyne-kernel = { path = "../kernel" }
+aikoql-kernel = { path = "../kernel" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+
+[dev-dependencies]
+aikoql-semantic = { path = "../engines/semantic" }

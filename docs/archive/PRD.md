@@ -1,10 +1,10 @@
 # Product Requirements Document (PRD)
 
-# Mnemosyne – The Knowledge Operating System for AI
+# aikoql – The Knowledge Operating System for AI
 
 **Version:** 1.0  
 **Status:** Draft  
-**Owner:** Mnemosyne Architecture Team
+**Owner:** Aikoql Architecture Team
 
 ---
 
@@ -12,9 +12,9 @@
 
 ## Vision
 
-Mnemosyne is an open-source **Knowledge Operating System (KOS)** designed for the next generation of AI applications and autonomous agents.
+aikoql is an open-source **Knowledge Operating System (KOS)** designed for the next generation of AI applications and autonomous agents.
 
-Rather than requiring multiple databases (relational, graph, vector, search, cache and event stores), Mnemosyne provides a single knowledge platform built around one canonical representation: the **Knowledge Object**.
+Rather than requiring multiple databases (relational, graph, vector, search, cache and event stores), aikoql provides a single knowledge platform built around one canonical representation: the **Knowledge Object**.
 
 The objective is to become the foundational runtime for AI-native systems in the same way Linux became the foundation for modern operating systems.
 
@@ -314,4 +314,4 @@ The product vision is achieved when:
 
 # 16. Definition of Success
 
-Mnemosyne succeeds when developers think in terms of **Knowledge Objects** rather than rows, documents, vectors or graph nodes, and when AI applications can rely on a single transactional knowledge platform instead of stitching together multiple infrastructure products.
+aikoql succeeds when developers think in terms of **Knowledge Objects** rather than rows, documents, vectors or graph nodes, and when AI applications can rely on a single transactional knowledge platform instead of stitching together multiple infrastructure products.

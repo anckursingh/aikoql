@@ -1,7 +1,7 @@
 # MRFC-0009: Secondary Index Lifecycle
 
 - **Status:** Draft v1.0 (implemented behavior — codifies Phase 1 Inc-3)
-- **Project:** Mnemosyne
+- **Project:** aikoql
 - **Category:** Foundation / Storage
 - **Depends on:** MRFC-0001 (KOM), MRFC-0008 (Commit Pipeline & Journal), MRFC-0011 (KS-ABI)
 - **Supersedes:** None

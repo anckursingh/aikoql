@@ -53,7 +53,7 @@ pub(crate) fn execution_stats() -> ExecutionStats {
 // ---------------------------------------------------------------------------
 
 pub struct ProgramCache {
-    cache: Mutex<HashMap<KOID, (mnemosyne_kernel::ir::IrPlan, u64)>>,
+    cache: Mutex<HashMap<KOID, (aikoql_kernel::ir::IrPlan, u64)>>,
     hits: Mutex<u64>,
 }
 
@@ -65,7 +65,7 @@ impl ProgramCache {
         }
     }
 
-    pub fn get(&self, koid: &KOID, expected_version: u64) -> Option<mnemosyne_kernel::ir::IrPlan> {
+    pub fn get(&self, koid: &KOID, expected_version: u64) -> Option<aikoql_kernel::ir::IrPlan> {
         let guard = self.cache.lock().unwrap();
         if let Some((plan, ver)) = guard.get(koid) {
             if *ver == expected_version {
@@ -76,7 +76,7 @@ impl ProgramCache {
         None
     }
 
-    pub fn put(&self, koid: KOID, version: u64, plan: mnemosyne_kernel::ir::IrPlan) {
+    pub fn put(&self, koid: KOID, version: u64, plan: aikoql_kernel::ir::IrPlan) {
         let mut guard = self.cache.lock().unwrap();
         // ponytail: simple LRU — if >100 entries, clear half.
         if guard.len() > 100 {
@@ -110,7 +110,7 @@ pub fn execute_workflow(
         .get(ctx.clone(), workflow_koid)
         .map_err(|e| e.to_string())?;
 
-    if wf_ko.metadata.type_name != "mnemosyne:workflow" {
+    if wf_ko.metadata.type_name != "aikoql:workflow" {
         return Err("not a workflow".into());
     }
 
@@ -177,14 +177,14 @@ pub fn execute_workflow(
             if let Some(cached) = c.get(&prog.koid, cur_ver) {
                 (cached, true)
             } else {
-                let plan = mnemosyne_compiler::parser::compile_with_subject(&body, &subject.name)
+                let plan = aikoql_compiler::parser::compile_with_subject(&body, &subject.name)
                     .map_err(|e| format!("compile: {}", e))?;
                 c.put(prog.koid, cur_ver, plan.clone());
                 (plan, false)
             }
         } else {
             (
-                mnemosyne_compiler::parser::compile_with_subject(&body, &subject.name)
+                aikoql_compiler::parser::compile_with_subject(&body, &subject.name)
                     .map_err(|e| format!("compile: {}", e))?,
                 false,
             )
@@ -195,12 +195,12 @@ pub fn execute_workflow(
         }
 
         let start = Instant::now();
-        let optimized = mnemosyne_compiler::planner::Planner::optimize(&plan);
-        match mnemosyne_runtime::Interpreter::execute(kernel, &optimized) {
+        let optimized = aikoql_compiler::planner::Planner::optimize(&plan);
+        match aikoql_runtime::Interpreter::execute(kernel, &optimized) {
             Ok(rows) => {
                 let elapsed = start.elapsed().as_millis() as u64;
                 let count = match &rows {
-                    mnemosyne_runtime::RowSet::Objects(objs) => objs.len() as u64,
+                    aikoql_runtime::RowSet::Objects(objs) => objs.len() as u64,
                     _ => 0,
                 };
                 record_execution(count, elapsed, cache_hit);
@@ -230,7 +230,7 @@ pub fn check_and_fire_triggers(kernel: &Kernel, last_seq: u64) -> Result<u64, St
     };
     let events = kernel.journal().map_err(|e| e.to_string())?;
     let triggers = kernel
-        .scan_by_type(&subject, "mnemosyne:trigger")
+        .scan_by_type(&subject, "aikoql:trigger")
         .unwrap_or_default();
     if triggers.is_empty() {
         return Ok(head);
@@ -261,13 +261,13 @@ pub fn check_and_fire_triggers(kernel: &Kernel, last_seq: u64) -> Result<u64, St
                     let ctx = KnowledgeContext::from(subject.clone());
                     if let Ok(prog_ko) = kernel.get(ctx, &prog_koid) {
                         if let Some(Value::Text(body)) = prog_ko.properties.get("body") {
-                            if let Ok(plan) = mnemosyne_compiler::parser::compile_with_subject(
+                            if let Ok(plan) = aikoql_compiler::parser::compile_with_subject(
                                 body,
                                 "trigger-engine",
                             ) {
                                 let optimized =
-                                    mnemosyne_compiler::planner::Planner::optimize(&plan);
-                                let _ = mnemosyne_runtime::Interpreter::execute(kernel, &optimized);
+                                    aikoql_compiler::planner::Planner::optimize(&plan);
+                                let _ = aikoql_runtime::Interpreter::execute(kernel, &optimized);
                             }
                         }
                     }
@@ -295,7 +295,7 @@ pub fn execute_agent(
         .get(ctx.clone(), agent_koid)
         .map_err(|e| e.to_string())?;
 
-    if agent.metadata.type_name != "mnemosyne:agent" {
+    if agent.metadata.type_name != "aikoql:agent" {
         return Err("not an agent".into());
     }
 
@@ -427,14 +427,14 @@ pub fn execute_agent(
             if let Some(cached) = c.get(&prog.koid, cur_ver) {
                 (cached, true)
             } else {
-                let plan = mnemosyne_compiler::parser::compile_with_subject(&body, &subject.name)
+                let plan = aikoql_compiler::parser::compile_with_subject(&body, &subject.name)
                     .map_err(|e| format!("compile: {}", e))?;
                 c.put(prog.koid, cur_ver, plan.clone());
                 (plan, false)
             }
         } else {
             (
-                mnemosyne_compiler::parser::compile_with_subject(&body, &subject.name)
+                aikoql_compiler::parser::compile_with_subject(&body, &subject.name)
                     .map_err(|e| format!("compile: {}", e))?,
                 false,
             )
@@ -445,12 +445,12 @@ pub fn execute_agent(
         }
 
         let start = std::time::Instant::now();
-        let optimized = mnemosyne_compiler::planner::Planner::optimize(&plan);
-        match mnemosyne_runtime::Interpreter::execute(kernel, &optimized) {
+        let optimized = aikoql_compiler::planner::Planner::optimize(&plan);
+        match aikoql_runtime::Interpreter::execute(kernel, &optimized) {
             Ok(rows) => {
                 let elapsed = start.elapsed().as_millis() as u64;
                 let count = match &rows {
-                    mnemosyne_runtime::RowSet::Objects(objs) => objs.len() as u64,
+                    aikoql_runtime::RowSet::Objects(objs) => objs.len() as u64,
                     _ => 0,
                 };
                 total_rows += count;

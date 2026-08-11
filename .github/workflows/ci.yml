@@ -52,11 +52,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release -p mnemosyne-mcp
+      - run: cargo build --release -p aikoql-mcp
       - uses: actions/upload-artifact@v4
         with:
-          name: mnemosyne-linux
-          path: target/release/mnemosyne-mcp
+          name: aikoql-linux
+          path: target/release/aikoql-mcp
 
   dependency-dag:
     name: Verify Dependency DAG
@@ -67,7 +67,7 @@ jobs:
       - name: Check banned dependencies
         run: |
           echo "Checking banned dependency patterns..."
-          if grep -r 'mnemosyne-kernel.*path.*runtime\|mnemosyne-kernel.*path.*compiler' crates/*/Cargo.toml crates/*/*/Cargo.toml 2>/dev/null; then
+          if grep -r 'aikoql-kernel.*path.*runtime\|aikoql-kernel.*path.*compiler' crates/*/Cargo.toml crates/*/*/Cargo.toml 2>/dev/null; then
             echo "DAG VIOLATION: kernel must not depend on runtime/compiler"
             exit 1
           fi

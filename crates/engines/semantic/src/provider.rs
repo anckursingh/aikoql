@@ -1,12 +1,65 @@
 //! Embedding providers: OpenAI-compatible (Ollama, OpenAI) and Candle (local).
 //!
-//! Implements `mnemosyne_kernel::EmbeddingProvider` so the kernel can generate
+//! Implements `aikoql_kernel::EmbeddingProvider` so the kernel can generate
 //! query-time vectors for `MATCH ... USING EMBEDDING`.
 //!
 //! ponytail: one trait, two impls. Candle behind `embedding-candle` feature.
 
-use mnemosyne_kernel::EmbeddingProvider;
-use mnemosyne_kernel::{KError, KResult};
+use aikoql_kernel::knowledge::kom::{KnowledgeObject, Value};
+use aikoql_kernel::EmbeddingProvider;
+use aikoql_kernel::{KError, KResult};
+
+// ---------------------------------------------------------------------------
+// EmbeddingEnricher — wraps an EmbeddingProvider as an AiProvider
+// ---------------------------------------------------------------------------
+
+/// Adapts an `EmbeddingProvider` into the `AiProvider` interface so one
+/// config flag drives both query-time ANN and background KO enrichment.
+///
+/// Extracts text from KO properties, calls `EmbeddingProvider::embed()`,
+/// and returns an `EnrichmentResult` with the embedding vector.
+pub struct EmbeddingEnricher {
+    provider: std::sync::Arc<dyn EmbeddingProvider>,
+    model: String,
+}
+
+impl EmbeddingEnricher {
+    pub fn new(provider: std::sync::Arc<dyn EmbeddingProvider>, model: &str) -> Self {
+        EmbeddingEnricher {
+            provider,
+            model: model.to_string(),
+        }
+    }
+}
+
+impl crate::AiProvider for EmbeddingEnricher {
+    fn enrich(&self, ko: &KnowledgeObject) -> KResult<crate::EnrichmentResult> {
+        let text: String = ko
+            .properties
+            .values()
+            .filter_map(|v| match v {
+                Value::Text(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        if text.is_empty() {
+            return Ok(crate::EnrichmentResult {
+                embedding_model: None,
+                embedding: None,
+                summary: None,
+                confidence: None,
+            });
+        }
+        let embedding = self.provider.embed(&text, Some(&self.model))?;
+        Ok(crate::EnrichmentResult {
+            embedding_model: Some(self.model.clone()),
+            embedding: Some(embedding),
+            summary: None,
+            confidence: None,
+        })
+    }
+}
 
 // ---------------------------------------------------------------------------
 // MockEmbeddingProvider — for tests
@@ -173,7 +226,7 @@ impl EmbeddingProvider for CandleEmbedding {
             .model
             .lock()
             .unwrap()
-            .forward(&ids, &mask, &type_ids)
+            .forward(&ids, &mask, Some(&type_ids))
             .map_err(|e| KError::Store(format!("forward: {e}")))?;
 
         // Mean-pool over sequence dim, masked by attention to exclude padding.
@@ -224,6 +277,12 @@ impl EmbeddingProvider for CandleEmbedding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AiProvider;
+    use aikoql_kernel::{
+        ExtensionMap, KOID, Lifecycle, LifecycleState, Metadata, Origin, PropertyMap,
+        SecurityDescriptor,
+    };
+    use std::sync::Arc;
 
     #[test]
     fn mock_returns_fixed_vector() {
@@ -239,5 +298,63 @@ mod tests {
         // Should fail to connect — not a real server at that point.
         let result = p.embed("test", None);
         assert!(result.is_err());
+    }
+
+    // ---- EmbeddingEnricher tests ----
+
+    fn test_ko(props: PropertyMap) -> KnowledgeObject {
+        KnowledgeObject {
+            koid: KOID::from_bytes([0u8; 16]),
+            version: 1,
+            commit_ts: 0,
+            metadata: Metadata {
+                type_name: "note".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            event_refs: vec![],
+            security: SecurityDescriptor {
+                owner: "test".into(),
+                acl: vec![],
+                classification: None,
+            },
+            lifecycle: Lifecycle {
+                state: LifecycleState::Draft,
+                origin: Origin::Human,
+            },
+            extensions: ExtensionMap::new(),
+        }
+    }
+
+    #[test]
+    fn enricher_extracts_text_and_embeds() {
+        let mock = Arc::new(MockEmbeddingProvider::with_dim(3));
+        let enricher = EmbeddingEnricher::new(mock, "mock-model");
+
+        let mut props = PropertyMap::new();
+        props.insert("body".into(), Value::Text("hello world".into()));
+        let ko = test_ko(props);
+
+        let result = enricher.enrich(&ko).unwrap();
+        assert_eq!(result.embedding_model.as_deref(), Some("mock-model"));
+        assert_eq!(result.embedding, Some(vec![0.1, 0.1, 0.1]));
+        assert!(result.summary.is_none());
+    }
+
+    #[test]
+    fn enricher_skips_empty_ko() {
+        let mock = Arc::new(MockEmbeddingProvider::new());
+        let enricher = EmbeddingEnricher::new(mock, "mock-model");
+
+        let ko = test_ko(PropertyMap::new());
+
+        let result = enricher.enrich(&ko).unwrap();
+        // No text properties → no embedding.
+        assert!(result.embedding.is_none());
+        assert!(result.embedding_model.is_none());
     }
 }
