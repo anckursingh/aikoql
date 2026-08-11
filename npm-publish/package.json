@@ -1,6 +1,6 @@
 {
   "name": "aikoql-mcp",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Aikoql — The Agent-First Knowledge Database. Single binary, zero deps. 59 MCP tools.",
   "license": "Apache-2.0",
   "author": {
