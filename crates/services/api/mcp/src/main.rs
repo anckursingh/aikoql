@@ -5170,7 +5170,7 @@ fn node_label(ko: &KnowledgeObject, max_len: usize) -> String {
         }
     }
     // First text property
-    for (_, v) in ko.properties.iter() {
+    for v in ko.properties.values() {
         if let Value::Text(s) = v {
             if !s.is_empty() {
                 return truncate(s, max_len);
