@@ -28,6 +28,9 @@ pub struct RankedEntity {
     pub type_hint: Option<String>,
     pub score: f32,
     pub mentions: Vec<String>,
+    /// Source file this entity was extracted from (None = synthetic).
+    #[serde(default)]
+    pub document_id: Option<String>,
     /// Why was this entity included in the context?
     pub justification: String,
 }
@@ -77,6 +80,12 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
             }
             let mut score = name_score + mention_score;
             score *= 1.0 + (e.mentions.len() as f32 * 0.1).min(0.5);
+            // Doc-section entities (headings from markdown, never code) are
+            // orientation, not implementation — they must not outrank code
+            // entities in a coding task and soak the whole budget.
+            if PROSE_TYPES.contains(&e.type_hint.as_deref().unwrap_or("")) {
+                score *= 0.5;
+            }
 
             let justification = if name_score > 0.0 {
                 format!(
@@ -85,7 +94,10 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
                     e.mentions.len()
                 )
             } else if !matched_mentions.is_empty() {
-                format!("mentions match task: {}", matched_mentions.first().unwrap())
+                format!(
+                    "mentions match task: {}",
+                    truncate_chars(matched_mentions.first().unwrap(), 120)
+                )
             } else {
                 format!(
                     "type '{}' has {} mentions",
@@ -99,6 +111,7 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
                 type_hint: e.type_hint.clone(),
                 score,
                 mentions: e.mentions.clone(),
+                document_id: e.evidence.document_id.clone(),
                 justification,
             }
         })
@@ -205,13 +218,22 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
         if e.score <= 0.0 {
             break;
         }
-        let est = est_tokens(&e.name) + e.mentions.iter().map(|m| est_tokens(m)).sum::<usize>();
+        // Cap mentions at pack time: the first one is the primary doc
+        // comment, the second is corroboration; giant section bodies (a
+        // whole markdown table in one mention) would dominate the payload.
+        let mentions = pack_mentions(&e.mentions);
+        let est = est_tokens(&e.name)
+            + est_tokens(&e.justification)
+            + mentions.iter().map(|m| est_tokens(m)).sum::<usize>();
         if !unlimited && tokens + est > token_budget {
             pkg.trimmed = true;
             break;
         }
         tokens += est;
-        pkg.entities.push(e.clone());
+        pkg.entities.push(RankedEntity {
+            mentions,
+            ..e.clone()
+        });
     }
 
     for f in &facts {
@@ -243,6 +265,36 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
 
     pkg.estimated_tokens = tokens;
     pkg
+}
+
+/// Type hints the markdown section classifier emits for documentation
+/// sections — never code. Demoted in ranking so code entities win the
+/// budget for coding tasks; they still surface for doc-oriented tasks.
+const PROSE_TYPES: &[&str] = &[
+    "Project",
+    "Database",
+    "Architecture",
+    "Design",
+    "Repository",
+    "API",
+    "Organization",
+];
+
+/// Max mentions kept per entity in a context package, and max chars per
+/// mention. Capped at pack time — the IR still holds the full evidence.
+const MAX_MENTIONS: usize = 2;
+const MAX_MENTION_CHARS: usize = 200;
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
+fn pack_mentions(mentions: &[String]) -> Vec<String> {
+    mentions
+        .iter()
+        .take(MAX_MENTIONS)
+        .map(|m| truncate_chars(m, MAX_MENTION_CHARS))
+        .collect()
 }
 
 /// Score a text against task keywords. Each exact word match adds 1.0,
@@ -282,6 +334,9 @@ pub fn render_context_markdown(pkg: &ContextPackage) -> String {
         for e in &pkg.entities {
             let type_str = e.type_hint.as_deref().unwrap_or("Unknown");
             md.push_str(&format!("- **{}** ({})", e.name, type_str));
+            if let Some(doc) = &e.document_id {
+                md.push_str(&format!(" [`{}`]", doc));
+            }
             if !e.mentions.is_empty() {
                 md.push_str(&format!(": {}", e.mentions.first().unwrap()));
             }
@@ -447,6 +502,7 @@ pub fn expand_source(source_hint: &str, ir: &KnowledgeIr) -> (Vec<RankedEntity>,
             type_hint: e.type_hint.clone(),
             score: e.confidence,
             mentions: e.mentions.clone(),
+            document_id: e.evidence.document_id.clone(),
             justification: format!("from source: {}", source_hint),
         })
         .collect();
@@ -772,5 +828,71 @@ mod tests {
         let md = render_context_markdown(&pkg);
         assert!(md.contains("TransactionEngine"));
         assert!(md.contains("DEPENDS_ON"));
+    }
+
+    #[test]
+    fn prose_entities_demoted_below_code() {
+        let ir = KnowledgeIr {
+            entities: vec![
+                EntityCandidate {
+                    name: "ConstraintEngine".into(),
+                    type_hint: Some("Struct".into()),
+                    mentions: vec!["Validates constraint rules".into()],
+                    confidence: 0.8,
+                    evidence: Evidence::default(),
+                },
+                EntityCandidate {
+                    name: "Constraint Overview".into(),
+                    type_hint: Some("Project".into()),
+                    mentions: vec![
+                        "Add constraint checks here".into(),
+                        "m1".into(),
+                        "m2".into(),
+                        "m3".into(),
+                    ],
+                    confidence: 0.8,
+                    evidence: Evidence::default(),
+                },
+            ],
+            ..Default::default()
+        };
+        let pkg = compile_context("add constraint", &ir, 0);
+        let first = &pkg.entities[0];
+        assert_eq!(first.name, "ConstraintEngine");
+        // Prose still surfaces (score > 0), just below the code entity.
+        assert!(pkg.entities.iter().any(|e| e.name == "Constraint Overview"));
+        assert!(pkg.entities[1].score < first.score);
+    }
+
+    #[test]
+    fn pack_caps_mentions() {
+        let long: String = "x".repeat(500);
+        let ir = KnowledgeIr {
+            entities: vec![EntityCandidate {
+                name: "Thing".into(),
+                type_hint: Some("Struct".into()),
+                mentions: vec![long.clone(), long.clone(), long.clone(), long.clone(), long],
+                confidence: 0.8,
+                evidence: Evidence::default(),
+            }],
+            ..Default::default()
+        };
+        let pkg = compile_context("thing", &ir, 0);
+        let m = &pkg.entities[0].mentions;
+        assert_eq!(m.len(), 2);
+        assert!(m.iter().all(|s| s.chars().count() <= MAX_MENTION_CHARS));
+    }
+
+    #[test]
+    fn render_includes_document_path() {
+        let mut e = sample_ir().entities[0].clone();
+        e.evidence.document_id = Some("crates/kernel/src/transaction.rs".into());
+        let ir = KnowledgeIr {
+            entities: vec![e],
+            ..Default::default()
+        };
+        let pkg = compile_context("transaction", &ir, 0);
+        let md = render_context_markdown(&pkg);
+        assert!(md.contains("crates/kernel/src/transaction.rs"));
     }
 }

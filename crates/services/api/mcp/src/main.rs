@@ -4239,8 +4239,9 @@ fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Result<J, String
 
     let ir = get_ir_for_koid(k, args, db_path)?;
 
-    // Compile context package
-    let pkg = aikoql_ingestion::compile_context(task, &ir, token_budget);
+    // Compile context package — cached per (task, budget, knowledge hash)
+    // so re-asked contexts are served without recompiling (5 min TTL).
+    let pkg = aikoql_ingestion::compile_context_cached(task, &ir, token_budget, 300);
     let md = aikoql_ingestion::render_context_markdown(&pkg);
 
     let pkg_json = serde_json::to_value(&pkg).unwrap_or_default();
