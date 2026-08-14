@@ -942,9 +942,10 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         }
     }
 
-    // Phase 1: one KO per entity. Idempotency keys make re-ingest exact-once.
-    let mut koids: HashMap<&str, KOID> = HashMap::new();
-    let mut doc_by_name: HashMap<&str, Option<String>> = HashMap::new();
+    // Phase 1: one KO per entity. The idempotency key includes the entity's
+    // document so same-named entities from different files (each file's `mod
+    // tests`, `fn main`) stay distinct KOs instead of collapsing into one.
+    let mut ent_kos: Vec<(&str, KOID, Option<String>)> = Vec::new();
     let mut entity_failures = 0usize;
     for ent in &result.ir.entities {
         // A path-named fallback entity (unparseable/text file) is its own
@@ -984,7 +985,12 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
             context: (&subj).into(),
             koid: None,
             expected_version: Some(0),
-            idempotency_key: Some(format!("ingest-entity:{}:{}", path, ent.name)),
+            idempotency_key: Some(format!(
+                "ingest-entity:{}:{}:{}",
+                path,
+                ent.evidence.document_id.as_deref().unwrap_or_default(),
+                ent.name
+            )),
             metadata: Metadata {
                 type_name,
                 tenant: None,
@@ -1005,8 +1011,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
             referential_policy: ReferentialPolicy::Permissive,
         }) {
             Ok(r) => {
-                koids.insert(ent.name.as_str(), r.koid);
-                doc_by_name.insert(ent.name.as_str(), ent.evidence.document_id.clone());
+                ent_kos.push((ent.name.as_str(), r.koid, ent.evidence.document_id.clone()));
             }
             Err(e) => {
                 entity_failures += 1;
@@ -1015,15 +1020,72 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         }
     }
 
-    // Phase 1b: containment — one File KO per source file; each file
-    // `contains` its entities and the directory KO (below) `contains` every
-    // file. Files with no parseable entities were already stored as
-    // path-named "file" entities — reuse those KOs as their File KO.
+    // Phase 0: one File KO per walked source file, independent of whether any
+    // of its entities survived merging — a fully name-deduped, macro-only, or
+    // empty file must still be a node in the graph. Fallback path entities
+    // (doc == name) are stored by Phase 1 and reused below, so skip those.
     let mut file_koids: HashMap<String, KOID> = HashMap::new();
     let mut outbound: HashMap<KOID, Vec<RelationshipRef>> = HashMap::new();
     let mut orphan_refs: Vec<RelationshipRef> = Vec::new();
-    for (name, &koid) in &koids {
-        let Some(doc) = doc_by_name.get(name).and_then(|d| d.as_deref()) else {
+    let fallback_docs: std::collections::HashSet<&str> = result
+        .ir
+        .entities
+        .iter()
+        .filter(|e| e.evidence.document_id.as_deref() == Some(e.name.as_str()))
+        .map(|e| e.name.as_str())
+        .collect();
+    let mut paths = Vec::new();
+    let mut path_stats = aikoql_ingestion::IngestStats::default();
+    if let Err(e) = aikoql_ingestion::collect_file_paths(
+        std::path::Path::new(path),
+        &mut paths,
+        &mut path_stats,
+    ) {
+        eprintln!("file walk for containment: {}", e);
+    }
+    for p in &paths {
+        let doc = p.to_string_lossy().to_string();
+        if fallback_docs.contains(doc.as_str()) || file_koids.contains_key(&doc) {
+            continue;
+        }
+        let mut fprops = PropertyMap::new();
+        fprops.insert("name".into(), Value::Text(doc.clone()));
+        match kernel.remember(RememberRequest {
+            context: (&subj).into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: Some(format!("ingest-file:{}:{}", path, doc)),
+            metadata: Metadata {
+                type_name: "File".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec!["ingest-dir".into(), "auto".into()],
+            },
+            properties: fprops,
+            semantic: None,
+            relationships: vec![],
+            security: Some(SecurityDescriptor {
+                owner: "ingest-dir".into(),
+                acl: vec![],
+                classification: None,
+            }),
+            extensions: ExtensionMap::new(),
+            origin: Origin::Agent("ingest-dir".into()),
+            note: Some(format!("source file from ingest-dir {}", path)),
+            referential_policy: ReferentialPolicy::Permissive,
+        }) {
+            Ok(r) => {
+                file_koids.insert(doc, r.koid);
+            }
+            Err(e) => eprintln!("file KO {}: {}", doc, e),
+        }
+    }
+
+    // Phase 1b: containment — each file `contains` its entities and the
+    // directory KO (below) `contains` every file. Fallback path entities
+    // (doc == name) become their own File KO.
+    for &(name, koid, ref doc_opt) in &ent_kos {
+        let Some(doc) = doc_opt.as_deref() else {
             // No provenance — hook directly to the directory KO.
             orphan_refs.push(RelationshipRef {
                 rel_type: kom::CONTAINS.to_string(),
@@ -1032,7 +1094,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
             });
             continue;
         };
-        if doc == *name {
+        if doc == name {
             file_koids.insert(doc.to_string(), koid);
             continue;
         }
@@ -1092,14 +1154,24 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
 
     // Phase 2: relationships, outbound from the subject entity's KO. Grouped
     // per subject so each KO gets one update (replace semantics keep
-    // re-ingest idempotent). Relation endpoints resolve by exact name, then
-    // case-folded name, then last `::` segment (use-paths / trait paths like
-    // `aikoql_kernel::KError`). Anything else — std/external refs, `crate`,
-    // wikilink targets outside the corpus — is out-of-corpus and skipped.
+    // re-ingest idempotent). Relation endpoints resolve doc-locally first
+    // (TESTED_BY "tests" must hit this file's tests module, not another
+    // file's), then case-folded unique name, then last `::` segment
+    // (use-paths / trait paths like `aikoql_kernel::KError`). Anything else —
+    // std/external refs, `crate`, wikilink targets outside the corpus — is
+    // out-of-corpus and skipped.
+    let mut local_lower: HashMap<(String, String), KOID> = HashMap::new();
     let mut by_lower: HashMap<String, KOID> = HashMap::new();
     let mut by_last_seg: HashMap<String, KOID> = HashMap::new();
     let mut ambiguous: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (&name, &koid) in &koids {
+    for &(name, koid, ref doc) in &ent_kos {
+        local_lower.insert(
+            (
+                doc.as_deref().unwrap_or_default().to_string(),
+                name.to_lowercase(),
+            ),
+            koid,
+        );
         let lower = name.to_lowercase();
         if by_lower.insert(lower.clone(), koid).is_some() {
             ambiguous.insert(lower);
@@ -1111,11 +1183,11 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
             }
         }
     }
-    let resolve = |name: &str| -> Option<KOID> {
-        if let Some(&k) = koids.get(name) {
+    let resolve = |name: &str, doc: Option<&str>| -> Option<KOID> {
+        let lower = name.to_lowercase();
+        if let Some(&k) = local_lower.get(&(doc.unwrap_or_default().to_string(), lower.clone())) {
             return Some(k);
         }
-        let lower = name.to_lowercase();
         if !ambiguous.contains(&lower) {
             if let Some(&k) = by_lower.get(&lower) {
                 return Some(k);
@@ -1147,8 +1219,13 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
                 .flatten()
         };
         // `impl X for Y` relations carry the whole impl header as subject.
-        let Some(subject_koid) = resolve(&rel.subject)
-            .or_else(|| resolve(rel.subject.rsplit(" for ").next().unwrap_or(&rel.subject)))
+        let Some(subject_koid) = resolve(&rel.subject, rel.evidence.document_id.as_deref())
+            .or_else(|| {
+                resolve(
+                    rel.subject.rsplit(" for ").next().unwrap_or(&rel.subject),
+                    rel.evidence.document_id.as_deref(),
+                )
+            })
             .or_else(|| crate_koid(&rel.subject))
         else {
             rel_skipped += 1;
@@ -1164,7 +1241,9 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         let mut targets: Vec<KOID> = Vec::new();
         for target in rel.object.split(',') {
             let t = target.trim();
-            if let Some(k) = resolve(t).or_else(|| crate_koid(t)) {
+            if let Some(k) =
+                resolve(t, rel.evidence.document_id.as_deref()).or_else(|| crate_koid(t))
+            {
                 if !targets.contains(&k) {
                     targets.push(k);
                 }
@@ -1205,7 +1284,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
     }
     println!(
         "Stored {} entity KOs, {} file KOs and {} relationships{}",
-        koids.len(),
+        ent_kos.len(),
         file_koids.len(),
         rel_written,
         if entity_failures > 0 {

@@ -20,13 +20,18 @@ pub fn merge_knowledge_ir(sources: &[KnowledgeIr]) -> KnowledgeIr {
         merged.page_count = first.page_count;
     }
 
-    // Entity dedup by normalized name
-    let mut seen_entities: std::collections::BTreeMap<String, usize> =
+    // Entity dedup by (document, normalized name): the same name in two
+    // documents is a different entity (each file's `mod tests` must stay its
+    // own KO, or every tested_by edge in the graph points at one winner).
+    let mut seen_entities: std::collections::BTreeMap<(String, String), usize> =
         std::collections::BTreeMap::new();
 
     for ir in sources {
         for entity in &ir.entities {
-            let key = normalize_name(&entity.name);
+            let key = (
+                entity.evidence.document_id.clone().unwrap_or_default(),
+                normalize_name(&entity.name),
+            );
             if let Some(&idx) = seen_entities.get(&key) {
                 // Merge into existing entity
                 let existing = &mut merged.entities[idx];
@@ -138,6 +143,46 @@ mod tests {
         let merged = merge_knowledge_ir(&[ir1, ir2]);
         assert_eq!(merged.entities.len(), 1);
         assert_eq!(merged.entities[0].mentions.len(), 2);
+    }
+
+    #[test]
+    fn merge_keeps_same_name_across_documents() {
+        let mut ir1 = KnowledgeIr {
+            entities: vec![EntityCandidate {
+                name: "tests".into(),
+                type_hint: Some("Module".into()),
+                mentions: vec![],
+                confidence: 0.8,
+                evidence: Evidence::default(),
+            }],
+            ..Default::default()
+        };
+        ir1.document_id = Some("a.rs".into());
+        ir1.entities[0].evidence.document_id = Some("a.rs".into());
+
+        let mut ir2 = KnowledgeIr {
+            entities: vec![EntityCandidate {
+                name: "tests".into(),
+                type_hint: Some("Module".into()),
+                mentions: vec![],
+                confidence: 0.8,
+                evidence: Evidence::default(),
+            }],
+            ..Default::default()
+        };
+        ir2.document_id = Some("b.rs".into());
+        ir2.entities[0].evidence.document_id = Some("b.rs".into());
+
+        let merged = merge_knowledge_ir(&[ir1, ir2]);
+        assert_eq!(merged.entities.len(), 2);
+        assert_eq!(
+            merged.entities[0].evidence.document_id.as_deref(),
+            Some("a.rs")
+        );
+        assert_eq!(
+            merged.entities[1].evidence.document_id.as_deref(),
+            Some("b.rs")
+        );
     }
 
     #[test]

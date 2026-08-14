@@ -204,7 +204,7 @@ pub use reconciliation_workflow::{
 mod ingest_dir;
 pub use ingest_dir::{
     build_report, collect_file_paths, compile_file, format_report, ingest_directory,
-    parallel_ingest_directory, IngestReport, IngestResult,
+    parallel_ingest_directory, IngestReport, IngestResult, IngestStats,
 };
 
 mod ingest_incremental;

@@ -389,10 +389,12 @@ pub fn compile_file(path: &Path) -> Option<KnowledgeIr> {
             Some(path.to_string_lossy().to_string()),
         )
         .ok()
+        .filter(|ir| !ir.entities.is_empty())
         .or_else(|| Some(file_as_entity(path)))
     } else if RUST_EXTS.contains(&ext.as_str()) {
         crate::code::compile_rust_file(&path.to_string_lossy())
             .ok()
+            .filter(|ir| !ir.entities.is_empty())
             .or_else(|| Some(file_as_entity(path)))
     } else if TEXT_EXTS.contains(&ext.as_str()) {
         Some(text_file_ir(path))
@@ -862,6 +864,38 @@ mod tests {
         // Stats should be populated
         assert!(result.files_processed >= 3);
 
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn compile_file_empty_ir_falls_back_to_path_entity() {
+        let tmp = std::env::temp_dir().join("aikoql-empty-ir-test");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Macro-only rust: parses fine, but zero extractable items.
+        let rs = tmp.join("fuzz.rs");
+        fs::write(
+            &rs,
+            "proptest! {\n#![proptest_config(std::env::var(\"x\").ok())]\n}\n",
+        )
+        .unwrap();
+        // Markdown with frontmatter but no recognized sections (the shape that
+        // made website/docs/sdk/*.md vanish from the KB).
+        let md = tmp.join("notes.md");
+        fs::write(
+            &md,
+            "---\ntitle: Go SDK\ndescription: A client\n---\n# Go SDK\n\nA client.\n",
+        )
+        .unwrap();
+
+        for f in [&rs, &md] {
+            let ir = compile_file(f).expect("fallback must produce an IR");
+            assert!(!ir.entities.is_empty(), "{:?} vanished", f);
+        }
+        // Macro-only rust extracts zero items, so the path entity must appear.
+        let ir = compile_file(&rs).expect("fallback must produce an IR");
+        assert_eq!(ir.entities[0].name, rs.to_string_lossy());
         let _ = fs::remove_dir_all(&tmp);
     }
 
