@@ -30,6 +30,10 @@ aikoql report ~/my-project
 aikoql ingest-dir ~/my-project ./kb.redb
 ```
 
+Every entity (file, module, function, test, section) becomes its own Knowledge
+Object with kernel relationships between them (`depends_on`, `implements`,
+`tested_by`). Re-ingesting the same path is idempotent — it updates in place.
+
 The ingest engine classifies every file:
 - `.md` → Markdown Knowledge Compiler (sections, ADRs, facts)
 - `.rs` → Rust Code Parser (DEPENDS_ON, IMPLEMENTS, TESTED_BY)
@@ -43,13 +47,13 @@ aikoql ships as a single, self-contained binary. No dependencies, no installers.
 
 **Windows:**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.5/aikoql-mcp.exe
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.6/aikoql-mcp.exe
 .\aikoql-mcp.exe --help
 ```
 
 **Linux (static musl — any distro):**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.5/aikoql-mcp-linux-musl
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.6/aikoql-mcp-linux-musl
 chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql
 ```
 
@@ -58,11 +62,11 @@ A glibc build (`aikoql-mcp-linux`) is also available for distros that prefer dyn
 **macOS (Apple Silicon / Intel):**
 ```bash
 # Apple Silicon
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.5/aikoql-mcp-macos-arm64
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.6/aikoql-mcp-macos-arm64
 chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql
 
 # Intel
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.5/aikoql-mcp-macos
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.6/aikoql-mcp-macos
 chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql
 ```
 
@@ -70,7 +74,7 @@ chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql
 
 ```bash
 aikoql --version
-# aikoql-mcp 0.1.5
+# aikoql-mcp 0.1.6
 ```
 
 ## 5-Second Start
