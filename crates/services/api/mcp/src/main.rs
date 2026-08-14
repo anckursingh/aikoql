@@ -722,7 +722,7 @@ fn print_usage() {
         "Server options (serve mode):\n",
         "  --listen ADDR          TCP listen address (e.g., 127.0.0.1:9090)\n",
         "  --metrics-addr ADDR    HTTP metrics + health endpoint (e.g., 127.0.0.1:9091)\n",
-        "  --embedding-provider P  Embedding provider: \"openai\" (default) or \"candle\"\n",
+        "  --embedding-provider P  Embedding provider: \"candle\" (default) or \"openai\"\n",
         "  --embedding-base-url U  OpenAI-compatible base URL (default: http://localhost:11434)\n",
         "  --embedding-model M     Model name (default: nomic-embed-text)\n",
         "  --embedding-api-key K   API key for remote endpoints (omit for Ollama)\n",

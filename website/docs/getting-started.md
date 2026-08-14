@@ -10,14 +10,14 @@ description: Install and run aikoql in 5 minutes
 ```
 aikoql comes with 9 CLI commands:
   shell [DB]             Interactive knowledge shell
-  serve [--listen ADDR] [--metrics-addr ADDR] [DB]  Start MCP + HTTP server
+  serve [OPTIONS] [DB]   Start MCP server (stdio by default; --listen for TCP)
   ingest-dir [PATH] [DB] Ingest directory into knowledge base
   report [PATH]          Print knowledge report for directory (read-only)
-  backup <db>            Create verified backup
-  restore <backup>       PITR restore from backup
-  keygen <path>          Generate master encryption key
-  encrypt <db>           Encrypt an existing database
-  decrypt <db>           Decrypt a database
+  backup [DB]            Create verified backup
+  restore BACKUP [DB]    Restore from backup
+  audit [DB]             Print encryption compliance report
+  keygen [PATH]          Generate master encryption key
+  import <SOURCE> [ARGS] Import from postgres / sqlite / mongodb
 ```
 
 ### Ingest a Codebase
@@ -53,17 +53,24 @@ curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.4/aikoql-m
 chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql
 ```
 
-**macOS (build from source):**
+A glibc build (`aikoql-mcp-linux`) is also available for distros that prefer dynamic linking.
+
+**macOS (Apple Silicon / Intel):**
 ```bash
-git clone https://github.com/anckursingh/aikoql
-cd aikoql && cargo build --release -p aikoql-mcp
+# Apple Silicon
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.4/aikoql-mcp-macos-arm64
+chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql
+
+# Intel
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.4/aikoql-mcp-macos
+chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql
 ```
 
 ### Verify
 
 ```bash
 aikoql --version
-# aikoql-mcp 0.1.0
+# aikoql-mcp 0.1.4
 ```
 
 ## 5-Second Start
