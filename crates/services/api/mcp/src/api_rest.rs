@@ -50,7 +50,13 @@ fn route_inner(
     token: Option<&str>,
 ) -> Result<J, String> {
     let need_auth = || check_auth(token, sessions);
-    let args = || serde_json::from_str(body).unwrap_or(J::Null);
+    let args = || {
+        with_principal(
+            serde_json::from_str(body).unwrap_or(J::Null),
+            token,
+            sessions,
+        )
+    };
 
     match (method, path) {
         ("GET", "/api/v1/openapi.json") => openapi_spec(),
@@ -102,17 +108,17 @@ fn route_inner(
         ("GET", p) if p.starts_with("/api/v1/explain/") => {
             need_auth()?;
             let hex = p.strip_prefix("/api/v1/explain/").unwrap_or("");
-            tool_explain(k, &json!({"koid": hex}))
+            tool_explain(k, &with_principal(json!({"koid": hex}), token, sessions))
         }
         ("GET", p) if p.starts_with("/api/v1/get/") => {
             need_auth()?;
             let hex = p.strip_prefix("/api/v1/get/").unwrap_or("");
-            tool_get(k, &json!({"koid": hex, "subject": "api-user"}))
+            tool_get(k, &with_principal(json!({"koid": hex}), token, sessions))
         }
         ("GET", p) if p.starts_with("/api/v1/trace/") => {
             need_auth()?;
             let hex = p.strip_prefix("/api/v1/trace/").unwrap_or("");
-            tool_trace(k, &json!({"koid": hex, "subject": "api-user"}))
+            tool_trace(k, &with_principal(json!({"koid": hex}), token, sessions))
         }
 
         ("POST", "/api/v1/remember") => {
@@ -266,7 +272,10 @@ fn route_inner(
                 .unwrap_or("")
                 .strip_suffix("/status")
                 .unwrap_or("");
-            tool_document_status(k, &json!({"koid": koid_hex}))
+            tool_document_status(
+                k,
+                &with_principal(json!({"koid": koid_hex}), token, sessions),
+            )
         }
         ("POST", "/api/v1/documents/compile") => {
             need_auth()?;
@@ -398,6 +407,64 @@ fn check_auth(
     let guard = sessions.lock().unwrap();
     guard.get(token).ok_or("invalid session")?;
     Ok(())
+}
+
+/// Overwrite `subject`/`roles` in tool args with the authenticated Bearer
+/// session's principal. REST tools must act as the token's identity, never a
+/// body-declared subject — the body is untrusted input and could claim any
+/// subject/roles otherwise (documents/compile was ACCESS_DENIED with an admin
+/// token because tools defaulted to "mcp-agent" from the body).
+fn with_principal(
+    mut a: J,
+    token: Option<&str>,
+    sessions: &Mutex<HashMap<String, crate::HttpSession>>,
+) -> J {
+    if let Some(tok) = token {
+        if let Some(s) = sessions.lock().unwrap().get(tok) {
+            let obj = match a.as_object_mut() {
+                Some(o) => o,
+                None => {
+                    a = json!({});
+                    a.as_object_mut().expect("fresh json object")
+                }
+            };
+            obj.insert("subject".into(), json!(s.username.clone()));
+            obj.insert("roles".into(), json!(s.roles.clone()));
+        }
+    }
+    a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_principal_token_overrides_body() {
+        let sessions = Mutex::new(HashMap::new());
+        sessions.lock().unwrap().insert(
+            "tok".into(),
+            crate::HttpSession {
+                username: "admin".into(),
+                roles: vec!["admin".into()],
+                created: std::time::Instant::now(),
+            },
+        );
+        // Valid token → body-declared subject/roles are overwritten.
+        let a = with_principal(
+            json!({"koid": "x", "subject": "hacker", "roles": ["hacker"]}),
+            Some("tok"),
+            &sessions,
+        );
+        assert_eq!(a["subject"], "admin");
+        assert_eq!(a["roles"], json!(["admin"]));
+        // No token → body untouched.
+        let a = with_principal(json!({"subject": "hacker"}), None, &sessions);
+        assert_eq!(a["subject"], "hacker");
+        // Unknown token → body untouched.
+        let a = with_principal(json!({"subject": "hacker"}), Some("bogus"), &sessions);
+        assert_eq!(a["subject"], "hacker");
+    }
 }
 
 fn openapi_spec() -> Result<J, String> {
