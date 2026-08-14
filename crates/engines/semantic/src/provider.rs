@@ -163,18 +163,25 @@ impl CandleEmbedding {
     /// Load `sentence-transformers/all-MiniLM-L6-v2` from HF Hub.
     /// First call downloads ~90MB and caches locally.
     pub fn new() -> KResult<Self> {
-        let api =
-            hf_hub::api::sync::Api::new().map_err(|e| KError::Store(format!("hf-api: {e}")))?;
-        let repo = api.model("sentence-transformers/all-MiniLM-L6-v2".into());
-        let config_path = repo
-            .get("config.json")
-            .map_err(|e| KError::Store(format!("hf-config: {e}")))?;
-        let tokenizer_path = repo
-            .get("tokenizer.json")
-            .map_err(|e| KError::Store(format!("hf-tokenizer: {e}")))?;
-        let weights_path = repo
-            .get("model.safetensors")
-            .map_err(|e| KError::Store(format!("hf-weights: {e}")))?;
+        // hf-hub 0.4 tokio API (rustls) — the sync API pulls native-tls/openssl.
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| KError::Store(format!("tokio-runtime: {e}")))?;
+        let (config_path, tokenizer_path, weights_path) = rt.block_on(async {
+            let api = hf_hub::api::tokio::Api::new()
+                .map_err(|e| KError::Store(format!("hf-api: {e}")))?;
+            let repo = api.model("sentence-transformers/all-MiniLM-L6-v2".into());
+            Ok::<_, KError>((
+                repo.get("config.json")
+                    .await
+                    .map_err(|e| KError::Store(format!("hf-config: {e}")))?,
+                repo.get("tokenizer.json")
+                    .await
+                    .map_err(|e| KError::Store(format!("hf-tokenizer: {e}")))?,
+                repo.get("model.safetensors")
+                    .await
+                    .map_err(|e| KError::Store(format!("hf-weights: {e}")))?,
+            ))
+        })?;
 
         let config_raw = std::fs::read_to_string(&config_path)
             .map_err(|e| KError::Store(format!("read config: {e}")))?;

@@ -70,15 +70,12 @@ jobs:
             target/release/aikoql-mcp-linux.sha256
 
   # ── Linux musl binary ───────────────────────────────────────────
-  # Non-blocking: hf-hub -> native-tls -> openssl-sys has no musl build in the
-  # cross image. musl is for Docker/Alpine/advanced users (post-MVP), so a
-  # failed musl build must not block the release. Artifacts upload
-  # conditionally below.
+  # hf-hub is pinned rustls-only (aikoql-semantic), so no openssl-sys enters
+  # the tree and the cross image builds it as-is.
   linux-musl:
     name: Build Linux (x86_64-musl)
     needs: validate-versions
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -161,10 +158,8 @@ jobs:
           cp windows/aikoql-mcp.exe.sha256    aikoql-mcp.exe.sha256
           cp linux-gnu/aikoql-mcp             aikoql-mcp-linux
           cp linux-gnu/aikoql-mcp-linux.sha256 aikoql-mcp-linux.sha256
-          if [ -f linux-musl/aikoql-mcp ]; then
-            cp linux-musl/aikoql-mcp             aikoql-mcp-linux-musl
-            cp linux-musl/aikoql-mcp-linux-musl.sha256 aikoql-mcp-linux-musl.sha256
-          fi
+          cp linux-musl/aikoql-mcp             aikoql-mcp-linux-musl
+          cp linux-musl/aikoql-mcp-linux-musl.sha256 aikoql-mcp-linux-musl.sha256
           cp macos-intel/aikoql-mcp            aikoql-mcp-macos
           cp macos-intel/aikoql-mcp-macos.sha256 aikoql-mcp-macos.sha256
           cp macos-arm/aikoql-mcp              aikoql-mcp-macos-arm64
@@ -181,6 +176,8 @@ jobs:
             aikoql-mcp.exe.sha256
             aikoql-mcp-linux
             aikoql-mcp-linux.sha256
+            aikoql-mcp-linux-musl
+            aikoql-mcp-linux-musl.sha256
             aikoql-mcp-macos
             aikoql-mcp-macos.sha256
             aikoql-mcp-macos-arm64
@@ -188,13 +185,6 @@ jobs:
             checksums.txt
             checksums.txt.sha256
           generate_release_notes: true
-      - name: Upload musl artifacts (if built)
-        run: |
-          if [ -f aikoql-mcp-linux-musl ]; then
-            gh release upload "$GITHUB_REF_NAME" aikoql-mcp-linux-musl aikoql-mcp-linux-musl.sha256 --clobber
-          fi
-        env:
-          GH_TOKEN: ${{ github.token }}
 
   # ── npm publish, gated on the release + version match ──────────
   npm-publish:
