@@ -192,8 +192,10 @@ impl CandleEmbedding {
             .map_err(|e| KError::Store(format!("load tokenizer: {e}")))?;
         // Cap input to all-MiniLM's 512-token window — enrichment text (e.g. an
         // ingested directory's ir_json) can be MBs and would blow up the tensor.
-        let mut tp = tokenizers::TruncationParams::default();
-        tp.max_length = 512;
+        let tp = tokenizers::TruncationParams {
+            max_length: 512,
+            ..Default::default()
+        };
         tokenizer
             .with_truncation(Some(tp))
             .map_err(|e| KError::Store(format!("tokenizer truncation: {e}")))?;

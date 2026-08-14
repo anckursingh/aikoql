@@ -923,12 +923,203 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
     );
     println!("{}\n", aikoql_ingestion::format_report(&report));
 
-    // Store as a Knowledge Object in the database.
+    // Store the IR as production knowledge: one KO per entity with kernel
+    // relationships between them. The summary KO below remains only as the
+    // compile_context IR snapshot (tool_compile_context reads ir_json).
     let engine = RedbEngine::open(db_path).expect("open db");
     let kernel =
         Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
     let subj = Subject::with_roles("ingest-dir", &["admin"]);
 
+    // Facts attach to every entity they reference.
+    let mut facts_by_entity: HashMap<&str, Vec<String>> = HashMap::new();
+    for fact in &result.ir.facts {
+        for name in &fact.entities {
+            facts_by_entity
+                .entry(name.as_str())
+                .or_default()
+                .push(fact.statement.clone());
+        }
+    }
+
+    // Phase 1: one KO per entity. Idempotency keys make re-ingest exact-once.
+    let mut koids: HashMap<&str, KOID> = HashMap::new();
+    let mut entity_failures = 0usize;
+    for ent in &result.ir.entities {
+        let type_name = entity_type_name(ent.type_hint.as_deref());
+        let mut ent_props = PropertyMap::new();
+        ent_props.insert("name".into(), Value::Text(ent.name.clone()));
+        if let Some(hint) = &ent.type_hint {
+            ent_props.insert("type_hint".into(), Value::Text(hint.clone()));
+        }
+        ent_props.insert(
+            "mentions".into(),
+            Value::List(ent.mentions.iter().cloned().map(Value::Text).collect()),
+        );
+        ent_props.insert("confidence".into(), Value::Float(ent.confidence as f64));
+        if let Some(doc) = &ent.evidence.document_id {
+            ent_props.insert("evidence_document".into(), Value::Text(doc.clone()));
+        }
+        ent_props.insert(
+            "evidence_extractor".into(),
+            Value::Text(ent.evidence.extractor.clone()),
+        );
+        if let Some(model) = &ent.evidence.model {
+            ent_props.insert("evidence_model".into(), Value::Text(model.clone()));
+        }
+        if let Some(facts) = facts_by_entity.get(ent.name.as_str()) {
+            ent_props.insert(
+                "facts".into(),
+                Value::List(facts.iter().cloned().map(Value::Text).collect()),
+            );
+        }
+        match kernel.remember(RememberRequest {
+            context: (&subj).into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: Some(format!("ingest-entity:{}:{}", path, ent.name)),
+            metadata: Metadata {
+                type_name,
+                tenant: None,
+                schema_version: 1,
+                tags: vec!["ingest-dir".into(), "auto".into()],
+            },
+            properties: ent_props,
+            semantic: None,
+            relationships: vec![],
+            security: Some(SecurityDescriptor {
+                owner: "ingest-dir".into(),
+                acl: vec![],
+                classification: None,
+            }),
+            extensions: ExtensionMap::new(),
+            origin: Origin::Agent("ingest-dir".into()),
+            note: Some(format!("entity from ingest-dir {}", path)),
+            referential_policy: ReferentialPolicy::Permissive,
+        }) {
+            Ok(r) => {
+                koids.insert(ent.name.as_str(), r.koid);
+            }
+            Err(e) => {
+                entity_failures += 1;
+                eprintln!("entity {}: {}", ent.name, e);
+            }
+        }
+    }
+
+    // Phase 2: relationships, outbound from the subject entity's KO. Grouped
+    // per subject so each KO gets one update (replace semantics keep
+    // re-ingest idempotent). Relation endpoints resolve by exact name, then
+    // case-folded name, then last `::` segment (use-paths / trait paths like
+    // `aikoql_kernel::KError`). Anything else — std/external refs, `crate`,
+    // wikilink targets outside the corpus — is out-of-corpus and skipped.
+    let mut by_lower: HashMap<String, KOID> = HashMap::new();
+    let mut by_last_seg: HashMap<String, KOID> = HashMap::new();
+    let mut ambiguous: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (&name, &koid) in &koids {
+        let lower = name.to_lowercase();
+        if by_lower.insert(lower.clone(), koid).is_some() {
+            ambiguous.insert(lower);
+        }
+        if let Some(seg) = name.rsplit("::").next() {
+            let key = seg.to_lowercase();
+            if by_last_seg.insert(key.clone(), koid).is_some() {
+                ambiguous.insert(key);
+            }
+        }
+    }
+    let resolve = |name: &str| -> Option<KOID> {
+        if let Some(&k) = koids.get(name) {
+            return Some(k);
+        }
+        let lower = name.to_lowercase();
+        if !ambiguous.contains(&lower) {
+            if let Some(&k) = by_lower.get(&lower) {
+                return Some(k);
+            }
+        }
+        if let Some(seg) = name.rsplit("::").next() {
+            let key = seg.to_lowercase();
+            if !ambiguous.contains(&key) {
+                if let Some(&k) = by_last_seg.get(&key) {
+                    return Some(k);
+                }
+            }
+        }
+        None
+    };
+    let mut outbound: HashMap<KOID, Vec<RelationshipRef>> = HashMap::new();
+    let mut rel_skipped = 0usize;
+    for rel in &result.ir.relations {
+        // `impl X for Y` relations carry the whole impl header as subject.
+        let Some(subject_koid) =
+            resolve(&rel.subject).or_else(|| resolve(rel.subject.rsplit(" for ").next().unwrap_or(&rel.subject)))
+        else {
+            rel_skipped += 1;
+            if rel_skipped <= 5 {
+                eprintln!(
+                    "  unresolved: {} {} {} (out-of-corpus)",
+                    rel.subject, rel.predicate, rel.object
+                );
+            }
+            continue;
+        };
+        // `use a::{B, C}` relations join targets with commas — one edge each.
+        let mut targets: Vec<KOID> = Vec::new();
+        for target in rel.object.split(',') {
+            if let Some(k) = resolve(target.trim()) {
+                if !targets.contains(&k) {
+                    targets.push(k);
+                }
+            }
+        }
+        if targets.is_empty() {
+            rel_skipped += 1;
+            continue;
+        }
+        let entry = outbound.entry(subject_koid).or_default();
+        for target in targets {
+            entry.push(RelationshipRef {
+                rel_type: rel.predicate.clone(),
+                target,
+                direction: Direction::Outbound,
+            });
+        }
+    }
+    let mut rel_written = 0usize;
+    for (koid, refs) in &outbound {
+        let ctx = KnowledgeContext::from(&subj);
+        match kernel.get(ctx, koid) {
+            Ok(ko) => {
+                let mut req = RememberRequest::update(
+                    KnowledgeContext::from(&subj),
+                    *koid,
+                    ko.metadata.clone(),
+                );
+                req.properties = ko.properties.clone();
+                req.relationships = refs.clone();
+                match kernel.remember(req) {
+                    Ok(_) => rel_written += refs.len(),
+                    Err(e) => eprintln!("relationships for {}: {}", koid.to_hex(), e),
+                }
+            }
+            Err(e) => eprintln!("relationships for {}: {}", koid.to_hex(), e),
+        }
+    }
+    println!(
+        "Stored {} entity KOs and {} relationships{}",
+        koids.len(),
+        rel_written,
+        if entity_failures > 0 {
+            format!(" ({} entities failed)", entity_failures)
+        } else if rel_skipped > 0 {
+            format!(" ({} out-of-corpus refs skipped)", rel_skipped)
+        } else {
+            String::new()
+        }
+    );
+
+    // Snapshot KO — ir_json's only consumer is tool_compile_context.
     let ir_json = serde_json::to_string(&result.ir).unwrap_or_default();
     let mut props = PropertyMap::new();
     props.insert("source_path".into(), Value::Text(path.to_string()));
@@ -967,7 +1158,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         }),
         extensions: ExtensionMap::new(),
         origin: Origin::Human,
-        note: Some(format!("Directory ingestion: {}", path)),
+        note: Some(format!("Directory ingestion IR snapshot (compile_context source): {}", path)),
         referential_policy: ReferentialPolicy::Permissive,
     }) {
         Ok(r) => {
@@ -980,6 +1171,27 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
             eprintln!("Warning: could not store KO: {}", e);
             println!("IR generated but not persisted.");
         }
+    }
+}
+
+/// Map an IR type hint to a kernel type name. Hints are extractor-produced
+/// tokens like "file", "module", "test"; anything unusable falls back to the
+/// generic entity type.
+fn entity_type_name(hint: Option<&str>) -> String {
+    match hint {
+        Some(h) if !h.trim().is_empty() => {
+            let sanitized: String = h
+                .trim()
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+                .collect();
+            if sanitized.is_empty() {
+                "aikoql:entity".into()
+            } else {
+                sanitized
+            }
+        }
+        _ => "aikoql:entity".into(),
     }
 }
 
@@ -5224,7 +5436,11 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max.saturating_sub(3).min(s.len())])
+        let mut end = max.saturating_sub(3).min(s.len());
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }
 
@@ -5895,4 +6111,24 @@ fn tools_list() -> J {
         {"name": "memory_delete", "description": "Delete a memory file from the memory directory and remove its entry from MEMORY.md. Returns the deleted memory's name and path. (MRFC-0070)", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "description": "Name slug of the memory to delete"}, "memory_dir": {"type": "string", "description": "Override the memory directory path"}}, "required": ["name"]}}
         ]
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate;
+
+    #[test]
+    fn truncate_never_splits_multibyte_chars() {
+        // 25 x 'a' + '—' (bytes 25..28) + 'zzzz' = 32 bytes. max 30 → end 27
+        // lands inside the em dash and must back off to a char boundary.
+        let s = "aaaaaaaaaaaaaaaaaaaaaaaaa—zzzz";
+        let t = truncate(s, 30);
+        assert!(t.ends_with("..."));
+        assert_eq!(&t[t.len() - 4..], "a...");
+    }
+
+    #[test]
+    fn truncate_passthrough_short_strings() {
+        assert_eq!(truncate("hi", 10), "hi");
+    }
 }
