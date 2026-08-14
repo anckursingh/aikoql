@@ -566,7 +566,14 @@ fn main() {
     // ponytail: synchronous scan on startup — blocks until all KOs are enriched.
     // Move to background thread when startup latency matters.
     if let Some(enrichment_provider) = emb_provider {
-        let enricher = EmbeddingEnricher::new(enrichment_provider, &model);
+        // Record the real model: candle always loads all-MiniLM-L6-v2; the
+        // --embedding-model flag only names the OpenAI-compatible endpoint.
+        let enrichment_model = if embedding_provider.as_deref() == Some("openai") {
+            model.clone()
+        } else {
+            "all-MiniLM-L6-v2".to_string()
+        };
+        let enricher = EmbeddingEnricher::new(enrichment_provider, &enrichment_model);
         let engine = Arc::new(SemanticEngine::new(Arc::new(enricher)));
         let sched = Scheduler::new();
         sched.register(engine);
@@ -5099,6 +5106,14 @@ fn add_node_api(
             "classification": ko.security.classification,
             "acl_count": ko.security.acl.len(),
         });
+        if let Some(ref sem) = ko.semantic {
+            node["semantic"] = json!({
+                "embedding_model": sem.embedding_model,
+                "embedding_dims": sem.embedding.as_ref().map(|v| v.len()).unwrap_or(0),
+                "confidence": sem.confidence,
+                "summary": sem.summary,
+            });
+        }
         node["extensions"] = json!(ko
             .extensions
             .iter()

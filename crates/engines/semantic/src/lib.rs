@@ -104,7 +104,10 @@ impl SemanticEngine {
         };
 
         let mut req = RememberRequest::update(
-            Subject::new("semantic-engine"),
+            // System service: admin role so ACL-filtered scans see every KO
+            // and the enrichment write is authorized (dogfood ingest found
+            // plain "semantic-engine" was silently denied read on owned KOs).
+            Subject::with_roles("semantic-engine", &["admin"]),
             ko.koid,
             ko.metadata.clone(),
         );
@@ -124,12 +127,12 @@ impl SchedulerJob for SemanticEngine {
     }
 
     fn start(&self, kernel: &Kernel) -> KResult<()> {
-        let subject = Subject::new("semantic-engine");
+        let subject = Subject::with_roles("semantic-engine", &["admin"]);
         // Catch-up: enrich all existing KOs that lack semantic blocks.
-        // ponytail: scan_by_type per type; a scan_all_readable would avoid
-        // the type-whitelist problem. Add when more than 2-3 types exist.
-        for type_name in &["fact", "note", "claim", "evidence", "document"] {
-            for ko in kernel.scan_by_type(&subject, type_name)? {
+        // Enumerate actual types — a hardcoded whitelist misses ingested
+        // directories, connectors, programs, etc. (dogfood ingest found this).
+        for type_name in kernel.list_types()? {
+            for ko in kernel.scan_by_type(&subject, &type_name)? {
                 self.enrich_one(kernel, &ko)?;
             }
         }

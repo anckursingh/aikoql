@@ -1043,6 +1043,14 @@ function renderNodeDetail(node) {
     h += '<div class="kv-row"><span class="kv-key">ACL Entries</span><span class="kv-val">'+(node.security.acl_count||0)+'</span></div>';
   }
 
+  // Semantic (embedding enrichment)
+  if (node.semantic) {
+    h += '<div class="section-title">Semantic</div>';
+    if (node.semantic.embedding_model) h += '<div class="kv-row"><span class="kv-key">Embedding Model</span><span class="kv-val">'+node.semantic.embedding_model+'</span></div>';
+    h += '<div class="kv-row"><span class="kv-key">Embedding Dims</span><span class="kv-val">'+(node.semantic.embedding_dims||0)+'</span></div>';
+    if (node.semantic.summary) h += '<div class="kv-row"><span class="kv-key">Summary</span><span class="kv-val">'+node.semantic.summary+'</span></div>';
+  }
+
   // Properties
   if (node.properties && Object.keys(node.properties).length > 0) {
     h += '<div class="section-title">Properties</div>';

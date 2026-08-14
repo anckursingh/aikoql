@@ -188,8 +188,15 @@ impl CandleEmbedding {
         let config: candle_transformers::models::bert::Config =
             serde_json::from_str(&config_raw)
                 .map_err(|e| KError::Store(format!("parse config: {e}")))?;
-        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
+        let mut tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| KError::Store(format!("load tokenizer: {e}")))?;
+        // Cap input to all-MiniLM's 512-token window — enrichment text (e.g. an
+        // ingested directory's ir_json) can be MBs and would blow up the tensor.
+        let mut tp = tokenizers::TruncationParams::default();
+        tp.max_length = 512;
+        tokenizer
+            .with_truncation(Some(tp))
+            .map_err(|e| KError::Store(format!("tokenizer truncation: {e}")))?;
 
         let device = candle_core::Device::Cpu;
         let vb = unsafe {
@@ -277,6 +284,8 @@ impl EmbeddingProvider for CandleEmbedding {
             .map_err(|e| KError::Store(format!("norm div: {e}")))?;
 
         let vec = normalized
+            .squeeze(0)
+            .map_err(|e| KError::Store(format!("squeeze: {e}")))?
             .to_vec1()
             .map_err(|e| KError::Store(format!("to_vec: {e}")))?;
         Ok(vec)
