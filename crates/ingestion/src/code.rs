@@ -57,6 +57,18 @@ fn parse_syn_file(file: &syn::File, document_id: Option<String>, extractor: Stri
         process_item(item, &mut ir, "crate");
     }
 
+    // Provenance pass: candidate builders can't see the file path, so fill
+    // evidence.document_id here. Downstream, ingest groups entities into their
+    // file KO by it, and relation anchors ("crate" subjects) resolve via it.
+    if let Some(doc) = &ir.document_id {
+        for e in &mut ir.entities {
+            e.evidence.document_id = Some(doc.clone());
+        }
+        for r in &mut ir.relations {
+            r.evidence.document_id = Some(doc.clone());
+        }
+    }
+
     ir
 }
 
@@ -464,6 +476,23 @@ mod engine {
             ir.entities.iter().any(|e| e.name == "Constraint"),
             "should find struct inside module"
         );
+    }
+
+    #[test]
+    fn evidence_document_id_filled_from_file_hint() {
+        let src = r#"
+use std::collections::HashMap;
+fn lookup() {}
+"#;
+        let ir = compile_rust_source(src, Some("src/util.rs"));
+        for e in &ir.entities {
+            assert_eq!(e.evidence.document_id.as_deref(), Some("src/util.rs"));
+        }
+        assert!(ir
+            .relations
+            .iter()
+            .all(|r| r.evidence.document_id.as_deref() == Some("src/util.rs")));
+        assert!(!ir.relations.is_empty());
     }
 
     #[test]

@@ -874,6 +874,8 @@ pub const SUPERSEDES: &str = "supersedes";
 pub const CONTRADICTS: &str = "contradicts";
 /// Derivation: source is derived from target.
 pub const DERIVED_FROM: &str = "derived_from";
+/// Containment: source contains target (directory → file → entity).
+pub const CONTAINS: &str = "contains";
 
 /// All MRFC-0070 relationship types for iteration/discovery.
 pub const RELATIONSHIP_TYPES: &[&str] = &[
@@ -888,6 +890,7 @@ pub const RELATIONSHIP_TYPES: &[&str] = &[
     SUPERSEDES,
     CONTRADICTS,
     DERIVED_FROM,
+    CONTAINS,
 ];
 
 // ---------------------------------------------------------------------------

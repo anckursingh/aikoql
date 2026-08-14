@@ -944,9 +944,16 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
 
     // Phase 1: one KO per entity. Idempotency keys make re-ingest exact-once.
     let mut koids: HashMap<&str, KOID> = HashMap::new();
+    let mut doc_by_name: HashMap<&str, Option<String>> = HashMap::new();
     let mut entity_failures = 0usize;
     for ent in &result.ir.entities {
-        let type_name = entity_type_name(ent.type_hint.as_deref());
+        // A path-named fallback entity (unparseable/text file) is its own
+        // File KO — type it as such instead of its extractor hint.
+        let type_name = if ent.evidence.document_id.as_deref() == Some(ent.name.as_str()) {
+            "File".into()
+        } else {
+            entity_type_name(ent.type_hint.as_deref())
+        };
         let mut ent_props = PropertyMap::new();
         ent_props.insert("name".into(), Value::Text(ent.name.clone()));
         if let Some(hint) = &ent.type_hint {
@@ -999,12 +1006,88 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         }) {
             Ok(r) => {
                 koids.insert(ent.name.as_str(), r.koid);
+                doc_by_name.insert(ent.name.as_str(), ent.evidence.document_id.clone());
             }
             Err(e) => {
                 entity_failures += 1;
                 eprintln!("entity {}: {}", ent.name, e);
             }
         }
+    }
+
+    // Phase 1b: containment — one File KO per source file; each file
+    // `contains` its entities and the directory KO (below) `contains` every
+    // file. Files with no parseable entities were already stored as
+    // path-named "file" entities — reuse those KOs as their File KO.
+    let mut file_koids: HashMap<String, KOID> = HashMap::new();
+    let mut outbound: HashMap<KOID, Vec<RelationshipRef>> = HashMap::new();
+    let mut orphan_refs: Vec<RelationshipRef> = Vec::new();
+    for (name, &koid) in &koids {
+        let Some(doc) = doc_by_name.get(name).and_then(|d| d.as_deref()) else {
+            // No provenance — hook directly to the directory KO.
+            orphan_refs.push(RelationshipRef {
+                rel_type: kom::CONTAINS.to_string(),
+                target: koid,
+                direction: Direction::Outbound,
+            });
+            continue;
+        };
+        if doc == *name {
+            file_koids.insert(doc.to_string(), koid);
+            continue;
+        }
+        let file_koid = match file_koids.get(doc) {
+            Some(&k) => k,
+            None => {
+                let mut fprops = PropertyMap::new();
+                fprops.insert("name".into(), Value::Text(doc.to_string()));
+                let k = match kernel.remember(RememberRequest {
+                    context: (&subj).into(),
+                    koid: None,
+                    expected_version: Some(0),
+                    idempotency_key: Some(format!("ingest-file:{}:{}", path, doc)),
+                    metadata: Metadata {
+                        type_name: "File".into(),
+                        tenant: None,
+                        schema_version: 1,
+                        tags: vec!["ingest-dir".into(), "auto".into()],
+                    },
+                    properties: fprops,
+                    semantic: None,
+                    relationships: vec![],
+                    security: Some(SecurityDescriptor {
+                        owner: "ingest-dir".into(),
+                        acl: vec![],
+                        classification: None,
+                    }),
+                    extensions: ExtensionMap::new(),
+                    origin: Origin::Agent("ingest-dir".into()),
+                    note: Some(format!("source file from ingest-dir {}", path)),
+                    referential_policy: ReferentialPolicy::Permissive,
+                }) {
+                    Ok(r) => r.koid,
+                    Err(e) => {
+                        eprintln!("file KO {}: {}", doc, e);
+                        orphan_refs.push(RelationshipRef {
+                            rel_type: kom::CONTAINS.to_string(),
+                            target: koid,
+                            direction: Direction::Outbound,
+                        });
+                        continue;
+                    }
+                };
+                file_koids.insert(doc.to_string(), k);
+                k
+            }
+        };
+        outbound
+            .entry(file_koid)
+            .or_default()
+            .push(RelationshipRef {
+                rel_type: kom::CONTAINS.to_string(),
+                target: koid,
+                direction: Direction::Outbound,
+            });
     }
 
     // Phase 2: relationships, outbound from the subject entity's KO. Grouped
@@ -1048,12 +1131,25 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         }
         None
     };
-    let mut outbound: HashMap<KOID, Vec<RelationshipRef>> = HashMap::new();
     let mut rel_skipped = 0usize;
     for rel in &result.ir.relations {
+        // The parser anchors per-file roots as "crate"; resolve to the File KO
+        // via the relation's provenance.
+        let crate_koid = |name: &str| {
+            (name == "crate")
+                .then(|| {
+                    rel.evidence
+                        .document_id
+                        .as_deref()
+                        .and_then(|d| file_koids.get(d))
+                        .copied()
+                })
+                .flatten()
+        };
         // `impl X for Y` relations carry the whole impl header as subject.
         let Some(subject_koid) = resolve(&rel.subject)
             .or_else(|| resolve(rel.subject.rsplit(" for ").next().unwrap_or(&rel.subject)))
+            .or_else(|| crate_koid(&rel.subject))
         else {
             rel_skipped += 1;
             if rel_skipped <= 5 {
@@ -1067,7 +1163,8 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         // `use a::{B, C}` relations join targets with commas — one edge each.
         let mut targets: Vec<KOID> = Vec::new();
         for target in rel.object.split(',') {
-            if let Some(k) = resolve(target.trim()) {
+            let t = target.trim();
+            if let Some(k) = resolve(t).or_else(|| crate_koid(t)) {
                 if !targets.contains(&k) {
                     targets.push(k);
                 }
@@ -1107,8 +1204,9 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         }
     }
     println!(
-        "Stored {} entity KOs and {} relationships{}",
+        "Stored {} entity KOs, {} file KOs and {} relationships{}",
         koids.len(),
+        file_koids.len(),
         rel_written,
         if entity_failures > 0 {
             format!(" ({} entities failed)", entity_failures)
@@ -1165,6 +1263,31 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         referential_policy: ReferentialPolicy::Permissive,
     }) {
         Ok(r) => {
+            // The directory KO is the graph root: it `contains` every File KO
+            // and any entity without file provenance. Update (REPLACE) keeps
+            // re-ingest idempotent.
+            let mut dir_refs: Vec<RelationshipRef> = file_koids
+                .values()
+                .map(|&k| RelationshipRef {
+                    rel_type: kom::CONTAINS.to_string(),
+                    target: k,
+                    direction: Direction::Outbound,
+                })
+                .collect();
+            dir_refs.extend(orphan_refs);
+            let ctx = KnowledgeContext::from(&subj);
+            if let Ok(ko) = kernel.get(ctx, &r.koid) {
+                let mut req = RememberRequest::update(
+                    KnowledgeContext::from(&subj),
+                    r.koid,
+                    ko.metadata.clone(),
+                );
+                req.properties = ko.properties.clone();
+                req.relationships = dir_refs;
+                if let Err(e) = kernel.remember(req) {
+                    eprintln!("Warning: directory containment edges: {}", e);
+                }
+            }
             println!("Stored as knowledge object:");
             println!("  KOID: {}", r.koid.to_hex());
             println!("\nQuery with: aikoql-mcp shell {} -- then:", db_path);
