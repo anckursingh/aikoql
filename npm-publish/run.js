@@ -5,6 +5,10 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 
+// Release determinism: the npm package version pins the GitHub Release it
+// downloads from, so npm@X always executes native binary X.
+const version = require('./package.json').version;
+
 const BIN_DIR = path.join(__dirname, 'bin');
 const exe = process.platform === 'win32' ? 'aikoql.exe' : 'aikoql';
 const binPath = path.join(BIN_DIR, exe);
@@ -28,7 +32,7 @@ function download() {
     fail(`no prebuilt binary for ${platform}.`);
   }
 
-  const base = `https://github.com/anckursingh/aikoql/releases/latest/download`;
+  const base = `https://github.com/anckursingh/aikoql/releases/download/v${version}`;
   const binUrl = `${base}/${file}`;
   const chkUrl = `${base}/${file}.sha256`;
 

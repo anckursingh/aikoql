@@ -437,7 +437,14 @@ fn main() {
     let mut embedding_model = String::new();
     #[allow(unused_assignments, unused_variables)]
     let mut embedding_api_key: Option<String> = None;
-    let mut i = 1;
+    // `serve` is the documented server-mode subcommand; start flag parsing
+    // after it so it isn't swallowed as the db path (creates a stray `serve`
+    // redb file in the CWD otherwise). Bare `aikoql-mcp [DB]` still works.
+    let mut i = if subcmd == Some("serve") {
+        subcmd_idx.unwrap() + 2
+    } else {
+        1
+    };
     while i < args.len() {
         match args[i].as_str() {
             "--listen" => {
@@ -485,6 +492,10 @@ fn main() {
             "--embedding-api-key" => {
                 embedding_api_key = Some(args.get(i + 1).cloned().unwrap_or_default());
                 i += 2;
+            }
+            _ if args[i].starts_with("--") => {
+                eprintln!("Unknown option: {} (run `aikoql-mcp help`)", args[i]);
+                std::process::exit(1);
             }
             _ => {
                 db_path = args[i].clone();

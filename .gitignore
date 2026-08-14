@@ -55,3 +55,9 @@ tests/e2e/test-results/
 test-*.db
 --version
 .aikoql/
+
+# npm launcher / serve runtime artifacts
+*.log
+/serve
+serve.artifacts/
+npm-publish/memory/

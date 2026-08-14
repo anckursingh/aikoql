@@ -41,16 +41,16 @@ The ingest engine classifies every file:
 
 aikoql ships as a single, self-contained binary. No dependencies, no installers.
 
-**Windows (3.4 MB):**
+**Windows:**
 ```bash
-curl -LO https://aikoql.dev/releases/latest/aikoql-windows.exe
-mv aikoql-windows.exe aikoql.exe
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.4/aikoql-mcp.exe
+.\aikoql-mcp.exe --help
 ```
 
-**Linux (3.7 MB, static musl — any distro):**
+**Linux (static musl — any distro):**
 ```bash
-curl -LO https://aikoql.dev/releases/latest/aikoql-linux
-chmod +x aikoql-linux && mv aikoql-linux /usr/local/bin/aikoql
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.4/aikoql-mcp-linux-musl
+chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql
 ```
 
 **macOS (build from source):**

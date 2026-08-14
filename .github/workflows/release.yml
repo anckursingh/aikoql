@@ -8,9 +8,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ── Version gate: git tag is the single source of truth ─────────
+  validate-versions:
+    name: Validate versions vs tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Cargo / npm / plugin versions match tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_ver="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          npm_ver="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' npm-publish/package.json | head -1)"
+          plugin_ver="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' .claude-plugin/plugin.json | head -1)"
+          fail=0
+          [ "$tag" = "$cargo_ver" ] || { echo "::error::Cargo.toml version '$cargo_ver' != tag '$tag'"; fail=1; }
+          [ "$tag" = "$npm_ver" ] || { echo "::error::npm version '$npm_ver' != tag '$tag'"; fail=1; }
+          [ "$tag" = "$plugin_ver" ] || { echo "::error::plugin version '$plugin_ver' != tag '$tag'"; fail=1; }
+          grep -q "releases/download/v$tag/" website/index.html || { echo "::error::website/index.html not pinned to v$tag"; fail=1; }
+          grep -q "releases/download/v$tag/" website/docs/getting-started.md || { echo "::error::getting-started.md not pinned to v$tag"; fail=1; }
+          exit $fail
+
   # ── Windows binary ──────────────────────────────────────────────
   windows:
     name: Build Windows (x86_64)
+    needs: validate-versions
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +52,7 @@ jobs:
   # ── Linux glibc binary ──────────────────────────────────────────
   linux-gnu:
     name: Build Linux (x86_64-gnu)
+    needs: validate-versions
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +72,7 @@ jobs:
   # ── Linux musl binary ───────────────────────────────────────────
   linux-musl:
     name: Build Linux (x86_64-musl)
+    needs: validate-versions
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,6 +98,7 @@ jobs:
   # ── macOS Intel binary ──────────────────────────────────────────
   macos-intel:
     name: Build macOS (x86_64)
+    needs: validate-versions
     runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
@@ -94,6 +118,7 @@ jobs:
   # ── macOS Apple Silicon binary ──────────────────────────────────
   macos-arm:
     name: Build macOS (aarch64)
+    needs: validate-versions
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -114,7 +139,7 @@ jobs:
   # ── GitHub Release ──────────────────────────────────────────────
   github-release:
     name: Publish Release
-    needs: [windows, linux-gnu, linux-musl, macos-intel, macos-arm]
+    needs: [validate-versions, windows, linux-gnu, linux-musl, macos-intel, macos-arm]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -153,3 +178,23 @@ jobs:
             checksums.txt
             checksums.txt.sha256
           generate_release_notes: true
+
+  # ── npm publish, gated on the release + version match ──────────
+  npm-publish:
+    name: Publish npm package
+    needs: [github-release, validate-versions]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+      - name: Smoke-test launcher resolves pinned release
+        working-directory: npm-publish
+        run: node run.js --version
+      - name: Publish
+        working-directory: npm-publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
