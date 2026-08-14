@@ -70,10 +70,15 @@ jobs:
             target/release/aikoql-mcp-linux.sha256
 
   # ── Linux musl binary ───────────────────────────────────────────
+  # Non-blocking: hf-hub -> native-tls -> openssl-sys has no musl build in the
+  # cross image. musl is for Docker/Alpine/advanced users (post-MVP), so a
+  # failed musl build must not block the release. Artifacts upload
+  # conditionally below.
   linux-musl:
     name: Build Linux (x86_64-musl)
     needs: validate-versions
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -96,24 +101,29 @@ jobs:
             target/x86_64-unknown-linux-musl/release/aikoql-mcp-linux-musl.sha256
 
   # ── macOS Intel binary ──────────────────────────────────────────
+  # macos-13 hosted runners are retired (jobs queue forever), so build
+  # x86_64-apple-darwin on the arm64 runner via cross-compilation.
   macos-intel:
     name: Build macOS (x86_64)
     needs: validate-versions
-    runs-on: macos-13
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build release
-        run: cargo build --release -p aikoql-mcp
+        with:
+          targets: x86_64-apple-darwin
+      - name: Build release (x86_64)
+        run: cargo build --release --target x86_64-apple-darwin -p aikoql-mcp
       - name: Generate SHA-256
         run: |
-          shasum -a 256 target/release/aikoql-mcp | cut -d' ' -f1 > target/release/aikoql-mcp-macos.sha256
+          shasum -a 256 target/x86_64-apple-darwin/release/aikoql-mcp | cut -d' ' -f1 \
+            > target/x86_64-apple-darwin/release/aikoql-mcp-macos.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: macos-intel
           path: |
-            target/release/aikoql-mcp
-            target/release/aikoql-mcp-macos.sha256
+            target/x86_64-apple-darwin/release/aikoql-mcp
+            target/x86_64-apple-darwin/release/aikoql-mcp-macos.sha256
 
   # ── macOS Apple Silicon binary ──────────────────────────────────
   macos-arm:
@@ -151,8 +161,10 @@ jobs:
           cp windows/aikoql-mcp.exe.sha256    aikoql-mcp.exe.sha256
           cp linux-gnu/aikoql-mcp             aikoql-mcp-linux
           cp linux-gnu/aikoql-mcp-linux.sha256 aikoql-mcp-linux.sha256
-          cp linux-musl/aikoql-mcp             aikoql-mcp-linux-musl
-          cp linux-musl/aikoql-mcp-linux-musl.sha256 aikoql-mcp-linux-musl.sha256
+          if [ -f linux-musl/aikoql-mcp ]; then
+            cp linux-musl/aikoql-mcp             aikoql-mcp-linux-musl
+            cp linux-musl/aikoql-mcp-linux-musl.sha256 aikoql-mcp-linux-musl.sha256
+          fi
           cp macos-intel/aikoql-mcp            aikoql-mcp-macos
           cp macos-intel/aikoql-mcp-macos.sha256 aikoql-mcp-macos.sha256
           cp macos-arm/aikoql-mcp              aikoql-mcp-macos-arm64
@@ -169,8 +181,6 @@ jobs:
             aikoql-mcp.exe.sha256
             aikoql-mcp-linux
             aikoql-mcp-linux.sha256
-            aikoql-mcp-linux-musl
-            aikoql-mcp-linux-musl.sha256
             aikoql-mcp-macos
             aikoql-mcp-macos.sha256
             aikoql-mcp-macos-arm64
@@ -178,6 +188,13 @@ jobs:
             checksums.txt
             checksums.txt.sha256
           generate_release_notes: true
+      - name: Upload musl artifacts (if built)
+        run: |
+          if [ -f aikoql-mcp-linux-musl ]; then
+            gh release upload "$GITHUB_REF_NAME" aikoql-mcp-linux-musl aikoql-mcp-linux-musl.sha256 --clobber
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # ── npm publish, gated on the release + version match ──────────
   npm-publish:
