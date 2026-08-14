@@ -31,8 +31,13 @@ impl McpClient {
             .unwrap()
             .parent()
             .unwrap();
-        let release_bin = workspace_root.join("target/release/aikoql-mcp.exe");
-        let debug_bin = workspace_root.join("target/debug/aikoql-mcp.exe");
+        let exe = if cfg!(windows) {
+            "aikoql-mcp.exe"
+        } else {
+            "aikoql-mcp"
+        };
+        let release_bin = workspace_root.join("target/release").join(exe);
+        let debug_bin = workspace_root.join("target/debug").join(exe);
         let bin = if release_bin.exists() {
             release_bin
         } else {

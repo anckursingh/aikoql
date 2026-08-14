@@ -1052,8 +1052,8 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
     let mut rel_skipped = 0usize;
     for rel in &result.ir.relations {
         // `impl X for Y` relations carry the whole impl header as subject.
-        let Some(subject_koid) =
-            resolve(&rel.subject).or_else(|| resolve(rel.subject.rsplit(" for ").next().unwrap_or(&rel.subject)))
+        let Some(subject_koid) = resolve(&rel.subject)
+            .or_else(|| resolve(rel.subject.rsplit(" for ").next().unwrap_or(&rel.subject)))
         else {
             rel_skipped += 1;
             if rel_skipped <= 5 {
@@ -1158,7 +1158,10 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         }),
         extensions: ExtensionMap::new(),
         origin: Origin::Human,
-        note: Some(format!("Directory ingestion IR snapshot (compile_context source): {}", path)),
+        note: Some(format!(
+            "Directory ingestion IR snapshot (compile_context source): {}",
+            path
+        )),
         referential_policy: ReferentialPolicy::Permissive,
     }) {
         Ok(r) => {
@@ -1183,7 +1186,13 @@ fn entity_type_name(hint: Option<&str>) -> String {
             let sanitized: String = h
                 .trim()
                 .chars()
-                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
                 .collect();
             if sanitized.is_empty() {
                 "aikoql:entity".into()

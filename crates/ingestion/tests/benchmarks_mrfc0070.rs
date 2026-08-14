@@ -8,10 +8,9 @@
 #[cfg(test)]
 mod benchmarks {
     use aikoql_ingestion::{
-        apply_proposal, auto_proposals_from_stale, compile_context, compile_markdown_string,
-        compile_rust_source, connector_metadata_to_ir, discover_connector_schema, filter_secrets,
-        merge_knowledge_ir, process_workflow, reconcile, render_context_markdown,
-        validate_proposal,
+        auto_proposals_from_stale, compile_context, compile_markdown_string, compile_rust_source,
+        connector_metadata_to_ir, discover_connector_schema, filter_secrets, merge_knowledge_ir,
+        process_workflow, reconcile, render_context_markdown, validate_proposal,
     };
     use std::time::Instant;
 
