@@ -184,6 +184,43 @@ fn t06_idempotent_retry_commits_exactly_once() {
     assert_eq!(k.journal().unwrap().len(), 1);
 }
 
+#[test]
+fn t06f_resolve_idempotency_then_update_replaces_content() {
+    let (k, _c) = mk();
+    let mut req = RememberRequest::create(alice(), meta("fact"));
+    req.idempotency_key = Some("req-456".into());
+    let r1 = k.remember(req.clone()).unwrap();
+
+    // Replay alone keeps stale content — the re-ingest trap.
+    let mut stale = req;
+    stale
+        .properties
+        .insert("body".into(), Value::Text("new".into()));
+    let r2 = k.remember(stale).unwrap();
+    assert_eq!(r2.version, r1.version);
+    assert!(
+        k.get(&alice(), &r1.koid)
+            .unwrap()
+            .properties
+            .get("body")
+            .is_none(),
+        "replay must not overwrite content"
+    );
+
+    // Resolve-then-update (what ingest-dir does) writes the new content.
+    let (koid, _, _) = k
+        .resolve_idempotency("req-456")
+        .unwrap()
+        .expect("idem resolved");
+    let mut upd = RememberRequest::update(alice(), koid, meta("fact"));
+    upd.properties
+        .insert("body".into(), Value::Text("new".into()));
+    let r3 = k.remember(upd).unwrap();
+    assert_eq!(r3.version, r1.version + 1);
+    let ko = k.get(&alice(), &koid).unwrap();
+    assert_eq!(ko.properties.get("body"), Some(&Value::Text("new".into())));
+}
+
 // ---------------------------------------------------------------------------
 // referential integrity (MRFC-0001 §7)
 // ---------------------------------------------------------------------------

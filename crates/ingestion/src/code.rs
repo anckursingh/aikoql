@@ -7,6 +7,7 @@
 
 use crate::ir::{EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate};
 use aikoql_kernel::knowledge::kom;
+use quote::ToTokens;
 
 /// Compile a Rust source file into KnowledgeIr.
 ///
@@ -70,6 +71,26 @@ fn parse_syn_file(file: &syn::File, document_id: Option<String>, extractor: Stri
     }
 
     ir
+}
+
+/// Mentions for a fn: doc lines when present, else the signature. Doc-less
+/// fns otherwise get zero mentions, leaving the entity with no lexical
+/// channel and a name-only embedding — the exact-fix-location recall gap.
+fn fn_mentions(docs: Vec<String>, sig: &syn::Signature) -> Vec<String> {
+    if docs.is_empty() {
+        // syn's ToTokens normalizes spacing ("& str", "s :") — collapse so
+        // the mention reads like a signature, not a token dump.
+        let sig = sig
+            .to_token_stream()
+            .to_string()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace(" :", ":");
+        vec![sig]
+    } else {
+        docs
+    }
 }
 
 fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
@@ -162,7 +183,7 @@ fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
             ir.entities.push(EntityCandidate {
                 name: name.clone(),
                 type_hint: Some(type_hint.into()),
-                mentions: docs.clone(),
+                mentions: fn_mentions(docs.clone(), &f.sig),
                 confidence: 0.85,
                 evidence: span_evidence(&extractor, &name, "fn"),
             });
@@ -218,7 +239,7 @@ fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
                     ir.entities.push(EntityCandidate {
                         name: full.clone(),
                         type_hint: Some("Method".into()),
-                        mentions: docs.clone(),
+                        mentions: fn_mentions(docs.clone(), &m.sig),
                         confidence: 0.85,
                         evidence: span_evidence(&extractor, &full, "method"),
                     });
@@ -416,6 +437,23 @@ fn test_constraint_validation() {
         assert!(
             ir.relations.iter().any(|r| r.predicate == kom::TESTED_BY),
             "should have TESTED_BY relation"
+        );
+    }
+
+    #[test]
+    fn docless_fn_gets_signature_mention() {
+        let src = "fn truncate(s: &str, max: usize) -> String { s.to_string() }";
+        let ir = compile_rust_source(src, Some("test.rs"));
+        let entity = ir
+            .entities
+            .iter()
+            .find(|e| e.name == "truncate")
+            .expect("should find fn");
+        assert_eq!(entity.mentions.len(), 1, "doc-less fn gets one mention");
+        assert!(
+            entity.mentions[0].contains("fn truncate") && entity.mentions[0].contains("String"),
+            "mention is the signature, got: {}",
+            entity.mentions[0]
         );
     }
 

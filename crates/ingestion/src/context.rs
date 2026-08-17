@@ -75,6 +75,26 @@ pub fn compile_context_semantic(
     token_budget: usize,
     semantic: Option<&HashMap<String, f32>>,
 ) -> ContextPackage {
+    compile_context_semantic_with(
+        task,
+        ir,
+        token_budget,
+        semantic,
+        SEMANTIC_WEIGHT,
+        SEMANTIC_MIN,
+    )
+}
+
+/// Tunable variant for ranking experiments (see examples/probe_rank.rs) —
+/// production calls go through [`compile_context_semantic`] with the defaults.
+pub fn compile_context_semantic_with(
+    task: &str,
+    ir: &KnowledgeIr,
+    token_budget: usize,
+    semantic: Option<&HashMap<String, f32>>,
+    semantic_weight: f32,
+    semantic_min: f32,
+) -> ContextPackage {
     let task_lower = task.to_lowercase();
     let task_words: Vec<&str> = task_lower.split_whitespace().collect();
 
@@ -104,10 +124,10 @@ pub fn compile_context_semantic(
                 .copied()
                 .unwrap_or(0.0);
             let lexical = name_score + mention_score;
-            let mut score = lexical + semantic_score * SEMANTIC_WEIGHT;
+            let mut score = lexical + semantic_score * semantic_weight;
             // Semantic-only matches must clear a floor to enter the package —
             // below it the similarity is noise, not signal.
-            if lexical <= 0.0 && semantic_score < SEMANTIC_MIN {
+            if lexical <= 0.0 && semantic_score < semantic_min {
                 score = 0.0;
             }
             score *= 1.0 + (e.mentions.len() as f32 * 0.1).min(0.5);
@@ -129,7 +149,7 @@ pub fn compile_context_semantic(
                     "mentions match task: {}",
                     truncate_chars(matched_mentions.first().unwrap(), 120)
                 )
-            } else if semantic_score >= SEMANTIC_MIN {
+            } else if semantic_score >= semantic_min {
                 format!(
                     "semantically relevant to task (cosine {:.2})",
                     semantic_score
@@ -323,8 +343,18 @@ const MAX_MENTION_CHARS: usize = 200;
 
 /// Semantic fusion weight (× cosine) and the minimum cosine a
 /// semantically-only matched entity needs to enter the package.
-const SEMANTIC_WEIGHT: f32 = 2.0;
-const SEMANTIC_MIN: f32 = 0.30;
+// Semantic fusion weight: cosine × this is added to the lexical score.
+// 3.0 is the offline-tuned value from probe_rank sweeps (see
+// crates/services/api/mcp/examples/probe_rank.rs): at 2.0 a symptom task's
+// exact fix location (doc-less fn, cosine ~0.38) sits below rank 40 of 47;
+// at 3.0 semantic proximity visibly reorders without flipping the top fold.
+const SEMANTIC_WEIGHT: f32 = 3.0;
+// 0.35 (was 0.30): at 0.30 one gibberish task leaked a junk cosine
+// ("impl ChaCha20Poly1305", name-only embedding ≈ stopwords, cos 0.315 vs
+// "xq9 wm3 blorp zzzq"). Entities whose embedding text is stopword-degenerate
+// wander 0.28-0.36 against arbitrary tasks; 0.35 closes the observed band.
+// ponytail: real fix is skipping stopword-only embedding texts at ingest.
+const SEMANTIC_MIN: f32 = 0.35;
 
 fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()

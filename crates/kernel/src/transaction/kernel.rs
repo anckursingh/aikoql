@@ -1766,6 +1766,16 @@ impl Kernel {
 
     // ---- reads (snapshot-isolated, MRFC-0001 §8) ----------------------------
 
+    /// Look up a KO by idempotency key. Returns (koid, version, commit_ts).
+    ///
+    /// Re-ingest uses this to convert exact-once creates into true updates:
+    /// `remember` with an existing idempotency key replays the old write
+    /// without storing anything, so an updater must resolve the key first and
+    /// remember with an explicit `koid` instead.
+    pub fn resolve_idempotency(&self, key: &str) -> KResult<Option<(KOID, u64, u64)>> {
+        self.repo.get_idem(key)
+    }
+
     pub fn get(&self, ctx: impl Into<KnowledgeContext>, koid: &KOID) -> KResult<KnowledgeObject> {
         let ctx = ctx.into();
         let mut ko = self.head_object(koid)?.ok_or(KError::NotFound(*koid))?;

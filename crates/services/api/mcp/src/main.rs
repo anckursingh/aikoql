@@ -1038,16 +1038,20 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
                 Value::List(facts.iter().cloned().map(Value::Text).collect()),
             );
         }
-        match kernel.remember(RememberRequest {
+        // Exact-once replay means a re-ingest would silently keep the stale
+        // entity content (e.g. mention text from an older parser). Resolve
+        // the idempotency key: existing → true update, new → guarded create.
+        let idem = format!(
+            "ingest-entity:{}:{}:{}",
+            path,
+            ent.evidence.document_id.as_deref().unwrap_or_default(),
+            ent.name
+        );
+        let mut req = RememberRequest {
             context: (&subj).into(),
             koid: None,
-            expected_version: Some(0),
-            idempotency_key: Some(format!(
-                "ingest-entity:{}:{}:{}",
-                path,
-                ent.evidence.document_id.as_deref().unwrap_or_default(),
-                ent.name
-            )),
+            expected_version: None,
+            idempotency_key: None,
             metadata: Metadata {
                 type_name,
                 tenant: None,
@@ -1066,7 +1070,15 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
             origin: Origin::Agent("ingest-dir".into()),
             note: Some(format!("entity from ingest-dir {}", path)),
             referential_policy: ReferentialPolicy::Permissive,
-        }) {
+        };
+        match kernel.resolve_idempotency(&idem) {
+            Ok(Some((koid, _, _))) => req.koid = Some(koid),
+            _ => {
+                req.idempotency_key = Some(idem);
+                req.expected_version = Some(0);
+            }
+        }
+        match kernel.remember(req) {
             Ok(r) => {
                 ent_kos.push((ent.name.as_str(), r.koid, ent.evidence.document_id.clone()));
             }
@@ -1375,11 +1387,14 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         Value::Text(serde_json::to_string(&entity_embeddings).unwrap_or_default()),
     );
 
-    match kernel.remember(RememberRequest {
+    // Same exact-once-replay trap as entity KOs: without resolving the key,
+    // a re-ingest would keep the stale ir_json/entity_embeddings forever.
+    let idem = format!("ingest-dir-{}", path);
+    let mut req = RememberRequest {
         context: (&subj).into(),
         koid: None,
-        expected_version: Some(0),
-        idempotency_key: Some(format!("ingest-dir-{}", path)),
+        expected_version: None,
+        idempotency_key: None,
         metadata: Metadata {
             type_name: "aikoql:ingested-directory".into(),
             tenant: None,
@@ -1401,7 +1416,15 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
             path
         )),
         referential_policy: ReferentialPolicy::Permissive,
-    }) {
+    };
+    match kernel.resolve_idempotency(&idem) {
+        Ok(Some((koid, _, _))) => req.koid = Some(koid),
+        _ => {
+            req.idempotency_key = Some(idem);
+            req.expected_version = Some(0);
+        }
+    }
+    match kernel.remember(req) {
         Ok(r) => {
             // The directory KO is the graph root: it `contains` every File KO
             // and any entity without file provenance. Update (REPLACE) keeps
