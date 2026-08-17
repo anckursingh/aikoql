@@ -232,6 +232,27 @@ fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
             }
 
             for inner in &imp.items {
+                if let syn::ImplItem::Const(c) = inner {
+                    // Associated consts are separate knowledge entities, not
+                    // properties — they can be documented and TESTED_BY'd.
+                    let full = format!("{}::{}", name, c.ident);
+                    let docs = doc_lines(&c.attrs);
+                    ir.entities.push(EntityCandidate {
+                        name: full.clone(),
+                        type_hint: Some("Constant".into()),
+                        mentions: docs.clone(),
+                        confidence: 0.80,
+                        evidence: span_evidence(&extractor, &full, "assoc-const"),
+                    });
+                    for doc in &docs {
+                        ir.facts.push(FactCandidate {
+                            statement: doc.clone(),
+                            entities: vec![full.clone()],
+                            confidence: 0.75,
+                            evidence: span_evidence(&extractor, &full, "doc"),
+                        });
+                    }
+                }
                 if let syn::ImplItem::Fn(m) = inner {
                     let method_name = m.sig.ident.to_string();
                     let full = format!("{}::{}", name, method_name);
@@ -493,6 +514,25 @@ impl Validator for MyValidator {
             ir.relations.iter().any(|r| r.predicate == kom::IMPLEMENTS),
             "should have IMPLEMENTS relation"
         );
+    }
+
+    #[test]
+    fn parse_assoc_const() {
+        let src = r#"
+struct Grid;
+impl Grid {
+    /// Maximum cells per dimension.
+    pub const MAX_CELLS: usize = 256;
+}
+"#;
+        let ir = compile_rust_source(src, Some("test.rs"));
+        let entity = ir
+            .entities
+            .iter()
+            .find(|e| e.name == "impl Grid::MAX_CELLS")
+            .expect("should find assoc const");
+        assert_eq!(entity.type_hint.as_deref(), Some("Constant"));
+        assert!(entity.mentions.iter().any(|m| m.contains("Maximum cells")));
     }
 
     #[test]

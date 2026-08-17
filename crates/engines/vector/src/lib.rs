@@ -267,7 +267,7 @@ impl TantivyTextIndex {
         let top_docs = searcher
             .search(
                 &tantivy::query::AllQuery,
-                &TopDocs::with_limit(num_docs as usize),
+                &TopDocs::with_limit(num_docs as usize).order_by_score(),
             )
             .map_err(|e| KError::Store(format!("tantivy scan: {}", e)))?;
         let mut docs: BTreeMap<KOID, BTreeSet<String>> = BTreeMap::new();
@@ -346,7 +346,7 @@ impl TextIndex for TantivyTextIndex {
         let len = self.docs.read().unwrap().len();
         let limit = k.min(len.max(1));
         let top_docs = searcher
-            .search(&query, &TopDocs::with_limit(limit))
+            .search(&query, &TopDocs::with_limit(limit).order_by_score())
             .expect("tantivy search");
         top_docs
             .into_iter()

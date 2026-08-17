@@ -14,7 +14,7 @@ use aikoql_kernel::{
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use pyo3::PyObject;
+use pyo3::IntoPyObjectExt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -35,13 +35,13 @@ fn value_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         Ok(Value::Text(s))
     } else if let Ok(b) = obj.extract::<Vec<u8>>() {
         Ok(Value::Bytes(b))
-    } else if let Ok(list) = obj.clone().downcast::<PyList>() {
+    } else if let Ok(list) = obj.clone().cast::<PyList>() {
         let mut v = Vec::new();
         for item in list.iter() {
             v.push(value_from_py(&item)?);
         }
         Ok(Value::List(v))
-    } else if let Ok(dict) = obj.clone().downcast::<PyDict>() {
+    } else if let Ok(dict) = obj.clone().cast::<PyDict>() {
         let mut m = BTreeMap::new();
         for (k, val) in dict.iter() {
             let key: String = k.extract()?;
@@ -55,27 +55,27 @@ fn value_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     }
 }
 
-fn value_to_py(py: Python<'_>, v: &Value) -> PyObject {
+fn value_to_py(py: Python<'_>, v: &Value) -> Py<PyAny> {
     match v {
         Value::Null => py.None(),
-        Value::Bool(b) => b.into_py(py),
-        Value::Int(i) => i.into_py(py),
-        Value::Float(f) => f.into_py(py),
-        Value::Text(s) => s.clone().into_py(py),
-        Value::Bytes(b) => b.clone().into_py(py),
+        Value::Bool(b) => b.into_py_any(py).unwrap(),
+        Value::Int(i) => i.into_py_any(py).unwrap(),
+        Value::Float(f) => f.into_py_any(py).unwrap(),
+        Value::Text(s) => s.clone().into_py_any(py).unwrap(),
+        Value::Bytes(b) => b.clone().into_py_any(py).unwrap(),
         Value::List(items) => {
-            let list = PyList::empty_bound(py);
+            let list = PyList::empty(py);
             for item in items {
                 list.append(value_to_py(py, item)).unwrap();
             }
-            list.into_py(py)
+            list.into_py_any(py).unwrap()
         }
         Value::Map(m) => {
-            let dict = PyDict::new_bound(py);
+            let dict = PyDict::new(py);
             for (k, val) in m.iter() {
                 dict.set_item(k, value_to_py(py, val)).unwrap();
             }
-            dict.into_py(py)
+            dict.into_py_any(py).unwrap()
         }
     }
 }
@@ -111,8 +111,8 @@ fn semantic_from_py(sem: &Bound<'_, PyDict>) -> PyResult<SemanticBlock> {
     })
 }
 
-fn ko_to_py(py: Python<'_>, ko: &aikoql_kernel::KnowledgeObject) -> PyObject {
-    let dict = PyDict::new_bound(py);
+fn ko_to_py(py: Python<'_>, ko: &aikoql_kernel::KnowledgeObject) -> Py<PyAny> {
+    let dict = PyDict::new(py);
     dict.set_item("koid", ko.koid.to_hex()).unwrap();
     dict.set_item("version", ko.version).unwrap();
     dict.set_item("commit_ts", ko.commit_ts).unwrap();
@@ -126,23 +126,23 @@ fn ko_to_py(py: Python<'_>, ko: &aikoql_kernel::KnowledgeObject) -> PyObject {
         .unwrap();
     dict.set_item("origin", format!("{:?}", ko.lifecycle.origin))
         .unwrap();
-    dict.into_py(py)
+    dict.into_py_any(py).unwrap()
 }
 
-fn props_to_py(py: Python<'_>, props: &BTreeMap<String, Value>) -> PyObject {
-    let dict = PyDict::new_bound(py);
+fn props_to_py(py: Python<'_>, props: &BTreeMap<String, Value>) -> Py<PyAny> {
+    let dict = PyDict::new(py);
     for (k, v) in props.iter() {
         dict.set_item(k, value_to_py(py, v)).unwrap();
     }
-    dict.into_py(py)
+    dict.into_py_any(py).unwrap()
 }
 
-fn scored_ko_to_py(py: Python<'_>, s: &ScoredKO) -> PyObject {
-    let dict = PyDict::new_bound(py);
+fn scored_ko_to_py(py: Python<'_>, s: &ScoredKO) -> Py<PyAny> {
+    let dict = PyDict::new(py);
     dict.set_item("ko", ko_to_py(py, &s.ko)).unwrap();
     dict.set_item("score", s.score).unwrap();
     dict.set_item("index_lag_ms", s.index_lag_ms).unwrap();
-    dict.into_py(py)
+    dict.into_py_any(py).unwrap()
 }
 
 #[pyclass(name = "aikoql")]
@@ -172,7 +172,7 @@ impl Aikoql {
         properties: &Bound<'_, PyDict>,
         semantic: Option<&Bound<'_, PyDict>>,
         roles: Option<Vec<String>>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         // Extract all Python data while the GIL is held; the closure passed to
         // `allow_threads` must be `Send`, so it cannot borrow `Bound` handles.
         let roles = roles.unwrap_or_default();
@@ -184,7 +184,7 @@ impl Aikoql {
         let semantic = semantic.map(semantic_from_py).transpose()?;
         let type_name = type_name.to_string();
 
-        let res = py.allow_threads(move || {
+        let res = py.detach(move || {
             let subject = Subject::with_roles(
                 subject,
                 &roles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
@@ -202,27 +202,27 @@ impl Aikoql {
             req.semantic = semantic;
             self.inner.remember(req).map_err(to_pyerr)
         })?;
-        let dict = PyDict::new_bound(py);
+        let dict = PyDict::new(py);
         dict.set_item("koid", res.koid.to_hex()).unwrap();
         dict.set_item("version", res.version).unwrap();
         dict.set_item("commit_ts", res.commit_ts).unwrap();
-        Ok(dict.into_py(py))
+        Ok(dict.into_py_any(py).unwrap())
     }
 
-    fn get(&self, py: Python<'_>, subject: &str, koid: &str) -> PyResult<PyObject> {
+    fn get(&self, py: Python<'_>, subject: &str, koid: &str) -> PyResult<Py<PyAny>> {
         let koid = KOID::from_hex(koid).map_err(|e| PyValueError::new_err(format!("{}", e)))?;
         let subject = subject.to_string();
-        let ko = py.allow_threads(move || {
+        let ko = py.detach(move || {
             let subj = Subject::new(&subject);
             self.inner.get(&subj, &koid).map_err(to_pyerr)
         })?;
         Ok(ko_to_py(py, &ko))
     }
 
-    fn forget(&self, py: Python<'_>, subject: &str, koid: &str) -> PyResult<PyObject> {
+    fn forget(&self, py: Python<'_>, subject: &str, koid: &str) -> PyResult<Py<PyAny>> {
         let koid = KOID::from_hex(koid).map_err(|e| PyValueError::new_err(format!("{}", e)))?;
         let subject = subject.to_string();
-        let res = py.allow_threads(move || {
+        let res = py.detach(move || {
             let subj = Subject::new(&subject);
             self.inner
                 .forget(
@@ -234,11 +234,11 @@ impl Aikoql {
                 )
                 .map_err(to_pyerr)
         })?;
-        let dict = PyDict::new_bound(py);
+        let dict = PyDict::new(py);
         dict.set_item("koid", res.koid.to_hex()).unwrap();
         dict.set_item("version", res.version).unwrap();
         dict.set_item("commit_ts", res.commit_ts).unwrap();
-        Ok(dict.into_py(py))
+        Ok(dict.into_py_any(py).unwrap())
     }
 
     #[pyo3(signature = (subject, text = None, vector = None, embedding_model = None, k = 5, fusion = "rrf"))]
@@ -251,7 +251,7 @@ impl Aikoql {
         embedding_model: Option<String>,
         k: usize,
         fusion: &str,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let fusion = match fusion {
             "vector_only" => Fusion::VectorOnly,
             "text_only" => Fusion::TextOnly,
@@ -271,12 +271,12 @@ impl Aikoql {
             k,
             fusion,
         };
-        let hits = py.allow_threads(|| self.inner.find_similar(q).map_err(to_pyerr))?;
-        let list = PyList::empty_bound(py);
+        let hits = py.detach(|| self.inner.find_similar(q).map_err(to_pyerr))?;
+        let list = PyList::empty(py);
         for s in hits.iter() {
             list.append(scored_ko_to_py(py, s)).unwrap();
         }
-        Ok(list.into_py(py))
+        Ok(list.into_py_any(py).unwrap())
     }
 
     fn close(&self, _py: Python<'_>) -> PyResult<()> {
@@ -291,23 +291,23 @@ impl Aikoql {
         from_koid: &str,
         to_koid: &str,
         rel_type: &str,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let from_koid =
             KOID::from_hex(from_koid).map_err(|e| PyValueError::new_err(format!("{}", e)))?;
         let to_koid =
             KOID::from_hex(to_koid).map_err(|e| PyValueError::new_err(format!("{}", e)))?;
         let subject = subject.to_string();
         let rel_type = rel_type.to_string();
-        let res = py.allow_threads(move || {
+        let res = py.detach(move || {
             let subj = Subject::new(&subject);
             let req = RelateRequest::new(subj, from_koid, to_koid, rel_type);
             self.inner.relate(req).map_err(to_pyerr)
         })?;
-        let dict = PyDict::new_bound(py);
+        let dict = PyDict::new(py);
         dict.set_item("koid", res.koid.to_hex()).unwrap();
         dict.set_item("version", res.version).unwrap();
         dict.set_item("commit_ts", res.commit_ts).unwrap();
-        Ok(dict.into_py(py))
+        Ok(dict.into_py_any(py).unwrap())
     }
 
     #[pyo3(signature = (subject, koid, rel_type = None, depth = 1))]
@@ -318,19 +318,19 @@ impl Aikoql {
         koid: &str,
         rel_type: Option<String>,
         depth: usize,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let koid = KOID::from_hex(koid).map_err(|e| PyValueError::new_err(format!("{}", e)))?;
         let subject = subject.to_string();
-        let hits = py.allow_threads(move || {
+        let hits = py.detach(move || {
             let subj = Subject::new(&subject);
             let mut q = TraverseQuery::new(subj, koid);
             q.rel_type = rel_type;
             q.depth = depth;
             self.inner.traverse(q).map_err(to_pyerr)
         })?;
-        let list = PyList::empty_bound(py);
+        let list = PyList::empty(py);
         for h in hits.iter() {
-            let dict = PyDict::new_bound(py);
+            let dict = PyDict::new(py);
             dict.set_item("koid", h.koid.to_hex()).unwrap();
             dict.set_item("depth", h.depth).unwrap();
             dict.set_item("rel_type", h.rel_type.clone()).unwrap();
@@ -345,36 +345,36 @@ impl Aikoql {
             .unwrap();
             list.append(dict).unwrap();
         }
-        Ok(list.into_py(py))
+        Ok(list.into_py_any(py).unwrap())
     }
 
     #[pyo3(signature = (query, subject = "query-user"))]
-    fn aikoql(&self, py: Python<'_>, query: &str, subject: &str) -> PyResult<PyObject> {
+    fn aikoql(&self, py: Python<'_>, query: &str, subject: &str) -> PyResult<Py<PyAny>> {
         let raw = aikoql_compiler::parser::compile_with_subject(query, subject)
             .map_err(PyRuntimeError::new_err)?;
         let plan = aikoql_compiler::planner::Planner::optimize(&raw);
-        let result = py.allow_threads(move || {
+        let result = py.detach(move || {
             aikoql_runtime::Interpreter::execute(&self.inner, &plan).map_err(to_pyerr)
         })?;
         match result {
             aikoql_runtime::RowSet::Objects(kos) => {
-                let list = PyList::empty_bound(py);
+                let list = PyList::empty(py);
                 for ko in &kos {
                     list.append(ko_to_py(py, ko)).unwrap();
                 }
-                Ok(list.into_py(py))
+                Ok(list.into_py_any(py).unwrap())
             }
             aikoql_runtime::RowSet::Scored(scored) => {
-                let list = PyList::empty_bound(py);
+                let list = PyList::empty(py);
                 for (koid, score, type_name, version) in &scored {
-                    let dict = PyDict::new_bound(py);
+                    let dict = PyDict::new(py);
                     dict.set_item("koid", koid.to_hex()).unwrap();
                     dict.set_item("score", *score).unwrap();
                     dict.set_item("type_name", type_name.clone()).unwrap();
                     dict.set_item("version", *version).unwrap();
                     list.append(dict).unwrap();
                 }
-                Ok(list.into_py(py))
+                Ok(list.into_py_any(py).unwrap())
             }
             _ => Ok(py.None()),
         }

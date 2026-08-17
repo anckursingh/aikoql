@@ -350,10 +350,13 @@ const MAX_MENTION_CHARS: usize = 200;
 // at 3.0 semantic proximity visibly reorders without flipping the top fold.
 const SEMANTIC_WEIGHT: f32 = 3.0;
 // 0.35 (was 0.30): at 0.30 one gibberish task leaked a junk cosine
-// ("impl ChaCha20Poly1305", name-only embedding ≈ stopwords, cos 0.315 vs
-// "xq9 wm3 blorp zzzq"). Entities whose embedding text is stopword-degenerate
-// wander 0.28-0.36 against arbitrary tasks; 0.35 closes the observed band.
-// ponytail: real fix is skipping stopword-only embedding texts at ingest.
+// ("impl ChaCha20Poly1305", embedding text tokenizes to subword junk, cos
+// 0.315 vs "xq9 wm3 blorp zzzq"). Tokenizer-degenerate embeddings wander
+// 0.28-0.36 against arbitrary tasks; 0.35 closes the observed band.
+// ponytail: an ingest-side lexical stopword filter was considered and
+// skipped — the degenerate case is tokenizer-level (camelCase split), not
+// lexical, so a word filter would catch a different class. The compile-time
+// gate here is the fix, not a stopgap.
 const SEMANTIC_MIN: f32 = 0.35;
 
 fn truncate_chars(s: &str, max: usize) -> String {

@@ -9,5 +9,5 @@ repository.workspace = true
 [dependencies]
 aikoql-kernel = { path = "../../kernel" }
 hnsw = { package = "fast-hnsw", version = "1" }
-tantivy = "0.22"
+tantivy = "0.26"
 serde_json = "1"
