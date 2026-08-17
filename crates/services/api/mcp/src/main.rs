@@ -880,6 +880,10 @@ fn run_report(path: &str) {
 }
 
 fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) {
+    // Idempotency keys embed the path verbatim — normalize separators so
+    // `E:\x` and `E:/x` update the same KOs instead of duplicating them
+    // (every KO here keys on this string; Windows APIs accept both forms).
+    let path = &path.replace('\\', "/");
     eprintln!("Ingesting directory: {}\n", path);
 
     let result = if incremental {
@@ -922,6 +926,59 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         result.binary_skipped,
     );
     println!("{}\n", aikoql_ingestion::format_report(&report));
+
+    // Semantic recall pass: embed each entity (name + first mention) once so
+    // compile_context can match symptom-described tasks ("fix the endpoint
+    // resolution bug") that share no keywords with entity names. Stored as a
+    // second property on the snapshot KO — ir_json stays lean for its other
+    // consumers. ponytail: CLI loads its own candle model (one-time ~90MB
+    // download); no OpenAI provider here, add a flag when it's needed.
+    #[cfg(feature = "embedding-candle")]
+    let embedder = match aikoql_semantic::provider::CandleEmbedding::new() {
+        Ok(p) => Some(Arc::new(p)),
+        Err(e) => {
+            eprintln!(
+                "Embedding model unavailable ({}), semantic recall disabled for this ingest",
+                e
+            );
+            None
+        }
+    };
+    #[cfg(not(feature = "embedding-candle"))]
+    let embedder: Option<Arc<dyn EmbeddingProvider>> = None;
+
+    let mut entity_embeddings: HashMap<String, Vec<f32>> = HashMap::new();
+    if let Some(p) = embedder {
+        let t0 = Instant::now();
+        let (mut ok, mut skip) = (0usize, 0usize);
+        for ent in &result.ir.entities {
+            let mention: String = ent
+                .mentions
+                .first()
+                .map(|m| m.chars().take(256).collect())
+                .unwrap_or_default();
+            let text = format!("{} {}", ent.name, mention);
+            match p.embed(&text, None) {
+                Ok(v) if !v.is_empty() => {
+                    let key = format!(
+                        "{}::{}",
+                        ent.evidence.document_id.as_deref().unwrap_or_default(),
+                        ent.name
+                    );
+                    entity_embeddings.insert(key, v);
+                    ok += 1;
+                }
+                _ => skip += 1,
+            }
+        }
+        eprintln!(
+            "Embedded {}/{} entities for semantic recall in {:?} ({} skipped)",
+            ok,
+            ok + skip,
+            t0.elapsed(),
+            skip
+        );
+    }
 
     // Store the IR as production knowledge: one KO per entity with kernel
     // relationships between them. The summary KO below remains only as the
@@ -1313,6 +1370,10 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         Value::Int(result.ir.relations.len() as i64),
     );
     props.insert("ir_json".into(), Value::Text(ir_json));
+    props.insert(
+        "entity_embeddings".into(),
+        Value::Text(serde_json::to_string(&entity_embeddings).unwrap_or_default()),
+    );
 
     match kernel.remember(RememberRequest {
         context: (&subj).into(),
@@ -4239,9 +4300,24 @@ fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Result<J, String
 
     let ir = get_ir_for_koid(k, args, db_path)?;
 
-    // Compile context package — cached per (task, budget, knowledge hash)
-    // so re-asked contexts are served without recompiling (5 min TTL).
-    let pkg = aikoql_ingestion::compile_context_cached(task, &ir, token_budget, 300);
+    // Semantic scores: embed the task and score every stored entity
+    // embedding against it. Falls back to lexical-only when no provider
+    // is wired or the snapshot predates embedding support.
+    let semantic = match k.embed_text(task, None) {
+        Ok(task_emb) if !task_emb.is_empty() => semantic_scores(k, args, &task_emb),
+        _ => None,
+    };
+
+    // Compile context package — cached per (task, budget, knowledge hash,
+    // semantic fingerprint) so re-asked contexts are served without
+    // recompiling (5 min TTL).
+    let pkg = aikoql_ingestion::compile_context_cached_semantic(
+        task,
+        &ir,
+        token_budget,
+        300,
+        semantic.as_ref(),
+    );
     let md = aikoql_ingestion::render_context_markdown(&pkg);
 
     let pkg_json = serde_json::to_value(&pkg).unwrap_or_default();
@@ -4252,6 +4328,51 @@ fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Result<J, String
         "task": task,
         "token_budget": token_budget,
     }))
+}
+
+/// Cosine similarity of every stored entity embedding against the task
+/// embedding, keyed "document_id::name" for compile_context_semantic.
+/// The snapshot's `entity_embeddings` property is read once per directory
+/// KO and cached in-process (parsing a ~10MB JSON string per call would
+/// dominate the request).
+type EmbeddingMap = HashMap<String, Vec<f32>>;
+
+fn semantic_scores(k: &Kernel, args: &J, task_emb: &[f32]) -> Option<HashMap<String, f32>> {
+    static EMB_CACHE: LazyLock<Mutex<HashMap<String, Arc<EmbeddingMap>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    let hex = args.get("koid")?.as_str()?;
+    // Cache hit: score directly. The guard must never span the kernel call
+    // or the insert below — std Mutex is not reentrant, and a nested lock
+    // on the same mutex self-deadlocks, wedging every later request.
+    if let Some(map) = EMB_CACHE.lock().unwrap().get(hex).cloned() {
+        return Some(score_map(map, task_emb));
+    }
+    let koid = KOID::from_hex(hex).ok()?;
+    let ctx = KnowledgeContext::from(subject_of(args));
+    let ko = k.get(ctx, &koid).ok()?;
+    let txt = match ko.properties.get("entity_embeddings") {
+        Some(Value::Text(t)) => t,
+        _ => return None, // snapshot predates semantic ingest → lexical-only
+    };
+    let parsed: HashMap<String, Vec<f32>> = serde_json::from_str(txt).ok()?;
+    let arc = Arc::new(parsed);
+    EMB_CACHE
+        .lock()
+        .unwrap()
+        .insert(hex.to_string(), arc.clone());
+    Some(score_map(arc, task_emb))
+}
+
+fn score_map(map: Arc<EmbeddingMap>, task_emb: &[f32]) -> HashMap<String, f32> {
+    map.iter()
+        .map(|(key, emb)| {
+            (
+                key.clone(),
+                aikoql_ingestion::cosine_similarity(task_emb, emb),
+            )
+        })
+        .collect()
 }
 
 // A8: Change Reconciliation — git diff → affected entities → impact report.
@@ -6342,5 +6463,64 @@ mod tests {
     #[test]
     fn truncate_passthrough_short_strings() {
         assert_eq!(truncate("hi", 10), "hi");
+    }
+
+    #[test]
+    fn semantic_scores_parses_caches_and_scores() {
+        // Regression check for the EMB_CACHE self-deadlock: the cache-insert
+        // branch used to re-lock the mutex it already held via a match
+        // scrutinee temporary, wedging the first request (and every request
+        // after it) forever. This test walks both branches: parse+insert,
+        // then cache-hit.
+        let db = std::env::temp_dir().join(format!("mnemo-sem-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db);
+        let engine = super::RedbEngine::open(db.to_str().unwrap()).expect("open store");
+        let k = super::Kernel::open(
+            std::sync::Arc::new(engine),
+            std::sync::Arc::new(super::SystemClock),
+            0,
+        )
+        .expect("open kernel");
+
+        let mut props = super::PropertyMap::new();
+        props.insert(
+            "entity_embeddings".into(),
+            super::Value::Text(r#"{"a::b":[1.0,0.0]}"#.into()),
+        );
+        let r = k
+            .remember(super::RememberRequest {
+                context: super::KnowledgeContext::from(&super::Subject::with_roles(
+                    "test",
+                    &["admin"],
+                )),
+                koid: None,
+                expected_version: Some(0),
+                idempotency_key: Some("sem-scores-test".into()),
+                metadata: super::Metadata {
+                    type_name: "aikoql:ingested-directory".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+                properties: props,
+                semantic: None,
+                relationships: vec![],
+                security: None,
+                extensions: super::ExtensionMap::new(),
+                origin: super::Origin::Human,
+                note: None,
+                referential_policy: super::ReferentialPolicy::Permissive,
+            })
+            .expect("remember");
+        let args =
+            serde_json::json!({"koid": r.koid.to_hex(), "subject": "test", "roles": ["admin"]});
+
+        let scores = super::semantic_scores(&k, &args, &[1.0, 0.0]).expect("scores");
+        assert!((scores["a::b"] - 1.0).abs() < 1e-6);
+        let cached = super::semantic_scores(&k, &args, &[1.0, 0.0]).expect("cached hit");
+        assert_eq!(cached.len(), 1);
+
+        drop(k);
+        let _ = std::fs::remove_file(&db);
     }
 }

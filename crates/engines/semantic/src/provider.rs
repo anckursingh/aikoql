@@ -244,11 +244,15 @@ impl EmbeddingProvider for CandleEmbedding {
             .unsqueeze(0)
             .map_err(|e| KError::Store(format!("typeids batch: {e}")))?;
 
+        // NB: forward(input_ids, token_type_ids, attention_mask) — swapping
+        // mask and type_ids feeds an all-zero attention mask, making every
+        // token attend to all [PAD] positions and collapsing every text onto
+        // the pad vector (measured: cosine 0.93-0.95 between unrelated texts).
         let output = self
             .model
             .lock()
             .unwrap()
-            .forward(&ids, &mask, Some(&type_ids))
+            .forward(&ids, &type_ids, Some(&mask))
             .map_err(|e| KError::Store(format!("forward: {e}")))?;
 
         // Mean-pool over sequence dim, masked by attention to exclude padding.
@@ -313,6 +317,51 @@ mod tests {
         let p = MockEmbeddingProvider::with_dim(3);
         let v = p.embed("anything", None).unwrap();
         assert_eq!(v, vec![0.1, 0.1, 0.1]);
+    }
+
+    fn cos(a: &[f32], b: &[f32]) -> f32 {
+        let (mut d, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
+        for (x, y) in a.iter().zip(b) {
+            d += x * y;
+            na += x * x;
+            nb += y * y;
+        }
+        d / (na.sqrt() * nb.sqrt())
+    }
+
+    #[test]
+    #[cfg(feature = "embedding-candle")]
+    fn candle_embeddings_distinguish_texts() {
+        // Sanity gate for the model path: unrelated English texts must not
+        // collapse onto the same vector (degenerate pooling shows up as
+        // cosines ≥0.9 for everything, which silently wrecks semantic recall).
+        let p = CandleEmbedding::new().expect("load model");
+        let gibberish = p.embed("quadruple zulu wendigo galvanize", None).unwrap();
+        let chunker = p
+            .embed("MockDocumentChunker splits documents into chunks", None)
+            .unwrap();
+        let graph = p
+            .embed(
+                "the graph API panics when it truncates a multibyte string property",
+                None,
+            )
+            .unwrap();
+        let graph2 = p
+            .embed(
+                "the graph API panics when it truncates a multibyte string property",
+                None,
+            )
+            .unwrap();
+        let g_g = cos(&graph, &graph2);
+        let g_c = cos(&graph, &chunker);
+        let g_gib = cos(&graph, &gibberish);
+        println!("same-text cosine: {g_g:.3}, unrelated: {g_c:.3}, gibberish: {g_gib:.3}");
+        assert!(g_g > 0.99, "embedding must be deterministic");
+        assert!(
+            g_c < 0.8,
+            "unrelated texts collapse (cosine {g_c:.3}) — pooling is degenerate"
+        );
+        assert!(g_gib < 0.8, "gibberish collapses (cosine {g_gib:.3})");
     }
 
     #[test]

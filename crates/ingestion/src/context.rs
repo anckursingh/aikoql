@@ -60,10 +60,25 @@ pub struct RankedRelation {
 /// - `ir`: merged KnowledgeIr from all compilers.
 /// - `token_budget`: max tokens for the context package (0 = unlimited).
 pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> ContextPackage {
+    compile_context_semantic(task, ir, token_budget, None)
+}
+
+/// Compile with optional semantic scores fused into the lexical score.
+///
+/// `semantic` maps "document_id::name" → cosine similarity between the
+/// entity's embedding and the task embedding. Symptom-described tasks
+/// ("fix the endpoint resolution bug") share no keywords with entity
+/// names, so lexical matching alone misses them entirely.
+pub fn compile_context_semantic(
+    task: &str,
+    ir: &KnowledgeIr,
+    token_budget: usize,
+    semantic: Option<&HashMap<String, f32>>,
+) -> ContextPackage {
     let task_lower = task.to_lowercase();
     let task_words: Vec<&str> = task_lower.split_whitespace().collect();
 
-    // Score entities by name overlap + mention overlap with task
+    // Score entities by name overlap + mention overlap + semantic similarity
     let mut entities: Vec<RankedEntity> = ir
         .entities
         .iter()
@@ -78,7 +93,23 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
                 }
                 mention_score += ms;
             }
-            let mut score = name_score + mention_score;
+            let semantic_score = semantic
+                .and_then(|m| {
+                    m.get(&format!(
+                        "{}::{}",
+                        e.evidence.document_id.as_deref().unwrap_or_default(),
+                        e.name
+                    ))
+                })
+                .copied()
+                .unwrap_or(0.0);
+            let lexical = name_score + mention_score;
+            let mut score = lexical + semantic_score * SEMANTIC_WEIGHT;
+            // Semantic-only matches must clear a floor to enter the package —
+            // below it the similarity is noise, not signal.
+            if lexical <= 0.0 && semantic_score < SEMANTIC_MIN {
+                score = 0.0;
+            }
             score *= 1.0 + (e.mentions.len() as f32 * 0.1).min(0.5);
             // Doc-section entities (headings from markdown, never code) are
             // orientation, not implementation — they must not outrank code
@@ -97,6 +128,11 @@ pub fn compile_context(task: &str, ir: &KnowledgeIr, token_budget: usize) -> Con
                 format!(
                     "mentions match task: {}",
                     truncate_chars(matched_mentions.first().unwrap(), 120)
+                )
+            } else if semantic_score >= SEMANTIC_MIN {
+                format!(
+                    "semantically relevant to task (cosine {:.2})",
+                    semantic_score
                 )
             } else {
                 format!(
@@ -285,6 +321,11 @@ const PROSE_TYPES: &[&str] = &[
 const MAX_MENTIONS: usize = 2;
 const MAX_MENTION_CHARS: usize = 200;
 
+/// Semantic fusion weight (× cosine) and the minimum cosine a
+/// semantically-only matched entity needs to enter the package.
+const SEMANTIC_WEIGHT: f32 = 2.0;
+const SEMANTIC_MIN: f32 = 0.30;
+
 fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
@@ -308,9 +349,17 @@ fn keyword_score(text: &str, task_words: &[&str]) -> f32 {
         if text.contains(word) {
             score += 1.0;
         } else {
-            // Partial match: word fragments
+            // Partial match: shared prefix ≥4 chars ("truncate"/"truncation").
+            // Stopword chunks ("a", "of") share no 4-char prefix, so they stop
+            // handing every mention fake lexical credit — which had drowned
+            // the semantic-only recall path (lexical was never 0).
             for chunk in text.split_whitespace() {
-                if chunk.contains(word) || word.contains(chunk) {
+                let shared = chunk
+                    .chars()
+                    .zip(word.chars())
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                if shared >= 4 {
                     score += 0.3;
                     break;
                 }
@@ -564,6 +613,24 @@ fn ir_fingerprint(ir: &KnowledgeIr) -> u64 {
     h.finish()
 }
 
+/// Stable fingerprint of a semantic map — HashMap iteration order is random,
+/// so sort keys before hashing or the cache key would change per call.
+fn semantic_fingerprint(semantic: Option<&HashMap<String, f32>>) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let Some(m) = semantic else {
+        return 0;
+    };
+    let mut h = DefaultHasher::new();
+    let mut keys: Vec<&String> = m.keys().collect();
+    keys.sort();
+    for k in keys {
+        k.hash(&mut h);
+        m[k].to_bits().hash(&mut h);
+    }
+    h.finish()
+}
+
 /// Compile context with caching. Returns None when cache hit,
 /// or Some(ContextPackage) on cache miss (caller should use the result).
 pub fn compile_context_cached(
@@ -572,8 +639,27 @@ pub fn compile_context_cached(
     token_budget: usize,
     ttl_secs: u64,
 ) -> ContextPackage {
+    compile_context_cached_semantic(task, ir, token_budget, ttl_secs, None)
+}
+
+/// Cached compile with semantic scores. The cache key includes a fingerprint
+/// of the semantic map so a different embedding model (or task embedding)
+/// never reuses stale semantic packages.
+pub fn compile_context_cached_semantic(
+    task: &str,
+    ir: &KnowledgeIr,
+    token_budget: usize,
+    ttl_secs: u64,
+    semantic: Option<&HashMap<String, f32>>,
+) -> ContextPackage {
     let fp = ir_fingerprint(ir);
-    let cache_key = format!("{}:{}:{}", task, token_budget, fp);
+    let cache_key = format!(
+        "{}:{}:{}:{}",
+        task,
+        token_budget,
+        fp,
+        semantic_fingerprint(semantic)
+    );
 
     // Check cache
     {
@@ -588,7 +674,7 @@ pub fn compile_context_cached(
     }
 
     // Cache miss — compile fresh
-    let pkg = compile_context(task, ir, token_budget);
+    let pkg = compile_context_semantic(task, ir, token_budget, semantic);
 
     // Store in cache
     {
@@ -822,6 +908,17 @@ mod tests {
     }
 
     #[test]
+    fn keyword_score_ignores_stopword_chunks() {
+        // Stopwords must never match task words — the old bidirectional
+        // containment rule gave every mention fake credit
+        // ("quadruple".contains("a")) and hid semantic-only recall.
+        assert_eq!(keyword_score("validate a write", &["quadruple"]), 0.0);
+        assert_eq!(keyword_score("the of and", &["galvanize"]), 0.0);
+        // Morphological prefix variant still scores.
+        assert_eq!(keyword_score("truncation", &["truncates"]), 0.3);
+    }
+
+    #[test]
     fn render_produces_markdown() {
         let ir = sample_ir();
         let pkg = compile_context("transaction", &ir, 0);
@@ -894,5 +991,81 @@ mod tests {
         let pkg = compile_context("transaction", &ir, 0);
         let md = render_context_markdown(&pkg);
         assert!(md.contains("crates/kernel/src/transaction.rs"));
+    }
+
+    #[test]
+    fn semantic_recall_includes_lexically_unmatched_entity() {
+        let mut e = EntityCandidate {
+            name: "EndpointResolver".into(),
+            type_hint: Some("Function".into()),
+            mentions: vec!["Maps use-path subjects to KOIDs".into()],
+            confidence: 0.8,
+            evidence: Evidence::default(),
+        };
+        e.evidence.document_id = Some("mcp/main.rs".into());
+        let ir = KnowledgeIr {
+            entities: vec![e],
+            ..Default::default()
+        };
+        // No keyword overlap — lexical-only compile finds nothing.
+        let lexical = compile_context("fix the gateway crash", &ir, 0);
+        assert!(lexical.entities.is_empty());
+        // Semantic match on the entity's key ("doc::name") pulls it in.
+        let mut semantic = HashMap::new();
+        semantic.insert("mcp/main.rs::EndpointResolver".to_string(), 0.72);
+        let pkg = compile_context_semantic("fix the gateway crash", &ir, 0, Some(&semantic));
+        assert_eq!(pkg.entities.len(), 1);
+        assert_eq!(pkg.entities[0].name, "EndpointResolver");
+        assert!(pkg.entities[0].justification.contains("cosine"));
+    }
+
+    #[test]
+    fn semantic_below_floor_excluded() {
+        let ir = KnowledgeIr {
+            entities: vec![EntityCandidate {
+                name: "EndpointResolver".into(),
+                type_hint: Some("Function".into()),
+                mentions: vec![],
+                confidence: 0.8,
+                evidence: Evidence::default(),
+            }],
+            ..Default::default()
+        };
+        let mut semantic = HashMap::new();
+        semantic.insert("::EndpointResolver".to_string(), 0.1);
+        let pkg = compile_context_semantic("fix the gateway crash", &ir, 0, Some(&semantic));
+        assert!(pkg.entities.is_empty());
+    }
+
+    #[test]
+    fn cached_semantic_key_separates_embeddings() {
+        invalidate_context_cache();
+        let ir = KnowledgeIr {
+            entities: vec![
+                EntityCandidate {
+                    name: "Alpha".into(),
+                    type_hint: Some("Function".into()),
+                    mentions: vec![],
+                    confidence: 0.8,
+                    evidence: Evidence::default(),
+                },
+                EntityCandidate {
+                    name: "Beta".into(),
+                    type_hint: Some("Function".into()),
+                    mentions: vec![],
+                    confidence: 0.8,
+                    evidence: Evidence::default(),
+                },
+            ],
+            ..Default::default()
+        };
+        let mut a = HashMap::new();
+        a.insert("::Alpha".to_string(), 0.9);
+        let mut b = HashMap::new();
+        b.insert("::Beta".to_string(), 0.9);
+        let pkg_a = compile_context_cached_semantic("task", &ir, 0, 300, Some(&a));
+        let pkg_b = compile_context_cached_semantic("task", &ir, 0, 300, Some(&b));
+        assert_eq!(pkg_a.entities[0].name, "Alpha");
+        assert_eq!(pkg_b.entities[0].name, "Beta");
     }
 }

@@ -176,9 +176,10 @@ pub use staleness::{detect_staleness, StalenessWarning};
 // Phase A5: Context Compiler
 mod context;
 pub use context::{
-    compile_context, compile_context_cached, context_cache_stats, expand_entity,
-    expand_relationship, expand_source, invalidate_context_cache, render_context_markdown,
-    ContextPackage, EntityExpansion, RankedEntity, RankedFact, RankedRelation,
+    compile_context, compile_context_cached, compile_context_cached_semantic,
+    compile_context_semantic, context_cache_stats, expand_entity, expand_relationship,
+    expand_source, invalidate_context_cache, render_context_markdown, ContextPackage,
+    EntityExpansion, RankedEntity, RankedFact, RankedRelation,
 };
 
 mod reconcile;
