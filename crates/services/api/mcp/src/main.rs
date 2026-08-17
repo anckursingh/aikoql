@@ -887,6 +887,58 @@ fn run_report(path: &str) {
     println!("{}", aikoql_ingestion::format_report(&report));
 }
 
+/// Enrich the merged IR before the snapshot write: one `file` entity per
+/// source file referenced by entity evidence, plus `file contains entity`
+/// relations. compile_context's relation-aware boost follows these edges, so
+/// a ranked entity's containing file enters the fold at low token budgets.
+/// ponytail: kernel-side File KOs/edges are already written by Phase 0/1b —
+/// this only feeds the ir_json snapshot, so no kernel graph changes (and no
+/// duplicate File KOs on re-ingest). File entities get no embeddings (added
+/// after the embedding pass): paths tokenize as subword junk that would only
+/// feed the gibberish cosine band the semantic gate exists for.
+fn enrich_file_contains(ir: &mut aikoql_ingestion::KnowledgeIr) {
+    use std::collections::HashSet;
+    let existing: HashSet<String> = ir.entities.iter().map(|e| e.name.clone()).collect();
+    let pairs: Vec<(String, String)> = ir
+        .entities
+        .iter()
+        .filter(|e| {
+            e.evidence
+                .document_id
+                .as_deref()
+                .is_some_and(|doc| doc != e.name)
+        })
+        .map(|e| {
+            (
+                e.evidence.document_id.clone().unwrap_or_default(),
+                e.name.clone(),
+            )
+        })
+        .collect();
+    let mut added: HashSet<String> = HashSet::new();
+    for (doc, name) in pairs {
+        if !existing.contains(&doc) && added.insert(doc.clone()) {
+            ir.entities.push(aikoql_ingestion::EntityCandidate {
+                name: doc.clone(),
+                type_hint: Some("file".into()),
+                mentions: vec![],
+                confidence: 0.8,
+                evidence: aikoql_ingestion::Evidence {
+                    document_id: Some(doc.clone()),
+                    ..Default::default()
+                },
+            });
+        }
+        ir.relations.push(aikoql_ingestion::RelationCandidate {
+            subject: doc,
+            predicate: "contains".into(),
+            object: name,
+            confidence: 0.9,
+            evidence: aikoql_ingestion::Evidence::default(),
+        });
+    }
+}
+
 fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) {
     // Idempotency keys embed the path verbatim — normalize separators so
     // `E:\x` and `E:/x` update the same KOs instead of duplicating them
@@ -894,7 +946,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
     let path = &path.replace('\\', "/");
     eprintln!("Ingesting directory: {}\n", path);
 
-    let result = if incremental {
+    let mut result = if incremental {
         eprintln!("Mode: incremental");
         match aikoql_ingestion::incremental_ingest_directory(path) {
             Ok((r, full)) => {
@@ -1374,6 +1426,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
     );
 
     // Snapshot KO — ir_json's only consumer is tool_compile_context.
+    enrich_file_contains(&mut result.ir);
     let ir_json = serde_json::to_string(&result.ir).unwrap_or_default();
     let mut props = PropertyMap::new();
     props.insert("source_path".into(), Value::Text(path.to_string()));
@@ -6494,6 +6547,64 @@ mod tests {
     #[test]
     fn truncate_passthrough_short_strings() {
         assert_eq!(truncate("hi", 10), "hi");
+    }
+
+    #[test]
+    fn enrich_file_contains_adds_file_entities_and_relations() {
+        use aikoql_ingestion::{EntityCandidate, Evidence, KnowledgeIr};
+        let mut ir = KnowledgeIr {
+            entities: vec![
+                EntityCandidate {
+                    name: "graph_api".into(),
+                    type_hint: Some("Function".into()),
+                    mentions: vec![],
+                    confidence: 0.8,
+                    evidence: Evidence {
+                        document_id: Some("src/main.rs".into()),
+                        ..Default::default()
+                    },
+                },
+                EntityCandidate {
+                    name: "retry_loop".into(),
+                    type_hint: Some("Function".into()),
+                    mentions: vec![],
+                    confidence: 0.8,
+                    evidence: Evidence {
+                        document_id: Some("src/main.rs".into()),
+                        ..Default::default()
+                    },
+                },
+                // doc == name fallback path entity: no duplicate File entity,
+                // no self-contains relation.
+                EntityCandidate {
+                    name: "src/lib.rs".into(),
+                    type_hint: Some("file".into()),
+                    mentions: vec![],
+                    confidence: 0.8,
+                    evidence: Evidence {
+                        document_id: Some("src/lib.rs".into()),
+                        ..Default::default()
+                    },
+                },
+            ],
+            ..Default::default()
+        };
+        super::enrich_file_contains(&mut ir);
+        let files: Vec<&str> = ir
+            .entities
+            .iter()
+            .filter(|e| e.type_hint.as_deref() == Some("file"))
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(files, vec!["src/lib.rs", "src/main.rs"]);
+        let contains: Vec<(&str, &str, &str)> = ir
+            .relations
+            .iter()
+            .map(|r| (r.subject.as_str(), r.predicate.as_str(), r.object.as_str()))
+            .collect();
+        assert_eq!(contains.len(), 2);
+        assert!(contains.contains(&("src/main.rs", "contains", "graph_api")));
+        assert!(contains.contains(&("src/main.rs", "contains", "retry_loop")));
     }
 
     #[test]

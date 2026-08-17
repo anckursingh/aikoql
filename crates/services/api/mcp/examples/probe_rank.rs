@@ -76,7 +76,8 @@ fn main() {
         );
     }
 
-    let pkg = compile_context_semantic_with(task, &ir, 2500, Some(&semantic), weight, min);
+    // relation_boost: production default (0.65) — probes must mirror prod.
+    let pkg = compile_context_semantic_with(task, &ir, 2500, Some(&semantic), weight, min, 0.65);
 
     println!(
         "task: {}\nweight={} min={} entities={}\n",

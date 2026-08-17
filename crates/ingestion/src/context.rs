@@ -82,11 +82,13 @@ pub fn compile_context_semantic(
         semantic,
         SEMANTIC_WEIGHT,
         SEMANTIC_MIN,
+        RELATION_BOOST_FACTOR,
     )
 }
 
-/// Tunable variant for ranking experiments (see examples/probe_rank.rs) —
-/// production calls go through [`compile_context_semantic`] with the defaults.
+/// Tunable variant for ranking experiments (see
+/// crates/services/api/mcp/examples/probe_rank.rs) — production calls go
+/// through [`compile_context_semantic`] with the defaults.
 pub fn compile_context_semantic_with(
     task: &str,
     ir: &KnowledgeIr,
@@ -94,6 +96,7 @@ pub fn compile_context_semantic_with(
     semantic: Option<&HashMap<String, f32>>,
     semantic_weight: f32,
     semantic_min: f32,
+    relation_boost: f32,
 ) -> ContextPackage {
     let task_lower = task.to_lowercase();
     let task_words: Vec<&str> = task_lower.split_whitespace().collect();
@@ -172,6 +175,80 @@ pub fn compile_context_semantic_with(
             }
         })
         .collect();
+
+    // Relation-aware boost: when an entity ranks, its direct neighbors
+    // (depends_on / tested_by / implements / contains) get a slice of its
+    // score, so a fix location follows its ranked anchor into the fold at
+    // low token budgets.
+    let mut adjacency: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+    for r in &ir.relations {
+        let pred_lower = r.predicate.to_lowercase();
+        if !RELATION_PREDICATES.contains(&pred_lower.as_str()) {
+            continue;
+        }
+        if pred_lower == "contains" {
+            // Inbound-only: the subject is the container (file contains
+            // entity). A ranked child boosts its container; a ranked
+            // container must not flood all its children.
+            adjacency
+                .entry(r.object.as_str())
+                .or_default()
+                .push((r.predicate.as_str(), r.subject.as_str()));
+        } else {
+            adjacency
+                .entry(r.subject.as_str())
+                .or_default()
+                .push((r.predicate.as_str(), r.object.as_str()));
+            adjacency
+                .entry(r.object.as_str())
+                .or_default()
+                .push((r.predicate.as_str(), r.subject.as_str()));
+        }
+    }
+    let index: HashMap<String, usize> = entities
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.name.clone(), i))
+        .collect();
+    let orig: Vec<f32> = entities.iter().map(|e| e.score).collect();
+    let mut boost_src: Vec<Option<(String, String)>> = vec![None; entities.len()];
+    for i in 0..entities.len() {
+        if orig[i] <= 0.0 {
+            continue; // ponytail: no transitivity — boosts don't re-boost
+        }
+        let anchor_score = entities[i].score;
+        let anchor_name = entities[i].name.clone();
+        let mut cands: Vec<(usize, &str)> = Vec::new();
+        if let Some(edges) = adjacency.get(anchor_name.as_str()) {
+            for &(pred, nb) in edges {
+                if let Some(&j) = index.get(nb) {
+                    cands.push((j, pred));
+                }
+            }
+        }
+        // Cap fan-out by the neighbor's own pre-boost score — a fat module's
+        // 30 use-targets collapse to its 5 highest-signal neighbors.
+        cands.sort_by(|a, b| {
+            orig[b.0]
+                .partial_cmp(&orig[a.0])
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
+        for (j, pred) in cands.into_iter().take(RELATION_MAX_NEIGHBORS) {
+            let boost = anchor_score * relation_boost;
+            if boost > entities[j].score {
+                entities[j].score = boost;
+                boost_src[j] = Some((anchor_name.clone(), pred.to_string()));
+            }
+        }
+    }
+    for (i, src) in boost_src.into_iter().enumerate() {
+        if let Some((anchor, pred)) = src {
+            if orig[i] <= 0.0 {
+                entities[i].justification = format!("related to {} via {}", anchor, pred);
+            }
+        }
+    }
     entities.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
@@ -358,6 +435,22 @@ const SEMANTIC_WEIGHT: f32 = 3.0;
 // lexical, so a word filter would catch a different class. The compile-time
 // gate here is the fix, not a stopgap.
 const SEMANTIC_MIN: f32 = 0.35;
+
+/// Relation-aware boost: a ranked anchor hands each neighbor max(own score,
+/// anchor × this). Fix locations (callees, tests, containing files) ride
+/// their anchors into the fold at low token budgets.
+/// 0.65 (was 0.5): tuned against the live snapshot — at 0.5 a containing
+/// file whose anchor scores ~6.0 still missed the budget-1000 fold when the
+/// cutoff sat at ~3.6 (0.5 × 6.0 = 3.0 < 3.6). 0.65 clears that band with
+/// margin while keeping control-fold top-5s unchanged.
+const RELATION_BOOST_FACTOR: f32 = 0.65;
+/// Predicates whose endpoints share ranking credit. `contains` is
+/// inbound-only (subject = container), handled in the adjacency build.
+const RELATION_PREDICATES: &[&str] = &["depends_on", "tested_by", "implements", "contains"];
+/// Max neighbors an anchor boosts, chosen by the neighbor's own pre-boost
+/// score (deterministic index tie-break) — a fat module's 30 use-targets
+/// collapse to its 5 highest-signal neighbors.
+const RELATION_MAX_NEIGHBORS: usize = 5;
 
 fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
@@ -1100,5 +1193,166 @@ mod tests {
         let pkg_b = compile_context_cached_semantic("task", &ir, 0, 300, Some(&b));
         assert_eq!(pkg_a.entities[0].name, "Alpha");
         assert_eq!(pkg_b.entities[0].name, "Beta");
+    }
+
+    fn ent(name: &str, type_hint: &str, mentions: Vec<&str>) -> EntityCandidate {
+        EntityCandidate {
+            name: name.into(),
+            type_hint: Some(type_hint.into()),
+            mentions: mentions.into_iter().map(String::from).collect(),
+            confidence: 0.8,
+            evidence: Evidence::default(),
+        }
+    }
+
+    fn rel(subject: &str, predicate: &str, object: &str) -> RelationCandidate {
+        RelationCandidate {
+            subject: subject.into(),
+            predicate: predicate.into(),
+            object: object.into(),
+            confidence: 0.8,
+            evidence: Evidence::default(),
+        }
+    }
+
+    #[test]
+    fn relation_boost_brings_neighbor_into_fold() {
+        // Uppercase predicate proves case normalization at the adjacency gate.
+        let ir = KnowledgeIr {
+            entities: vec![
+                ent("RetryLoop", "Function", vec![]),
+                ent("TimeoutPolicy", "Struct", vec![]),
+            ],
+            relations: vec![rel("RetryLoop", "DEPENDS_ON", "TimeoutPolicy")],
+            ..Default::default()
+        };
+        let pkg = compile_context("retry", &ir, 0);
+        let neighbor = pkg
+            .entities
+            .iter()
+            .find(|e| e.name == "TimeoutPolicy")
+            .expect("gated neighbor should be resurrected by boost");
+        assert!((neighbor.score - RELATION_BOOST_FACTOR).abs() < 1e-6);
+        assert_eq!(
+            neighbor.justification,
+            "related to RetryLoop via DEPENDS_ON"
+        );
+    }
+
+    #[test]
+    fn relation_boost_skips_unrelated_entity() {
+        let ir = KnowledgeIr {
+            entities: vec![
+                ent("RetryLoop", "Function", vec![]),
+                ent("TimeoutPolicy", "Struct", vec![]),
+                ent("UnrelatedThing", "Struct", vec![]),
+            ],
+            relations: vec![rel("RetryLoop", "depends_on", "TimeoutPolicy")],
+            ..Default::default()
+        };
+        let pkg = compile_context("retry", &ir, 0);
+        let names: Vec<&str> = pkg.entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"TimeoutPolicy"));
+        assert!(!names.contains(&"UnrelatedThing"));
+    }
+
+    #[test]
+    fn contains_boosts_parent_only() {
+        let ir = KnowledgeIr {
+            entities: vec![
+                ent("RetryLoop", "Function", vec![]),
+                ent("src/net.rs", "config", vec![]),
+            ],
+            relations: vec![rel("src/net.rs", "contains", "RetryLoop")],
+            ..Default::default()
+        };
+        // Ranked child boosts its container…
+        let pkg = compile_context("retry", &ir, 0);
+        let file = pkg
+            .entities
+            .iter()
+            .find(|e| e.name == "src/net.rs")
+            .expect("container should be boosted by its ranked child");
+        assert!((file.score - RELATION_BOOST_FACTOR).abs() < 1e-6);
+        assert_eq!(file.justification, "related to RetryLoop via contains");
+        // …but a ranked container does not flood its children.
+        let pkg2 = compile_context("net", &ir, 0);
+        assert!(!pkg2.entities.iter().any(|e| e.name == "RetryLoop"));
+    }
+
+    #[test]
+    fn relation_boost_takes_max_not_sum() {
+        let ir = KnowledgeIr {
+            entities: vec![
+                ent("RetryLoop", "Function", vec![]),
+                ent("TimeoutPolicy", "Struct", vec![]),
+                ent("CircuitBreaker", "Struct", vec![]),
+            ],
+            relations: vec![
+                rel("RetryLoop", "depends_on", "CircuitBreaker"),
+                rel("TimeoutPolicy", "tested_by", "CircuitBreaker"),
+            ],
+            ..Default::default()
+        };
+        let pkg = compile_context("retry timeout", &ir, 0);
+        let shared = pkg
+            .entities
+            .iter()
+            .find(|e| e.name == "CircuitBreaker")
+            .expect("shared neighbor should be boosted");
+        assert!(
+            (shared.score - RELATION_BOOST_FACTOR).abs() < 1e-6,
+            "boost must be max, not sum: {}",
+            shared.score
+        );
+    }
+
+    #[test]
+    fn relation_boost_fanout_capped() {
+        let mut entities = vec![ent("RetryLoop", "Function", vec![])];
+        for i in 0..7 {
+            entities.push(ent(&format!("Node{i}"), "Struct", vec![]));
+        }
+        let relations: Vec<RelationCandidate> = (0..7)
+            .map(|i| rel("RetryLoop", "depends_on", &format!("Node{i}")))
+            .collect();
+        let ir = KnowledgeIr {
+            entities,
+            relations,
+            ..Default::default()
+        };
+        let pkg = compile_context("retry", &ir, 0);
+        // All 7 neighbors are score-0 pre-boost → the tie-break is entity
+        // index, so Node0..Node4 win the 5 slots deterministically.
+        let names: Vec<&str> = pkg.entities.iter().map(|e| e.name.as_str()).collect();
+        for i in 0..5 {
+            let name = format!("Node{i}");
+            assert!(names.contains(&name.as_str()), "Node{i} should be boosted");
+        }
+        assert!(!names.contains(&"Node5"));
+        assert!(!names.contains(&"Node6"));
+        assert_eq!(pkg.entities.len(), 6);
+    }
+
+    #[test]
+    fn relation_boost_keeps_own_justification() {
+        let ir = KnowledgeIr {
+            entities: vec![
+                ent("RetryLoop", "Function", vec![]),
+                ent("TimeoutPolicy", "Struct", vec![]),
+            ],
+            relations: vec![rel("RetryLoop", "depends_on", "TimeoutPolicy")],
+            ..Default::default()
+        };
+        let pkg = compile_context("retry timeout", &ir, 0);
+        let own = pkg
+            .entities
+            .iter()
+            .find(|e| e.name == "TimeoutPolicy")
+            .expect("lexically-ranked neighbor should be present");
+        // Own lexical score (1.0) beats the 0.5 boost — max, not replace.
+        assert!((own.score - 1.0).abs() < 1e-6);
+        assert!(own.justification.contains("name matches"));
+        assert!(!own.justification.starts_with("related to"));
     }
 }
