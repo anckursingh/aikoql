@@ -541,9 +541,17 @@ fn main() {
             // Default: Candle (offline, CPU-only, ~90 MB HF model download on first use)
             #[cfg(feature = "embedding-candle")]
             {
-                let p = aikoql_semantic::provider::CandleEmbedding::new()
-                    .expect("load candle embedding model");
-                Some(Arc::new(p))
+                match aikoql_semantic::provider::CandleEmbedding::new() {
+                    Ok(p) => Some(Arc::new(p)),
+                    // A cold machine or a transient HF failure must not kill
+                    // the server (CI hit this: first tools/call got EOF because
+                    // serve panicked before reading stdin). Degrade to
+                    // lexical-only recall; a later restart retries the download.
+                    Err(e) => {
+                        info!(error = %e, "candle model unavailable — serving without semantic embeddings");
+                        None
+                    }
+                }
             }
             #[cfg(not(feature = "embedding-candle"))]
             {

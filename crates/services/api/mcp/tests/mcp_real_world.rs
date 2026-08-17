@@ -49,7 +49,7 @@ impl McpClient {
             .arg(db_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::inherit()) // crash output lands in CI logs, not /dev/null
             .spawn()
             .expect("start MCP server");
 
