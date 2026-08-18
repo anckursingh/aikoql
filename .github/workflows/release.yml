@@ -338,7 +338,7 @@ jobs:
   # version in npm-publish/package.json, e.g. v0.1.18's gap).
   npm-publish:
     name: Publish npm package
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.github-release.result == 'success') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
     runs-on: ubuntu-latest
     permissions:
