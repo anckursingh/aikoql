@@ -1,7 +1,7 @@
 {
   "name": "aikoql-mcp",
-  "version": "0.1.17",
-  "description": "Aikoql — The Agent-First Knowledge Database. Single binary, zero deps. 59 MCP tools.",
+  "version": "0.1.18",
+  "description": "Aikoql — The Agent-First Knowledge Database. Single binary, zero deps. MCP server for knowledge CRUD, aikoql queries, graph traversal, hybrid search, context compilation, document ingestion, and more.",
   "license": "Apache-2.0",
   "author": {
     "name": "Anckur Singh",

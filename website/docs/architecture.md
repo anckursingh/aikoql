@@ -175,7 +175,7 @@ Upload (PDF/DOCX/MD) → D1-D3 (OCR, AST, Classify)
 
 | Entry Point | Protocol | Use Case |
 |---|---|---|
-| `aikoql serve` | MCP (JSON-RPC) over stdio/TCP | AI agents (59 tools) |
+| `aikoql serve` | MCP (JSON-RPC) over stdio/TCP | AI agents |
 | `:9091/api/v1/*` | REST (HTTP/JSON) | Web apps, curl (40+ endpoints) |
 | `:9091/studio` | Studio SPA (14 panels) | Full management UI |
 | `aikoql shell` | Interactive REPL (9 commands) | Human queries |
@@ -207,7 +207,7 @@ crates/
 │   ├── vector/       HNSW + Tantivy (BM25) hybrid search
 │   └── scheduler/    Background jobs (index, compaction, rotation)
 ├── services/
-│   ├── api/mcp/      MCP server (59 tools) + REST API (40+ endpoints) + Studio UI (14 panels)
+│   ├── api/mcp/      MCP server + REST API (40+ endpoints) + Studio UI (14 panels)
 │   ├── reasoning/    If-then rule engine
 │   ├── semantic/     AI embedding enrichment
 │   └── ingestion/    Document ingestion pipeline (D1-D9) + knowledge compilers (A1-A9)

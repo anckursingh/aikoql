@@ -1,72 +1,97 @@
-//! Rate limiting for MCP tool calls.
+//! Rate limiting for MCP tool calls and the REST surface.
 //!
 //! ## Scope
 //!
-//! The default `InMemoryRateLimiter` is **process-local**. Each OS process
-//! maintains its own independent counter. In a horizontally-scaled deployment
-//! (load balancer → N instances), every instance independently allows the
-//! configured limit — the aggregate call rate across instances is N × limit.
-//!
-//! For global rate limiting across instances, implement the `RateLimiter`
-//! trait with a shared backend (Redis, Memcached, etc.) or enforce limits at
-//! the gateway/load-balancer layer.
-//!
-//! ## Future
-//!
-//! The trait exists so the process-local impl can be swapped for a
-//! distributed one without changing the call site. See `RateLimiter` trait.
+//! `RateLimiter` is **process-local**: each OS process maintains its own
+//! counters, so N instances each allow the configured limit (aggregate
+//! N × limit). For global limiting across instances, enforce at the
+//! gateway/load-balancer layer or swap the counters for a shared backend.
 
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Shared rate-limiter contract.
-///
-/// Implementations must be `Send + Sync` for concurrent use across
-/// connection-handler tasks.
-#[allow(dead_code)]
-pub trait RateLimiter: Send + Sync {
-    /// Record one call for `key` and return whether it is allowed.
-    /// Returns `true` if under the limit, `false` if the limit is exceeded.
-    fn check(&mut self, key: &str) -> bool;
-
-    /// Reset the counter for `key` (e.g. after a window rolls over).
-    fn reset(&mut self, key: &str);
-
-    /// Current count for `key`.
-    fn count(&self, key: &str) -> u64;
-}
-
-/// Process-local, in-memory rate limiter with no external dependencies.
-///
-/// Counts calls per key in a `HashMap`. Callers must periodically reset
-/// counts (e.g. every 60s) to implement a sliding window.
-#[allow(dead_code)]
-pub struct InMemoryRateLimiter {
+/// Sliding-window rate limiter: at most `max_per_window` calls per
+/// `window_secs` per key. Fixed epochs (`now / window * window`), so all
+/// keys roll over at the same wall-clock instant.
+pub(crate) struct RateLimiter {
+    enabled: bool,
     max_per_window: u64,
-    counters: HashMap<String, u64>,
+    window_secs: u64,
+    counters: HashMap<String, (u64, u64)>, // (count, window_start)
 }
 
-impl InMemoryRateLimiter {
-    #[allow(dead_code)]
-    pub fn new(max_per_window: u64) -> Self {
-        InMemoryRateLimiter {
-            max_per_window,
+impl RateLimiter {
+    pub(crate) fn new(enabled: bool, max_per_minute: u64) -> Self {
+        RateLimiter {
+            enabled,
+            max_per_window: max_per_minute.max(1),
+            window_secs: 60,
             counters: HashMap::new(),
         }
     }
+
+    /// Record one call for `key`; `Err(max)` when the window is exhausted.
+    pub(crate) fn check(&mut self, key: &str) -> Result<(), u64> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            // justified: pre-epoch clock is unreachable in practice
+            .unwrap_or(0);
+        self.check_at(key, now)
+    }
+
+    pub(crate) fn check_at(&mut self, key: &str, now_secs: u64) -> Result<(), u64> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let start = now_secs / self.window_secs * self.window_secs;
+        let (count, window) = self.counters.entry(key.to_string()).or_insert((0, start));
+        if *window != start {
+            *count = 0;
+            *window = start;
+        }
+        *count += 1;
+        if *count > self.max_per_window {
+            return Err(self.max_per_window);
+        }
+        Ok(())
+    }
 }
 
-impl RateLimiter for InMemoryRateLimiter {
-    fn check(&mut self, key: &str) -> bool {
-        let count = self.counters.entry(key.to_string()).or_insert(0);
-        *count += 1;
-        *count <= self.max_per_window
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_up_to_limit() {
+        let mut rl = RateLimiter::new(true, 3);
+        assert!(rl.check_at("k", 1000).is_ok());
+        assert!(rl.check_at("k", 1000).is_ok());
+        assert!(rl.check_at("k", 1000).is_ok());
+        assert_eq!(rl.check_at("k", 1000), Err(3));
     }
 
-    fn reset(&mut self, key: &str) {
-        self.counters.remove(key);
+    #[test]
+    fn window_rollover_resets() {
+        let mut rl = RateLimiter::new(true, 2);
+        assert!(rl.check_at("k", 60).is_ok());
+        assert!(rl.check_at("k", 61).is_ok());
+        assert_eq!(rl.check_at("k", 65), Err(2));
+        assert!(rl.check_at("k", 120).is_ok()); // new epoch
     }
 
-    fn count(&self, key: &str) -> u64 {
-        self.counters.get(key).copied().unwrap_or(0)
+    #[test]
+    fn keys_are_independent() {
+        let mut rl = RateLimiter::new(true, 1);
+        assert!(rl.check_at("a", 0).is_ok());
+        assert!(rl.check_at("b", 0).is_ok());
+    }
+
+    #[test]
+    fn disabled_never_blocks() {
+        let mut rl = RateLimiter::new(false, 1);
+        for _ in 0..100 {
+            assert!(rl.check_at("k", 0).is_ok());
+        }
     }
 }

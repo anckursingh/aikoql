@@ -28,7 +28,14 @@ impl McpClient {
             "aikoql-mcp not built at {:?}; run cargo build first",
             exe
         );
+        // PRR-4: the default rate limit (120 calls/min) would throttle the
+        // load-heavy scenarios (m11 creates 150 objects) — raise it through
+        // the config pipeline the tests exercise.
+        let cfg = db.with_file_name("aikoql-rate.toml");
+        std::fs::write(&cfg, "[rate_limit]\nmax_calls_per_minute = 100000\n").unwrap();
         let mut child = Command::new(&exe)
+            .arg("--config")
+            .arg(&cfg)
             .arg(db)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -73,7 +73,9 @@ function download() {
     const checksumUrl = chkUrl;
     let expected;
     if (process.platform === 'win32') {
-      expected = execSync(`powershell -c "$ProgressPreference='SilentlyContinue'; (Invoke-WebRequest -Uri '${checksumUrl}').Content.Trim()"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      // WebClient, not Invoke-WebRequest: IWR throws NullReferenceException when
+      // its stdout is piped (no console host) — exactly how execSync runs it.
+      expected = execSync(`powershell -c "(New-Object System.Net.WebClient).DownloadString('${checksumUrl}')"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
     } else {
       expected = execSync(`curl -fsSL '${checksumUrl}'`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
     }

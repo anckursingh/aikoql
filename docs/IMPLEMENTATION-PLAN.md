@@ -3,8 +3,8 @@
 **Architecture:** [MRFC-0005](MRFC-0005-System-Architecture.md) | [MRFC-0010](MRFC-0010-aikoql-Parser-Architecture-v2.md) | [MRFC-0020](MRFC-0020-Encryption-Key-Management-Architecture.md) | [MRFC-0030](#mrf-0030-active-knowledge-objects--the-knowledge-operating-system) — Active Knowledge Objects | [MRFC-0050](#mrf-0050-document-ocr--knowledge-ingestion) — Document OCR & Ingestion | [MRFC-0060](#mrf-0060-constraint-engine) — Schema, Constraint & Integrity Engine | **NEW: [MRFC-0070](#mrf-0070-agent-knowledge-interface--engineering-knowledge-compiler) — Agent Knowledge Interface & Engineering Knowledge Compiler**  
 **Conceptual Model:** [Universal Conceptual Model for Engineering Agents](Universal-Conceptual-Model-for-Engineering-Agents.md)  
 **Status:** Phases 1–5 complete, MRFC-0020 complete, API Layer done, MRFC-0030 Phase 7a–7d complete (9/9 Active KOs + Agent Runtime), MRFC-0040 complete, Studio Phase S2/S3/S4 complete (Document Compiler UI), MRFC-0050 Phase D1–D9 complete (full Document Knowledge Compiler pipeline), MRFC-0060 Phase C1–C9 + gap-filling complete (~95%), MRFC-0070 Phases A0–A10 complete (full Agent Knowledge Interface + Context Compiler).  
-**Last updated:** 2026-08-18 (R14 complete — benchmark infrastructure: 16-scenario scale suite at 100K + weekly regression CI with >20% alert; all 15 MVP-readiness phases done)  
-**Next session:** release prep — commit, tag, push the unreleased remediation work (R4–R14) as 0.1.17
+**Last updated:** 2026-08-18 (R14 complete — benchmark infrastructure: 16-scenario scale suite at 100K + weekly regression CI with >20% alert; all 15 MVP-readiness phases done; + PRR production review triaged — 16 findings verified, 7 PRR phases queued; PRR-2 TCP auth DONE; PRR-3 offline embedding lifecycle DONE; PRR-1 Docker DONE (rust:1.97 builder, healthy container verified live); PRR-4 config pipeline DONE (TOML→env→CLI, AIKOQL_TCP_TOKEN landed, rate_limit enforced); PRR-5 packaging gate DONE (npm tarball gate + per-platform MCP smoke + plugin validation; run.js Windows checksum bug fixed); PRR-6 docs & config consistency DONE (compose dev-only + parameterized, providers candle|http|ollama, 11 tool-count sites cleaned, QUICKSTART macOS binaries); PRR-7 refactors DONE (cli.rs 1773→447 + admin/ingest/imports/model; server.rs deleted → transport/tool_registry/dispatcher/protocol; main.rs 617→459; tests moved to tests.rs; all suites green); + Docker distribution review remediated — GHCR multi-arch release images (amd64+arm64 native jobs, no qemu), :VERSION/:MINOR/:latest manifest merge, OCI labels, /data contract (/data/aikoql.redb + /data/models model-dir, stateless image), docker-compose.release.yml, container smoke in release)  
+**Next session:** watch the v0.1.18 release pipeline (first GHCR multi-arch images — docker-amd64/docker-arm64/manifest merge are the new jobs), then start the next phase below
 
 ---
 
@@ -2117,7 +2117,7 @@ Full end-to-end test of the Aikoql MCP plugin against the aikoql project itself.
 
 **Tested input:**
 ```json
-[{"op":"remember","type_name":"Fact","properties":{"statement":"aikoql has 59 MCP tools","confidence":0.99}}]
+[{"op":"remember","type_name":"Fact","properties":{"statement":"aikoql has 75 MCP tools","confidence":0.99}}]
 ```
 
 **Impact:** Atomic batch operations are non-functional. The tool exists but no operation type is recognized.
@@ -2848,4 +2848,174 @@ aikoql is not hardened until:
 - [x] Benchmark infrastructure measures scalability (R14 — done 2026-08-18; 16-scenario scale suite, 10K/100K/1M via `AIKOQL_BENCH_SCALE`, weekly regression CI)
 - [x] Rate limiting scope documented (R15)
 
-**Done: 19 of 19. Remaining: 0.** All MVP-readiness phases complete — release the unreleased remediation work (R4–R14) as 0.1.17.
+**Done: 19 of 19. Remaining: 0 (R-series closed — released as 0.1.17).** New workstream below: PRR production review — 16 findings triaged, 7 phases queued for next session.
+
+---
+
+## MVP Production Readiness Review (2026-08-18) — PRR Phases
+
+External staff-level review received 2026-08-18 (16 findings, `MVP-001`…`MVP-016`). **Every finding verified against code on main @ 0.1.17 before planning** — two are partially stale, none are wrong, and one additional P0 was found during triage.
+
+### Triage
+
+| ID | Sev | Area | Verdict | Evidence |
+|---|---|---|---|---|
+| MVP-001 | P0 | Docker | ✅ Confirmed | `Dockerfile` builds with `--features storage-rocksdb`; `aikoql-mcp` exposes only `embedding-candle`/`embedding-openai` → clean-checkout build fails |
+| MVP-002 | P0 | Security | ✅ Confirmed (R9 mitigated cross-tenant only) | `session.rs:36-40` reads `tenant`/`roles` verbatim from client args; `authz.rs:13,45` `roles.is_empty() \|\| contains("admin")` → unrestricted; TCP has no auth handshake. R9 confines tenant inside `authorize()` (t30–t35), but identity is still client-asserted |
+| MVP-003 | P0 | Embeddings | ✅ Confirmed | `provider.rs:163-172` — `CandleEmbedding::new()` downloads all-MiniLM-L6-v2 (~90 MB) from HF Hub on first call; `embedding-candle` is the default feature |
+| MVP-004 | P0 | Config | ✅ Confirmed | Only `aikoql.toml` reference is a println (`cli.rs:1432`); no TOML loader in the workspace; Dockerfile ships the file to `/etc/aikoql/` — dead config |
+| MVP-005 | P0 | Release | ✅ Confirmed | npm job runs `node run.js --version` from the source dir then publishes; `npm pack` → clean install → npx never tested |
+| MVP-006 | P1 | CI | ✅ Confirmed | ci.yml has no Docker job (would have caught MVP-001) |
+| MVP-007 | P1 | Deploy | ✅ Confirmed | compose: `POSTGRES_PASSWORD: aikoql`, `NEO4J_AUTH: neo4j/password`, header claims "development & production" |
+| MVP-008 | P1 | Embeddings | ✅ Confirmed | `--embedding-provider openai` defaults base_url to `http://localhost:11434` (Ollama) — name says openai, default says ollama |
+| MVP-009 | P1 | Embeddings | ✅ Confirmed | Candle model hard-coded (`provider.rs:172`); `--embedding-model` only reaches the HTTP provider — silently ignored otherwise |
+| MVP-010 | P1 | Ops | ✅ Confirmed | serve startup catch-up re-embeds on the critical path (`cli.rs:491`); a degrade pattern already exists in ingest (`cli.rs:332-339`) — extend it |
+| MVP-011 | P1 | Testing | ✅ Confirmed | release.yml builds 5 platforms but never executes a binary |
+| MVP-012 | P1 | Docs | ✅ Confirmed | QUICKSTART says "26 total", plugin.json says 59; 74 `tool_*` fns exist — real count = `tools/list` |
+| MVP-013 | P1 | Docs | ✅ Confirmed | `QUICKSTART.md:240`: macOS = "Build from source" while release ships macos + macos-arm64 |
+| MVP-014 | P1 | CI | ✅ Confirmed (synthesis of 005/006/011) | CI is Rust-centric; the product is Rust + npm + plugin + Docker + GitHub Release |
+| MVP-015 | P2 | Arch | ⚠️ Partially stale | main.rs already 5756→492 (R7). Real target now: `cli.rs` (1773 lines) — config extraction (PRR-4) is its natural first split |
+| MVP-016 | P2 | Arch | ✅ Confirmed | server.rs 756 lines: protocol dispatch, TCP, sessions, registry, routing — review agrees not an MVP blocker |
+| **PRR-1a** | **P0** | Docker | **🆕 Found during triage (review missed it)** | Dockerfile `HEALTHCHECK CMD aikoql health` — no `health` subcommand exists (only the HTTP `/health` endpoint, `http.rs:764`). Container health would always fail |
+
+### Phases
+
+#### PRR-1: Docker correctness (MVP-001 + MVP-006 + PRR-1a) — P0 ✅ DONE (2026-08-18)
+
+**Implemented:**
+1. Dockerfile: dropped `--features storage-rocksdb` (redb is the default path — the feature never existed, MVP-001 confirmed) and `librocksdb-dev`/`librocksdb9.1` from both stages.
+2. HEALTHCHECK (PRR-1a): no `aikoql health` subcommand exists — probe the HTTP `/health` endpoint on the metrics port (`curl -fsS http://127.0.0.1:9091/health || exit 1`), 30s interval, 3s timeout, 5s start-period.
+3. CI: added a `docker:` job (ubuntu-latest) — `docker build -t aikoql:test .` → `docker run --rm aikoql:test --version` → container started with `-e AIKOQL_TCP_TOKEN=ci:ci:admin`, health polled via `docker inspect` up to 60s, logs dumped on failure.
+4. **🆕 Beyond the review (found during local build):** builder pinned `rust:1.80-slim-bookworm` cannot parse edition-2024 registry crates (crypto-common 0.2.2 → "feature `edition2024` is required") → bumped to `rust:1.97-slim-bookworm` (comment in Dockerfile).
+5. **🆕 Also found live:** `ENTRYPOINT ["aikoql"]` + `CMD ["sh","-c","exec aikoql serve …"]` double-invokes (`aikoql sh -c …` → the CMD string becomes the positional db path → store open ENOENT). Fixed with an exec-form CMD and the PRR-4 `AIKOQL_TCP_TOKEN` env var (exec form does no env expansion — the env pipeline handles the token). compose passes `AIKOQL_TCP_TOKEN=${TCP_TOKEN:?…}`.
+
+**Acceptance:** `docker build .` passes from a clean checkout (local verify: image built with rust:1.97, container `HEALTH=healthy`, config auto-loaded from `/etc/aikoql/aikoql.toml`, TCP ready with token auth, `aikoql --version` → 0.1.17). (RocksDB later: expose a real `storage-rocksdb` feature through the dependency graph + test it, then restore the flag.)
+
+#### PRR-2: TCP authentication + server-derived identity (MVP-002) — P0 ✅ DONE (2026-08-18)
+
+**Decision:** stdio keeps the OS process boundary as its trust boundary; TCP requires a bearer token. No client-supplied identity on TCP, ever.
+
+**Implemented:**
+1. `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]]` (repeatable, required with `--listen` — TCP without a token exits 2, fail-closed). Empty-role specs and duplicate tokens rejected at startup. `AIKOQL_TCP_TOKEN` env form deferred to PRR-4 (config pipeline).
+2. Token verified at MCP `initialize` (`params.token`); before auth only `initialize`/`ping` are accepted — everything else gets an error frame and the connection is dropped. Identity becomes server-assigned: `agent_id` forced to `tcp-agent`, tenant/roles from the token.
+3. TCP `session/init` rejects client-supplied `agent_id`/`tenant`/`roles`; only `run_id` is per-session. `tools/call` + `aikoql/stream` use **forced** injection in TCP mode (session identity overrides per-call `subject`/`roles`/`tenant` — closes the per-call `roles:["admin"]` elevation hole that fill-if-absent injection allowed).
+4. Deviation from plan text: `authz.rs` is unchanged (stdio keeps empty-roles-unrestricted); instead `call_tool` denies any TCP session whose token has no roles (defense in depth — startup validation makes this unreachable).
+5. Default TCP bind: empty listen host (`:9090`) → `127.0.0.1`; explicit `0.0.0.0` warns (opt-in). `run_tcp_listener` now takes a pre-bound listener so tests bind `127.0.0.1:0`.
+
+**Acceptance (review's matrix):** unauthenticated TCP → reject; user token → correct identity; normal user → privileged tool denied; admin → privileged tool allowed; tenant A → cannot access tenant B; client-supplied roles → never elevate. — Covered by 5 tests in `server::tcp_auth_tests` + 4 in `session::tests`.
+
+#### PRR-3: Explicit offline embedding lifecycle (MVP-003 + MVP-009 + MVP-010) — P0 ✅ DONE (2026-08-18)
+
+**Implemented:**
+1. `aikoql model install [MODEL_ID] [--model-dir DIR]` → `~/.aikoql/models/<slug>/` (config.json, tokenizer.json, model.safetensors). The ONLY code path that downloads (plus `CandleEmbedding::new()`, kept for tests). `--model-dir` flag on `serve`/`ingest-dir`/`model install`.
+2. Runtime **never downloads**: `serve` and `ingest-dir` load via `CandleEmbedding::from_local()`. Missing model → MCP stays up, `embed_text` and health return a clear "run `aikoql model install`" remediation.
+3. Model identity explicit: `--embedding-model` naming a non-installed candle model → `unavailable` (not silently swapped for all-MiniLM-L6-v2).
+4. Enrichment moved to a worker thread (`Scheduler::start_all` off the serve critical path); readiness `initializing | ready | unavailable` via `SEMANTIC_STATUS` static, surfaced in `tool_health` + `/health` (`semantic: {state, detail}`).
+
+**Acceptance (review's matrix):** serve starts immediately with no model (live smoke: uptime ~2.5s, health `semantic.state="unavailable"` + install hint); `aikoql model install` → next start `semantic.state="ready"` ("embeddings live (model all-MiniLM-L6-v2)"); `--embedding-model nomic-embed-text` (not installed) → `unavailable` with per-model install hint. Covered by 5 new tests (provider slug/from_local, main.rs model-dir/semantic-status) + live smoke on the real binary.
+
+#### PRR-4: Configuration loading (MVP-004) — P0 ✅ DONE (2026-08-18)
+
+**Implemented** (`crates/services/api/mcp/src/config.rs`, ~560 lines incl. 11 tests):
+1. Precedence pipeline `defaults → aikoql.toml → env → CLI` → validated `RuntimeConfig`, one entry point (`config::load`) for serve-mode startup. TOML discovery: `--config PATH` → `./aikoql.toml` → `/etc/aikoql/aikoql.toml`.
+2. Env layer (PRR-2's deferred item lands): `AIKOQL_DB`, `AIKOQL_LISTEN`, `AIKOQL_METRICS_ADDR`, `AIKOQL_TCP_TOKEN` (one token per var — role lists use commas, so multi-token env strings would be ambiguous; repeatable via TOML `tcp_tokens` array or CLI), `AIKOQL_MEMORY_DIR`, `AIKOQL_EMBEDDING_PROVIDER/BASE_URL/MODEL/API_KEY`, `AIKOQL_MODEL_DIR`.
+3. Validation (reject, don't ignore): `serde deny_unknown_fields` on every TOML section (unknown key → startup error, exit 2); `storage.backend` must be "redb" (rocksdb rejected with MVP-001 pointer); `encryption.enabled=true` rejected (at-rest not wired into serve yet — MRFC-0020); log level ∈ {trace,debug,info,warn,error}; format ∈ {text,json} (feeds EnvFilter fallback when RUST_LOG is unset); toml/env `embedding.provider` ∈ {candle,openai}.
+4. `[rate_limit]` is **enforced**: 60s fixed-epoch window (rate_limiter.rs — windowed rewrite with rollover, disabled bypass, 4 unit tests), per connection on MCP `tools/call` (TCP + stdio) and per token on the REST surface (429 with the limit in the message; anonymous callers share one bucket). The old hardcoded 1000-calls-per-connection counter is replaced by the config value (default 120/min). Process-local: N instances = N × limit — documented in rate_limiter.rs. TCP limit test (server::tcp_auth_tests) + live smoke (limit 2 → `200,200,429`).
+5. The shipped `aikoql.toml` (repo root → `/etc/aikoql/aikoql.toml` in the image) took effect live: container log shows `configuration loaded config=/etc/aikoql/aikoql.toml`.
+
+**Acceptance:** 11 unit tests (`default < TOML < env < CLI` per section, unknown-key/rocksdb/encryption/log-level rejection, env token push, positional db path); live smoke — TOML auto-discovery from cwd (serve up, `semantic=ready`), `unknown field 'bogus_key'` → exit 2, `AIKOQL_TCP_TOKEN` env token serve up; the aikoql.toml shipped in Docker takes effect.
+
+#### PRR-5: Product-level packaging gate (MVP-005 + MVP-011 + MVP-014) — P0
+
+**Tasks:**
+1. npm job: `npm pack` → install the exact tarball into a clean temp dir → `npx aikoql-mcp --version` → MCP `initialize` + `tools/list`.
+2. Per-platform release smoke (minimum: Windows, Linux GNU, macOS ARM): `--version`, `initialize`, `tools/list`, one representative `tools/call`.
+3. Plugin validation step in CI.
+
+**Acceptance:** the exact published tarball proves install → resolve pinned GitHub release → SHA-256 verify → version → MCP start. MVP-014's Rust gate already exists; this adds Docker + npm + plugin + smoke to make CI product-centric.
+
+**✅ DONE (2026-08-18, uncommitted):**
+- `npm-publish/smoke-mcp.js` — dependency-free MCP stdio client (initialize → tools/list → one `tools/call`; 120s timeout; temp db file under cwd — the db path is a FILE, redb on a directory fails on Windows; cleans up on exit). Not shipped in the tarball (`files: ["run.js"]`).
+- release.yml `npm-publish` job: `npm pack` → `npm install <exact tgz>` into a clean temp dir → `npx aikoql-mcp --version` → MCP smoke via npx (the plugin's own launch path). Replaces the old `node run.js --version` source-dir smoke.
+- release.yml per-platform smoke: windows/linux-gnu/macos-arm build jobs run `--version` + MCP smoke against the freshly built binary before upload.
+- ci.yml `plugin` job: `npm-publish/validate-plugin.js` — plugin.json/marketplace.json parse, required fields, mcpServers command+args, and plugin/npm/Cargo version alignment (drift caught pre-tag).
+- 🆕 run.js Windows bug the gate caught: checksum fetch used `Invoke-WebRequest` via piped execSync → NullReferenceException (no console host) → verification always failed on Windows. Switched to `WebClient.DownloadString`. npm gate verified live on Windows: tarball (2 files) → clean install → npx → download → `checksum OK (4c1991…)` → `aikoql-mcp 0.1.17` → initialize + tools/list (75 tools) + metrics call, exit 0.
+
+#### PRR-6: Docs & config consistency (MVP-007 + MVP-008 + MVP-012 + MVP-013) — P1
+
+**Tasks:** compose — `${POSTGRES_PASSWORD:?…}` / `${NEO4J_PASSWORD:?…}` and mark the file development-only; provider names `candle | ollama | http` (accept legacy `openai` alias with a deprecation note); tool counts — generate from `tools/list` or remove the number from QUICKSTART/plugin.json/website (website landing rewritten 2026-08-18 still says 59 — reconcile with the real count); QUICKSTART macOS = shipped binaries.
+
+**Acceptance:** no hand-maintained tool counts anywhere; docs match actual release artifacts.
+
+**✅ DONE (2026-08-18, uncommitted):**
+- MVP-007 compose: header now DEVELOPMENT-ONLY (dev passwords, exposed ports, no secret manager; production note points at secret-manager env vars + managed/private DBs); `POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aikoql-dev-only}` and `NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-password-dev-only}` — dev defaults, overridable via env. Used `:-` not `:?`: the review's `:?` form fails interpolation for the whole file (profiles don't gate interpolation), breaking plain `docker compose up` for the aikoql service alone. Verified with `docker compose --profile full config` (defaults + env overrides). PRR-2's existing `TCP_TOKEN:?` gate confirmed working.
+- MVP-008 providers: canonical `candle | http | ollama` in all three config layers (TOML/env/CLI) via one `normalize_provider` helper (config.rs); legacy `openai` accepted → http adapter + deprecation warning; **CLI unknown values are now rejected** (old loop silently fell back to candle — the exact MVP-009 "silently ignoring" pattern). Internal sentinel unchanged → zero consumer changes. 4 new unit tests (17 config tests total); aikoql.toml + `--help` + getting-started updated.
+- MVP-012 tool counts: **all 11 hand-maintained count sites removed** (plugin.json, marketplace.json, package.json, website landing ×3, api-reference, docs index ×2, architecture ×2, QUICKSTART "(26 total)" → "subset — run `tools/list`"). Live `tools/list` = 75. QUICKSTART tool table verified against the test registry.
+- MVP-013 platforms: QUICKSTART platform table now lists all 5 shipped binaries (win exe, linux GNU + musl, macos-arm64, macos-intel) + npm launcher; macOS no longer "build from source".
+- 🆕 extra drift fixed (same acceptance class): QUICKSTART TCP examples now carry the required `--tcp-token` (PRR-2 fail-closed made them wrong), config section documents discovery/precedence/AIKOQL_* vars, and the encryption section notes `enabled=true` is currently rejected by serve.
+
+#### PRR-7: cli.rs / server.rs split (MVP-015 + MVP-016) — P2
+
+**✅ DONE (2026-08-18, uncommitted):**
+- cli.rs 1773 → 447 lines (`print_usage` + `dispatch` only); new `admin.rs` (backup/restore/audit/report/keygen), `ingest.rs` (ingest-dir, enrich_file_contains, content_trust_extension, entity_type_name), `imports.rs` (pg/sqlite/mongo/neo4j), `model.rs` (model install).
+- server.rs 1066 → **deleted**; new `transport.rs` (ACTIVE_CONNECTIONS/STREAM_ID, handle_tcp_client, run_tcp_listener, run_stdio, tcp_auth_tests), `tool_registry.rs` (tools_list, tool_batch, call_tool), `dispatcher.rs` (handle_message, notifications, event parsing), `protocol.rs` (write_frame, err_frame, ToolResult).
+- main.rs 617 → **459 lines** (<500 acceptance); test module moved to `tests.rs`.
+- All moves verbatim (mechanical line-range splice); `pub(crate)` visibility preserved so the `use crate::*` prelude chains (root → transport → tools/admin, tools/query) keep resolving.
+- **Acceptance verified:** cargo fmt clean; clippy `--workspace -D warnings` clean; `cargo test -p aikoql-mcp` 39+3+15 green (identical counts pre/post); kernel/compiler/runtime/ingestion 23 suites green (312/232/84/45/37/13/10/8/8/8/7/6/5/5/3/3/1 + 9+1+1+1 ignored).
+
+#### PRR-8: Docker release distribution (external container review) — DONE
+
+**✅ DONE (2026-08-18, uncommitted):** second external review (container distribution) — mostly re-confirmed PRR-1 fixes (RocksDB assumptions + `aikoql health` healthcheck were already gone); new work:
+- **/data contract:** CMD now `serve /data/aikoql.redb --listen 0.0.0.0:9090 --metrics-addr 0.0.0.0:9091 --model-dir /data/models` — redb file, memory dir, and the local embedding model store all inside the volume; image stays stateless (no model baked in; `docker exec aikoql aikoql model install` targets /data/models).
+- **GHCR release publishing:** release.yml gains `docker-amd64` (ubuntu-latest) + `docker-arm64` (ubuntu-24.04-arm, native — no qemu emulation) jobs pushing arch-suffixed tags with OCI labels (title/description/version/source/revision/created); `docker-manifest` merges them via `buildx imagetools create` into `ghcr.io/anckursingh/aikoql:{VERSION,MINOR,latest}` and prints the digest. Release (github-release job) now gates on docker-manifest.
+- **Container smoke in release:** amd64 image boots with a smoke token, /health on :19091 goes 200, `--version` runs (both arches).
+- **docker-compose.release.yml:** production compose on the GHCR image; `AIKOQL_TCP_TOKEN:?` required (fail-closed matches PRR-2), `AIKOQL_VERSION` pins the tag, named volume for /data. Verified: resolves with token, hard interpolation error without.
+- **QUICKSTART:** Docker (GHCR) section — pull/run/upgrade contract, container layout, health check.
+- Dockerfile keeps the PRR-1 rust:1.97-slim-bookworm builder + debian-bookworm-slim runtime + strip; unchanged for multi-arch (both base images have amd64/arm64 variants; each arch builds natively on its own runner).
+
+### Production DoD (review §10) — current status
+
+- [x] Rust workspace builds, tests, clippy, fmt
+- [x] tools/list works
+- [x] Core knowledge CRUD, graph operations, hybrid search work
+- [x] MCP stdio starts immediately, and semantic failure does not kill MCP (PRR-3 ✅ 2026-08-18)
+- [x] Semantic search works when a local model is installed; no implicit download at runtime (PRR-3 ✅ 2026-08-18)
+- [x] Docker builds, starts, health passes (PRR-1 ✅ 2026-08-18)
+- [x] TCP is authenticated OR explicitly disabled for MVP; tenant identity is server-derived (PRR-2 ✅ 2026-08-18)
+- [x] Configuration actually controls runtime (PRR-4 ✅ 2026-08-18)
+- [x] npm tarball works; Claude plugin works; release artifacts smoke-tested (PRR-5 ✅ 2026-08-18)
+- [x] Release artifacts are version-aligned (0.1.17 release gate)
+- [x] Documentation matches actual behavior (PRR-6 ✅ 2026-08-18)
+- [x] cli.rs/server.rs split, main.rs <500 (PRR-7 ✅ 2026-08-18)
+- [x] GHCR multi-arch release image with /data contract + container smoke (PRR-8 ✅ 2026-08-18)
+
+### Priority order (next session)
+
+```text
+P0:  watch the v0.1.18 release pipeline (first GHCR multi-arch images)
+P1:  start "Next phase" below (encryption-at-rest first)
+```
+
+**PRR status: 7 of 7 phases done (PRR-1 ✅ 2026-08-18, PRR-2 ✅ 2026-08-18, PRR-3 ✅ 2026-08-18, PRR-4 ✅ 2026-08-18, PRR-5 ✅ 2026-08-18, PRR-6 ✅ 2026-08-18, PRR-7 ✅ 2026-08-18) + PRR-8 Docker distribution ✅ 2026-08-18. All 16 review findings + container distribution review addressed. Shipping as v0.1.18 (commit + tag authorized 2026-08-18).**
+
+---
+
+### Next phase (post-MVP): v0.2 hardening
+
+```text
+P0:  MRFC-0020 encryption at rest wired into serve — KMS, AES-256-GCM,
+     envelope encryption, and field-level policies already exist (MRFC-0020);
+     serve currently REJECTS encryption.enabled=true at startup (documented
+     in QUICKSTART). Task: connect RedbEngine opens to the LocalKMS key file,
+     wire passphrase/AIKOQL_PASSPHRASE, field-level policies per schema type.
+P1:  Durable CDC + `notify` streaming — notify is intentionally unexposed
+     (main.rs header); notification_subscribe already replays from the
+     journal. Task: persistent change feed (journal positions, resume).
+P1:  Durable MCP subscriptions — sub sets are in-memory per connection;
+     reconnect loses subscriptions. Follows from durable CDC.
+P2:  Owner secondary index — deferred from R9; per-owner scans are still
+     linear. Type index pattern (R9) is the template.
+P3:  Docker build caching (cargo-chef) + distroless/minimal runtime —
+     deferred from the container review until the release pipeline is
+     proven deterministic (first GHCR publish = v0.1.18).
+```

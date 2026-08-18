@@ -5,7 +5,7 @@ description: Complete reference for all MCP tools and REST endpoints
 
 # API Reference
 
-aikoql exposes 59 MCP tools and 40+ REST endpoints.
+aikoql exposes its full MCP tool registry (autodiscovered via `tools/list`) and 40+ REST endpoints.
 
 ## Authentication
 

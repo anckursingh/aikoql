@@ -158,37 +158,90 @@ pub struct CandleEmbedding {
     device: candle_core::Device,
 }
 
+/// Model id of the bundled offline embedding model (PRR-3).
+pub const DEFAULT_MODEL_ID: &str = "sentence-transformers/all-MiniLM-L6-v2";
+
+/// Local-store directory name for a model id (its last path segment).
+pub fn model_slug(model_id: &str) -> &str {
+    model_id.rsplit('/').next().unwrap_or(model_id)
+}
+
+/// hf-hub download of the three files a Bert model needs. The ONLY network
+/// path (PRR-3) — used by `install` and `new`, never by the runtime.
+#[cfg(feature = "embedding-candle")]
+fn hf_download(
+    model_id: &str,
+) -> KResult<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> {
+    // hf-hub 0.4 tokio API (rustls) — the sync API pulls native-tls/openssl.
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|e| KError::Store(format!("tokio-runtime: {e}")))?;
+    rt.block_on(async {
+        let api =
+            hf_hub::api::tokio::Api::new().map_err(|e| KError::Store(format!("hf-api: {e}")))?;
+        let repo = api.model(model_id.into());
+        Ok::<_, KError>((
+            repo.get("config.json")
+                .await
+                .map_err(|e| KError::Store(format!("hf-config: {e}")))?,
+            repo.get("tokenizer.json")
+                .await
+                .map_err(|e| KError::Store(format!("hf-tokenizer: {e}")))?,
+            repo.get("model.safetensors")
+                .await
+                .map_err(|e| KError::Store(format!("hf-weights: {e}")))?,
+        ))
+    })
+}
+
 #[cfg(feature = "embedding-candle")]
 impl CandleEmbedding {
-    /// Load `sentence-transformers/all-MiniLM-L6-v2` from HF Hub.
-    /// First call downloads ~90MB and caches locally.
+    /// Download `sentence-transformers/all-MiniLM-L6-v2` from HF Hub and load
+    /// it. Explicit install/test path only — the runtime must use
+    /// `from_local` and never downloads (PRR-3).
     pub fn new() -> KResult<Self> {
-        // hf-hub 0.4 tokio API (rustls) — the sync API pulls native-tls/openssl.
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| KError::Store(format!("tokio-runtime: {e}")))?;
-        let (config_path, tokenizer_path, weights_path) = rt.block_on(async {
-            let api = hf_hub::api::tokio::Api::new()
-                .map_err(|e| KError::Store(format!("hf-api: {e}")))?;
-            let repo = api.model("sentence-transformers/all-MiniLM-L6-v2".into());
-            Ok::<_, KError>((
-                repo.get("config.json")
-                    .await
-                    .map_err(|e| KError::Store(format!("hf-config: {e}")))?,
-                repo.get("tokenizer.json")
-                    .await
-                    .map_err(|e| KError::Store(format!("hf-tokenizer: {e}")))?,
-                repo.get("model.safetensors")
-                    .await
-                    .map_err(|e| KError::Store(format!("hf-weights: {e}")))?,
-            ))
-        })?;
+        let (config_path, tokenizer_path, weights_path) = hf_download(DEFAULT_MODEL_ID)?;
+        Self::from_files(&config_path, &tokenizer_path, &weights_path)
+    }
 
-        let config_raw = std::fs::read_to_string(&config_path)
+    /// Load an installed model from a local directory containing
+    /// config.json, tokenizer.json, and model.safetensors. No network.
+    pub fn from_local(dir: &std::path::Path) -> KResult<Self> {
+        Self::from_files(
+            &dir.join("config.json"),
+            &dir.join("tokenizer.json"),
+            &dir.join("model.safetensors"),
+        )
+    }
+
+    /// Install a model into the local store (`store/<slug>/`). Returns the
+    /// installed directory.
+    pub fn install(model_id: &str, store: &std::path::Path) -> KResult<std::path::PathBuf> {
+        let (config_path, tokenizer_path, weights_path) = hf_download(model_id)?;
+        let dir = store.join(model_slug(model_id));
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| KError::Store(format!("create model dir: {e}")))?;
+        for (src, name) in [
+            (&config_path, "config.json"),
+            (&tokenizer_path, "tokenizer.json"),
+            (&weights_path, "model.safetensors"),
+        ] {
+            std::fs::copy(src, dir.join(name))
+                .map_err(|e| KError::Store(format!("install {name}: {e}")))?;
+        }
+        Ok(dir)
+    }
+
+    fn from_files(
+        config_path: &std::path::Path,
+        tokenizer_path: &std::path::Path,
+        weights_path: &std::path::Path,
+    ) -> KResult<Self> {
+        let config_raw = std::fs::read_to_string(config_path)
             .map_err(|e| KError::Store(format!("read config: {e}")))?;
         let config: candle_transformers::models::bert::Config =
             serde_json::from_str(&config_raw)
                 .map_err(|e| KError::Store(format!("parse config: {e}")))?;
-        let mut tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
+        let mut tokenizer = tokenizers::Tokenizer::from_file(tokenizer_path)
             .map_err(|e| KError::Store(format!("load tokenizer: {e}")))?;
         // Cap input to all-MiniLM's 512-token window — enrichment text (e.g. an
         // ingested directory's ir_json) can be MBs and would blow up the tensor.
@@ -327,6 +380,36 @@ mod tests {
             nb += y * y;
         }
         d / (na.sqrt() * nb.sqrt())
+    }
+
+    #[test]
+    fn model_slug_strips_repo_prefix() {
+        assert_eq!(
+            model_slug("sentence-transformers/all-MiniLM-L6-v2"),
+            "all-MiniLM-L6-v2"
+        );
+        assert_eq!(model_slug("plainname"), "plainname");
+    }
+
+    #[test]
+    #[cfg(feature = "embedding-candle")]
+    fn from_local_missing_dir_is_clear_error() {
+        // PRR-3: from_local must never download — a missing install errors
+        // immediately instead of hitting the network.
+        let tmp = std::env::temp_dir().join(format!(
+            "aikoql-semantic-missing-model-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let err = match CandleEmbedding::from_local(&tmp) {
+            Ok(_) => panic!("from_local must fail on a missing install"),
+            Err(e) => e,
+        };
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("config") || msg.contains("NotFound"),
+            "error should name the missing file, got: {msg}"
+        );
     }
 
     #[test]

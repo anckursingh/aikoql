@@ -19,10 +19,12 @@ aikoql-ingestion = { path = "../../../ingestion" }
 aikoql-semantic = { path = "../../../engines/semantic" }
 aikoql-scheduler = { path = "../../../engines/scheduler" }
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 sha2 = "0.10"
 base64 = "0.22"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [features]
 default = ["embedding-candle"]

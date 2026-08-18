@@ -8,8 +8,8 @@ aikoql is a knowledge database with built-in encryption, hybrid vector+text sear
 # Download and run (stdio mode — perfect for MCP clients like Claude Code):
 ./aikoql-mcp
 
-# Or TCP server mode (for multiple clients):
-./aikoql-mcp --listen 127.0.0.1:9090 --metrics-addr 127.0.0.1:9091 ./data/aikoql.redb
+# Or TCP server mode (for multiple clients — a token is required, PRR-2):
+./aikoql-mcp --listen 127.0.0.1:9090 --tcp-token TOKEN --metrics-addr 127.0.0.1:9091 ./data/aikoql.redb
 ```
 
 ## Usage Modes
@@ -22,17 +22,17 @@ aikoql-mcp [database_path]
 ```
 
 ### TCP Mode
-Accepts multiple MCP client connections over TCP.
+Accepts multiple MCP client connections over TCP. Requires a token — `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]]` (repeatable; also `AIKOQL_TCP_TOKEN` env or `tcp_tokens` in `aikoql.toml`). Refuses to start without one.
 
 ```
-aikoql-mcp --listen 127.0.0.1:9090 [database_path]
+aikoql-mcp --listen 127.0.0.1:9090 --tcp-token TOKEN [database_path]
 ```
 
 ### TCP + Metrics (REST API + Studio)
 Starts the HTTP server with REST API, health endpoints, and the Studio web UI:
 
 ```
-aikoql-mcp --listen 127.0.0.1:9090 --metrics-addr 127.0.0.1:9091 [database_path]
+aikoql-mcp --listen 127.0.0.1:9090 --tcp-token TOKEN --metrics-addr 127.0.0.1:9091 [database_path]
 ```
 
 ### Metrics-Only Mode (Studio UI)
@@ -111,7 +111,7 @@ The compilation results display all phases: stats, IR entities, ontology proposa
 Try it with the sample invoice PDF at:
 `C:/Users/ancku/CascadeProjects/ai-crm-platform/services/billing-processor/output/invoice_9655.pdf`
 
-## Available MCP Tools (26 total)
+## Key MCP Tools (subset — run `tools/list` for the full registry)
 
 | Category | Tools |
 |----------|-------|
@@ -135,17 +135,19 @@ Try it with the sample invoice PDF at:
 
 ## Configuration
 
-Copy `aikoql.toml` alongside the binary and edit values. CLI flags override config.
+Copy `aikoql.toml` alongside the binary and edit values. Discovery order: `--config PATH` → `./aikoql.toml` → `/etc/aikoql/aikoql.toml`. Precedence: defaults < TOML < environment (`AIKOQL_*`) < CLI flags. Unknown keys and invalid values are rejected at startup.
 
 Environment variables:
 - `RUST_LOG` — log level (trace, debug, info, warn, error). Default: info.
+- `AIKOQL_TCP_TOKEN` — TCP auth token for `--listen` (one per variable).
+- `AIKOQL_DB`, `AIKOQL_LISTEN`, `AIKOQL_METRICS_ADDR` — override TOML settings.
 - `AIKOQL_PASSPHRASE` — KMS passphrase for encryption (if enabled).
 
 ## Encryption (MRFC-0020)
 
 Encryption at rest is built-in but optional. To enable:
 
-1. Set `encryption.enabled = true` in `aikoql.toml`
+1. Set `encryption.enabled = true` in `aikoql.toml` (Note: `serve` currently rejects `enabled = true` at startup — encryption is not wired into the MCP server yet, MRFC-0020.)
 2. Set `encryption.key_path` to where the master key will be stored
 3. Set `encryption.passphrase` or the `AIKOQL_PASSPHRASE` env var
 
@@ -231,13 +233,31 @@ By default, aikoql stores all data in a single [redb](https://github.com/cberner
 - Encryption: All data encrypted at rest when enabled (AES-256-GCM, ChaCha20-Poly1305 available).
 - Audit: Immutable SHA-256 hash chain. Every mutation is journaled.
 
+## Docker (GHCR)
+
+Release images are multi-arch (linux/amd64 + linux/arm64) and published on every release tag alongside the binaries:
+
+```bash
+docker pull ghcr.io/anckursingh/aikoql:0.1.18   # pin the immutable release tag
+docker run -d --name aikoql \
+  -e AIKOQL_TCP_TOKEN=TOKEN \
+  -p 9090:9090 -p 9091:9091 \
+  -v aikoql_data:/data \
+  ghcr.io/anckursingh/aikoql:0.1.18
+```
+
+Container contract: config at `/etc/aikoql/aikoql.toml`; all state under the `/data` volume — `/data/aikoql.redb`, `memory/`, and the local embedding model store (`/data/models`, installable with `docker exec aikoql aikoql model install`). The image is stateless: upgrades are pull + recreate, the knowledge base survives in the volume. TCP auth is fail-closed — the container refuses to listen without a token. Health check: `curl http://127.0.0.1:9091/health`. Compose variant: `AIKOQL_VERSION=0.1.18 AIKOQL_TCP_TOKEN=TOKEN docker compose -f docker-compose.release.yml up -d`.
+
 ## Platform Support
 
 | Platform | Binary | Status |
 |----------|--------|--------|
 | Windows 10/11 | `aikoql-mcp.exe` | ✅ Full (build + Studio + E2E) |
-| Linux x86_64 | `aikoql-mcp` | ✅ Full (native build or cross-compile) |
-| macOS (ARM/x86) | `aikoql-mcp` | Build from source |
+| Linux x86_64 | `aikoql-mcp` (GNU) / `aikoql-mcp-linux-musl` (static) | ✅ Full (native build or cross-compile) |
+| macOS ARM | `aikoql-mcp-macos-arm64` | ✅ Shipped binary (GitHub Releases) |
+| macOS Intel | `aikoql-mcp-macos` | ✅ Shipped binary (GitHub Releases) |
+
+Shipped binaries download from `https://github.com/anckursingh/aikoql/releases` (SHA-256 files alongside), or install via `npm i -g aikoql-mcp` — the launcher downloads, verifies, and runs the right binary automatically.
 
 ## Next Steps
 

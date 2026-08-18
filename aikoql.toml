@@ -1,18 +1,18 @@
 # Aikoql Configuration
-# Copy this file to where you run aikoql-mcp, or override values via CLI flags.
-# CLI flags always take precedence over this config file.
+# Precedence: defaults < this file < environment (AIKOQL_*) < CLI flags.
+# Auto-discovered at ./aikoql.toml (fallback /etc/aikoql/aikoql.toml — the
+# Docker image ships it there). Override with --config PATH.
 
 [storage]
-# Storage backend: "redb" (default) or "rocksdb" (requires --features storage-rocksdb).
-# redb: pure Rust, single-writer, ideal for development and single-agent workloads.
-# rocksdb: C++ LSM-tree, concurrent readers+writers, better for production workloads.
+# Storage backend: only "redb" is built (the rocksdb backend feature does not
+# exist — see MVP-001). Unknown values are rejected at startup.
 backend = "redb"
-# Path to the database directory (redb uses a single file, rocksdb uses a directory).
-path = "./aikoql_data"
+# Path to the redb database file.
+path = "./aikoql.redb"
 
 [database]
-# Deprecated: use [storage] section above. Kept for backward compatibility.
-# Path to the redb database file. Default: ./aikoql.redb
+# Deprecated: use [storage] above. Kept for backward compatibility; this
+# section wins over [storage].path when both are set.
 path = "./aikoql.redb"
 
 [server]
@@ -22,9 +22,15 @@ path = "./aikoql.redb"
 # Prometheus metrics + health check HTTP endpoint. Comment out to disable.
 # metrics_addr = "127.0.0.1:9091"
 
+# TCP auth tokens (TOKEN[:TENANT[:ROLE1,ROLE2]]). Required with listen.
+# Repeatable; alternatively one token via the AIKOQL_TCP_TOKEN env var or
+# repeated --tcp-token flags.
+# tcp_tokens = ["mytoken:acme:admin"]
+
 [encryption]
 # Enable encryption at rest (MRFC-0020). Requires a key file.
-# Set to true and provide a key_path to enable.
+# NOTE: encryption-at-rest is not wired into serve yet — setting enabled=true
+# is rejected at startup.
 enabled = false
 
 # Path to the master key file for the LocalKMS.
@@ -34,24 +40,24 @@ enabled = false
 # passphrase = "change-me-in-production"
 
 [rate_limit]
-# Enable per-process rate limiting for MCP tool calls.
+# Enforced: 60s window — per connection on MCP tools/call (TCP + stdio) and
+# per token on the REST surface (429 with the limit in the message).
 enabled = true
-# Maximum tool calls per minute per connection.
+# Maximum calls per minute per key. Process-local: N instances = N × limit.
 max_calls_per_minute = 120
-# NOTE: Process-local. In a horizontally-scaled deployment (load balancer →
-# N instances), each instance independently allows max_calls_per_minute.
-# For global rate limiting, use a shared backend (see rate_limiter.rs) or
-# enforce limits at the gateway layer.
 
 [embedding]
 # Embedding provider for MATCH ... USING EMBEDDING queries.
-# "openai" (OpenAI-compatible: Ollama, OpenAI, etc.) — uses /v1/embeddings.
-# "candle" (local BERT inference via candle-transformers) — no network, CPU only.
-provider = "openai"
+# "candle" (default — local BERT inference, no network; requires
+#   `aikoql model install` once), "http" (any OpenAI-compatible endpoint:
+#   Ollama, OpenAI, etc. — uses /v1/embeddings), or "ollama" (alias of
+#   "http"). Legacy "openai" is accepted with a deprecation warning.
+provider = "candle"
 # Base URL for OpenAI-compatible endpoint (omit /v1; default: Ollama localhost).
 base_url = "http://localhost:11434"
-# Model name for the embedding endpoint.
-model = "nomic-embed-text"
+# Model name. Candle: only all-MiniLM-L6-v2 ships (install others via
+# `aikoql model install <model>`). OpenAI-compatible: endpoint model name.
+model = "all-MiniLM-L6-v2"
 # API key for remote services (omit for Ollama — no auth needed).
 # api_key = "sk-..."
 

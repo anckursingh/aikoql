@@ -706,7 +706,9 @@ impl Kernel {
         match &self.embedding_provider {
             Some(p) => p.embed(text, model),
             None => Err(KError::UnsupportedOperation(
-                "no embedding provider configured; set --embedding-provider flag".into(),
+                "no embedding provider configured — run `aikoql model install` for offline \
+                 embeddings or set --embedding-provider openai"
+                    .into(),
             )),
         }
     }

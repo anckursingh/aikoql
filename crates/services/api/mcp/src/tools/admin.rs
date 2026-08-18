@@ -113,6 +113,8 @@ pub(crate) fn tool_health(k: &Kernel) -> Result<J, String> {
     let journal_lag_ms: u64 = 0;
     let connections = ACTIVE_CONNECTIONS.load(Ordering::Relaxed);
     let max_connections = if connections > 0 { connections } else { 1 };
+    // PRR-3: surface semantic readiness (enrichment worker updates the static).
+    let sem = crate::semantic_status_snapshot();
     Ok(json!({
         "status": if ready { "healthy" } else { "degraded" },
         "ready": ready,
@@ -122,6 +124,10 @@ pub(crate) fn tool_health(k: &Kernel) -> Result<J, String> {
         "connection_pool": format!("{}/{}", connections, max_connections),
         "audit_hash": audit.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
         "uptime_seconds": SERVER_START.get().map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0),
+        "semantic": {
+            "state": sem.state,
+            "detail": sem.detail,
+        },
     }))
 }
 

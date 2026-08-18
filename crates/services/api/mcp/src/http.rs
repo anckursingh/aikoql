@@ -11,6 +11,7 @@ pub(crate) fn serve_metrics(
     ontology: Arc<OntologyRegistry>,
     addr: &str,
     db_path: &Arc<String>,
+    rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
 ) {
     let listener = match TcpListener::bind(addr) {
         Ok(l) => l,
@@ -27,7 +28,8 @@ pub(crate) fn serve_metrics(
                 let sess = sessions.clone();
                 let db = db_path.clone();
                 let ont = ontology.clone();
-                std::thread::spawn(move || handle_http(&mut s, &k, &sess, &db, &ont));
+                let rl = rate_limit.clone();
+                std::thread::spawn(move || handle_http(&mut s, &k, &sess, &db, &ont, &rl));
             }
             Err(e) => {
                 // ponytail: don't die on transient accept errors.
@@ -662,6 +664,7 @@ pub(crate) fn handle_http(
     sessions: &Mutex<HashMap<String, HttpSession>>,
     db_path: &Arc<String>,
     ontology: &OntologyRegistry,
+    rate_limit: &Mutex<crate::rate_limiter::RateLimiter>,
 ) {
     // ponytail: 64 KB buffer fits all practical HTTP requests. Browsers send
     // ~2-8 KB of headers; single read captures the full request.
@@ -734,6 +737,7 @@ pub(crate) fn handle_http(
             db_path.as_str(),
             sessions,
             token.clone(),
+            rate_limit,
         );
         let mut resp = format!(
             "HTTP/1.0 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",
@@ -766,8 +770,14 @@ pub(crate) fn handle_http(
                 .get()
                 .map(|s| s.elapsed().as_secs_f64())
                 .unwrap_or(0.0);
-            let body =
-                json!({"status":"ok","uptime_seconds":(uptime * 10.0).round() / 10.0}).to_string();
+            // PRR-3: surface semantic readiness alongside server health.
+            let sem = crate::semantic_status_snapshot();
+            let body = json!({
+                "status": "ok",
+                "uptime_seconds": (uptime * 10.0).round() / 10.0,
+                "semantic": {"state": sem.state, "detail": sem.detail},
+            })
+            .to_string();
             ("200 OK", "application/json", body)
         }
         "/metrics" => {
@@ -922,7 +932,8 @@ pub(crate) fn spawn_metrics(
     ontology: Arc<OntologyRegistry>,
     addr: String,
     db_path: Arc<String>,
+    rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
 ) {
     info!(addr = %addr, "metrics HTTP server started");
-    thread::spawn(move || serve_metrics(kernel, ontology, &addr, &db_path));
+    thread::spawn(move || serve_metrics(kernel, ontology, &addr, &db_path, rate_limit));
 }

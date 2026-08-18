@@ -8,7 +8,7 @@ description: Install and run aikoql in 5 minutes
 ## CLI Commands
 
 ```
-aikoql comes with 9 CLI commands:
+aikoql comes with 10 CLI commands:
   shell [DB]             Interactive knowledge shell
   serve [OPTIONS] [DB]   Start MCP server (stdio by default; --listen for TCP)
   ingest-dir [PATH] [DB] Ingest directory into knowledge base
@@ -18,6 +18,7 @@ aikoql comes with 9 CLI commands:
   audit [DB]             Print encryption compliance report
   keygen [PATH]          Generate master encryption key
   import <SOURCE> [ARGS] Import from postgres / sqlite / mongodb
+  model install [MODEL]  Install an embedding model for offline use
 ```
 
 ### Ingest a Codebase
@@ -44,19 +45,29 @@ The ingest engine classifies every file:
 
 ## Installation
 
+### npm (recommended for MCP clients)
+
+```bash
+npm install -g aikoql-mcp
+aikoql-mcp --version
+```
+
+First run downloads the pinned platform binary from GitHub Releases and
+verifies its SHA-256 — npm@X always executes native binary X.
+
 ### Download Binary
 
 aikoql ships as a single, self-contained binary. No dependencies, no installers.
 
 **Windows:**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.17/aikoql-mcp.exe
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.18/aikoql-mcp.exe
 .\aikoql-mcp.exe --help
 ```
 
 **Linux (static musl — any distro):**
 ```bash
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.17/aikoql-mcp-linux-musl
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.18/aikoql-mcp-linux-musl
 chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql
 ```
 
@@ -65,11 +76,11 @@ A glibc build (`aikoql-mcp-linux`) is also available for distros that prefer dyn
 **macOS (Apple Silicon / Intel):**
 ```bash
 # Apple Silicon
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.17/aikoql-mcp-macos-arm64
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.18/aikoql-mcp-macos-arm64
 chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql
 
 # Intel
-curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.17/aikoql-mcp-macos
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.18/aikoql-mcp-macos
 chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql
 ```
 
@@ -77,7 +88,7 @@ chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql
 
 ```bash
 aikoql --version
-# aikoql-mcp 0.1.17
+# aikoql-mcp 0.1.18
 ```
 
 ## 5-Second Start
@@ -123,11 +134,15 @@ Connects via stdin/stdout — perfect for Claude Code, VS Code, and other MCP cl
 
 ### TCP Server + Web UI
 
+TCP mode requires at least one auth token (`TOKEN[:TENANT[:ROLE1,ROLE2]]`); clients
+pass it as `params.token` to MCP `initialize`.
+
 ```bash
-aikoql serve --listen 127.0.0.1:9090 --metrics-addr 127.0.0.1:9091 ./my-knowledge.redb
+aikoql serve --listen 127.0.0.1:9090 --tcp-token mytoken:acme:admin \
+  --metrics-addr 127.0.0.1:9091 ./my-knowledge.redb
 ```
 
-- MCP endpoint: `tcp://127.0.0.1:9090`
+- MCP endpoint: `tcp://127.0.0.1:9090` (token auth required)
 - Graph Browser: `http://127.0.0.1:9091/ui`
 - REST API: `http://127.0.0.1:9091/api/v1/`
 - Health check: `http://127.0.0.1:9091/health`
@@ -170,6 +185,21 @@ aikoql> .backup
 aikoql> .help
 ```
 
+## Embeddings (Optional)
+
+Semantic search (`MATCH ... USING EMBEDDING`) runs fully offline — the server
+never downloads models at runtime. Install the bundled model once:
+
+```bash
+aikoql model install
+```
+
+Without an installed model, `serve` still starts and `/health` reports
+`semantic: {"state": "unavailable"}` together with the install command.
+Point `--embedding-provider http` + `--embedding-base-url` at an
+Ollama/OpenAI-compatible endpoint to use a remote model instead
+(`ollama` is an alias of `http`; providers are `candle` | `http` | `ollama`).
+
 ## Connecting from Code
 
 ### Python
@@ -207,7 +237,7 @@ aikoql keygen ./master.key
 export AIKOQL_PASSPHRASE="your-secure-passphrase"
 
 # Start with encryption
-aikoql serve --listen :9090 --metrics-addr :9091 ./encrypted-kb.redb
+aikoql serve --listen :9090 --tcp-token mytoken:acme:admin --metrics-addr :9091 ./encrypted-kb.redb
 ```
 
 See [Encryption Guide](/docs/guides/encryption) for details on key rotation, field-level encryption, and compliance.

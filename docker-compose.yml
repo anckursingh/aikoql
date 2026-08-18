@@ -1,4 +1,8 @@
-# Aikoql MVP — development & production compose
+# Aikoql — DEVELOPMENT-ONLY compose (MVP-007). Not for production:
+# dev-default passwords below, exposed DB ports, no secret manager.
+# Production: supply POSTGRES_PASSWORD / NEO4J_PASSWORD (and TCP_TOKEN) from a
+# secret manager, point at managed/private Postgres + Neo4j, drop the port
+# mappings. All secrets are overridable via environment variables.
 version: "3.8"
 
 services:
@@ -11,6 +15,9 @@ services:
       - aikoql_data:/data
     environment:
       - RUST_LOG=info
+      # PRR-2: TCP serve requires a token — fail fast if unset rather than
+      # crash-looping (set TCP_TOKEN=TOKEN[:TENANT[:ROLES]] in .env or shell).
+      - AIKOQL_TCP_TOKEN=${TCP_TOKEN:?TCP_TOKEN must be set (TOKEN[:TENANT[:ROLE1,ROLE2]])}
     restart: unless-stopped
 
   # Optional: PostgreSQL provider for federated queries
@@ -20,7 +27,7 @@ services:
       - "5432:5432"
     environment:
       POSTGRES_USER: aikoql
-      POSTGRES_PASSWORD: aikoql
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aikoql-dev-only}
       POSTGRES_DB: knowledge
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -33,7 +40,7 @@ services:
       - "7474:7474"
       - "7687:7687"
     environment:
-      NEO4J_AUTH: neo4j/password
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-password-dev-only}
     volumes:
       - neo4j_data:/data
     profiles: [full]

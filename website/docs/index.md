@@ -11,8 +11,8 @@ aikoql is an embedded knowledge database that treats **everything as a Knowledge
 
 ```bash
 # 5 seconds to start
-curl -L https://aikoql.dev/install | bash
-aikoql shell :memory:
+npm install -g aikoql-mcp
+aikoql-mcp shell :memory:
 ```
 
 ## Why aikoql?
@@ -30,7 +30,7 @@ aikoql shell :memory:
 
 ### For AI Agents
 
-- **MCP Protocol** — 59 tools over stdio or TCP. Autodiscovery via `tools/list`.
+- **MCP Protocol** — Tools over stdio or TCP. Autodiscovery via `tools/list`.
 - **Agent Knowledge Interface** — Pre-compile knowledge so agents spend tokens on problem-solving, not discovery.
 - **Context Compiler** — 40-60% reduction in agent discovery tokens. Compiles code + docs into minimum sufficient context.
 - **Schema Discovery** — Agents learn what types and properties exist before composing queries.
@@ -48,7 +48,7 @@ aikoql shell :memory:
 - **Graph Traversal** — Relationship-first queries with depth and direction.
 - **Programs-as-KOs** — Deploy aikoql programs as versioned objects. Execute with `{{param}}` substitution.
 - **Knowledge Compiler** — Markdown + Rust code → KnowledgeIr. Multi-source merging. Staleness detection.
-- **Document Pipeline (D1-D9)** — Upload PDF/DOCX/Markdown → OCR → Document AST → KnowledgeIr → KOs.
+- **Document Pipeline** — Upload PDF/DOCX/Markdown → OCR → structure analysis → queryable Knowledge Objects.
 - **Connector Bridge** — PostgreSQL, SQLite, MongoDB, Neo4j schemas → KnowledgeIr conversion.
 - **Constraint Engine** — Property types, uniqueness, cardinality, domain/check constraints, programmable constraints.
 - **Change Reconciliation** — Git diff → affected entities → auto-proposals → validate → apply.
@@ -78,7 +78,7 @@ Storage Kernel (redb · EncryptedStore)
 ## Quick Links
 
 - [Getting Started](/docs/getting-started) — Install and run in 5 minutes
-- [API Reference](/docs/api-reference) — All 59 MCP tools + 40+ REST endpoints
+- [API Reference](/docs/api-reference) — All MCP tools + 40+ REST endpoints
 - [Architecture](/docs/architecture) — Deep dive into the Knowledge OS
 - [Programs-as-KOs](/docs/guides/programs) — Deploy, execute, version, audit
 - [Encryption](/docs/guides/encryption) — AES-256-GCM setup and key management

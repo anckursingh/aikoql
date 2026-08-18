@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "aikoql",
-      "description": "59 MCP tools: knowledge CRUD, aikoql, graph traversal, hybrid HNSW+BM25 search, context compiler, document ingestion, 4 DB connectors, constraint engine, encryption.",
+      "description": "MCP tools: knowledge CRUD, aikoql, graph traversal, hybrid HNSW+BM25 search, context compiler, document ingestion, 4 DB connectors, constraint engine, encryption.",
       "source": "./",
       "category": "data-tools"
     }

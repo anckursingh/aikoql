@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>aikoql — The Agent-First Knowledge Database</title>
-<meta name="description" content="aikoql is the knowledge operating system for AI agents. Everything is a Knowledge Object — data, programs, workflows, policies. 59 MCP tools, 4 SDKs, 14-panel Studio UI.">
+<meta name="description" content="aikoql is the knowledge operating system for AI agents. Everything is a Knowledge Object — data, programs, workflows, policies. MCP tools, 4 SDKs, 14-panel Studio UI.">
 <style>
 :root {
   --bg: #0a0a12;
@@ -43,6 +43,11 @@ header nav a:hover { color: var(--text); text-decoration: none; }
 .cta-primary:hover { background: #7dd4f5; text-decoration: none !important; }
 .cta-secondary { background: transparent; border: 1px solid var(--border); color: var(--text) !important; }
 .cta-secondary:hover { border-color: var(--accent); text-decoration: none !important; }
+.hero-demo { max-width: 640px; margin: 40px auto 0; }
+.hero-demo pre { text-align: left; margin: 0; }
+.hero-demo p { color: var(--muted); font-size: 13px; margin-top: 12px; }
+.hero-demo .demo-prompt { color: var(--green); }
+.hero-demo .demo-strong { color: var(--text); font-family: var(--mono); }
 
 .stats { display: flex; justify-content: center; gap: 48px; flex-wrap: wrap; padding: 0 24px 60px; }
 .stat { text-align: center; }
@@ -106,6 +111,8 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
     <div class="logo">🧠 aikoql<span>OS</span></div>
     <nav>
       <a href="#features">Features</a>
+      <a href="#use-cases">Use Cases</a>
+      <a href="#query">Query</a>
       <a href="#architecture">Architecture</a>
       <a href="#install">Install</a>
       <a href="/docs/">Docs</a>
@@ -116,20 +123,24 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
 
 <section class="hero">
   <h1>The <em>Agent-First</em><br>Knowledge Database</h1>
-  <p class="sub">Pre-compile software knowledge so AI agents spend tokens on problem-solving, not discovery. Everything is a Knowledge Object.</p>
+  <p class="sub">A SQL-style query language and embedded database for knowledge objects — code, docs, policies, programs. Native MCP interface. Graph, vector, and text search in one statement.</p>
   <div class="cta">
-    <a href="#install" class="cta-primary">Get Started</a>
+    <a href="#install" class="cta-primary">Install aikoql</a>
     <a href="/docs/" class="cta-secondary">Read the Docs</a>
+  </div>
+  <div class="hero-demo">
+    <pre><code><span class="demo-prompt">aikoql&gt;</span> CREATE Note body == "refund policy: 30 days"<br><span class="demo-prompt">aikoql&gt;</span> MATCH Note SIMILAR TO "refund window"<br>          SCORE BM25 USING EMBEDDING RETURN *</code></pre>
+    <p><span class="demo-strong">npm i -g aikoql-mcp</span> · single binary · zero runtime deps</p>
   </div>
 </section>
 
 <div class="stats">
-  <div class="stat"><div class="n">600+</div><div class="l">Tests (0 failures)</div></div>
+  <div class="stat"><div class="n">370K+</div><div class="l">Reads/sec</div></div>
+  <div class="stat"><div class="n">120K+</div><div class="l">Writes/sec</div></div>
   <div class="stat"><div class="n">59</div><div class="l">MCP Tools</div></div>
   <div class="stat"><div class="n">4</div><div class="l">Language SDKs</div></div>
-  <div class="stat"><div class="n">14</div><div class="l">Studio Panels</div></div>
-  <div class="stat"><div class="n">9</div><div class="l">CLI Commands</div></div>
   <div class="stat"><div class="n">4</div><div class="l">DB Connectors</div></div>
+  <div class="stat"><div class="n">0</div><div class="l">Runtime Deps</div></div>
 </div>
 
 <div class="divider"></div>
@@ -141,8 +152,8 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
   <div class="features">
     <div class="feature">
       <div class="icon">📦</div>
-      <h3>Context Compiler (MRFC-0070)</h3>
-      <p>40-60% reduction in agent discovery tokens. Compiles code + docs + ADRs into minimum sufficient context packages under token budget. No other database has this.</p>
+      <h3>Context Compiler</h3>
+      <p>40-60% reduction in agent discovery tokens. Compiles your code + docs + ADRs into minimum sufficient context packages under a token budget. No other database has this.</p>
     </div>
     <div class="feature">
       <div class="icon">🔐</div>
@@ -151,8 +162,8 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
     </div>
     <div class="feature">
       <div class="icon">📝</div>
-      <h3>Aikoql Query Language</h3>
-      <p>Purpose-built for knowledge graphs. Lexer → Parser → AST → Semantic Analyzer → KIR → Planner → Runtime. 5 statement types, 6 operators. Streaming results.</p>
+      <h3>aikoql — SQL for Knowledge Objects</h3>
+      <p>MATCH, WHERE, SIMILAR TO, SCORE BM25 USING EMBEDDING, TRAVERSE — graph, vector, and text search composed in one statement. Familiar to SQL users, built for knowledge.</p>
     </div>
     <div class="feature">
       <div class="icon">🕸</div>
@@ -166,23 +177,23 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
     </div>
     <div class="feature">
       <div class="icon">📄</div>
-      <h3>Document Knowledge Compiler</h3>
-      <p>D1-D9 pipeline: Upload PDF/DOCX/Markdown → OCR → Document AST → Knowledge IR → Ontology → Resolution → Commit → KOs. 195 tests.</p>
+      <h3>Documents → Knowledge Objects</h3>
+      <p>Upload PDF/DOCX/Markdown → OCR → structure analysis → section classification → queryable Knowledge Objects. ADRs become decisions agents can reason over.</p>
     </div>
     <div class="feature">
       <div class="icon">🔌</div>
       <h3>4 Database Connectors</h3>
-      <p>PostgreSQL, SQLite, MongoDB, Neo4j. Schema → entities + relationships + facts via connector bridge. Universal connector_metadata_to_ir() for all types.</p>
+      <p>PostgreSQL, SQLite, MongoDB, Neo4j. Import schema and data into the knowledge graph with one command — tables and collections become typed Knowledge Objects.</p>
     </div>
     <div class="feature">
       <div class="icon">🛡</div>
-      <h3>Constraint Engine (~95%)</h3>
-      <p>Property types, uniqueness, cardinality, domain/check constraints, transaction-aware deferred evaluation, connector pushdown, constraint inference, programmable constraints.</p>
+      <h3>Constraint Engine</h3>
+      <p>Property types, uniqueness, cardinality, domain and check constraints — enforced at commit, programmable in aikoql. Agent writes that violate the schema never land.</p>
     </div>
     <div class="feature">
       <div class="icon">📡</div>
       <h3>MCP + REST + Studio</h3>
-      <p>59 MCP tools over stdio/TCP. 40+ REST endpoints with OpenAPI 3.0. 14-panel Studio UI — no npm, no build step. Zero external dependencies.</p>
+      <p>MCP tools over stdio/TCP. 40+ REST endpoints with OpenAPI 3.0. 14-panel Studio UI — no npm, no build step. Zero external dependencies.</p>
     </div>
     <div class="feature">
       <div class="icon">💾</div>
@@ -197,7 +208,46 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
     <div class="feature">
       <div class="icon">🏗</div>
       <h3>Agent Knowledge Interface</h3>
-      <p>10 knowledge primitives. 11 authority levels. 12 scope levels. Markdown→KO compiler. Rust code→KO compiler. Context compiler. Conflict detection. Staleness detection. Change reconciliation.</p>
+      <p>Knowledge primitives with authority, scope, evidence, and lifecycle. Markdown and Rust compilers. Conflict detection, staleness detection, change reconciliation — knowledge that stays current with your repo.</p>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section id="use-cases">
+  <h2>What teams build with it</h2>
+  <p class="lead">One embedded database for the whole agent stack — memory, retrieval, compliance, and automation.</p>
+  <div class="features">
+    <div class="feature">
+      <div class="icon">🧠</div>
+      <h3>Agent Memory (MCP)</h3>
+      <p>Persistent, queryable memory for Claude Code and any MCP client. MCP tools over stdio or TCP — remember, search, traverse, compile context.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">📚</div>
+      <h3>Codebase Intelligence</h3>
+      <p>aikoql ingest-dir ~/repo — then ask questions. Files, functions, tests, and ADRs become entities with depends_on, implements, tested_by edges.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🔎</div>
+      <h3>RAG with a Graph</h3>
+      <p>Hybrid HNSW + BM25 retrieval over entities, not chunks — RRF-fused results that stay grounded in the relationship graph.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🛡️</div>
+      <h3>Compliance & Audit</h3>
+      <p>SHA-256 cryptographic audit chain, MVCC time travel, AES-256-GCM field-level encryption, RBAC — every change attributed and verifiable.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">📦</div>
+      <h3>Embedded & Local-First</h3>
+      <p>One 3.4 MB binary with zero runtime deps. Ship it inside your app, your CI, or your on-prem agent fleet — data never leaves your machine.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">⚙️</div>
+      <h3>Knowledge Programs</h3>
+      <p>Deploy programs as versioned, audited Knowledge Objects. Execute with parameter substitution and track every run in the audit chain.</p>
     </div>
   </div>
 </section>
@@ -246,9 +296,25 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
     <div class="panel-chip">⏱️ Benchmark Center (versioned benchmarks) 🔥</div>
     <div class="panel-chip">📊 Query Profiler (execution plans)</div>
     <div class="panel-chip">🔌 Provider Manager (connector management)</div>
-    <div class="panel-chip">📄 Document Explorer (D1-D9 pipeline)</div>
+    <div class="panel-chip">📄 Document Explorer (PDF/DOCX/Markdown → KOs)</div>
   </div>
   <p style="margin-top:12px;color:var(--muted);font-size:12px">🔥 = Unique capability — no graph DB, analytics platform, or document DB has this.</p>
+</section>
+
+<div class="divider"></div>
+
+<section id="query">
+  <h2>The aikoql Query Language</h2>
+  <p class="lead">Everything is a Knowledge Object. Query it like data.</p>
+  <pre><code># Create and query — familiar SQL shape
+aikoql&gt; CREATE Employee name == "Alice", dept == "Engineering"
+aikoql&gt; MATCH Employee WHERE dept == "Engineering" RETURN name, salary</code></pre>
+  <pre><code># Hybrid search — vector + text, fused in one statement
+aikoql&gt; MATCH Doc SIMILAR TO "refund window"
+          SCORE BM25 USING EMBEDDING RETURN *</code></pre>
+  <pre><code># Graph traversal — walk relationships from a set of objects
+aikoql&gt; MATCH Person TRAVERSE knows RETURN *</code></pre>
+  <p style="margin-top:16px;color:var(--muted);font-size:14px">Full reference: <a href="/docs/api-reference">API Reference</a> · <a href="/docs/getting-started">Getting Started</a></p>
 </section>
 
 <div class="divider"></div>
@@ -257,22 +323,42 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
   <h2>Get Started in 5 Seconds</h2>
   <p class="lead">Single binary. Zero dependencies. No installers.</p>
   <div class="install-section">
-    <h3>Download</h3>
+    <h3>Install</h3>
     <div class="tabs">
-      <button class="tab active" onclick="showInstall('windows',this)">Windows</button>
+      <button class="tab active" onclick="showInstall('npm',this)">npm</button>
+      <button class="tab" onclick="showInstall('windows',this)">Windows</button>
       <button class="tab" onclick="showInstall('linux',this)">Linux (musl)</button>
+      <button class="tab" onclick="showInstall('macos',this)">macOS</button>
       <button class="tab" onclick="showInstall('source',this)">From Source</button>
     </div>
-    <div id="inst-windows"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.17/aikoql-mcp.exe
+    <div id="inst-npm"><pre><code>npm install -g aikoql-mcp
+aikoql-mcp --version</code></pre></div>
+    <div id="inst-windows" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.18/aikoql-mcp.exe
 .\aikoql-mcp.exe --help</code></pre></div>
-    <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.17/aikoql-mcp-linux-musl
+    <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.18/aikoql-mcp-linux-musl
 chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql
 aikoql --help</code></pre></div>
+    <div id="inst-macos" style="display:none"><pre><code># Apple Silicon
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.18/aikoql-mcp-macos-arm64
+chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql
+# Intel
+curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.18/aikoql-mcp-macos
+chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql</code></pre></div>
     <div id="inst-source" style="display:none"><pre><code>git clone https://github.com/anckursingh/aikoql.git
 cd aikoql
 cargo build --release -p aikoql-mcp
 ./target/release/aikoql-mcp --help</code></pre></div>
   </div>
+
+  <h3 style="margin: 28px 0 12px;">Use with Claude Code / MCP Clients</h3>
+  <pre><code>{
+  "mcpServers": {
+    "aikoql": {
+      "command": "aikoql-mcp",
+      "args": ["serve", "./my-knowledge.redb"]
+    }
+  }
+}</code></pre>
 
   <h3 style="margin: 28px 0 12px;">Quick Start</h3>
   <pre><code># Interactive shell (in-memory)
@@ -323,7 +409,7 @@ result, _ := client.Remember(map[string]interface{}{"type_name": "Note"})</code>
       <tr><td>Programs-as-KOs</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅</td></tr>
       <tr><td>Field-level encryption</td><td class="no">—</td><td class="yes">pgcrypto</td><td class="yes">CSFLE</td><td class="no">—</td><td class="yes">✅ AES-256-GCM</td></tr>
       <tr><td>Embedded (single binary)</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅</td></tr>
-      <tr><td>Document→Knowledge pipeline</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ D1-D9</td></tr>
+      <tr><td>Document→Knowledge pipeline</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ PDF→KO</td></tr>
       <tr><td>Constraint engine</td><td class="yes">Node keys</td><td class="yes">Full</td><td class="yes">Schema val</td><td class="no">—</td><td class="yes">✅ C1-C9</td></tr>
       <tr><td>DB connectors built-in</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ 4 connectors</td></tr>
       <tr><td>Envelope encryption</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ KEK→DEK</td></tr>
@@ -338,6 +424,7 @@ result, _ := client.Remember(map[string]interface{}{"type_name": "Note"})</code>
     <a href="/docs/api-reference">API Reference</a>
     <a href="/docs/architecture">Architecture</a>
     <a href="https://github.com/anckursingh/aikoql" target="_blank">GitHub</a>
+    <a href="https://www.npmjs.com/package/aikoql-mcp" target="_blank">npm</a>
     <a href="/docs/guides/programs">Programs-as-KOs</a>
     <a href="/docs/guides/encryption">Encryption</a>
     <a href="/docs/guides/import">Import Data</a>

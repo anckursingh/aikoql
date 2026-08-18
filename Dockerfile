@@ -1,9 +1,12 @@
 # Aikoql MVP — multi-stage Docker build
-# Stage 1: build
-FROM rust:1.80-slim-bookworm AS builder
+# PRR-1: redb is the default storage backend — no rocksdb (the
+# `storage-rocksdb` feature never existed; see MVP-001).
+# Stage 1: build (pin matches the repo MSRV — rust 1.80 cannot parse
+# edition-2024 registry crates, e.g. crypto-common 0.2.2).
+FROM rust:1.97-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    clang libclang-dev librocksdb-dev \
+    clang libclang-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -11,14 +14,15 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY benchmarks/ benchmarks/
 
-RUN cargo build -p aikoql-mcp --features storage-rocksdb --release \
+RUN cargo build -p aikoql-mcp --release \
     && strip target/release/aikoql-mcp
 
 # Stage 2: runtime
 FROM debian:bookworm-slim
 
+# curl is for the HEALTHCHECK below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates librocksdb9.1 \
+    ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/aikoql-mcp /usr/local/bin/aikoql
@@ -29,8 +33,20 @@ VOLUME /data
 
 EXPOSE 9090 9091
 
+# PRR-1a: no `aikoql health` subcommand exists — probe the HTTP /health
+# endpoint on the metrics port instead.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD aikoql health 2>/dev/null || exit 1
+    CMD curl -fsS http://127.0.0.1:9091/health || exit 1
 
 ENTRYPOINT ["aikoql"]
-CMD ["serve", "/data/kb", "--listen", "0.0.0.0:9090", "--metrics-addr", "0.0.0.0:9091"]
+# PRR-2 + PRR-4: TCP requires >=1 token; the config pipeline reads
+# AIKOQL_TCP_TOKEN (TOKEN[:TENANT[:ROLES]]) directly, so no shell expansion
+# is needed (an exec-form CMD with ${...} is NOT expanded by Docker, and a
+# sh -c CMD here would run `aikoql sh -c ...` — double invocation).
+# Unset AIKOQL_TCP_TOKEN -> no tokens -> TCP listener refuses (fail-closed).
+# Container contract: everything mutable lives under the /data volume —
+# redb file, memory dir, and the local embedding model store (PRR-3 installs
+# there via `docker exec aikoql aikoql model install`; the image itself stays
+# stateless, no model baked in). CLI args win over aikoql.toml, so the paths
+# below are authoritative in the container.
+CMD ["serve", "/data/aikoql.redb", "--listen", "0.0.0.0:9090", "--metrics-addr", "0.0.0.0:9091", "--model-dir", "/data/models"]

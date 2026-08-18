@@ -38,6 +38,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build release
         run: cargo build --release -p aikoql-mcp
+      - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
+        run: |
+          .\target\release\aikoql-mcp.exe --version
+          node npm-publish/smoke-mcp.js .\target\release\aikoql-mcp.exe
       - name: Generate SHA-256
         run: |
           $hash = (Get-FileHash -Algorithm SHA256 target/release/aikoql-mcp.exe).Hash.ToLower()
@@ -59,6 +63,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build release
         run: cargo build --release -p aikoql-mcp
+      - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
+        run: |
+          target/release/aikoql-mcp --version
+          node npm-publish/smoke-mcp.js target/release/aikoql-mcp
       - name: Generate SHA-256
         run: |
           sha256sum target/release/aikoql-mcp | cut -d' ' -f1 > target/release/aikoql-mcp-linux.sha256
@@ -132,6 +140,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build release
         run: cargo build --release -p aikoql-mcp
+      - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
+        run: |
+          target/release/aikoql-mcp --version
+          node npm-publish/smoke-mcp.js target/release/aikoql-mcp
       - name: Generate SHA-256
         run: |
           shasum -a 256 target/release/aikoql-mcp | cut -d' ' -f1 \
@@ -143,10 +155,131 @@ jobs:
             target/release/aikoql-mcp
             target/release/aikoql-mcp-macos-arm64.sha256
 
+  # ── Docker: one native build per architecture (no qemu emulation) ─
+  # Each job pushes an arch-suffixed tag; docker-manifest merges them into
+  # the canonical :VERSION / :MINOR / :latest tags. OCI labels carry
+  # version/source/revision so `docker inspect` identifies the exact commit.
+  docker-amd64:
+    name: Docker image (linux/amd64)
+    needs: validate-versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute tags + labels
+        id: tag
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ghcr.io/anckursingh/aikoql:${{ steps.tag.outputs.version }}-amd64
+          labels: |
+            org.opencontainers.image.title=aikoql
+            org.opencontainers.image.description=Knowledge database with built-in encryption and an MCP interface
+            org.opencontainers.image.version=${{ steps.tag.outputs.version }}
+            org.opencontainers.image.source=https://github.com/anckursingh/aikoql
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.tag.outputs.created }}
+      - name: Smoke test container (health + version)
+        run: |
+          set -euo pipefail
+          v="${{ steps.tag.outputs.version }}"
+          docker run -d --name aikoql-smoke \
+            -e AIKOQL_TCP_TOKEN=smoketoken:acme:admin \
+            -p 19090:9090 -p 19091:9091 \
+            ghcr.io/anckursingh/aikoql:${v}-amd64
+          ok=""
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:19091/health; then ok=1; break; fi
+            sleep 2
+          done
+          [ -n "$ok" ] || { docker logs aikoql-smoke; exit 1; }
+          docker run --rm --entrypoint aikoql ghcr.io/anckursingh/aikoql:${v}-amd64 --version
+          docker rm -f aikoql-smoke
+
+  docker-arm64:
+    name: Docker image (linux/arm64)
+    needs: validate-versions
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute tags + labels
+        id: tag
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/arm64
+          tags: ghcr.io/anckursingh/aikoql:${{ steps.tag.outputs.version }}-arm64
+          labels: |
+            org.opencontainers.image.title=aikoql
+            org.opencontainers.image.description=Knowledge database with built-in encryption and an MCP interface
+            org.opencontainers.image.version=${{ steps.tag.outputs.version }}
+            org.opencontainers.image.source=https://github.com/anckursingh/aikoql
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ steps.tag.outputs.created }}
+      - name: Smoke test binary (version)
+        run: |
+          docker run --rm --entrypoint aikoql \
+            ghcr.io/anckursingh/aikoql:${{ steps.tag.outputs.version }}-arm64 --version
+
+  # ── Docker manifest: merge arch images into canonical tags, print digest ──
+  docker-manifest:
+    name: Publish multi-arch image
+    needs: [docker-amd64, docker-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge manifests, tag, print digest
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          minor="$(echo "$v" | sed 's/\.[0-9]*$//')"
+          docker buildx imagetools create \
+            -t ghcr.io/anckursingh/aikoql:${v} \
+            -t ghcr.io/anckursingh/aikoql:${minor} \
+            -t ghcr.io/anckursingh/aikoql:latest \
+            ghcr.io/anckursingh/aikoql:${v}-amd64 \
+            ghcr.io/anckursingh/aikoql:${v}-arm64
+          echo "::notice::pushed ghcr.io/anckursingh/aikoql:${v} (:${minor}, :latest)"
+          docker buildx imagetools inspect ghcr.io/anckursingh/aikoql:${v}
+
   # ── GitHub Release ──────────────────────────────────────────────
   github-release:
     name: Publish Release
-    needs: [validate-versions, windows, linux-gnu, linux-musl, macos-intel, macos-arm]
+    needs: [validate-versions, windows, linux-gnu, linux-musl, macos-intel, macos-arm, docker-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -197,9 +330,17 @@ jobs:
         with:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
-      - name: Smoke-test launcher resolves pinned release
+      - name: Pack + install the exact tarball + MCP smoke
         working-directory: npm-publish
-        run: node run.js --version
+        run: |
+          set -euo pipefail
+          npm pack --pack-destination /tmp/aikoql-pkg
+          tarball=$(ls /tmp/aikoql-pkg/aikoql-mcp-*.tgz | head -1)
+          clean=$(mktemp -d)
+          npm install --prefix "$clean" "$tarball" >/dev/null
+          cd "$clean"
+          npx aikoql-mcp --version
+          node "$OLDPWD/smoke-mcp.js" npx aikoql-mcp serve "$clean/db"
       - name: Publish
         working-directory: npm-publish
         run: npm publish

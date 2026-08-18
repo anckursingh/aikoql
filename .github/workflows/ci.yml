@@ -45,6 +45,37 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace -- -D warnings
 
+  plugin:
+    name: Plugin validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node npm-publish/validate-plugin.js
+
+  docker:
+    name: Docker build + health (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t aikoql:test .
+      - run: docker run --rm aikoql:test --version
+      - name: Start container and wait for healthy
+        run: |
+          docker run -d --name aikoql-test -e AIKOQL_TCP_TOKEN=ci:ci:admin aikoql:test
+          for i in $(seq 1 30); do
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' aikoql-test)" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "container never became healthy — last logs:"
+          docker logs aikoql-test 2>&1 | tail -30
+          exit 1
+
   build-release:
     name: Build Release (Linux)
     runs-on: ubuntu-latest

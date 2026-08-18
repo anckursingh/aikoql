@@ -11,8 +11,22 @@ pub fn route_v1(
     db_path: &str,
     sessions: &Mutex<HashMap<String, crate::HttpSession>>,
     token: Option<String>,
+    rate_limit: &Mutex<crate::rate_limiter::RateLimiter>,
 ) -> (String, String, String) {
     let clean_path = path.split('?').next().unwrap_or(path);
+
+    // PRR-4: [rate_limit] config applies to the REST surface — 60s window,
+    // keyed per token (anonymous callers share one bucket).
+    if let Err(max) = rate_limit
+        .lock()
+        .unwrap() // justified: Mutex poison is unrecoverable
+        .check(token.as_deref().unwrap_or("anon"))
+    {
+        return json_response(
+            429,
+            &json!({"error": format!("rate limit exceeded (max {max} calls/min)")}),
+        );
+    }
 
     let result: Result<J, String> = route_inner(
         method,
@@ -391,6 +405,7 @@ fn json_response(code: u16, body: &J) -> (String, String, String) {
         400 => "400 Bad Request",
         401 => "401 Unauthorized",
         404 => "404 Not Found",
+        429 => "429 Too Many Requests",
         _ => "500 Internal Server Error",
     };
     (

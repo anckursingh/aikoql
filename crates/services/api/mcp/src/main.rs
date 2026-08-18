@@ -10,21 +10,29 @@
 //! Logs go to stderr; stdout carries protocol frames only.
 //! Structured tracing via `tracing` with env-filter (`RUST_LOG`).
 
+mod admin;
 mod api_rest;
 mod audit;
 mod authz;
 mod cli;
+mod config;
+mod dispatcher;
 mod error_codes;
 mod graph_ui;
 mod helpers;
 mod http;
+mod imports;
+mod ingest;
 mod knowledge_runtime;
+mod model;
+mod protocol;
 mod rate_limiter;
-mod server;
 mod session;
 mod shell;
 mod studio;
+mod tool_registry;
 mod tools;
+mod transport;
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -63,13 +71,60 @@ pub(crate) use tracing::{error, info, info_span, warn};
 pub(crate) static SERVER_START: OnceLock<Instant> = OnceLock::new();
 pub(crate) static MEMORY_DIR: OnceLock<String> = OnceLock::new();
 
+/// PRR-3: semantic readiness — the enrichment worker thread updates this,
+/// tool_health and /health surface it.
+#[derive(Clone, Debug)]
+pub(crate) struct SemanticStatus {
+    pub(crate) state: &'static str, // "initializing" | "ready" | "unavailable"
+    pub(crate) detail: String,
+}
+
+pub(crate) static SEMANTIC_STATUS: OnceLock<Mutex<SemanticStatus>> = OnceLock::new();
+
+pub(crate) fn set_semantic_status(state: &'static str, detail: impl Into<String>) {
+    let cell = SEMANTIC_STATUS.get_or_init(|| {
+        Mutex::new(SemanticStatus {
+            state: "initializing",
+            detail: String::new(),
+        })
+    });
+    let mut s = cell.lock().unwrap(); // justified: Mutex poison is unrecoverable
+    s.state = state;
+    s.detail = detail.into();
+}
+
+pub(crate) fn semantic_status_snapshot() -> SemanticStatus {
+    SEMANTIC_STATUS
+        .get()
+        .map(|m| m.lock().unwrap().clone()) // justified: Mutex poison is unrecoverable
+        .unwrap_or(SemanticStatus {
+            state: "initializing",
+            detail: String::new(),
+        })
+}
+
+/// PRR-3: local model store — `--model-dir` wins, else `~/.aikoql/models`.
+pub(crate) fn model_store_dir(flag: Option<&str>) -> std::path::PathBuf {
+    match flag {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let home = std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            home.join(".aikoql").join("models")
+        }
+    }
+}
+
 pub(crate) const PROTOCOL_VERSION: &str = "2024-11-05";
 
 // main() is the orchestrator: CLI dispatch + server bootstrap. Everything
 // else lives in the modules above (R7).
 use crate::cli::*;
 use crate::http::*;
-use crate::server::*;
+use crate::session::TcpAuthTable;
+use crate::transport::*;
 
 #[allow(unused_assignments)]
 fn main() {
@@ -92,94 +147,50 @@ fn main() {
         return;
     }
 
-    tracing_subscriber::fmt()
+    // PRR-4: defaults → aikoql.toml → env → CLI, validated in one place.
+    let cfg = match config::load(&args, subcmd, subcmd_idx) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
+
+    let subscriber = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&cfg.log_level)),
         )
-        .with_writer(std::io::stderr)
-        .init();
-    let mut listen_addr: Option<String> = None;
-    let mut metrics_addr: Option<String> = None;
-    let mut db_path = "./aikoql.redb".to_string();
-    let mut memory_dir = "./memory".to_string();
-    let mut embedding_provider: Option<String> = None;
-    #[allow(unused_assignments, unused_variables)]
-    let mut embedding_base_url = String::new();
-    let mut embedding_model = String::new();
-    #[allow(unused_assignments, unused_variables)]
-    let mut embedding_api_key: Option<String> = None;
-    // `serve` is the documented server-mode subcommand; start flag parsing
-    // after it so it isn't swallowed as the db path (creates a stray `serve`
-    // redb file in the CWD otherwise). Bare `aikoql-mcp [DB]` still works.
-    let mut i = if subcmd == Some("serve") {
-        let Some(idx) = subcmd_idx else {
-            eprintln!("Usage: aikoql-mcp serve [OPTIONS] [DB]");
-            std::process::exit(2);
-        };
-        idx + 2
+        .with_writer(std::io::stderr);
+    if cfg.log_format == "json" {
+        subscriber.json().init();
     } else {
-        1
-    };
-    while i < args.len() {
-        match args[i].as_str() {
-            "--listen" => {
-                listen_addr = Some(
-                    args.get(i + 1)
-                        .cloned()
-                        .unwrap_or_else(|| "127.0.0.1:9090".into()),
-                );
-                i += 2;
-            }
-            "--metrics-addr" => {
-                metrics_addr = Some(
-                    args.get(i + 1)
-                        .cloned()
-                        .unwrap_or_else(|| "127.0.0.1:9091".into()),
-                );
-                i += 2;
-            }
-            "--memory-dir" => {
-                memory_dir = args
-                    .get(i + 1)
-                    .cloned()
-                    .unwrap_or_else(|| "./memory".into());
-                i += 2;
-            }
-            "--embedding-provider" => {
-                embedding_provider =
-                    Some(args.get(i + 1).cloned().unwrap_or_else(|| "candle".into()));
-                i += 2;
-            }
-            "--embedding-base-url" => {
-                embedding_base_url = args
-                    .get(i + 1)
-                    .cloned()
-                    .unwrap_or_else(|| "http://localhost:11434".into());
-                i += 2;
-            }
-            "--embedding-model" => {
-                embedding_model = args
-                    .get(i + 1)
-                    .cloned()
-                    .unwrap_or_else(|| "nomic-embed-text".into());
-                i += 2;
-            }
-            "--embedding-api-key" => {
-                // justified: missing flag value → empty (no API key)
-                embedding_api_key = Some(args.get(i + 1).cloned().unwrap_or_default());
-                i += 2;
-            }
-            _ if args[i].starts_with("--") => {
-                eprintln!("Unknown option: {} (run `aikoql-mcp help`)", args[i]);
-                std::process::exit(1);
-            }
-            _ => {
-                db_path = args[i].clone();
-                i += 1;
-            }
-        }
+        subscriber.init();
     }
+    if let Some(path) = &cfg.config_path {
+        info!(config = %path, "configuration loaded");
+    }
+    let listen_addr = cfg.listen_addr;
+    let metrics_addr = cfg.metrics_addr;
+    let tcp_tokens = cfg.tcp_tokens;
+    let db_path = cfg.db_path;
+    let memory_dir = cfg.memory_dir;
+    // PRR-4: [rate_limit] config — per-connection on MCP tools/call, per-token
+    // on the REST surface (shared limiter below).
+    let rate_enabled = cfg.rate_enabled;
+    let rate_max_calls_per_minute = cfg.rate_max_calls_per_minute;
+    let rest_rate_limit = Arc::new(Mutex::new(crate::rate_limiter::RateLimiter::new(
+        rate_enabled,
+        rate_max_calls_per_minute,
+    )));
+    let embedding_provider = cfg.embedding_provider;
+    #[allow(unused_assignments, unused_variables)]
+    let embedding_base_url = cfg.embedding_base_url;
+    let embedding_model = cfg.embedding_model;
+    #[allow(unused_assignments, unused_variables)]
+    let embedding_api_key = cfg.embedding_api_key;
+    // PRR-3: local model store override (default ~/.aikoql/models).
+    let model_dir_flag = cfg.model_dir;
     MEMORY_DIR.set(memory_dir).ok();
 
     let engine = match RedbEngine::open(&db_path) {
@@ -210,41 +221,75 @@ fn main() {
     };
 
     // Build provider Arc first so we can share it with the enrichment engine.
+    // PRR-3: the runtime NEVER downloads — candle loads from the local model
+    // store only; a missing install degrades to lexical-only recall with a
+    // clear remediation in tool_health / /health.
     let emb_provider: Option<Arc<dyn EmbeddingProvider>> = match embedding_provider.as_deref() {
         Some("openai") => {
             #[cfg(feature = "embedding-openai")]
             {
                 let p = OpenAiEmbeddingProvider::new(&url, &model, embedding_api_key.as_deref());
+                set_semantic_status(
+                    "initializing",
+                    format!("openai-compatible endpoint {url} (model {model})"),
+                );
                 Some(Arc::new(p))
             }
             #[cfg(not(feature = "embedding-openai"))]
             {
-                info!(
-                    "openai embedding requested but binary not compiled with embedding-openai feature"
+                set_semantic_status(
+                    "unavailable",
+                    "openai embedding requested but binary not compiled with embedding-openai feature",
                 );
                 None
             }
         }
         _ => {
-            // Default: Candle (offline, CPU-only, ~90 MB HF model download on first use)
             #[cfg(feature = "embedding-candle")]
             {
-                match aikoql_semantic::provider::CandleEmbedding::new() {
-                    Ok(p) => Some(Arc::new(p)),
-                    // A cold machine or a transient HF failure must not kill
-                    // the server (CI hit this: first tools/call got EOF because
-                    // serve panicked before reading stdin). Degrade to
-                    // lexical-only recall; a later restart retries the download.
-                    Err(e) => {
-                        info!(error = %e, "candle model unavailable — serving without semantic embeddings");
-                        None
+                let candle_dir = model_store_dir(model_dir_flag.as_deref()).join(
+                    aikoql_semantic::provider::model_slug(
+                        aikoql_semantic::provider::DEFAULT_MODEL_ID,
+                    ),
+                );
+                // Model identity is explicit: a non-default --embedding-model
+                // names a candle model that isn't installed, so we reject it
+                // instead of silently swapping in all-MiniLM-L6-v2.
+                if !embedding_model.is_empty() && embedding_model != "all-MiniLM-L6-v2" {
+                    set_semantic_status(
+                        "unavailable",
+                        format!(
+                            "model '{embedding_model}' is not installed — run `aikoql model install {embedding_model}`, or omit --embedding-model for the bundled all-MiniLM-L6-v2"
+                        ),
+                    );
+                    None
+                } else {
+                    match aikoql_semantic::provider::CandleEmbedding::from_local(&candle_dir) {
+                        Ok(p) => {
+                            set_semantic_status(
+                                "initializing",
+                                "local model loaded; background enrichment running",
+                            );
+                            Some(Arc::new(p))
+                        }
+                        Err(e) => {
+                            set_semantic_status(
+                                "unavailable",
+                                format!(
+                                    "{e} — run `aikoql model install` to install all-MiniLM-L6-v2 into {}",
+                                    candle_dir.display()
+                                ),
+                            );
+                            None
+                        }
                     }
                 }
             }
             #[cfg(not(feature = "embedding-candle"))]
             {
-                info!(
-                    "no embedding provider compiled in — activate embedding-candle or embedding-openai feature"
+                set_semantic_status(
+                    "unavailable",
+                    "no embedding provider compiled in — activate embedding-candle or embedding-openai feature",
                 );
                 None
             }
@@ -258,9 +303,8 @@ fn main() {
     };
     let kernel = Arc::new(kernel);
 
-    // Start background enrichment if embedding provider is configured.
-    // ponytail: synchronous scan on startup — blocks until all KOs are enriched.
-    // Move to background thread when startup latency matters.
+    // PRR-3: enrichment runs on a worker thread — serve comes up immediately
+    // and /health reports semantic readiness while the scan runs.
     if let Some(enrichment_provider) = emb_provider {
         // Record the real model: candle always loads all-MiniLM-L6-v2; the
         // --embedding-model flag only names the OpenAI-compatible endpoint.
@@ -269,13 +313,20 @@ fn main() {
         } else {
             "all-MiniLM-L6-v2".to_string()
         };
-        let enricher = EmbeddingEnricher::new(enrichment_provider, &enrichment_model);
-        let engine = Arc::new(SemanticEngine::new(Arc::new(enricher)));
-        let sched = Scheduler::new();
-        sched.register(engine);
-        if let Err(e) = sched.start_all(&kernel) {
-            info!(error = %e, "background enrichment scan failed");
-        }
+        let kernel_work = kernel.clone();
+        thread::spawn(move || {
+            let enricher = EmbeddingEnricher::new(enrichment_provider, &enrichment_model);
+            let engine = Arc::new(SemanticEngine::new(Arc::new(enricher)));
+            let sched = Scheduler::new();
+            sched.register(engine);
+            match sched.start_all(&kernel_work) {
+                Ok(()) => set_semantic_status(
+                    "ready",
+                    format!("embeddings live (model {enrichment_model})"),
+                ),
+                Err(e) => set_semantic_status("unavailable", format!("enrichment failed: {e}")),
+            }
+        });
     }
 
     let db_path = Arc::new(db_path);
@@ -348,149 +399,61 @@ fn main() {
             ontology.clone(),
             addr.clone(),
             db_path.clone(),
+            rest_rate_limit.clone(),
         );
     }
 
     if let Some(addr) = listen_addr {
-        run_tcp_listener(kernel.clone(), &addr, db_path.clone());
+        // PRR-2: TCP requires token auth (fail-closed). Stdio keeps the
+        // process-boundary trust model and needs no token.
+        if tcp_tokens.is_empty() {
+            eprintln!(
+                "TCP mode requires at least one --tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]] — refusing to serve without authentication (stdio mode needs no token)"
+            );
+            std::process::exit(2);
+        }
+        let auth = match TcpAuthTable::parse(&tcp_tokens) {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                eprintln!("invalid --tcp-token: {e}");
+                std::process::exit(2);
+            }
+        };
+        // PRR-2: an empty listen host means loopback only; exposing all
+        // interfaces requires an explicit 0.0.0.0 opt-in.
+        let addr = default_loopback(&addr);
+        let listener = match TcpListener::bind(&addr) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("bind TCP listener {}: {}", addr, e);
+                std::process::exit(1);
+            }
+        };
+        run_tcp_listener(
+            kernel,
+            listener,
+            auth,
+            db_path,
+            rate_enabled,
+            rate_max_calls_per_minute,
+        );
     } else {
-        run_stdio(&kernel, &db_path);
+        run_stdio(&kernel, &db_path, rate_enabled, rate_max_calls_per_minute);
+    }
+}
+
+/// PRR-2: `--listen :9090` (empty host) binds loopback only; 0.0.0.0 is an
+/// explicit opt-in that warns.
+fn default_loopback(addr: &str) -> String {
+    match addr.rsplit_once(':') {
+        Some(("", port)) => format!("127.0.0.1:{port}"),
+        Some(("0.0.0.0", _)) => {
+            warn!("--listen 0.0.0.0 exposes the MCP server on all interfaces — ensure the network is trusted");
+            addr.to_string()
+        }
+        _ => addr.to_string(),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::http::truncate;
-
-    #[test]
-    fn truncate_never_splits_multibyte_chars() {
-        // 25 x 'a' + '—' (bytes 25..28) + 'zzzz' = 32 bytes. max 30 → end 27
-        // lands inside the em dash and must back off to a char boundary.
-        let s = "aaaaaaaaaaaaaaaaaaaaaaaaa—zzzz";
-        let t = truncate(s, 30);
-        assert!(t.ends_with("..."));
-        assert_eq!(&t[t.len() - 4..], "a...");
-    }
-
-    #[test]
-    fn truncate_passthrough_short_strings() {
-        assert_eq!(truncate("hi", 10), "hi");
-    }
-
-    #[test]
-    fn enrich_file_contains_adds_file_entities_and_relations() {
-        use aikoql_ingestion::{EntityCandidate, Evidence, KnowledgeIr};
-        let mut ir = KnowledgeIr {
-            entities: vec![
-                EntityCandidate {
-                    name: "graph_api".into(),
-                    type_hint: Some("Function".into()),
-                    mentions: vec![],
-                    confidence: 0.8,
-                    evidence: Evidence {
-                        document_id: Some("src/main.rs".into()),
-                        ..Default::default()
-                    },
-                },
-                EntityCandidate {
-                    name: "retry_loop".into(),
-                    type_hint: Some("Function".into()),
-                    mentions: vec![],
-                    confidence: 0.8,
-                    evidence: Evidence {
-                        document_id: Some("src/main.rs".into()),
-                        ..Default::default()
-                    },
-                },
-                // doc == name fallback path entity: no duplicate File entity,
-                // no self-contains relation.
-                EntityCandidate {
-                    name: "src/lib.rs".into(),
-                    type_hint: Some("file".into()),
-                    mentions: vec![],
-                    confidence: 0.8,
-                    evidence: Evidence {
-                        document_id: Some("src/lib.rs".into()),
-                        ..Default::default()
-                    },
-                },
-            ],
-            ..Default::default()
-        };
-        crate::cli::enrich_file_contains(&mut ir);
-        let files: Vec<&str> = ir
-            .entities
-            .iter()
-            .filter(|e| e.type_hint.as_deref() == Some("file"))
-            .map(|e| e.name.as_str())
-            .collect();
-        assert_eq!(files, vec!["src/lib.rs", "src/main.rs"]);
-        let contains: Vec<(&str, &str, &str)> = ir
-            .relations
-            .iter()
-            .map(|r| (r.subject.as_str(), r.predicate.as_str(), r.object.as_str()))
-            .collect();
-        assert_eq!(contains.len(), 2);
-        assert!(contains.contains(&("src/main.rs", "contains", "graph_api")));
-        assert!(contains.contains(&("src/main.rs", "contains", "retry_loop")));
-    }
-
-    #[test]
-    fn semantic_scores_parses_caches_and_scores() {
-        // Regression check for the EMB_CACHE self-deadlock: the cache-insert
-        // branch used to re-lock the mutex it already held via a match
-        // scrutinee temporary, wedging the first request (and every request
-        // after it) forever. This test walks both branches: parse+insert,
-        // then cache-hit.
-        let db = std::env::temp_dir().join(format!("mnemo-sem-{}.redb", std::process::id()));
-        let _ = std::fs::remove_file(&db);
-        let engine = super::RedbEngine::open(db.to_str().unwrap()).expect("open store");
-        let k = super::Kernel::open(
-            std::sync::Arc::new(engine),
-            std::sync::Arc::new(super::SystemClock),
-            0,
-        )
-        .expect("open kernel");
-
-        let mut props = super::PropertyMap::new();
-        props.insert(
-            "entity_embeddings".into(),
-            super::Value::Text(r#"{"a::b":[1.0,0.0]}"#.into()),
-        );
-        let r = k
-            .remember(super::RememberRequest {
-                context: super::KnowledgeContext::from(&super::Subject::with_roles(
-                    "test",
-                    &["admin"],
-                )),
-                koid: None,
-                expected_version: Some(0),
-                idempotency_key: Some("sem-scores-test".into()),
-                metadata: super::Metadata {
-                    type_name: "aikoql:ingested-directory".into(),
-                    tenant: None,
-                    schema_version: 1,
-                    tags: vec![],
-                },
-                properties: props,
-                semantic: None,
-                relationships: vec![],
-                security: None,
-                extensions: super::ExtensionMap::new(),
-                origin: super::Origin::Human,
-                note: None,
-                referential_policy: super::ReferentialPolicy::Permissive,
-            })
-            .expect("remember");
-        let args =
-            serde_json::json!({"koid": r.koid.to_hex(), "subject": "test", "roles": ["admin"]});
-
-        let scores = crate::tools::semantic_scores(&k, &args, &[1.0, 0.0]).expect("scores");
-        assert!((scores["a::b"] - 1.0).abs() < 1e-6);
-        let cached = crate::tools::semantic_scores(&k, &args, &[1.0, 0.0]).expect("cached hit");
-        assert_eq!(cached.len(), 1);
-
-        drop(k);
-        let _ = std::fs::remove_file(&db);
-    }
-}
+mod tests;
