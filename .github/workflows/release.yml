@@ -362,6 +362,13 @@ jobs:
           cd "$clean"
           npx aikoql-mcp --version
           node "$OLDPWD/smoke-mcp.js" npx aikoql-mcp serve "$clean/db"
+      - name: Dump OIDC claims (debug — dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          resp=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm")
+          jwt=$(echo "$resp" | sed -n 's/.*"value": *"\([^"]*\)".*/\1/p')
+          echo "$jwt" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null || echo "$jwt" | cut -d. -f2
+          npm --version
       - name: Publish
         working-directory: npm-publish
         run: npm publish --provenance
