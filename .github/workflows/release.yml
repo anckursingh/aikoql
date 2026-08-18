@@ -361,16 +361,8 @@ jobs:
           cd "$clean"
           npx aikoql-mcp --version
           node "$OLDPWD/smoke-mcp.js" npx aikoql-mcp serve "$clean/db"
-      - name: Dump OIDC claims (debug — dispatch only)
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          resp=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm")
-          jwt=$(echo "$resp" | sed -n 's/.*"value": *"\([^"]*\)".*/\1/p')
-          echo "$jwt" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null || echo "$jwt" | cut -d. -f2
-          npm --version
-          [ -n "$NODE_AUTH_TOKEN" ] && echo "NODE_AUTH_TOKEN is SET (len ${#NODE_AUTH_TOKEN})" || echo "NODE_AUTH_TOKEN unset"
       - name: Publish
         working-directory: npm-publish
         run: npm publish --provenance
         env:
-          NODE_AUTH_TOKEN: ''  # force pure OIDC — an injected managed token gets 404'd by npmjs.org
+          NODE_AUTH_TOKEN: ''  # force pure OIDC — GitHub injects a managed token that npmjs.org 404s (v0.1.18)

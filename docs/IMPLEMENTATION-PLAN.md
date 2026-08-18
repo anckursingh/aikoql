@@ -2992,12 +2992,11 @@ External staff-level review received 2026-08-18 (16 findings, `MVP-001`…`MVP-0
 ### Priority order (next session)
 
 ```text
-P0:  settle the v0.1.18 npm gap (0.1.18 published to GHCR + GitHub Releases,
-     npm job failed on missing /tmp/aikoql-pkg dir — fixed in release.yml,
-     uncommitted), then start "Next phase" below (encryption-at-rest first)
+P0:  start "Next phase" below (encryption-at-rest first) — v0.1.18 fully
+     shipped (Release + GHCR + npm, all verified live 2026-08-18)
 ```
 
-**PRR status: 8 of 8 phases done (PRR-1 ✅ 2026-08-18, PRR-2 ✅ 2026-08-18, PRR-3 ✅ 2026-08-18, PRR-4 ✅ 2026-08-18, PRR-5 ✅ 2026-08-18, PRR-6 ✅ 2026-08-18, PRR-7 ✅ 2026-08-18, PRR-8 Docker distribution ✅ 2026-08-18). All 16 review findings + container distribution review addressed. v0.1.18 shipped 2026-08-18: GitHub Release (12 assets), GHCR multi-arch (`:0.1.18`, `:0.1`, `:latest` — verified live), npm SKIPPED for 0.1.18 (see P0).**
+**PRR status: 8 of 8 phases done (PRR-1 ✅ 2026-08-18, PRR-2 ✅ 2026-08-18, PRR-3 ✅ 2026-08-18, PRR-4 ✅ 2026-08-18, PRR-5 ✅ 2026-08-18, PRR-6 ✅ 2026-08-18, PRR-7 ✅ 2026-08-18, PRR-8 Docker distribution ✅ 2026-08-18). All 16 review findings + container distribution review addressed. v0.1.18 shipped 2026-08-18: GitHub Release (12 assets), GHCR multi-arch (`:0.1.18`, `:0.1`, `:latest` — verified live), npm 0.1.18 (trusted publishing + provenance, `latest`).**
 
 ---
 
