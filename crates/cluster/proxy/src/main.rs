@@ -62,6 +62,7 @@ impl Shard {
                 Err(e) => {
                     last_err = e;
                     // Drop the dead connection so the next attempt reconnects.
+                    // justified: Mutex poison is unrecoverable
                     *self.conn.lock().unwrap() = None;
                 }
             }
@@ -70,6 +71,7 @@ impl Shard {
     }
 
     fn try_send(&self, request: &J) -> Result<J, String> {
+        // justified: Mutex poison is unrecoverable
         let mut guard = self.conn.lock().unwrap();
         if guard.is_none() {
             let stream = TcpStream::connect(&self.addr)
@@ -77,6 +79,7 @@ impl Shard {
             stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
             *guard = Some(stream);
         }
+        // justified: Some guaranteed by the is_none branch above
         let stream = guard.as_mut().unwrap();
 
         let req_str = request.to_string();
@@ -176,7 +179,12 @@ fn route_tool_call(msg: &J, tool_name: &str, args: &J, shards: &[Arc<Shard>]) ->
 // ---------------------------------------------------------------------------
 
 fn handle_client(mut stream: TcpStream, shards: Arc<Vec<Arc<Shard>>>) {
-    let reader = BufReader::new(stream.try_clone().expect("clone stream"));
+    let Ok(reader) = stream.try_clone() else {
+        // R4: clone fails when the connection is already dead — drop it
+        eprintln!("clone stream failed — dropping connection");
+        return;
+    };
+    let reader = BufReader::new(reader);
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
@@ -278,7 +286,14 @@ fn main() {
         }
     }
 
-    let listener = TcpListener::bind(&listen_addr).expect("bind proxy");
+    let listener = match TcpListener::bind(&listen_addr) {
+        Ok(l) => l,
+        Err(e) => {
+            // R4: port-in-use etc. → clean exit, not a panic
+            eprintln!("failed to bind {}: {}", listen_addr, e);
+            std::process::exit(1);
+        }
+    };
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {

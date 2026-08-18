@@ -117,18 +117,23 @@ impl VectorIndex for HnswVectorIndex {
         }
         // R7: label is "{model}:{koid_hex}" so different models produce distinct entries.
         let label = format!("{}:{}", model, koid.to_hex());
+        // justified: Mutex poison is unrecoverable
         self.index.lock().unwrap().insert(vec.to_vec(), label);
         self.model_map
             .write()
+            // justified: RwLock poison is unrecoverable
             .unwrap()
             .insert((koid, model.to_string()), ());
+        // justified: RwLock poison is unrecoverable
         self.tombstones.write().unwrap().remove(&koid);
     }
 
     fn remove(&self, koid: &KOID) {
+        // justified: RwLock poison is unrecoverable
         self.tombstones.write().unwrap().insert(*koid);
         self.model_map
             .write()
+            // justified: RwLock poison is unrecoverable
             .unwrap()
             .retain(|(k, _), _| k != koid);
     }
@@ -137,10 +142,13 @@ impl VectorIndex for HnswVectorIndex {
         if qv.len() != self.dim || k == 0 {
             return Vec::new();
         }
+        // justified: Mutex poison is unrecoverable
         let idx = self.index.lock().unwrap();
         let internal_k = k.saturating_mul(4).min(self.capacity);
         let hits = idx.search(qv, internal_k.max(1), 20);
+        // justified: RwLock poison is unrecoverable
         let dead = self.tombstones.read().unwrap();
+        // justified: RwLock poison is unrecoverable
         let models = self.model_map.read().unwrap();
         let mut best: BTreeMap<KOID, f32> = BTreeMap::new();
         for h in hits {
@@ -149,6 +157,7 @@ impl VectorIndex for HnswVectorIndex {
                 Some((m, kh)) => (m, kh),
                 None => continue, // skip legacy labels without model prefix
             };
+            // justified: legacy/malformed label → KOID::ZERO, skipped below
             let koid = KOID::from_hex(koid_hex).unwrap_or(KOID::ZERO);
             if koid == KOID::ZERO || dead.contains(&koid) {
                 continue;
@@ -171,6 +180,7 @@ impl VectorIndex for HnswVectorIndex {
         let mut scored: Vec<(KOID, f32)> = best.into_iter().collect();
         scored.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
+                // justified: NaN (zero-vector cosine) ties deterministically
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.0.cmp(&b.0))
         });
@@ -179,6 +189,7 @@ impl VectorIndex for HnswVectorIndex {
     }
 
     fn len(&self) -> usize {
+        // justified: RwLock poison is unrecoverable
         self.model_map.read().unwrap().len()
     }
 
@@ -187,11 +198,13 @@ impl VectorIndex for HnswVectorIndex {
             .map_err(|e| KError::Store(format!("create hnsw checkpoint dir: {}", e)))?;
         self.index
             .lock()
+            // justified: Mutex poison is unrecoverable
             .unwrap()
             .save(dir.join("index.hnsw"))
             .map_err(|e| KError::Store(format!("hnsw save: {}", e)))?;
         // R7: models stored as {koid_hex: [model1, model2, ...]}.
         let mut models_json: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        // justified: RwLock poison is unrecoverable
         for (koid, model) in self.model_map.read().unwrap().keys() {
             models_json
                 .entry(koid.to_hex())
@@ -201,6 +214,7 @@ impl VectorIndex for HnswVectorIndex {
         let tombstones: Vec<String> = self
             .tombstones
             .read()
+            // justified: RwLock poison is unrecoverable
             .unwrap()
             .iter()
             .map(|k| k.to_hex())
@@ -232,20 +246,24 @@ pub struct TantivyTextIndex {
 }
 
 impl TantivyTextIndex {
-    pub fn new() -> Self {
+    /// R4: returns KResult — a failed tantivy writer is unrecoverable at
+    /// this layer, so it propagates to the caller.
+    pub fn new() -> KResult<Self> {
         let mut schema_builder = Schema::builder();
         let koid_field = schema_builder.add_text_field("koid", STRING | STORED);
         let tokens_field = schema_builder.add_text_field("tokens", TEXT | STORED);
         let schema = schema_builder.build();
         let index = Index::create_in_ram(schema);
-        let writer = index.writer(15_000_000).expect("tantivy writer");
-        TantivyTextIndex {
+        let writer = index
+            .writer(15_000_000)
+            .map_err(|e| KError::Store(format!("tantivy writer: {}", e)))?;
+        Ok(TantivyTextIndex {
             koid_field,
             tokens_field,
             index,
             writer: Mutex::new(writer),
             docs: RwLock::new(BTreeMap::new()),
-        }
+        })
     }
 
     pub fn load(dir: &std::path::Path) -> KResult<Self> {
@@ -300,55 +318,64 @@ impl TantivyTextIndex {
 
 impl Default for TantivyTextIndex {
     fn default() -> Self {
-        Self::new()
+        // justified: Default cannot return a Result; a writer failure here is
+        // unrecoverable for an in-RAM index
+        Self::new().expect("tantivy writer")
     }
 }
 
 impl TextIndex for TantivyTextIndex {
-    // ponytail: these two methods panic on tantivy write errors (disk full,
-    // permission denied, etc.). The TextIndex trait returns () so we can't
-    // propagate. The index is async-secondary — a panic here kills the
-    // maintainer but the kernel survives. Change trait to KResult<()> when
-    // something besides TokenTextIndex needs the result.
-    fn upsert(&self, koid: KOID, tokens: &BTreeSet<String>) {
+    fn upsert(&self, koid: KOID, tokens: &BTreeSet<String>) -> KResult<()> {
         let key = koid.to_hex();
         let text = tokens.iter().cloned().collect::<Vec<_>>().join(" ");
+        // justified: Mutex poison is unrecoverable
         let mut w = self.writer.lock().unwrap();
         w.delete_term(Term::from_field_text(self.koid_field, &key));
         w.add_document(doc!(
             self.koid_field => key,
             self.tokens_field => text,
         ))
-        .expect("tantivy add_document");
-        w.commit().expect("tantivy commit");
+        .map_err(|e| KError::Store(format!("tantivy add_document: {}", e)))?;
+        w.commit()
+            .map_err(|e| KError::Store(format!("tantivy commit: {}", e)))?;
+        // justified: RwLock poison is unrecoverable
         self.docs.write().unwrap().insert(koid, tokens.clone());
+        Ok(())
     }
 
-    fn remove(&self, koid: &KOID) {
+    fn remove(&self, koid: &KOID) -> KResult<()> {
         let key = koid.to_hex();
+        // justified: Mutex poison is unrecoverable
         let mut w = self.writer.lock().unwrap();
         w.delete_term(Term::from_field_text(self.koid_field, &key));
-        w.commit().expect("tantivy commit");
+        w.commit()
+            .map_err(|e| KError::Store(format!("tantivy commit: {}", e)))?;
+        // justified: RwLock poison is unrecoverable
         self.docs.write().unwrap().remove(koid);
+        Ok(())
     }
 
-    fn search(&self, tokens: &BTreeSet<String>, k: usize) -> Vec<(KOID, f32)> {
+    fn search(&self, tokens: &BTreeSet<String>, k: usize) -> KResult<Vec<(KOID, f32)>> {
         if tokens.is_empty() || k == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let terms: Vec<Term> = tokens
             .iter()
             .map(|t| Term::from_field_text(self.tokens_field, t))
             .collect();
         let query = BooleanQuery::new_multiterms_query(terms);
-        let reader = self.index.reader().expect("tantivy reader");
+        let reader = self
+            .index
+            .reader()
+            .map_err(|e| KError::Store(format!("tantivy reader: {}", e)))?;
         let searcher = reader.searcher();
+        // justified: RwLock poison is unrecoverable
         let len = self.docs.read().unwrap().len();
         let limit = k.min(len.max(1));
         let top_docs = searcher
             .search(&query, &TopDocs::with_limit(limit).order_by_score())
-            .expect("tantivy search");
-        top_docs
+            .map_err(|e| KError::Store(format!("tantivy search: {}", e)))?;
+        Ok(top_docs
             .into_iter()
             .filter_map(|(score, doc_address)| {
                 let doc: TantivyDocument = searcher.doc(doc_address).ok()?;
@@ -356,10 +383,11 @@ impl TextIndex for TantivyTextIndex {
                 let koid = KOID::from_hex(koid_str).ok()?;
                 Some((koid, score))
             })
-            .collect()
+            .collect())
     }
 
     fn len(&self) -> usize {
+        // justified: RwLock poison is unrecoverable
         self.docs.read().unwrap().len()
     }
 
@@ -375,6 +403,7 @@ impl TextIndex for TantivyTextIndex {
         let mut w = disk_index
             .writer(15_000_000)
             .map_err(|e| KError::Store(format!("tantivy disk writer: {}", e)))?;
+        // justified: RwLock poison is unrecoverable
         for (koid, tokens) in self.docs.read().unwrap().iter() {
             let text = tokens.iter().cloned().collect::<Vec<_>>().join(" ");
             w.add_document(doc!(
@@ -454,17 +483,22 @@ mod tests {
 
     #[test]
     fn tantivy_text_index_orders_and_removes() {
-        let idx = TantivyTextIndex::new();
+        let idx = TantivyTextIndex::new().unwrap();
         let a = kid(1);
         let b = kid(2);
-        idx.upsert(a, &BTreeSet::from(["cats".to_string(), "dogs".to_string()]));
-        idx.upsert(b, &BTreeSet::from(["birds".to_string()]));
-        let r = idx.search(&BTreeSet::from(["cats".to_string()]), 5);
+        idx.upsert(a, &BTreeSet::from(["cats".to_string(), "dogs".to_string()]))
+            .unwrap();
+        idx.upsert(b, &BTreeSet::from(["birds".to_string()]))
+            .unwrap();
+        let r = idx
+            .search(&BTreeSet::from(["cats".to_string()]), 5)
+            .unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].0, a);
-        idx.remove(&a);
+        idx.remove(&a).unwrap();
         assert!(idx
             .search(&BTreeSet::from(["cats".to_string()]), 5)
+            .unwrap()
             .is_empty());
     }
 }

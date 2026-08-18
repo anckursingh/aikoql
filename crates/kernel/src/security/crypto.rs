@@ -90,6 +90,7 @@ impl Aes256Gcm {
 
     fn get_cipher(&self, key: &[u8; 32]) -> Result<AesImpl, String> {
         // Fast path: cached key matches.
+        // justified: RwLock poison is unrecoverable
         if let Some((cached_key, ref cached_cipher)) = *self.cache.read().unwrap() {
             if &cached_key == key {
                 return Ok(cached_cipher.clone());
@@ -97,6 +98,7 @@ impl Aes256Gcm {
         }
         // Slow path: compute key expansion once per key.
         let cipher = AesImpl::new_from_slice(key).map_err(|e| format!("aes-gcm init: {}", e))?;
+        // justified: RwLock poison is unrecoverable
         *self.cache.write().unwrap() = Some((*key, cipher.clone()));
         Ok(cipher)
     }
@@ -184,6 +186,7 @@ impl ChaCha20Poly1305 {
     }
 
     fn get_cipher(&self, key: &[u8; 32]) -> Result<ChaChaImpl, String> {
+        // justified: RwLock poison is unrecoverable
         if let Some((cached_key, ref cached_cipher)) = *self.cache.read().unwrap() {
             if &cached_key == key {
                 return Ok(cached_cipher.clone());
@@ -191,6 +194,7 @@ impl ChaCha20Poly1305 {
         }
         let cipher = ChaChaImpl::new_from_slice(key)
             .map_err(|e| format!("chacha20-poly1305 init: {}", e))?;
+        // justified: RwLock poison is unrecoverable
         *self.cache.write().unwrap() = Some((*key, cipher.clone()));
         Ok(cipher)
     }
@@ -271,14 +275,17 @@ impl Crypto {
     }
 
     pub fn encrypt(&self, key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, String> {
+        // justified: RwLock poison is unrecoverable
         self.provider.read().unwrap().encrypt(key, plaintext, aad)
     }
 
     pub fn decrypt(&self, key: &[u8; 32], data: &[u8], aad: &[u8]) -> Result<Vec<u8>, String> {
+        // justified: RwLock poison is unrecoverable
         self.provider.read().unwrap().decrypt(key, data, aad)
     }
 
     pub fn generate_key(&self) -> [u8; 32] {
+        // justified: RwLock poison is unrecoverable
         self.provider.read().unwrap().generate_key()
     }
 

@@ -99,13 +99,13 @@ fn main() {
     match subcmd {
         Some("shell") => {
             // Accept: aikoql-mcp shell [--tenant NAME] [DB_PATH]
+            let Some(idx) = subcmd_idx else {
+                eprintln!("Usage: aikoql-mcp shell [--tenant NAME] [DB_PATH]");
+                std::process::exit(2);
+            };
             let mut db = "./aikoql.redb";
             let mut tenant: Option<&str> = None;
-            let tail_args: Vec<&str> = args
-                .iter()
-                .skip(subcmd_idx.unwrap() + 2)
-                .map(String::as_str)
-                .collect();
+            let tail_args: Vec<&str> = args.iter().skip(idx + 2).map(String::as_str).collect();
             let mut ti = 0;
             while ti < tail_args.len() {
                 match tail_args[ti] {
@@ -144,15 +144,15 @@ fn main() {
             return;
         }
         Some("ingest-dir") => {
+            let Some(idx) = subcmd_idx else {
+                eprintln!("Usage: aikoql-mcp ingest-dir [PATH] [DB] [--parallel] [--incremental]");
+                std::process::exit(2);
+            };
             let path = arg_after.unwrap_or(".");
             let db = arg_after2.unwrap_or("./aikoql.redb");
             let mut parallel = false;
             let mut incremental = false;
-            let tail_args: Vec<&str> = args
-                .iter()
-                .skip(subcmd_idx.unwrap() + 2)
-                .map(String::as_str)
-                .collect();
+            let tail_args: Vec<&str> = args.iter().skip(idx + 2).map(String::as_str).collect();
             for a in &tail_args {
                 if *a == "--parallel" {
                     parallel = true;
@@ -172,11 +172,11 @@ fn main() {
             // import <source> <source-args...>
             //   import postgres <conn_str> [--tenant NAME] [--table TABLE] [DB_PATH]
             //   import sqlite <file.db> [--tenant NAME] [--table TABLE] [DB_PATH]
-            let ti_args: Vec<&str> = args
-                .iter()
-                .skip(subcmd_idx.unwrap() + 2)
-                .map(String::as_str)
-                .collect();
+            let Some(idx) = subcmd_idx else {
+                eprintln!("Usage: aikoql-mcp import <SOURCE> [ARGS...]");
+                std::process::exit(2);
+            };
+            let ti_args: Vec<&str> = args.iter().skip(idx + 2).map(String::as_str).collect();
             if ti_args.is_empty() {
                 eprintln!("Usage: aikoql-mcp import <SOURCE> [ARGS...]");
                 eprintln!("Sources: postgres, sqlite, mongodb, neo4j");
@@ -441,7 +441,11 @@ fn main() {
     // after it so it isn't swallowed as the db path (creates a stray `serve`
     // redb file in the CWD otherwise). Bare `aikoql-mcp [DB]` still works.
     let mut i = if subcmd == Some("serve") {
-        subcmd_idx.unwrap() + 2
+        let Some(idx) = subcmd_idx else {
+            eprintln!("Usage: aikoql-mcp serve [OPTIONS] [DB]");
+            std::process::exit(2);
+        };
+        idx + 2
     } else {
         1
     };
@@ -490,6 +494,7 @@ fn main() {
                 i += 2;
             }
             "--embedding-api-key" => {
+                // justified: missing flag value → empty (no API key)
                 embedding_api_key = Some(args.get(i + 1).cloned().unwrap_or_default());
                 i += 2;
             }
@@ -505,9 +510,20 @@ fn main() {
     }
     MEMORY_DIR.set(memory_dir).ok();
 
-    let engine = RedbEngine::open(&db_path).expect("open store");
-    let kernel =
-        Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xA9C9).expect("open kernel");
+    let engine = match RedbEngine::open(&db_path) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("open store: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xA9C9) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("open kernel: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     #[cfg(feature = "embedding-openai")]
     let url = if embedding_base_url.is_empty() {
@@ -609,12 +625,12 @@ fn main() {
                     manual
                         .into_iter()
                         .max_by_key(|ko| ko.commit_ts)
-                        .expect("manual is non-empty")
+                        .expect("manual is non-empty") // justified: guarded by !manual.is_empty() above
                 } else {
                     // Fall back to latest auto-discovered.
                     kos.iter()
                         .max_by_key(|ko| ko.commit_ts)
-                        .expect("kos is non-empty")
+                        .expect("kos is non-empty") // justified: guarded by the outer Ok(kos) if !kos.is_empty() arm
                 };
                 match OntologyDef::from_ko(candidate) {
                     Ok(def) => {
@@ -632,7 +648,13 @@ fn main() {
                               mappings = def.mappings.len(),
                               source = source,
                               "ontology loaded");
-                        Arc::new(OntologyRegistry::new(def).expect("load ontology"))
+                        match OntologyRegistry::new(def) {
+                            Ok(r) => Arc::new(r),
+                            Err(e) => {
+                                info!(error = %e, "ontology registry failed to initialize — using empty registry");
+                                Arc::new(OntologyRegistry::empty())
+                            }
+                        }
                     }
                     Err(e) => {
                         info!(error = %e, "ontology KO found but failed to decode — using empty registry");
@@ -659,7 +681,13 @@ fn main() {
 
     if let Some(addr) = listen_addr {
         // TCP mode: accept multiple connections, one handler thread each.
-        let listener = TcpListener::bind(&addr).expect("bind TCP listener");
+        let listener = match TcpListener::bind(&addr) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("bind TCP listener: {}", e);
+                std::process::exit(1);
+            }
+        };
         info!(addr = %addr, db = %db_path, "aikoql-mcp TCP server ready");
         for stream in listener.incoming() {
             match stream {
@@ -691,7 +719,7 @@ fn main() {
             let msg: J = match serde_json::from_str(line.trim()) {
                 Ok(v) => v,
                 Err(e) => {
-                    let mut out = stdout.lock().unwrap();
+                    let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
                     write_frame(
                         &mut *out,
                         err_frame(&J::Null, -32700, &format!("parse error: {}", e)),
@@ -768,13 +796,27 @@ fn run_backup(db_path: &str) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let dir_name = format!("{}.backup.{}", db_path, ts);
-    std::fs::create_dir_all(&dir_name).expect("create backup dir");
+    if let Err(e) = std::fs::create_dir_all(&dir_name) {
+        eprintln!("create backup dir: {}", e);
+        std::process::exit(1);
+    }
 
     // Gather metadata, then drop kernel to release file lock before copy.
     let (seq, object_count) = {
-        let engine = RedbEngine::open(db_path).expect("open source db");
-        let kernel =
-            Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+        let engine = match RedbEngine::open(db_path) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("open source db: {}", e);
+                std::process::exit(1);
+            }
+        };
+        let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("open kernel: {}", e);
+                std::process::exit(1);
+            }
+        };
         let s = kernel
             .journal_head()
             .unwrap_or_else(|e| {
@@ -793,7 +835,10 @@ fn run_backup(db_path: &str) {
     }; // kernel + engine dropped → file lock released.
 
     let data_path = format!("{}/data.redb", dir_name);
-    std::fs::copy(db_path, &data_path).expect("copy db file");
+    if let Err(e) = std::fs::copy(db_path, &data_path) {
+        eprintln!("copy db file: {}", e);
+        std::process::exit(1);
+    }
 
     let meta = serde_json::json!({
         "journal_seq": seq,
@@ -801,11 +846,14 @@ fn run_backup(db_path: &str) {
         "backup_ts": ts,
         "source": db_path,
     });
-    std::fs::write(
-        format!("{}/meta.json", dir_name),
-        serde_json::to_string_pretty(&meta).unwrap(),
-    )
-    .expect("write meta");
+    let meta_json = serde_json::to_string_pretty(&meta).unwrap_or_else(|e| {
+        eprintln!("write backup meta: {}", e);
+        std::process::exit(1);
+    });
+    if let Err(e) = std::fs::write(format!("{}/meta.json", dir_name), meta_json) {
+        eprintln!("write backup meta: {}", e);
+        std::process::exit(1);
+    }
 
     println!("Backup created: {}", dir_name);
     println!("  Objects: {}", object_count);
@@ -840,14 +888,28 @@ fn run_restore(backup_dir: &str, target_path: &str) {
             );
         }
     }
-    std::fs::copy(&data_path, target_path).expect("restore copy");
+    if let Err(e) = std::fs::copy(&data_path, target_path) {
+        eprintln!("restore copy: {}", e);
+        std::process::exit(1);
+    }
     println!("Restored to: {}", target_path);
 }
 
 fn run_audit(db_path: &str) {
-    let engine = RedbEngine::open(db_path).expect("open db");
-    let kernel =
-        Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let engine = match RedbEngine::open(db_path) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("open db: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("open kernel: {}", e);
+            std::process::exit(1);
+        }
+    };
     match kernel.compliance_report() {
         Ok(report) => {
             let json = serde_json::to_string_pretty(&serde_json::json!({
@@ -910,6 +972,7 @@ fn enrich_file_contains(ir: &mut aikoql_ingestion::KnowledgeIr) {
         })
         .map(|e| {
             (
+                // justified: entity without provenance → no document link
                 e.evidence.document_id.clone().unwrap_or_default(),
                 e.name.clone(),
             )
@@ -937,6 +1000,18 @@ fn enrich_file_contains(ir: &mut aikoql_ingestion::KnowledgeIr) {
             evidence: aikoql_ingestion::Evidence::default(),
         });
     }
+}
+
+/// R8: stamp ingested KOs with their content trust level. The IR carries the
+/// value for compile_context; the KO extension makes it queryable/auditable
+/// in the kernel graph.
+fn content_trust_extension(ct: ContentTrust) -> ExtensionMap {
+    let mut ext = ExtensionMap::new();
+    ext.insert(
+        KnowledgeObject::EXT_CONTENT_TRUST.into(),
+        Value::Text(ct.as_str().into()),
+    );
+    ext
 }
 
 fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) {
@@ -977,6 +1052,12 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         }
     };
 
+    // R8: a local repo checkout is human-authored, reviewed content —
+    // tag the whole IR Trusted so the context compiler keeps its
+    // instruction facts (uploads go the other way: deploy_document
+    // stamps Untrusted).
+    result.ir.content_trust = Some(ContentTrust::Trusted);
+
     let report = aikoql_ingestion::build_report(
         &result.ir,
         path,
@@ -1016,12 +1097,14 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
                 .mentions
                 .first()
                 .map(|m| m.chars().take(256).collect())
+                // justified: entity without mentions → empty mention text
                 .unwrap_or_default();
             let text = format!("{} {}", ent.name, mention);
             match p.embed(&text, None) {
                 Ok(v) if !v.is_empty() => {
                     let key = format!(
                         "{}::{}",
+                        // justified: no provenance → empty document id
                         ent.evidence.document_id.as_deref().unwrap_or_default(),
                         ent.name
                     );
@@ -1043,9 +1126,20 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
     // Store the IR as production knowledge: one KO per entity with kernel
     // relationships between them. The summary KO below remains only as the
     // compile_context IR snapshot (tool_compile_context reads ir_json).
-    let engine = RedbEngine::open(db_path).expect("open db");
-    let kernel =
-        Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let engine = match RedbEngine::open(db_path) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("open db: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("open kernel: {}", e);
+            std::process::exit(1);
+        }
+    };
     let subj = Subject::with_roles("ingest-dir", &["admin"]);
 
     // Facts attach to every entity they reference.
@@ -1104,6 +1198,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         let idem = format!(
             "ingest-entity:{}:{}:{}",
             path,
+            // justified: no provenance → empty document id
             ent.evidence.document_id.as_deref().unwrap_or_default(),
             ent.name
         );
@@ -1126,7 +1221,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
                 acl: vec![],
                 classification: None,
             }),
-            extensions: ExtensionMap::new(),
+            extensions: content_trust_extension(ContentTrust::Trusted),
             origin: Origin::Agent("ingest-dir".into()),
             note: Some(format!("entity from ingest-dir {}", path)),
             referential_policy: ReferentialPolicy::Permissive,
@@ -1210,7 +1305,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
                 acl: vec![],
                 classification: None,
             }),
-            extensions: ExtensionMap::new(),
+            extensions: content_trust_extension(ContentTrust::Trusted),
             origin: Origin::Agent("ingest-dir".into()),
             note: Some(format!("source file from ingest-dir {}", path)),
             referential_policy: ReferentialPolicy::Permissive,
@@ -1308,6 +1403,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
     for &(name, koid, ref doc) in &ent_kos {
         local_lower.insert(
             (
+                // justified: no provenance → empty document id
                 doc.as_deref().unwrap_or_default().to_string(),
                 name.to_lowercase(),
             ),
@@ -1326,6 +1422,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
     }
     let resolve = |name: &str, doc: Option<&str>| -> Option<KOID> {
         let lower = name.to_lowercase();
+        // justified: no provenance → empty document id
         if let Some(&k) = local_lower.get(&(doc.unwrap_or_default().to_string(), lower.clone())) {
             return Some(k);
         }
@@ -1443,7 +1540,10 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
 
     // Snapshot KO — ir_json's only consumer is tool_compile_context.
     enrich_file_contains(&mut result.ir);
-    let ir_json = serde_json::to_string(&result.ir).unwrap_or_default();
+    let ir_json = serde_json::to_string(&result.ir).unwrap_or_else(|e| {
+        eprintln!("serialize ir: {}", e);
+        std::process::exit(1);
+    });
     let mut props = PropertyMap::new();
     props.insert("source_path".into(), Value::Text(path.to_string()));
     props.insert(
@@ -1458,11 +1558,12 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
         "relation_count".into(),
         Value::Int(result.ir.relations.len() as i64),
     );
+    let emb_json = serde_json::to_string(&entity_embeddings).unwrap_or_else(|e| {
+        eprintln!("serialize entity_embeddings: {}", e);
+        std::process::exit(1);
+    });
     props.insert("ir_json".into(), Value::Text(ir_json));
-    props.insert(
-        "entity_embeddings".into(),
-        Value::Text(serde_json::to_string(&entity_embeddings).unwrap_or_default()),
-    );
+    props.insert("entity_embeddings".into(), Value::Text(emb_json));
 
     // Same exact-once-replay trap as entity KOs: without resolving the key,
     // a re-ingest would keep the stale ir_json/entity_embeddings forever.
@@ -1486,7 +1587,7 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
             acl: vec![],
             classification: None,
         }),
-        extensions: ExtensionMap::new(),
+        extensions: content_trust_extension(ContentTrust::Trusted),
         origin: Origin::Human,
         note: Some(format!(
             "Directory ingestion IR snapshot (compile_context source): {}",
@@ -1609,9 +1710,20 @@ fn run_pg_import(
     }
     println!();
 
-    let engine = RedbEngine::open(target_db).expect("open target db");
-    let kernel =
-        Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let engine = match RedbEngine::open(target_db) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("open target db: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("open kernel: {}", e);
+            std::process::exit(1);
+        }
+    };
     let mut total_imported = 0usize;
 
     for schema in &schemas {
@@ -1708,9 +1820,20 @@ fn run_sqlite_import(
     }
     println!();
 
-    let engine = RedbEngine::open(target_db).expect("open target db");
-    let kernel =
-        Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let engine = match RedbEngine::open(target_db) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("open target db: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("open kernel: {}", e);
+            std::process::exit(1);
+        }
+    };
     let mut total_imported = 0usize;
 
     for schema in &schemas {
@@ -1806,9 +1929,20 @@ fn run_mongo_import(
     }
     println!();
 
-    let engine = RedbEngine::open(target_db).expect("open target db");
-    let kernel =
-        Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let engine = match RedbEngine::open(target_db) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("open target db: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("open kernel: {}", e);
+            std::process::exit(1);
+        }
+    };
     let mut total_imported = 0usize;
 
     for schema in &schemas {
@@ -1885,7 +2019,13 @@ fn run_neo4j_import(
             std::process::exit(1);
         }
     };
-    let rel_types = connector.list_rel_types().unwrap_or_default();
+    let rel_types = match connector.list_rel_types() {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to list relationship types: {}", e);
+            std::process::exit(1);
+        }
+    };
     println!(
         "Labels: {} ({}), Relationship types: {} ({})",
         labels.len(),
@@ -1895,9 +2035,20 @@ fn run_neo4j_import(
     );
     println!();
 
-    let engine = RedbEngine::open(target_db).expect("open target db");
-    let kernel =
-        Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE).expect("open kernel");
+    let engine = match RedbEngine::open(target_db) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("open target db: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("open kernel: {}", e);
+            std::process::exit(1);
+        }
+    };
     let mut total_nodes = 0usize;
     let mut total_rels = 0usize;
 
@@ -2010,10 +2161,16 @@ fn run_keygen(path: &str) {
     } else {
         if let Some(parent) = std::path::Path::new(path).parent() {
             if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).expect("create key dir");
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    eprintln!("create key dir: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
-        std::fs::write(path, &hex).expect("write key file");
+        if let Err(e) = std::fs::write(path, &hex) {
+            eprintln!("write key file: {}", e);
+            std::process::exit(1);
+        }
         println!("Key written to: {}", path);
         println!("Set encryption.key_path in aikoql.toml to this path.");
         println!(
@@ -2033,10 +2190,15 @@ fn handle_tcp_client(kernel: &Arc<Kernel>, stream: TcpStream, db_path: Arc<Strin
     let peer = stream
         .peer_addr()
         .map(|a| a.to_string())
+        // justified: log-only cosmetic — unknown peer on failure
         .unwrap_or_default();
     ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
     info!(%peer, "client connected");
-    let reader = BufReader::new(stream.try_clone().expect("clone stream"));
+    let Ok(clone) = stream.try_clone() else {
+        eprintln!("clone stream failed — dropping connection");
+        return;
+    };
+    let reader = BufReader::new(clone);
     let writer = Arc::new(Mutex::new(stream));
     let mut sub_ids: HashSet<String> = HashSet::new();
     let mut rate_limits: HashMap<String, u64> = HashMap::new();
@@ -2053,7 +2215,7 @@ fn handle_tcp_client(kernel: &Arc<Kernel>, stream: TcpStream, db_path: Arc<Strin
         let msg: J = match serde_json::from_str(line.trim()) {
             Ok(v) => v,
             Err(e) => {
-                let mut out = writer.lock().unwrap();
+                let mut out = writer.lock().unwrap(); // justified: Mutex poison is unrecoverable
                 write_frame(
                     &mut *out,
                     err_frame(&J::Null, -32700, &format!("parse error: {}", e)),
@@ -2101,14 +2263,14 @@ fn handle_message(
         *count += 1;
         if *count > rate_limit_max {
             warn!(count = %count, limit = %rate_limit_max, "rate limit exceeded");
-            let mut out = stdout.lock().unwrap();
+            let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
             if let Some(id) = id {
                 write_frame(&mut *out, err_frame(&id, -32000, "rate limit exceeded"));
             }
             return;
         }
     }
-    let mut out = stdout.lock().unwrap();
+    let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
     match method {
         "initialize" => {
             if let Some(id) = id {
@@ -2140,7 +2302,7 @@ fn handle_message(
                 .and_then(|s| s.as_str())
                 .unwrap_or("stream-user");
             let result = execute_stream_query(k, query, subject);
-            let mut out = stdout.lock().unwrap();
+            let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
             match result {
                 Ok((chunks, stream_id)) => {
                     let total = chunks.len();
@@ -2169,7 +2331,7 @@ fn handle_message(
                             for (i, chunk) in remaining.into_iter().enumerate() {
                                 let chunk_idx = i + 1;
                                 let done = chunk_idx == n;
-                                let mut w = out_arc.lock().unwrap();
+                                let mut w = out_arc.lock().unwrap(); // justified: Mutex poison is unrecoverable
                                 write_frame(
                                     &mut *w,
                                     json!({
@@ -2217,6 +2379,7 @@ fn handle_message(
                         .filter_map(|x| x.as_str().map(String::from))
                         .collect()
                 })
+                // justified: absent roles param → empty role list
                 .unwrap_or_default();
             let resp = json!({
                 "session": {
@@ -2257,7 +2420,7 @@ fn handle_message(
             }
             // Notifications are streamed immediately by background threads;
             // no drain needed.
-            let mut out = stdout.lock().unwrap();
+            let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
             if let Some(id) = id {
                 let frame = match result {
                     Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
@@ -2270,7 +2433,7 @@ fn handle_message(
             drop(out); // release lock before subscription setup
             let params = msg.get("params").cloned().unwrap_or(J::Null);
             let result = notification_subscribe(k, sub_ids, stdout, &params);
-            let mut out = stdout.lock().unwrap();
+            let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
             if let Some(id) = id {
                 let frame = match result {
                     Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
@@ -2331,7 +2494,7 @@ fn notification_subscribe(
     // Replay missed events before the subscription becomes live.
     let replayed = k.replay(&id).map_err(|e| (-32603, e.to_string()))?;
     {
-        let mut out = stdout.lock().unwrap();
+        let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
         for ke in &replayed {
             write_frame(
                 &mut *out,
@@ -2348,7 +2511,7 @@ fn notification_subscribe(
     let id_clone = id.clone();
     std::thread::spawn(move || {
         for ke in rx {
-            let mut out = out.lock().unwrap();
+            let mut out = out.lock().unwrap(); // justified: Mutex poison is unrecoverable
             write_frame(
                 &mut *out,
                 json!({
@@ -2416,8 +2579,9 @@ fn parse_event_kind(s: &str) -> Option<EventKind> {
 }
 
 fn write_frame(out: &mut impl Write, frame: J) {
-    writeln!(out, "{}", frame).expect("write frame");
-    out.flush().expect("flush frame");
+    if writeln!(out, "{}", frame).is_err() || out.flush().is_err() {
+        // Connection died — the caller's next read ends the session.
+    }
 }
 
 fn err_frame(id: &J, code: i64, message: &str) -> J {
@@ -2525,7 +2689,7 @@ fn check_rate(agent_id: &str, roles: &[String], max_per_minute: u32) -> Result<(
     if roles.is_empty() || roles.contains(&"admin".to_string()) {
         return Ok(());
     }
-    let mut store = RATE_STORE.lock().unwrap();
+    let mut store = RATE_STORE.lock().unwrap(); // justified: Mutex poison is unrecoverable
     let now = Instant::now();
     let window = Duration::from_secs(60);
 
@@ -2544,6 +2708,7 @@ fn check_rate(agent_id: &str, roles: &[String], max_per_minute: u32) -> Result<(
                 format!("rate limit exceeded: {} calls/min", max_per_minute),
             ));
         }
+        // justified: entry present — should_reset=false only when store.get returned Some above
         let start = store.get(agent_id).unwrap().0;
         store.insert(agent_id.to_string(), (start, count + 1));
     }
@@ -2685,6 +2850,7 @@ fn subject_of(args: &J) -> Subject {
                 .filter_map(|x| x.as_str().map(String::from))
                 .collect()
         })
+        // justified: absent roles param → empty role list
         .unwrap_or_default();
     Subject {
         name: name.into(),
@@ -2933,6 +3099,7 @@ fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
                     .filter_map(|x| x.as_str().map(String::from))
                     .collect()
             })
+            // justified: absent tags param → empty tag list
             .unwrap_or_default(),
     };
     let mut req = match args.get("koid").and_then(|x| x.as_str()) {
@@ -3272,6 +3439,7 @@ fn tool_eval_recall(k: &Kernel, args: &J) -> Result<J, String> {
                 .filter_map(|s| KOID::from_hex(s).ok())
                 .collect()
         })
+        // justified: absent expected param → empty set
         .unwrap_or_default();
     let report = k
         .eval_recall(EvalRecallQuery {
@@ -3606,6 +3774,7 @@ fn tool_compliance_report(k: &Kernel) -> Result<J, String> {
                 .map(|(kind, count)| json!({"kind": kind.as_str(), "count": count}))
                 .collect()
         })
+        // justified: no crypto summary → empty audit list
         .unwrap_or_default();
     Ok(json!({
         "encryption_enabled": report.encryption_enabled,
@@ -3945,17 +4114,20 @@ fn tool_deploy_agent(k: &Kernel, args: &J) -> Result<J, String> {
     let skills = args
         .get("skills")
         .and_then(|v| v.as_array())
-        .map(|a| serde_json::to_string(a).unwrap_or_default())
+        .map(|a| serde_json::to_string(a).map_err(|e| format!("serialize skills: {}", e)))
+        .transpose()?
         .unwrap_or_else(|| "[]".into());
     let tools = args
         .get("tools")
         .and_then(|v| v.as_array())
-        .map(|a| serde_json::to_string(a).unwrap_or_default())
+        .map(|a| serde_json::to_string(a).map_err(|e| format!("serialize tools: {}", e)))
+        .transpose()?
         .unwrap_or_else(|| "[]".into());
     let policies = args
         .get("policies")
         .and_then(|v| v.as_array())
-        .map(|a| serde_json::to_string(a).unwrap_or_default())
+        .map(|a| serde_json::to_string(a).map_err(|e| format!("serialize policies: {}", e)))
+        .transpose()?
         .unwrap_or_else(|| "[]".into());
     let r = k
         .deploy_agent(name, prompt, &skills, &tools, &policies, &subject_of(args))
@@ -4003,12 +4175,14 @@ fn tool_deploy_connector(k: &Kernel, args: &J) -> Result<J, String> {
     let config = args
         .get("config")
         .and_then(|v| v.as_object())
-        .map(|o| serde_json::to_string(o).unwrap_or_default())
+        .map(|o| serde_json::to_string(o).map_err(|e| format!("serialize config: {}", e)))
+        .transpose()?
         .unwrap_or_else(|| "{}".into());
     let mapping = args
         .get("mapping")
         .and_then(|v| v.as_array())
-        .map(|a| serde_json::to_string(a).unwrap_or_default())
+        .map(|a| serde_json::to_string(a).map_err(|e| format!("serialize mapping: {}", e)))
+        .transpose()?
         .unwrap_or_else(|| "[]".into());
     let r = k
         .deploy_connector(name, plugin, &config, &mapping, &subject_of(args))
@@ -4074,7 +4248,8 @@ fn tool_deploy_report(k: &Kernel, args: &J) -> Result<J, String> {
     let parameters = args
         .get("parameters")
         .and_then(|v| v.as_array())
-        .map(|a| serde_json::to_string(a).unwrap_or_default())
+        .map(|a| serde_json::to_string(a).map_err(|e| format!("serialize parameters: {}", e)))
+        .transpose()?
         .unwrap_or_else(|| "[]".into());
     let r = k
         .deploy_report(name, template, format, &parameters, &subject_of(args))
@@ -4335,7 +4510,8 @@ fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Result<J, Strin
             std::fs::read_to_string(&artifact_path).map_err(|e| format!("read markdown: {}", e))?;
         let ir = aikoql_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
             .map_err(|e| format!("markdown compile: {}", e))?;
-        let ir_json = serde_json::to_value(&ir).unwrap_or_default();
+        let ir_json =
+            serde_json::to_value(&ir).map_err(|e| format!("serialize markdown_ir: {}", e))?;
         serde_json::json!({
             "markdown_ir": ir_json,
             "method": "markdown-compiler",
@@ -4352,7 +4528,7 @@ fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Result<J, Strin
     } else if is_rust {
         let ir = aikoql_ingestion::compile_rust_file(&artifact_path)
             .map_err(|e| format!("rust compile: {}", e))?;
-        let ir_json = serde_json::to_value(&ir).unwrap_or_default();
+        let ir_json = serde_json::to_value(&ir).map_err(|e| format!("serialize code_ir: {}", e))?;
         serde_json::json!({
             "code_ir": ir_json,
             "method": "rust-code-parser",
@@ -4420,7 +4596,7 @@ fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Result<J, String
     );
     let md = aikoql_ingestion::render_context_markdown(&pkg);
 
-    let pkg_json = serde_json::to_value(&pkg).unwrap_or_default();
+    let pkg_json = serde_json::to_value(&pkg).map_err(|e| format!("serialize package: {}", e))?;
     Ok(serde_json::json!({
         "context_markdown": md,
         "package": pkg_json,
@@ -4445,6 +4621,7 @@ fn semantic_scores(k: &Kernel, args: &J, task_emb: &[f32]) -> Option<HashMap<Str
     // Cache hit: score directly. The guard must never span the kernel call
     // or the insert below — std Mutex is not reentrant, and a nested lock
     // on the same mutex self-deadlocks, wedging every later request.
+    // justified: Mutex poison is unrecoverable
     if let Some(map) = EMB_CACHE.lock().unwrap().get(hex).cloned() {
         return Some(score_map(map, task_emb));
     }
@@ -4459,6 +4636,7 @@ fn semantic_scores(k: &Kernel, args: &J, task_emb: &[f32]) -> Option<HashMap<Str
     let arc = Arc::new(parsed);
     EMB_CACHE
         .lock()
+        // justified: Mutex poison is unrecoverable
         .unwrap()
         .insert(hex.to_string(), arc.clone());
     Some(score_map(arc, task_emb))
@@ -4492,7 +4670,8 @@ fn tool_reconcile(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
     let ir = get_ir_for_koid(k, args, db_path)?;
 
     let report = aikoql_ingestion::reconcile(&files, &ir);
-    let report_json = serde_json::to_value(&report).unwrap_or_default();
+    let report_json =
+        serde_json::to_value(&report).map_err(|e| format!("serialize report: {}", e))?;
     Ok(serde_json::json!({
         "report": report_json,
         "koid": hex,
@@ -4532,6 +4711,7 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
                             })
                             .collect()
                     })
+                    // justified: absent fields array → empty field list
                     .unwrap_or_default();
                 aikoql_ingestion::ContainerInfo {
                     name,
@@ -4553,6 +4733,7 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
                                     .filter_map(|v| v.as_str().map(String::from))
                                     .collect()
                             })
+                            // justified: absent from_fields array → empty field list
                             .unwrap_or_default(),
                         to_container: r["to_container"].as_str().unwrap_or("?").to_string(),
                         to_fields: r["to_fields"]
@@ -4562,11 +4743,13 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
                                     .filter_map(|v| v.as_str().map(String::from))
                                     .collect()
                             })
+                            // justified: absent to_fields array → empty field list
                             .unwrap_or_default(),
                         name: r["name"].as_str().map(String::from),
                     })
                     .collect()
             })
+            // justified: absent references array → empty list
             .unwrap_or_default();
 
         aikoql_ingestion::ConnectorMetadata {
@@ -4587,7 +4770,8 @@ fn tool_connector_bridge(_k: &Kernel, args: &J) -> Result<J, String> {
     };
 
     let ir = aikoql_ingestion::connector_metadata_to_ir(&meta);
-    let ir_json = serde_json::to_value(&ir).unwrap_or_default();
+    let ir_json =
+        serde_json::to_value(&ir).map_err(|e| format!("serialize knowledge_ir: {}", e))?;
     Ok(serde_json::json!({
         "knowledge_ir": ir_json,
         "connector_type": connector_type,
@@ -4628,27 +4812,32 @@ fn get_ir_for_koid(
         if !std::path::Path::new(&artifact_path).exists() {
             return Err(format!("artifact not found: {}", artifact_path));
         }
-        return if mime_type.contains("markdown")
+        let mut ir = if mime_type.contains("markdown")
             || mime_type == "text/md"
             || artifact_path.ends_with(".md")
         {
             let content = std::fs::read_to_string(&artifact_path)
                 .map_err(|e| format!("read markdown: {}", e))?;
             aikoql_ingestion::compile_markdown_string(&content, Some(hex.to_string()))
-                .map_err(|e| format!("markdown compile: {}", e))
+                .map_err(|e| format!("markdown compile: {}", e))?
         } else if mime_type.contains("rust") || artifact_path.ends_with(".rs") {
             aikoql_ingestion::compile_rust_file(&artifact_path)
-                .map_err(|e| format!("rust compile: {}", e))
+                .map_err(|e| format!("rust compile: {}", e))?
         } else {
             let doc = aikoql_ingestion::extract_document(&artifact_path, &mime_type)
                 .map_err(|e| format!("extract: {}", e))?;
             let cr = aikoql_ingestion::compile_document_mock(&doc, &[]);
-            Ok(aikoql_ingestion::KnowledgeIr {
-                facts: serde_json::from_value(serde_json::to_value(&cr).unwrap_or_default())
-                    .unwrap_or_default(),
+            let cr_v = serde_json::to_value(&cr).map_err(|e| format!("serialize facts: {}", e))?;
+            aikoql_ingestion::KnowledgeIr {
+                facts: serde_json::from_value(cr_v).map_err(|e| format!("decode facts: {}", e))?,
                 ..Default::default()
-            })
+            }
         };
+        // R8: the re-compiled IR inherits the document KO's trust level —
+        // deploy_document stamps uploads Untrusted, so untrusted content
+        // stays untrusted through the context pipeline.
+        ir.content_trust = Some(ko.content_trust());
+        return Ok(ir);
     }
 
     // Path 2: Direct KO with ir_json (from remember/ingest-dir) → deserialize.
@@ -4667,7 +4856,7 @@ fn tool_explain_component(k: &Kernel, args: &J, db_path: &str) -> Result<J, Stri
     let ir = get_ir_for_koid(k, args, db_path)?;
     let explanation = aikoql_ingestion::explain_component(name, &ir)
         .ok_or_else(|| format!("component '{}' not found", name))?;
-    Ok(serde_json::to_value(&explanation).unwrap_or_default())
+    serde_json::to_value(&explanation).map_err(|e| format!("serialize explanation: {}", e))
 }
 
 fn tool_explain_decision(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
@@ -4678,7 +4867,7 @@ fn tool_explain_decision(k: &Kernel, args: &J, db_path: &str) -> Result<J, Strin
     let ir = get_ir_for_koid(k, args, db_path)?;
     let explanation = aikoql_ingestion::explain_decision(name, &ir)
         .ok_or_else(|| format!("decision '{}' not found", name))?;
-    Ok(serde_json::to_value(&explanation).unwrap_or_default())
+    serde_json::to_value(&explanation).map_err(|e| format!("serialize explanation: {}", e))
 }
 
 fn tool_trace_requirement(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
@@ -4688,7 +4877,7 @@ fn tool_trace_requirement(k: &Kernel, args: &J, db_path: &str) -> Result<J, Stri
         .ok_or("missing: requirement")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
     let trace = aikoql_ingestion::trace_requirement(req_id, &ir);
-    Ok(serde_json::to_value(&trace).unwrap_or_default())
+    serde_json::to_value(&trace).map_err(|e| format!("serialize trace: {}", e))
 }
 
 fn tool_find_conflicts(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
@@ -4698,13 +4887,13 @@ fn tool_find_conflicts(k: &Kernel, args: &J, db_path: &str) -> Result<J, String>
         .ok_or("missing: component")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
     let conflicts = aikoql_ingestion::find_conflicts(component, &ir);
-    Ok(serde_json::to_value(&conflicts).unwrap_or_default())
+    serde_json::to_value(&conflicts).map_err(|e| format!("serialize conflicts: {}", e))
 }
 
 fn tool_find_stale(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
     let ir = get_ir_for_koid(k, args, db_path)?;
     let report = aikoql_ingestion::find_stale_documentation(&ir);
-    Ok(serde_json::to_value(&report).unwrap_or_default())
+    serde_json::to_value(&report).map_err(|e| format!("serialize report: {}", e))
 }
 
 fn tool_validate_change(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
@@ -4714,7 +4903,7 @@ fn tool_validate_change(k: &Kernel, args: &J, db_path: &str) -> Result<J, String
         .ok_or("missing: change")?;
     let ir = get_ir_for_koid(k, args, db_path)?;
     let validation = aikoql_ingestion::validate_change(description, &ir);
-    Ok(serde_json::to_value(&validation).unwrap_or_default())
+    serde_json::to_value(&validation).map_err(|e| format!("serialize validation: {}", e))
 }
 
 fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
@@ -4742,6 +4931,7 @@ fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String>
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect()
         })
+        // justified: absent new_facts param → empty list
         .unwrap_or_default();
     let remove_facts: Vec<String> = args
         .get("remove_facts")
@@ -4751,6 +4941,7 @@ fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String>
                 .filter_map(|v| v.as_str().map(String::from))
                 .collect()
         })
+        // justified: absent remove_facts param → empty list
         .unwrap_or_default();
     let new_relations: Vec<(String, String, String)> = args
         .get("new_relations")
@@ -4767,6 +4958,7 @@ fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String>
                 })
                 .collect()
         })
+        // justified: absent new_relations param → empty list
         .unwrap_or_default();
     let justification = args
         .get("justification")
@@ -4790,13 +4982,13 @@ fn tool_propose_update(k: &Kernel, args: &J, db_path: &str) -> Result<J, String>
         agent_id,
         &ir,
     );
-    Ok(serde_json::to_value(&proposal).unwrap_or_default())
+    serde_json::to_value(&proposal).map_err(|e| format!("serialize proposal: {}", e))
 }
 
 fn tool_filter_secrets(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
     let ir = get_ir_for_koid(k, args, db_path)?;
     let (_redacted, findings) = aikoql_ingestion::filter_secrets(&ir);
-    Ok(serde_json::to_value(&findings).unwrap_or_default())
+    serde_json::to_value(&findings).map_err(|e| format!("serialize findings: {}", e))
 }
 
 // ---- Agent Experience Improvements (MRFC-0040) -------------------------
@@ -5223,6 +5415,7 @@ fn tool_memory_update(args: &J) -> Result<J, String> {
                 let rest = &raw[i + 4..];
                 rest.find("\n---").map(|j| rest[j + 4..].trim().to_string())
             })
+            // justified: no body after frontmatter → empty body
             .unwrap_or_default()
     };
 
@@ -5315,6 +5508,7 @@ fn system_time_iso8601() -> String {
     use std::time::SystemTime;
     let dur = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
+        // justified: clock before epoch is impossible in practice → epoch
         .unwrap_or_default();
     let total_secs = dur.as_secs();
     let days_since_epoch = (total_secs / 86400) as i64;
@@ -5418,6 +5612,7 @@ fn tool_session_init(args: &J, session: &mut McpSession) -> Result<J, String> {
                 .filter_map(|x| x.as_str().map(String::from))
                 .collect()
         })
+        // justified: absent roles param → empty role list
         .unwrap_or_default();
     Ok(json!({
         "session": {
@@ -5717,6 +5912,7 @@ fn add_node_api(
     nodes_added.insert(hex.clone());
     let c = color_for_type(&ko.metadata.type_name);
     let label = node_label(ko, 30);
+    // justified: KO without tenant → empty tenant label
     let tenant = ko.metadata.tenant.clone().unwrap_or_default();
     let key_props: Vec<J> = ko
         .properties
@@ -5943,6 +6139,7 @@ fn handle_login(
             .unwrap_or(0),
         std::process::id()
     );
+    // justified: Mutex poison is unrecoverable
     sessions.lock().unwrap().insert(
         token.clone(),
         HttpSession {
@@ -5959,6 +6156,7 @@ fn validate_token(
     sessions: &Mutex<HashMap<String, HttpSession>>,
 ) -> Option<Subject> {
     let token = token?;
+    // justified: Mutex poison is unrecoverable
     let guard = sessions.lock().unwrap();
     let sess = guard.get(token)?;
     // Session expires after 24h.
@@ -6071,6 +6269,7 @@ fn parse_query_param(path: &str, key: &str) -> String {
                 .find(|(k, _)| *k == key)
                 .map(|(_, v)| url_decode(v))
         })
+        // justified: missing query param → empty value
         .unwrap_or_default()
 }
 
@@ -6135,6 +6334,7 @@ fn schema_endpoint(k: &Kernel) -> Result<String, String> {
     }
 
     for t in &types {
+        // justified: type with no live objects → empty lists
         let info = json!({
             "count": type_counts.get(t).copied().unwrap_or(0),
             "properties": type_props.get(t).map(|s| s.iter().collect::<Vec<_>>()).unwrap_or_default(),
@@ -6369,8 +6569,19 @@ fn handle_http(
 }
 
 fn prometheus_metrics(k: &Kernel) -> String {
-    let (seq, _) = k.journal_head().unwrap_or((0, [0u8; 32]));
-    let heads = k.scan_heads().unwrap_or_default();
+    // R4: a storage failure must not render as "0 objects" — it is logged per
+    // scrape and surfaced via the aikoql_metrics_error gauge.
+    let mut metrics_error = 0u8;
+    let (seq, _) = k.journal_head().unwrap_or_else(|e| {
+        eprintln!("metrics: journal_head: {}", e);
+        metrics_error = 1;
+        (0, [0u8; 32])
+    });
+    let heads = k.scan_heads().unwrap_or_else(|e| {
+        eprintln!("metrics: scan_heads: {}", e);
+        metrics_error = 1;
+        Vec::new()
+    });
     let active = heads
         .iter()
         .filter(|(_, _, _, s)| *s != LifecycleState::Deleted)
@@ -6392,11 +6603,15 @@ fn prometheus_metrics(k: &Kernel) -> String {
          aikoql_objects_active {}\n\
          # HELP aikoql_uptime_seconds Server uptime in seconds.\n\
          # TYPE aikoql_uptime_seconds gauge\n\
-         aikoql_uptime_seconds {:.1}\n",
+         aikoql_uptime_seconds {:.1}\n\
+         # HELP aikoql_metrics_error 1 if a store read failed during scrape.\n\
+         # TYPE aikoql_metrics_error gauge\n\
+         aikoql_metrics_error {}\n",
         seq,
         heads.len(),
         active,
-        uptime
+        uptime,
+        metrics_error
     )
 }
 
@@ -6430,7 +6645,7 @@ fn tool_metrics(k: &Kernel) -> Result<J, String> {
         }
     }
     // Type-level breakdown (ponytail: O(n) scan; add type index if slow).
-    let types = k.list_types().unwrap_or_default();
+    let types = k.list_types().map_err(|e| e.to_string())?;
     let system = Subject::with_roles("system", &["admin"]);
     let mut by_type = serde_json::Map::new();
     for t in &types {

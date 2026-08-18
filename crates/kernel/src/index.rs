@@ -83,6 +83,7 @@ impl Default for BruteForceVectorIndex {
 
 impl VectorIndex for BruteForceVectorIndex {
     fn upsert(&self, koid: KOID, model: &str, vec: &[f32]) {
+        // justified: RwLock poison is unrecoverable
         self.inner
             .write()
             .unwrap()
@@ -90,10 +91,12 @@ impl VectorIndex for BruteForceVectorIndex {
     }
 
     fn remove(&self, koid: &KOID) {
+        // justified: RwLock poison is unrecoverable
         self.inner.write().unwrap().retain(|(k, _), _| k != koid);
     }
 
     fn search(&self, qv: &[f32], k: usize, model: Option<&str>) -> Vec<(KOID, f32)> {
+        // justified: RwLock poison is unrecoverable
         let map = self.inner.read().unwrap();
         let mut scored: Vec<(KOID, f32)> = map
             .iter()
@@ -102,6 +105,7 @@ impl VectorIndex for BruteForceVectorIndex {
             .collect();
         scored.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
+                // justified: NaN (zero-vector cosine) ties deterministically
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.0.cmp(&b.0))
         });
@@ -110,6 +114,7 @@ impl VectorIndex for BruteForceVectorIndex {
     }
 
     fn len(&self) -> usize {
+        // justified: RwLock poison is unrecoverable
         self.inner.read().unwrap().len()
     }
 }
@@ -120,10 +125,13 @@ impl VectorIndex for BruteForceVectorIndex {
 
 /// Pluggable full-text index. Kernel defines the contract; engine crates
 /// provide implementations (TokenText for exact, Tantivy for BM25).
+///
+/// R4: `upsert`/`remove`/`search` return KResult — tantivy writes/reads can
+/// fail (disk full, permission denied); callers must propagate, not panic.
 pub trait TextIndex: Send + Sync {
-    fn upsert(&self, koid: KOID, tokens: &BTreeSet<String>);
-    fn remove(&self, koid: &KOID);
-    fn search(&self, tokens: &BTreeSet<String>, k: usize) -> Vec<(KOID, f32)>;
+    fn upsert(&self, koid: KOID, tokens: &BTreeSet<String>) -> KResult<()>;
+    fn remove(&self, koid: &KOID) -> KResult<()>;
+    fn search(&self, tokens: &BTreeSet<String>, k: usize) -> KResult<Vec<(KOID, f32)>>;
     fn len(&self) -> usize;
     fn checkpoint(&self, _dir: &std::path::Path) -> KResult<()> {
         Ok(())
@@ -155,7 +163,8 @@ impl Default for TokenTextIndex {
 }
 
 impl TextIndex for TokenTextIndex {
-    fn upsert(&self, koid: KOID, tokens: &BTreeSet<String>) {
+    fn upsert(&self, koid: KOID, tokens: &BTreeSet<String>) -> KResult<()> {
+        // justified: RwLock poison is unrecoverable
         let mut docs = self.docs.write().unwrap();
         let mut inv = self.inv.write().unwrap();
         if let Some(old) = docs.get(&koid) {
@@ -169,9 +178,11 @@ impl TextIndex for TokenTextIndex {
             inv.entry(t.clone()).or_default().insert(koid);
         }
         docs.insert(koid, tokens.clone());
+        Ok(())
     }
 
-    fn remove(&self, koid: &KOID) {
+    fn remove(&self, koid: &KOID) -> KResult<()> {
+        // justified: RwLock poison is unrecoverable
         let mut docs = self.docs.write().unwrap();
         let mut inv = self.inv.write().unwrap();
         if let Some(old) = docs.remove(koid) {
@@ -181,9 +192,11 @@ impl TextIndex for TokenTextIndex {
                 }
             }
         }
+        Ok(())
     }
 
-    fn search(&self, tokens: &BTreeSet<String>, k: usize) -> Vec<(KOID, f32)> {
+    fn search(&self, tokens: &BTreeSet<String>, k: usize) -> KResult<Vec<(KOID, f32)>> {
+        // justified: RwLock poison is unrecoverable
         let docs = self.docs.read().unwrap();
         let inv = self.inv.read().unwrap();
         let mut cands: BTreeSet<KOID> = BTreeSet::new();
@@ -195,20 +208,24 @@ impl TextIndex for TokenTextIndex {
         let mut scored: Vec<(KOID, f32)> = cands
             .into_iter()
             .map(|id| {
+                // justified: KOID may vanish between the two lock reads
+                // (concurrent remove); an empty token set scores 0
                 let d = docs.get(&id).cloned().unwrap_or_default();
                 (id, jaccard(tokens, &d))
             })
             .collect();
         scored.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
+                // justified: NaN (zero-vector cosine) ties deterministically
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.0.cmp(&b.0))
         });
         scored.truncate(k);
-        scored
+        Ok(scored)
     }
 
     fn len(&self) -> usize {
+        // justified: RwLock poison is unrecoverable
         self.docs.read().unwrap().len()
     }
 }
@@ -280,14 +297,19 @@ mod tests {
         let idx = TokenTextIndex::new();
         let a = kid(1);
         let b = kid(2);
-        idx.upsert(a, &BTreeSet::from(["cats".to_string(), "dogs".to_string()]));
-        idx.upsert(b, &BTreeSet::from(["birds".to_string()]));
-        let r = idx.search(&BTreeSet::from(["cats".to_string()]), 5);
+        idx.upsert(a, &BTreeSet::from(["cats".to_string(), "dogs".to_string()]))
+            .unwrap();
+        idx.upsert(b, &BTreeSet::from(["birds".to_string()]))
+            .unwrap();
+        let r = idx
+            .search(&BTreeSet::from(["cats".to_string()]), 5)
+            .unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].0, a);
-        idx.remove(&a);
+        idx.remove(&a).unwrap();
         assert!(idx
             .search(&BTreeSet::from(["cats".to_string()]), 5)
+            .unwrap()
             .is_empty());
     }
 }

@@ -76,12 +76,14 @@ impl Scheduler {
 
     /// Register a job. Must be called before `start_all`.
     pub fn register(&self, job: Arc<dyn SchedulerJob>) {
+        // justified: RwLock poison is unrecoverable
         self.jobs.write().unwrap().push(job);
     }
 
     /// Start all registered jobs. Each replays the journal from its
     /// current water mark, then subscribes to live events.
     pub fn start_all(&self, kernel: &Kernel) -> KResult<()> {
+        // justified: RwLock poison is unrecoverable
         for job in self.jobs.read().unwrap().iter() {
             job.start(kernel)?;
         }
@@ -90,6 +92,7 @@ impl Scheduler {
 
     /// Shut down all jobs and join their threads.
     pub fn shutdown_all(&self) {
+        // justified: RwLock poison is unrecoverable
         for job in self.jobs.read().unwrap().iter() {
             job.shutdown();
         }
@@ -97,6 +100,7 @@ impl Scheduler {
 
     /// Persist every job's state under `dir/<job_name>/`.
     pub fn checkpoint_all(&self, dir: &std::path::Path) -> KResult<()> {
+        // justified: RwLock poison is unrecoverable
         for job in self.jobs.read().unwrap().iter() {
             job.checkpoint(&dir.join(job.name()))?;
         }
@@ -105,6 +109,7 @@ impl Scheduler {
 
     /// Number of registered jobs.
     pub fn len(&self) -> usize {
+        // justified: RwLock poison is unrecoverable
         self.jobs.read().unwrap().len()
     }
 
@@ -193,7 +198,7 @@ impl IndexMaintainer {
         };
         self.inner.water.store(water, Ordering::Relaxed);
 
-        let rx = kernel.notify(EventFilter::default());
+        let rx = kernel.notify(EventFilter::default())?;
         let state = self.inner.clone();
         let v = self.vectors.clone();
         let t = self.text.clone();
@@ -204,6 +209,9 @@ impl IndexMaintainer {
             }
             match rx.recv_timeout(Duration::from_millis(25)) {
                 Ok(ke) => {
+                    // justified: async-secondary swallow — the maintainer is a
+                    // background service; a failed apply retries on the next
+                    // event and the kernel path is unaffected
                     if Self::apply(&k, &*v, &*t, &ke).is_ok() {
                         state.water.store(ke.seq, Ordering::Relaxed);
                     }
@@ -212,6 +220,7 @@ impl IndexMaintainer {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         });
+        // justified: Mutex poison is unrecoverable
         *self.inner.handle.lock().unwrap() = Some(handle);
         Ok(())
     }
@@ -265,7 +274,7 @@ impl IndexMaintainer {
         match ke.kind {
             EventKind::Forgotten => {
                 vectors.remove(&ke.koid);
-                text.remove(&ke.koid);
+                text.remove(&ke.koid)?;
             }
             _ => match kernel.raw_object_at(&ke.koid, ke.commit_ts)? {
                 Some(ko) if ko.lifecycle.state != LifecycleState::Deleted => {
@@ -274,11 +283,11 @@ impl IndexMaintainer {
                             vectors.upsert(ke.koid, model, emb);
                         }
                     }
-                    text.upsert(ke.koid, &tokenize(&ko_text(&ko)));
+                    text.upsert(ke.koid, &tokenize(&ko_text(&ko)))?;
                 }
                 _ => {
                     vectors.remove(&ke.koid);
-                    text.remove(&ke.koid);
+                    text.remove(&ke.koid)?;
                 }
             },
         }
@@ -303,6 +312,7 @@ impl IndexMaintainer {
 
     pub fn shutdown(&self) {
         self.inner.stop.store(true, Ordering::Relaxed);
+        // justified: Mutex poison is unrecoverable
         if let Some(h) = self.inner.handle.lock().unwrap().take() {
             let _ = h.join();
         }

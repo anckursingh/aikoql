@@ -144,11 +144,13 @@ fn decode_rel_out_key(key: &[u8]) -> KResult<(KOID, String, KOID)> {
     if key.len() < 5 + KOID_LEN + 1 + 1 + KOID_LEN {
         return Err(KError::Codec("rel out key too short".into()));
     }
+    // justified: length guarded above — slice is exactly KOID_LEN bytes, try_into cannot fail
     let src = KOID::from_bytes(key[5..5 + KOID_LEN].try_into().unwrap());
     let tail = &key[5 + KOID_LEN + 1..];
     let split = tail.len() - KOID_LEN - 1;
     let rel_type = String::from_utf8(tail[..split].to_vec())
         .map_err(|_| KError::Codec("rel out key bad utf-8".into()))?;
+    // justified: length guarded above — slice is exactly KOID_LEN bytes, try_into cannot fail
     let dst = KOID::from_bytes(tail[split + 1..].try_into().unwrap());
     Ok((src, rel_type, dst))
 }
@@ -156,11 +158,13 @@ fn decode_rel_in_key(key: &[u8]) -> KResult<(KOID, String, KOID)> {
     if key.len() < 5 + KOID_LEN + 1 + 1 + KOID_LEN {
         return Err(KError::Codec("rel in key too short".into()));
     }
+    // justified: length guarded above — slice is exactly KOID_LEN bytes, try_into cannot fail
     let dst = KOID::from_bytes(key[5..5 + KOID_LEN].try_into().unwrap());
     let tail = &key[5 + KOID_LEN + 1..];
     let split = tail.len() - KOID_LEN - 1;
     let rel_type = String::from_utf8(tail[..split].to_vec())
         .map_err(|_| KError::Codec("rel in key bad utf-8".into()))?;
+    // justified: length guarded above — slice is exactly KOID_LEN bytes, try_into cannot fail
     let src = KOID::from_bytes(tail[split + 1..].try_into().unwrap());
     Ok((dst, rel_type, src))
 }

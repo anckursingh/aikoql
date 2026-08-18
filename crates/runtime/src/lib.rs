@@ -268,6 +268,7 @@ impl Interpreter {
                     .collect();
                 scored.sort_by(|a, b| {
                     b.1.partial_cmp(&a.1)
+                        // justified: NaN score ties deterministically
                         .unwrap_or(std::cmp::Ordering::Equal)
                         .then_with(|| a.0.cmp(&b.0))
                 });
@@ -348,6 +349,7 @@ impl Interpreter {
             .collect();
         scored.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
+                // justified: NaN score ties deterministically
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.0.cmp(&b.0))
         });
@@ -365,11 +367,13 @@ impl Interpreter {
         match mode {
             FuseMode::VectorOnly => {
                 let mut out = a.to_vec();
+                // justified: NaN score ties deterministically
                 out.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap_or(Ordering::Equal));
                 out
             }
             FuseMode::TextOnly => {
                 let mut out = b.to_vec();
+                // justified: NaN score ties deterministically
                 out.sort_by(|x, y| y.1.partial_cmp(&x.1).unwrap_or(Ordering::Equal));
                 out
             }
@@ -393,6 +397,7 @@ impl Interpreter {
                 }
                 merged.sort_by(|x, y| {
                     y.1.partial_cmp(&x.1)
+                        // justified: NaN score ties deterministically
                         .unwrap_or(Ordering::Equal)
                         .then_with(|| x.0.cmp(&y.0))
                 });
@@ -434,6 +439,7 @@ impl Interpreter {
                                     .find(|(k, ..)| *k == koid)
                                     .map(|(_, _, tn, _)| tn.clone())
                             })
+                            // justified: koid is drawn from a/b union keys — fallback is dead code
                             .unwrap_or_default();
                         let ver = a
                             .iter()
@@ -446,6 +452,7 @@ impl Interpreter {
                     .collect();
                 merged.sort_by(|x, y| {
                     y.1.partial_cmp(&x.1)
+                        // justified: NaN score ties deterministically
                         .unwrap_or(Ordering::Equal)
                         .then_with(|| x.0.cmp(&y.0))
                 });
@@ -473,6 +480,8 @@ impl Runtime {
                 .worker_threads(4)
                 .thread_name("aikoql-runtime")
                 .build()
+                // justified: worker-thread allocation failure is unrecoverable;
+                // no production callers construct Runtime today (Interpreter only)
                 .expect("build tokio runtime"),
         }
     }

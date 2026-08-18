@@ -446,6 +446,7 @@ fn file_as_entity(path: &Path) -> KnowledgeIr {
         document_id: Some(name),
         page_count: 1,
         extractor: "ingest-dir".into(),
+        content_trust: None,
     }
 }
 
@@ -497,6 +498,7 @@ fn text_file_ir(path: &Path) -> KnowledgeIr {
         document_id: Some(name),
         page_count: 1,
         extractor: "ingest-dir".into(),
+        content_trust: None,
     }
 }
 
@@ -781,6 +783,9 @@ fn git_info(path: &str) -> (String, String) {
     let revision = Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
         .current_dir(path)
+        // justified: best-effort repo metadata — a git failure (missing git,
+        // not-a-repo, dirty worktree) yields empty provenance, which callers
+        // treat as absent; not fatal to ingestion
         .output()
         .ok()
         .and_then(|o| {

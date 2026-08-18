@@ -32,7 +32,7 @@ static EXEC_STATS: std::sync::Mutex<ExecutionStats> = std::sync::Mutex::new(Exec
 });
 
 pub fn record_execution(rows: u64, elapsed_ms: u64, cache_hit: bool) {
-    let mut s = EXEC_STATS.lock().unwrap();
+    let mut s = EXEC_STATS.lock().unwrap(); // justified: Mutex poison is unrecoverable
     s.programs_executed += 1;
     s.total_rows_returned += rows;
     s.total_time_ms += elapsed_ms;
@@ -45,7 +45,7 @@ pub fn record_execution(rows: u64, elapsed_ms: u64, cache_hit: bool) {
 
 #[allow(dead_code)]
 pub(crate) fn execution_stats() -> ExecutionStats {
-    EXEC_STATS.lock().unwrap().clone()
+    EXEC_STATS.lock().unwrap().clone() // justified: Mutex poison is unrecoverable
 }
 
 // ---------------------------------------------------------------------------
@@ -66,10 +66,10 @@ impl ProgramCache {
     }
 
     pub fn get(&self, koid: &KOID, expected_version: u64) -> Option<aikoql_kernel::ir::IrPlan> {
-        let guard = self.cache.lock().unwrap();
+        let guard = self.cache.lock().unwrap(); // justified: Mutex poison is unrecoverable
         if let Some((plan, ver)) = guard.get(koid) {
             if *ver == expected_version {
-                *self.hits.lock().unwrap() += 1;
+                *self.hits.lock().unwrap() += 1; // justified: Mutex poison is unrecoverable
                 return Some(plan.clone());
             }
         }
@@ -77,6 +77,7 @@ impl ProgramCache {
     }
 
     pub fn put(&self, koid: KOID, version: u64, plan: aikoql_kernel::ir::IrPlan) {
+        // justified: Mutex poison is unrecoverable
         let mut guard = self.cache.lock().unwrap();
         // ponytail: simple LRU — if >100 entries, clear half.
         if guard.len() > 100 {
@@ -89,7 +90,7 @@ impl ProgramCache {
     }
 
     pub fn stats(&self) -> u64 {
-        *self.hits.lock().unwrap()
+        *self.hits.lock().unwrap() // justified: Mutex poison is unrecoverable
     }
 }
 
@@ -162,6 +163,7 @@ pub fn execute_workflow(
                 Value::Int(i) => Some(*i as u64),
                 _ => None,
             })
+            // justified: Option — absent version means unversioned → 0
             .unwrap_or_default();
 
         let body = match prog.properties.get("body") {
@@ -231,7 +233,7 @@ pub fn check_and_fire_triggers(kernel: &Kernel, last_seq: u64) -> Result<u64, St
     let events = kernel.journal().map_err(|e| e.to_string())?;
     let triggers = kernel
         .scan_by_type(&subject, "aikoql:trigger")
-        .unwrap_or_default();
+        .map_err(|e| format!("scan triggers: {}", e))?;
     if triggers.is_empty() {
         return Ok(head);
     }
@@ -345,6 +347,7 @@ pub fn execute_agent(
                         .filter_map(|s| s.as_str().map(String::from))
                         .collect()
                 })
+                // justified: Option — absent skills array means no skills
                 .unwrap_or_default()
         } else {
             vec![]
@@ -408,6 +411,7 @@ pub fn execute_agent(
                 Value::Int(i) => Some(*i as u64),
                 _ => None,
             })
+            // justified: Option — absent version means unversioned → 0
             .unwrap_or_default();
 
         let body = match prog.properties.get("body") {

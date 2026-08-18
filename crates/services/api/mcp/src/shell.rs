@@ -27,11 +27,22 @@ pub fn run_shell(db_path: &str, tenant: Option<&str>) {
                 let _ = std::fs::create_dir_all(parent);
             }
         }
-        Arc::new(RedbEngine::open(db_path).expect("open database"))
+        Arc::new(match RedbEngine::open(db_path) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("open database: {}", e);
+                std::process::exit(1);
+            }
+        })
     };
 
-    let kernel =
-        Arc::new(Kernel::open(engine, Arc::new(SystemClock), 0xCAFE).expect("open kernel"));
+    let kernel = Arc::new(match Kernel::open(engine, Arc::new(SystemClock), 0xCAFE) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("open kernel: {}", e);
+            std::process::exit(1);
+        }
+    });
 
     println!(
         "aikoql {} — Aikoql Knowledge Shell",

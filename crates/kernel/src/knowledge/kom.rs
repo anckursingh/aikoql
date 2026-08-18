@@ -801,6 +801,8 @@ impl KnowledgeObject {
                 Value::Text(s) => ContentTrust::from_str(s),
                 _ => None,
             })
+            // justified: absent/unrecognized extension → Unknown
+            // (conservative default, documented in getter doc)
             .unwrap_or_default()
     }
 
@@ -1505,6 +1507,7 @@ fn validate_format(format: &str, value: &Value) -> Result<(), String> {
     match format {
         "email" => {
             // RFC 5321 simplified: local@domain
+            // justified: compile-time literal pattern — a failure here is a code bug
             let re = Regex::new(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$").unwrap();
             if re.is_match(s) {
                 Ok(())
@@ -1513,6 +1516,7 @@ fn validate_format(format: &str, value: &Value) -> Result<(), String> {
             }
         }
         "url" => {
+            // justified: compile-time literal pattern — a failure here is a code bug
             let re = Regex::new(r"^https?://[a-zA-Z0-9.-]+(:\d+)?(/[^\s]*)?$").unwrap();
             if re.is_match(s) {
                 Ok(())
@@ -1524,6 +1528,7 @@ fn validate_format(format: &str, value: &Value) -> Result<(), String> {
             let re = Regex::new(
                 r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             )
+            // justified: compile-time literal pattern — a failure here is a code bug
             .unwrap();
             if re.is_match(s) {
                 Ok(())
@@ -1533,6 +1538,7 @@ fn validate_format(format: &str, value: &Value) -> Result<(), String> {
         }
         "date" => {
             // YYYY-MM-DD with valid month (01-12) and day (01-31).
+            // justified: compile-time literal pattern — a failure here is a code bug
             let re = Regex::new(r"^(\d{4})-(\d{2})-(\d{2})$").unwrap();
             if let Some(caps) = re.captures(s) {
                 let month: u32 = caps[2].parse().unwrap_or(0);
@@ -1547,6 +1553,7 @@ fn validate_format(format: &str, value: &Value) -> Result<(), String> {
             // ISO 8601: YYYY-MM-DDTHH:MM:SS[.fff][Z|±HH:MM]
             let re =
                 Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
+                    // justified: compile-time literal pattern — a failure here is a code bug
                     .unwrap();
             if re.is_match(s) {
                 Ok(())
@@ -2277,6 +2284,7 @@ pub fn hmac_sha256(key: &[u8; 32], bytes: &[u8]) -> [u8; 32] {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
+    // justified: HMAC-SHA256 accepts any key length; key is fixed [u8; 32]
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(bytes);
     mac.finalize().into_bytes().into()

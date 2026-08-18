@@ -44,6 +44,9 @@ fn current_head_sha(root: &Path) -> String {
     Command::new("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(root)
+        // justified: best-effort repo metadata — a git failure (missing git,
+        // not-a-repo, dirty worktree) yields empty provenance, which callers
+        // treat as absent; not fatal to ingestion
         .output()
         .ok()
         .and_then(|o| {
@@ -57,26 +60,24 @@ fn current_head_sha(root: &Path) -> String {
 }
 
 /// Get list of changed files between two commits.
-fn git_diff(root: &Path, from_sha: &str, to_sha: &str) -> Vec<String> {
+fn git_diff(root: &Path, from_sha: &str, to_sha: &str) -> Result<Vec<String>, String> {
     let range = format!("{}..{}", from_sha, to_sha);
-    Command::new("git")
+    // R4: propagate git failures — an empty change set here silently served
+    // stale IR as current, so failures must surface to the caller (which
+    // falls back to full ingest).
+    let output = Command::new("git")
         .args(["diff", "--name-only", &range])
         .current_dir(root)
         .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                let files: Vec<String> = String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .map(|l| l.trim().to_string())
-                    .filter(|l| !l.is_empty())
-                    .collect();
-                Some(files)
-            } else {
-                None
-            }
-        })
-        .unwrap_or_default()
+        .map_err(|e| format!("git diff failed: {}", e))?;
+    if !output.status.success() {
+        return Err("git diff exited non-zero".into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
 }
 
 /// Incremental directory ingestion.
@@ -155,7 +156,7 @@ pub fn incremental_diff_ingest(
     }
 
     // Get changed files since last ingest
-    let changed = git_diff(path, &prev.last_sha, &head_sha);
+    let changed = git_diff(path, &prev.last_sha, &head_sha)?;
 
     if changed.is_empty() {
         // Update tracking SHA even if no file changes (e.g., merge commits)
@@ -415,6 +416,21 @@ mod tests {
             full_entity_count, incr_entity_count,
             "full and incremental should produce same entity count"
         );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn git_diff_propagates_git_failure() {
+        // R4: git failure must surface as Err, not an empty change set —
+        // an empty set would silently serve stale IR as current.
+        let tmp = std::env::temp_dir().join("aikoql-gitdiff-fail");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Not a git repository → git exits non-zero.
+        let err = git_diff(&tmp, "HEAD~1", "HEAD").unwrap_err();
+        assert!(!err.is_empty());
 
         let _ = fs::remove_dir_all(&tmp);
     }

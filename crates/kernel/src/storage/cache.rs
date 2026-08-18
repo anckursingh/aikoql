@@ -91,10 +91,12 @@ impl KnowledgeCache {
     }
 
     pub fn get_head(&self, koid: &KOID) -> Option<(u64, u64, LifecycleState)> {
+        // justified: Mutex poison is unrecoverable
         self.inner.lock().unwrap().heads.get(koid)
     }
 
     pub fn put_head(&self, koid: &KOID, version: u64, commit_ts: u64, state: LifecycleState) {
+        // justified: Mutex poison is unrecoverable
         self.inner
             .lock()
             .unwrap()
@@ -103,14 +105,17 @@ impl KnowledgeCache {
     }
 
     pub fn delete_head(&self, koid: &KOID) {
+        // justified: Mutex poison is unrecoverable
         self.inner.lock().unwrap().heads.remove(koid);
     }
 
     pub fn get_object(&self, koid: &KOID, commit_ts: u64) -> Option<KnowledgeObject> {
+        // justified: Mutex poison is unrecoverable
         self.inner.lock().unwrap().objects.get(&(*koid, commit_ts))
     }
 
     pub fn put_object(&self, koid: &KOID, commit_ts: u64, ko: &KnowledgeObject) {
+        // justified: Mutex poison is unrecoverable
         self.inner
             .lock()
             .unwrap()
@@ -119,6 +124,7 @@ impl KnowledgeCache {
     }
 
     pub fn delete_object(&self, koid: &KOID, commit_ts: u64) {
+        // justified: Mutex poison is unrecoverable
         self.inner
             .lock()
             .unwrap()
@@ -127,6 +133,7 @@ impl KnowledgeCache {
     }
 
     pub fn clear(&self) {
+        // justified: Mutex poison is unrecoverable
         let mut inner = self.inner.lock().unwrap();
         inner.heads.clear();
         inner.objects.clear();

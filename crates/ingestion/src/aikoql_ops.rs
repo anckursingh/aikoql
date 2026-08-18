@@ -161,6 +161,7 @@ pub fn explain_decision(name: &str, ir: &KnowledgeIr) -> Option<DecisionExplanat
             None
         },
         consequences: {
+            // justified: absent consequences section → empty list
             let lines: Vec<String> = consequences_text
                 .unwrap_or_default()
                 .lines()
@@ -226,6 +227,7 @@ pub fn trace_requirement(requirement_id: &str, ir: &KnowledgeIr) -> RequirementT
         .unwrap_or_else(|| requirement_id.to_string());
 
     // Find entities mentioned in this requirement
+    // justified: requirement fact not found → no entities mentioned
     let req_entities: Vec<String> = req_fact.map(|f| f.entities.clone()).unwrap_or_default();
 
     let mut trace_chain: Vec<String> = vec![format!("Requirement: {}", req_text)];
@@ -480,6 +482,7 @@ pub fn find_stale_documentation(ir: &KnowledgeIr) -> StaleDocumentationReport {
         if !doc_refs.is_empty() && code_refs.is_empty() {
             stale_entities.push(StaleEntityInfo {
                 entity_name: entity.name.clone(),
+                // justified: entity without a source document → ""
                 entity_source: entity.evidence.document_id.clone().unwrap_or_default(),
                 reason: "documented but no code reference — possibly removed or renamed".into(),
             });
@@ -489,6 +492,7 @@ pub fn find_stale_documentation(ir: &KnowledgeIr) -> StaleDocumentationReport {
         if doc_refs.is_empty() && !code_refs.is_empty() {
             stale_entities.push(StaleEntityInfo {
                 entity_name: entity.name.clone(),
+                // justified: entity without a source document → ""
                 entity_source: entity.evidence.document_id.clone().unwrap_or_default(),
                 reason: "exists in code but has no documentation — documentation gap".into(),
             });

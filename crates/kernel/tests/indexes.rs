@@ -260,7 +260,7 @@ fn i07_tantivy_text_recall_parity_with_exact_path() {
     let m = IndexMaintainer::start(
         &k,
         Arc::new(BruteForceVectorIndex::new()),
-        Arc::new(TantivyTextIndex::new()),
+        Arc::new(TantivyTextIndex::new().unwrap()),
     )
     .unwrap();
     k.attach_indexes(m.clone());
@@ -290,7 +290,7 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
     let _b = create_vec(&k, "cats and dogs", vec![0.9, 0.1]);
 
     let vectors: Arc<HnswVectorIndex> = Arc::new(HnswVectorIndex::new(2, 100));
-    let text: Arc<TantivyTextIndex> = Arc::new(TantivyTextIndex::new());
+    let text: Arc<TantivyTextIndex> = Arc::new(TantivyTextIndex::new().unwrap());
     let m1 = IndexMaintainer::start(
         &k,
         vectors.clone() as Arc<dyn VectorIndex>,

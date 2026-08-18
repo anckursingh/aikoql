@@ -59,11 +59,13 @@ impl SchedulerJob for CompactionJob {
             }
         });
 
+        // justified: Mutex poison is unrecoverable
         *self.handle.lock().unwrap() = Some(h);
         Ok(())
     }
 
     fn shutdown(&self) {
+        // justified: Mutex poison is unrecoverable
         if let Some(h) = self.handle.lock().unwrap().take() {
             let _ = h.join();
         }

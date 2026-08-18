@@ -84,6 +84,7 @@ impl LocalKms {
 impl KeyManager for LocalKms {
     fn master_key(&self, passphrase: &str) -> Result<[u8; 32], String> {
         // Return cached key if available.
+        // justified: RwLock poison is unrecoverable
         if let Some(k) = *self.cached_key.read().unwrap() {
             return Ok(k);
         }
@@ -107,6 +108,7 @@ impl KeyManager for LocalKms {
                 ));
             }
             let key = decrypt_v2_envelope(&raw, passphrase)?;
+            // justified: RwLock poison is unrecoverable
             *self.cached_key.write().unwrap() = Some(key);
             Ok(key)
         } else {
@@ -118,6 +120,7 @@ impl KeyManager for LocalKms {
                 fs::create_dir_all(parent).map_err(|e| format!("create kms dir: {}", e))?;
             }
             fs::write(path, &envelope).map_err(|e| format!("write master key: {}", e))?;
+            // justified: RwLock poison is unrecoverable
             *self.cached_key.write().unwrap() = Some(key);
             Ok(key)
         }
@@ -127,6 +130,7 @@ impl KeyManager for LocalKms {
         let new_key = provider.generate_key();
         let envelope = encrypt_v2_envelope(&new_key, passphrase)?;
         fs::write(&self.path, &envelope).map_err(|e| format!("write rotated key: {}", e))?;
+        // justified: RwLock poison is unrecoverable
         *self.cached_key.write().unwrap() = Some(new_key);
         Ok(new_key)
     }
@@ -136,6 +140,7 @@ impl LocalKms {
     /// Read a legacy v1 envelope (48 bytes: salt || xor-wrapped), decrypt
     /// with the old scheme, then immediately re-encrypt in v2 format.
     fn migrate_from_v1(&self, raw: &[u8], passphrase: &str) -> Result<[u8; 32], String> {
+        // justified: length checked by caller (raw.len() == V1_ENVELOPE_LEN = 48)
         let salt: [u8; SALT_LEN] = raw[..16].try_into().unwrap();
         let wrapped: [u8; MASTER_KEY_LEN] = raw[16..48].try_into().unwrap();
         let derived = derive_key_v1(passphrase, &salt);
@@ -228,9 +233,11 @@ fn decrypt_v2_envelope(raw: &[u8], passphrase: &str) -> Result<[u8; MASTER_KEY_L
         return Err(format!("unsupported KDF 0x{:02x}", kdf_id));
     }
 
+    // justified: length checked above (raw.len() != V2_ENVELOPE_LEN → Err)
     let kdf_params: [u8; 9] = raw[2..11].try_into().unwrap();
     let (mem, iters, par) = decode_kdf_params(&kdf_params);
 
+    // justified: length checked above (raw.len() != V2_ENVELOPE_LEN → Err)
     let salt: [u8; SALT_LEN] = raw[11..27].try_into().unwrap();
 
     let aead_id = raw[27];
@@ -238,6 +245,7 @@ fn decrypt_v2_envelope(raw: &[u8], passphrase: &str) -> Result<[u8; MASTER_KEY_L
         return Err(format!("unsupported AEAD 0x{:02x}", aead_id));
     }
 
+    // justified: length checked above (raw.len() != V2_ENVELOPE_LEN → Err)
     let nonce_bytes: [u8; NONCE_LEN] = raw[28..40].try_into().unwrap();
     let nonce = chacha20poly1305::Nonce::from_slice(&nonce_bytes);
 
@@ -342,6 +350,7 @@ impl AwsKms {
 
 impl KeyManager for AwsKms {
     fn master_key(&self, _passphrase: &str) -> Result<[u8; 32], String> {
+        // justified: RwLock poison is unrecoverable
         if let Some(k) = *self.cached_key.read().unwrap() {
             return Ok(k);
         }
@@ -352,6 +361,7 @@ impl KeyManager for AwsKms {
             }
             let mut key = [0u8; 32];
             key.copy_from_slice(&bytes);
+            // justified: RwLock poison is unrecoverable
             *self.cached_key.write().unwrap() = Some(key);
             Ok(key)
         } else {
@@ -361,6 +371,7 @@ impl KeyManager for AwsKms {
 
     fn rotate(&self, _passphrase: &str, provider: &dyn CryptoProvider) -> Result<[u8; 32], String> {
         let new_key = provider.generate_key();
+        // justified: RwLock poison is unrecoverable
         *self.cached_key.write().unwrap() = Some(new_key);
         Ok(new_key)
     }
@@ -385,6 +396,7 @@ impl AzureKeyVault {
 
 impl KeyManager for AzureKeyVault {
     fn master_key(&self, _passphrase: &str) -> Result<[u8; 32], String> {
+        // justified: RwLock poison is unrecoverable
         if let Some(k) = *self.cached_key.read().unwrap() {
             return Ok(k);
         }
@@ -395,6 +407,7 @@ impl KeyManager for AzureKeyVault {
             }
             let mut key = [0u8; 32];
             key.copy_from_slice(&bytes);
+            // justified: RwLock poison is unrecoverable
             *self.cached_key.write().unwrap() = Some(key);
             Ok(key)
         } else {
@@ -407,6 +420,7 @@ impl KeyManager for AzureKeyVault {
 
     fn rotate(&self, _passphrase: &str, provider: &dyn CryptoProvider) -> Result<[u8; 32], String> {
         let new_key = provider.generate_key();
+        // justified: RwLock poison is unrecoverable
         *self.cached_key.write().unwrap() = Some(new_key);
         Ok(new_key)
     }
@@ -440,6 +454,7 @@ impl GcpKeyManager {
 
 impl KeyManager for GcpKeyManager {
     fn master_key(&self, _passphrase: &str) -> Result<[u8; 32], String> {
+        // justified: RwLock poison is unrecoverable
         if let Some(k) = *self.cached_key.read().unwrap() {
             return Ok(k);
         }
@@ -450,6 +465,7 @@ impl KeyManager for GcpKeyManager {
             }
             let mut key = [0u8; 32];
             key.copy_from_slice(&bytes);
+            // justified: RwLock poison is unrecoverable
             *self.cached_key.write().unwrap() = Some(key);
             Ok(key)
         } else {
@@ -462,6 +478,7 @@ impl KeyManager for GcpKeyManager {
 
     fn rotate(&self, _passphrase: &str, provider: &dyn CryptoProvider) -> Result<[u8; 32], String> {
         let new_key = provider.generate_key();
+        // justified: RwLock poison is unrecoverable
         *self.cached_key.write().unwrap() = Some(new_key);
         Ok(new_key)
     }

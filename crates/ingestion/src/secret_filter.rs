@@ -6,6 +6,12 @@
 //! Strategy: regex-based detection with redaction markers. This is a
 //! defense-in-depth layer — connector-level filtering is the primary
 //! defense; this catches what leaks through.
+//!
+//! Known limits (R8.1): pattern-based detection catches known formats only.
+//! It does not decode URL-encoded or base64-encoded text or reassemble
+//! secrets split across lines, so a determined adversary can bypass it.
+//! Document-level filtering is the real boundary; this layer redacts
+//! plain-text leaks.
 
 use crate::ir::KnowledgeIr;
 
@@ -102,8 +108,13 @@ pub fn filter_secrets(ir: &KnowledgeIr) -> (KnowledgeIr, Vec<SecretFinding>) {
 
 /// Detect if a string contains a secret pattern.
 fn detect_secret(text: &str) -> Option<SecretKind> {
-    // API keys: common patterns
-    if contains_pattern(text, "sk-") && text.len() > 20 {
+    // API keys: common patterns. "sk-" matches on a word boundary —
+    // "disk-", "task-" etc. must not trigger it.
+    let lower = text.to_lowercase();
+    let sk_api_key = lower
+        .match_indices("sk-")
+        .any(|(i, _)| i == 0 || !lower[..i].chars().last().unwrap_or('a').is_alphanumeric());
+    if sk_api_key && text.len() > 20 {
         return Some(SecretKind::ApiKey);
     }
     if contains_pattern(text, "api_key=")
@@ -117,7 +128,29 @@ fn detect_secret(text: &str) -> Option<SecretKind> {
     if text.contains("github_pat_") || text.contains("ghp_") {
         return Some(SecretKind::ApiKey);
     }
+    // Slack tokens: xoxb- (bot), xoxp- (user), xoxa- (app), xoxr- (refresh)
+    if contains_pattern(text, "xoxb-")
+        || contains_pattern(text, "xoxp-")
+        || contains_pattern(text, "xoxa-")
+        || contains_pattern(text, "xoxr-")
+    {
+        return Some(SecretKind::ApiKey);
+    }
+    // Stripe keys: sk_live_ / sk_test_ / pk_live_ / pk_test_ / rk_*
+    if contains_pattern(text, "sk_live_")
+        || contains_pattern(text, "sk_test_")
+        || contains_pattern(text, "pk_live_")
+        || contains_pattern(text, "pk_test_")
+        || contains_pattern(text, "rk_live_")
+        || contains_pattern(text, "rk_test_")
+    {
+        return Some(SecretKind::ApiKey);
+    }
 
+    // Google OAuth access tokens
+    if contains_pattern(text, "ya29.") {
+        return Some(SecretKind::BearerToken);
+    }
     // Bearer tokens — require ≥20 contiguous non-whitespace chars after
     // "Bearer " to avoid matching prose like "Bearer of good news".
     if let Some(idx) = text.to_lowercase().find("bearer ") {
@@ -151,6 +184,7 @@ fn detect_secret(text: &str) -> Option<SecretKind> {
 
     // Connection strings (before password — Server=...Password= is a conn string)
     if contains_pattern(text, "mongodb://")
+        || contains_pattern(text, "mongodb+srv://")
         || contains_pattern(text, "postgresql://")
         || contains_pattern(text, "mysql://")
         || contains_pattern(text, "postgres://")
@@ -273,9 +307,19 @@ fn is_likely_token(text: &str) -> bool {
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '+' || *c == '/' || *c == '=')
         .collect();
+    // Pure hex (0-9a-f) is a checksum/hash (sha256, git oids), not a
+    // base64 token — engineering docs are full of them.
+    if !clean.is_empty() && clean.chars().all(|c| c.is_ascii_hexdigit()) {
+        return false;
+    }
     // ponytail: token detection threshold — 40+ char base64-like strings
-    // with no spaces are likely tokens/secrets
-    if clean.len() > 40 && !text.contains(' ') && (clean.ends_with('=') || clean.len() > 60) {
+    // with no spaces are likely tokens/secrets. A '/' or '+' inside an
+    // unspaced 40+ char string is a strong base64 signal (AWS secret keys
+    // are exactly 40 chars with no '=' suffix).
+    if clean.len() >= 40
+        && !text.contains(' ')
+        && (clean.ends_with('=') || clean.len() > 60 || clean.contains('+') || clean.contains('/'))
+    {
         return true;
     }
     false
@@ -520,5 +564,169 @@ mod tests {
         let (_, findings) = filter_secrets(&ir);
         assert!(!findings.is_empty());
         assert_eq!(findings[0].kind, SecretKind::CreditCard);
+    }
+
+    // ---- R8.1: real-world secret formats ----
+
+    /// Assert that `statement` is detected as exactly `kind`.
+    fn assert_redacted_as(statement: &str, kind: SecretKind) {
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement: statement.into(),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        assert!(
+            !findings.is_empty(),
+            "expected '{}' to be redacted",
+            statement
+        );
+        assert_eq!(
+            findings[0].kind, kind,
+            "expected '{:?}' for '{}', got '{:?}'",
+            kind, statement, findings[0].kind
+        );
+    }
+
+    #[test]
+    fn slack_bot_token_is_redacted() {
+        // R8.1: fixtures built at runtime — GitHub push protection blocks
+        // literal token-shaped strings in source even as test fixtures.
+        let slack = format!(
+            "{}{}-{}-{}-{}",
+            "xox", "b", 1234567890u64, 1234567890u64, "abcdefghijklmnopqrstuvwx"
+        );
+        assert_redacted_as(&slack, SecretKind::ApiKey);
+    }
+
+    #[test]
+    fn stripe_secret_and_publishable_keys_are_redacted() {
+        let stripe = format!("{}{}{}", "sk_", "live_", "51H7abcdEFGHijklMNOPqrst");
+        assert_redacted_as(&stripe, SecretKind::ApiKey);
+        assert_redacted_as("pk_test_51H7abcdEFGHijklMNOPqrst", SecretKind::ApiKey);
+    }
+
+    #[test]
+    fn oauth_access_token_is_redacted() {
+        assert_redacted_as(
+            "ya29.a0AfH6SMB_abcdefghijklmnopqrstuvwxyz0123456789",
+            SecretKind::BearerToken,
+        );
+    }
+
+    #[test]
+    fn mongodb_srv_connection_is_redacted() {
+        assert_redacted_as(
+            "mongodb+srv://user:pass@cluster0.mongodb.net/db",
+            SecretKind::ConnectionString,
+        );
+    }
+
+    #[test]
+    fn postgres_url_is_redacted() {
+        assert_redacted_as(
+            "postgresql://user:pass@host:5432/db",
+            SecretKind::ConnectionString,
+        );
+    }
+
+    #[test]
+    fn ghp_fine_grained_pat_is_redacted() {
+        assert_redacted_as(
+            "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+            SecretKind::ApiKey,
+        );
+    }
+
+    #[test]
+    fn aws_secret_key_is_redacted() {
+        // The 40-char AWS secret key is base64-like (no "=" suffix) — the
+        // generic-token threshold must catch it at exactly 40 chars.
+        assert_redacted_as(
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            SecretKind::GenericToken,
+        );
+    }
+
+    #[test]
+    fn ssn_is_redacted() {
+        assert_redacted_as("123-45-6789", SecretKind::Ssn);
+    }
+
+    #[test]
+    fn password_assignment_is_redacted() {
+        assert_redacted_as("password=Sup3rSecret!", SecretKind::Password);
+    }
+
+    #[test]
+    fn bearer_token_is_redacted() {
+        assert_redacted_as(
+            "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789",
+            SecretKind::BearerToken,
+        );
+    }
+
+    // ---- R8.1: false positives ----
+
+    #[test]
+    fn sha256_hex_hash_passes_through() {
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement:
+                    "sha256: a3f5c8d2e1b6490f7a6c5d4e3b2a1908f7e6d5c4b3a29182736455463728190a"
+                        .into(),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        assert!(
+            findings.is_empty(),
+            "pure-hex checksums must not be redacted: {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn disk_word_passes_through() {
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement: "the disk-usage metrics report is ready".into(),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        assert!(
+            findings.is_empty(),
+            "'disk-' must not match 'sk-': {:?}",
+            findings
+        );
+    }
+
+    #[test]
+    fn url_encoded_secret_is_documented_bypass() {
+        // KNOWN LIMIT (R8.1): pattern-based detection does not decode URL
+        // encoding — "admin@example.com" encoded as "admin%40example.com"
+        // passes through. Document-level filtering is the primary defense.
+        let ir = KnowledgeIr {
+            facts: vec![crate::FactCandidate {
+                statement: "contact admin%40example.com".into(),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let (_, findings) = filter_secrets(&ir);
+        assert!(findings.is_empty(), "documented bypass: {:?}", findings);
     }
 }

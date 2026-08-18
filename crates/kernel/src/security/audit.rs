@@ -162,6 +162,7 @@ impl KeyAuditLog {
 
     /// Append a key event to the audit log. Returns the storage key.
     pub fn record(&self, event: &KeyEvent) -> Result<Vec<u8>, String> {
+        // justified: Mutex poison is unrecoverable
         let mut guard = self.seq.lock().unwrap();
         if guard.0 != event.ts_ms {
             guard.0 = event.ts_ms;

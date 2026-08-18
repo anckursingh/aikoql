@@ -27,6 +27,7 @@ impl SigningKey {
         let mut h = DefaultHasher::new();
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
+            // justified: clock before epoch → Duration::ZERO (entropy only, unreachable in practice)
             .unwrap_or_default()
             .subsec_nanos()
             .hash(&mut h);
@@ -157,14 +158,17 @@ impl Signer {
     }
 
     pub fn set_key(&self, key: SigningKey) {
+        // justified: RwLock poison is unrecoverable
         *self.key.write().unwrap() = Some(key);
     }
 
     pub fn sign(&self, message: &[u8; 32]) -> KResult<Option<[u8; 64]>> {
+        // justified: RwLock poison is unrecoverable
         Ok(self.key.read().unwrap().as_ref().map(|k| k.sign(message)))
     }
 
     pub fn public_key(&self) -> Option<[u8; 32]> {
+        // justified: RwLock poison is unrecoverable
         self.key.read().unwrap().as_ref().map(|k| k.public_key())
     }
 }

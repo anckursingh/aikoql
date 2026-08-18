@@ -45,11 +45,13 @@ impl TenantManager {
 
     /// Set or update a tenant's quota.
     pub fn set_quota(&self, tenant: &str, quota: TenantQuota) {
+        // justified: RwLock poison is unrecoverable
         self.quotas.write().unwrap().insert(tenant.into(), quota);
     }
 
     /// Get current object count for a tenant, or 0 if unknown.
     pub fn usage(&self, tenant: &str) -> usize {
+        // justified: RwLock poison is unrecoverable; absent usage count → 0
         self.usage.read().unwrap().get(tenant).copied().unwrap_or(0)
     }
 
@@ -59,6 +61,7 @@ impl TenantManager {
         heads: &[(KOID, u64, u64, LifecycleState)],
         type_resolver: impl Fn(&KOID) -> Option<String>,
     ) {
+        // justified: RwLock poison is unrecoverable
         let mut usage = self.usage.write().unwrap();
         usage.clear();
         for (koid, _, _, state) in heads {
@@ -83,10 +86,14 @@ impl TenantManager {
         let quota = self
             .quotas
             .read()
+            // justified: RwLock poison is unrecoverable
             .unwrap()
             .get(t)
             .cloned()
+            // justified: unset quota → TenantQuota::default()
+            // (policy: default quota applies to unconfigured tenants)
             .unwrap_or_default();
+        // justified: RwLock poison is unrecoverable; absent usage count → 0
         let current = self.usage.read().unwrap().get(t).copied().unwrap_or(0);
         if current >= quota.max_objects {
             return Err(KError::InvalidObject(format!(
@@ -100,12 +107,14 @@ impl TenantManager {
     /// Record a new object for the tenant.
     pub fn record_create(&self, _tenant: Option<&str>) {
         let t = _tenant.unwrap_or("default").to_string();
+        // justified: RwLock poison is unrecoverable
         *self.usage.write().unwrap().entry(t).or_insert(0) += 1;
     }
 
     /// Record a deletion for the tenant.
     pub fn record_delete(&self, _tenant: Option<&str>) {
         let t = _tenant.unwrap_or("default").to_string();
+        // justified: RwLock poison is unrecoverable
         if let Some(c) = self.usage.write().unwrap().get_mut(&t) {
             *c = c.saturating_sub(1);
         }

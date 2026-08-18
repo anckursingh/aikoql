@@ -289,6 +289,7 @@ fn extract_pdf(path: &str) -> Result<DocumentModel, String> {
         std::path::Path::new(path)
             .file_stem()
             .map(|n| n.to_string_lossy())
+            // justified: path without a file name → empty work-dir suffix
             .unwrap_or_default()
     ));
     std::fs::create_dir_all(&work_dir).ok();

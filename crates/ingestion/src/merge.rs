@@ -4,6 +4,7 @@
 //! unified graph with entity dedup and evidence linking.
 
 use crate::ir::{Evidence, KnowledgeIr};
+use aikoql_kernel::ContentTrust;
 
 /// Merge multiple KnowledgeIr sources into one.
 ///
@@ -11,6 +12,7 @@ use crate::ir::{Evidence, KnowledgeIr};
 /// - Entities with the same normalized name → merged (mentions + evidence combined)
 /// - Facts are deduplicated by statement equality
 /// - Relations are deduplicated by (subject, predicate, object) triple
+/// - Trust is conservative: untagged/unknown sources poison the merge (R8)
 pub fn merge_knowledge_ir(sources: &[KnowledgeIr]) -> KnowledgeIr {
     let mut merged = KnowledgeIr::default();
 
@@ -19,6 +21,15 @@ pub fn merge_knowledge_ir(sources: &[KnowledgeIr]) -> KnowledgeIr {
         merged.extractor = "multi-source-merger".into();
         merged.page_count = first.page_count;
     }
+    // Most-conservative wins: Trusted < Untrusted < Unknown, and an untagged
+    // source counts as Untrusted. Only an all-Trusted merge stays Trusted.
+    merged.content_trust = Some(
+        sources
+            .iter()
+            .map(|s| s.content_trust.unwrap_or(ContentTrust::Untrusted))
+            .max()
+            .unwrap_or(ContentTrust::Untrusted),
+    );
 
     // Entity dedup by (document, normalized name): the same name in two
     // documents is a different entity (each file's `mod tests` must stay its
@@ -29,6 +40,7 @@ pub fn merge_knowledge_ir(sources: &[KnowledgeIr]) -> KnowledgeIr {
     for ir in sources {
         for entity in &ir.entities {
             let key = (
+                // justified: entity without a source document → "" key component
                 entity.evidence.document_id.clone().unwrap_or_default(),
                 normalize_name(&entity.name),
             );

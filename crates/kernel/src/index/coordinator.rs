@@ -69,11 +69,11 @@ impl IndexCoordinator {
                     .collect()
             })
         });
-        let tmap: Option<BTreeMap<KOID, f32>> = self.maintainer.as_ref().and_then(|m| {
-            q_tokens
-                .as_ref()
-                .map(|t| m.text().search(t, usize::MAX).into_iter().collect())
-        });
+        let tmap: Option<BTreeMap<KOID, f32>> = match (&self.maintainer, &q_tokens) {
+            // R4: text().search() returns KResult — propagate, don't swallow
+            (Some(m), Some(t)) => Some(m.text().search(t, usize::MAX)?.into_iter().collect()),
+            _ => None,
+        };
 
         for (koid, _version, _ts, state) in &heads {
             let ko = match kernel.object_at(koid, snap)? {

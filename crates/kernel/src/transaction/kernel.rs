@@ -13,7 +13,9 @@
 //!   process is already unrecoverable, and crashing is the correct response.
 //!   Similarly, `.as_ref().unwrap()` on head pointers inside `remember()` is
 //!   **justified** — the preceding branch guarantees Some; a None here would be
-//!   a logic bug that should crash.
+//!   a logic bug that should crash. The two `.map(...).unwrap_or_default()`
+//!   sites (scan/head-summary defaults) and the coordinator `.expect()` are
+//!   also **justified** — inline `// justified:` comments mark each.
 
 use crate::embedding::EmbeddingProvider;
 use crate::event::EventManager;
@@ -1013,6 +1015,7 @@ impl Kernel {
             event_refs: head
                 .as_ref()
                 .map(|h| h.event_refs.clone())
+                // justified: no prior head → empty event_refs (new KO)
                 .unwrap_or_default(),
             security,
             lifecycle: head
@@ -1305,6 +1308,7 @@ impl Kernel {
                     .head
                     .as_ref()
                     .map(|h| h.event_refs.clone())
+                    // justified: no prior head → empty event_refs (new KO)
                     .unwrap_or_default(),
                 security,
                 lifecycle: r
@@ -1823,6 +1827,8 @@ impl Kernel {
             .read()
             .unwrap()
             .as_ref()
+            // justified: Kernel::open seeds Some(IndexCoordinator) (see open());
+            // attach_indexes only swaps Some→Some
             .expect("kernel always has a coordinator")
             .search(self, q)
     }
@@ -2148,10 +2154,12 @@ impl Kernel {
     }
 
     /// In-process notification channel (legacy; prefer `subscribe` for durability).
-    pub fn notify(&self, filter: EventFilter) -> mpsc::Receiver<KnowledgeEvent> {
+    ///
+    /// R4: returns KResult — `subscribe` persists a durable subscription record
+    /// via the repo, so a storage failure here must propagate, not panic.
+    pub fn notify(&self, filter: EventFilter) -> KResult<mpsc::Receiver<KnowledgeEvent>> {
         let id = format!("__anon__{}", self.new_koid().to_hex());
         self.subscribe(id, filter)
-            .expect("memory subscription never fails")
     }
 
     /// Full journal scan (conformance + debugging).

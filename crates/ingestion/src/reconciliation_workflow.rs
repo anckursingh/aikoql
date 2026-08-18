@@ -99,6 +99,7 @@ pub fn validate_proposal(proposal: &KnowledgeProposal, ir: &KnowledgeIr) -> Vali
                     warnings,
                 };
             }
+            // justified: guarded by the is_none check above
             let target = proposal.target_entity.as_ref().unwrap();
             if !ir.entities.iter().any(|e| e.name == *target) {
                 return ValidationResult {

@@ -59,6 +59,7 @@ impl Envelope {
 
     /// Attach an audit log for key lifecycle event recording.
     pub fn with_audit(self, audit: Arc<KeyAuditLog>) -> Self {
+        // justified: RwLock poison is unrecoverable
         *self.audit.write().unwrap() = Some(audit);
         self
     }
@@ -67,12 +68,15 @@ impl Envelope {
     /// the wrapped form is stored for persistence.
     pub fn tenant_key(&self, tenant: &str) -> Result<[u8; 32], String> {
         // Fast path: cached.
+        // justified: RwLock poison is unrecoverable
         if let Some(dek) = self.deks.read().unwrap().get(tenant) {
             return Ok(*dek);
         }
         // Slow path: generate new DEK, wrap it with KEK.
         let dek = self.crypto.generate_key();
+        // justified: RwLock poison is unrecoverable
         let kek = *self.kek.read().unwrap();
+        // justified: RwLock poison is unrecoverable
         let kek_id = *self.kek_id.read().unwrap();
         // The DEK is "wrapped" by encrypting it with the KEK.
         // AAD = tenant name binds this DEK to the tenant.
@@ -82,12 +86,15 @@ impl Envelope {
             kek_id,
             wrapped_key,
         };
+        // justified: RwLock poison is unrecoverable
         self.deks.write().unwrap().insert(tenant.to_string(), dek);
         self.wrapped_deks
             .write()
+            // justified: RwLock poison is unrecoverable
             .unwrap()
             .insert(tenant.to_string(), wrapped);
         // Audit: log key creation.
+        // justified: RwLock poison is unrecoverable
         if let Some(ref audit) = *self.audit.read().unwrap() {
             let _ = audit.record(&KeyEvent::now(
                 KeyEventKind::Created,
@@ -100,6 +107,7 @@ impl Envelope {
 
     /// Load a previously-wrapped DEK (e.g., from database metadata on startup).
     pub fn load_dek(&self, wrapped: &WrappedDek) -> Result<[u8; 32], String> {
+        // justified: RwLock poison is unrecoverable
         let kek = *self.kek.read().unwrap();
         let dek_bytes =
             self.crypto
@@ -108,6 +116,7 @@ impl Envelope {
         dek.copy_from_slice(&dek_bytes);
         self.deks
             .write()
+            // justified: RwLock poison is unrecoverable
             .unwrap()
             .insert(wrapped.tenant.clone(), dek);
         Ok(dek)
@@ -117,6 +126,7 @@ impl Envelope {
     pub fn wrapped_deks(&self) -> Vec<WrappedDek> {
         self.wrapped_deks
             .read()
+            // justified: RwLock poison is unrecoverable
             .unwrap()
             .values()
             .cloned()
@@ -126,14 +136,18 @@ impl Envelope {
     /// Rotate the KEK: re-wrap all DEKs with the new KEK.
     /// This is online — old data does NOT need re-encryption.
     pub fn rotate_kek(&self, kms: &dyn KeyManager, passphrase: &str) -> Result<(), String> {
+        // justified: RwLock poison is unrecoverable
         let guard = self.crypto.inner().read().unwrap();
         let provider: &dyn CryptoProvider = &**guard;
         let new_kek = kms.rotate(passphrase, provider)?;
+        // justified: RwLock poison is unrecoverable
         let old_kek = *self.kek.read().unwrap();
+        // justified: RwLock poison is unrecoverable
         let new_id = *self.kek_id.read().unwrap() + 1;
 
         // Re-wrap all DEKs with the new KEK.
         let mut new_wrapped = HashMap::new();
+        // justified: RwLock poison is unrecoverable
         for (tenant, wrapped) in self.wrapped_deks.read().unwrap().iter() {
             // Decrypt DEK with old KEK.
             let dek_bytes =
@@ -153,11 +167,15 @@ impl Envelope {
             );
         }
 
+        // justified: RwLock poison is unrecoverable
         *self.kek.write().unwrap() = new_kek;
+        // justified: RwLock poison is unrecoverable
         *self.kek_id.write().unwrap() = new_id;
         let deks_count = new_wrapped.len();
+        // justified: RwLock poison is unrecoverable
         *self.wrapped_deks.write().unwrap() = new_wrapped;
         // Audit: log key rotation.
+        // justified: RwLock poison is unrecoverable
         if let Some(ref audit) = *self.audit.read().unwrap() {
             let _ = audit.record(&KeyEvent::now(
                 KeyEventKind::Rotated,
@@ -197,6 +215,7 @@ mod tests {
 
     impl KeyManager for MemKms {
         fn master_key(&self, _passphrase: &str) -> Result<[u8; 32], String> {
+            // justified: RwLock poison is unrecoverable
             Ok(*self.key.read().unwrap())
         }
 
@@ -206,6 +225,7 @@ mod tests {
             provider: &dyn CryptoProvider,
         ) -> Result<[u8; 32], String> {
             let new_key = provider.generate_key();
+            // justified: RwLock poison is unrecoverable
             *self.key.write().unwrap() = new_key;
             Ok(new_key)
         }

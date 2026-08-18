@@ -76,12 +76,14 @@ impl FieldCrypto {
 
     /// Attach an audit log for key usage event recording.
     pub fn with_audit(self, audit: Arc<KeyAuditLog>) -> Self {
+        // justified: RwLock poison is unrecoverable
         *self.audit.write().unwrap() = Some(audit);
         self
     }
 
     /// Generate a compliance summary for audit reporting (MRFC-0020 Phase 4).
     pub fn compliance_summary(&self) -> Result<ComplianceSummary, String> {
+        // justified: RwLock poison is unrecoverable
         let audit_events = if let Some(ref audit) = *self.audit.read().unwrap() {
             audit.counts_by_kind()?
         } else {
@@ -128,6 +130,7 @@ impl FieldCrypto {
         }
         // Audit: log field encryption usage (once per call, not per field).
         if count > 0 {
+            // justified: RwLock poison is unrecoverable
             if let Some(ref audit) = *self.audit.read().unwrap() {
                 let _ = audit.record(&KeyEvent::now(
                     KeyEventKind::Used,
@@ -171,6 +174,7 @@ impl FieldCrypto {
         }
         // Audit: log field decryption usage.
         if count > 0 {
+            // justified: RwLock poison is unrecoverable
             if let Some(ref audit) = *self.audit.read().unwrap() {
                 let _ = audit.record(&KeyEvent::now(
                     KeyEventKind::Used,
@@ -353,6 +357,7 @@ mod tests {
     }
     impl KeyManager for MemKms {
         fn master_key(&self, _passphrase: &str) -> Result<[u8; 32], String> {
+            // justified: RwLock poison is unrecoverable
             Ok(*self.key.read().unwrap())
         }
         fn rotate(
@@ -361,6 +366,7 @@ mod tests {
             provider: &dyn CryptoProvider,
         ) -> Result<[u8; 32], String> {
             let new_key = provider.generate_key();
+            // justified: RwLock poison is unrecoverable
             *self.key.write().unwrap() = new_key;
             Ok(new_key)
         }

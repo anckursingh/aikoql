@@ -87,6 +87,7 @@ pub use knowledge::kom::{
     ConflictResolution,
     ConstraintResult,
     ConstraintViolation,
+    ContentTrust,
     Direction,
     Effect,
     EventKind,

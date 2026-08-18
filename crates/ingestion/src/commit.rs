@@ -293,6 +293,7 @@ impl KnowledgeReconciler for MockKnowledgeReconciler {
                         evidence: entity
                             .as_ref()
                             .map(|e| vec![e.evidence.clone()])
+                            // justified: no source entity → empty evidence set
                             .unwrap_or_default(),
                     });
                 } else {
@@ -519,6 +520,7 @@ fn detect_conflicts(
                     document_value: doc_value.clone(),
                     existing_value: Some(existing_val.to_string()),
                     severity: ConflictSeverity::Warning,
+                    // justified: no source entity → empty evidence set
                     evidence: entity.map(|e| vec![e.evidence.clone()]).unwrap_or_default(),
                 });
             }
@@ -626,6 +628,7 @@ fn build_create(
         entity_name: entity_name.into(),
         class_name,
         properties,
+        // justified: no source entity → empty evidence set
         evidence: entity.map(|e| vec![e.evidence.clone()]).unwrap_or_default(),
     }
 }

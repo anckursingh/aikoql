@@ -138,7 +138,7 @@ impl SchedulerJob for SemanticEngine {
         }
 
         // Subscribe to live events so new remember+embed:true calls get processed.
-        let rx = kernel.notify(EventFilter::default());
+        let rx = kernel.notify(EventFilter::default())?;
         let k = kernel.clone_handle();
         let provider = self.provider.clone();
         let inner = self.inner.clone();
@@ -179,12 +179,14 @@ impl SchedulerJob for SemanticEngine {
             }
         });
 
+        // justified: Mutex poison is unrecoverable
         *self.inner.handle.lock().unwrap() = Some(handle);
         Ok(())
     }
 
     fn shutdown(&self) {
         self.inner.stop.store(true, Ordering::Relaxed);
+        // justified: Mutex poison is unrecoverable
         if let Some(handle) = self.inner.handle.lock().unwrap().take() {
             let _ = handle.join();
         }

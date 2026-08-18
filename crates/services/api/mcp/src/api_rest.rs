@@ -404,7 +404,7 @@ fn check_auth(
     sessions: &Mutex<HashMap<String, crate::HttpSession>>,
 ) -> Result<(), String> {
     let token = token.ok_or("login required")?;
-    let guard = sessions.lock().unwrap();
+    let guard = sessions.lock().unwrap(); // justified: Mutex poison is unrecoverable
     guard.get(token).ok_or("invalid session")?;
     Ok(())
 }
@@ -420,12 +420,13 @@ fn with_principal(
     sessions: &Mutex<HashMap<String, crate::HttpSession>>,
 ) -> J {
     if let Some(tok) = token {
-        if let Some(s) = sessions.lock().unwrap().get(tok) {
+        let sessions = sessions.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        if let Some(s) = sessions.get(tok) {
             let obj = match a.as_object_mut() {
                 Some(o) => o,
                 None => {
                     a = json!({});
-                    a.as_object_mut().expect("fresh json object")
+                    a.as_object_mut().expect("fresh json object") // justified: literal json! object — as_object_mut cannot fail
                 }
             };
             obj.insert("subject".into(), json!(s.username.clone()));

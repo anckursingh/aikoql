@@ -80,6 +80,7 @@ impl ReasoningEngine {
             _ => PropertyMap::new(),
         };
 
+        // justified: RwLock poison is unrecoverable
         self.rules.write().unwrap().push(Rule {
             koid: ko.koid,
             conditions,
@@ -92,6 +93,7 @@ impl ReasoningEngine {
     /// Evaluate all registered rules against a KO. For each rule where all
     /// conditions match, assert the conclusion as a new KO with origin=Reason.
     fn evaluate(&self, kernel: &Kernel, ko: &KnowledgeObject) -> KResult<()> {
+        // justified: RwLock poison is unrecoverable
         let rules = self.rules.read().unwrap();
         for rule in rules.iter() {
             let all_match = rule
@@ -158,6 +160,7 @@ impl SchedulerJob for ReasoningEngine {
     }
 
     fn water(&self) -> u64 {
+        // justified: RwLock poison is unrecoverable
         *self.water.read().unwrap()
     }
 }

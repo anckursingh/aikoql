@@ -910,14 +910,18 @@ fn t23_notify_delivers_commits_in_order_with_filter() {
     let a = create_fact(&k, &alice(), "fact");
     let b = create_fact(&k, &alice(), "fact");
 
-    let rx_a = k.notify(EventFilter {
-        koid: Some(a),
-        kinds: None,
-    });
-    let rx_b_created = k.notify(EventFilter {
-        koid: Some(b),
-        kinds: Some(vec![EventKind::Created]),
-    });
+    let rx_a = k
+        .notify(EventFilter {
+            koid: Some(a),
+            kinds: None,
+        })
+        .unwrap();
+    let rx_b_created = k
+        .notify(EventFilter {
+            koid: Some(b),
+            kinds: Some(vec![EventKind::Created]),
+        })
+        .unwrap();
 
     k.evolve(
         &alice(),
