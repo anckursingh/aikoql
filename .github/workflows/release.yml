@@ -348,8 +348,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          registry-url: 'https://registry.npmjs.org'
+          node-version: 24
       - name: Pack + install the exact tarball + MCP smoke
         working-directory: npm-publish
         run: |
@@ -369,6 +368,9 @@ jobs:
           jwt=$(echo "$resp" | sed -n 's/.*"value": *"\([^"]*\)".*/\1/p')
           echo "$jwt" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null || echo "$jwt" | cut -d. -f2
           npm --version
+          [ -n "$NODE_AUTH_TOKEN" ] && echo "NODE_AUTH_TOKEN is SET (len ${#NODE_AUTH_TOKEN})" || echo "NODE_AUTH_TOKEN unset"
       - name: Publish
         working-directory: npm-publish
         run: npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ''  # force pure OIDC — an injected managed token gets 404'd by npmjs.org
