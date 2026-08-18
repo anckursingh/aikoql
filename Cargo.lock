@@ -108,6 +108,7 @@ version = "0.1.15"
 dependencies = [
  "aikoql-kernel",
  "pdf-extract",
+ "proc-macro2",
  "quote",
  "rayon",
  "serde",

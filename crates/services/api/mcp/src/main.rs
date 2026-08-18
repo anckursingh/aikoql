@@ -1132,7 +1132,19 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
             referential_policy: ReferentialPolicy::Permissive,
         };
         match kernel.resolve_idempotency(&idem) {
-            Ok(Some((koid, _, _))) => req.koid = Some(koid),
+            Ok(Some((koid, _, _))) => {
+                req.koid = Some(koid);
+                // Carry the semantic block forward when the entity's content
+                // is unchanged — an update with semantic:None resets it, and
+                // serve's startup catch-up then re-embeds every KO (~4-6 min
+                // per re-ingest). Changed/new entities stay None and get
+                // enriched at serve start (only those, not the whole corpus).
+                if let Ok(old) = kernel.get(KnowledgeContext::from(&subj), &koid) {
+                    if old.properties == req.properties {
+                        req.semantic = old.semantic.clone();
+                    }
+                }
+            }
             _ => {
                 req.idempotency_key = Some(idem);
                 req.expected_version = Some(0);
@@ -1402,6 +1414,10 @@ fn run_ingest_dir(path: &str, db_path: &str, parallel: bool, incremental: bool) 
                     ko.metadata.clone(),
                 );
                 req.properties = ko.properties.clone();
+                // Same carry-forward as Phase 1 — this update touches only
+                // relationships, so preserve whatever semantic Phase 1 left
+                // (carried forward or None for changed entities).
+                req.semantic = ko.semantic.clone();
                 req.relationships = refs.clone();
                 match kernel.remember(req) {
                     Ok(_) => rel_written += refs.len(),

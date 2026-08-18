@@ -309,8 +309,15 @@ fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
             });
         }
 
-        // Macro invocations at module level — skip
-        syn::Item::Macro(_) => {}
+        // proptest! hides test fns inside its token tree — syn sees 0 items,
+        // so fuzz tests were invisible to the IR. Its fns use `arg in
+        // strategy` signatures syn can't parse as items, so walk the tokens.
+        // ponytail: `proptest` only — the same mechanism covers
+        // cfg_if!/lazy_static! if a corpus file needs them (add idents here
+        // instead of generalizing to all macros).
+        syn::Item::Macro(m) if m.mac.path.is_ident("proptest") => {
+            proptest_items(&m.mac.tokens, ir, parent);
+        }
 
         _ => {}
     }
@@ -319,6 +326,64 @@ fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// proptest! fns use `arg in strategy` signatures that syn can't parse as
+/// items, so walk the macro token stream instead: `fn <ident>` starts an
+/// entity, the stream up to the next `fn` is its signature+body (stringified
+/// as the mention — the only lexical text available), and its token span is
+/// the evidence. proptest! only contains test cases, so all fns are typed
+/// "Test" and get the same TESTED_BY edge as #[test] fns.
+/// ponytail: a nested `fn` ident inside a body would split the chunk early —
+/// no corpus case; revisit if a proptest! body ever declares one.
+fn proptest_items(tokens: &proc_macro2::TokenStream, ir: &mut KnowledgeIr, parent: &str) {
+    use proc_macro2::TokenTree;
+    let extractor = "rust-code-parser".to_string();
+    let toks: Vec<TokenTree> = tokens.clone().into_iter().collect();
+    let mut i = 0;
+    while i < toks.len() {
+        let is_fn = matches!(&toks[i], TokenTree::Ident(id) if id == "fn");
+        if !is_fn {
+            i += 1;
+            continue;
+        }
+        let Some(TokenTree::Ident(name_tok)) = toks.get(i + 1) else {
+            i += 1;
+            continue;
+        };
+        let name = name_tok.to_string();
+        let mut end = i + 2;
+        while end < toks.len() {
+            let is_next_fn = matches!(&toks[end], TokenTree::Ident(id) if id == "fn")
+                && matches!(toks.get(end + 1), Some(TokenTree::Ident(_)));
+            if is_next_fn {
+                break;
+            }
+            end += 1;
+        }
+        let mention: String = toks[i + 2..end]
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<String>()
+            .chars()
+            .take(256)
+            .collect();
+        ir.entities.push(EntityCandidate {
+            name: name.clone(),
+            type_hint: Some("Test".into()),
+            mentions: vec![mention],
+            confidence: 0.85,
+            evidence: span_evidence(&extractor, &name, "proptest-fn"),
+        });
+        ir.relations.push(RelationCandidate {
+            subject: name,
+            predicate: kom::TESTED_BY.to_string(),
+            object: parent.to_string(),
+            confidence: 0.8,
+            evidence: span_evidence(&extractor, "proptest", "test-attr"),
+        });
+        i = end;
+    }
+}
 
 fn extract_doc_comment(attr: &syn::Attribute) -> Option<String> {
     if !attr.path().is_ident("doc") {
@@ -458,6 +523,44 @@ fn test_constraint_validation() {
         assert!(
             ir.relations.iter().any(|r| r.predicate == kom::TESTED_BY),
             "should have TESTED_BY relation"
+        );
+    }
+
+    #[test]
+    fn proptest_macro_contents_parsed_as_items() {
+        let src = r#"
+proptest! {
+    fn roundtrip_preserves_bytes(bytes in any::<Vec<u8>>()) {
+        let enc = bincode_encode(&bytes);
+        prop_assert_eq!(bincode_decode(&enc), bytes);
+    }
+}
+"#;
+        let ir = compile_rust_source(src, Some("test.rs"));
+        let entity = ir
+            .entities
+            .iter()
+            .find(|e| e.name == "roundtrip_preserves_bytes")
+            .expect("proptest! fn should be an entity");
+        assert_eq!(entity.type_hint.as_deref(), Some("Test"));
+        assert_eq!(
+            entity.mentions.len(),
+            1,
+            "signature+body chunk is the mention"
+        );
+        assert!(
+            entity.mentions[0].contains("bytes in any"),
+            "mention should carry the proptest signature, got: {}",
+            entity.mentions[0]
+        );
+        assert_eq!(
+            entity.evidence.document_id.as_deref(),
+            Some("test.rs"),
+            "span evidence should resolve to the source file"
+        );
+        assert!(
+            ir.relations.iter().any(|r| r.predicate == kom::TESTED_BY),
+            "proptest! fns should get TESTED_BY edges"
         );
     }
 
