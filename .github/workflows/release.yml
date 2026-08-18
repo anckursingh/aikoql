@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:  # npm-only rescue: publishes npm-publish/package.json's version via npm trusted publishing (all tag jobs skipped)
 
 env:
   CARGO_TERM_COLOR: always
@@ -11,6 +12,7 @@ jobs:
   # ── Version gate: git tag is the single source of truth ─────────
   validate-versions:
     name: Validate versions vs tag
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +33,7 @@ jobs:
   # ── Windows binary ──────────────────────────────────────────────
   windows:
     name: Build Windows (x86_64)
+    if: github.event_name == 'push'
     needs: validate-versions
     runs-on: windows-latest
     steps:
@@ -56,6 +59,7 @@ jobs:
   # ── Linux glibc binary ──────────────────────────────────────────
   linux-gnu:
     name: Build Linux (x86_64-gnu)
+    if: github.event_name == 'push'
     needs: validate-versions
     runs-on: ubuntu-latest
     steps:
@@ -82,6 +86,7 @@ jobs:
   # the tree and the cross image builds it as-is.
   linux-musl:
     name: Build Linux (x86_64-musl)
+    if: github.event_name == 'push'
     needs: validate-versions
     runs-on: ubuntu-latest
     steps:
@@ -110,6 +115,7 @@ jobs:
   # x86_64-apple-darwin on the arm64 runner via cross-compilation.
   macos-intel:
     name: Build macOS (x86_64)
+    if: github.event_name == 'push'
     needs: validate-versions
     runs-on: macos-latest
     steps:
@@ -133,6 +139,7 @@ jobs:
   # ── macOS Apple Silicon binary ──────────────────────────────────
   macos-arm:
     name: Build macOS (aarch64)
+    if: github.event_name == 'push'
     needs: validate-versions
     runs-on: macos-latest
     steps:
@@ -161,6 +168,7 @@ jobs:
   # version/source/revision so `docker inspect` identifies the exact commit.
   docker-amd64:
     name: Docker image (linux/amd64)
+    if: github.event_name == 'push'
     needs: validate-versions
     runs-on: ubuntu-latest
     permissions:
@@ -212,6 +220,7 @@ jobs:
 
   docker-arm64:
     name: Docker image (linux/arm64)
+    if: github.event_name == 'push'
     needs: validate-versions
     runs-on: ubuntu-24.04-arm
     permissions:
@@ -252,6 +261,7 @@ jobs:
   # ── Docker manifest: merge arch images into canonical tags, print digest ──
   docker-manifest:
     name: Publish multi-arch image
+    if: github.event_name == 'push'
     needs: [docker-amd64, docker-arm64]
     runs-on: ubuntu-latest
     permissions:
@@ -279,12 +289,15 @@ jobs:
   # ── GitHub Release ──────────────────────────────────────────────
   github-release:
     name: Publish Release
+    if: github.event_name == 'push'
     needs: [validate-versions, windows, linux-gnu, linux-musl, macos-intel, macos-arm, docker-manifest]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
+        with:
+          pattern: '!*.dockerbuild'  # skip buildx state artifacts (build-push-action uploads corrupt blobs; they broke this job on v0.1.18)
       - name: Rename + collect
         run: |
           cp windows/aikoql-mcp.exe           aikoql-mcp.exe
@@ -320,10 +333,17 @@ jobs:
           generate_release_notes: true
 
   # ── npm publish, gated on the release + version match ──────────
+  # Publishes via npm trusted publishing (GitHub Actions OIDC, no token).
+  # Also runs standalone on workflow_dispatch (rescue path: publishes the
+  # version in npm-publish/package.json, e.g. v0.1.18's gap).
   npm-publish:
     name: Publish npm package
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -334,6 +354,7 @@ jobs:
         working-directory: npm-publish
         run: |
           set -euo pipefail
+          mkdir -p /tmp/aikoql-pkg  # npm pack does not create the --pack-destination dir (v0.1.18 npm job failed on ENOENT)
           npm pack --pack-destination /tmp/aikoql-pkg
           tarball=$(ls /tmp/aikoql-pkg/aikoql-mcp-*.tgz | head -1)
           clean=$(mktemp -d)
@@ -343,6 +364,4 @@ jobs:
           node "$OLDPWD/smoke-mcp.js" npx aikoql-mcp serve "$clean/db"
       - name: Publish
         working-directory: npm-publish
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance
