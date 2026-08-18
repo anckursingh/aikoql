@@ -122,8 +122,22 @@ impl Interpreter {
 
     fn exec_op(&mut self, kernel: &Kernel, op: &IrOp, input: RowSet) -> KResult<RowSet> {
         match op {
-            IrOp::Scan { type_name, subject } => {
-                let subj = Subject::new(subject);
+            IrOp::Scan {
+                type_name,
+                subject,
+                roles,
+                tenant,
+            } => {
+                // R9: rebuild the full Subject — roles and tenant scope from
+                // the planner's hints, not just the bare name.
+                let subj = Subject::with_roles(
+                    subject,
+                    &roles.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
+                );
+                let subj = match tenant {
+                    Some(t) => subj.in_tenant(t),
+                    None => subj,
+                };
                 let kos = kernel.scan_by_type(&subj, type_name)?;
                 self.cached_objects = Some(kos.clone());
                 self.cached_subject = Some(subj);
@@ -576,6 +590,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "fact".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Filter {
                 predicates: vec![Predicate::eq("temp", Value::Int(35))],
@@ -614,6 +630,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "fact".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Filter {
                 predicates: vec![Predicate::gt("temp", Value::Int(20))],
@@ -627,6 +645,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "fact".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Filter {
                 predicates: vec![Predicate::gte("temp", Value::Int(20))],
@@ -640,6 +660,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "fact".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Filter {
                 predicates: vec![Predicate::lt("temp", Value::Int(20))],
@@ -653,6 +675,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "fact".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Filter {
                 predicates: vec![Predicate::lte("temp", Value::Int(20))],
@@ -679,6 +703,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "note".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::TextSearch {
                 query: "cats".into(),
@@ -715,10 +741,14 @@ mod tests {
         let plan1 = IrPlan::new(vec![IrOp::Scan {
             type_name: "note".into(),
             subject: "alice".into(),
+            roles: vec![],
+            tenant: None,
         }]);
         let plan2 = IrPlan::new(vec![IrOp::Scan {
             type_name: "fact".into(),
             subject: "alice".into(),
+            roles: vec![],
+            tenant: None,
         }]);
 
         let rt = Runtime::new();
@@ -818,6 +848,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "note".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::AnnSearch {
                 vector: vec![],
@@ -852,6 +884,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "note".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::TextSearch {
                 query: "machine learning".into(),
@@ -906,6 +940,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "note".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::AnnSearch {
                 vector: query_emb,
@@ -977,6 +1013,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "note".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::AnnSearch {
                 vector: vec![],
@@ -1025,6 +1063,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "note".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::AnnSearch {
                 vector: vec![],

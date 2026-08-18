@@ -2540,3 +2540,162 @@ fn t29_anonymous_and_unauthorised_access_denied() {
         "unauthorised read must be denied"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase R9 — tenant isolation (scope-aware authorization)
+// ---------------------------------------------------------------------------
+
+fn acme() -> Subject {
+    alice().in_tenant("acme")
+}
+
+#[test]
+fn t30_tenant_scan_confines_to_tenant() {
+    let k = mk().0;
+
+    // Same type, two tenants.
+    let mut r1 = RememberRequest::create(alice(), meta_tenant("fact", "acme"));
+    r1.properties
+        .insert("who".into(), Value::Text("acme".into()));
+    k.remember(r1).unwrap();
+    let mut r2 = RememberRequest::create(Subject::new("bob"), meta_tenant("fact", "beta"));
+    r2.properties
+        .insert("who".into(), Value::Text("beta".into()));
+    k.remember(r2).unwrap();
+
+    let acme_objs = k.scan_by_type(&acme(), "fact").unwrap();
+    assert_eq!(acme_objs.len(), 1);
+    assert_eq!(
+        acme_objs[0].properties.get("who"),
+        Some(&Value::Text("acme".into()))
+    );
+
+    let beta_objs = k
+        .scan_by_type(&Subject::new("bob").in_tenant("beta"), "fact")
+        .unwrap();
+    assert_eq!(beta_objs.len(), 1);
+    assert_eq!(
+        beta_objs[0].properties.get("who"),
+        Some(&Value::Text("beta".into()))
+    );
+
+    // Unscoped admin (pre-R9 behavior) sees both tenants.
+    assert_eq!(
+        k.scan_by_type(&Subject::with_roles("root", &["admin"]), "fact")
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn t31_scoped_owner_still_confined_cross_tenant() {
+    let k = mk().0;
+
+    // alice creates an object inside beta's tenant.
+    let mut r = RememberRequest::create(alice().in_tenant("beta"), meta_tenant("note", "beta"));
+    r.properties
+        .insert("t".into(), Value::Text("secret".into()));
+    let ko = k.remember(r).unwrap();
+
+    // alice scoped to acme is still the owner — but tenant confinement
+    // is checked first, so the read and trace are denied.
+    let err = k.get(&acme(), &ko.koid).unwrap_err();
+    assert!(matches!(err, KError::AccessDenied { .. }));
+    assert!(k.trace(&acme(), &ko.koid).is_err());
+
+    // Same subject scoped to the matching tenant reads fine.
+    assert!(k.get(&alice().in_tenant("beta"), &ko.koid).is_ok());
+}
+
+#[test]
+fn t32_untenanted_objects_visible_to_scoped_subjects() {
+    let k = mk().0;
+    let ko = k
+        .remember(RememberRequest::create(alice(), meta("fact")))
+        .unwrap()
+        .koid;
+    // No tenant on the object — not confined, visible to any scoped subject.
+    assert!(k.get(&acme(), &ko).is_ok());
+    assert_eq!(k.scan_by_type(&acme(), "fact").unwrap().len(), 1);
+}
+
+#[test]
+fn t33_deleted_objects_absent_from_scan_by_type() {
+    let k = mk().0;
+    let ko = create_fact(&k, &alice(), "fact");
+    assert_eq!(k.scan_by_type(&alice(), "fact").unwrap().len(), 1);
+    drive_to(&k, &alice(), &ko, LifecycleState::Deleted);
+    assert!(k.scan_by_type(&alice(), "fact").unwrap().is_empty());
+}
+
+#[test]
+fn t34_type_index_backfill_on_open() {
+    let (k1, store, clock) = mk_with_store();
+    create_fact(&k1, &alice(), "fact");
+    create_fact(&k1, &alice(), "note");
+    drop(k1);
+
+    // Simulate a pre-R9 database: wipe the type index and its marker.
+    let mut batch = WriteBatch::new();
+    for (key, _v) in store.scan(b"type/").unwrap() {
+        batch.del(key);
+    }
+    batch.del(b"meta/type_index".to_vec());
+    store.write_batch(&batch).unwrap();
+
+    let k2 = Kernel::open(store, clock, 0xC0FFEE).unwrap();
+    // Backfill rebuilt the index from heads — both types scannable again.
+    assert_eq!(k2.scan_by_type(&alice(), "fact").unwrap().len(), 1);
+    assert_eq!(k2.scan_by_type(&alice(), "note").unwrap().len(), 1);
+}
+
+#[test]
+fn t35_find_similar_respects_tenant_scope() {
+    let k = mk().0;
+
+    let acme_ko = {
+        let mut req = RememberRequest::create(alice(), meta_tenant("note", "acme"));
+        req.properties
+            .insert("body".into(), Value::Text("acme-secret".into()));
+        req.semantic = Some(SemanticBlock {
+            embedding_model: Some("test-model".into()),
+            embedding: Some(vec![1.0, 0.0]),
+            confidence: None,
+            source: None,
+            summary: None,
+        });
+        k.remember(req).unwrap().koid
+    };
+    {
+        let mut req = RememberRequest::create(Subject::new("bob"), meta_tenant("note", "beta"));
+        req.properties
+            .insert("body".into(), Value::Text("beta-secret".into()));
+        req.semantic = Some(SemanticBlock {
+            embedding_model: Some("test-model".into()),
+            embedding: Some(vec![1.0, 0.0]),
+            confidence: None,
+            source: None,
+            summary: None,
+        });
+        k.remember(req).unwrap();
+    }
+
+    let res = k
+        .find_similar(SimilarityQuery {
+            context: acme().into(),
+            filter: None,
+            text: None,
+            vector: Some(vec![1.0, 0.0]),
+            embedding_model: None,
+            k: 10,
+            fusion: Fusion::VectorOnly,
+        })
+        .unwrap();
+    assert_eq!(
+        res.len(),
+        1,
+        "beta's object must not leak into acme's recall"
+    );
+    assert_eq!(res[0].ko.koid, acme_ko);
+}

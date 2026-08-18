@@ -7,7 +7,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+aikoql-compiler = { path = "../crates/compiler" }
+aikoql-graph = { path = "../crates/engines/graph" }
 aikoql-kernel = { path = "../crates/kernel" }
+aikoql-runtime = { path = "../crates/runtime" }
 aikoql-vector = { path = "../crates/engines/vector" }
 aikoql-scheduler = { path = "../crates/engines/scheduler" }
 
@@ -20,4 +23,8 @@ harness = false
 
 [[bench]]
 name = "knowledge_ops"
+harness = false
+
+[[bench]]
+name = "scale"
 harness = false

@@ -20,6 +20,23 @@ pub fn parse(source: &str) -> Result<ast::Statement, String> {
     p.parse_statement().map_err(|e| e.to_string())
 }
 
+/// Caller identity carried into the plan's Scan operator (R9).
+#[derive(Clone, Debug, Default)]
+struct ScanSubject {
+    name: String,
+    roles: Vec<String>,
+    tenant: Option<String>,
+}
+
+impl From<&str> for ScanSubject {
+    fn from(name: &str) -> Self {
+        ScanSubject {
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+}
+
 /// Compile aikoql source text into a validated `IrPlan`.
 pub fn compile(source: &str) -> Result<IrPlan, String> {
     compile_with_subject(source, "query-user")
@@ -29,7 +46,28 @@ pub fn compile(source: &str) -> Result<IrPlan, String> {
 pub fn compile_with_subject(source: &str, subject: &str) -> Result<IrPlan, String> {
     let mut p = Parser::new(source);
     let stmt = p.parse_statement().map_err(|e| e.to_string())?;
-    ast_to_ir(&stmt, subject)
+    ast_to_ir(&stmt, &subject.into())
+}
+
+/// Compile with the full caller identity — subject name, roles, and tenant
+/// scope (R9). The Scan operator carries all three so runtime ACL evaluation
+/// sees the caller's roles and tenant confinement.
+pub fn compile_scoped(
+    source: &str,
+    subject: &str,
+    roles: &[String],
+    tenant: Option<&str>,
+) -> Result<IrPlan, String> {
+    let mut p = Parser::new(source);
+    let stmt = p.parse_statement().map_err(|e| e.to_string())?;
+    ast_to_ir(
+        &stmt,
+        &ScanSubject {
+            name: subject.into(),
+            roles: roles.to_vec(),
+            tenant: tenant.map(String::from),
+        },
+    )
 }
 
 /// Compile with schema validation (MRFC-0010 §3 Semantic Analyzer).
@@ -44,7 +82,7 @@ pub fn compile_with_schema(
     crate::semantic::SemanticAnalyzer::new(registry)
         .analyze(&stmt)
         .map_err(|e| e.to_string())?;
-    ast_to_ir(&stmt, subject)
+    ast_to_ir(&stmt, &subject.into())
 }
 
 /// Compile with ontology-aware reasoning (MRFC-0041).
@@ -59,6 +97,19 @@ pub fn compile_with_ontology(
     registry: &SchemaRegistry,
     ontology: Option<&OntologyRegistry>,
 ) -> Result<Vec<IrPlan>, String> {
+    compile_with_ontology_scoped(source, subject, &[], None, registry, ontology)
+}
+
+/// `compile_with_ontology` with the full caller identity (R9) — roles and
+/// tenant scope ride on the emitted Scan operators.
+pub fn compile_with_ontology_scoped(
+    source: &str,
+    subject: &str,
+    roles: &[String],
+    tenant: Option<&str>,
+    registry: &SchemaRegistry,
+    ontology: Option<&OntologyRegistry>,
+) -> Result<Vec<IrPlan>, String> {
     let mut p = Parser::new(source);
     let stmt = p.parse_statement().map_err(|e| e.to_string())?;
     crate::semantic::SemanticAnalyzer::new(registry)
@@ -66,7 +117,12 @@ pub fn compile_with_ontology(
         .analyze(&stmt)
         .map_err(|e| e.to_string())?;
 
-    let plan = ast_to_ir(&stmt, subject)?;
+    let subj = ScanSubject {
+        name: subject.into(),
+        roles: roles.to_vec(),
+        tenant: tenant.map(String::from),
+    };
+    let plan = ast_to_ir(&stmt, &subj)?;
 
     // Ontology expansion: if the Scan entity is an ontology class with
     // physical mappings, clone one plan per mapping, substituting the
@@ -101,7 +157,7 @@ pub fn compile_with_ontology(
     }
 }
 
-fn ast_to_ir(stmt: &ast::Statement, subject: &str) -> Result<IrPlan, String> {
+fn ast_to_ir(stmt: &ast::Statement, subject: &ScanSubject) -> Result<IrPlan, String> {
     match stmt {
         ast::Statement::Match(m) => compile_match(m, subject),
         ast::Statement::Create(c) => compile_create(c, subject),
@@ -111,41 +167,38 @@ fn ast_to_ir(stmt: &ast::Statement, subject: &str) -> Result<IrPlan, String> {
     }
 }
 
-fn compile_create(c: &ast::CreateStatement, subject: &str) -> Result<IrPlan, String> {
-    let plan = IrPlan::new(vec![IrOp::Scan {
-        type_name: c.entity.clone(),
-        subject: subject.into(),
-    }])
-    .with_description(format!("CREATE {}", c.entity));
+fn scan_op(type_name: &str, subject: &ScanSubject) -> IrOp {
+    IrOp::Scan {
+        type_name: type_name.into(),
+        subject: subject.name.clone(),
+        roles: subject.roles.clone(),
+        tenant: subject.tenant.clone(),
+    }
+}
+
+fn compile_create(c: &ast::CreateStatement, subject: &ScanSubject) -> Result<IrPlan, String> {
+    let plan = IrPlan::new(vec![scan_op(&c.entity, subject)])
+        .with_description(format!("CREATE {}", c.entity));
     Ok(plan)
 }
 
-fn compile_update(u: &ast::UpdateStatement, subject: &str) -> Result<IrPlan, String> {
-    let plan = IrPlan::new(vec![IrOp::Scan {
-        type_name: u.entity.clone(),
-        subject: subject.into(),
-    }])
-    .with_description(format!("UPDATE {} {}", u.entity, u.koid));
+fn compile_update(u: &ast::UpdateStatement, subject: &ScanSubject) -> Result<IrPlan, String> {
+    let plan = IrPlan::new(vec![scan_op(&u.entity, subject)])
+        .with_description(format!("UPDATE {} {}", u.entity, u.koid));
     Ok(plan)
 }
 
-fn compile_delete(d: &ast::DeleteStatement, subject: &str) -> Result<IrPlan, String> {
-    let plan = IrPlan::new(vec![IrOp::Scan {
-        type_name: d.entity.clone(),
-        subject: subject.into(),
-    }])
-    .with_description(format!("DELETE {} {}", d.entity, d.koid));
+fn compile_delete(d: &ast::DeleteStatement, subject: &ScanSubject) -> Result<IrPlan, String> {
+    let plan = IrPlan::new(vec![scan_op(&d.entity, subject)])
+        .with_description(format!("DELETE {} {}", d.entity, d.koid));
     Ok(plan)
 }
 
-fn compile_match(m: &ast::MatchStatement, subject: &str) -> Result<IrPlan, String> {
+fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPlan, String> {
     let mut ops = Vec::new();
 
     // Scan.
-    ops.push(IrOp::Scan {
-        type_name: m.entity.clone(),
-        subject: subject.into(),
-    });
+    ops.push(scan_op(&m.entity, subject));
 
     // Predicates → Filter.
     let flat = flatten_predicates(&m.predicates);

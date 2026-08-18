@@ -7,6 +7,8 @@ use aikoql_kernel::kom::{
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::collections::BTreeMap;
 
+use aikoql_kernel::store::{MemoryEngine, StorageEngine, WriteBatch};
+
 fn sample_ko() -> KnowledgeObject {
     let mut properties = BTreeMap::new();
     properties.insert("name".into(), Value::Text("aikoql".into()));
@@ -121,11 +123,32 @@ fn validation_benchmark(c: &mut Criterion) {
     });
 }
 
+fn storage_scan_benchmark(c: &mut Criterion) {
+    // R6 guard: a narrow-prefix scan over a 100K-key store must stay bounded
+    // (seek to prefix + break at first non-matching key), not walk the store.
+    let engine = MemoryEngine::new();
+    let mut batch = WriteBatch::new();
+    for i in 0..100_000u32 {
+        batch.put(format!("other/{i:08x}").into_bytes(), vec![0u8; 32]);
+    }
+    for i in 0..100u32 {
+        batch.put(format!("hot/{i:08x}").into_bytes(), vec![0u8; 32]);
+    }
+    engine.write_batch(&batch).unwrap();
+    c.bench_function("scan_narrow_prefix_100k_db", |b| {
+        b.iter(|| black_box(engine.scan(black_box(b"hot/")).unwrap().len()))
+    });
+    c.bench_function("scan_wide_prefix_100k_db", |b| {
+        b.iter(|| black_box(engine.scan(black_box(b"other/")).unwrap().len()))
+    });
+}
+
 criterion_group!(
     benches,
     koid_benchmark,
     lifecycle_benchmark,
     codec_benchmark,
-    validation_benchmark
+    validation_benchmark,
+    storage_scan_benchmark
 );
 criterion_main!(benches);

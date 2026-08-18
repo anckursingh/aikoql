@@ -103,11 +103,14 @@ impl Compiler {
             _ => {}
         }
 
-        // Compile scan.
+        // Compile scan. R9: JSON frontend has no roles/tenant carrier — the
+        // scan runs unscoped (single-tenant behavior).
         if let Some(scan) = &q.scan {
             ops.push(IrOp::Scan {
                 type_name: scan.type_name.clone(),
                 subject: scan.subject.clone(),
+                roles: vec![],
+                tenant: None,
             });
         }
 
@@ -215,7 +218,9 @@ mod tests {
         let plan = Compiler::compile(json).unwrap();
         assert_eq!(plan.operators.len(), 1);
         match &plan.operators[0] {
-            IrOp::Scan { type_name, subject } => {
+            IrOp::Scan {
+                type_name, subject, ..
+            } => {
                 assert_eq!(type_name, "fact");
                 assert_eq!(subject, "alice");
             }

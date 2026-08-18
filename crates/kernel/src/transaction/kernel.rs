@@ -188,6 +188,10 @@ fn uniqueness_conflict(
 pub struct Subject {
     pub name: String,
     pub roles: Vec<String>,
+    /// R9: tenant scope confinement. When set, `authorize` denies access to
+    /// objects in any other tenant (untenanted objects remain shared). `None`
+    /// means unscoped — the pre-R9 single-tenant behavior, unchanged.
+    pub tenant: Option<String>,
 }
 
 impl Subject {
@@ -195,13 +199,20 @@ impl Subject {
         Subject {
             name: name.into(),
             roles: vec![],
+            tenant: None,
         }
     }
     pub fn with_roles(name: &str, roles: &[&str]) -> Self {
         Subject {
             name: name.into(),
             roles: roles.iter().map(|r| r.to_string()).collect(),
+            tenant: None,
         }
+    }
+    /// Confine this subject to one tenant (R9).
+    pub fn in_tenant(mut self, tenant: impl Into<String>) -> Self {
+        self.tenant = Some(tenant.into());
+        self
     }
     pub(crate) fn is_admin(&self) -> bool {
         self.roles.iter().any(|r| r == "admin")
@@ -211,8 +222,8 @@ impl Subject {
 /// Runtime context carried by every kernel operation.
 ///
 /// Groups identity, tenancy, and snapshot so syscalls do not accumulate a long
-/// parameter list. Optional fields are forward-compat hooks; the kernel only
-/// uses `subject` and `snapshot` today.
+/// parameter list. The kernel uses `subject` (including its R9 tenant scope),
+/// `snapshot`, and — for field-level crypto key derivation — `tenant`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnowledgeContext {
     pub subject: Subject,
@@ -532,6 +543,26 @@ impl Kernel {
     /// restarted kernel continues the hash chain and sequence numbers.
     pub fn open(store: Arc<dyn StorageEngine>, clock: Arc<dyn Clock>, salt: u64) -> KResult<Self> {
         let repo = Arc::new(KnowledgeRepository::new(store));
+        // R9: one-time backfill of the type index for databases created before
+        // it existed. Marker makes it a no-op on every subsequent open.
+        if !repo.type_index_marker()? {
+            let mut batch = WriteBatch::new();
+            let mut indexed = 0usize;
+            for (koid, _version, ts, state) in repo.scan_heads()? {
+                if state == LifecycleState::Deleted {
+                    continue;
+                }
+                if let Some(ko) = repo.get_object_version(&koid, ts)? {
+                    repo.write_type_index(&mut batch, &ko.metadata.type_name, &koid);
+                    indexed += 1;
+                }
+            }
+            repo.put_type_index_marker(&mut batch);
+            repo.write_batch(&batch)?;
+            if indexed > 0 {
+                eprintln!("type index: backfilled {indexed} objects");
+            }
+        }
         let (seq, audit, last_ts) = match repo.journal_head()? {
             Some((s, a, t)) => (s, a, t),
             None => (0, [0u8; 32], 0),
@@ -750,6 +781,19 @@ impl Kernel {
         self.objects.scan_heads()
     }
 
+    /// `(koid, head_state)` for every object indexed under `type_name` (R9).
+    /// Type-scoped similarity search iterates this instead of all heads.
+    pub(crate) fn heads_of_type(&self, type_name: &str) -> KResult<Vec<(KOID, LifecycleState)>> {
+        let mut out = Vec::new();
+        for koid in self.repo.scan_type(type_name)? {
+            let Some((_version, _ts, state)) = self.repo.get_head(&koid)? else {
+                continue; // head erased under a stale index entry
+            };
+            out.push((koid, state));
+        }
+        Ok(out)
+    }
+
     pub(crate) fn check_access(
         &self,
         subject: &Subject,
@@ -764,14 +808,41 @@ impl Kernel {
         subject: &Subject,
         type_name: Option<&str>,
     ) -> KResult<Vec<KnowledgeObject>> {
-        let mut out = Vec::new();
-        for (koid, _version, _ts, state) in self.repo.scan_heads()? {
-            if state == LifecycleState::Deleted {
-                continue;
+        // R9: with a type filter, walk the type index; without one, fall back
+        // to the full head scan (no narrower scope to seek).
+        let Some(tn) = type_name else {
+            let mut out = Vec::new();
+            for (koid, _version, _ts, state) in self.repo.scan_heads()? {
+                if state == LifecycleState::Deleted {
+                    continue;
+                }
+                let Some(ko) = self.head_object(&koid)? else {
+                    continue;
+                };
+                if self
+                    .auth
+                    .read()
+                    .unwrap()
+                    .authorize(subject, &ko, Action::Read)
+                    .is_err()
+                {
+                    continue;
+                }
+                out.push(ko);
             }
+            return Ok(out);
+        };
+        let mut out = Vec::new();
+        for koid in self.repo.scan_type(tn)? {
             let Some(ko) = self.head_object(&koid)? else {
                 continue;
             };
+            if ko.metadata.type_name != tn {
+                continue; // stale index entry (type changed after indexing)
+            }
+            if ko.lifecycle.state == LifecycleState::Deleted {
+                continue;
+            }
             if self
                 .auth
                 .read()
@@ -780,11 +851,6 @@ impl Kernel {
                 .is_err()
             {
                 continue;
-            }
-            if let Some(tn) = type_name {
-                if ko.metadata.type_name != tn {
-                    continue;
-                }
             }
             out.push(ko);
         }
@@ -892,6 +958,10 @@ impl Kernel {
             commit_ts,
             ko.lifecycle.state,
         );
+        // R9: maintain the type-scoped secondary index. Stale entries from a
+        // later type change are harmless — scan_by_type re-checks the payload.
+        self.repo
+            .write_type_index(&mut batch, &ko.metadata.type_name, &ko.koid);
         self.repo.put_event(&mut batch, seq, &ke);
         self.repo.put_journal(&mut batch, seq, audit, commit_ts);
         if let Some(k) = idem {
@@ -1752,6 +1822,9 @@ impl Kernel {
                 self.repo.put_journal(&mut batch, seq, audit, commit_ts);
                 self.repo.put_tombstone(&mut batch, koid, head_hash, seq);
                 self.repo.delete_head(&mut batch, koid);
+                // R9: the head is gone — drop the type-index entry with it.
+                self.repo
+                    .delete_type_index(&mut batch, &head.metadata.type_name, koid);
                 for ts in versions {
                     self.repo.delete_object_version(&mut batch, koid, ts);
                 }
@@ -1871,22 +1944,23 @@ impl Kernel {
     // ---- type scanning ---------------------------------------------------
 
     /// Return all readable KOs of a given type (ACL-filtered).
-    /// Services around the kernel use this for enumeration without touching
-    /// storage internals.
+    /// R9: walks the `type/` secondary index (O(log N + per-type)) instead of
+    /// the whole head space; the payload type re-check guards against stale
+    /// index entries from type changes.
     pub fn scan_by_type(
         &self,
         subject: &Subject,
         type_name: &str,
     ) -> KResult<Vec<KnowledgeObject>> {
         let mut out = Vec::new();
-        for (koid, _version, _ts, state) in self.repo.scan_heads()? {
-            if state == LifecycleState::Deleted {
-                continue;
-            }
+        for koid in self.repo.scan_type(type_name)? {
             let Some(ko) = self.head_object(&koid)? else {
                 continue;
             };
             if ko.metadata.type_name != type_name {
+                continue; // stale index entry (type changed after indexing)
+            }
+            if ko.lifecycle.state == LifecycleState::Deleted {
                 continue;
             }
             if self
@@ -2789,6 +2863,7 @@ impl Kernel {
         let subject = Subject {
             name: "kernel-reason".into(),
             roles: vec!["admin".into()],
+            tenant: None,
         };
         // Scan objects matching the rule's conditions and produce claims.
         let candidates = self.scan_by_type(&subject, rule_type)?;

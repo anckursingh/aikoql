@@ -96,7 +96,15 @@ pub enum FuseMode {
 #[derive(Clone, Debug, PartialEq)]
 pub enum IrOp {
     /// Scan all readable KOs of `type_name` as `subject`.
-    Scan { type_name: String, subject: String },
+    /// R9: `roles`/`tenant` are the planner's authorization hints — the
+    /// runtime builds a full `Subject` from them so ACL evaluation sees the
+    /// caller's roles and tenant scope (previously only the bare name arrived).
+    Scan {
+        type_name: String,
+        subject: String,
+        roles: Vec<String>,
+        tenant: Option<String>,
+    },
     /// Filter the current result set by property predicates.
     Filter { predicates: Vec<Predicate> },
     /// Traverse graph edges from the current KOID set.
@@ -227,6 +235,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "fact".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Filter {
                 predicates: vec![Predicate::eq("temperature", Value::Int(35))],
@@ -243,6 +253,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "note".into(),
                 subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::AnnSearch {
                 vector: vec![1.0, 0.0],
@@ -291,6 +303,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "fact".into(),
                 subject: "a".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Filter { predicates: vec![] },
         ])
@@ -304,10 +318,14 @@ mod tests {
             IrOp::Scan {
                 type_name: "a".into(),
                 subject: "x".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Scan {
                 type_name: "b".into(),
                 subject: "x".into(),
+                roles: vec![],
+                tenant: None,
             },
         ])
         .validate()

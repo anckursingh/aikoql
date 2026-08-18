@@ -108,6 +108,15 @@ impl AuthManager {
         ko: &KnowledgeObject,
         action: Action,
     ) -> KResult<()> {
+        // R9: tenant scope confinement. A tenant-scoped subject may only touch
+        // objects in that tenant; untenanted objects are shared and stay
+        // visible. Checked first so not even ownership or admin bypasses it —
+        // an unscoped subject (tenant None) keeps the pre-R9 behavior.
+        if let (Some(st), Some(kt)) = (&subject.tenant, &ko.metadata.tenant) {
+            if st != kt {
+                return Err(access_denied(subject, action, ko.koid));
+            }
+        }
         let sec = &ko.security;
         if subject.name == sec.owner || subject.is_admin() {
             return Ok(());

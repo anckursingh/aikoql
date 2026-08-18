@@ -38,10 +38,26 @@ impl McpClient {
         };
         let release_bin = workspace_root.join("target/release").join(exe);
         let debug_bin = workspace_root.join("target/debug").join(exe);
-        let bin = if release_bin.exists() {
-            release_bin
-        } else {
-            debug_bin
+        // Prefer the freshest build — otherwise a stale release binary runs
+        // old code and integration tests silently test the wrong version.
+        let newest = |a: &std::path::Path, b: &std::path::Path| -> bool {
+            let m = |p: &std::path::Path| {
+                p.metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH)
+            };
+            m(a) >= m(b)
+        };
+        let bin = match (release_bin.exists(), debug_bin.exists()) {
+            (true, true) => {
+                if newest(&debug_bin, &release_bin) {
+                    debug_bin
+                } else {
+                    release_bin
+                }
+            }
+            (true, false) => release_bin,
+            _ => debug_bin,
         };
         eprintln!("Using binary: {}", bin.display());
         let mut child = Command::new(&bin)
@@ -98,6 +114,24 @@ impl McpClient {
         let req = json!({
             "jsonrpc": "2.0", "id": id, "method": "tools/call",
             "params": {"name": tool, "arguments": args}
+        });
+        self.stdin
+            .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
+            .unwrap();
+        self.stdin.flush().unwrap();
+        let mut response = String::new();
+        self.reader.read_line(&mut response).unwrap();
+        serde_json::from_str(&response).unwrap()
+    }
+
+    /// Establish session identity (R9): subsequent tool calls inherit the
+    /// agent_id, roles, and tenant scope until the next session/init.
+    fn session_init(&mut self, agent_id: &str, tenant: &str) -> J {
+        let id = self.next_id;
+        self.next_id += 1;
+        let req = json!({
+            "jsonrpc": "2.0", "id": id, "method": "session/init",
+            "params": {"agent_id": agent_id, "tenant": tenant}
         });
         self.stdin
             .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
@@ -290,11 +324,91 @@ fn real_world_agent_workflow() {
     assert!(metrics["journal_seq"].as_u64().unwrap() > 0);
     assert!(metrics["total_objects"].as_u64().unwrap() >= 4);
 
-    // ── Phase 12: Multi-Tenancy ──────────────────────────────────────────
+    // ── Phase 12: Multi-Tenancy (R9) ─────────────────────────────────────
 
-    // Verify tenant isolation: alice and bob are "acme", carol is "beta".
-    // The schema endpoint should show both tenants.
-    // (schema is an HTTP endpoint, tested via the HTTP route tests.)
+    // The SAME principal "admin" owns both notes — only the tenant differs,
+    // so any cross-visibility here is a tenant-confinement failure, not an
+    // ACL failure. Session identity carries the tenant into every tool call.
+    let init = c.session_init("admin", "acme");
+    assert_eq!(init["result"]["established"], true);
+
+    let acme_note = c.call(
+        "remember",
+        &json!({"type_name": "note", "properties": {"body": "acme quarterly report", "memo": "acme"}}),
+    );
+    let acme_koid = acme_note["koid"].as_str().unwrap().to_string();
+
+    c.session_init("admin", "beta");
+    let beta_note = c.call(
+        "remember",
+        &json!({"type_name": "note", "properties": {"body": "beta launch plan", "memo": "beta"}}),
+    );
+    let beta_koid = beta_note["koid"].as_str().unwrap().to_string();
+
+    // Scoped to beta: recall sees only beta's note.
+    let beta_sim = c.call(
+        "find_similar",
+        &json!({"type_name": "note", "text": "launch plan", "k": 10}),
+    );
+    let beta_koids: Vec<&str> = beta_sim["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["koid"].as_str())
+        .collect();
+    assert!(
+        beta_koids.contains(&beta_koid.as_str()),
+        "beta's own note must be visible: {beta_koids:?}"
+    );
+    assert!(
+        !beta_koids.contains(&acme_koid.as_str()),
+        "acme's note leaked into beta's recall: {beta_koids:?}"
+    );
+
+    // Cross-tenant point read denied even though admin owns the object.
+    // Tool errors surface as an isError result carrying the message.
+    let cross = c.call_raw("get", &json!({"koid": &acme_koid}));
+    let cross_text = cross["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        cross["result"]["isError"] == true && cross_text.contains("ACCESS_DENIED"),
+        "cross-tenant get must be denied: {cross}"
+    );
+
+    // Scoped to acme: recall sees only acme's note.
+    c.session_init("admin", "acme");
+    let acme_sim = c.call(
+        "find_similar",
+        &json!({"type_name": "note", "text": "report", "k": 10}),
+    );
+    let acme_koids: Vec<&str> = acme_sim["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["koid"].as_str())
+        .collect();
+    assert!(
+        acme_koids.contains(&acme_koid.as_str()),
+        "acme's own note must be visible: {acme_koids:?}"
+    );
+    assert!(
+        !acme_koids.contains(&beta_koid.as_str()),
+        "beta's note leaked into acme's recall: {acme_koids:?}"
+    );
+
+    // MATCH (aikoql) rides the same scoped path.
+    let acme_match = c.call("aikoql", &json!({"query": "MATCH note RETURN *"}));
+    let match_koids: Vec<&str> = acme_match["results"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|o| o["koid"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(
+        match_koids.contains(&acme_koid.as_str()),
+        "MATCH should return acme's note: {match_koids:?}"
+    );
+    assert!(
+        !match_koids.contains(&beta_koid.as_str()),
+        "MATCH leaked beta's note: {match_koids:?}"
+    );
 
     let _ = std::fs::remove_file(&db);
 }

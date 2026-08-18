@@ -85,6 +85,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "f".into(),
                 subject: "a".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Filter {
                 predicates: vec![Predicate::eq("x", aikoql_kernel::Value::Int(1))],
@@ -107,6 +109,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "Employee".into(),
                 subject: "a".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Filter {
                 predicates: vec![Predicate::eq(
@@ -117,6 +121,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "Employee".into(),
                 subject: "b".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Filter {
                 predicates: vec![Predicate::eq("salary", aikoql_kernel::Value::Int(100000))],
@@ -140,6 +146,8 @@ mod tests {
             IrOp::Scan {
                 type_name: "f".into(),
                 subject: "a".into(),
+                roles: vec![],
+                tenant: None,
             },
             IrOp::Filter {
                 predicates: vec![Predicate::eq("x", aikoql_kernel::Value::Int(1))],

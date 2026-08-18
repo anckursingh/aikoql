@@ -19,12 +19,14 @@
 //! | `sub/`    | `sub/<sub_id>`                      | Event subscriptions      |
 //! | `relo/`   | `relo/<src(16)>/<rel>/<dst(16)>`   | Outbound relationship idx|
 //! | `reli/`   | `reli/<dst(16)>/<rel>/<src(16)>`   | Inbound relationship idx |
+//! | `type/`   | `type/<type_name>/<koid(16)>`      | Type-scoped secondary idx|
 //! | `meta/`   | `meta/journal`                      | Journal head counter     |
+//! | `meta/`   | `meta/type_index`                   | Type-index backfill marker|
 //!
-//! ponytail: type-scoped scan (`scan_by_type`) uses `P_HEAD` prefix + in-memory
-//! filter. A secondary index on `type_name` would eliminate the scan, but the
-//! BTree range over heads is already namespace-bounded; add when single-type
-//! scan latency measurably exceeds SLA.
+//! R9: `scan_by_type` walks `type/<type_name>/` instead of the whole `head/`
+//! space (O(log N + per-type) instead of O(N)). The index is a candidate set —
+//! readers still verify the payload's `type_name` so stale entries from type
+//! changes are harmless.
 
 use crate::knowledge::codec::{self, Dec, Enc};
 use crate::knowledge::kom::*;
@@ -41,7 +43,9 @@ const P_IDEM: &[u8] = b"idem/";
 const P_SUB: &[u8] = b"sub/";
 const P_REL_OUT: &[u8] = b"relo/";
 const P_REL_IN: &[u8] = b"reli/";
+const P_TYPE: &[u8] = b"type/";
 const K_JOURNAL: &[u8] = b"meta/journal";
+const K_TYPE_INDEX: &[u8] = b"meta/type_index";
 
 fn obj_key(k: &KOID, commit_ts: u64) -> Vec<u8> {
     let mut v = Vec::with_capacity(3 + KOID_LEN + 8);
@@ -137,6 +141,21 @@ fn rel_in_prefix_dst_type(dst: &KOID, rel_type: &str) -> Vec<u8> {
     v.extend_from_slice(dst.as_bytes());
     v.push(b'/');
     v.extend_from_slice(rel_type.as_bytes());
+    v.push(b'/');
+    v
+}
+fn type_key(type_name: &str, koid: &KOID) -> Vec<u8> {
+    let mut v = Vec::with_capacity(5 + type_name.len() + 1 + KOID_LEN);
+    v.extend_from_slice(P_TYPE);
+    v.extend_from_slice(type_name.as_bytes());
+    v.push(b'/');
+    v.extend_from_slice(koid.as_bytes());
+    v
+}
+fn type_prefix(type_name: &str) -> Vec<u8> {
+    let mut v = Vec::with_capacity(5 + type_name.len() + 1);
+    v.extend_from_slice(P_TYPE);
+    v.extend_from_slice(type_name.as_bytes());
     v.push(b'/');
     v
 }
@@ -357,6 +376,45 @@ impl KnowledgeRepository {
             out.push((rt, src));
         }
         Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
+    // Type index (R9: O(log N + per-type) scoped scans)
+    // -----------------------------------------------------------------------
+
+    /// Put one `type/<type_name>/<koid>` entry. Idempotent at the KV level.
+    pub fn write_type_index(&self, batch: &mut WriteBatch, type_name: &str, koid: &KOID) {
+        batch.put(type_key(type_name, koid), vec![]);
+    }
+
+    /// Remove one type-index entry (used on Erase; Tombstone keeps the head
+    /// so the entry stays and is filtered by the Deleted-state check).
+    pub fn delete_type_index(&self, batch: &mut WriteBatch, type_name: &str, koid: &KOID) {
+        batch.del(type_key(type_name, koid));
+    }
+
+    /// KOIDs indexed under `type_name`, in koid order.
+    pub fn scan_type(&self, type_name: &str) -> KResult<Vec<KOID>> {
+        let prefix = type_prefix(type_name);
+        let mut out = Vec::new();
+        for (k, _v) in self.engine().scan(&prefix)? {
+            if k.len() != prefix.len() + KOID_LEN {
+                continue;
+            }
+            let mut kb = [0u8; KOID_LEN];
+            kb.copy_from_slice(&k[prefix.len()..]);
+            out.push(KOID(kb));
+        }
+        Ok(out)
+    }
+
+    /// Whether the one-time type-index backfill has run on this database.
+    pub fn type_index_marker(&self) -> KResult<bool> {
+        Ok(self.engine().get(K_TYPE_INDEX)?.is_some())
+    }
+
+    pub fn put_type_index_marker(&self, batch: &mut WriteBatch) {
+        batch.put(K_TYPE_INDEX.to_vec(), vec![]);
     }
 
     // -----------------------------------------------------------------------

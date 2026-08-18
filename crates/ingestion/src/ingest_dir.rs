@@ -173,6 +173,10 @@ pub fn ingest_directory(root: &str) -> Result<IngestResult, String> {
 /// Throughput improves on multi-core for large repos. Memory is bounded by
 /// the number of files; compilation is CPU-bound so num_cpus threads is
 /// the natural bound.
+///
+/// ponytail: no explicit backpressure channel — rayon work-stealing keeps
+/// in-flight work ≤ num_cpus, and the merge needs every fragment anyway, so
+/// total memory equals sequential. Add a channel if per-fragment cost grows.
 pub fn parallel_ingest_directory(root: &str) -> Result<IngestResult, String> {
     let path = Path::new(root);
     if !path.is_dir() {
@@ -931,6 +935,52 @@ mod tests {
         // binary file
         fs::write(tmp.join("data.bin"), &[0u8, 1, 2, 3]).unwrap();
         assert!(is_binary_file(&tmp.join("data.bin")));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn parallel_matches_sequential() {
+        let tmp = std::env::temp_dir().join("aikoql-ingest-par-test");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("src")).unwrap();
+        fs::create_dir_all(tmp.join("docs")).unwrap();
+        fs::write(
+            tmp.join("README.md"),
+            "# Architecture\n\nThe system uses a pipeline.\n",
+        )
+        .unwrap();
+        fs::write(tmp.join("src/lib.rs"), "/// Lib entry.\npub fn run() {}\n").unwrap();
+        fs::write(tmp.join("src/util.py"), "def helper():\n    return 1\n").unwrap();
+        fs::write(tmp.join("docs/notes.txt"), "first line of notes\n").unwrap();
+        fs::write(tmp.join("Cargo.toml"), "[package]\nname = \"t\"\n").unwrap();
+
+        let seq = ingest_directory(&tmp.to_string_lossy()).expect("sequential");
+        let par = parallel_ingest_directory(&tmp.to_string_lossy()).expect("parallel");
+
+        assert_eq!(par.files_processed, seq.files_processed);
+        assert_eq!(par.files_skipped, seq.files_skipped);
+        assert_eq!(par.dirs_skipped, seq.dirs_skipped);
+        assert_eq!(par.binary_skipped, seq.binary_skipped);
+        // KnowledgeIr itself lacks PartialEq; compare every field that does
+        // derive it — the merge outputs plus the identity/stats fields.
+        assert_eq!(par.ir.entities, seq.ir.entities);
+        assert_eq!(par.ir.relations, seq.ir.relations);
+        assert_eq!(par.ir.facts, seq.ir.facts);
+        assert_eq!(par.ir.events, seq.ir.events);
+        assert_eq!(par.ir.temporal, seq.ir.temporal);
+        assert_eq!(par.ir.document_id, seq.ir.document_id);
+        assert_eq!(par.ir.page_count, seq.ir.page_count);
+        assert_eq!(par.ir.extractor, seq.ir.extractor);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn parallel_empty_dir_errors() {
+        let tmp = std::env::temp_dir().join("aikoql-ingest-par-empty");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        assert!(parallel_ingest_directory(&tmp.to_string_lossy()).is_err());
         let _ = fs::remove_dir_all(&tmp);
     }
 }

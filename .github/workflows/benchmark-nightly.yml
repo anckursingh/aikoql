@@ -1,8 +1,8 @@
-name: Benchmark (Nightly)
+name: Benchmark (Weekly)
 
 on:
   schedule:
-    - cron: '37 3 * * *' # daily at 03:37 UTC
+    - cron: '37 3 * * 1' # weekly, Monday 03:37 UTC
   workflow_dispatch: # manual trigger
 
 env:
@@ -10,10 +10,51 @@ env:
 
 jobs:
   benchmark:
-    name: Run Benchmarks
+    name: Run Benchmarks + Regression Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+
+      # R5 durability gate (ignored tests only).
       - run: cargo test --workspace -- --ignored --test-threads=1
         timeout-minutes: 30
+
+      # R14: run all criterion benches, save results under the `ci` baseline.
+      # Bench targets are enumerated so the criterion flags don't reach
+      # libtest bench targets ("Unrecognized option: 'save-baseline'").
+      - name: Run criterion benchmarks
+        run: |
+          cargo bench \
+            -p aikoql-benchmarks --bench hybrid_recall --bench knowledge_ops --bench scale \
+            -p aikoql-kernel --bench kom_benchmark \
+            -p aikoql-ingestion --bench ingest_benchmark \
+            -p aikoql-compiler --bench parse_bench \
+            -- --save-baseline ci
+        timeout-minutes: 90
+
+      # R14: compare against the previous week's baseline; >20% regression
+      # fails the job (scheduled-run failure notifications are the alert).
+      - name: Download previous baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: bench-baseline
+          path: prev-baseline
+        continue-on-error: true
+
+      - name: Compare against previous baseline
+        run: |
+          if [ -d prev-baseline ] && [ -n "$(find prev-baseline -name estimates.json -print -quit)" ]; then
+            python3 benchmarks/scripts/compare_benchmarks.py prev-baseline target/criterion --threshold 20
+          else
+            echo "no previous baseline artifact — first run, skipping comparison"
+          fi
+
+      # Always store this week's results as the new baseline.
+      - name: Upload new baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-baseline
+          path: target/criterion/**/ci/*.json
+          overwrite: true
+          if-no-files-found: error

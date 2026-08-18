@@ -50,7 +50,17 @@ impl IndexCoordinator {
             return Err(KError::InvalidQuery("k must be >= 1".into()));
         }
         let snap = q.context.snapshot.unwrap_or_else(|| kernel.snapshot());
-        let heads = kernel.scan_heads()?;
+        // R9: a type-scoped query walks the type index instead of all heads.
+        // The per-KO type filter below stays — it guards stale index entries.
+        let heads: Vec<(KOID, u64, u64, LifecycleState)> =
+            match q.filter.as_ref().and_then(|f| f.type_name.as_deref()) {
+                Some(tn) => kernel
+                    .heads_of_type(tn)?
+                    .into_iter()
+                    .map(|(koid, state)| (koid, 0, 0, state))
+                    .collect(),
+                None => kernel.scan_heads()?,
+            };
         let mut vec_scored: Vec<(KOID, f32)> = Vec::new();
         let mut txt_scored: Vec<(KOID, f32)> = Vec::new();
         let mut merged: Vec<ScoredKO> = Vec::new();

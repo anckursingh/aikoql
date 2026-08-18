@@ -28,7 +28,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.16"
+version = "0.1.17"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/anckursingh/aikoql"
@@ -41,3 +41,8 @@ opt-level = 0
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[profile.bench]
+# R14: bench profile (deferred from Phase 3 §Benchmarks). opt-level 3 for
+# representative numbers; inherits the rest from [profile.release].
+opt-level = 3

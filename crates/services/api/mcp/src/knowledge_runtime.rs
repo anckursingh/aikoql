@@ -48,6 +48,25 @@ pub(crate) fn execution_stats() -> ExecutionStats {
     EXEC_STATS.lock().unwrap().clone() // justified: Mutex poison is unrecoverable
 }
 
+/// R9: stamp the executing caller's identity onto a plan's Scan operator.
+/// Cached plans are identity-free templates — identity is applied per
+/// execution so a plan cached under one caller never runs under another.
+fn stamp_scan_identity(plan: &mut IrPlan, subject: &Subject) {
+    for op in &mut plan.operators {
+        if let IrOp::Scan {
+            subject: ref mut scan_subject,
+            ref mut roles,
+            ref mut tenant,
+            ..
+        } = op
+        {
+            *scan_subject = subject.name.clone();
+            *roles = subject.roles.clone();
+            *tenant = subject.tenant.clone();
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Program Cache — LRU of compiled IrPlans keyed by KOID
 // ---------------------------------------------------------------------------
@@ -175,7 +194,7 @@ pub fn execute_workflow(
         };
 
         // Check program cache.
-        let (plan, cache_hit) = if let Some(c) = cache {
+        let (mut plan, cache_hit) = if let Some(c) = cache {
             if let Some(cached) = c.get(&prog.koid, cur_ver) {
                 (cached, true)
             } else {
@@ -195,6 +214,10 @@ pub fn execute_workflow(
         if cache_hit {
             logs.push("    (cache hit)".to_string());
         }
+
+        // R9: cached plans are identity-free templates — stamp the executing
+        // caller's identity onto the Scan before optimize/execute.
+        stamp_scan_identity(&mut plan, subject);
 
         let start = Instant::now();
         let optimized = aikoql_compiler::planner::Planner::optimize(&plan);
@@ -229,6 +252,7 @@ pub fn check_and_fire_triggers(kernel: &Kernel, last_seq: u64) -> Result<u64, St
     let subject = Subject {
         name: "trigger-engine".into(),
         roles: vec!["admin".into()],
+        tenant: None, // unscoped admin — full visibility
     };
     let events = kernel.journal().map_err(|e| e.to_string())?;
     let triggers = kernel
@@ -263,10 +287,13 @@ pub fn check_and_fire_triggers(kernel: &Kernel, last_seq: u64) -> Result<u64, St
                     let ctx = KnowledgeContext::from(subject.clone());
                     if let Ok(prog_ko) = kernel.get(ctx, &prog_koid) {
                         if let Some(Value::Text(body)) = prog_ko.properties.get("body") {
-                            if let Ok(plan) = aikoql_compiler::parser::compile_with_subject(
+                            if let Ok(mut plan) = aikoql_compiler::parser::compile_with_subject(
                                 body,
                                 "trigger-engine",
                             ) {
+                                // R9: run the program body as the trigger engine's
+                                // own admin identity (unscoped), same as the scan.
+                                stamp_scan_identity(&mut plan, &subject);
                                 let optimized = aikoql_compiler::planner::Planner::optimize(&plan);
                                 let _ = aikoql_runtime::Interpreter::execute(kernel, &optimized);
                             }
@@ -426,7 +453,7 @@ pub fn execute_agent(
         let body = body.replace("{{prompt}}", prompt);
 
         // Check program cache.
-        let (plan, cache_hit) = if let Some(c) = cache {
+        let (mut plan, cache_hit) = if let Some(c) = cache {
             if let Some(cached) = c.get(&prog.koid, cur_ver) {
                 (cached, true)
             } else {
@@ -446,6 +473,10 @@ pub fn execute_agent(
         if cache_hit {
             logs.push("    (cache hit)".into());
         }
+
+        // R9: cached plans are identity-free templates — stamp the executing
+        // caller's identity onto the Scan before optimize/execute.
+        stamp_scan_identity(&mut plan, subject);
 
         let start = std::time::Instant::now();
         let optimized = aikoql_compiler::planner::Planner::optimize(&plan);

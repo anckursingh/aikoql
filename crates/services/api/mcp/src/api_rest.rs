@@ -1,6 +1,7 @@
 //! REST API Layer — /api/v1/* endpoints mirroring MCP tools.
 
 use super::*;
+use crate::tools::*;
 
 pub fn route_v1(
     method: &str,

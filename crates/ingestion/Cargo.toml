@@ -16,3 +16,10 @@ rayon = "1"
 syn = { version = "2", features = ["full", "parsing", "extra-traits", "printing"] }
 quote = "1"
 proc-macro2 = "1"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "ingest_benchmark"
+harness = false
