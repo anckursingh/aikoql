@@ -1,9 +1,9 @@
 //! Encryption acceptance tests — MRFC-0020 Phase 1 & Phase 3 gates.
 
 use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto, CryptoProvider};
-use aikoql_kernel::security::envelope::Envelope;
+use aikoql_kernel::security::envelope::{Envelope, DEKS_STORAGE_KEY};
 use aikoql_kernel::security::field_crypto::{EncryptionPolicy, FieldCrypto};
-use aikoql_kernel::security::kms::KeyManager;
+use aikoql_kernel::security::kms::{KeyManager, LocalKms};
 use aikoql_kernel::storage::encrypted::EncryptedStore;
 use aikoql_kernel::storage::store::{MemoryEngine, StorageEngine, WriteBatch};
 use aikoql_kernel::storage::store_redb::RedbEngine;
@@ -143,7 +143,8 @@ fn e05_field_level_encrypt_remember_decrypt_get() {
 
     let k = Kernel::open(store, clock, 0xBEEF)
         .unwrap()
-        .with_field_encryption(crypto, envelope);
+        .with_field_encryption(crypto, envelope)
+        .unwrap();
 
     // Mark "salary" and "ssn" as encrypted for type "employee".
     let policy = EncryptionPolicy::new(vec!["salary".to_string(), "ssn".to_string()]);
@@ -226,7 +227,8 @@ fn e06_field_encryption_without_policy_is_noop() {
     // Kernel with field encryption enabled, but no policy registered for this type.
     let k = Kernel::open(store, clock, 0xCAFE)
         .unwrap()
-        .with_field_encryption(crypto, envelope);
+        .with_field_encryption(crypto, envelope)
+        .unwrap();
 
     let alice = Subject::new("alice");
     let mut props = BTreeMap::new();
@@ -360,4 +362,93 @@ fn e08_encrypted_backup_restore() {
 
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&backup_path);
+}
+
+/// e09: DEKs persist through a full kernel restart (not just FieldCrypto).
+/// Without persistence each boot mints fresh DEKs and field ciphertext
+/// becomes undecryptable — data loss.
+#[test]
+fn e09_deks_persist_across_kernel_restart() {
+    let key_path = temp_path("e09-key");
+    let _ = std::fs::remove_file(&key_path);
+    let kms = LocalKms::new(&key_path);
+    let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+    let store: Arc<dyn StorageEngine> = Arc::new(MemoryEngine::new());
+    let clock = Arc::new(ManualClock::new(30_000));
+
+    let remembered = {
+        let envelope = Arc::new(Envelope::init(&kms, "pw", crypto.clone()).unwrap());
+        let k = Kernel::open(store.clone(), clock.clone(), 0xD00D)
+            .unwrap()
+            .with_field_encryption(crypto.clone(), envelope)
+            .unwrap();
+        k.set_encryption_policy(
+            "employee",
+            EncryptionPolicy::new(vec!["salary".to_string()]),
+        );
+        let alice = Subject::new("alice");
+        let mut props = BTreeMap::new();
+        props.insert("name".into(), Value::Text("Alice".into()));
+        props.insert("salary".into(), Value::Int(150000));
+        k.remember(RememberRequest {
+            context: (&alice).into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "employee".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: BTreeMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap()
+    };
+
+    // Fresh kernel over the same store: DEKs must load from the store.
+    {
+        let envelope = Arc::new(Envelope::init(&kms, "pw", crypto.clone()).unwrap());
+        let k = Kernel::open(store, clock, 0xD00D)
+            .unwrap()
+            .with_field_encryption(crypto, envelope)
+            .unwrap();
+        k.set_encryption_policy(
+            "employee",
+            EncryptionPolicy::new(vec!["salary".to_string()]),
+        );
+        let alice = Subject::new("alice");
+        let ko = k.get(&alice, &remembered.koid).unwrap();
+        assert_eq!(ko.properties.get("salary"), Some(&Value::Int(150000)));
+        assert_eq!(
+            ko.properties.get("name"),
+            Some(&Value::Text("Alice".into()))
+        );
+    }
+    let _ = std::fs::remove_file(&key_path);
+}
+
+/// e10: A corrupt DEK record fails the open — silently continuing would mint
+/// a fresh DEK for the tenant and orphan every field-encrypted value.
+#[test]
+fn e10_corrupt_dek_record_fails_closed() {
+    let store: Arc<dyn StorageEngine> = Arc::new(MemoryEngine::new());
+    let mut batch = WriteBatch::new();
+    batch.put(DEKS_STORAGE_KEY.to_vec(), vec![0xAB, 0xCD]); // truncated garbage
+    store.write_batch(&batch).unwrap();
+
+    let kms = MemKms::new();
+    let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+    let envelope = Arc::new(Envelope::init(&kms, "pw", crypto.clone()).unwrap());
+    let res = Kernel::open(store, Arc::new(ManualClock::new(40_000)), 0xE0E)
+        .unwrap()
+        .with_field_encryption(crypto, envelope);
+    assert!(res.is_err(), "corrupt DEK record must fail the open");
 }

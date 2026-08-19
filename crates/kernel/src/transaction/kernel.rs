@@ -29,7 +29,7 @@ use crate::object::ObjectManager;
 use crate::relationship::RelationshipManager;
 use crate::security::auth::{AuthManager, POLICY_TYPE, ROLE_TYPE};
 use crate::security::crypto::Crypto;
-use crate::security::envelope::Envelope;
+use crate::security::envelope::{Envelope, DEKS_STORAGE_KEY};
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
 use crate::security::tenant::TenantManager;
 use crate::storage::repository::KnowledgeRepository;
@@ -512,6 +512,8 @@ struct Pipeline {
 
 pub struct Kernel {
     repo: Arc<KnowledgeRepository>,
+    /// Raw store handle for keys outside the repository (encryption DEKs).
+    store: Arc<dyn StorageEngine>,
     clock: Arc<dyn Clock>,
     hlc: Arc<Hlc>,
     idgen: Arc<Mutex<IdGen>>,
@@ -542,7 +544,7 @@ impl Kernel {
     /// Open (or create) a kernel over `store`. Recovers the journal head so a
     /// restarted kernel continues the hash chain and sequence numbers.
     pub fn open(store: Arc<dyn StorageEngine>, clock: Arc<dyn Clock>, salt: u64) -> KResult<Self> {
-        let repo = Arc::new(KnowledgeRepository::new(store));
+        let repo = Arc::new(KnowledgeRepository::new(store.clone()));
         // R9: one-time backfill of the type index for databases created before
         // it existed. Marker makes it a no-op on every subsequent open.
         if !repo.type_index_marker()? {
@@ -574,6 +576,7 @@ impl Kernel {
         let constraint_caps = repo.constraint_capabilities();
         Ok(Kernel {
             repo,
+            store,
             clock,
             hlc: Arc::new(Hlc::starting_at(last_ts)),
             idgen: Arc::new(Mutex::new(IdGen::new(salt))),
@@ -614,9 +617,25 @@ impl Kernel {
 
     /// Enable field-level encryption (MRFC-0020 Phase 3).
     /// Only effective when called on the originally opened kernel.
-    pub fn with_field_encryption(mut self, crypto: Arc<Crypto>, envelope: Arc<Envelope>) -> Self {
+    /// Loads persisted wrapped DEKs from the store. Fails closed on a corrupt
+    /// DEK record: continuing would mint a fresh DEK for the tenant and orphan
+    /// every field-encrypted value.
+    pub fn with_field_encryption(
+        mut self,
+        crypto: Arc<Crypto>,
+        envelope: Arc<Envelope>,
+    ) -> KResult<Self> {
+        if let Some(raw) = self.store.get(DEKS_STORAGE_KEY)? {
+            let deks = Envelope::decode_wrapped_deks(&raw)
+                .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
+            for d in &deks {
+                envelope
+                    .load_dek(d)
+                    .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
+            }
+        }
         self.field_crypto = Some(Arc::new(FieldCrypto::new(crypto, envelope)));
-        self
+        Ok(self)
     }
 
     /// Register an encryption policy for a schema type. Fields listed in the
@@ -667,6 +686,7 @@ impl Kernel {
     pub fn clone_handle(&self) -> Kernel {
         Kernel {
             repo: self.repo.clone(),
+            store: self.store.clone(),
             clock: self.clock.clone(),
             hlc: self.hlc.clone(),
             idgen: self.idgen.clone(),
@@ -1216,8 +1236,24 @@ impl Kernel {
                 .get(&req.metadata.type_name)
             {
                 let tenant = req.context.tenant.as_deref().unwrap_or("default");
-                fc.encrypt_fields(tenant, &req.metadata.type_name, &mut ko.properties, policy)
+                let encrypted = fc
+                    .encrypt_fields(tenant, &req.metadata.type_name, &mut ko.properties, policy)
                     .map_err(|e| KError::Store(format!("field encrypt: {}", e)))?;
+                if encrypted > 0 {
+                    // Persist wrapped DEKs BEFORE the object commit: a crash in
+                    // between leaves an orphan DEK record (harmless); the
+                    // reverse would leave field ciphertext with no recoverable
+                    // key. ponytail: unconditional rewrite (tens of bytes);
+                    // dirty-tracking if this path gets hot.
+                    let mut batch = WriteBatch::new();
+                    batch.put(
+                        DEKS_STORAGE_KEY.to_vec(),
+                        Envelope::encode_wrapped_deks(&fc.wrapped_deks()),
+                    );
+                    self.store
+                        .write_batch(&batch)
+                        .map_err(|e| KError::Store(format!("DEK persist: {}", e)))?;
+                }
             }
         }
         // claims via Class B keep ClaimAsserted kind

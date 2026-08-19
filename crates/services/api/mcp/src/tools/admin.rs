@@ -172,15 +172,7 @@ pub(crate) fn tool_backup(k: &Kernel, db_path: &str) -> Result<J, String> {
 
 /// Open a backup file in a throwaway kernel and check basic integrity.
 pub(crate) fn verify_backup_file(path: &str, expected_seq: u64, expected_objects: usize) -> bool {
-    let engine = match RedbEngine::open(path) {
-        Ok(e) => e,
-        Err(_) => return false,
-    };
-    let k = match Kernel::open(
-        std::sync::Arc::new(engine),
-        std::sync::Arc::new(SystemClock),
-        0,
-    ) {
+    let k = match crate::engine::open_kernel_auto(path) {
         Ok(k) => k,
         Err(_) => return false,
     };

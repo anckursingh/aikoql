@@ -12,6 +12,10 @@ use crate::security::kms::KeyManager;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+/// Storage key under which wrapped DEKs are persisted (inside the store;
+/// the wrapped form is KEK-encrypted and safe to sit beside the data).
+pub const DEKS_STORAGE_KEY: &[u8] = b"__encryption__/deks";
+
 /// A wrapped DEK: the DEK itself encrypted by the KEK.
 #[derive(Clone, Debug)]
 pub struct WrappedDek {
@@ -114,11 +118,18 @@ impl Envelope {
                 .decrypt(&kek, &wrapped.wrapped_key, wrapped.tenant.as_bytes())?;
         let mut dek = [0u8; 32];
         dek.copy_from_slice(&dek_bytes);
+        // justified: RwLock poison is unrecoverable
         self.deks
             .write()
-            // justified: RwLock poison is unrecoverable
             .unwrap()
             .insert(wrapped.tenant.clone(), dek);
+        // Keep the wrapped copy so a later wrapped_deks() persist round-trips
+        // everything ever loaded (otherwise re-persisting writes an empty list).
+        // justified: RwLock poison is unrecoverable
+        self.wrapped_deks
+            .write()
+            .unwrap()
+            .insert(wrapped.tenant.clone(), wrapped.clone());
         Ok(dek)
     }
 
@@ -131,6 +142,55 @@ impl Envelope {
             .values()
             .cloned()
             .collect()
+    }
+
+    /// Encode wrapped DEKs for storage. Layout: u32 count, then per DEK:
+    /// u16 tenant-len || tenant || u64 kek_id || u32 wrapped-len || wrapped.
+    pub fn encode_wrapped_deks(deks: &[WrappedDek]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(64 * deks.len());
+        out.extend_from_slice(&(deks.len() as u32).to_le_bytes());
+        for d in deks {
+            out.extend_from_slice(&(d.tenant.len() as u16).to_le_bytes());
+            out.extend_from_slice(d.tenant.as_bytes());
+            out.extend_from_slice(&d.kek_id.to_le_bytes());
+            out.extend_from_slice(&(d.wrapped_key.len() as u32).to_le_bytes());
+            out.extend_from_slice(&d.wrapped_key);
+        }
+        out
+    }
+
+    /// Decode wrapped DEKs written by [`Self::encode_wrapped_deks`].
+    /// Returns an error on any truncation/overflow — callers must fail closed.
+    pub fn decode_wrapped_deks(bytes: &[u8]) -> Result<Vec<WrappedDek>, String> {
+        let mut out = Vec::new();
+        let mut pos = 0usize;
+        let take = |pos: &mut usize, n: usize| -> Result<&[u8], String> {
+            if *pos > bytes.len() || bytes.len() - *pos < n {
+                return Err("wrapped DEKs: truncated".into());
+            }
+            let s = &bytes[*pos..*pos + n];
+            *pos += n;
+            Ok(s)
+        };
+        let (count_b, _) = take(&mut pos, 4)?.split_at(4);
+        let count = u32::from_le_bytes(count_b.try_into().unwrap()) as usize;
+        for _ in 0..count {
+            let (tlen_b, _) = take(&mut pos, 2)?.split_at(2);
+            let tlen = u16::from_le_bytes(tlen_b.try_into().unwrap()) as usize;
+            let tenant = String::from_utf8(take(&mut pos, tlen)?.to_vec())
+                .map_err(|_| "wrapped DEKs: bad tenant utf8")?;
+            let (kek_b, _) = take(&mut pos, 8)?.split_at(8);
+            let kek_id = u64::from_le_bytes(kek_b.try_into().unwrap());
+            let (wlen_b, _) = take(&mut pos, 4)?.split_at(4);
+            let wlen = u32::from_le_bytes(wlen_b.try_into().unwrap()) as usize;
+            let wrapped_key = take(&mut pos, wlen)?.to_vec();
+            out.push(WrappedDek {
+                tenant,
+                kek_id,
+                wrapped_key,
+            });
+        }
+        Ok(out)
     }
 
     /// Rotate the KEK: re-wrap all DEKs with the new KEK.

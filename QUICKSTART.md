@@ -147,12 +147,26 @@ Environment variables:
 
 Encryption at rest is built-in but optional. To enable:
 
-1. Set `encryption.enabled = true` in `aikoql.toml` (Note: `serve` currently rejects `enabled = true` at startup — encryption is not wired into the MCP server yet, MRFC-0020.)
-2. Set `encryption.key_path` to where the master key will be stored
-3. Set `encryption.passphrase` or the `AIKOQL_PASSPHRASE` env var
+```toml
+[encryption]
+enabled = true
+key_path = "./aikoql.key"
+# passphrase = "..."   # or AIKOQL_PASSPHRASE env (env wins)
 
-The first run creates the key file. Subsequent runs use the existing key.
-AES-256-GCM with envelope encryption (KEK→DEK→Data). Field-level encryption policies per schema type.
+[encryption.policies]
+employee = ["salary", "ssn"]
+```
+
+1. Generate the master key: `aikoql keygen ./aikoql.key` — passphrase comes
+   from `AIKOQL_PASSPHRASE`, else one is generated and printed once (save it).
+2. Start serve with `AIKOQL_PASSPHRASE` set (or the TOML `passphrase`).
+
+The first open creates the key file; subsequent runs reuse it. A wrong or
+missing passphrase fails the open — an encrypted database never silently
+opens as plaintext. All store values are AES-256-GCM encrypted; the envelope
+hierarchy (KEK→tenant DEK→field) encrypts policy-listed properties per type,
+decrypted transparently on read. All subcommands (`audit`, `backup`,
+`imports`, `ingest-dir`, `shell`) honor the same settings.
 
 ## Building from Source
 

@@ -45,14 +45,7 @@ pub(crate) fn run_pg_import(
     }
     println!();
 
-    let engine = match RedbEngine::open(target_db) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("open target db: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+    let kernel = match engine::open_kernel_auto(target_db) {
         Ok(k) => k,
         Err(e) => {
             eprintln!("open kernel: {}", e);
@@ -154,14 +147,7 @@ pub(crate) fn run_sqlite_import(
     }
     println!();
 
-    let engine = match RedbEngine::open(target_db) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("open target db: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+    let kernel = match engine::open_kernel_auto(target_db) {
         Ok(k) => k,
         Err(e) => {
             eprintln!("open kernel: {}", e);
@@ -262,14 +248,7 @@ pub(crate) fn run_mongo_import(
     }
     println!();
 
-    let engine = match RedbEngine::open(target_db) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("open target db: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+    let kernel = match engine::open_kernel_auto(target_db) {
         Ok(k) => k,
         Err(e) => {
             eprintln!("open kernel: {}", e);
@@ -367,14 +346,7 @@ pub(crate) fn run_neo4j_import(
     );
     println!();
 
-    let engine = match RedbEngine::open(target_db) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("open target db: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+    let kernel = match engine::open_kernel_auto(target_db) {
         Ok(k) => k,
         Err(e) => {
             eprintln!("open kernel: {}", e);

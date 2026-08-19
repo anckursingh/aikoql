@@ -10,7 +10,7 @@
 use crate::knowledge::kom::Value;
 use crate::security::audit::{KeyAuditLog, KeyEvent, KeyEventKind};
 use crate::security::crypto::Crypto;
-use crate::security::envelope::Envelope;
+use crate::security::envelope::{Envelope, WrappedDek};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, RwLock};
 
@@ -79,6 +79,11 @@ impl FieldCrypto {
         // justified: RwLock poison is unrecoverable
         *self.audit.write().unwrap() = Some(audit);
         self
+    }
+
+    /// All wrapped DEKs known to the envelope (for persistence).
+    pub fn wrapped_deks(&self) -> Vec<WrappedDek> {
+        self.envelope.wrapped_deks()
     }
 
     /// Generate a compliance summary for audit reporting (MRFC-0020 Phase 4).

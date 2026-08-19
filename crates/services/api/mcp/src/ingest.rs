@@ -185,14 +185,7 @@ pub(crate) fn run_ingest_dir(
     // Store the IR as production knowledge: one KO per entity with kernel
     // relationships between them. The summary KO below remains only as the
     // compile_context IR snapshot (tool_compile_context reads ir_json).
-    let engine = match RedbEngine::open(db_path) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("open db: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+    let kernel = match engine::open_kernel_auto(db_path) {
         Ok(k) => k,
         Err(e) => {
             eprintln!("open kernel: {}", e);

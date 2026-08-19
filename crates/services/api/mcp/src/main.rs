@@ -17,6 +17,7 @@ mod authz;
 mod cli;
 mod config;
 mod dispatcher;
+mod engine;
 mod error_codes;
 mod graph_ui;
 mod helpers;
@@ -193,14 +194,7 @@ fn main() {
     let model_dir_flag = cfg.model_dir;
     MEMORY_DIR.set(memory_dir).ok();
 
-    let engine = match RedbEngine::open(&db_path) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("open store: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xA9C9) {
+    let kernel = match engine::open_kernel(&db_path, &cfg.encryption) {
         Ok(k) => k,
         Err(e) => {
             eprintln!("open kernel: {}", e);

@@ -29,8 +29,23 @@ pub(crate) struct RuntimeConfig {
     /// tools/call (TCP + stdio) and per token on the REST surface.
     pub rate_enabled: bool,
     pub rate_max_calls_per_minute: u64,
+    /// [encryption] — encryption-at-rest (MRFC-0020), wired in serve + all
+    /// store-opening subcommands via engine::open_kernel.
+    pub encryption: RuntimeEncryption,
     /// The TOML path that took effect (for diagnostics).
     pub config_path: Option<String>,
+}
+
+/// Merged encryption settings (MRFC-0020). Disabled by default.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RuntimeEncryption {
+    pub enabled: bool,
+    /// Path to the LocalKms key file (v2 envelope, auto-created on first use).
+    pub key_path: String,
+    /// None = no passphrase configured (fail-closed at open when enabled).
+    pub passphrase: Option<String>,
+    /// Field-level policies: type_name → fields encrypted on remember.
+    pub policies: std::collections::HashMap<String, Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -75,10 +90,9 @@ struct TomlServer {
 #[serde(deny_unknown_fields)]
 struct TomlEncryption {
     enabled: Option<bool>,
-    #[allow(dead_code)]
     key_path: Option<String>,
-    #[allow(dead_code)]
     passphrase: Option<String>,
+    policies: Option<std::collections::HashMap<String, Vec<String>>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -153,6 +167,46 @@ fn find_toml(args: &[String]) -> Result<Option<String>, String> {
     Ok(None)
 }
 
+/// Apply a TOML [encryption] section onto merged settings (shared by `load`
+/// and subcommand discovery).
+fn apply_toml_encryption(enc: &mut RuntimeEncryption, e: TomlEncryption) {
+    enc.enabled = e.enabled.unwrap_or(enc.enabled);
+    if let Some(kp) = e.key_path {
+        enc.key_path = kp;
+    }
+    if let Some(p) = e.passphrase {
+        enc.passphrase = Some(p);
+    }
+    if let Some(p) = e.policies {
+        enc.policies = p;
+    }
+}
+
+impl RuntimeEncryption {
+    /// Subcommand discovery: `./aikoql.toml` → `/etc/aikoql/aikoql.toml` + env
+    /// (serve passes its already-merged settings instead — `load()` layered
+    /// `--config`/CLI on top). Fails closed: a broken TOML must not silently
+    /// downgrade an encrypted database to a plaintext open.
+    pub(crate) fn discover() -> Result<RuntimeEncryption, String> {
+        let mut enc = RuntimeEncryption {
+            key_path: "./aikoql.key".into(),
+            ..Default::default()
+        };
+        if let Some(path) = find_toml(&[])? {
+            let raw =
+                std::fs::read_to_string(&path).map_err(|e| format!("config {path}: read: {e}"))?;
+            let t: TomlConfig = toml::from_str(&raw).map_err(|e| format!("config {path}: {e}"))?;
+            if let Some(e) = t.encryption {
+                apply_toml_encryption(&mut enc, e);
+            }
+        }
+        if let Some(v) = env_opt("AIKOQL_PASSPHRASE") {
+            enc.passphrase = Some(v);
+        }
+        Ok(enc)
+    }
+}
+
 /// Layering: defaults → TOML → env → CLI. `subcmd == Some("serve")` skips
 /// the `serve` token when scanning flags/positionals (mirrors the old main.rs
 /// loop); bare `aikoql-mcp [DB]` still works.
@@ -176,6 +230,10 @@ pub(crate) fn load(
         log_format: "text".into(),
         rate_enabled: true,
         rate_max_calls_per_minute: 120,
+        encryption: RuntimeEncryption {
+            key_path: "./aikoql.key".into(),
+            ..Default::default()
+        },
         config_path: None,
     };
 
@@ -215,11 +273,7 @@ pub(crate) fn load(
             }
         }
         if let Some(e) = t.encryption {
-            if e.enabled == Some(true) {
-                return Err(format!(
-                    "config {path}: encryption.enabled=true but encryption-at-rest is not wired into serve yet (MRFC-0020) — set enabled=false"
-                ));
-            }
+            apply_toml_encryption(&mut cfg.encryption, e);
         }
         if let Some(r) = t.rate_limit {
             cfg.rate_enabled = r.enabled.unwrap_or(cfg.rate_enabled);
@@ -293,6 +347,9 @@ pub(crate) fn load(
     }
     if let Some(v) = env_opt("AIKOQL_MODEL_DIR") {
         cfg.model_dir = Some(v);
+    }
+    if let Some(v) = env_opt("AIKOQL_PASSPHRASE") {
+        cfg.encryption.passphrase = Some(v);
     }
 
     // Layer 4: CLI (highest precedence). Same semantics as the pre-PRR-4 loop.
@@ -588,10 +645,49 @@ level = "debug"
     }
 
     #[test]
-    fn encryption_enabled_rejected() {
-        let p = tmp_toml("[encryption]\nenabled = true\n");
-        let err = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap_err();
-        assert!(err.contains("encryption"), "got: {err}");
+    fn encryption_defaults_disabled() {
+        let cfg = load_bare(&argv(&["aikoql-mcp"])).unwrap();
+        assert!(!cfg.encryption.enabled);
+        assert_eq!(cfg.encryption.key_path, "./aikoql.key");
+        assert!(cfg.encryption.passphrase.is_none());
+        assert!(cfg.encryption.policies.is_empty());
+    }
+
+    #[test]
+    fn encryption_toml_parsed() {
+        let p = tmp_toml(
+            r#"
+[encryption]
+enabled = true
+key_path = "/k/kf"
+passphrase = "from-toml"
+
+[encryption.policies]
+employee = ["salary", "ssn"]
+"#,
+        );
+        let cfg = load_t(&argv(&["aikoql-mcp", "--config", &p]), None, None).unwrap();
+        assert!(cfg.encryption.enabled);
+        assert_eq!(cfg.encryption.key_path, "/k/kf");
+        assert_eq!(cfg.encryption.passphrase.as_deref(), Some("from-toml"));
+        assert_eq!(
+            cfg.encryption.policies.get("employee"),
+            Some(&vec!["salary".to_string(), "ssn".to_string()])
+        );
+    }
+
+    #[test]
+    fn encryption_passphrase_env_overrides_toml() {
+        let p = tmp_toml("[encryption]\nenabled = true\npassphrase = \"from-toml\"\n");
+        let cfg = load_with_env(|| {
+            std::env::set_var("AIKOQL_PASSPHRASE", "from-env");
+            let r = load(&argv(&["aikoql-mcp", "--config", &p]), None, None);
+            std::env::remove_var("AIKOQL_PASSPHRASE");
+            r
+        })
+        .unwrap();
+        assert!(cfg.encryption.enabled);
+        assert_eq!(cfg.encryption.passphrase.as_deref(), Some("from-env"));
     }
 
     #[test]
