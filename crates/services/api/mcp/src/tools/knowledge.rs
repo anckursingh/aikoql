@@ -189,12 +189,18 @@ pub(crate) fn tool_transition_epistemic(k: &Kernel, args: &J) -> Result<J, Strin
         .ok_or("missing argument: to")?;
     let to =
         EpistemicStatus::from_str(to).ok_or_else(|| format!("unknown epistemic status: {}", to))?;
+    // v0.3 K2: naming the successor wires the SUPERSEDES edge + ends validity.
+    let superseded_by = match args.get("superseded_by").and_then(|s| s.as_str()) {
+        Some(hex) => Some(KOID::from_hex(hex).map_err(|e| e.to_string())?),
+        None => None,
+    };
     let r = k
         .transition_epistemic(
             subject_of(args),
             &koid_of(args)?,
             to,
             parse_origin(args),
+            superseded_by,
             args.get("expected_version").and_then(|v| v.as_u64()),
             args.get("reason")
                 .and_then(|r| r.as_str())

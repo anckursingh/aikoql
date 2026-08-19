@@ -321,6 +321,7 @@ fn plain_update_carries_epistemic_metadata_forward() {
         Origin::System,
         None,
         None,
+        None,
     )
     .unwrap();
     let before = k.get(&alice(), &id).unwrap();

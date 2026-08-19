@@ -1079,6 +1079,8 @@ impl Kernel {
                 KnowledgeObject::EXT_EVIDENCE,
                 KnowledgeObject::EXT_LIFECYCLE_HISTORY,
                 KnowledgeObject::EXT_CONTENT_TRUST,
+                KnowledgeObject::EXT_VALID_FROM,
+                KnowledgeObject::EXT_VALID_TO,
                 "authority",
                 "scope",
             ] {
@@ -1877,12 +1879,20 @@ impl Kernel {
     /// lands an `EpistemicChanged` event in the audit chain. Transitions
     /// create evidence: the history entry records from/to, wall-clock,
     /// actor, and reason.
+    ///
+    /// v0.3 K2 supersession semantics: moving to `Superseded` ends the fact's
+    /// validity now (stamps `valid_to` when absent) and, when `superseded_by`
+    /// names the successor, records the `SUPERSEDES` edge on the superseded
+    /// KO. Supersession lives on the epistemic path — the review's own
+    /// doctrine keeps epistemic ("do we still hold this") orthogonal to
+    /// lifecycle ("is this record maintained").
     pub fn transition_epistemic(
         &self,
         ctx: impl Into<KnowledgeContext>,
         koid: &KOID,
         to: EpistemicStatus,
         origin: Origin,
+        superseded_by: Option<KOID>,
         expected_version: Option<u64>,
         reason: Option<String>,
     ) -> KResult<EpistemicChanged> {
@@ -1910,6 +1920,28 @@ impl Kernel {
         let mut ko = head.clone();
         ko.version = cur_v + 1;
         ko.set_epistemic_status(to);
+        if to == EpistemicStatus::Superseded {
+            if ko.valid_to().is_none() {
+                ko.set_valid_time(ko.valid_from(), Some(at));
+            }
+            if let Some(target) = superseded_by {
+                if self.head_object(&target)?.is_none() {
+                    return Err(KError::InvalidObject(format!(
+                        "superseded_by target not found: {}",
+                        target.to_hex()
+                    )));
+                }
+                ko.relationships.push(RelationshipRef {
+                    rel_type: SUPERSEDES.into(),
+                    target,
+                    direction: Direction::Outbound,
+                });
+            }
+        } else if superseded_by.is_some() {
+            return Err(KError::InvalidObject(
+                "'superseded_by' requires a transition to 'superseded'".into(),
+            ));
+        }
         ko.push_epistemic_history(from, to, at, &ctx.subject.name, reason.as_deref());
         let (commit_ts, _seq) = self.commit_version(
             &mut pipe,
@@ -2092,6 +2124,66 @@ impl Kernel {
             .unwrap()
             .authorize(&ctx.subject, &ko, Action::Read)?;
         Ok(ko)
+    }
+
+    // ---- v0.3 K2: temporal reads -------------------------------------------
+
+    /// Current wall-clock millis from the kernel clock — "now" for valid-time
+    /// evaluation. Distinct from HLC commit timestamps.
+    pub fn clock_now(&self) -> u64 {
+        self.clock.millis()
+    }
+
+    /// Point-in-time (transaction-time) read: the version this kernel had
+    /// committed as of wall-clock `at_millis`. Packs to the HLC layout
+    /// (`millis << 16 | counter`) so the MVCC `<= snap` comparison selects
+    /// the newest version committed at or before that instant; `Ok(None)`
+    /// when the KO did not exist (or was not yet committed) by then.
+    pub fn get_as_of(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: &KOID,
+        at_millis: u64,
+    ) -> KResult<Option<KnowledgeObject>> {
+        let ctx = ctx.into();
+        let snap = at_millis.checked_shl(16).unwrap_or(u64::MAX);
+        let Some(ko) = self.object_at(koid, snap)? else {
+            return Ok(None);
+        };
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &ko, Action::Read)?;
+        Ok(Some(ko))
+    }
+
+    /// All committed versions of `koid` in ascending commit order —
+    /// historical reconstruction for the `HISTORICAL` query operator.
+    /// Tombstone (Deleted) versions are skipped; each version is
+    /// ACL-checked independently (a version's ACL may differ from the head).
+    pub fn history(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: &KOID,
+    ) -> KResult<Vec<(u64, KnowledgeObject)>> {
+        let ctx = ctx.into();
+        let mut out = Vec::new();
+        for (ts, ko) in self.objects.scan_versions(koid)? {
+            if ko.lifecycle.state == LifecycleState::Deleted {
+                continue;
+            }
+            if self
+                .auth
+                .read()
+                .unwrap()
+                .authorize(&ctx.subject, &ko, Action::Read)
+                .is_err()
+            {
+                continue;
+            }
+            out.push((ts, ko));
+        }
+        Ok(out)
     }
 
     // ---- find_similar (MRFC-0011 §6.4) --------------------------------------

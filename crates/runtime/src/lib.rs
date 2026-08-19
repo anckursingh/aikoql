@@ -89,6 +89,9 @@ pub struct Interpreter {
     cached_subject: Option<Subject>,
     /// The previous scored result, stored for Fuse to combine with the current.
     prev_scored: Option<Vec<(KOID, f32, String, u64)>>,
+    /// v0.3 K2: temporal plans own their time semantics (AS_OF/BETWEEN/
+    /// HISTORICAL), so the Scan arm skips its default "valid now" filter.
+    temporal_mode: bool,
 }
 
 impl Interpreter {
@@ -98,6 +101,10 @@ impl Interpreter {
             cached_objects: None,
             cached_subject: None,
             prev_scored: None,
+            temporal_mode: plan
+                .operators
+                .iter()
+                .any(|op| matches!(op, IrOp::Temporal { .. })),
         };
         let mut rows = RowSet::Objects(Vec::new());
         for op in &plan.operators {
@@ -138,7 +145,14 @@ impl Interpreter {
                     Some(t) => subj.in_tenant(t),
                     None => subj,
                 };
-                let kos = kernel.scan_by_type(&subj, type_name)?;
+                let mut kos = kernel.scan_by_type(&subj, type_name)?;
+                // v0.3 K2: default MATCH answers with current truth — facts
+                // not valid at "now" stay out of relational results. Temporal
+                // plans (AS_OF/BETWEEN/HISTORICAL) handle time themselves.
+                if !self.temporal_mode {
+                    let now = kernel.clock_now();
+                    kos.retain(|ko| ko.valid_at(now));
+                }
                 self.cached_objects = Some(kos.clone());
                 self.cached_subject = Some(subj);
                 Ok(RowSet::Objects(kos))
@@ -316,6 +330,73 @@ impl Interpreter {
                 };
                 let fused = Self::fuse_scored(&prev, &current, mode);
                 Ok(RowSet::Scored(fused))
+            }
+            IrOp::Temporal { op } => {
+                let kos = match input {
+                    RowSet::Objects(kos) => kos,
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "Temporal requires Object input".into(),
+                        ))
+                    }
+                };
+                let subj = self.cached_subject.clone().ok_or_else(|| {
+                    KError::InvalidQuery("Temporal requires a Scan subject".into())
+                })?;
+                let out = match op {
+                    // Transaction-time reconstruction: the version committed
+                    // at/before `at`. Rows that did not exist yet (or were
+                    // already tombstones) are dropped.
+                    TemporalOp::AsOf(at) => {
+                        let mut out = Vec::new();
+                        for ko in &kos {
+                            if let Some(v) = kernel.get_as_of(&subj, &ko.koid, *at)? {
+                                if v.lifecycle.state != LifecycleState::Deleted {
+                                    out.push(v);
+                                }
+                            }
+                        }
+                        out
+                    }
+                    // Valid-time overlap with [from, to): half-open. Timeless
+                    // facts (no bounds) overlap every window.
+                    TemporalOp::Between { from, to } => kos
+                        .into_iter()
+                        .filter(|ko| {
+                            ko.valid_from().unwrap_or(0) < *to
+                                && ko.valid_to().map(|t| t > *from).unwrap_or(true)
+                        })
+                        .collect(),
+                    // Historical reconstruction: every committed version of
+                    // every scanned KOID, ascending commit order.
+                    TemporalOp::Historical => {
+                        let mut out = Vec::new();
+                        for ko in &kos {
+                            for (_ts, v) in kernel.history(&subj, &ko.koid)? {
+                                out.push(v);
+                            }
+                        }
+                        out
+                    }
+                };
+                self.cached_objects = Some(out.clone());
+                Ok(RowSet::Objects(out))
+            }
+            IrOp::EpistemicFilter { allowed } => {
+                let kos = match input {
+                    RowSet::Objects(kos) => kos,
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "EpistemicFilter requires Object input".into(),
+                        ))
+                    }
+                };
+                let out: Vec<KnowledgeObject> = kos
+                    .into_iter()
+                    .filter(|ko| allowed.iter().any(|s| s == ko.epistemic_status().as_str()))
+                    .collect();
+                self.cached_objects = Some(out.clone());
+                Ok(RowSet::Objects(out))
             }
             IrOp::Project { fields } => {
                 let mut kos = match input {
@@ -1083,5 +1164,211 @@ mod tests {
             }
             _ => panic!("expected Scored"),
         }
+    }
+
+    // ---- v0.3 K2: temporal + epistemic operators ----
+
+    fn mk_with_clock() -> (Kernel, Arc<ManualClock>) {
+        let clock = Arc::new(ManualClock::new(20_000));
+        let k = Kernel::open(Arc::new(MemoryEngine::new()), clock.clone(), 0xCAFE).unwrap();
+        (k, clock)
+    }
+
+    fn fact_with_validity(
+        k: &Kernel,
+        who: &str,
+        prop: &str,
+        v: i64,
+        valid: Option<(u64, u64)>,
+    ) -> KOID {
+        let mut ext = ExtensionMap::new();
+        if let Some((from, to)) = valid {
+            ext.insert("valid_from".into(), Value::Int(from as i64));
+            ext.insert("valid_to".into(), Value::Int(to as i64));
+        }
+        let mut props = PropertyMap::new();
+        props.insert(prop.into(), Value::Int(v));
+        k.remember(RememberRequest {
+            context: Subject::new(who).into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "fact".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: ext,
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap()
+        .koid
+    }
+
+    fn update_val(k: &Kernel, who: &str, id: KOID, expected: u64, prop: &str, v: i64) {
+        let mut props = PropertyMap::new();
+        props.insert(prop.into(), Value::Int(v));
+        k.remember(RememberRequest {
+            context: Subject::new(who).into(),
+            koid: Some(id),
+            expected_version: Some(expected),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "fact".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: ExtensionMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap();
+    }
+
+    fn scan_plan() -> IrPlan {
+        IrPlan::new(vec![IrOp::Scan {
+            type_name: "fact".into(),
+            subject: "alice".into(),
+            roles: vec![],
+            tenant: None,
+        }])
+    }
+
+    fn objects(result: RowSet) -> Vec<KnowledgeObject> {
+        match result {
+            RowSet::Objects(kos) => kos,
+            other => panic!("expected Objects, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn default_match_excludes_facts_not_valid_now() {
+        let (k, _clock) = mk_with_clock(); // now = 20_000
+        fact_with_validity(&k, "alice", "a", 1, None); // timeless: included
+        fact_with_validity(&k, "alice", "b", 2, Some((30_000, 40_000))); // future: excluded
+        fact_with_validity(&k, "alice", "c", 3, Some((0, 10_000))); // expired: excluded
+        fact_with_validity(&k, "alice", "d", 4, Some((10_000, 30_000))); // valid now
+
+        let kos = objects(Interpreter::execute(&k, &scan_plan()).unwrap());
+        assert_eq!(kos.len(), 2, "timeless and currently-valid facts only");
+        let vals: Vec<i64> = kos
+            .iter()
+            .map(
+                |ko| match ko.properties.get("a").or(ko.properties.get("d")) {
+                    Some(Value::Int(v)) => *v,
+                    other => panic!("unexpected row: {:?}", other),
+                },
+            )
+            .collect();
+        assert_eq!(vals, vec![1, 4]);
+    }
+
+    #[test]
+    fn as_of_reconstructs_committed_versions() {
+        let (k, clock) = mk_with_clock();
+        let id = fact_with_validity(&k, "alice", "a", 1, None); // v1 at 20_000
+        clock.tick(10_000);
+        update_val(&k, "alice", id, 1, "a", 2); // v2 at 30_000
+
+        let as_of = |t: u64| {
+            let mut plan = scan_plan();
+            plan.operators.push(IrOp::Temporal {
+                op: TemporalOp::AsOf(t),
+            });
+            objects(Interpreter::execute(&k, &plan).unwrap())
+        };
+
+        // Between the commits: v1.
+        let mid = as_of(25_000);
+        assert_eq!(mid.len(), 1);
+        assert_eq!(mid[0].version, 1);
+        assert_eq!(mid[0].properties.get("a"), Some(&Value::Int(1)));
+        // After the second commit: v2.
+        let late = as_of(35_000);
+        assert_eq!(late[0].version, 2);
+        // Before creation: nothing.
+        assert!(as_of(5_000).is_empty());
+    }
+
+    #[test]
+    fn between_uses_valid_time_overlap_semantics() {
+        let (k, _clock) = mk_with_clock();
+        fact_with_validity(&k, "alice", "a", 1, Some((25_000, 35_000))); // overlaps first window
+        fact_with_validity(&k, "alice", "b", 2, None); // timeless: any window
+        fact_with_validity(&k, "alice", "c", 3, Some((0, 10_000))); // long expired
+
+        let between = |from: u64, to: u64| {
+            let mut plan = scan_plan();
+            plan.operators.push(IrOp::Temporal {
+                op: TemporalOp::Between { from, to },
+            });
+            objects(Interpreter::execute(&k, &plan).unwrap())
+        };
+
+        // [30_000, 40_000): a overlaps, timeless included, c excluded.
+        let rows = between(30_000, 40_000);
+        assert_eq!(rows.len(), 2);
+        // [35_000, 40_000): half-open — a's valid_to == from, excluded.
+        assert_eq!(between(35_000, 40_000).len(), 1);
+        // [5_000, 10_000): a not yet valid; c overlaps (valid at 9_999) →
+        // included with the timeless fact.
+        assert_eq!(between(5_000, 10_000).len(), 2);
+    }
+
+    #[test]
+    fn historical_enumerates_all_versions_ascending() {
+        let (k, clock) = mk_with_clock();
+        let id = fact_with_validity(&k, "alice", "a", 1, None);
+        clock.tick(10_000);
+        update_val(&k, "alice", id, 1, "a", 2);
+        clock.tick(10_000);
+        update_val(&k, "alice", id, 2, "a", 3);
+
+        let mut plan = scan_plan();
+        plan.operators.push(IrOp::Temporal {
+            op: TemporalOp::Historical,
+        });
+        let kos = objects(Interpreter::execute(&k, &plan).unwrap());
+        assert_eq!(kos.len(), 3, "one row per committed version");
+        let versions: Vec<u64> = kos.iter().map(|ko| ko.version).collect();
+        assert_eq!(versions, vec![1, 2, 3], "ascending commit order");
+    }
+
+    #[test]
+    fn epistemic_filter_selects_by_status() {
+        let (k, _clock) = mk_with_clock();
+        let id = fact_with_validity(&k, "alice", "a", 1, None);
+        fact_with_validity(&k, "alice", "b", 2, None);
+        k.transition_epistemic(
+            &Subject::new("alice"),
+            &id,
+            EpistemicStatus::Verified,
+            Origin::Human,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let mut plan = scan_plan();
+        plan.operators.push(IrOp::EpistemicFilter {
+            allowed: vec!["verified".into()],
+        });
+        let kos = objects(Interpreter::execute(&k, &plan).unwrap());
+        assert_eq!(kos.len(), 1);
+        assert_eq!(kos[0].epistemic_status(), EpistemicStatus::Verified);
     }
 }

@@ -984,6 +984,61 @@ impl KnowledgeObject {
             }
         }
     }
+
+    // ---- v0.3 K2: Valid-time helpers (stored in extensions) ----
+
+    /// Extension key for valid_from (epoch millis; absent = unbounded past).
+    pub const EXT_VALID_FROM: &str = "valid_from";
+    /// Extension key for valid_to (epoch millis; absent = unbounded future).
+    pub const EXT_VALID_TO: &str = "valid_to";
+
+    /// Start of the validity interval, epoch millis. None = unbounded past.
+    /// Distinct from commit_ts (transaction time) and from `observed_at` —
+    /// this is when the knowledge is true in the world (K2 adversarial test:
+    /// timeless sentences must not create timeless truth).
+    pub fn valid_from(&self) -> Option<u64> {
+        match self.extensions.get(Self::EXT_VALID_FROM) {
+            Some(Value::Int(v)) if *v >= 0 => Some(*v as u64),
+            _ => None,
+        }
+    }
+
+    /// End of the validity interval (exclusive), epoch millis. None = open.
+    pub fn valid_to(&self) -> Option<u64> {
+        match self.extensions.get(Self::EXT_VALID_TO) {
+            Some(Value::Int(v)) if *v >= 0 => Some(*v as u64),
+            _ => None,
+        }
+    }
+
+    /// Set the [valid_from, valid_to) interval; None clears a bound.
+    pub fn set_valid_time(&mut self, from: Option<u64>, to: Option<u64>) {
+        match from {
+            Some(f) => {
+                self.extensions
+                    .insert(Self::EXT_VALID_FROM.into(), Value::Int(f as i64));
+            }
+            None => {
+                self.extensions.remove(Self::EXT_VALID_FROM);
+            }
+        }
+        match to {
+            Some(t) => {
+                self.extensions
+                    .insert(Self::EXT_VALID_TO.into(), Value::Int(t as i64));
+            }
+            None => {
+                self.extensions.remove(Self::EXT_VALID_TO);
+            }
+        }
+    }
+
+    /// True when `at_millis` falls inside the validity interval. Half-open
+    /// [valid_from, valid_to); an absent bound is unbounded on that side.
+    pub fn valid_at(&self, at_millis: u64) -> bool {
+        self.valid_from().map(|f| f <= at_millis).unwrap_or(true)
+            && self.valid_to().map(|t| t > at_millis).unwrap_or(true)
+    }
 }
 
 /// Canonical extension encoding of one evidence record (v0.3 K1).

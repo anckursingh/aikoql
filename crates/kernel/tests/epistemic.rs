@@ -206,6 +206,7 @@ fn happy_path_records_status_history_and_audit_event() {
             Asserted,
             Origin::Human,
             None,
+            None,
             Some("manual review".into()),
         )
         .unwrap();
@@ -250,12 +251,12 @@ fn happy_path_records_status_history_and_audit_event() {
 fn illegal_transition_is_rejected_unchanged() {
     let k = mk();
     let id = create_fact(&k, &alice(), "fact");
-    k.transition_epistemic(&alice(), &id, Verified, Origin::System, None, None)
+    k.transition_epistemic(&alice(), &id, Verified, Origin::System, None, None, None)
         .unwrap(); // Observed -> Verified is legal
 
     // Verified -> Asserted is a downgrade: rejected.
     let err = k
-        .transition_epistemic(&alice(), &id, Asserted, Origin::System, None, None)
+        .transition_epistemic(&alice(), &id, Asserted, Origin::System, None, None, None)
         .unwrap_err();
     assert!(matches!(
         err,
@@ -266,7 +267,7 @@ fn illegal_transition_is_rejected_unchanged() {
     ));
 
     // Terminal state: nothing after Superseded.
-    k.transition_epistemic(&alice(), &id, Superseded, Origin::System, None, None)
+    k.transition_epistemic(&alice(), &id, Superseded, Origin::System, None, None, None)
         .unwrap();
     for target in [
         Observed,
@@ -277,7 +278,7 @@ fn illegal_transition_is_rejected_unchanged() {
         Contradicted,
     ] {
         let err = k
-            .transition_epistemic(&alice(), &id, target, Origin::System, None, None)
+            .transition_epistemic(&alice(), &id, target, Origin::System, None, None, None)
             .unwrap_err();
         assert!(matches!(err, KError::InvalidEpistemic { .. }));
     }
@@ -295,14 +296,23 @@ fn illegal_transition_is_rejected_unchanged() {
 fn contradicted_can_be_reasserted_with_stronger_evidence() {
     let k = mk();
     let id = create_fact(&k, &alice(), "fact");
-    k.transition_epistemic(&alice(), &id, Contradicted, Origin::System, None, None)
-        .unwrap();
+    k.transition_epistemic(
+        &alice(),
+        &id,
+        Contradicted,
+        Origin::System,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     let r = k
         .transition_epistemic(
             &alice(),
             &id,
             Asserted,
             Origin::Human,
+            None,
             None,
             Some("re-asserted on stronger evidence".into()),
         )
@@ -314,7 +324,7 @@ fn contradicted_can_be_reasserted_with_stronger_evidence() {
 fn history_survives_reopen_and_accumulates() {
     let (k, store) = mk_with_store();
     let id = create_fact(&k, &alice(), "fact"); // Human → Asserted head
-    k.transition_epistemic(&alice(), &id, Verified, Origin::System, None, None)
+    k.transition_epistemic(&alice(), &id, Verified, Origin::System, None, None, None)
         .unwrap();
     drop(k);
 
@@ -337,7 +347,7 @@ fn history_survives_reopen_and_accumulates() {
     }
 
     // And the chain continues from the persisted state.
-    k2.transition_epistemic(&alice(), &id, Superseded, Origin::System, None, None)
+    k2.transition_epistemic(&alice(), &id, Superseded, Origin::System, None, None, None)
         .unwrap();
     let ko = k2.get(&alice(), &id).unwrap();
     assert_eq!(ko.epistemic_status(), Superseded);
@@ -352,7 +362,15 @@ fn occ_guard_applies_to_epistemic_transitions() {
     let k = mk();
     let id = create_fact(&k, &alice(), "fact"); // Asserted head
     let err = k
-        .transition_epistemic(&alice(), &id, Verified, Origin::System, Some(99), None)
+        .transition_epistemic(
+            &alice(),
+            &id,
+            Verified,
+            Origin::System,
+            None,
+            Some(99),
+            None,
+        )
         .unwrap_err();
     assert!(matches!(
         err,

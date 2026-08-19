@@ -1188,3 +1188,123 @@ fn k1_epistemic_and_evidence_end_to_end() {
 
     let _ = std::fs::remove_file(&db);
 }
+
+// ---- v0.3 K2 acceptance ------------------------------------------------------
+
+#[test]
+fn k2_temporal_operators_end_to_end() {
+    let db = tmp_db("k2");
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "k2", "version": "0"}}));
+    c.notify("notifications/initialized");
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    // 1. Two generations of a fact. The old one is valid since the epoch
+    // (timeless upper bound); the new one is valid since Nov 2023.
+    let old = c.call_tool(
+        "remember",
+        json!({
+            "subject": "alice",
+            "type_name": "claim",
+            "properties": {"text": "we use kafka"},
+            "extensions": {"valid_from": 0}
+        }),
+    );
+    let old_koid = old["koid"].as_str().unwrap().to_string();
+    let new = c.call_tool(
+        "remember",
+        json!({
+            "subject": "alice",
+            "type_name": "claim",
+            "properties": {"text": "we use rabbitmq"},
+            "extensions": {"valid_from": 1_700_000_000_000u64}
+        }),
+    );
+    let new_koid = new["koid"].as_str().unwrap().to_string();
+
+    let ql = |c: &mut McpClient, query: &str| {
+        c.call_tool("aikoql", json!({"subject": "alice", "query": query}))["results"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+
+    // 2. Default MATCH answers with current truth: both generations are
+    // valid now.
+    assert_eq!(ql(&mut c, "MATCH claim RETURN *").len(), 2);
+
+    // 3. BETWEEN narrows to valid-time overlap: only the old generation was
+    // valid during [1000, 2000).
+    let between = ql(&mut c, "MATCH claim BETWEEN 1000 AND 2000 RETURN *");
+    assert_eq!(between.len(), 1);
+    assert_eq!(between[0]["properties"]["text"], "we use kafka");
+
+    // 4. AS_OF is transaction-time reconstruction: nothing existed at epoch 0.
+    assert_eq!(ql(&mut c, "MATCH claim AS_OF 0 RETURN *").len(), 0);
+    let as_of_now = ql(
+        &mut c,
+        &format!("MATCH claim AS_OF {} RETURN *", now_ms + 60_000),
+    );
+    assert_eq!(as_of_now.len(), 2);
+
+    // 5. Supersession through the protocol: validity ends now and the
+    // SUPERSEDES edge old -> new is wired.
+    let t = c.call_tool(
+        "transition_epistemic",
+        json!({
+            "subject": "alice",
+            "koid": old_koid,
+            "to": "superseded",
+            "superseded_by": new_koid,
+            "reason": "migrated to rabbitmq"
+        }),
+    );
+    assert_eq!(t["from"], "asserted");
+    assert_eq!(t["to"], "superseded");
+    let ko = c.call_tool("get", json!({"subject": "alice", "koid": old_koid}));
+    let valid_to = ko["extensions"]["valid_to"].as_i64().unwrap();
+    assert!(
+        (valid_to as u64) >= now_ms - 60_000,
+        "supersession must end validity at ~now, got {}",
+        valid_to
+    );
+    let hits = c.call_tool(
+        "traverse",
+        json!({"subject": "alice", "koid": old_koid, "rel_type": "supersedes"}),
+    );
+    assert_eq!(hits["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(hits["hits"][0]["koid"], new_koid);
+
+    // 6. Current truth excludes the superseded generation — no application
+    // code reconstructs this; the runtime enforces validity.
+    let current = ql(&mut c, "MATCH claim RETURN *");
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0]["properties"]["text"], "we use rabbitmq");
+
+    // 7. HISTORICAL reconstructs every committed version: old appears twice
+    // (asserted + superseded), new once.
+    let hist = ql(&mut c, "MATCH claim HISTORICAL RETURN *");
+    assert_eq!(hist.len(), 3);
+    let old_versions: Vec<u64> = hist
+        .iter()
+        .filter(|r| r["koid"] == old_koid.as_str())
+        .map(|r| r["version"].as_u64().unwrap())
+        .collect();
+    assert_eq!(old_versions, vec![1, 2], "ascending commit order");
+
+    // 8. K1 leftover closed: protocol-level epistemic filter. The successor
+    // passes human review; EPISTEMIC verified returns only it.
+    c.call_tool(
+        "transition_epistemic",
+        json!({"subject": "alice", "koid": new_koid, "to": "verified", "reason": "ops review"}),
+    );
+    let verified = ql(&mut c, "MATCH claim EPISTEMIC verified RETURN *");
+    assert_eq!(verified.len(), 1);
+    assert_eq!(verified[0]["koid"], new_koid.as_str());
+
+    let _ = std::fs::remove_file(&db);
+}
