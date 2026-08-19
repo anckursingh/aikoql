@@ -3,8 +3,8 @@
 **Architecture:** [MRFC-0005](MRFC-0005-System-Architecture.md) | [MRFC-0010](MRFC-0010-aikoql-Parser-Architecture-v2.md) | [MRFC-0020](MRFC-0020-Encryption-Key-Management-Architecture.md) | [MRFC-0030](#mrf-0030-active-knowledge-objects--the-knowledge-operating-system) — Active Knowledge Objects | [MRFC-0050](#mrf-0050-document-ocr--knowledge-ingestion) — Document OCR & Ingestion | [MRFC-0060](#mrf-0060-constraint-engine) — Schema, Constraint & Integrity Engine | **NEW: [MRFC-0070](#mrf-0070-agent-knowledge-interface--engineering-knowledge-compiler) — Agent Knowledge Interface & Engineering Knowledge Compiler**  
 **Conceptual Model:** [Universal Conceptual Model for Engineering Agents](Universal-Conceptual-Model-for-Engineering-Agents.md)  
 **Status:** Phases 1–5 complete, MRFC-0020 complete, API Layer done, MRFC-0030 Phase 7a–7d complete (9/9 Active KOs + Agent Runtime), MRFC-0040 complete, Studio Phase S2/S3/S4 complete (Document Compiler UI), MRFC-0050 Phase D1–D9 complete (full Document Knowledge Compiler pipeline), MRFC-0060 Phase C1–C9 + gap-filling complete (~95%), MRFC-0070 Phases A0–A10 complete (full Agent Knowledge Interface + Context Compiler). **v0.3 opened 2026-08-19 — Agent Knowledge OS (AIKOQL Reality-Check response): K1–K5 phased roadmap with evidence-based maturity marks (see §v0.3).**  
-**Last updated:** 2026-08-19 (v0.2 P0 done — encryption-at-rest wired into serve + all subcommands, DEK persistence fixed in kernel, manual e2e pass; v0.3 section added — reality-check analysis, per-capability re-scores with file:line evidence, K1-K5 phase marks, Knowledge Continuity Test exit criteria)  
-**Next session:** start K1 (Knowledge Object Kernel — wire evidence/authority/scope into the write path) and K2 (Temporal — valid_from/valid_to + temporal query operators) on `feature/mvp-launch`
+**Last updated:** 2026-08-19 (v0.2 P0 done — encryption-at-rest wired into serve + all subcommands, DEK persistence fixed in kernel, manual e2e pass; v0.3 section added — reality-check analysis, per-capability re-scores with file:line evidence, K1-K5 phase marks; coder-hypothesis review response — falsification table, per-phase exit criteria, staged continuity suite, 5 adversarial tests)  
+**Next session:** start K1 (Knowledge Object Kernel — wire evidence/authority/scope into the write path) and K2 (Temporal — valid_from/valid_to + temporal query operators) on `feature/mvp-launch`, measured against the new per-phase exit criteria
 
 ---
 
@@ -3037,7 +3037,7 @@ P3:  Docker build caching (cargo-chef) + distroless/minimal runtime —
 | Claim | Evidence |
 |---|---|
 | No valid_from/valid_to bitemporal model | Kernel KO has commit_ts-only MVCC (`kom.rs:632-653`); grep `valid_from\|valid_to\|bitemporal` across `crates/` → zero hits; ingestion `TemporalAssertion` is flattened to string properties at commit (`commit.rs:458-472`); no temporal query operators in the lexer (`lexer.rs:132-156`) |
-| Evidence/authority types exist but are not wired | Kernel `Evidence` (`evidence.rs:12-50`, 9 methods) has **zero production call sites** — dead code; `set_authority`/`set_scope` (`kom.rs:776,790`) never called; `ConflictDetector` (`kom.rs:961-993`) never invoked in production; `DERIVED_FROM`/`SUPERSEDES` (`kom.rs:874-878`) are constants — no code creates them |
+| Evidence/authority types exist but are not wired | Kernel `Evidence` (`evidence.rs:12-50`, 9 methods) has **zero production call sites** — dead code; `set_authority`/`set_scope` (`kom.rs:776,790`) never called; kernel `ConflictDetector` struct (`kom.rs:961-993`) has zero callers — ingestion uses its own `detect_conflicts` (`commit.rs:262`) as a write gate surfacing `NeedsReview` actions, report-only (no Conflict KOs persisted); `DERIVED_FROM`/`SUPERSEDES` (`kom.rs:874-878`) are constants — no code creates them |
 | No knowledge-transaction operations | observe/assert/verify/contradict/supersede/merge/invalidate — zero engine ops. A8's "workflow engine" mutates in-memory `KnowledgeIr` only (`reconciliation_workflow.rs:55-298`); `verify` is an ACL check (`kernel.rs:888`); `eval_contradictions` is report-only, creates no Conflict KOs (`eval.rs:177-227`) |
 | No derived-knowledge invalidation | Reasoning engine persists conclusions with `origin=Reason` but no premise links (`reasoning/src/lib.rs:95-123`); the constraint engine rejects writes only — no invalidation or recomputation of dependents |
 | No formal Agent Experience model | Zero structs for lesson/experience/outcome/goal in `crates/`; MRFC-0040 "Agent Experience" = developer ergonomics (session identity, error codes, batch); trigger execution results discarded (`knowledge_runtime.rs:298`); `agent_memory` TTL stored, never enforced (`tools/memory.rs:15,67`) |
@@ -3059,28 +3059,93 @@ P3:  Docker build caching (cargo-chef) + distroless/minimal runtime —
 
 | Phase | Exists (evidence) | Missing (the work) | Mark |
 |---|---|---|---|
-| **K1 — Knowledge Object Kernel** | KO model, 12-state lifecycle, Authority(11 levels)/Scope(12)/EvidenceMethod(9), ContentTrust, 12 relation types, MVCC, ACL, constraint engine C1–C9 | Wire kernel `Evidence` into KO persistence; stamp authority/scope on production write paths; unified epistemic status (OBSERVED/EXTRACTED/INFERRED/ASSERTED/VERIFIED/CONTRADICTED/SUPERSEDED); stop dropping evidence detail at commit | ~60% |
-| **K2 — Temporal Knowledge** | Transaction-time MVCC (time-travel reads `raw_object_at`, Studio timeline); `TemporalAssertion` in IR; heuristic staleness (A4) | `valid_from`/`valid_to` on the kernel KO; temporal query operators (AS_OF/BETWEEN/HISTORICAL) through lexer→planner→runtime; wire the `SUPERSEDES` edge on evolve; clock-aware staleness detection | ~20% |
-| **K3 — Evidence & Lineage** | `prove()` audit chain; SemanticBlock; ContentTrust; per-candidate IR evidence; provenance immutability (R12) | Create `DERIVED_FROM` edges whenever knowledge is derived; persist full evidence (page/bbox/confidence-detail); confidence context model (source reliability, independent confirmations, `last_verified`); lineage traversal in `trace` | ~35% |
-| **K4 — Knowledge Transactions** | A8 proposal workflow (in-memory IR); constraint write-set dependency pattern (C6 — reusable for invalidation); ConflictDetector; `eval_contradictions` | Engine ops observe/assert/verify/contradict/supersede/merge/invalidate on the kernel; dependent-knowledge invalidation + recomputation; Conflict KO creation + persisted resolution workflow | ~15% |
+| **K1 — Knowledge Object Kernel** | KO model, 12-state lifecycle, Authority(11 levels)/Scope(12)/EvidenceMethod(9), ContentTrust, 12 relation types, MVCC, ACL, constraint engine C1–C9 | Wire kernel `Evidence` into KO persistence; stamp authority/scope on production write paths; epistemic status as a constrained transition table (not a linear chain — CONTRADICTED/INFERRED are not pipeline stages); status transitions create evidence, historical status retained, queries filter by epistemic state; stop dropping evidence detail at commit | ~60% |
+| **K2 — Temporal Knowledge** | Transaction-time MVCC (time-travel reads `raw_object_at`, Studio timeline); `TemporalAssertion` in IR; heuristic staleness (A4) | `valid_from`/`valid_to` on the kernel KO; temporal query operators (AS_OF/BETWEEN/HISTORICAL) through lexer→planner→runtime; wire the `SUPERSEDES` edge on evolve; clock-aware staleness detection; planner-level strategy choice (H2 — must answer "no vector search needed" for relational/temporal/epistemic queries) | ~20% |
+| **K3 — Evidence & Lineage** | `prove()` audit chain; SemanticBlock; ContentTrust; per-candidate IR evidence; provenance immutability (R12) | First-class Derivation structure (derived object, source objects, operation, actor, model, timestamp, evidence, confidence) — a bare `DERIVED_FROM` edge is insufficient; persist full evidence (page/bbox/confidence-detail); confidence context model (source reliability, independent confirmations, `last_verified`); lineage traversal in `trace` answering WHY / FROM WHAT / DERIVED HOW / BY WHOM / WHEN | ~35% |
+| **K4 — Knowledge Transactions** | A8 proposal workflow (in-memory IR); constraint write-set dependency pattern (C6 — reusable for invalidation); ConflictDetector; `eval_contradictions` | Engine ops observe/assert/verify/contradict/supersede/merge/invalidate on the kernel under the anti-CRUD-cosplay rule (each op enforces semantics — SUPERSEDE preserves X, creates temporal transition + supersession relation + actor + evidence, invalidates dependents); dependent-knowledge invalidation + recomputation; semantic conflict resolution (persisted Conflict KOs with assertions/authorities/evidence/timestamps/scopes + resolution decision) | ~15% |
 | **K5 — Agent Experience** | `agent_memory` KV; `decide`; in-process execution stats; context compiler (semantic+lexical fusion, justification, token budget) | Experience KO (actor/goal/context/action/preconditions/outcome/causal explanation/lesson/evidence/confidence/reuse conditions); execution-outcome capture (triggers, agent runs, programs); reuse-condition matching in `compile_context`; TTL enforcement | ~10% |
 
 ### v0.3 execution order
 
 K1 → K2 → K3 → K4 → K5 (the review's order; each builds on the last). K1+K2 first: wired evidence and temporal validity are prerequisites for every higher layer. K4's invalidation graph reuses the C6 constraint write-set pattern; K5's reuse-condition matching plugs into the context compiler's ranking.
 
-### Exit criteria — the review's §20 proof
+### Exit criteria — per phase, then the end-to-end proof
 
-**The AIKOQL Knowledge Continuity Test** — three agents, one environment:
+**Completion doctrine:** a phase is done only when its capabilities pass all three levels — primitive implemented, production-wired, end-to-end semantic guarantee — never on the first level alone (reviewer §18; previously we had been marking phases on "built").
 
-1. Agent 1 discovers: architecture uses Kafka.
-2. Agent 2 changes it: Kafka → Pulsar.
-3. Agent 3 asks: what does it use? what did it use previously? why did it change? who changed it? what evidence proves the change? what else is affected? what should I be careful about?
+| Phase | Exit criteria (reviewer §19–23, adopted) |
+|---|---|
+| K1 | Every production KO carries explicit epistemic state; authority/scope stamped on every write; evidence survives ingestion → commit → storage → query; lifecycle transitions enforced in production (not tests-only); provenance immutable; identity/version semantics deterministic; no production path silently drops epistemic metadata |
+| K2 | Valid time + transaction time; historical reconstruction; AS_OF/BETWEEN/HISTORICAL operators; supersession semantics; time-aware staleness; temporal filtering in the planner; no application-side reconstruction of truth |
+| K3 | Every derived KO answers WHY / FROM WHAT / DERIVED HOW / BY WHOM / WHEN / WITH WHICH EVIDENCE — a bare source pointer is insufficient |
+| K4 | All 7 operations are real database ops with transaction semantics, authorization, provenance, lifecycle effects, temporal effects, dependency effects, auditability — `VERIFY X` must not reduce to `X.status = VERIFIED` |
+| K5 | Full Experience structure (actor/goal/context/action/outcome/cause/lesson/evidence/confidence/reuse conditions) + proof that one agent's experience is correctly reused by another under matching conditions |
 
-Pass = deterministic answers with evidence chains for all 7 questions. Becomes a conformance suite when K4 lands.
+**The AIKOQL Knowledge Continuity Test** — three agents, one environment: Agent 1 discovers "architecture uses Kafka"; Agent 2 changes Kafka → Pulsar; Agent 3 asks 10 questions. **Staged:** the suite is a progress instrument, not just a finish line — questions unlock per phase:
 
-**Dogfood (§21):** aikoql's own repository as the first knowledge universe — `ingest-dir` + `compile_context` already do this (v0.1.15+); the review's question list ("why was the planner designed this way?", "what did previous coding agents learn?", …) becomes the acceptance checklist.
+1. What messaging is currently used? — K2
+2. What was used previously? — K2
+3. When did the change happen? — K2
+4. Why did it happen? — K3
+5. Who made/observed the change? — K3
+6. What evidence proves the transition? — K3
+7. What components are affected? — K4
+8. What derived knowledge became stale? — K4
+9. What previous agent experience applies? — K5
+10. What should the next agent be careful about? — K5
+
+Pass = deterministic answers with evidence chains. A phase's unlocked questions become that phase's conformance gate.
+
+**Adversarial tests (reviewer §16 — the happy path is not enough):**
+
+| Scenario | Expectation | Gate |
+|---|---|---|
+| Contradiction: agents A→Redis, B→Valkey, C→Redis | 3 observations ≠ 3 truths; Conflict KO persists with per-assertion authority/evidence/timestamp/scope + resolution decision | K4 (detection from K1) |
+| Stale authority: architect 2024→Kafka, owner 2026→Pulsar | Authority evaluated against time — the 2026 assertion governs current | K2+K3 |
+| Missing evidence: source deleted/revoked | Knowledge stays identifiable but evidence availability degrades; confidence must not silently stay full | K3 |
+| Malicious injection: unbacked claim "uses MongoDB" | ContentTrust + authority + epistemic state prevent it becoming verified knowledge | K1 |
+| Temporal ambiguity: "project uses Java" | Timeless-sentence ingestion must not create timeless truth — observed_at/valid_from/valid_to/committed_at are distinct | K2 |
+
+**Dogfood (reviewer §17):** aikoql's own repository as the first knowledge universe — ingest source, commits, issues, PRs, ADRs, benchmarks, tests, release history, agent interactions. Acceptance: answers to the reviewer's 10 questions ("why was the planner designed this way?", "what did previous coding agents learn?", …) must contain **knowledge lineage, not just retrieved snippets**. `ingest-dir` + `compile_context` already ingest the repo (v0.1.15+); lineage answers require K3.
+
+**Positioning (reviewer H11):** until K1–K5 are demonstrably operational, public framing is **"AIKOQL — an AI-native knowledge database and query engine"**; "Agent Knowledge OS" is reserved for the K1–K5-operational state.
 
 ### What we deliberately do NOT build (review §19 "do not prioritize")
 
 Another embedding model, vector index, RAG strategy, reranker, or LLM integration. Table stakes — the moat is the semantic knowledge model (review §4: one model from which relational/vector/graph/temporal/provenance strategies are derived).
+
+---
+
+### Coder Hypothesis Review — response (2026-08-19)
+
+Second reviewer round (`AIKOQL_v0.3_Coder_Hypothesis_Review.md`, H0–H12) received via PR #1. Verdict: **convergent with our audit — and it exposed one imprecise evidence claim of ours.** H0 ("already an Agent Knowledge OS") is falsified by the table below; the reviewer's own decision rule for that outcome — primitives mostly dormant ⇒ prioritize wiring and semantic correctness over new capabilities — is exactly the K1–K5 order. The reviewer's §27 scores land within ~0.5 of our marks. K1–K5 percentage marks are unchanged: they measure what exists; the new exit criteria measure when a phase is done.
+
+**Adopted from the review:** the three-level completion doctrine (primitive ≠ wired ≠ end-to-end guarantee); per-phase exit criteria; staged continuity suite; the five adversarial tests; first-class Derivation structure (H4); epistemic status as a constrained transition model, not a string field (H5); anti-CRUD-cosplay rule for knowledge transactions (H6); semantic conflict resolution (H8); the H11 positioning split. All folded into the sections above.
+
+**Push-backs (critical-analysis notes):**
+
+- **H5's linear epistemic chain is illustrative, not a spec.** CONTRADICTED can hit any state (an OBSERVED fact is contradicted directly, never "passing through" EXTRACTED/ASSERTED), and INFERRED is an orthogonal axis (derivation), not a stage. The requirement is a constrained transition table + transitions create evidence + historical status retained — the enforced `LifecycleState` transition-table pattern (`kom.rs:507-598`) is the template. Also: epistemic status ≠ lifecycle state; two axes ("how do we know it" vs "is it live") that must not be collapsed.
+- **The continuity test must be staged** (done above). The reviewer's single pass condition requires K5; staged, every phase gets a passable gate.
+- **Our earlier table said the kernel `ConflictDetector` is never invoked in production — precise only for the struct.** Ingestion's `detect_conflicts` IS production-wired (`commit.rs:262`) as a `NeedsReview` write gate. That is still report-only (no persisted Conflict KOs, no resolution) — which confirms the reviewer's H8 falsification condition ("detect conflict → return report") exactly as stated. Corrected above.
+- **H2 is partially falsifiable today:** explicit strategy operations exist (`SCORE BM25`, `USING EMBEDDING`, Fuse) and compile_context degrades when the embedding backend is unavailable — but strategy selection is caller-chosen, not planner-decided. The planner criterion ("no vector search needed") is folded into the K2/K4 exit criteria.
+- **H10 (multi-agent, 3/10): agreed.** Isolation infrastructure ≠ collective intelligence; the cross-agent reuse proof in K5's exit criteria is the first collective-semantics test; full collective resolution is beyond v0.3.
+
+### The falsification table (reviewer §24 — code evidence, not documentation)
+
+Legend: ✓ exists · ◐ partial · — absent. Citations re-verified against current code (2026-08-19).
+
+| Capability | Struct exists | Persisted | Production write path | Queryable | Enforced | End-to-end test |
+|---|---|---|---|---|---|---|
+| Evidence | ✓ `evidence.rs:12-50` (9 methods) | — detail dropped at commit (`ingest.rs:231-240`) | — | — | — | — |
+| Authority | ✓ `authority.rs:9-28` (11 levels) | — `set_authority` zero callers (`kom.rs:776`) | — | — | — | — |
+| Scope | ✓ `scope.rs:8-27` | — `set_scope` zero callers (`kom.rs:790`) | — | — | — | — |
+| Epistemic state | — no enum; `LifecycleState` is the other axis | — | — | — | — | — |
+| Temporal validity | — commit_ts MVCC only; `TemporalAssertion` flattened to string props (`commit.rs:458-472`); `valid_from`/`valid_to` zero Rust hits | — | — | — | — | — |
+| Provenance | ✓ `prove()` audit chain (`kernel.rs:2153+`), SemanticBlock, ContentTrust | ◐ SemanticBlock per-KO | ◐ ContentTrust spine (R8.2) | ◐ `trace` | ◐ R12 immutability | ◐ tamper-evidence verified |
+| Derivation | — `DERIVED_FROM` constant (`kom.rs:878`), zero creators | — | — | — | — | — |
+| Conflict | ✓ Conflict struct; ingestion `detect_conflicts` (`commit.rs:262`) | — NeedsReview gate only; no Conflict KOs | ◐ ingestion write gate | — | ◐ gate blocks conflicting update | — report-only |
+| Supersession | — `SUPERSEDES` constant (`kom.rs:874`), zero creators | — | — | — | — | — |
+| Invalidation | ◐ C6 write-set dependency graph — constraints only | — | — | — | ◐ write-time rejection | — no dependent recomputation |
+| Experience | — | — | — | — | — | — |
+
+Reading: six rows have a ✓ but only Provenance shows any ◐ past "struct exists" — the "many primitives, few capabilities" diagnosis is confirmed at cell level, and the table is the baseline the conformance gates must move rightward.
