@@ -120,6 +120,66 @@ MCP: aikoql
 {"query": "MATCH Employee WHERE dept == \"Engineering\" RETURN name, salary"}
 ```
 
+Temporal and epistemic operators (v0.3):
+
+```aikoql
+MATCH Employee AS_OF 1724025600000 RETURN *            -- state at a point in time
+MATCH Employee BETWEEN 1724025600000 AND 1724630400000 RETURN *
+MATCH Employee HISTORICAL RETURN *                     -- every committed version
+MATCH Employee EPISTEMIC verified RETURN *             -- only verified knowledge
+MATCH Employee EPISTEMIC asserted RETURN *             -- incl. observations/claims
+```
+
+Default `MATCH` already filters to facts valid *now* (`valid_at(now)`); `HISTORICAL` and `AS_OF` escape that boundary.
+
+## Knowledge Transactions (v0.3)
+
+Knowledge as a versioned, evidence-backed, evolving object — not just CRUD.
+
+| MCP tool | What it does |
+|---|---|
+| `transition_epistemic` | Move a KO's epistemic status under the constrained 7-state table (`observed → asserted → verified → contradicted → superseded`); supersession stamps `valid_to` and wires the SUPERSEDES edge |
+| `derive` | Derive a new KO from premise KOs: validates sources, wires DERIVED_FROM edges, stamps a derivation record (operation, actor, model, timestamp, reason, sources) |
+| `observe` | Record a direct observation. **Evidence mandatory** — unbacked observations are rejected |
+| `assert_knowledge` | Assert knowledge on explicit authority (e.g. `human_approved`, `source_code`, `test_verified`). Authority + evidence mandatory |
+| `verify_knowledge` | Independently verify a KO: bumps the confidence context (confirmations + `last_verified`, score never lowered). Not a status flip |
+| `contradict` | Register a competing assertion: counter-claim + CONTRADICTS edge + persisted `aikoql:conflict` KO with per-assertion authority/evidence snapshots. Original claim untouched until resolution |
+| `supersede` | Replace a claim with a new generation: old KO → Superseded + `valid_to` + SUPERSEDES edge; derived dependents swept for staleness |
+| `merge` | Merge 2+ sources into one KO as a first-class derivation (`manual` \| `newest_wins` \| `authority_wins`) |
+| `invalidate` | Withdraw support for a KO and everything derived from it: target → Contradicted where legal; every DERIVED_FROM dependent gets the invalidation stamp + `valid_to=now` |
+| `resolve_conflict` | Apply a resolution decision to a Conflict KO (`resolved_a_preferred` \| `resolved_b_preferred` \| `resolved_both_valid` \| `resolved_replaced`). Rationale mandatory — the kernel never silently picks |
+| `resolve_conflict_by_authority` | Resolve by recorded assertion authority — higher wins; a tie is an error |
+| `record_experience` | Record an agent run outcome as an `aikoql:experience` KO (TTL-bounded validity, evidence mandatory, confidence context, `reuse_conditions` gating) |
+| `find_experiences` | Match recorded experiences for reuse against a task: reuse-condition gating, confidence-weighted ranking, expired/invalidated filtered, ACL-scoped |
+
+**Example — the full knowledge lifecycle in 6 calls:**
+
+```json
+{"method":"tools/call","params":{"name":"assert_knowledge","arguments":{
+  "subject":"agent-a","type_name":"Claim","properties":{"text":"kernel commits under one pipe lock"},
+  "authority":"source_code","evidence":[{"source_artifact":"crates/kernel/src/transaction/kernel.rs","method":"ast_extraction","confidence":0.9}]}}}
+
+{"method":"tools/call","params":{"name":"transition_epistemic","arguments":{
+  "subject":"agent-a","koid":"<koid>","to":"verified"}}}
+
+{"method":"tools/call","params":{"name":"trace","arguments":{
+  "subject":"agent-a","koid":"<koid>"}}}
+// → versions (with commit_ts), events, derivation, confidence, invalidation, evidence
+```
+
+## Lineage: `trace` vs `explain`
+
+`trace` (v0.3) is the full lineage of a fact — one call answers all six questions:
+
+- **WHY** — derivation reason / invalidation reason
+- **FROM WHAT** — derivation sources (premise KOIDs + types) and evidence source artifacts
+- **DERIVED HOW** — derivation operation, model, timestamp
+- **BY WHOM** — actor of every derivation, verification, and invalidation
+- **WHEN** — `valid_from`/`valid_to`, per-version commit timestamps
+- **WITH WHICH EVIDENCE** — evidence trail (source_artifact, location, revision, method, confidence)
+
+`explain` remains the short-form provenance + confidence summary.
+
 ## Graph
 
 ### `relate` — Create a directed relationship

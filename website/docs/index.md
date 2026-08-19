@@ -23,7 +23,8 @@ aikoql-mcp shell :memory:
 | Agents retry — idempotency matters | Every mutation has a `idempotency_key` |
 | Programs should be versioned like data | Programs are Knowledge Objects — deploy, version, execute, audit |
 | Knowledge needs provenance | SHA-256 audit chain. Every mutation is a `KnowledgeEvent` |
-| Sensitive data needs encryption | AES-256-GCM + ChaCha20-Poly1305 at rest. Field-level policies |
+| Sensitive data needs encryption | AES-256-GCM + ChaCha20-Poly1305 at rest. Field-level policies via `[encryption]` TOML |
+| Agents need to know *what's true, since when, and why* | Epistemic status model + valid-time + evidence lineage on every Knowledge Object (v0.3) |
 | Data comes from many sources | 4 connectors: PostgreSQL, SQLite, MongoDB, Neo4j |
 
 ## Core Capabilities
@@ -37,12 +38,17 @@ aikoql-mcp shell :memory:
 - **Idempotent Mutations** — Safe to retry. Same `idempotency_key` = exact-once commit.
 - **REST API** — 40+ endpoints with JSON, Bearer auth, OpenAPI 3.0 spec.
 - **4 SDKs** — Python (PyO3), TypeScript, Go, Java.
+- **Knowledge Transactions (v0.3)** — observe, assert, verify, contradict, supersede, merge, invalidate, resolve — every operation evidence-backed and lineage-stamped.
+- **Agent Experience Reuse (v0.3)** — record execution outcomes as TTL-bounded experience KOs; match them to new tasks under reuse conditions; injected into `compile_context`.
 
 ### For Knowledge Engineers
 
 - **aikoql** — Purpose-built query language for knowledge graphs.
   ```aikoql
   MATCH Employee WHERE dept == "Engineering" RETURN name, salary
+  MATCH Employee AS_OF 1724025600000 RETURN *          # what was true then
+  MATCH Employee HISTORICAL RETURN *                   # every committed version
+  MATCH Employee EPISTEMIC verified RETURN *           # only verified knowledge
   ```
 - **Hybrid Search** — Vector (HNSW) + text (BM25) with RRF fusion.
 - **Graph Traversal** — Relationship-first queries with depth and direction.
@@ -52,6 +58,8 @@ aikoql-mcp shell :memory:
 - **Connector Bridge** — PostgreSQL, SQLite, MongoDB, Neo4j schemas → KnowledgeIr conversion.
 - **Constraint Engine** — Property types, uniqueness, cardinality, domain/check constraints, programmable constraints.
 - **Change Reconciliation** — Git diff → affected entities → auto-proposals → validate → apply.
+- **Epistemic + Temporal Model (v0.3)** — 7-state constrained transition table (observed → asserted → verified → contradicted → superseded), valid-time extensions, supersession stamps.
+- **Evidence & Derivation Lineage (v0.3)** — mandatory evidence on observation/assertion/verification; first-class `Derivation` + `ConfidenceContext`; `trace()` answers WHY / FROM WHAT / HOW / BY WHOM / WHEN / WITH WHICH EVIDENCE.
 
 ### For Operations
 
@@ -68,7 +76,7 @@ Knowledge Objects (passive + active)
         ↓
 Knowledge Runtime (Compiler → KVM · Orchestrator · Policy Engine)
         ↓
-Knowledge Kernel (MVCC · OCC · HLC · RBAC · Audit · CDC)
+Knowledge Kernel (MVCC · OCC · HLC · RBAC · Audit · CDC · Epistemic · Valid-Time · Evidence)
         ↓
 Storage Kernel (redb · EncryptedStore)
 ```
