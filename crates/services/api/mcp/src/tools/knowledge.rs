@@ -216,6 +216,77 @@ pub(crate) fn tool_transition_epistemic(k: &Kernel, args: &J) -> Result<J, Strin
     }))
 }
 
+pub(crate) fn tool_derive(k: &Kernel, args: &J) -> Result<J, String> {
+    // v0.3 K3: first-class derivation through the protocol — premises are
+    // validated, the derivation record + DERIVED_FROM edges are stamped by
+    // the kernel (anti-CRUD-cosplay: this is not a bare remember()).
+    let subject = subject_of(args);
+    let type_name = args
+        .get("type_name")
+        .and_then(|t| t.as_str())
+        .ok_or("missing argument: type_name")?;
+    let mut req = DeriveRequest::new(subject, type_name);
+    req.properties = parse_properties(args)?;
+    if let Some(srcs) = args.get("sources").and_then(|s| s.as_array()) {
+        for s in srcs {
+            let hex = s.as_str().ok_or("sources must be KOID hex strings")?;
+            req.sources
+                .push(KOID::from_hex(hex).map_err(|e| e.to_string())?);
+        }
+    }
+    req.operation = args
+        .get("operation")
+        .and_then(|o| o.as_str())
+        .unwrap_or("derivation")
+        .into();
+    if let Some(actor) = args.get("actor").and_then(|a| a.as_str()) {
+        req.actor = actor.into();
+    }
+    req.model = args.get("model").and_then(|m| m.as_str()).map(String::from);
+    req.reason = args
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .map(String::from);
+    if let Some(evs) = args.get("evidence").and_then(|e| e.as_array()) {
+        for ev in evs {
+            let source_artifact = ev
+                .get("source_artifact")
+                .and_then(|s| s.as_str())
+                .ok_or("evidence entries need source_artifact")?;
+            let method = ev
+                .get("method")
+                .and_then(|m| m.as_str())
+                .ok_or("evidence entries need method")?;
+            let method = EvidenceMethod::from_str(method)
+                .ok_or_else(|| format!("unknown evidence method: {}", method))?;
+            let mut e = Evidence::new(source_artifact, method);
+            if let Some(l) = ev.get("location").and_then(|l| l.as_str()) {
+                e = e.with_location(l);
+            }
+            if let Some(r) = ev.get("revision").and_then(|r| r.as_str()) {
+                e = e.with_revision(r);
+            }
+            if let Some(c) = ev.get("confidence").and_then(|c| c.as_f64()) {
+                e = e.with_confidence(c as f32);
+            }
+            req.evidence.push(e);
+        }
+    }
+    if let Some(c) = args.get("confidence").and_then(|c| c.as_object()) {
+        req.confidence = Some(ConfidenceContext {
+            score: c.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0) as f32,
+            confirmations: c.get("confirmations").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
+            last_verified: c.get("last_verified").and_then(|v| v.as_u64()),
+        });
+    }
+    let r = k.derive(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts
+    }))
+}
+
 pub(crate) fn tool_verify(k: &Kernel, args: &J) -> Result<J, String> {
     k.verify(subject_of(args), &koid_of(args)?, parse_action(args)?)
         .map_err(|e| e.to_string())?;

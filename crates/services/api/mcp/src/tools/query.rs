@@ -236,9 +236,33 @@ pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
 }
 
 pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
-    let lin = k
-        .trace(subject_of(args), &koid_of(args)?)
-        .map_err(|e| e.to_string())?;
+    let koid = koid_of(args)?;
+    let subject = subject_of(args);
+    let lin = k.trace(subject.clone(), &koid).map_err(|e| e.to_string())?;
+    // v0.3 K3: lineage must answer WHY / FROM WHAT / DERIVED HOW / BY WHOM /
+    // WHEN / WITH WHICH EVIDENCE — a bare source pointer is insufficient
+    // (reviewer H4). The derivation record + confidence context live in the
+    // head's extensions; sources are resolved one level deep for readability.
+    let ko = k.get(subject.clone(), &koid).map_err(|e| e.to_string())?;
+    let derivation = ko.derivation().map(|d| {
+        json!({
+            "operation": d.operation,
+            "actor": d.actor,
+            "model": d.model,
+            "timestamp": d.timestamp,
+            "reason": d.reason,
+            "sources": d.sources.iter().map(|s| {
+                let type_name = k
+                    .get(subject.clone(), s)
+                    .ok()
+                    .map(|src| src.metadata.type_name);
+                json!({
+                    "koid": s.to_hex(),
+                    "type_name": type_name,
+                })
+            }).collect::<Vec<_>>()
+        })
+    });
     Ok(json!({
         "koid": lin.koid.to_hex(),
         "versions": lin.versions.iter().map(|v| json!({
@@ -246,7 +270,20 @@ pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
             "commit_ts": v.commit_ts,
             "state": v.state.to_string()
         })).collect::<Vec<_>>(),
-        "events": lin.events.iter().map(ke_json).collect::<Vec<_>>()
+        "events": lin.events.iter().map(ke_json).collect::<Vec<_>>(),
+        "derivation": derivation,
+        "confidence": ko.confidence_context().map(|c| json!({
+            "score": c.score,
+            "confirmations": c.confirmations,
+            "last_verified": c.last_verified
+        })),
+        "evidence": ko.evidence().iter().map(|e| json!({
+            "source_artifact": e.source_artifact,
+            "location": e.location,
+            "revision": e.revision,
+            "method": e.method.as_str(),
+            "confidence": e.confidence
+        })).collect::<Vec<_>>()
     }))
 }
 

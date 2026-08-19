@@ -370,6 +370,51 @@ pub struct Remembered {
     pub commit_ts: u64,
 }
 
+/// v0.3 K3: a first-class derivation request — the anti-CRUD-cosplay form of
+/// "create a KO that came from other KOs" (review H6: a bare write of a
+/// DERIVED_FROM edge is not a derivation).
+#[derive(Clone, Debug)]
+pub struct DeriveRequest {
+    pub context: KnowledgeContext,
+    /// Type of the derived KO.
+    pub type_name: String,
+    pub properties: PropertyMap,
+    /// Premise KOs — all must exist and be readable; each is wired as an
+    /// inbound DERIVED_FROM edge on the derived KO, so `outbound_edges(src,
+    /// "derived_from")` finds every dependent (K4 invalidation input).
+    pub sources: Vec<KOID>,
+    /// The derivation operation (rule_fired, inference, merge, extraction…).
+    pub operation: String,
+    /// Who (or which agent) performed the derivation.
+    pub actor: String,
+    /// The model used, if the derivation was model-assisted.
+    pub model: Option<String>,
+    /// Human-readable justification — the WHY.
+    pub reason: Option<String>,
+    /// Structured evidence trail (canonical Evidence extension).
+    pub evidence: Vec<crate::knowledge::evidence::Evidence>,
+    /// Confidence context override; None derives a baseline from the sources.
+    pub confidence: Option<ConfidenceContext>,
+}
+
+impl DeriveRequest {
+    pub fn new(context: impl Into<KnowledgeContext>, type_name: impl Into<String>) -> Self {
+        let ctx = context.into();
+        DeriveRequest {
+            context: ctx.clone(),
+            type_name: type_name.into(),
+            properties: PropertyMap::new(),
+            sources: Vec::new(),
+            operation: "derivation".into(),
+            actor: ctx.subject.name,
+            model: None,
+            reason: None,
+            evidence: Vec::new(),
+            confidence: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Evolved {
     pub koid: KOID,
@@ -1081,6 +1126,8 @@ impl Kernel {
                 KnowledgeObject::EXT_CONTENT_TRUST,
                 KnowledgeObject::EXT_VALID_FROM,
                 KnowledgeObject::EXT_VALID_TO,
+                KnowledgeObject::EXT_DERIVATION,
+                KnowledgeObject::EXT_CONFIDENCE,
                 "authority",
                 "scope",
             ] {
@@ -2184,6 +2231,87 @@ impl Kernel {
             out.push((ts, ko));
         }
         Ok(out)
+    }
+
+    // ---- v0.3 K3: derivation (anti-CRUD-cosplay, review H4/H6) ---------------
+
+    /// Derive a new KO from premise KOs. This is a real operation, not a
+    /// property write: every premise must exist and be readable; the derived
+    /// KO carries a first-class Derivation record (WHY / FROM WHAT / HOW /
+    /// BY WHOM / WHEN), inbound DERIVED_FROM edges to each source (so
+    /// `outbound_edges(src, "derived_from")` finds dependents), the canonical
+    /// evidence trail when supplied, and a confidence context (explicit or
+    /// baseline-derived from the sources — never silently full). Origin is
+    /// Reason, so the epistemic baseline is Inferred.
+    pub fn derive(&self, req: DeriveRequest) -> KResult<Remembered> {
+        let mut rels = Vec::with_capacity(req.sources.len());
+        let mut src_conf: Vec<f32> = Vec::new();
+        for s in &req.sources {
+            let src = self.head_object(s)?.ok_or(KError::NotFound(*s))?;
+            self.auth
+                .read()
+                .unwrap()
+                .authorize(&req.context.subject, &src, Action::Read)?;
+            rels.push(RelationshipRef {
+                rel_type: DERIVED_FROM.into(),
+                target: *s,
+                direction: Direction::Inbound,
+            });
+            if let Some(c) = src.confidence_context() {
+                src_conf.push(c.score);
+            }
+        }
+        let at = self.clock_now();
+        let derivation = Derivation {
+            operation: req.operation,
+            actor: req.actor,
+            model: req.model,
+            timestamp: at,
+            sources: req.sources.clone(),
+            reason: req.reason.clone(),
+        };
+        let confidence = req.confidence.unwrap_or_else(|| {
+            if src_conf.is_empty() {
+                return ConfidenceContext {
+                    score: 0.0,
+                    confirmations: 0,
+                    last_verified: None,
+                };
+            }
+            ConfidenceContext {
+                score: src_conf.iter().sum::<f32>() / src_conf.len() as f32,
+                confirmations: src_conf.len() as u32,
+                last_verified: None,
+            }
+        });
+        let mut remember = RememberRequest::create(
+            req.context,
+            Metadata {
+                type_name: req.type_name,
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+        );
+        remember.properties = req.properties;
+        remember.relationships = rels;
+        remember.origin = Origin::Reason;
+        remember.note = req.reason.clone();
+        remember.extensions.insert(
+            KnowledgeObject::EXT_DERIVATION.into(),
+            derivation_to_value(&derivation),
+        );
+        remember.extensions.insert(
+            KnowledgeObject::EXT_CONFIDENCE.into(),
+            confidence_to_value(&confidence),
+        );
+        if !req.evidence.is_empty() {
+            remember.extensions.insert(
+                KnowledgeObject::EXT_EVIDENCE.into(),
+                KnowledgeObject::evidence_value(&req.evidence),
+            );
+        }
+        self.remember(remember)
     }
 
     // ---- find_similar (MRFC-0011 §6.4) --------------------------------------

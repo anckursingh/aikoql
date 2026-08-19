@@ -1308,3 +1308,126 @@ fn k2_temporal_operators_end_to_end() {
 
     let _ = std::fs::remove_file(&db);
 }
+
+#[test]
+fn k3_derivation_and_lineage_end_to_end() {
+    let db = tmp_db("k3");
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "k3", "version": "0"}}));
+    c.notify("notifications/initialized");
+
+    // Two premise claims, each carrying structured evidence.
+    let p1 = c.call_tool(
+        "remember",
+        json!({
+            "subject": "alice",
+            "type_name": "observation",
+            "properties": {"env": "prod", "cpu": 41},
+            "extensions": {"confidence": {"score": 0.8, "confirmations": 1}}
+        }),
+    );
+    let p1_koid = p1["koid"].as_str().unwrap().to_string();
+    let p2 = c.call_tool(
+        "remember",
+        json!({
+            "subject": "alice",
+            "type_name": "observation",
+            "properties": {"env": "prod", "cpu": 43}
+        }),
+    );
+    let p2_koid = p2["koid"].as_str().unwrap().to_string();
+
+    // 1. Derive a conclusion through the protocol — first-class operation.
+    let d = c.call_tool(
+        "derive",
+        json!({
+            "subject": "alice",
+            "type_name": "conclusion",
+            "properties": {"env": "prod", "cpu_is_high": true},
+            "sources": [p1_koid, p2_koid],
+            "operation": "inference",
+            "actor": "agent-7",
+            "model": "claude-sonnet-5",
+            "reason": "two independent observations agree cpu is elevated",
+            "evidence": [{"source_artifact": "monitoring/grafana", "method": "runtime_observation", "location": "prod cluster", "confidence": 0.9}]
+        }),
+    );
+    let d_koid = d["koid"].as_str().unwrap().to_string();
+
+    // 2. The derived KO carries the full derivation record at the query
+    // boundary — all six questions answerable from one trace call.
+    let ko = c.call_tool("get", json!({"subject": "alice", "koid": d_koid}));
+    let ext = ko["extensions"].clone();
+    assert_eq!(
+        ext["epistemic_status"], "inferred",
+        "Origin::Reason => Inferred"
+    );
+    let deriv = ext["derivation"].clone();
+    assert_eq!(deriv["operation"], "inference"); // DERIVED HOW
+    assert_eq!(deriv["actor"], "agent-7"); // BY WHOM
+    assert_eq!(deriv["model"], "claude-sonnet-5");
+    assert_eq!(
+        deriv["reason"],
+        "two independent observations agree cpu is elevated"
+    ); // WHY
+    let sources = deriv["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 2);
+    assert!(sources.contains(&json!(p1_koid)) && sources.contains(&json!(p2_koid))); // FROM WHAT
+    assert!(deriv["timestamp"].as_u64().is_some()); // WHEN
+                                                    // Baseline confidence: one source had 0.8, the other none -> 0.8, 1 confirmation.
+    let conf = ext["confidence"].clone();
+    assert!((conf["score"].as_f64().unwrap() - 0.8).abs() < 0.001);
+    assert_eq!(conf["confirmations"], 1);
+
+    // 3. DERIVED_FROM edges are traversable from either premise — the
+    // invalidation input for K4.
+    for p in [&p1_koid, &p2_koid] {
+        let hits = c.call_tool(
+            "traverse",
+            json!({"subject": "alice", "koid": p, "rel_type": "derived_from"}),
+        );
+        let hits = hits["hits"].as_array().unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0]["koid"], d_koid.as_str());
+    }
+
+    // 4. trace answers all six questions in one call.
+    let t = c.call_tool("trace", json!({"subject": "alice", "koid": d_koid}));
+    let tr = t["derivation"].clone();
+    assert_eq!(tr["operation"], "inference");
+    assert_eq!(tr["actor"], "agent-7");
+    assert_eq!(tr["model"], "claude-sonnet-5");
+    assert_eq!(
+        tr["reason"],
+        "two independent observations agree cpu is elevated"
+    );
+    assert_eq!(tr["sources"].as_array().unwrap().len(), 2);
+    assert_eq!(tr["sources"][0]["type_name"], "observation");
+    let te = t["evidence"].as_array().unwrap();
+    assert_eq!(te.len(), 1);
+    assert_eq!(te[0]["source_artifact"], "monitoring/grafana");
+    assert_eq!(te[0]["method"], "runtime_observation");
+    assert!(
+        (t["confidence"]["score"].as_f64().unwrap() - 0.8).abs() < 0.001,
+        "f32 scores serialize with f64 rounding"
+    );
+
+    // 5. A bare pointer is not enough: deriving from a missing KO fails —
+    // the operation validates premises, it does not cosplay a property write.
+    // (Raw request: call_tool would panic on a tool error, which is the
+    // behavior under test here.)
+    let bad = c.request(
+        "tools/call",
+        json!({
+            "name": "derive",
+            "arguments": {
+                "subject": "alice",
+                "type_name": "conclusion",
+                "sources": ["ffffffffffffffffffffffffffffffff"]
+            }
+        }),
+    );
+    assert_eq!(bad.get("isError").and_then(|b| b.as_bool()), Some(true));
+
+    let _ = std::fs::remove_file(&db);
+}

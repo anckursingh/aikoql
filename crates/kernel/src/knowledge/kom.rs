@@ -1039,6 +1039,178 @@ impl KnowledgeObject {
         self.valid_from().map(|f| f <= at_millis).unwrap_or(true)
             && self.valid_to().map(|t| t > at_millis).unwrap_or(true)
     }
+
+    // ---- v0.3 K3: Derivation & confidence context (stored in extensions) ----
+
+    /// Extension key for the Derivation record (Map; absent = asserted).
+    pub const EXT_DERIVATION: &str = "derivation";
+    /// Extension key for the ConfidenceContext record (Map).
+    pub const EXT_CONFIDENCE: &str = "confidence";
+
+    /// The first-class derivation record, if this KO was derived from others.
+    /// Answers WHY (reason) / FROM WHAT (sources) / DERIVED HOW (operation,
+    /// model) / BY WHOM (actor) / WHEN (timestamp) — a bare DERIVED_FROM
+    /// edge is not enough (reviewer H4).
+    pub fn derivation(&self) -> Option<Derivation> {
+        self.extensions
+            .get(Self::EXT_DERIVATION)
+            .and_then(derivation_from_value)
+    }
+
+    /// Attach (or replace) the derivation record.
+    pub fn set_derivation(&mut self, d: &Derivation) {
+        self.extensions
+            .insert(Self::EXT_DERIVATION.into(), derivation_to_value(d));
+    }
+
+    /// The confidence context, if set: score, independent confirmations,
+    /// and when it was last verified.
+    pub fn confidence_context(&self) -> Option<ConfidenceContext> {
+        self.extensions
+            .get(Self::EXT_CONFIDENCE)
+            .and_then(confidence_from_value)
+    }
+
+    /// Attach (or replace) the confidence context.
+    pub fn set_confidence_context(&mut self, c: &ConfidenceContext) {
+        self.extensions
+            .insert(Self::EXT_CONFIDENCE.into(), confidence_to_value(c));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v0.3 K3: Derivation structure & confidence context model.
+// Extension-backed (same locked pattern as K1/K2 state). KOIDs are encoded
+// as hex Text; timestamp is epoch millis Int.
+// ---------------------------------------------------------------------------
+
+/// First-class derivation record: how this KO came to be.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Derivation {
+    /// The derivation operation (rule_fired, inference, merge, extraction…).
+    pub operation: String,
+    /// Who (or which agent) performed the derivation.
+    pub actor: String,
+    /// The model used, if the derivation was model-assisted.
+    pub model: Option<String>,
+    /// Epoch millis when the derivation happened.
+    pub timestamp: u64,
+    /// Premise KOs this object was derived from.
+    pub sources: Vec<KOID>,
+    /// Human-readable justification (the WHY).
+    pub reason: Option<String>,
+}
+
+pub fn derivation_to_value(d: &Derivation) -> Value {
+    let mut m = BTreeMap::new();
+    m.insert("operation".into(), Value::Text(d.operation.clone()));
+    m.insert("actor".into(), Value::Text(d.actor.clone()));
+    if let Some(model) = &d.model {
+        m.insert("model".into(), Value::Text(model.clone()));
+    }
+    m.insert("timestamp".into(), Value::Int(d.timestamp as i64));
+    m.insert(
+        "sources".into(),
+        Value::List(d.sources.iter().map(|s| Value::Text(s.to_hex())).collect()),
+    );
+    if let Some(r) = &d.reason {
+        m.insert("reason".into(), Value::Text(r.clone()));
+    }
+    Value::Map(m)
+}
+
+fn derivation_from_value(v: &Value) -> Option<Derivation> {
+    let m = match v {
+        Value::Map(m) => m,
+        _ => return None,
+    };
+    let operation = match m.get("operation") {
+        Some(Value::Text(s)) => s.clone(),
+        _ => return None,
+    };
+    let actor = match m.get("actor") {
+        Some(Value::Text(s)) => s.clone(),
+        _ => return None,
+    };
+    let timestamp = match m.get("timestamp") {
+        Some(Value::Int(t)) if *t >= 0 => *t as u64,
+        _ => return None,
+    };
+    let sources = match m.get("sources") {
+        Some(Value::List(l)) => {
+            let mut srcs = Vec::new();
+            for item in l {
+                match item {
+                    Value::Text(s) => match KOID::from_hex(s) {
+                        Ok(k) => srcs.push(k),
+                        Err(_) => return None,
+                    },
+                    _ => return None,
+                }
+            }
+            srcs
+        }
+        _ => return None,
+    };
+    Some(Derivation {
+        operation,
+        actor,
+        model: match m.get("model") {
+            Some(Value::Text(s)) => Some(s.clone()),
+            _ => None,
+        },
+        timestamp,
+        sources,
+        reason: match m.get("reason") {
+            Some(Value::Text(s)) => Some(s.clone()),
+            _ => None,
+        },
+    })
+}
+
+/// Confidence context model: how much the system trusts a KO, and why.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ConfidenceContext {
+    /// Aggregate confidence score (0.0–1.0).
+    pub score: f32,
+    /// Number of independent confirmations.
+    pub confirmations: u32,
+    /// Epoch millis of the last verification, if any.
+    pub last_verified: Option<u64>,
+}
+
+pub fn confidence_to_value(c: &ConfidenceContext) -> Value {
+    let mut m = BTreeMap::new();
+    m.insert("score".into(), Value::Float(c.score as f64));
+    m.insert("confirmations".into(), Value::Int(c.confirmations as i64));
+    if let Some(v) = c.last_verified {
+        m.insert("last_verified".into(), Value::Int(v as i64));
+    }
+    Value::Map(m)
+}
+
+fn confidence_from_value(v: &Value) -> Option<ConfidenceContext> {
+    let m = match v {
+        Value::Map(m) => m,
+        _ => return None,
+    };
+    let score = match m.get("score") {
+        Some(Value::Float(f)) => *f as f32,
+        Some(Value::Int(i)) => *i as f32,
+        _ => return None,
+    };
+    let confirmations = match m.get("confirmations") {
+        Some(Value::Int(i)) if *i >= 0 => *i as u32,
+        _ => return None,
+    };
+    Some(ConfidenceContext {
+        score,
+        confirmations,
+        last_verified: match m.get("last_verified") {
+            Some(Value::Int(t)) if *t >= 0 => Some(*t as u64),
+            _ => None,
+        },
+    })
 }
 
 /// Canonical extension encoding of one evidence record (v0.3 K1).
