@@ -20,9 +20,11 @@
 use crate::embedding::EmbeddingProvider;
 use crate::event::EventManager;
 use crate::index::coordinator::IndexCoordinator;
+use crate::knowledge::authority::Authority;
 use crate::knowledge::codec::{self, Enc};
 use crate::knowledge::kom::*;
 use crate::knowledge::ontology::{Cardinality, OntologyRegistry};
+use crate::knowledge::scope::Scope;
 use crate::lifecycle::constraint::{ConstraintEvaluator, InferenceEngine};
 use crate::lifecycle::schema::SchemaRegistry;
 use crate::object::ObjectManager;
@@ -374,6 +376,16 @@ pub struct Evolved {
     pub version: u64,
     pub commit_ts: u64,
     pub state: LifecycleState,
+}
+
+/// v0.3 K1: result of an epistemic status transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EpistemicChanged {
+    pub koid: KOID,
+    pub version: u64,
+    pub commit_ts: u64,
+    pub from: EpistemicStatus,
+    pub to: EpistemicStatus,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1033,17 +1045,100 @@ impl Kernel {
             });
         }
         let creating = head.is_none();
-        // MRFC-0060 Phase R12: provenance fields are immutable once written.
-        // Evidence, source_artifact, and revision extensions cannot be changed.
-        if !creating {
-            let head_ext = &head.as_ref().unwrap().extensions;
-            for key in &["evidence", "source_artifact", "revision"] {
-                if head_ext.contains_key(*key) && req.extensions.get(*key) != head_ext.get(*key) {
+        // v0.3 K1: prepare extensions so every committed KO carries explicit
+        // epistemic metadata, and updates never silently drop it.
+        let mut extensions = req.extensions.clone();
+        if creating {
+            // Stamp defaults for writes that declare none — the kernel, not
+            // the caller, owns the epistemic baseline.
+            if !extensions.contains_key(KnowledgeObject::EXT_EPISTEMIC_STATUS) {
+                extensions.insert(
+                    KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
+                    Value::Text(EpistemicStatus::for_origin(&req.origin).as_str().into()),
+                );
+            }
+            if !extensions.contains_key("authority") {
+                extensions.insert(
+                    "authority".into(),
+                    Value::Text(Authority::for_origin(&req.origin).as_str().into()),
+                );
+            }
+            if !extensions.contains_key("scope") {
+                extensions.insert(
+                    "scope".into(),
+                    Value::Text(Scope::for_origin(&req.origin).as_str().into()),
+                );
+            }
+        } else {
+            let head = head.as_ref().unwrap();
+            // Carry forward epistemic/provenance metadata the caller did not
+            // restate — updates used to replace the whole extension map.
+            for key in [
+                KnowledgeObject::EXT_EPISTEMIC_STATUS,
+                KnowledgeObject::EXT_EPISTEMIC_HISTORY,
+                KnowledgeObject::EXT_EVIDENCE,
+                KnowledgeObject::EXT_LIFECYCLE_HISTORY,
+                KnowledgeObject::EXT_CONTENT_TRUST,
+                "authority",
+                "scope",
+            ] {
+                if !extensions.contains_key(key) {
+                    if let Some(v) = head.extensions.get(key) {
+                        extensions.insert(key.into(), v.clone());
+                    }
+                }
+            }
+            // Authority is monotonic-up on ordinary updates; a downgrade
+            // requires an admin (explicit escalation path).
+            let parse_rank = |v: &Value| match v {
+                Value::Text(s) => Authority::from_str(s).map(|a| a.rank()),
+                _ => None,
+            };
+            if let (Some(head_a), Some(req_a)) = (
+                head.extensions.get("authority").and_then(parse_rank),
+                extensions.get("authority").and_then(parse_rank),
+            ) {
+                if req_a < head_a && !req.context.subject.is_admin() {
+                    return Err(KError::InvalidObject(format!(
+                        "authority downgrade ({} -> {}) requires admin",
+                        head_a, req_a
+                    )));
+                }
+            }
+            // MRFC-0060 Phase R12: source_artifact/revision are immutable once
+            // written; evidence is append-only — the head's list must be a
+            // prefix of the request's (entries never change or vanish).
+            for key in &["source_artifact", "revision"] {
+                if head.extensions.contains_key(*key)
+                    && extensions.get(*key) != head.extensions.get(*key)
+                {
                     return Err(KError::InvalidObject(format!(
                         "provenance field '{}' is immutable — cannot be changed after creation",
                         key
                     )));
                 }
+            }
+            match head.extensions.get(KnowledgeObject::EXT_EVIDENCE) {
+                Some(Value::List(head_ev)) => match extensions.get(KnowledgeObject::EXT_EVIDENCE) {
+                    Some(Value::List(req_ev))
+                        if req_ev.len() >= head_ev.len()
+                            && req_ev[..head_ev.len()] == head_ev[..] => {}
+                    _ => {
+                        return Err(KError::InvalidObject(
+                                "provenance field 'evidence' is append-only — existing entries cannot be changed or removed"
+                                    .into(),
+                            ));
+                    }
+                },
+                // Legacy non-list evidence keeps the strict equality rule.
+                Some(other) if extensions.get(KnowledgeObject::EXT_EVIDENCE) == Some(other) => {}
+                Some(_) => {
+                    return Err(KError::InvalidObject(
+                        "provenance field 'evidence' is immutable — cannot be changed after creation"
+                            .into(),
+                    ));
+                }
+                None => {}
             }
         }
         // MRFC-0060 Phase C6: compute write-set for incremental constraint evaluation.
@@ -1117,7 +1212,7 @@ impl Kernel {
                     state: LifecycleState::Draft,
                     origin: req.origin.clone(),
                 }),
-            extensions: req.extensions.clone(),
+            extensions,
         };
         {
             let schemas = self.schemas.read().unwrap();
@@ -1749,6 +1844,15 @@ impl Kernel {
             state: to,
             origin: origin.clone(),
         };
+        // v0.3 K1: lifecycle transitions create evidence — append to the
+        // append-only history before commit.
+        ko.push_lifecycle_history(
+            from,
+            to,
+            self.clock.millis(),
+            &ctx.subject.name,
+            note.as_deref(),
+        );
         let (commit_ts, _seq) = self.commit_version(
             &mut pipe,
             ko,
@@ -1763,6 +1867,65 @@ impl Kernel {
             version: cur_v + 1,
             commit_ts,
             state: to,
+        })
+    }
+
+    // ---- epistemic transitions (v0.3 K1) -----------------------------------
+
+    /// Move a KO's epistemic status under the constrained transition table.
+    /// Appends to the append-only history extension, bumps the version, and
+    /// lands an `EpistemicChanged` event in the audit chain. Transitions
+    /// create evidence: the history entry records from/to, wall-clock,
+    /// actor, and reason.
+    pub fn transition_epistemic(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: &KOID,
+        to: EpistemicStatus,
+        origin: Origin,
+        expected_version: Option<u64>,
+        reason: Option<String>,
+    ) -> KResult<EpistemicChanged> {
+        let ctx = ctx.into();
+        let mut pipe = self.pipe.lock().unwrap();
+        let head = self.head_object(koid)?.ok_or(KError::NotFound(*koid))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &head, Action::Write)?;
+        let from = head.epistemic_status();
+        if !from.can_transition(to) {
+            return Err(KError::InvalidEpistemic { from, to });
+        }
+        let cur_v = head.version;
+        let expected = expected_version.unwrap_or(cur_v);
+        if expected != cur_v {
+            return Err(KError::VersionConflict {
+                koid: *koid,
+                expected,
+                found: cur_v,
+            });
+        }
+        let at = self.clock.millis();
+        let mut ko = head.clone();
+        ko.version = cur_v + 1;
+        ko.set_epistemic_status(to);
+        ko.push_epistemic_history(from, to, at, &ctx.subject.name, reason.as_deref());
+        let (commit_ts, _seq) = self.commit_version(
+            &mut pipe,
+            ko,
+            EventKind::EpistemicChanged,
+            origin,
+            &ctx.subject.name,
+            reason,
+            None,
+        )?;
+        Ok(EpistemicChanged {
+            koid: *koid,
+            version: cur_v + 1,
+            commit_ts,
+            from,
+            to,
         })
     }
 
@@ -1990,6 +2153,17 @@ impl Kernel {
         subject: &Subject,
         type_name: &str,
     ) -> KResult<Vec<KnowledgeObject>> {
+        self.scan_by_type_filtered(subject, type_name, None)
+    }
+
+    /// Scan by type with an optional epistemic-status filter (v0.3 K1).
+    /// Legacy KOs answer via the fallback mapping, same as `epistemic_status()`.
+    pub fn scan_by_type_filtered(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        status: Option<EpistemicStatus>,
+    ) -> KResult<Vec<KnowledgeObject>> {
         let mut out = Vec::new();
         for koid in self.repo.scan_type(type_name)? {
             let Some(ko) = self.head_object(&koid)? else {
@@ -2000,6 +2174,11 @@ impl Kernel {
             }
             if ko.lifecycle.state == LifecycleState::Deleted {
                 continue;
+            }
+            if let Some(want) = status {
+                if ko.epistemic_status() != want {
+                    continue;
+                }
             }
             if self
                 .auth

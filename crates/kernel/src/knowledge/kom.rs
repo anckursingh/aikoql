@@ -354,6 +354,8 @@ pub enum EventKind {
     LifecycleChanged,
     ClaimAsserted,
     Audit,
+    /// v0.3 K1: epistemic status transition (audit-trailed, like lifecycle).
+    EpistemicChanged,
 }
 
 impl EventKind {
@@ -365,6 +367,7 @@ impl EventKind {
             EventKind::LifecycleChanged => 3,
             EventKind::ClaimAsserted => 4,
             EventKind::Audit => 5,
+            EventKind::EpistemicChanged => 6,
         }
     }
     pub fn from_tag(t: u8) -> Option<Self> {
@@ -375,6 +378,7 @@ impl EventKind {
             3 => Some(EventKind::LifecycleChanged),
             4 => Some(EventKind::ClaimAsserted),
             5 => Some(EventKind::Audit),
+            6 => Some(EventKind::EpistemicChanged),
             _ => None,
         }
     }
@@ -813,6 +817,191 @@ impl KnowledgeObject {
             Value::Text(ct.as_str().into()),
         );
     }
+
+    // ---- v0.3 K1: Epistemic status helpers (stored in extensions) ----
+
+    /// Extension key for `EpistemicStatus` value.
+    pub const EXT_EPISTEMIC_STATUS: &str = "epistemic_status";
+    /// Extension key for the append-only status transition history.
+    pub const EXT_EPISTEMIC_HISTORY: &str = "epistemic_history";
+
+    /// Current epistemic status. The explicit extension wins; legacy KOs
+    /// (written before v0.3 K1) fall back to their lifecycle state:
+    /// Verified → Verified, Extracted → Extracted, everything else → Observed.
+    pub fn epistemic_status(&self) -> EpistemicStatus {
+        self.extensions
+            .get(Self::EXT_EPISTEMIC_STATUS)
+            .and_then(|v| match v {
+                Value::Text(s) => EpistemicStatus::from_str(s),
+                _ => None,
+            })
+            .unwrap_or(match self.lifecycle.state {
+                LifecycleState::Verified => EpistemicStatus::Verified,
+                LifecycleState::Extracted => EpistemicStatus::Extracted,
+                _ => EpistemicStatus::Observed,
+            })
+    }
+
+    /// Set the epistemic status extension. Low-level — no transition
+    /// validation; kernel `transition_epistemic` is the enforced path.
+    pub fn set_epistemic_status(&mut self, s: EpistemicStatus) {
+        self.extensions.insert(
+            Self::EXT_EPISTEMIC_STATUS.into(),
+            Value::Text(s.as_str().into()),
+        );
+    }
+
+    /// Append a transition record to the history extension (append-only:
+    /// existing entries are never modified or removed).
+    pub fn push_epistemic_history(
+        &mut self,
+        from: EpistemicStatus,
+        to: EpistemicStatus,
+        at_millis: u64,
+        by: &str,
+        reason: Option<&str>,
+    ) {
+        let mut entry = BTreeMap::new();
+        entry.insert("from".into(), Value::Text(from.as_str().into()));
+        entry.insert("to".into(), Value::Text(to.as_str().into()));
+        entry.insert("at".into(), Value::Int(at_millis as i64));
+        entry.insert("by".into(), Value::Text(by.into()));
+        if let Some(r) = reason {
+            entry.insert("reason".into(), Value::Text(r.into()));
+        }
+        match self.extensions.get_mut(Self::EXT_EPISTEMIC_HISTORY) {
+            Some(Value::List(l)) => l.push(Value::Map(entry)),
+            _ => {
+                self.extensions.insert(
+                    Self::EXT_EPISTEMIC_HISTORY.into(),
+                    Value::List(vec![Value::Map(entry)]),
+                );
+            }
+        }
+    }
+
+    // ---- v0.3 K1: Evidence helpers (canonical extension encoding) ----
+
+    /// Extension key for the canonical evidence list (R12 immutable prefix).
+    pub const EXT_EVIDENCE: &str = "evidence";
+    /// Extension key for the append-only lifecycle transition history.
+    pub const EXT_LIFECYCLE_HISTORY: &str = "lifecycle_history";
+
+    /// Decode the canonical evidence list. A missing/unrecognized extension
+    /// or malformed entries yield empty/skipped records — legacy KOs stored
+    /// evidence as flat `evidence_*` properties and are not decoded here.
+    pub fn evidence(&self) -> Vec<crate::knowledge::evidence::Evidence> {
+        use crate::knowledge::evidence::{Evidence, EvidenceMethod};
+        match self.extensions.get(Self::EXT_EVIDENCE) {
+            Some(Value::List(items)) => items
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Map(m) => {
+                        let source_artifact = match m.get("source_artifact") {
+                            Some(Value::Text(s)) => s.clone(),
+                            _ => return None,
+                        };
+                        let method = match m.get("method").and_then(|x| match x {
+                            Value::Text(s) => EvidenceMethod::from_str(s),
+                            _ => None,
+                        }) {
+                            Some(method) => method,
+                            None => return None,
+                        };
+                        let mut ev = Evidence::new(source_artifact, method);
+                        if let Some(Value::Text(l)) = m.get("location") {
+                            ev = ev.with_location(l.clone());
+                        }
+                        if let Some(Value::Text(r)) = m.get("revision") {
+                            ev = ev.with_revision(r.clone());
+                        }
+                        if let Some(Value::Float(c)) = m.get("confidence") {
+                            ev = ev.with_confidence(*c as f32);
+                        }
+                        Some(ev)
+                    }
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Canonical extension value for an evidence trail (v0.3 K1) — public so
+    /// ingestion and other producers construct the exact same encoding.
+    pub fn evidence_value(evs: &[crate::knowledge::evidence::Evidence]) -> Value {
+        Value::List(evs.iter().map(evidence_to_value).collect())
+    }
+
+    /// Replace the evidence trail with its canonical encoding. Deterministic
+    /// (BTreeMap ordering) — the R12 append-only check compares raw values.
+    pub fn set_evidence(&mut self, evs: Vec<crate::knowledge::evidence::Evidence>) {
+        self.extensions
+            .insert(Self::EXT_EVIDENCE.into(), Self::evidence_value(&evs));
+    }
+
+    /// Append one evidence record; exact duplicates are skipped.
+    pub fn add_evidence(&mut self, ev: crate::knowledge::evidence::Evidence) {
+        let encoded = evidence_to_value(&ev);
+        match self.extensions.get_mut(Self::EXT_EVIDENCE) {
+            Some(Value::List(l)) => {
+                if !l.contains(&encoded) {
+                    l.push(encoded);
+                }
+            }
+            _ => {
+                self.extensions
+                    .insert(Self::EXT_EVIDENCE.into(), Value::List(vec![encoded]));
+            }
+        }
+    }
+
+    /// Append a lifecycle transition record — transitions create evidence,
+    /// mirroring `push_epistemic_history`.
+    pub fn push_lifecycle_history(
+        &mut self,
+        from: LifecycleState,
+        to: LifecycleState,
+        at_millis: u64,
+        by: &str,
+        reason: Option<&str>,
+    ) {
+        let mut entry = BTreeMap::new();
+        entry.insert("from".into(), Value::Text(from.to_string()));
+        entry.insert("to".into(), Value::Text(to.to_string()));
+        entry.insert("at".into(), Value::Int(at_millis as i64));
+        entry.insert("by".into(), Value::Text(by.into()));
+        if let Some(r) = reason {
+            entry.insert("reason".into(), Value::Text(r.into()));
+        }
+        match self.extensions.get_mut(Self::EXT_LIFECYCLE_HISTORY) {
+            Some(Value::List(l)) => l.push(Value::Map(entry)),
+            _ => {
+                self.extensions.insert(
+                    Self::EXT_LIFECYCLE_HISTORY.into(),
+                    Value::List(vec![Value::Map(entry)]),
+                );
+            }
+        }
+    }
+}
+
+/// Canonical extension encoding of one evidence record (v0.3 K1).
+fn evidence_to_value(ev: &crate::knowledge::evidence::Evidence) -> Value {
+    let mut m = BTreeMap::new();
+    m.insert(
+        "source_artifact".into(),
+        Value::Text(ev.source_artifact.clone()),
+    );
+    m.insert("method".into(), Value::Text(ev.method.as_str().into()));
+    if let Some(l) = &ev.location {
+        m.insert("location".into(), Value::Text(l.clone()));
+    }
+    if let Some(r) = &ev.revision {
+        m.insert("revision".into(), Value::Text(r.clone()));
+    }
+    m.insert("confidence".into(), Value::Float(ev.confidence as f64));
+    Value::Map(m)
 }
 
 // ---- R8 ContentTrust: trust level for ingested content ----
@@ -847,6 +1036,105 @@ impl ContentTrust {
             "unknown" => Some(ContentTrust::Unknown),
             _ => None,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v0.3 K1: Epistemic status — how the system knows a KO is true.
+// Orthogonal to LifecycleState ("is it live?"); this is "how do we know?".
+// Stored in extensions under EXT_EPISTEMIC_STATUS (Text) with an append-only
+// transition history under EXT_EPISTEMIC_HISTORY (List of Maps).
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EpistemicStatus {
+    /// Observed in the world — the conservative default for new KOs.
+    Observed,
+    /// Mechanically extracted from an artifact (parser, extractor).
+    Extracted,
+    /// Asserted by an agent or human.
+    Asserted,
+    /// Derived by reasoning from other knowledge.
+    Inferred,
+    /// Independently verified.
+    Verified,
+    /// Contradicted by other evidence.
+    Contradicted,
+    /// Replaced by newer knowledge.
+    Superseded,
+}
+
+impl EpistemicStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EpistemicStatus::Observed => "observed",
+            EpistemicStatus::Extracted => "extracted",
+            EpistemicStatus::Asserted => "asserted",
+            EpistemicStatus::Inferred => "inferred",
+            EpistemicStatus::Verified => "verified",
+            EpistemicStatus::Contradicted => "contradicted",
+            EpistemicStatus::Superseded => "superseded",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "observed" => Some(EpistemicStatus::Observed),
+            "extracted" => Some(EpistemicStatus::Extracted),
+            "asserted" => Some(EpistemicStatus::Asserted),
+            "inferred" => Some(EpistemicStatus::Inferred),
+            "verified" => Some(EpistemicStatus::Verified),
+            "contradicted" => Some(EpistemicStatus::Contradicted),
+            "superseded" => Some(EpistemicStatus::Superseded),
+            _ => None,
+        }
+    }
+
+    /// Constrained transition table (review H5 — deliberately NOT the
+    /// review's illustrative linear chain: CONTRADICTED can hit any state
+    /// directly, and INFERRED is a derivation origin, not a pipeline stage).
+    /// Same-state transitions are rejected — every recorded transition must
+    /// change state.
+    pub fn can_transition(self, to: EpistemicStatus) -> bool {
+        use EpistemicStatus::*;
+        matches!(
+            (self, to),
+            (Observed, Extracted)
+                | (Observed, Asserted)
+                | (Observed, Verified)
+                | (Observed, Contradicted)
+                | (Observed, Superseded)
+                | (Extracted, Asserted)
+                | (Extracted, Verified)
+                | (Extracted, Contradicted)
+                | (Extracted, Superseded)
+                | (Asserted, Verified)
+                | (Asserted, Contradicted)
+                | (Asserted, Superseded)
+                | (Inferred, Verified)
+                | (Inferred, Contradicted)
+                | (Inferred, Superseded)
+                | (Verified, Contradicted)
+                | (Verified, Superseded)
+            // A contradicted fact may be re-asserted on stronger evidence.
+                | (Contradicted, Asserted)
+                | (Contradicted, Superseded)
+        )
+    }
+
+    /// Initial status for a create, by write origin.
+    pub fn for_origin(origin: &Origin) -> Self {
+        match origin {
+            Origin::Reason => EpistemicStatus::Inferred,
+            Origin::Human | Origin::Agent(_) => EpistemicStatus::Asserted,
+            Origin::System | Origin::SemanticEnrichment => EpistemicStatus::Observed,
+        }
+    }
+}
+
+impl fmt::Display for EpistemicStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -2208,6 +2496,11 @@ pub enum KError {
         from: LifecycleState,
         to: LifecycleState,
     },
+    /// v0.3 K1: illegal epistemic status transition.
+    InvalidEpistemic {
+        from: EpistemicStatus,
+        to: EpistemicStatus,
+    },
     NotFound(KOID),
     UnsupportedOperation(String),
     IndexLagExceeded,
@@ -2240,6 +2533,9 @@ impl fmt::Display for KError {
             }
             KError::InvalidState { from, to } => {
                 write!(f, "INVALID_STATE: {} -> {}", from, to)
+            }
+            KError::InvalidEpistemic { from, to } => {
+                write!(f, "INVALID_EPISTEMIC: {} -> {}", from, to)
             }
             KError::NotFound(k) => write!(f, "NOT_FOUND: {}", k),
             KError::UnsupportedOperation(m) => write!(f, "UNSUPPORTED_OPERATION: {}", m),

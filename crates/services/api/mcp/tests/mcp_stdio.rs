@@ -1101,3 +1101,90 @@ fn m15_document_compile_pipeline() {
 
     let _ = std::fs::remove_file(&db);
 }
+
+// ---- v0.3 K1 acceptance -----------------------------------------------------
+
+#[test]
+fn k1_epistemic_and_evidence_end_to_end() {
+    let db = tmp_db("k1");
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "k1", "version": "0"}}));
+    c.notify("notifications/initialized");
+
+    // 1. An agent commits knowledge with an evidence trail declared at the
+    // protocol boundary.
+    let created = c.call_tool(
+        "remember",
+        json!({
+            "subject": "agent-researcher",
+            "type_name": "claim",
+            "properties": {"revenue": "$4.2B"},
+            "origin": "agent-researcher",
+            "extensions": {
+                "evidence": [{
+                    "source_artifact": "sec-10k-filing.pdf",
+                    "method": "doc_extraction",
+                    "location": "page 42",
+                    "confidence": 0.95
+                }],
+                "authority": "documentation",
+                "scope": "repository"
+            }
+        }),
+    );
+    let koid = created["koid"].as_str().unwrap().to_string();
+    assert_eq!(created["version"], 1);
+
+    // 2. Epistemic baseline stamped on the write; explicit authority wins.
+    let ko = c.call_tool("get", json!({"subject": "agent-researcher", "koid": koid}));
+    assert_eq!(ko["extensions"]["epistemic_status"], "asserted");
+    assert_eq!(ko["extensions"]["authority"], "documentation");
+    assert_eq!(ko["extensions"]["scope"], "repository");
+
+    // 3. Evidence survives ingestion -> commit -> storage -> query with
+    // every detail intact (no silent epistemic metadata drop).
+    let ev = &ko["extensions"]["evidence"][0];
+    assert_eq!(ev["source_artifact"], "sec-10k-filing.pdf");
+    assert_eq!(ev["method"], "doc_extraction");
+    assert_eq!(ev["location"], "page 42");
+    let conf = ev["confidence"].as_f64().expect("confidence present");
+    assert!((conf - 0.95).abs() < 1e-6, "confidence {} != 0.95", conf);
+
+    // 4. Epistemic transitions through the protocol, constrained table:
+    // asserted -> verified is legal, and the append-only history lands.
+    let t = c.call_tool(
+        "transition_epistemic",
+        json!({"subject": "agent-researcher", "koid": koid, "to": "verified", "reason": "human review"}),
+    );
+    assert_eq!(t["from"], "asserted");
+    assert_eq!(t["to"], "verified");
+    let ko = c.call_tool("get", json!({"subject": "agent-researcher", "koid": koid}));
+    let history = ko["extensions"]["epistemic_history"].as_array().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["by"], "agent-researcher");
+    assert_eq!(history[0]["reason"], "human review");
+
+    // 5. Illegal move surfaces as a tool error (table enforced in
+    // production, not just in the kernel).
+    let res = c.request(
+        "tools/call",
+        json!({
+            "name": "transition_epistemic",
+            "arguments": {"subject": "agent-researcher", "koid": koid, "to": "observed"}
+        }),
+    );
+    assert_eq!(res.get("isError").and_then(|b| b.as_bool()), Some(true));
+
+    // 6. Lifecycle transitions create evidence too.
+    c.call_tool(
+        "evolve",
+        json!({"subject": "agent-researcher", "koid": koid, "to": "active"}),
+    );
+    let ko = c.call_tool("get", json!({"subject": "agent-researcher", "koid": koid}));
+    let lh = ko["extensions"]["lifecycle_history"].as_array().unwrap();
+    assert_eq!(lh.len(), 1);
+    assert_eq!(lh[0]["from"], "draft");
+    assert_eq!(lh[0]["to"], "active");
+
+    let _ = std::fs::remove_file(&db);
+}

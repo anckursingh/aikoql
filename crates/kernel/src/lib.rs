@@ -90,6 +90,7 @@ pub use knowledge::kom::{
     ContentTrust,
     Direction,
     Effect,
+    EpistemicStatus,
     EventKind,
     EventRef,
     ExtensionMap,

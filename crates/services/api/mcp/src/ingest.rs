@@ -244,6 +244,44 @@ pub(crate) fn run_ingest_dir(
                 Value::List(facts.iter().cloned().map(Value::Text).collect()),
             );
         }
+        // v0.3 K1: canonical evidence trail — page/bbox survive into the KO
+        // (they used to be flattened into properties and partially dropped).
+        let ev_method = if ent.evidence.extractor.contains("rust") {
+            EvidenceMethod::AstExtraction
+        } else {
+            EvidenceMethod::DocExtraction
+        };
+        let mut kernel_ev = Evidence::new(
+            ent.evidence
+                .document_id
+                .clone()
+                .unwrap_or_else(|| path.to_string()),
+            ev_method,
+        );
+        let mut loc_parts: Vec<String> = Vec::new();
+        if let Some(p) = ent.evidence.page {
+            loc_parts.push(format!("page {}", p));
+        }
+        if let Some(b) = &ent.evidence.bbox_text {
+            loc_parts.push(format!("bbox {:?}", b));
+        }
+        if !loc_parts.is_empty() {
+            kernel_ev = kernel_ev.with_location(loc_parts.join(", "));
+        }
+        kernel_ev = kernel_ev.with_confidence(ent.evidence.confidence);
+        let mut extensions = content_trust_extension(ContentTrust::Trusted);
+        extensions.insert(
+            "authority".into(),
+            Value::Text(Authority::for_evidence_method(ev_method).as_str().into()),
+        );
+        extensions.insert(
+            "scope".into(),
+            Value::Text(Scope::Repository.as_str().into()),
+        );
+        extensions.insert(
+            KnowledgeObject::EXT_EVIDENCE.into(),
+            KnowledgeObject::evidence_value(&[kernel_ev]),
+        );
         // Exact-once replay means a re-ingest would silently keep the stale
         // entity content (e.g. mention text from an older parser). Resolve
         // the idempotency key: existing → true update, new → guarded create.
@@ -273,7 +311,7 @@ pub(crate) fn run_ingest_dir(
                 acl: vec![],
                 classification: None,
             }),
-            extensions: content_trust_extension(ContentTrust::Trusted),
+            extensions,
             origin: Origin::Agent("ingest-dir".into()),
             note: Some(format!("entity from ingest-dir {}", path)),
             referential_policy: ReferentialPolicy::Permissive,

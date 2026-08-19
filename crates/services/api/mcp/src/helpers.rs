@@ -68,6 +68,18 @@ pub(crate) fn parse_properties(args: &J) -> Result<PropertyMap, String> {
     Ok(out)
 }
 
+/// v0.3 K1: `extensions` argument — epistemic state, authority, scope, and
+/// canonical evidence can be declared at the protocol boundary.
+pub(crate) fn parse_extensions(args: &J) -> Result<ExtensionMap, String> {
+    let mut out = ExtensionMap::new();
+    if let Some(J::Object(m)) = args.get("extensions") {
+        for (k, v) in m {
+            out.insert(k.clone(), json_to_value(v)?);
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn parse_semantic(args: &J) -> Result<Option<SemanticBlock>, String> {
     let Some(s) = args.get("semantic") else {
         return Ok(None);
@@ -160,6 +172,13 @@ pub(crate) fn ko_json(ko: &KnowledgeObject) -> J {
     for (k, v) in &ko.properties {
         props.insert(k.clone(), value_to_json(v));
     }
+    // v0.3 K1: extensions (epistemic state, history, evidence, authority,
+    // scope, trust) must survive to the query boundary — dropping them here
+    // is a silent epistemic metadata drop.
+    let mut ext = serde_json::Map::new();
+    for (k, v) in &ko.extensions {
+        ext.insert(k.clone(), value_to_json(v));
+    }
     json!({
         "koid": ko.koid.to_hex(),
         "version": ko.version,
@@ -167,6 +186,7 @@ pub(crate) fn ko_json(ko: &KnowledgeObject) -> J {
         "type_name": ko.metadata.type_name,
         "state": ko.lifecycle.state.to_string(),
         "properties": J::Object(props),
+        "extensions": J::Object(ext),
         "semantic": ko.semantic.as_ref().map(|s| json!({
             "embedding_model": s.embedding_model,
             "confidence": s.confidence,

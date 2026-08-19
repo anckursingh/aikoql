@@ -68,7 +68,10 @@ pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
                 "koid": ko.koid.to_hex(),
                 "type_name": ko.metadata.type_name,
                 "version": ko.version,
-                "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+                "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
+                // v0.3 K1: epistemic metadata must survive the QL query
+                // boundary too — no silent drops.
+                "extensions": ko.extensions.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
             })).collect::<Vec<_>>()
         })),
         aikoql_runtime::RowSet::Scored(scored) => Ok(json!({
@@ -104,7 +107,10 @@ pub(crate) fn execute_stream_query(
             "koid": ko.koid.to_hex(),
             "type_name": ko.metadata.type_name,
             "version": ko.version,
-            "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+            "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
+            // v0.3 K1: epistemic metadata must survive the QL query
+            // boundary too — no silent drops.
+            "extensions": ko.extensions.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
         })).collect(),
         aikoql_runtime::RowSet::Scored(scored) => scored.iter().map(|(koid, score, tn, ver)| json!({
             "koid": koid.to_hex(),

@@ -83,6 +83,33 @@ impl Authority {
             _ => None,
         }
     }
+
+    /// v0.3 K1: default authority for a write that declares none, by origin.
+    pub fn for_origin(origin: &crate::knowledge::kom::Origin) -> Self {
+        use crate::knowledge::kom::Origin;
+        match origin {
+            Origin::Human => Authority::HumanApproved,
+            Origin::System => Authority::OrganizationPolicy,
+            Origin::Reason | Origin::Agent(_) | Origin::SemanticEnrichment => {
+                Authority::AgentDerived
+            }
+        }
+    }
+
+    /// v0.3 K1: authority implied by the evidence-extraction method.
+    pub fn for_evidence_method(m: crate::knowledge::evidence::EvidenceMethod) -> Self {
+        use crate::knowledge::evidence::EvidenceMethod;
+        match m {
+            EvidenceMethod::AstExtraction => Authority::SourceCode,
+            EvidenceMethod::DocExtraction => Authority::Documentation,
+            EvidenceMethod::TestObservation => Authority::TestVerified,
+            EvidenceMethod::CiObservation => Authority::CiVerified,
+            EvidenceMethod::RuntimeObservation => Authority::DeploymentObserved,
+            EvidenceMethod::HumanProvided => Authority::HumanApproved,
+            EvidenceMethod::AgentAnalysis | EvidenceMethod::Derivation => Authority::AgentDerived,
+            EvidenceMethod::LlmInference => Authority::LlmInferred,
+        }
+    }
 }
 
 /// Configurable precedence policy for authority filtering.

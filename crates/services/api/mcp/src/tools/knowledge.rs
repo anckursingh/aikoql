@@ -95,6 +95,9 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     };
     req.properties = parse_properties(args)?;
     req.semantic = parse_semantic(args)?;
+    // v0.3 K1: extensions may be declared at the protocol boundary
+    // (epistemic status, authority, scope, canonical evidence).
+    req.extensions = parse_extensions(args)?;
     // Parse optional relationships array.
     if let Some(rels) = args.get("relationships").and_then(|r| r.as_array()) {
         for rel in rels {
@@ -174,6 +177,36 @@ pub(crate) fn tool_evolve(k: &Kernel, args: &J) -> Result<J, String> {
         "version": e.version,
         "commit_ts": e.commit_ts,
         "state": e.state.to_string()
+    }))
+}
+
+/// v0.3 K1: epistemic status transitions over MCP — the protocol surface for
+/// "how do we know this is true" (distinct from `evolve`'s lifecycle axis).
+pub(crate) fn tool_transition_epistemic(k: &Kernel, args: &J) -> Result<J, String> {
+    let to = args
+        .get("to")
+        .and_then(|x| x.as_str())
+        .ok_or("missing argument: to")?;
+    let to =
+        EpistemicStatus::from_str(to).ok_or_else(|| format!("unknown epistemic status: {}", to))?;
+    let r = k
+        .transition_epistemic(
+            subject_of(args),
+            &koid_of(args)?,
+            to,
+            parse_origin(args),
+            args.get("expected_version").and_then(|v| v.as_u64()),
+            args.get("reason")
+                .and_then(|r| r.as_str())
+                .map(String::from),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts,
+        "from": r.from.as_str(),
+        "to": r.to.as_str()
     }))
 }
 

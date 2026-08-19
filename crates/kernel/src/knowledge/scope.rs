@@ -88,6 +88,16 @@ impl Scope {
             Scope::Environment => 0,
         }
     }
+
+    /// v0.3 K1: default scope for a write that declares none, by origin.
+    pub fn for_origin(origin: &crate::knowledge::kom::Origin) -> Self {
+        use crate::knowledge::kom::Origin;
+        match origin {
+            Origin::Human => Scope::User,
+            Origin::Agent(_) => Scope::Session,
+            Origin::System | Origin::Reason | Origin::SemanticEnrichment => Scope::Global,
+        }
+    }
 }
 
 /// Deterministic scope nesting resolver.
