@@ -189,7 +189,7 @@ pub(crate) fn tool_derive(k: &Kernel, args: &J) -> Result<J, String> {
         .get("type_name")
         .and_then(|t| t.as_str())
         .ok_or("missing argument: type_name")?;
-    let mut req = DeriveRequest::new(subject, type_name);
+    let mut req = DeriveRequest::new(subject.clone(), type_name);
     req.properties = parse_properties(args)?;
     if let Some(srcs) = args.get("sources").and_then(|s| s.as_array()) {
         for s in srcs {
@@ -203,21 +203,28 @@ pub(crate) fn tool_derive(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(|o| o.as_str())
         .unwrap_or("derivation")
         .into();
-    if let Some(actor) = args.get("actor").and_then(|a| a.as_str()) {
-        req.actor = actor.into();
-    }
+    // Review P1-9: the provenance actor is the authenticated session
+    // identity — args arrive session-injected (dispatcher), so `subject` IS
+    // who performed the derivation. A caller-supplied "actor" arg cannot
+    // spoof provenance.
+    req.actor = subject.name;
     req.model = args.get("model").and_then(|m| m.as_str()).map(String::from);
     req.reason = args
         .get("reason")
         .and_then(|r| r.as_str())
         .map(String::from);
     req.evidence = parse_evidence(args)?;
+    // Review P1-7: the protocol boundary validates the confidence object —
+    // out-of-range scores are rejected here, not trusted to the kernel.
     if let Some(c) = args.get("confidence").and_then(|c| c.as_object()) {
-        req.confidence = Some(ConfidenceContext {
-            score: c.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0) as f32,
-            confirmations: c.get("confirmations").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
-            last_verified: c.get("last_verified").and_then(|v| v.as_u64()),
-        });
+        req.confidence = Some(
+            ConfidenceContext::new(
+                c.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0) as f32,
+                c.get("confirmations").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
+                c.get("last_verified").and_then(|v| v.as_u64()),
+            )
+            .map_err(|e| e.to_string())?,
+        );
     }
     let r = k.derive(req).map_err(|e| e.to_string())?;
     Ok(json!({
@@ -364,6 +371,14 @@ pub(crate) fn tool_supersede(k: &Kernel, args: &J) -> Result<J, String> {
             .invalidated_dependents
             .iter()
             .map(|d| d.to_hex())
+            .collect::<Vec<_>>(),
+        // Review P1-5: the sweep outcome is surfaced — a partial sweep is
+        // visible, never silent.
+        "completed": r.completed,
+        "failed": r
+            .failed
+            .iter()
+            .map(|f| json!({"koid": f.koid.to_hex(), "error": f.error}))
             .collect::<Vec<_>>()
     }))
 }
@@ -422,7 +437,15 @@ pub(crate) fn tool_invalidate(k: &Kernel, args: &J) -> Result<J, String> {
     req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
     let r = k.invalidate(req).map_err(|e| e.to_string())?;
     Ok(json!({
-        "invalidated": r.invalidated.iter().map(|k| k.to_hex()).collect::<Vec<_>>()
+        "invalidated": r.invalidated.iter().map(|k| k.to_hex()).collect::<Vec<_>>(),
+        // Review P1-5: the sweep outcome is surfaced — a partial sweep is
+        // visible, never silent.
+        "completed": r.completed,
+        "failed": r
+            .failed
+            .iter()
+            .map(|f| json!({"koid": f.koid.to_hex(), "error": f.error}))
+            .collect::<Vec<_>>()
     }))
 }
 
@@ -457,6 +480,13 @@ pub(crate) fn tool_resolve_conflict(k: &Kernel, args: &J) -> Result<J, String> {
             .effects
             .iter()
             .map(|(k, st)| json!({"koid": k.to_hex(), "status": st.as_str()}))
+            .collect::<Vec<_>>(),
+        // Review P1-5: the replacement sweep outcome is surfaced.
+        "completed": out.completed,
+        "failed": out
+            .failed
+            .iter()
+            .map(|f| json!({"koid": f.koid.to_hex(), "error": f.error}))
             .collect::<Vec<_>>()
     }))
 }
@@ -476,6 +506,13 @@ pub(crate) fn tool_resolve_conflict_by_authority(k: &Kernel, args: &J) -> Result
             .effects
             .iter()
             .map(|(k, st)| json!({"koid": k.to_hex(), "status": st.as_str()}))
+            .collect::<Vec<_>>(),
+        // Review P1-5: the replacement sweep outcome is surfaced.
+        "completed": out.completed,
+        "failed": out
+            .failed
+            .iter()
+            .map(|f| json!({"koid": f.koid.to_hex(), "error": f.error}))
             .collect::<Vec<_>>()
     }))
 }
@@ -516,10 +553,12 @@ pub(crate) fn tool_record_experience(k: &Kernel, args: &J) -> Result<J, String> 
         .get("outcome")
         .and_then(|o| o.as_str())
         .ok_or("missing argument: outcome")?;
-    let mut req = ExperienceRequest::new(subject_of(args), goal, action, outcome);
-    if let Some(a) = args.get("actor").and_then(|a| a.as_str()) {
-        req.actor = a.into();
-    }
+    let subject = subject_of(args);
+    let mut req = ExperienceRequest::new(subject.clone(), goal, action, outcome);
+    // Review P1-9: the provenance actor is the authenticated session
+    // identity (args arrive session-injected); a caller-supplied "actor"
+    // arg cannot spoof who performed the run.
+    req.actor = subject.name;
     req.preconditions = string_array(args, "preconditions");
     req.causal_explanation = args
         .get("causal_explanation")

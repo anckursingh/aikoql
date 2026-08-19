@@ -1083,7 +1083,50 @@ impl Kernel {
 
     // ---- remember (MRFC-0011 §6.1) -----------------------------------------
 
+    /// Extension keys owned by the kernel: epistemic status/history, lifecycle,
+    /// invalidation, evidence, derivation, confidence, valid_to, authority,
+    /// Extension keys owned by the kernel: epistemic status/history, lifecycle,
+    /// evidence, derivation, confidence, valid_to, authority, scope, and
+    /// content trust. Only the semantic operations may write them — a caller
+    /// supplying them to remember() would forge epistemic state (review P0-1).
+    /// `valid_from` is deliberately absent: callers declare their own claim's
+    /// temporal start (and may not have written `valid_to`). Public so callers
+    /// can strip these keys from a read-modify-write update instead of being
+    /// rejected.
+    pub const KERNEL_MANAGED_EXTENSIONS: &[&str] = &[
+        KnowledgeObject::EXT_EPISTEMIC_STATUS,
+        KnowledgeObject::EXT_EPISTEMIC_HISTORY,
+        KnowledgeObject::EXT_LIFECYCLE_HISTORY,
+        KnowledgeObject::EXT_INVALIDATION,
+        KnowledgeObject::EXT_EVIDENCE,
+        KnowledgeObject::EXT_DERIVATION,
+        KnowledgeObject::EXT_CONFIDENCE,
+        KnowledgeObject::EXT_VALID_TO,
+        KnowledgeObject::EXT_CONTENT_TRUST,
+        "authority",
+        "scope",
+    ];
+
+    /// Public entry point: the epistemic-metadata boundary. Kernel-managed
+    /// extension keys are rejected here so no external caller can mint a
+    /// Verified claim, a forged authority, or a fabricated evidence trail.
     pub fn remember(&self, req: RememberRequest) -> KResult<Remembered> {
+        for key in Self::KERNEL_MANAGED_EXTENSIONS {
+            if req.extensions.contains_key(*key) {
+                return Err(KError::InvalidObject(format!(
+                    "extension '{key}' is kernel-managed — set it via the semantic \
+                     operations (assert/verify/contradict/supersede/merge/invalidate/\
+                     derive), not remember()"
+                )));
+            }
+        }
+        self.remember_trusted(req)
+    }
+
+    /// remember() without the managed-extension guard — for the semantic
+    /// operations (K4) that construct extension maps with kernel-owned keys
+    /// and commit through the same locked path.
+    fn remember_trusted(&self, req: RememberRequest) -> KResult<Remembered> {
         let mut pipe = self.pipe.lock().unwrap();
         self.remember_locked(&mut pipe, &req)
     }
@@ -1184,6 +1227,33 @@ impl Kernel {
                     return Err(KError::InvalidObject(format!(
                         "authority downgrade ({} -> {}) requires admin",
                         head_a, req_a
+                    )));
+                }
+            }
+            // MRFC-0060 Phase R12: source_artifact/revision are immutable once
+            // written; evidence is append-only — the head's list must be a
+            // prefix of the request's (entries never change or vanish).
+            // P1-1 (review): the effective interval must never invert —
+            // valid_from <= valid_to, checked here so no caller or internal
+            // op can commit a KO whose interval runs backwards. Equality is
+            // legal: a claim superseded/invalidated at its own assertion
+            // instant (or a future fact closed before it became valid) has a
+            // zero-duration interval and is valid nowhere — by design.
+            let int_of = |v: &Value| match v {
+                Value::Int(i) if *i >= 0 => Some(*i as u64),
+                _ => None,
+            };
+            if let (Some(f), Some(t)) = (
+                extensions
+                    .get(KnowledgeObject::EXT_VALID_FROM)
+                    .and_then(int_of),
+                extensions
+                    .get(KnowledgeObject::EXT_VALID_TO)
+                    .and_then(int_of),
+            ) {
+                if f > t {
+                    return Err(KError::InvalidObject(format!(
+                        "valid interval must satisfy valid_from <= valid_to (got {f} > {t})"
                     )));
                 }
             }
@@ -1959,13 +2029,15 @@ impl Kernel {
     /// create evidence: the history entry records from/to, wall-clock,
     /// actor, and reason.
     ///
-    /// Library-level primitive — NOT exposed through any protocol surface
-    /// (MCP/REST/shell): agents must use the semantic ops (`observe`,
-    /// `assert_knowledge`, `verify_knowledge`, `contradict`, `supersede`,
-    /// `merge`, `invalidate`, `resolve_conflict`), which compose this
-    /// primitive with evidence validation, confidence updates, edges, and
-    /// dependent sweeps (review P0-1). Embedders building their own protocol
-    /// surfaces on the kernel accept that responsibility.
+    /// Explicitly privileged epistemic transition (review P0-2). The
+    /// `admin_` prefix is the contract: this bypasses the semantic ops'
+    /// evidence validation, confidence accounting, and dependent sweeps, and
+    /// is therefore reserved for an embedder's own admin surface (or
+    /// multi-KO composite ops inside the crate, which use
+    /// `transition_epistemic_locked` directly). NOT exposed through any
+    /// protocol surface (MCP/REST/shell): agents must use the semantic ops
+    /// (`observe`, `assert_knowledge`, `verify_knowledge`, `contradict`,
+    /// `supersede`, `merge`, `invalidate`, `resolve_conflict`).
     ///
     /// v0.3 K2 supersession semantics: moving to `Superseded` ends the fact's
     /// validity now (stamps `valid_to` when absent) and, when `superseded_by`
@@ -1973,7 +2045,7 @@ impl Kernel {
     /// KO. Supersession lives on the epistemic path — the review's own
     /// doctrine keeps epistemic ("do we still hold this") orthogonal to
     /// lifecycle ("is this record maintained").
-    pub fn transition_epistemic(
+    pub fn admin_transition_epistemic(
         &self,
         ctx: impl Into<KnowledgeContext>,
         koid: &KOID,
@@ -1997,7 +2069,7 @@ impl Kernel {
         )
     }
 
-    /// transition_epistemic() with the pipe lock already held — internal to
+    /// admin_transition_epistemic() with the pipe lock already held — internal to
     /// composite knowledge ops (K4).
     pub(crate) fn transition_epistemic_locked(
         &self,
@@ -2033,9 +2105,7 @@ impl Kernel {
         ko.version = cur_v + 1;
         ko.set_epistemic_status(to);
         if to == EpistemicStatus::Superseded {
-            if ko.valid_to().is_none() {
-                ko.set_valid_time(ko.valid_from(), Some(at));
-            }
+            ko.close_valid_time(at)?;
             if let Some(target) = superseded_by {
                 if self.head_object(&target)?.is_none() {
                     return Err(KError::InvalidObject(format!(
@@ -2311,6 +2381,12 @@ impl Kernel {
     pub fn derive(&self, req: DeriveRequest) -> KResult<Remembered> {
         let mut rels = Vec::with_capacity(req.sources.len());
         let mut src_conf: Vec<f32> = Vec::new();
+        // Review P1-8 (Model B): a derivation with no explicit evidence
+        // inherits the sources' evidence trails — the derived claim is backed
+        // by the premises that produced it, and the Derivation record keeps
+        // who/how/why. Strict decode: a corrupt source trail is an error,
+        // not something to inherit silently (P2-6).
+        let mut inherited_evidence: Vec<crate::knowledge::evidence::Evidence> = Vec::new();
         for s in &req.sources {
             let src = self.head_object(s)?.ok_or(KError::NotFound(*s))?;
             self.auth
@@ -2325,6 +2401,9 @@ impl Kernel {
             if let Some(c) = src.confidence_context() {
                 src_conf.push(c.score);
             }
+            if req.evidence.is_empty() {
+                inherited_evidence.extend(src.strict_evidence()?);
+            }
         }
         let at = self.clock_now();
         let derivation = Derivation {
@@ -2335,20 +2414,26 @@ impl Kernel {
             sources: req.sources.clone(),
             reason: req.reason.clone(),
         };
-        let confidence = req.confidence.unwrap_or_else(|| {
-            if src_conf.is_empty() {
-                return ConfidenceContext {
-                    score: 0.0,
-                    confirmations: 0,
-                    last_verified: None,
-                };
+        // Review P1-7: a caller-supplied confidence override crosses the
+        // model boundary here — validated, never trusted.
+        let confidence = match req.confidence {
+            Some(c) => ConfidenceContext {
+                verification_keys: c.verification_keys,
+                ..ConfidenceContext::new(c.score, c.confirmations, c.last_verified)?
+            },
+            None => {
+                if src_conf.is_empty() {
+                    ConfidenceContext::new(0.0, 0, None).expect("0.0 is in range")
+                } else {
+                    ConfidenceContext::new(
+                        src_conf.iter().sum::<f32>() / src_conf.len() as f32,
+                        src_conf.len() as u32,
+                        None,
+                    )
+                    .expect("mean of in-range scores is in range")
+                }
             }
-            ConfidenceContext {
-                score: src_conf.iter().sum::<f32>() / src_conf.len() as f32,
-                confirmations: src_conf.len() as u32,
-                last_verified: None,
-            }
-        });
+        };
         let mut remember = RememberRequest::create(
             req.context,
             Metadata {
@@ -2375,8 +2460,13 @@ impl Kernel {
                 KnowledgeObject::EXT_EVIDENCE.into(),
                 KnowledgeObject::evidence_value(&req.evidence),
             );
+        } else if !inherited_evidence.is_empty() {
+            remember.extensions.insert(
+                KnowledgeObject::EXT_EVIDENCE.into(),
+                KnowledgeObject::evidence_value(&inherited_evidence),
+            );
         }
-        self.remember(remember)
+        self.remember_trusted(remember)
     }
 
     // ---- find_similar (MRFC-0011 §6.4) --------------------------------------
@@ -2767,7 +2857,7 @@ impl Kernel {
         props.insert("body".into(), Value::Text(body.to_string()));
         props.insert("language".into(), Value::Text(language.to_string()));
         props.insert("version".into(), Value::Int(1));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -2812,7 +2902,7 @@ impl Kernel {
         let mut props = ko.properties.clone();
         props.insert("body".into(), Value::Text(new_body.to_string()));
         props.insert("version".into(), Value::Int(cur_ver + 1));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: Some(*koid),
             expected_version: Some(ko.version),
@@ -2859,7 +2949,7 @@ impl Kernel {
         if let Some(c) = condition {
             props.insert("condition".into(), Value::Text(c.to_string()));
         }
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -2958,7 +3048,7 @@ impl Kernel {
         let mut props = PropertyMap::new();
         props.insert("name".into(), Value::Text(name.to_string()));
         props.insert("steps".into(), Value::Text(steps_json.to_string()));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -3000,7 +3090,7 @@ impl Kernel {
         props.insert("event_kind".into(), Value::Text(event_kind.to_string()));
         props.insert("type_filter".into(), Value::Text(type_filter.to_string()));
         props.insert("program_koid".into(), Value::Text(program_koid.to_string()));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -3045,7 +3135,7 @@ impl Kernel {
         props.insert("tools".into(), Value::Text(tools_json.to_string()));
         props.insert("policies".into(), Value::Text(policies_json.to_string()));
         props.insert("version".into(), Value::Int(1));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -3092,7 +3182,7 @@ impl Kernel {
         props.insert("plugin".into(), Value::Text(plugin.to_string()));
         props.insert("config".into(), Value::Text(config_json.to_string()));
         props.insert("mapping".into(), Value::Text(mapping_json.to_string()));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -3139,7 +3229,7 @@ impl Kernel {
         if let Some(secs) = refresh_seconds {
             props.insert("refresh_seconds".into(), Value::Int(secs));
         }
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -3189,7 +3279,7 @@ impl Kernel {
             "parameters".into(),
             Value::Text(parameters_json.to_string()),
         );
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -3238,7 +3328,7 @@ impl Kernel {
         if let Some(w) = warmup {
             props.insert("warmup".into(), Value::Int(w));
         }
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -3297,7 +3387,7 @@ impl Kernel {
             KnowledgeObject::EXT_CONTENT_TRUST.into(),
             Value::Text(ContentTrust::Untrusted.as_str().into()),
         );
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),

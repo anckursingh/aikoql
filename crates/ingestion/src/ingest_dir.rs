@@ -933,7 +933,7 @@ mod tests {
         fs::write(tmp.join("hello.txt"), "hello world").unwrap();
         assert!(!is_binary_file(&tmp.join("hello.txt")));
         // binary file
-        fs::write(tmp.join("data.bin"), &[0u8, 1, 2, 3]).unwrap();
+        fs::write(tmp.join("data.bin"), [0u8, 1, 2, 3]).unwrap();
         assert!(is_binary_file(&tmp.join("data.bin")));
         let _ = fs::remove_dir_all(&tmp);
     }

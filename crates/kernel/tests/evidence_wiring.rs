@@ -33,10 +33,6 @@ fn alice() -> Subject {
     Subject::new("alice")
 }
 
-fn root() -> Subject {
-    Subject::with_roles("root", &["admin"])
-}
-
 fn ev(artifact: &str, method: EvidenceMethod) -> Evidence {
     Evidence::new(artifact, method).with_confidence(0.9)
 }
@@ -130,10 +126,10 @@ fn create_stamps_authority_and_scope_by_origin() {
         (Origin::SemanticEnrichment, "agent_derived", "global"),
     ];
     for (origin, want_auth, want_scope) in cases {
-        let mut req = RememberRequest::create(&alice(), meta("fact"));
+        let mut req = RememberRequest::create(alice(), meta("fact"));
         req.origin = origin.clone();
         let id = k.remember(req).unwrap().koid;
-        let ko = k.get(&alice(), &id).unwrap();
+        let ko = k.get(alice(), &id).unwrap();
         assert_eq!(
             ko.extensions.get("authority"),
             Some(&Value::Text((*want_auth).into())),
@@ -148,27 +144,32 @@ fn create_stamps_authority_and_scope_by_origin() {
         );
     }
 
-    // Explicit extensions always win over the stamp.
-    let mut req = RememberRequest::create(&alice(), meta("fact"));
+    // Review P0-1 (Test 1): caller-supplied kernel-managed keys are REJECTED
+    // on the public boundary — epistemic status/authority/scope are stamped
+    // by the kernel or set via the semantic ops, never smuggled through
+    // remember().
+    for (key, value) in [
+        ("authority", Value::Text("llm_inferred".into())),
+        ("scope", Value::Text("task".into())),
+        (
+            KnowledgeObject::EXT_EPISTEMIC_STATUS,
+            Value::Text("verified".into()),
+        ),
+    ] {
+        let mut req = RememberRequest::create(alice(), meta("fact"));
+        req.extensions.insert(key.into(), value);
+        let err = k.remember(req).unwrap_err();
+        assert!(
+            matches!(err, KError::InvalidObject(_)),
+            "key {key} must be rejected, got {err:?}"
+        );
+    }
+    // valid_from is deliberately caller-settable — it is the caller's own
+    // temporal claim, not kernel epistemic state.
+    let mut req = RememberRequest::create(alice(), meta("fact"));
     req.extensions
-        .insert("authority".into(), Value::Text("llm_inferred".into()));
-    req.extensions
-        .insert("scope".into(), Value::Text("task".into()));
-    req.extensions.insert(
-        KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
-        Value::Text("verified".into()),
-    );
-    let id = k.remember(req).unwrap().koid;
-    let ko = k.get(&alice(), &id).unwrap();
-    assert_eq!(
-        ko.extensions.get("authority"),
-        Some(&Value::Text("llm_inferred".into()))
-    );
-    assert_eq!(
-        ko.extensions.get("scope"),
-        Some(&Value::Text("task".into()))
-    );
-    assert_eq!(ko.epistemic_status(), EpistemicStatus::Verified);
+        .insert(KnowledgeObject::EXT_VALID_FROM.into(), Value::Int(0));
+    assert!(k.remember(req).is_ok());
 }
 
 #[test]
@@ -177,15 +178,14 @@ fn evidence_survives_ingestion_commit_storage_query() {
     let e1 = ev("src/lib.rs", EvidenceMethod::AstExtraction)
         .with_location("page 3, bbox \"fn main\"")
         .with_confidence(0.95);
-    let mut req = RememberRequest::create(&alice(), meta("fact"));
-    req.extensions.insert(
-        KnowledgeObject::EXT_EVIDENCE.into(),
-        KnowledgeObject::evidence_value(&[e1.clone()]),
-    );
-    let id = k.remember(req).unwrap().koid;
+    // Review P0-1: evidence is kernel-managed — it enters via the semantic
+    // ops (here: observe), not remember().
+    let mut req = ObservationRequest::new(alice(), "fact");
+    req.evidence = vec![e1.clone()];
+    let id = k.observe(req).unwrap().koid;
 
     // Query boundary: the full trail decodes back, confidence intact.
-    let ko = k.get(&alice(), &id).unwrap();
+    let ko = k.get(alice(), &id).unwrap();
     let decoded = ko.evidence();
     assert_eq!(decoded.len(), 1);
     assert_eq!(decoded[0], e1);
@@ -194,7 +194,7 @@ fn evidence_survives_ingestion_commit_storage_query() {
     drop(k);
     let clock = Arc::new(ManualClock::new(50_000));
     let k2 = Kernel::open(store, clock, 0xE915).unwrap();
-    let ko = k2.get(&alice(), &id).unwrap();
+    let ko = k2.get(alice(), &id).unwrap();
     assert_eq!(ko.evidence(), vec![e1]);
 }
 
@@ -205,26 +205,38 @@ fn evidence_is_append_only_on_update() {
     let k = mk();
     let e1 = ev("a.md", EvidenceMethod::DocExtraction);
     let e2 = ev("b.md", EvidenceMethod::DocExtraction);
-    let mut req = RememberRequest::create(&alice(), meta("fact"));
-    req.extensions.insert(
-        KnowledgeObject::EXT_EVIDENCE.into(),
-        KnowledgeObject::evidence_value(&[e1.clone()]),
-    );
-    let id = k.remember(req).unwrap().koid;
+    // Review P0-1: evidence enters via the semantic ops (observe), and the
+    // public remember() boundary rejects any attempt to smuggle it through.
+    let mut obs = ObservationRequest::new(alice(), "fact");
+    obs.evidence = vec![e1.clone()];
+    let id = k.observe(obs).unwrap().koid;
+    assert_eq!(k.get(alice(), &id).unwrap().evidence(), vec![e1.clone()]);
 
-    // Append: legal, trail grows.
-    let mut up = RememberRequest::update(&alice(), id, meta("fact"));
-    up.extensions.insert(
-        KnowledgeObject::EXT_EVIDENCE.into(),
-        KnowledgeObject::evidence_value(&[e1.clone(), e2.clone()]),
-    );
-    k.remember(up).unwrap();
-    let ko = k.get(&alice(), &id).unwrap();
-    assert_eq!(ko.evidence().len(), 2);
-    assert_eq!(ko.version, 2);
+    // Append via verify (the semantic evidence path): trail grows.
+    let mut v = VerificationRequest::new(alice(), id);
+    v.evidence = vec![e2.clone()];
+    k.verify_knowledge(v).unwrap();
+    let ko = k.get(alice(), &id).unwrap();
+    assert_eq!(ko.evidence(), vec![e1.clone(), e2.clone()]);
 
-    // Reorder (not a prefix of the head): rejected.
-    let mut bad = RememberRequest::update(&alice(), id, meta("fact"));
+    // Review P2-3: re-verifying the same evidence is idempotent — exact
+    // duplicates are dropped and the confirmation is not double-counted.
+    let mut v = VerificationRequest::new(alice(), id);
+    v.evidence = vec![e2.clone()];
+    k.verify_knowledge(v).unwrap();
+    let ko = k.get(alice(), &id).unwrap();
+    assert_eq!(ko.evidence(), vec![e1.clone(), e2.clone()]);
+    let conf = ko.confidence_context().unwrap();
+    assert_eq!(
+        conf.confirmations, 1,
+        "same verifier + same evidence must not re-confirm"
+    );
+    assert_eq!(conf.verification_keys.len(), 1);
+
+    // Review P0-1: a plain update carrying the managed evidence key is
+    // rejected outright — there is no reorder/truncate/mutate path left
+    // through the public boundary.
+    let mut bad = RememberRequest::update(alice(), id, meta("fact"));
     bad.extensions.insert(
         KnowledgeObject::EXT_EVIDENCE.into(),
         KnowledgeObject::evidence_value(&[e2.clone(), e1.clone()]),
@@ -232,43 +244,26 @@ fn evidence_is_append_only_on_update() {
     let err = k.remember(bad).unwrap_err();
     assert!(matches!(err, KError::InvalidObject(_)), "got {:?}", err);
 
-    // Truncate: rejected.
-    let mut bad = RememberRequest::update(&alice(), id, meta("fact"));
-    bad.extensions.insert(
-        KnowledgeObject::EXT_EVIDENCE.into(),
-        KnowledgeObject::evidence_value(&[e1.clone()]),
-    );
-    assert!(matches!(k.remember(bad), Err(KError::InvalidObject(_))));
-
-    // Mutate an existing entry: rejected.
-    let mut bad = RememberRequest::update(&alice(), id, meta("fact"));
-    let mut altered = e1.clone();
-    altered.confidence = 0.1;
-    bad.extensions.insert(
-        KnowledgeObject::EXT_EVIDENCE.into(),
-        KnowledgeObject::evidence_value(&[altered, e2.clone()]),
-    );
-    assert!(matches!(k.remember(bad), Err(KError::InvalidObject(_))));
-
     // Omit the key entirely: carried forward, legal, trail intact.
-    let ok = RememberRequest::update(&alice(), id, meta("fact"));
+    let version_before = k.get(alice(), &id).unwrap().version;
+    let ok = RememberRequest::update(alice(), id, meta("fact"));
     k.remember(ok).unwrap();
-    let ko = k.get(&alice(), &id).unwrap();
-    assert_eq!(ko.evidence().len(), 2);
-    assert_eq!(ko.version, 3);
+    let ko = k.get(alice(), &id).unwrap();
+    assert_eq!(ko.evidence(), vec![e1, e2]);
+    assert_eq!(ko.version, version_before + 1);
 }
 
 #[test]
 fn source_artifact_and_revision_stay_strictly_immutable() {
     let k = mk();
-    let mut req = RememberRequest::create(&alice(), meta("fact"));
+    let mut req = RememberRequest::create(alice(), meta("fact"));
     req.extensions
         .insert("source_artifact".into(), Value::Text("src/main.rs".into()));
     req.extensions
         .insert("revision".into(), Value::Text("rev1".into()));
     let id = k.remember(req).unwrap().koid;
 
-    let mut bad = RememberRequest::update(&alice(), id, meta("fact"));
+    let mut bad = RememberRequest::update(alice(), id, meta("fact"));
     bad.extensions
         .insert("revision".into(), Value::Text("rev2".into()));
     let err = k.remember(bad).unwrap_err();
@@ -278,31 +273,45 @@ fn source_artifact_and_revision_stay_strictly_immutable() {
 #[test]
 fn authority_is_monotonic_up_without_admin() {
     let k = mk();
-    let mut req = RememberRequest::create(&alice(), meta("fact"));
+    // Review P0-1: authority is kernel-managed. The public remember()
+    // boundary rejects caller-supplied authority at create time...
+    let mut req = RememberRequest::create(alice(), meta("fact"));
     req.extensions
         .insert("authority".into(), Value::Text("source_code".into()));
-    let id = k.remember(req).unwrap().koid;
-
-    // Upgrade by a plain user: fine.
-    let mut up = RememberRequest::update(&alice(), id, meta("fact"));
-    up.extensions
-        .insert("authority".into(), Value::Text("human_approved".into()));
-    k.remember(up).unwrap();
-    assert_eq!(k.get(&alice(), &id).unwrap().version, 2);
-
-    // Downgrade by a plain user: rejected.
-    let mut down = RememberRequest::update(&alice(), id, meta("fact"));
-    down.extensions
-        .insert("authority".into(), Value::Text("documentation".into()));
-    let err = k.remember(down).unwrap_err();
+    let err = k.remember(req).unwrap_err();
     assert!(matches!(err, KError::InvalidObject(_)), "got {:?}", err);
 
-    // Downgrade by an admin: explicit escalation path, allowed.
-    let mut down = RememberRequest::update(&root(), id, meta("fact"));
-    down.extensions
-        .insert("authority".into(), Value::Text("documentation".into()));
-    k.remember(down).unwrap();
-    assert_eq!(k.get(&alice(), &id).unwrap().version, 3);
+    // ...and at update time — no escalation/downgrade smuggling via updates.
+    let id = create_fact(&k, &alice(), "fact");
+    let mut up = RememberRequest::update(alice(), id, meta("fact"));
+    up.extensions
+        .insert("authority".into(), Value::Text("human_approved".into()));
+    let err = k.remember(up).unwrap_err();
+    assert!(matches!(err, KError::InvalidObject(_)), "got {:?}", err);
+    // The failed update left the object untouched.
+    let ko = k.get(alice(), &id).unwrap();
+    assert_eq!(ko.version, 1);
+
+    // The explicit path is the semantic assert op, which stamps the
+    // requested authority level (and rejects invalid levels).
+    let mut bad = AssertionRequest::new(alice(), "fact");
+    bad.authority = Some("not-a-level".into());
+    bad.evidence = vec![Evidence::new("x", EvidenceMethod::HumanProvided)];
+    assert!(matches!(
+        k.assert_knowledge(bad),
+        Err(KError::InvalidObject(_))
+    ));
+    let mut a = AssertionRequest::new(alice(), "fact");
+    a.authority = Some("human_approved".into());
+    a.evidence = vec![Evidence::new("x", EvidenceMethod::HumanProvided)];
+    let asserted = k.assert_knowledge(a).unwrap().koid;
+    assert_eq!(
+        k.get(alice(), &asserted)
+            .unwrap()
+            .extensions
+            .get("authority"),
+        Some(&Value::Text("human_approved".into()))
+    );
 }
 
 // ---- no silent drops -------------------------------------------------------
@@ -310,12 +319,15 @@ fn authority_is_monotonic_up_without_admin() {
 #[test]
 fn plain_update_carries_epistemic_metadata_forward() {
     let k = mk();
-    let mut req = RememberRequest::create(&alice(), meta("fact"));
-    req.extensions
-        .insert("authority".into(), Value::Text("test_verified".into()));
-    let id = k.remember(req).unwrap().koid;
-    k.transition_epistemic(
-        &alice(),
+    // Review P0-1: authority is stamped by the semantic assert op, and the
+    // privileged transition is explicitly named admin_transition_epistemic
+    // (review P0-2).
+    let mut a = AssertionRequest::new(alice(), "fact");
+    a.authority = Some("test_verified".into());
+    a.evidence = vec![Evidence::new("x", EvidenceMethod::HumanProvided)];
+    let id = k.assert_knowledge(a).unwrap().koid;
+    k.admin_transition_epistemic(
+        alice(),
         &id,
         EpistemicStatus::Verified,
         Origin::System,
@@ -324,13 +336,13 @@ fn plain_update_carries_epistemic_metadata_forward() {
         None,
     )
     .unwrap();
-    let before = k.get(&alice(), &id).unwrap();
+    let before = k.get(alice(), &id).unwrap();
 
     // Update with NO extensions restated — the epistemic block must survive.
-    let mut up = RememberRequest::update(&alice(), id, meta("fact"));
+    let mut up = RememberRequest::update(alice(), id, meta("fact"));
     up.properties.insert("x".into(), Value::Int(1));
     k.remember(up).unwrap();
-    let after = k.get(&alice(), &id).unwrap();
+    let after = k.get(alice(), &id).unwrap();
     assert_eq!(
         after.extensions.get(KnowledgeObject::EXT_EPISTEMIC_STATUS),
         before.extensions.get(KnowledgeObject::EXT_EPISTEMIC_STATUS)
@@ -355,7 +367,7 @@ fn evolve_appends_lifecycle_history_and_survives_reopen() {
     let (k, store) = mk_with_store();
     let id = create_fact(&k, &alice(), "fact");
     k.evolve(
-        &alice(),
+        alice(),
         &id,
         LifecycleState::Active,
         Origin::System,
@@ -364,7 +376,7 @@ fn evolve_appends_lifecycle_history_and_survives_reopen() {
     )
     .unwrap();
     k.evolve(
-        &alice(),
+        alice(),
         &id,
         LifecycleState::Verified,
         Origin::System,
@@ -376,7 +388,7 @@ fn evolve_appends_lifecycle_history_and_survives_reopen() {
 
     let clock = Arc::new(ManualClock::new(50_000));
     let k2 = Kernel::open(store, clock, 0xE915).unwrap();
-    let ko = k2.get(&alice(), &id).unwrap();
+    let ko = k2.get(alice(), &id).unwrap();
     let history = match ko.extensions.get(KnowledgeObject::EXT_LIFECYCLE_HISTORY) {
         Some(Value::List(l)) => l.clone(),
         other => panic!("expected lifecycle history, got {:?}", other),
@@ -411,7 +423,7 @@ fn evolve_appends_lifecycle_history_and_survives_reopen() {
 fn scan_by_type_filtered_selects_by_epistemic_status() {
     let k = mk();
     let asserted = create_fact(&k, &alice(), "fact"); // Human → Asserted
-    let mut req = RememberRequest::create(&alice(), meta("fact"));
+    let mut req = RememberRequest::create(alice(), meta("fact"));
     req.origin = Origin::System; // → Observed
     let observed = k.remember(req).unwrap().koid;
 

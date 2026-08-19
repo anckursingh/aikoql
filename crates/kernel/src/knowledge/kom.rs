@@ -927,6 +927,66 @@ impl KnowledgeObject {
         }
     }
 
+    /// Strict variant of `evidence()` for epistemic-critical reads (review
+    /// P2-6): a present-but-malformed evidence entry is an error, not a
+    /// silent drop — verify/derive/trace must never build on evidence they
+    /// half-understand. Absent evidence decodes to an empty trail.
+    pub fn strict_evidence(&self) -> KResult<Vec<crate::knowledge::evidence::Evidence>> {
+        use crate::knowledge::evidence::{Evidence, EvidenceMethod};
+        match self.extensions.get(Self::EXT_EVIDENCE) {
+            None => Ok(Vec::new()),
+            Some(Value::List(items)) => {
+                let mut out = Vec::with_capacity(items.len());
+                for (i, v) in items.iter().enumerate() {
+                    let m = match v {
+                        Value::Map(m) => m,
+                        other => {
+                            return Err(KError::Codec(format!(
+                                "evidence entry {i} is {other:?}, expected a map"
+                            )));
+                        }
+                    };
+                    let source_artifact = match m.get("source_artifact") {
+                        Some(Value::Text(s)) => s.clone(),
+                        _ => {
+                            return Err(KError::Codec(format!(
+                                "evidence entry {i} is missing source_artifact"
+                            )));
+                        }
+                    };
+                    let method = match m.get("method").and_then(|x| match x {
+                        Value::Text(s) => EvidenceMethod::from_str(s),
+                        _ => None,
+                    }) {
+                        Some(method) => method,
+                        None => {
+                            return Err(KError::Codec(format!(
+                                "evidence entry {i} has an unknown method"
+                            )));
+                        }
+                    };
+                    let mut ev = Evidence::new(source_artifact, method);
+                    if let Some(Value::Text(l)) = m.get("location") {
+                        ev = ev.with_location(l.clone());
+                    }
+                    if let Some(Value::Text(r)) = m.get("revision") {
+                        ev = ev.with_revision(r.clone());
+                    }
+                    if let Some(Value::Float(c)) = m.get("confidence") {
+                        ev = ev.with_confidence(*c as f32);
+                    }
+                    out.push(ev);
+                }
+                Ok(out)
+            }
+            // Legacy non-list evidence is not canonical (see evidence()) —
+            // strict readers refuse it rather than guess.
+            Some(other) => Err(KError::Codec(format!(
+                "evidence extension is {other:?}, expected a list"
+            ))),
+        }
+    }
+
     /// Canonical extension value for an evidence trail (v0.3 K1) — public so
     /// ingestion and other producers construct the exact same encoding.
     pub fn evidence_value(evs: &[crate::knowledge::evidence::Evidence]) -> Value {
@@ -1012,7 +1072,19 @@ impl KnowledgeObject {
     }
 
     /// Set the [valid_from, valid_to) interval; None clears a bound.
-    pub fn set_valid_time(&mut self, from: Option<u64>, to: Option<u64>) {
+    /// Rejects an inverted interval (review P1-1): with both bounds set the
+    /// kernel invariant is `valid_from <= valid_to`. Equality is a legal
+    /// zero-duration interval — a claim closed at its own assertion instant,
+    /// or a future fact invalidated before it ever became valid — and reads
+    /// as valid_at nothing, which is exactly the intended policy.
+    pub fn set_valid_time(&mut self, from: Option<u64>, to: Option<u64>) -> KResult<()> {
+        if let (Some(f), Some(t)) = (from, to) {
+            if f > t {
+                return Err(KError::InvalidObject(format!(
+                    "valid interval must satisfy valid_from <= valid_to (got {f} > {t})"
+                )));
+            }
+        }
         match from {
             Some(f) => {
                 self.extensions
@@ -1031,6 +1103,22 @@ impl KnowledgeObject {
                 self.extensions.remove(Self::EXT_VALID_TO);
             }
         }
+        Ok(())
+    }
+
+    /// Close an open validity interval at `at` (review P1-1 future-fact
+    /// policy). A fact whose valid_from lies in the future (now < valid_from)
+    /// must not gain valid_to < valid_from: that would invert the interval.
+    /// Such an invalidation collapses to a zero-duration interval
+    /// [valid_from, valid_from) — it was never valid, and it never becomes
+    /// valid. No-op when the interval already has an end.
+    pub fn close_valid_time(&mut self, at: u64) -> KResult<()> {
+        if self.valid_to().is_some() {
+            return Ok(());
+        }
+        let from = self.valid_from();
+        let to = from.map_or(at, |f| f.max(at));
+        self.set_valid_time(from, Some(to))
     }
 
     /// True when `at_millis` falls inside the validity interval. Half-open
@@ -1195,14 +1283,50 @@ fn derivation_from_value(v: &Value) -> Option<Derivation> {
 }
 
 /// Confidence context model: how much the system trusts a KO, and why.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ConfidenceContext {
     /// Aggregate confidence score (0.0–1.0).
     pub score: f32,
-    /// Number of independent confirmations.
+    /// Number of independent confirmations (review P2-4: distinct
+    /// verifier+evidence keys only — re-verifying with the same evidence
+    /// does not inflate the count).
     pub confirmations: u32,
     /// Epoch millis of the last verification, if any.
     pub last_verified: Option<u64>,
+    /// Persisted confirmation keys backing `confirmations` (hash-like
+    /// verifier|artifact|method|location|revision strings; absent = legacy
+    /// record predating keyed confirmations).
+    pub verification_keys: Vec<String>,
+}
+
+impl Default for ConfidenceContext {
+    fn default() -> Self {
+        ConfidenceContext {
+            score: 0.0,
+            confirmations: 0,
+            last_verified: None,
+            verification_keys: Vec::new(),
+        }
+    }
+}
+
+impl ConfidenceContext {
+    /// The model boundary (review P1-7): every kernel construction site goes
+    /// through here, so a NaN/±∞/out-of-range score is rejected up front —
+    /// never clamped silently, never persisted.
+    pub fn new(score: f32, confirmations: u32, last_verified: Option<u64>) -> KResult<Self> {
+        if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+            return Err(KError::InvalidObject(format!(
+                "confidence score must be finite and within [0,1], got {score}"
+            )));
+        }
+        Ok(ConfidenceContext {
+            score,
+            confirmations,
+            last_verified,
+            verification_keys: Vec::new(),
+        })
+    }
 }
 
 pub fn confidence_to_value(c: &ConfidenceContext) -> Value {
@@ -1211,6 +1335,17 @@ pub fn confidence_to_value(c: &ConfidenceContext) -> Value {
     m.insert("confirmations".into(), Value::Int(c.confirmations as i64));
     if let Some(v) = c.last_verified {
         m.insert("last_verified".into(), Value::Int(v as i64));
+    }
+    if !c.verification_keys.is_empty() {
+        m.insert(
+            "verification_keys".into(),
+            Value::List(
+                c.verification_keys
+                    .iter()
+                    .map(|k| Value::Text(k.clone()))
+                    .collect(),
+            ),
+        );
     }
     Value::Map(m)
 }
@@ -1225,9 +1360,27 @@ fn confidence_from_value(v: &Value) -> Option<ConfidenceContext> {
         Some(Value::Int(i)) => *i as f32,
         _ => return None,
     };
+    // Reject a corrupt/non-finite score on decode too — it must not
+    // roundtrip or feed ranking (review P1-7/P2-6).
+    if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+        return None;
+    }
     let confirmations = match m.get("confirmations") {
         Some(Value::Int(i)) if *i >= 0 => *i as u32,
         _ => return None,
+    };
+    let verification_keys = match m.get("verification_keys") {
+        Some(Value::List(list)) => list
+            .iter()
+            .filter_map(|x| match x {
+                Value::Text(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        // Legacy records predate keyed confirmations (review P2-4 migration
+        // note: their confirmations count is accepted as-is; the first new
+        // verification adds its key and bumps by one).
+        _ => Vec::new(),
     };
     Some(ConfidenceContext {
         score,
@@ -1236,6 +1389,7 @@ fn confidence_from_value(v: &Value) -> Option<ConfidenceContext> {
             Some(Value::Int(t)) if *t >= 0 => Some(*t as u64),
             _ => None,
         },
+        verification_keys,
     })
 }
 
@@ -3132,7 +3286,7 @@ mod tests {
         assert_eq!(Value::Null.type_name(), "Null");
         assert_eq!(Value::Bool(true).type_name(), "Bool");
         assert_eq!(Value::Int(42).type_name(), "Int");
-        assert_eq!(Value::Float(3.14).type_name(), "Float");
+        assert_eq!(Value::Float(std::f64::consts::PI).type_name(), "Float");
         assert_eq!(Value::Text("hi".into()).type_name(), "Text");
         assert_eq!(Value::Bytes(vec![1, 2, 3]).type_name(), "Bytes");
         assert_eq!(Value::List(vec![]).type_name(), "List");
@@ -3154,7 +3308,7 @@ mod tests {
     fn type_check_passes_for_matching_types() {
         assert!(Value::Bool(true).type_check(&prop("flag", "Bool")).is_ok());
         assert!(Value::Int(42).type_check(&prop("count", "Int")).is_ok());
-        assert!(Value::Float(3.14)
+        assert!(Value::Float(std::f64::consts::PI)
             .type_check(&prop("score", "Float"))
             .is_ok());
         assert!(Value::Text("hi".into())

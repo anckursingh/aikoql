@@ -318,7 +318,14 @@ fn remember_request_from_object(
         semantic: ko.semantic,
         relationships,
         security: None,
-        extensions: ko.extensions,
+        // Kernel-managed keys (epistemic status, evidence, authority, ...) are
+        // rejected by the public remember() boundary (review P0-1) and are
+        // carried forward automatically by plain updates — strip before submit.
+        extensions: ko
+            .extensions
+            .into_iter()
+            .filter(|(key, _)| !Kernel::KERNEL_MANAGED_EXTENSIONS.contains(&key.as_str()))
+            .collect(),
         origin: ko.lifecycle.origin,
         note: None,
         referential_policy: ReferentialPolicy::default(),

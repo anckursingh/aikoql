@@ -1118,34 +1118,48 @@ fn k1_epistemic_and_evidence_end_to_end() {
     c.notify("notifications/initialized");
 
     // 1. An agent commits knowledge with an evidence trail declared at the
-    // protocol boundary.
+    // protocol boundary — via the semantic assert op (review P0-1:
+    // remember() rejects kernel-managed extensions like evidence/authority).
     let created = c.call_tool(
-        "remember",
+        "assert_knowledge",
         json!({
             "subject": "agent-researcher",
             "type_name": "claim",
             "properties": {"revenue": "$4.2B"},
-            "origin": "agent-researcher",
-            "extensions": {
-                "evidence": [{
-                    "source_artifact": "sec-10k-filing.pdf",
-                    "method": "doc_extraction",
-                    "location": "page 42",
-                    "confidence": 0.95
-                }],
-                "authority": "documentation",
-                "scope": "repository"
-            }
+            "authority": "documentation",
+            "evidence": [{
+                "source_artifact": "sec-10k-filing.pdf",
+                "method": "doc_extraction",
+                "location": "page 42",
+                "confidence": 0.95
+            }]
         }),
     );
     let koid = created["koid"].as_str().unwrap().to_string();
     assert_eq!(created["version"], 1);
 
+    // 1b. The bypass is closed at the protocol boundary too: remember with
+    // a kernel-managed extension key is a tool error, not a silent stamp.
+    let res = c.request(
+        "tools/call",
+        json!({
+            "name": "remember",
+            "arguments": {
+                "subject": "agent-researcher",
+                "type_name": "claim",
+                "properties": {"revenue": "$4.2B"},
+                "extensions": {"authority": "human_approved"}
+            }
+        }),
+    );
+    assert_eq!(res.get("isError").and_then(|b| b.as_bool()), Some(true));
+
     // 2. Epistemic baseline stamped on the write; explicit authority wins.
+    // Scope is origin-stamped by the kernel (agent assertion → session).
     let ko = c.call_tool("get", json!({"subject": "agent-researcher", "koid": koid}));
     assert_eq!(ko["extensions"]["epistemic_status"], "asserted");
     assert_eq!(ko["extensions"]["authority"], "documentation");
-    assert_eq!(ko["extensions"]["scope"], "repository");
+    assert_eq!(ko["extensions"]["scope"], "session");
 
     // 3. Evidence survives ingestion -> commit -> storage -> query with
     // every detail intact (no silent epistemic metadata drop).
@@ -1354,8 +1368,7 @@ fn k3_derivation_and_lineage_end_to_end() {
         json!({
             "subject": "alice",
             "type_name": "observation",
-            "properties": {"env": "prod", "cpu": 41},
-            "extensions": {"confidence": {"score": 0.8, "confirmations": 1}}
+            "properties": {"env": "prod", "cpu": 41}
         }),
     );
     let p1_koid = p1["koid"].as_str().unwrap().to_string();
@@ -1368,6 +1381,17 @@ fn k3_derivation_and_lineage_end_to_end() {
         }),
     );
     let p2_koid = p2["koid"].as_str().unwrap().to_string();
+    // Confidence is kernel-managed (review P0-1): seed it via the semantic
+    // verify op, not a remember extension.
+    c.call_tool(
+        "verify_knowledge",
+        json!({
+            "subject": "alice",
+            "koid": p1_koid,
+            "confidence": 0.8,
+            "evidence": [{"source_artifact": "monitoring/grafana", "method": "runtime_observation"}]
+        }),
+    );
 
     // 1. Derive a conclusion through the protocol — first-class operation.
     let d = c.call_tool(
@@ -1396,7 +1420,10 @@ fn k3_derivation_and_lineage_end_to_end() {
     );
     let deriv = ext["derivation"].clone();
     assert_eq!(deriv["operation"], "inference"); // DERIVED HOW
-    assert_eq!(deriv["actor"], "agent-7"); // BY WHOM
+                                                 // Review P1-9 (Test 5): the caller-supplied "actor": "agent-7" arg is
+                                                 // IGNORED — the tool binds the actor to the session identity ("alice"),
+                                                 // so provenance can never be spoofed through the protocol boundary.
+    assert_eq!(deriv["actor"], "alice"); // BY WHOM
     assert_eq!(deriv["model"], "claude-sonnet-5");
     assert_eq!(
         deriv["reason"],
@@ -1427,7 +1454,7 @@ fn k3_derivation_and_lineage_end_to_end() {
     let t = c.call_tool("trace", json!({"subject": "alice", "koid": d_koid}));
     let tr = t["derivation"].clone();
     assert_eq!(tr["operation"], "inference");
-    assert_eq!(tr["actor"], "agent-7");
+    assert_eq!(tr["actor"], "alice"); // session identity, not the forged arg (P1-9)
     assert_eq!(tr["model"], "claude-sonnet-5");
     assert_eq!(
         tr["reason"],

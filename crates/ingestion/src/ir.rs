@@ -859,7 +859,7 @@ mod tests {
         let analyzer = MockSemanticAnalyzer::new();
         let ir = analyzer.analyze(&ast);
 
-        assert!(ir.facts.len() >= 1);
+        assert!(!ir.facts.is_empty());
         let fact = &ir.facts[0];
         assert!(fact
             .statement

@@ -45,7 +45,7 @@ fn derive_stamps_derivation_record_and_wires_edges() {
     req.reason = Some("both premises observed the same environment".into());
     let r = k.derive(req).unwrap();
 
-    let ko = k.get(&Subject::new("alice"), &r.koid).unwrap();
+    let ko = k.get(Subject::new("alice"), &r.koid).unwrap();
     // Origin::Reason => Inferred epistemic baseline (not a human assertion).
     assert_eq!(ko.epistemic_status(), EpistemicStatus::Inferred);
 
@@ -110,13 +110,14 @@ fn derivation_and_confidence_survive_reopen() {
         score: 0.75,
         confirmations: 3,
         last_verified: Some(9_999),
+        verification_keys: Vec::new(),
     });
     let r = k.derive(req).unwrap();
     drop(k);
 
     let clock = Arc::new(ManualClock::new(50_000));
     let k2 = Kernel::open(store, clock, 0xE915).unwrap();
-    let ko = k2.get(&Subject::new("alice"), &r.koid).unwrap();
+    let ko = k2.get(Subject::new("alice"), &r.koid).unwrap();
     let d = ko.derivation().expect("derivation survives reopen");
     assert_eq!(d.operation, "merge");
     assert_eq!(d.sources, vec![a]);
@@ -125,7 +126,8 @@ fn derivation_and_confidence_survive_reopen() {
         Some(ConfidenceContext {
             score: 0.75,
             confirmations: 3,
-            last_verified: Some(9_999)
+            last_verified: Some(9_999),
+            verification_keys: Vec::new()
         })
     );
     assert_eq!(
@@ -141,17 +143,17 @@ fn confidence_baseline_comes_from_sources_never_silently_full() {
     let b = fact(&k, "alice", "env", 2);
 
     // Sources with explicit confidence contexts: baseline = mean score,
-    // confirmations = number of sources carrying a context.
+    // confirmations = number of sources carrying a context. Review P0-1:
+    // confidence is kernel-managed — set via the semantic verify op, never
+    // smuggled through remember().
     let set = |id: &KOID, score: f32| {
-        let mut ko = k.get(&Subject::new("alice"), id).unwrap();
-        ko.set_confidence_context(&ConfidenceContext {
-            score,
-            confirmations: 1,
-            last_verified: None,
-        });
-        let mut upd = RememberRequest::update(Subject::new("alice"), *id, meta("fact"));
-        upd.extensions = ko.extensions.clone();
-        k.remember(upd).unwrap();
+        let mut v = VerificationRequest::new(Subject::new("alice"), *id);
+        v.evidence = vec![Evidence::new(
+            format!("baseline-evidence-{score}"),
+            EvidenceMethod::HumanProvided,
+        )];
+        v.confidence = Some(score);
+        k.verify_knowledge(v).unwrap();
     };
     set(&a, 0.6);
     set(&b, 0.8);
@@ -160,7 +162,7 @@ fn confidence_baseline_comes_from_sources_never_silently_full() {
     req.sources = vec![a, b];
     let r = k.derive(req).unwrap();
     let c = k
-        .get(&Subject::new("alice"), &r.koid)
+        .get(Subject::new("alice"), &r.koid)
         .unwrap()
         .confidence_context()
         .expect("baseline confidence must be stamped");
@@ -174,7 +176,7 @@ fn confidence_baseline_comes_from_sources_never_silently_full() {
     req.sources = vec![c1];
     let r2 = k.derive(req).unwrap();
     let c2 = k
-        .get(&Subject::new("alice"), &r2.koid)
+        .get(Subject::new("alice"), &r2.koid)
         .unwrap()
         .confidence_context()
         .expect("baseline confidence must be stamped");
@@ -196,7 +198,7 @@ fn update_carries_derivation_and_confidence_forward() {
     upd.properties.insert("answer".into(), Value::Int(42));
     k.remember(upd).unwrap();
 
-    let ko = k.get(&Subject::new("alice"), &r.koid).unwrap();
+    let ko = k.get(Subject::new("alice"), &r.koid).unwrap();
     let d = ko.derivation().expect("derivation must survive update");
     assert_eq!(d.operation, "inference");
     assert_eq!(d.sources, vec![a]);
@@ -218,7 +220,7 @@ fn derive_with_evidence_stamps_canonical_trail() {
         .with_location("lines 42-58")
         .with_confidence(0.95)];
     let r = k.derive(req).unwrap();
-    let ko = k.get(&Subject::new("alice"), &r.koid).unwrap();
+    let ko = k.get(Subject::new("alice"), &r.koid).unwrap();
     let ev = ko.evidence();
     assert_eq!(ev.len(), 1);
     assert_eq!(ev[0].source_artifact, "src/main.rs");
@@ -245,13 +247,57 @@ fn confidence_context_round_trips_through_extensions() {
         score: 0.5,
         confirmations: 2,
         last_verified: Some(123),
+        verification_keys: Vec::new(),
     });
     assert_eq!(
         ko.confidence_context(),
         Some(ConfidenceContext {
             score: 0.5,
             confirmations: 2,
-            last_verified: Some(123)
+            last_verified: Some(123),
+            verification_keys: Vec::new()
         })
     );
+}
+
+#[test]
+fn confidence_context_rejects_non_finite_and_out_of_range_scores() {
+    let (k, _clock, _store) = mk_kernel();
+    let a = fact(&k, "alice", "env", 1);
+    // Review P1-7 (Test 6): scores outside [0,1] or non-finite are rejected
+    // at the model boundary, not clamped.
+    for bad in [1.7f32, -0.5, f32::NAN, f32::INFINITY] {
+        let mut req = DeriveRequest::new(Subject::new("alice"), "conclusion");
+        req.sources = vec![a];
+        req.confidence = Some(ConfidenceContext {
+            score: bad,
+            confirmations: 0,
+            last_verified: None,
+            verification_keys: Vec::new(),
+        });
+        assert!(
+            matches!(k.derive(req), Err(KError::InvalidObject(_))),
+            "score {bad} must be rejected"
+        );
+    }
+    // The [0,1] boundaries themselves are legal.
+    for ok in [0.0f32, 1.0] {
+        let mut req = DeriveRequest::new(Subject::new("alice"), "conclusion");
+        req.sources = vec![a];
+        req.confidence = Some(ConfidenceContext {
+            score: ok,
+            confirmations: 0,
+            last_verified: None,
+            verification_keys: Vec::new(),
+        });
+        let r = k.derive(req).unwrap();
+        assert_eq!(
+            k.get(Subject::new("alice"), &r.koid)
+                .unwrap()
+                .confidence_context()
+                .unwrap()
+                .score,
+            ok
+        );
+    }
 }

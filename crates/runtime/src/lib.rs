@@ -617,7 +617,9 @@ impl Default for Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aikoql_kernel::{ManualClock, MemoryEngine, Metadata, RememberRequest, SemanticBlock};
+    use aikoql_kernel::{
+        Clock, ManualClock, MemoryEngine, Metadata, RememberRequest, SemanticBlock,
+    };
     use std::sync::Arc;
 
     fn mk() -> Kernel {
@@ -1178,6 +1180,7 @@ mod tests {
 
     fn fact_with_validity(
         k: &Kernel,
+        clock: &ManualClock,
         who: &str,
         prop: &str,
         v: i64,
@@ -1187,13 +1190,18 @@ mod tests {
             Some((f, t)) => (Some(f), Some(t)),
             None => (None, None),
         };
-        fact_with_open_validity(k, who, prop, v, from, to)
+        fact_with_open_validity(k, clock, who, prop, v, from, to)
     }
 
     /// Fact with independently-optional bounds: None valid_from = -inf,
     /// None valid_to = +inf (never `0`-as-unbounded — review P0-2).
+    /// `valid_to` is kernel-managed (review P0-1): the bound is closed by
+    /// the privileged Superseded transition at the closing instant
+    /// (`close_valid_time` collapses future starts to a zero-duration
+    /// interval — the fixture only uses `from <= to`).
     fn fact_with_open_validity(
         k: &Kernel,
+        clock: &ManualClock,
         who: &str,
         prop: &str,
         v: i64,
@@ -1204,33 +1212,49 @@ mod tests {
         if let Some(f) = from {
             ext.insert("valid_from".into(), Value::Int(f as i64));
         }
-        if let Some(t) = to {
-            ext.insert("valid_to".into(), Value::Int(t as i64));
-        }
         let mut props = PropertyMap::new();
         props.insert(prop.into(), Value::Int(v));
-        k.remember(RememberRequest {
-            context: Subject::new(who).into(),
-            koid: None,
-            expected_version: Some(0),
-            idempotency_key: None,
-            metadata: Metadata {
-                type_name: "fact".into(),
-                tenant: None,
-                schema_version: 1,
-                tags: vec![],
-            },
-            properties: props,
-            semantic: None,
-            relationships: vec![],
-            security: None,
-            extensions: ext,
-            origin: Origin::Human,
-            note: None,
-            referential_policy: ReferentialPolicy::default(),
-        })
-        .unwrap()
-        .koid
+        let id = k
+            .remember(RememberRequest {
+                context: Subject::new(who).into(),
+                koid: None,
+                expected_version: Some(0),
+                idempotency_key: None,
+                metadata: Metadata {
+                    type_name: "fact".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+                properties: props,
+                semantic: None,
+                relationships: vec![],
+                security: None,
+                extensions: ext,
+                origin: Origin::Human,
+                note: None,
+                referential_policy: ReferentialPolicy::default(),
+            })
+            .unwrap()
+            .koid;
+        if let Some(t) = to {
+            // The close is stamped at instant `t`; restore the fixture clock
+            // afterwards so `now` (default-scan filtering) stays untouched.
+            let now = clock.millis();
+            clock.set(t);
+            k.admin_transition_epistemic(
+                Subject::new(who),
+                &id,
+                EpistemicStatus::Superseded,
+                Origin::System,
+                None,
+                None,
+                Some("test fixture: close validity".into()),
+            )
+            .unwrap();
+            clock.set(now);
+        }
+        id
     }
 
     fn update_val(k: &Kernel, who: &str, id: KOID, expected: u64, prop: &str, v: i64) {
@@ -1277,11 +1301,11 @@ mod tests {
 
     #[test]
     fn default_match_excludes_facts_not_valid_now() {
-        let (k, _clock) = mk_with_clock(); // now = 20_000
-        fact_with_validity(&k, "alice", "a", 1, None); // timeless: included
-        fact_with_validity(&k, "alice", "b", 2, Some((30_000, 40_000))); // future: excluded
-        fact_with_validity(&k, "alice", "c", 3, Some((0, 10_000))); // expired: excluded
-        fact_with_validity(&k, "alice", "d", 4, Some((10_000, 30_000))); // valid now
+        let (k, clock) = mk_with_clock(); // now = 20_000
+        fact_with_validity(&k, &clock, "alice", "a", 1, None); // timeless: included
+        fact_with_validity(&k, &clock, "alice", "b", 2, Some((30_000, 40_000))); // future: excluded
+        fact_with_validity(&k, &clock, "alice", "c", 3, Some((0, 10_000))); // expired: excluded
+        fact_with_validity(&k, &clock, "alice", "d", 4, Some((10_000, 30_000))); // valid now
 
         let kos = objects(Interpreter::execute(&k, &scan_plan()).unwrap());
         assert_eq!(kos.len(), 2, "timeless and currently-valid facts only");
@@ -1300,7 +1324,7 @@ mod tests {
     #[test]
     fn as_of_reconstructs_committed_versions() {
         let (k, clock) = mk_with_clock();
-        let id = fact_with_validity(&k, "alice", "a", 1, None); // v1 at 20_000
+        let id = fact_with_validity(&k, &clock, "alice", "a", 1, None); // v1 at 20_000
         clock.tick(10_000);
         update_val(&k, "alice", id, 1, "a", 2); // v2 at 30_000
 
@@ -1326,10 +1350,10 @@ mod tests {
 
     #[test]
     fn between_uses_valid_time_overlap_semantics() {
-        let (k, _clock) = mk_with_clock();
-        fact_with_validity(&k, "alice", "a", 1, Some((25_000, 35_000))); // overlaps first window
-        fact_with_validity(&k, "alice", "b", 2, None); // timeless: any window
-        fact_with_validity(&k, "alice", "c", 3, Some((0, 10_000))); // long expired
+        let (k, clock) = mk_with_clock();
+        fact_with_validity(&k, &clock, "alice", "a", 1, Some((25_000, 35_000))); // overlaps first window
+        fact_with_validity(&k, &clock, "alice", "b", 2, None); // timeless: any window
+        fact_with_validity(&k, &clock, "alice", "c", 3, Some((0, 10_000))); // long expired
 
         let between = |from: u64, to: u64| {
             let mut plan = scan_plan();
@@ -1353,14 +1377,14 @@ mod tests {
     fn between_boundary_matrix_and_unbounded_sides() {
         // Review P0-2/P1-6: a fact valid on [1000, 2000) against the full
         // window matrix, with independently-unbounded sides.
-        let (k, _clock) = mk_with_clock();
-        fact_with_validity(&k, "alice", "windowed", 1, Some((1_000, 2_000)));
+        let (k, clock) = mk_with_clock();
+        fact_with_validity(&k, &clock, "alice", "windowed", 1, Some((1_000, 2_000)));
         // valid on (-inf, 1000): valid_to only.
-        fact_with_open_validity(&k, "alice", "past_only", 2, None, Some(1_000));
+        fact_with_open_validity(&k, &clock, "alice", "past_only", 2, None, Some(1_000));
         // valid on [2000, +inf): valid_from only.
-        fact_with_open_validity(&k, "alice", "future_only", 3, Some(2_000), None);
+        fact_with_open_validity(&k, &clock, "alice", "future_only", 3, Some(2_000), None);
         // timeless: both bounds None.
-        fact_with_validity(&k, "alice", "timeless", 4, None);
+        fact_with_validity(&k, &clock, "alice", "timeless", 4, None);
 
         let between = |from: u64, to: u64| {
             let mut plan = scan_plan();
@@ -1393,7 +1417,7 @@ mod tests {
     #[test]
     fn historical_enumerates_all_versions_ascending() {
         let (k, clock) = mk_with_clock();
-        let id = fact_with_validity(&k, "alice", "a", 1, None);
+        let id = fact_with_validity(&k, &clock, "alice", "a", 1, None);
         clock.tick(10_000);
         update_val(&k, "alice", id, 1, "a", 2);
         clock.tick(10_000);
@@ -1411,11 +1435,11 @@ mod tests {
 
     #[test]
     fn epistemic_filter_selects_by_status() {
-        let (k, _clock) = mk_with_clock();
-        let id = fact_with_validity(&k, "alice", "a", 1, None);
-        fact_with_validity(&k, "alice", "b", 2, None);
-        k.transition_epistemic(
-            &Subject::new("alice"),
+        let (k, clock) = mk_with_clock();
+        let id = fact_with_validity(&k, &clock, "alice", "a", 1, None);
+        fact_with_validity(&k, &clock, "alice", "b", 2, None);
+        k.admin_transition_epistemic(
+            Subject::new("alice"),
             &id,
             EpistemicStatus::Verified,
             Origin::Human,

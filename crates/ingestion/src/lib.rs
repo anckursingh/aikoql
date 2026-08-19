@@ -501,7 +501,7 @@ mod tests {
         let mut found = false;
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
-            if path.extension().map_or(false, |e| e == "pdf") {
+            if path.extension().is_some_and(|e| e == "pdf") {
                 found = true;
                 let doc = extract_document(&path.to_string_lossy(), "application/pdf").unwrap();
                 let fname = path.file_name().unwrap().to_string_lossy();
@@ -561,7 +561,7 @@ mod tests {
         // Find first PDF.
         let pdf = std::fs::read_dir(dir).unwrap().find_map(|e| {
             let p = e.unwrap().path();
-            if p.extension().map_or(false, |ext| ext == "pdf") {
+            if p.extension().is_some_and(|ext| ext == "pdf") {
                 Some(p)
             } else {
                 None

@@ -507,7 +507,7 @@ mod tests {
             Value::Int(-42),
             Value::Int(0),
             Value::Int(i64::MAX),
-            Value::Float(3.14),
+            Value::Float(std::f64::consts::PI),
             Value::Float(-0.5),
             Value::Text("hello".into()),
             Value::Text("".into()),

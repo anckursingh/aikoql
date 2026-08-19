@@ -89,7 +89,7 @@ fn observe_requires_evidence_and_stamps_provenance() {
     req.evidence = vec![ev("thermometer-1")];
     let r = k.observe(req).unwrap();
     clock.tick(1);
-    let ko = k.get(&Subject::new("alice"), &r.koid).unwrap();
+    let ko = k.get(Subject::new("alice"), &r.koid).unwrap();
     // A direct observation is epistemic Observed — never a bare Asserted.
     assert_eq!(ko.epistemic_status(), EpistemicStatus::Observed);
     assert_eq!(ko.valid_from(), Some(10_000));
@@ -132,7 +132,7 @@ fn assert_requires_evidence_and_valid_authority() {
     req.authority = Some("source_code".into());
     req.evidence = vec![ev("src/main.rs")];
     let r = k.assert_knowledge(req).unwrap();
-    let ko = k.get(&Subject::new("alice"), &r.koid).unwrap();
+    let ko = k.get(Subject::new("alice"), &r.koid).unwrap();
     assert_eq!(ko.epistemic_status(), EpistemicStatus::Asserted);
     assert_eq!(ko.authority(), Some(Authority::SourceCode));
 }
@@ -155,7 +155,7 @@ fn verify_is_not_a_status_flip() {
     let mut req = VerificationRequest::new(Subject::new("alice"), f);
     req.evidence = vec![ev("ci-run-1")];
     let res = k.verify_knowledge(req).unwrap();
-    let ko = k.get(&Subject::new("alice"), &f).unwrap();
+    let ko = k.get(Subject::new("alice"), &f).unwrap();
     assert_eq!(ko.epistemic_status(), EpistemicStatus::Verified);
     assert_eq!(res.status, EpistemicStatus::Verified);
     let conf = ko.confidence_context().expect("confidence context");
@@ -168,18 +168,14 @@ fn verify_is_not_a_status_flip() {
 #[test]
 fn verify_bumps_confirmations_and_never_lowers_score() {
     let (k, clock, _store) = mk_kernel();
-    // Premise asserted with confidence 0.8 (0.8 score, 1 confirmation).
+    // Premise verified with confidence 0.8 (0.8 score, 1 confirmation).
+    // Review P0-1: the confidence context is kernel-managed — it is set via
+    // the semantic verify op, never smuggled through remember().
     let f = assert_k(&k, "alice", "env", 1, "source_code");
-    let mut ko = k.get(&Subject::new("alice"), &f).unwrap();
-    ko.set_confidence_context(&ConfidenceContext {
-        score: 0.8,
-        confirmations: 1,
-        last_verified: None,
-    });
-    let mut rr = RememberRequest::update(&Subject::new("alice"), f, ko.metadata.clone());
-    rr.properties = ko.properties.clone();
-    rr.extensions = ko.extensions.clone();
-    k.remember(rr).unwrap();
+    let mut seed = VerificationRequest::new(Subject::new("alice"), f);
+    seed.evidence = vec![ev("ci-run-0")];
+    seed.confidence = Some(0.8);
+    k.verify_knowledge(seed).unwrap();
     clock.tick(1);
 
     let mut req = VerificationRequest::new(Subject::new("alice"), f);
@@ -187,7 +183,7 @@ fn verify_bumps_confirmations_and_never_lowers_score() {
     req.confidence = Some(0.5); // a weaker verification must not lower the score
     let res = k.verify_knowledge(req).unwrap();
     assert_eq!(res.confirmations, 2);
-    let ko = k.get(&Subject::new("alice"), &f).unwrap();
+    let ko = k.get(Subject::new("alice"), &f).unwrap();
     let conf = ko.confidence_context().unwrap();
     assert_eq!(conf.score, 0.8);
     assert_eq!(conf.confirmations, 2);
@@ -198,7 +194,7 @@ fn verify_bumps_confirmations_and_never_lowers_score() {
     req.evidence = vec![ev("ci-run-2")];
     k.verify_knowledge(req).unwrap();
     let conf = k
-        .get(&Subject::new("alice"), &f)
+        .get(Subject::new("alice"), &f)
         .unwrap()
         .confidence_context()
         .unwrap();
@@ -251,13 +247,13 @@ fn contradict_persists_symmetric_conflict_without_touching_original() {
     let res = k.contradict(cr).unwrap();
 
     // The original claim is UNTOUCHED — the conflict is symmetric.
-    let orig = k.get(&Subject::new("alice"), &a).unwrap();
+    let orig = k.get(Subject::new("alice"), &a).unwrap();
     assert_eq!(orig.epistemic_status(), EpistemicStatus::Asserted);
     assert!(orig.invalidation().is_none());
     assert!(orig.valid_to().is_none());
 
     // Counter-claim: asserted, evidenced, CONTRADICTS edge.
-    let counter = k.get(&Subject::new("bob"), &res.counter).unwrap();
+    let counter = k.get(Subject::new("bob"), &res.counter).unwrap();
     assert_eq!(counter.epistemic_status(), EpistemicStatus::Asserted);
     assert_eq!(
         k.outbound_edges(&res.counter, Some(CONTRADICTS)).unwrap(),
@@ -265,7 +261,7 @@ fn contradict_persists_symmetric_conflict_without_touching_original() {
     );
 
     // Persisted Conflict KO: claims, description, resolution, snapshots.
-    let conflict = k.get(&Subject::new("bob"), &res.conflict).unwrap();
+    let conflict = k.get(Subject::new("bob"), &res.conflict).unwrap();
     assert_eq!(conflict.metadata.type_name, "aikoql:conflict");
     assert_eq!(
         conflict.properties.get("claim_a"),
@@ -315,6 +311,40 @@ fn contradict_rejects_identical_or_non_current_claims() {
     ));
 }
 
+#[test]
+fn contradict_stamps_origin_derived_authority_by_default() {
+    let (k, _clock, _store) = mk_kernel();
+    let a = assert_k(&k, "alice", "env", 1, "source_code");
+    // Review P1-3 (Test 4): no explicit authority → the counter-claim gets
+    // the origin-derived default (agent_derived), never inheriting the
+    // contradicted claim's higher authority.
+    let mut cr = ContradictionRequest::new(Subject::new("bob"), a);
+    cr.counter_props.insert("env".into(), Value::Int(2));
+    cr.evidence = vec![ev("bob-observation")];
+    let res = k.contradict(cr).unwrap();
+    let counter = k.get(Subject::new("bob"), &res.counter).unwrap();
+    assert_eq!(
+        counter.extensions.get("authority"),
+        Some(&Value::Text("agent_derived".into()))
+    );
+    // Explicit authority wins, and an invalid level is rejected.
+    let mut cr = ContradictionRequest::new(Subject::new("bob"), a);
+    cr.counter_props.insert("env".into(), Value::Int(3));
+    cr.evidence = vec![ev("bob-observation-2")];
+    cr.authority = Some("human_approved".into());
+    let res = k.contradict(cr).unwrap();
+    let counter = k.get(Subject::new("bob"), &res.counter).unwrap();
+    assert_eq!(
+        counter.extensions.get("authority"),
+        Some(&Value::Text("human_approved".into()))
+    );
+    let mut cr = ContradictionRequest::new(Subject::new("bob"), a);
+    cr.counter_props.insert("env".into(), Value::Int(4));
+    cr.evidence = vec![ev("bob-observation-3")];
+    cr.authority = Some("not-a-level".into());
+    assert!(matches!(k.contradict(cr), Err(KError::InvalidObject(_))));
+}
+
 // ---- supersede -------------------------------------------------------------
 
 #[test]
@@ -331,7 +361,7 @@ fn supersede_transitions_old_and_stamps_dependents() {
     let res = k.supersede(sr).unwrap();
 
     // Old: Superseded + valid_to=now + SUPERSEDES edge — but fully preserved.
-    let old = k.get(&Subject::new("alice"), &a).unwrap();
+    let old = k.get(Subject::new("alice"), &a).unwrap();
     assert_eq!(old.epistemic_status(), EpistemicStatus::Superseded);
     assert_eq!(old.valid_to(), Some(10_001));
     assert_eq!(old.properties.get("env"), Some(&Value::Int(1)));
@@ -341,7 +371,7 @@ fn supersede_transitions_old_and_stamps_dependents() {
     );
 
     // New: current, evidenced, asserted.
-    let new = k.get(&Subject::new("alice"), &res.new).unwrap();
+    let new = k.get(Subject::new("alice"), &res.new).unwrap();
     assert_eq!(new.epistemic_status(), EpistemicStatus::Asserted);
     assert_eq!(new.properties.get("env"), Some(&Value::Int(2)));
     assert_eq!(new.valid_to(), None);
@@ -349,7 +379,7 @@ fn supersede_transitions_old_and_stamps_dependents() {
     // The dependent was swept: stamped invalidated + valid_to, but its
     // epistemic status is untouched (nothing contradicted IT).
     assert_eq!(res.invalidated_dependents, vec![dep]);
-    let dep_ko = k.get(&Subject::new("alice"), &dep).unwrap();
+    let dep_ko = k.get(Subject::new("alice"), &dep).unwrap();
     assert_eq!(dep_ko.epistemic_status(), EpistemicStatus::Inferred);
     assert!(dep_ko.invalidation().is_some());
     assert_eq!(dep_ko.invalidation().unwrap().actor, "alice");
@@ -391,13 +421,13 @@ fn supersede_with_superseded_by_links_existing_successor() {
 
     // No new generation is minted — the named successor IS the result.
     assert_eq!(res.new, successor);
-    let successor_ko = k.get(&Subject::new("alice"), &successor).unwrap();
+    let successor_ko = k.get(Subject::new("alice"), &successor).unwrap();
     assert_eq!(successor_ko.version, 1);
     assert_eq!(successor_ko.epistemic_status(), EpistemicStatus::Asserted);
     assert_eq!(successor_ko.valid_to(), None);
 
     // Old: Superseded + valid_to stamped + SUPERSEDES edge to the successor.
-    let old_ko = k.get(&Subject::new("alice"), &old).unwrap();
+    let old_ko = k.get(Subject::new("alice"), &old).unwrap();
     assert_eq!(old_ko.epistemic_status(), EpistemicStatus::Superseded);
     assert_eq!(old_ko.valid_to(), Some(10_001));
     assert_eq!(
@@ -414,7 +444,7 @@ fn supersede_with_superseded_by_links_existing_successor() {
     // The dependent was swept.
     assert_eq!(res.invalidated_dependents, vec![dep]);
     assert!(k
-        .get(&Subject::new("alice"), &dep)
+        .get(Subject::new("alice"), &dep)
         .unwrap()
         .invalidation()
         .is_some());
@@ -437,7 +467,7 @@ fn supersede_with_superseded_by_rejects_dead_successor() {
         KError::InvalidObject(_)
     ));
     // The rejected supersession left the old claim untouched.
-    let old_ko = k.get(&Subject::new("alice"), &old).unwrap();
+    let old_ko = k.get(Subject::new("alice"), &old).unwrap();
     assert_eq!(old_ko.epistemic_status(), EpistemicStatus::Asserted);
     assert_eq!(old_ko.valid_to(), None);
 }
@@ -465,7 +495,7 @@ fn merge_is_a_first_class_derivation_with_property_folding() {
     mr.strategy = MergeStrategy::NewestWins;
     mr.evidence = vec![ev("merge-run")];
     let r = k.merge(mr).unwrap();
-    let ko = k.get(&Subject::new("alice"), &r.koid).unwrap();
+    let ko = k.get(Subject::new("alice"), &r.koid).unwrap();
     assert_eq!(ko.properties.get("a"), Some(&Value::Int(1)));
     assert_eq!(ko.properties.get("b"), Some(&Value::Int(2)));
     assert_eq!(ko.properties.get("c"), Some(&Value::Int(3)));
@@ -501,7 +531,7 @@ fn invalidate_contradicts_target_and_sweeps_derivation_chain() {
     assert_eq!(res.invalidated, vec![a, b, c]);
 
     // Target: Contradicted + stamp + valid_to.
-    let a_ko = k.get(&Subject::new("alice"), &a).unwrap();
+    let a_ko = k.get(Subject::new("alice"), &a).unwrap();
     assert_eq!(a_ko.epistemic_status(), EpistemicStatus::Contradicted);
     let inv = a_ko.invalidation().expect("invalidation stamp");
     assert_eq!(inv.actor, "alice");
@@ -509,11 +539,11 @@ fn invalidate_contradicts_target_and_sweeps_derivation_chain() {
     assert_eq!(a_ko.valid_to(), Some(10_001));
 
     // Dependents: stamped + valid_to, but epistemic status untouched.
-    let b_ko = k.get(&Subject::new("alice"), &b).unwrap();
+    let b_ko = k.get(Subject::new("alice"), &b).unwrap();
     assert_eq!(b_ko.epistemic_status(), EpistemicStatus::Inferred);
     assert!(b_ko.invalidation().is_some());
     assert_eq!(b_ko.valid_to(), Some(10_001));
-    let c_ko = k.get(&Subject::new("alice"), &c).unwrap();
+    let c_ko = k.get(Subject::new("alice"), &c).unwrap();
     assert_eq!(c_ko.epistemic_status(), EpistemicStatus::Inferred);
     assert!(c_ko.invalidation().is_some());
     assert_eq!(c_ko.valid_to(), Some(10_001));
@@ -548,10 +578,17 @@ fn sweep_terminates_on_derived_from_cycles() {
     let b = derive_from(&k, "alice", a, "mid", 10);
     let c = derive_from(&k, "alice", b, "final", 100);
     // Close the cycle: wire C -> A as an inbound DERIVED_FROM edge on A.
-    let a_ko = k.get(&Subject::new("alice"), &a).unwrap();
-    let mut rr = RememberRequest::update(&Subject::new("alice"), a, a_ko.metadata.clone());
+    // Kernel-managed keys are stripped (review P0-1) — carried forward
+    // automatically by the plain update.
+    let a_ko = k.get(Subject::new("alice"), &a).unwrap();
+    let mut rr = RememberRequest::update(Subject::new("alice"), a, a_ko.metadata.clone());
     rr.properties = a_ko.properties.clone();
-    rr.extensions = a_ko.extensions.clone();
+    rr.extensions = a_ko
+        .extensions
+        .clone()
+        .into_iter()
+        .filter(|(key, _)| !Kernel::KERNEL_MANAGED_EXTENSIONS.contains(&key.as_str()))
+        .collect();
     rr.relationships = vec![RelationshipRef {
         rel_type: DERIVED_FROM.into(),
         target: c,
@@ -569,7 +606,7 @@ fn sweep_terminates_on_derived_from_cycles() {
     got.sort();
     assert_eq!(got, expected);
     for koid in [b, c] {
-        let ko = k.get(&Subject::new("alice"), &koid).unwrap();
+        let ko = k.get(Subject::new("alice"), &koid).unwrap();
         assert!(ko.invalidation().is_some());
     }
 }
@@ -591,7 +628,7 @@ fn sweep_collapses_duplicate_edges_to_one_stamp() {
     let res = k.invalidate(ir).unwrap();
     // B appears exactly once and is stamped exactly once (one version bump).
     assert_eq!(res.invalidated, vec![a, b]);
-    let b_ko = k.get(&Subject::new("alice"), &b).unwrap();
+    let b_ko = k.get(Subject::new("alice"), &b).unwrap();
     assert_eq!(b_ko.version, 2); // v1 created, v2 invalidation stamp
 }
 
@@ -612,7 +649,7 @@ fn repeated_sweep_is_idempotent_per_dependent() {
     ir.evidence = vec![ev("refuting-observation")];
     let res = k.invalidate(ir).unwrap();
     assert_eq!(res.invalidated, vec![a, b]);
-    let b_ko = k.get(&Subject::new("alice"), &b).unwrap();
+    let b_ko = k.get(Subject::new("alice"), &b).unwrap();
     assert_eq!(b_ko.version, 2);
 
     // The second premise sweep finds B already stamped and leaves it alone.
@@ -620,7 +657,7 @@ fn repeated_sweep_is_idempotent_per_dependent() {
     ir.evidence = vec![ev("refuting-observation-2")];
     let res = k.invalidate(ir).unwrap();
     assert_eq!(res.invalidated, vec![x]);
-    let b_ko = k.get(&Subject::new("alice"), &b).unwrap();
+    let b_ko = k.get(Subject::new("alice"), &b).unwrap();
     assert_eq!(b_ko.version, 2);
 }
 
@@ -651,13 +688,11 @@ fn resolve_conflict_applies_decision_and_records_rationale() {
         vec![(cc.counter, EpistemicStatus::Contradicted)]
     );
     assert_eq!(
-        k.get(&Subject::new("alice"), &a)
-            .unwrap()
-            .epistemic_status(),
+        k.get(Subject::new("alice"), &a).unwrap().epistemic_status(),
         EpistemicStatus::Asserted
     );
     // The Conflict KO records the decision + rationale.
-    let conflict = k.get(&Subject::new("bob"), &cc.conflict).unwrap();
+    let conflict = k.get(Subject::new("bob"), &cc.conflict).unwrap();
     assert_eq!(
         conflict.extensions.get("resolution"),
         Some(&Value::Text("resolved_a_preferred".into()))
@@ -762,7 +797,7 @@ fn resolve_conflict_replaced_requires_replacement_and_supersedes_both() {
         .effects
         .iter()
         .all(|(_, st)| *st == EpistemicStatus::Superseded));
-    let conflict = k.get(&Subject::new("bob"), &cc.conflict).unwrap();
+    let conflict = k.get(Subject::new("bob"), &cc.conflict).unwrap();
     assert_eq!(
         conflict.extensions.get("replacement"),
         Some(&Value::Text(replacement.to_hex()))
@@ -794,7 +829,7 @@ fn resolve_replaced_wires_supersedes_edges_and_sweeps_dependents() {
 
     // Both claims superseded, valid_to stamped, SUPERSEDES edge to R each.
     for claim in [a, cc.counter] {
-        let ko = k.get(&Subject::new("bob"), &claim).unwrap();
+        let ko = k.get(Subject::new("bob"), &claim).unwrap();
         assert_eq!(ko.epistemic_status(), EpistemicStatus::Superseded);
         assert_eq!(ko.valid_to(), Some(10_001));
         assert_eq!(
@@ -803,7 +838,7 @@ fn resolve_replaced_wires_supersedes_edges_and_sweeps_dependents() {
         );
     }
     // The replacement stays current and untouched.
-    let r_ko = k.get(&Subject::new("alice"), &replacement).unwrap();
+    let r_ko = k.get(Subject::new("alice"), &replacement).unwrap();
     assert_eq!(r_ko.epistemic_status(), EpistemicStatus::Asserted);
     assert_eq!(r_ko.valid_to(), None);
 
@@ -814,7 +849,7 @@ fn resolve_replaced_wires_supersedes_edges_and_sweeps_dependents() {
     expected.sort();
     assert_eq!(swept, expected);
     for dep in [dep_a, dep_b] {
-        let ko = k.get(&Subject::new("bob"), &dep).unwrap();
+        let ko = k.get(Subject::new("bob"), &dep).unwrap();
         assert_eq!(ko.epistemic_status(), EpistemicStatus::Inferred);
         assert!(ko.invalidation().is_some());
         assert_eq!(ko.valid_to(), Some(10_001));
@@ -853,7 +888,7 @@ fn knowledge_continuity_kafka_to_rabbitmq() {
     obs.properties
         .insert("bus".into(), Value::Text("rabbitmq".into()));
     obs.evidence = vec![ev("migration-runbook-2025")];
-    let rabbit = k.observe(obs).unwrap().koid;
+    let _rabbit = k.observe(obs).unwrap().koid;
 
     // 5. Agent asserts the contradiction (old claim untouched).
     let mut cr = ContradictionRequest::new(agent.clone(), kafka);
@@ -870,7 +905,14 @@ fn knowledge_continuity_kafka_to_rabbitmq() {
     let counter_ko = k.get(&agent, &counter).unwrap();
     let mut grant = RememberRequest::update(&agent, counter, counter_ko.metadata.clone());
     grant.properties = counter_ko.properties.clone();
-    grant.extensions = counter_ko.extensions.clone();
+    // Kernel-managed keys are stripped (review P0-1) — carried forward
+    // automatically by the plain update.
+    grant.extensions = counter_ko
+        .extensions
+        .clone()
+        .into_iter()
+        .filter(|(key, _)| !Kernel::KERNEL_MANAGED_EXTENSIONS.contains(&key.as_str()))
+        .collect();
     grant.security = Some(SecurityDescriptor {
         owner: "agent".into(),
         acl: vec![

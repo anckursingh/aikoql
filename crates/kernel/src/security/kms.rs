@@ -761,7 +761,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("aikoql-test-kms-corr-{}", std::process::id()));
         // Write 50 bytes of garbage (not 48 for v1, not 88 for v2).
-        fs::write(&tmp, &[0u8; 50]).unwrap();
+        fs::write(&tmp, [0u8; 50]).unwrap();
         let kms = LocalKms::new(tmp.to_str().unwrap());
         let err = kms.master_key("pw").unwrap_err();
         assert!(err.contains("corrupted"), "got: {}", err);

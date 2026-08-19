@@ -810,7 +810,7 @@ mod tests {
         assert!(explanation
             .selected
             .as_ref()
-            .map_or(false, |s| s.contains("MVCC")));
+            .is_some_and(|s| s.contains("MVCC")));
         assert!(!explanation.consequences.is_empty());
     }
 

@@ -208,6 +208,10 @@ pub struct SupersedeResult {
     pub new: KOID,
     /// Derived dependents stamped invalidated (stale) by the sweep.
     pub invalidated_dependents: Vec<KOID>,
+    /// False when any dependent stamp failed (see `failed`, review P1-5).
+    pub completed: bool,
+    /// Per-dependent stamp failures: the KOID and the error it refused.
+    pub failed: Vec<InvalidationFailure>,
 }
 
 /// Property-folding strategy for merge.
@@ -279,10 +283,29 @@ impl InvalidationRequest {
     }
 }
 
+/// One dependent stamp that refused to commit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InvalidationFailure {
+    pub koid: KOID,
+    pub error: String,
+}
+
+/// Internal outcome of `invalidate_dependents_locked`, flattened into the
+/// public result structs.
+struct SweepOutcome {
+    stamped: Vec<KOID>,
+    completed: bool,
+    failed: Vec<InvalidationFailure>,
+}
+
 /// The KOIDs invalidated, in BFS order: target first, then its dependents.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InvalidationResult {
     pub invalidated: Vec<KOID>,
+    /// False when any dependent stamp failed (see `failed`, review P1-5).
+    pub completed: bool,
+    /// Per-dependent stamp failures: the KOID and the error it refused.
+    pub failed: Vec<InvalidationFailure>,
 }
 
 /// Resolve a persisted Conflict KO. `decision` must be a resolved state and
@@ -306,6 +329,10 @@ pub struct ConflictResolutionOutcome {
     /// Derived dependents stamped invalidated by the replacement sweep
     /// (empty unless the decision was ResolvedReplaced).
     pub invalidated_dependents: Vec<KOID>,
+    /// False when any dependent stamp failed (see `failed`, review P1-5).
+    pub completed: bool,
+    /// Per-dependent stamp failures: the KOID and the error it refused.
+    pub failed: Vec<InvalidationFailure>,
 }
 
 // ---------------------------------------------------------------------------
@@ -323,6 +350,41 @@ fn require_evidence(ev: &[Evidence]) -> KResult<()> {
 
 fn evidence_value(ev: &[Evidence]) -> Value {
     KnowledgeObject::evidence_value(ev)
+}
+
+/// Deterministic key for one (verifier, evidence) confirmation (review
+/// P2-4). Every field that distinguishes evidence participates, so two
+/// records about the same artifact from different methods/locations/
+/// revisions count independently.
+fn confirmation_key(verifier: &str, ev: &Evidence) -> String {
+    format!(
+        "{verifier}|{}|{}|{}|{}",
+        ev.source_artifact,
+        ev.method.as_str(),
+        ev.location.as_deref().unwrap_or(""),
+        ev.revision.as_deref().unwrap_or("")
+    )
+}
+
+/// Append evidence records to a KO's extension map, skipping entries whose
+/// exact encoding is already present (review P2-3: repeated verify/supersede/
+/// invalidate calls must not duplicate evidence entries). Equivalent to
+/// `KnowledgeObject::add_evidence` for extension maps under construction.
+fn append_evidence(extensions: &mut ExtensionMap, ev: &[Evidence]) {
+    let fresh = match evidence_value(ev) {
+        Value::List(list) => list,
+        other => vec![other],
+    };
+    let mut merged: Vec<Value> = match extensions.get(KnowledgeObject::EXT_EVIDENCE) {
+        Some(Value::List(list)) => list.clone(),
+        _ => Vec::new(),
+    };
+    for f in fresh {
+        if !merged.contains(&f) {
+            merged.push(f);
+        }
+    }
+    extensions.insert(KnowledgeObject::EXT_EVIDENCE.into(), Value::List(merged));
 }
 
 /// Rank of a KO's stamped authority (0 when absent/unparseable).
@@ -371,7 +433,10 @@ fn snapshot_authority<'a>(conflict: &'a KnowledgeObject, side: &str) -> Option<&
     })
 }
 
-fn snapshot_authority_rank(snapshot: Option<&Value>) -> u32 {
+/// Rank of a snapshot's stamped authority. Review P1-4: None (not `0`) when
+/// the assertion carries no authority — a missing rank must not silently
+/// lose every comparison, it must force an explicit decision.
+fn snapshot_authority_rank(snapshot: Option<&Value>) -> Option<u32> {
     snapshot
         .and_then(|v| match v {
             Value::Map(m) => m.get("authority"),
@@ -382,7 +447,6 @@ fn snapshot_authority_rank(snapshot: Option<&Value>) -> u32 {
             _ => None,
         })
         .map(|a| a.rank() as u32)
-        .unwrap_or(0)
 }
 
 /// The two claim KOIDs recorded on a Conflict KO.
@@ -442,7 +506,7 @@ impl Kernel {
             note: req.note,
             referential_policy: ReferentialPolicy::default(),
         };
-        self.remember(rr)
+        self.remember_trusted(rr)
     }
 
     // ---- assert ----------------------------------------------------------
@@ -493,7 +557,7 @@ impl Kernel {
             note: req.note,
             referential_policy: ReferentialPolicy::default(),
         };
-        self.remember(rr)
+        self.remember_trusted(rr)
     }
 
     // ---- verify ----------------------------------------------------------
@@ -522,15 +586,27 @@ impl Kernel {
             });
         }
         let at = self.clock_now();
-        let existing = head.confidence_context().unwrap_or(ConfidenceContext {
-            score: 0.0,
-            confirmations: 0,
-            last_verified: None,
-        });
+        let existing = head.confidence_context().unwrap_or_default();
+        // Review P2-4: independent confirmations — each distinct
+        // (verifier, evidence) key counts once; re-verifying with the same
+        // evidence bumps the score but not the count.
+        let verifier = ctx.subject.name.clone();
+        let mut keys = existing.verification_keys;
+        let mut added = 0u32;
+        for ev in &req.evidence {
+            let key = confirmation_key(&verifier, ev);
+            if !keys.contains(&key) {
+                keys.push(key);
+                added += 1;
+            }
+        }
         let new_conf = ConfidenceContext {
-            score: req.confidence.unwrap_or(existing.score).max(existing.score),
-            confirmations: existing.confirmations + 1,
-            last_verified: Some(at),
+            verification_keys: keys,
+            ..ConfidenceContext::new(
+                req.confidence.unwrap_or(existing.score).max(existing.score),
+                existing.confirmations + added,
+                Some(at),
+            )?
         };
         let reason = req.note.clone();
         let mut version = head.version;
@@ -560,20 +636,7 @@ impl Kernel {
             KnowledgeObject::EXT_CONFIDENCE.into(),
             confidence_to_value(&new_conf),
         );
-        match extensions.get(KnowledgeObject::EXT_EVIDENCE).cloned() {
-            Some(Value::List(mut existing)) => {
-                if let Value::List(fresh) = evidence_value(&req.evidence) {
-                    existing.extend(fresh);
-                }
-                extensions.insert(KnowledgeObject::EXT_EVIDENCE.into(), Value::List(existing));
-            }
-            _ => {
-                extensions.insert(
-                    KnowledgeObject::EXT_EVIDENCE.into(),
-                    evidence_value(&req.evidence),
-                );
-            }
-        }
+        append_evidence(&mut extensions, &req.evidence);
         let rr = RememberRequest {
             context: ctx.clone(),
             koid: Some(req.koid),
@@ -635,12 +698,22 @@ impl Kernel {
             KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
             Value::Text("asserted".into()),
         );
-        if let Some(a) = &req.authority {
-            Authority::from_str(a).ok_or_else(|| {
-                KError::InvalidObject("contradict requires a valid authority level".into())
-            })?;
-            counter_ext.insert("authority".into(), Value::Text(a.clone()));
-        }
+        // Review P1-3: the counter-claim is ALWAYS authority-stamped. An
+        // explicit level is validated; absent it the origin-derived default
+        // (agent_derived for an agent actor) is recorded — a contradiction
+        // never enters authority resolution with a missing rank.
+        let authority = match &req.authority {
+            Some(a) => {
+                Authority::from_str(a).ok_or_else(|| {
+                    KError::InvalidObject("contradict requires a valid authority level".into())
+                })?;
+                a.clone()
+            }
+            None => Authority::for_origin(&Origin::Agent(ctx.subject.name.clone()))
+                .as_str()
+                .into(),
+        };
+        counter_ext.insert("authority".into(), Value::Text(authority));
         counter_ext.insert(
             KnowledgeObject::EXT_EVIDENCE.into(),
             evidence_value(&req.evidence),
@@ -817,20 +890,7 @@ impl Kernel {
                 .head_object(&req.old)?
                 .ok_or(KError::NotFound(req.old))?;
             let mut extensions = new_head.extensions.clone();
-            match extensions.get(KnowledgeObject::EXT_EVIDENCE).cloned() {
-                Some(Value::List(mut existing)) => {
-                    if let Value::List(fresh) = evidence_value(&req.evidence) {
-                        existing.extend(fresh);
-                    }
-                    extensions.insert(KnowledgeObject::EXT_EVIDENCE.into(), Value::List(existing));
-                }
-                _ => {
-                    extensions.insert(
-                        KnowledgeObject::EXT_EVIDENCE.into(),
-                        evidence_value(&req.evidence),
-                    );
-                }
-            }
+            append_evidence(&mut extensions, &req.evidence);
             let rr = RememberRequest {
                 context: ctx.clone(),
                 koid: Some(req.old),
@@ -849,7 +909,7 @@ impl Kernel {
             self.remember_locked(&mut pipe, &rr)?;
         }
         let roots = self.outbound_edges(&req.old, Some(DERIVED_FROM))?;
-        let invalidated = self.invalidate_dependents_locked(
+        let sweep = self.invalidate_dependents_locked(
             &mut pipe,
             &ctx,
             roots,
@@ -858,7 +918,9 @@ impl Kernel {
         Ok(SupersedeResult {
             old: req.old,
             new: successor,
-            invalidated_dependents: invalidated,
+            invalidated_dependents: sweep.stamped,
+            completed: sweep.completed,
+            failed: sweep.failed,
         })
     }
 
@@ -962,24 +1024,9 @@ impl Kernel {
             .ok_or(KError::NotFound(req.koid))?;
         let mut ko = new_head.clone();
         ko.set_invalidated(at, &ctx.subject.name, &reason);
-        if ko.valid_to().is_none() {
-            ko.set_valid_time(ko.valid_from(), Some(at));
-        }
+        ko.close_valid_time(at)?;
         let mut extensions = ko.extensions.clone();
-        match extensions.get(KnowledgeObject::EXT_EVIDENCE).cloned() {
-            Some(Value::List(mut existing)) => {
-                if let Value::List(fresh) = evidence_value(&req.evidence) {
-                    existing.extend(fresh);
-                }
-                extensions.insert(KnowledgeObject::EXT_EVIDENCE.into(), Value::List(existing));
-            }
-            _ => {
-                extensions.insert(
-                    KnowledgeObject::EXT_EVIDENCE.into(),
-                    evidence_value(&req.evidence),
-                );
-            }
-        }
+        append_evidence(&mut extensions, &req.evidence);
         let rr = RememberRequest {
             context: ctx.clone(),
             koid: Some(req.koid),
@@ -998,13 +1045,18 @@ impl Kernel {
         self.remember_locked(&mut pipe, &rr)?;
         invalidated.push(req.koid);
         let roots = self.outbound_edges(&req.koid, Some(DERIVED_FROM))?;
-        invalidated.extend(self.invalidate_dependents_locked(
+        let sweep = self.invalidate_dependents_locked(
             &mut pipe,
             &ctx,
             roots,
             &format!("premise {} was invalidated", req.koid.to_hex()),
-        )?);
-        Ok(InvalidationResult { invalidated })
+        )?;
+        invalidated.extend(sweep.stamped);
+        Ok(InvalidationResult {
+            invalidated,
+            completed: sweep.completed,
+            failed: sweep.failed,
+        })
     }
 
     // ---- conflict resolution ---------------------------------------------
@@ -1059,6 +1111,8 @@ impl Kernel {
         let (claim_a, claim_b) = conflict_claims(&conflict)?;
         let mut effects = Vec::new();
         let mut invalidated_dependents: Vec<KOID> = Vec::new();
+        let mut sweep_completed = true;
+        let mut sweep_failed: Vec<InvalidationFailure> = Vec::new();
         match req.decision {
             ConflictResolution::ResolvedAPreferred => {
                 self.transition_claim_if_legal(
@@ -1106,7 +1160,7 @@ impl Kernel {
                 // normal invalidation policy — the same sweep supersede() runs.
                 for claim in [claim_a, claim_b] {
                     let roots = self.outbound_edges(&claim, Some(DERIVED_FROM))?;
-                    invalidated_dependents.extend(self.invalidate_dependents_locked(
+                    let sweep = self.invalidate_dependents_locked(
                         &mut pipe,
                         &ctx,
                         roots,
@@ -1115,7 +1169,10 @@ impl Kernel {
                             claim.to_hex(),
                             replacement.to_hex()
                         ),
-                    )?);
+                    )?;
+                    invalidated_dependents.extend(sweep.stamped);
+                    sweep_completed &= sweep.completed;
+                    sweep_failed.extend(sweep.failed);
                 }
             }
             ConflictResolution::Unresolved | ConflictResolution::UnderReview => unreachable!(),
@@ -1158,6 +1215,8 @@ impl Kernel {
             decision: req.decision,
             effects,
             invalidated_dependents,
+            completed: sweep_completed,
+            failed: sweep_failed,
         })
     }
 
@@ -1174,8 +1233,22 @@ impl Kernel {
         if ko.metadata.type_name != "aikoql:conflict" {
             return Err(KError::InvalidObject("not a conflict KO".into()));
         }
-        let rank_a = snapshot_authority_rank(snapshot_authority(&ko, "a"));
-        let rank_b = snapshot_authority_rank(snapshot_authority(&ko, "b"));
+        // Review P1-4: fail closed on missing authority — ranking two
+        // assertions of which one has no stamped authority is not a tie, it
+        // is undecidable; the kernel refuses rather than defaulting the
+        // missing side to rank 0 and auto-picking the other.
+        let rank_a = snapshot_authority_rank(snapshot_authority(&ko, "a")).ok_or_else(|| {
+            KError::InvalidObject(
+                "assertion 'a' has no recorded authority — an authority-ranked resolution requires an explicit authority on both sides"
+                    .into(),
+            )
+        })?;
+        let rank_b = snapshot_authority_rank(snapshot_authority(&ko, "b")).ok_or_else(|| {
+            KError::InvalidObject(
+                "assertion 'b' has no recorded authority — an authority-ranked resolution requires an explicit authority on both sides"
+                    .into(),
+            )
+        })?;
         let decision = match rank_a.cmp(&rank_b) {
             std::cmp::Ordering::Greater => ConflictResolution::ResolvedAPreferred,
             std::cmp::Ordering::Less => ConflictResolution::ResolvedBPreferred,
@@ -1267,7 +1340,7 @@ impl Kernel {
         ctx: &KnowledgeContext,
         roots: Vec<(String, KOID)>,
         reason: &str,
-    ) -> KResult<Vec<KOID>> {
+    ) -> KResult<SweepOutcome> {
         let at = self.clock_now();
         // Phase 1 — collect: discover the full dependent closure WITHOUT
         // mutating anything (review P1-7: never mutate while discovering the
@@ -1295,39 +1368,66 @@ impl Kernel {
         }
         // Phase 2 — stamp: one remember per collected dependent, re-reading
         // the head so the expected_version is fresh. The pipe lock keeps
-        // concurrent ops out; a storage error mid-loop can still leave an
-        // earlier stamp committed (the store layer has no cross-KO
-        // transaction — documented limitation).
-        let mut out = Vec::with_capacity(to_stamp.len());
+        // concurrent ops out; a failure on one dependent (ACL denial, storage
+        // error) is recorded and the sweep continues best-effort — the store
+        // layer has no cross-KO transaction (documented limitation). Only
+        // collect-phase errors above propagate (nothing was mutated yet);
+        // per-stamp failures land in `failed` with `completed: false`
+        // (review P1-5).
+        let mut outcome = SweepOutcome {
+            stamped: Vec::with_capacity(to_stamp.len()),
+            completed: true,
+            failed: Vec::new(),
+        };
         for k in &to_stamp {
-            let head = self.head_object(k)?.ok_or(KError::NotFound(*k))?;
-            if head.invalidation().is_some() {
-                continue; // stamped between phases — idempotent
+            match self.stamp_invalidated_locked(pipe, ctx, k, at, reason) {
+                Ok(()) => outcome.stamped.push(*k),
+                Err(e) => {
+                    outcome.completed = false;
+                    outcome.failed.push(InvalidationFailure {
+                        koid: *k,
+                        error: e.to_string(),
+                    });
+                }
             }
-            let mut ko = head.clone();
-            ko.set_invalidated(at, &ctx.subject.name, reason);
-            if ko.valid_to().is_none() {
-                ko.set_valid_time(ko.valid_from(), Some(at));
-            }
-            let rr = RememberRequest {
-                context: ctx.clone(),
-                koid: Some(*k),
-                expected_version: Some(head.version),
-                idempotency_key: None,
-                metadata: ko.metadata.clone(),
-                properties: ko.properties.clone(),
-                semantic: None,
-                relationships: ko.relationships.clone(),
-                security: None,
-                extensions: ko.extensions.clone(),
-                origin: Origin::System,
-                note: Some(reason.into()),
-                referential_policy: ReferentialPolicy::default(),
-            };
-            self.remember_locked(pipe, &rr)?;
-            out.push(*k);
         }
-        Ok(out)
+        Ok(outcome)
+    }
+
+    /// Stamp one dependent invalidated: re-read the head, stamp the
+    /// invalidation record, close the validity interval, commit.
+    fn stamp_invalidated_locked(
+        &self,
+        pipe: &mut Pipeline,
+        ctx: &KnowledgeContext,
+        k: &KOID,
+        at: u64,
+        reason: &str,
+    ) -> KResult<()> {
+        let head = self.head_object(k)?.ok_or(KError::NotFound(*k))?;
+        if head.invalidation().is_some() {
+            return Ok(()); // stamped between phases — idempotent
+        }
+        let mut ko = head.clone();
+        ko.set_invalidated(at, &ctx.subject.name, reason);
+        ko.close_valid_time(at)?;
+        let rr = RememberRequest {
+            context: ctx.clone(),
+            koid: Some(*k),
+            expected_version: Some(head.version),
+            idempotency_key: None,
+            metadata: ko.metadata.clone(),
+            properties: ko.properties.clone(),
+            semantic: None,
+            relationships: ko.relationships.clone(),
+            security: None,
+            extensions: ko.extensions.clone(),
+            origin: Origin::System,
+            note: Some(reason.into()),
+            referential_policy: ReferentialPolicy::default(),
+        };
+        self.remember_locked(pipe, &rr)?;
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -1354,11 +1454,22 @@ impl Kernel {
         }
         let at = self.clock_now();
         let ttl = req.ttl_seconds.unwrap_or(30 * 24 * 3600);
-        let confidence = ConfidenceContext {
-            score: req.confidence.unwrap_or(0.5).clamp(0.0, 1.0),
-            confirmations: 0,
-            last_verified: None,
-        };
+        // Review P1-6: checked arithmetic — a hostile/accidental u64::MAX TTL
+        // must be rejected, not silently wrapped into an inverted interval.
+        let ttl_ms = ttl.checked_mul(1000).ok_or_else(|| {
+            KError::InvalidObject(format!("ttl_seconds {ttl} overflows the millisecond bound"))
+        })?;
+        let valid_to = at
+            .checked_add(ttl_ms)
+            .filter(|v| *v <= i64::MAX as u64)
+            .ok_or_else(|| {
+                KError::InvalidObject(
+                    "ttl pushes valid_to past the representable epoch bound".into(),
+                )
+            })?;
+        // Review P1-7: the model boundary validates the score — out-of-range
+        // or non-finite confidence is rejected, never clamped silently.
+        let confidence = ConfidenceContext::new(req.confidence.unwrap_or(0.5), 0, None)?;
         let mut extensions = ExtensionMap::new();
         extensions.insert(
             KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
@@ -1375,7 +1486,7 @@ impl Kernel {
         );
         extensions.insert(
             KnowledgeObject::EXT_VALID_TO.into(),
-            Value::Int((at + ttl * 1000) as i64),
+            Value::Int(valid_to as i64),
         );
         extensions.insert(
             KnowledgeObject::EXT_CONFIDENCE.into(),
@@ -1444,7 +1555,7 @@ impl Kernel {
             note: req.note,
             referential_policy: ReferentialPolicy::default(),
         };
-        self.remember(rr)
+        self.remember_trusted(rr)
     }
 
     /// Match recorded experiences against a task description for reuse.

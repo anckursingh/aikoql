@@ -154,7 +154,7 @@ fn origin_maps_to_initial_status() {
 fn fresh_ko_is_stamped_by_origin() {
     let k = mk();
     let id = create_fact(&k, &alice(), "fact");
-    let ko = k.get(&alice(), &id).unwrap();
+    let ko = k.get(alice(), &id).unwrap();
     // remember() stamps the epistemic baseline: Human writes are Asserted.
     assert_eq!(ko.epistemic_status(), Asserted);
     assert_eq!(
@@ -163,10 +163,10 @@ fn fresh_ko_is_stamped_by_origin() {
     );
 
     // System writes are Observed; an explicit extension always wins.
-    let mut req = RememberRequest::create(&alice(), meta("sys"));
+    let mut req = RememberRequest::create(alice(), meta("sys"));
     req.origin = Origin::System;
     let id2 = k.remember(req).unwrap().koid;
-    assert_eq!(k.get(&alice(), &id2).unwrap().epistemic_status(), Observed);
+    assert_eq!(k.get(alice(), &id2).unwrap().epistemic_status(), Observed);
 }
 
 #[test]
@@ -195,13 +195,13 @@ fn legacy_lifecycle_verified_maps_to_verified() {
 fn happy_path_records_status_history_and_audit_event() {
     let k = mk();
     // System origin → Observed head, so Observed -> Asserted is a real move.
-    let mut req = RememberRequest::create(&alice(), meta("fact"));
+    let mut req = RememberRequest::create(alice(), meta("fact"));
     req.origin = Origin::System;
     let id = k.remember(req).unwrap().koid;
 
     let r = k
-        .transition_epistemic(
-            &alice(),
+        .admin_transition_epistemic(
+            alice(),
             &id,
             Asserted,
             Origin::Human,
@@ -213,7 +213,7 @@ fn happy_path_records_status_history_and_audit_event() {
     assert_eq!((r.from, r.to), (Observed, Asserted));
     assert_eq!(r.version, 2);
 
-    let ko = k.get(&alice(), &id).unwrap();
+    let ko = k.get(alice(), &id).unwrap();
     assert_eq!(ko.epistemic_status(), Asserted);
     assert_eq!(
         ko.extensions.get("epistemic_status"),
@@ -251,12 +251,12 @@ fn happy_path_records_status_history_and_audit_event() {
 fn illegal_transition_is_rejected_unchanged() {
     let k = mk();
     let id = create_fact(&k, &alice(), "fact");
-    k.transition_epistemic(&alice(), &id, Verified, Origin::System, None, None, None)
+    k.admin_transition_epistemic(alice(), &id, Verified, Origin::System, None, None, None)
         .unwrap(); // Observed -> Verified is legal
 
     // Verified -> Asserted is a downgrade: rejected.
     let err = k
-        .transition_epistemic(&alice(), &id, Asserted, Origin::System, None, None, None)
+        .admin_transition_epistemic(alice(), &id, Asserted, Origin::System, None, None, None)
         .unwrap_err();
     assert!(matches!(
         err,
@@ -267,7 +267,7 @@ fn illegal_transition_is_rejected_unchanged() {
     ));
 
     // Terminal state: nothing after Superseded.
-    k.transition_epistemic(&alice(), &id, Superseded, Origin::System, None, None, None)
+    k.admin_transition_epistemic(alice(), &id, Superseded, Origin::System, None, None, None)
         .unwrap();
     for target in [
         Observed,
@@ -278,13 +278,13 @@ fn illegal_transition_is_rejected_unchanged() {
         Contradicted,
     ] {
         let err = k
-            .transition_epistemic(&alice(), &id, target, Origin::System, None, None, None)
+            .admin_transition_epistemic(alice(), &id, target, Origin::System, None, None, None)
             .unwrap_err();
         assert!(matches!(err, KError::InvalidEpistemic { .. }));
     }
 
     // Rejected transitions do not bump the version or add history entries.
-    let ko = k.get(&alice(), &id).unwrap();
+    let ko = k.get(alice(), &id).unwrap();
     assert_eq!(ko.version, 3); // create + 2 successful transitions
     match ko.extensions.get("epistemic_history") {
         Some(Value::List(l)) => assert_eq!(l.len(), 2),
@@ -296,19 +296,11 @@ fn illegal_transition_is_rejected_unchanged() {
 fn contradicted_can_be_reasserted_with_stronger_evidence() {
     let k = mk();
     let id = create_fact(&k, &alice(), "fact");
-    k.transition_epistemic(
-        &alice(),
-        &id,
-        Contradicted,
-        Origin::System,
-        None,
-        None,
-        None,
-    )
-    .unwrap();
+    k.admin_transition_epistemic(alice(), &id, Contradicted, Origin::System, None, None, None)
+        .unwrap();
     let r = k
-        .transition_epistemic(
-            &alice(),
+        .admin_transition_epistemic(
+            alice(),
             &id,
             Asserted,
             Origin::Human,
@@ -324,14 +316,14 @@ fn contradicted_can_be_reasserted_with_stronger_evidence() {
 fn history_survives_reopen_and_accumulates() {
     let (k, store) = mk_with_store();
     let id = create_fact(&k, &alice(), "fact"); // Human → Asserted head
-    k.transition_epistemic(&alice(), &id, Verified, Origin::System, None, None, None)
+    k.admin_transition_epistemic(alice(), &id, Verified, Origin::System, None, None, None)
         .unwrap();
     drop(k);
 
     // Reopen on the same store — status + history must survive.
     let clock = Arc::new(ManualClock::new(50_000));
     let k2 = Kernel::open(store, clock, 0xE915).unwrap();
-    let ko = k2.get(&alice(), &id).unwrap();
+    let ko = k2.get(alice(), &id).unwrap();
     assert_eq!(ko.epistemic_status(), Verified);
     match ko.extensions.get("epistemic_history") {
         Some(Value::List(l)) => {
@@ -347,9 +339,9 @@ fn history_survives_reopen_and_accumulates() {
     }
 
     // And the chain continues from the persisted state.
-    k2.transition_epistemic(&alice(), &id, Superseded, Origin::System, None, None, None)
+    k2.admin_transition_epistemic(alice(), &id, Superseded, Origin::System, None, None, None)
         .unwrap();
-    let ko = k2.get(&alice(), &id).unwrap();
+    let ko = k2.get(alice(), &id).unwrap();
     assert_eq!(ko.epistemic_status(), Superseded);
     match ko.extensions.get("epistemic_history") {
         Some(Value::List(l)) => assert_eq!(l.len(), 2),
@@ -362,15 +354,7 @@ fn occ_guard_applies_to_epistemic_transitions() {
     let k = mk();
     let id = create_fact(&k, &alice(), "fact"); // Asserted head
     let err = k
-        .transition_epistemic(
-            &alice(),
-            &id,
-            Verified,
-            Origin::System,
-            None,
-            Some(99),
-            None,
-        )
+        .admin_transition_epistemic(alice(), &id, Verified, Origin::System, None, Some(99), None)
         .unwrap_err();
     assert!(matches!(
         err,

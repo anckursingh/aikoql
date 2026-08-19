@@ -98,7 +98,7 @@ fn t01_create_persists_all_blocks_and_emits_created() {
     let r = k.remember(req).unwrap();
     assert_eq!(r.version, 1);
 
-    let ko = k.get(&alice(), &r.koid).unwrap();
+    let ko = k.get(alice(), &r.koid).unwrap();
     assert_eq!(ko.version, 1);
     assert_eq!(ko.properties.get("revenue"), Some(&Value::Int(1_000_000)));
     assert_eq!(
@@ -199,11 +199,10 @@ fn t06f_resolve_idempotency_then_update_replaces_content() {
     let r2 = k.remember(stale).unwrap();
     assert_eq!(r2.version, r1.version);
     assert!(
-        k.get(&alice(), &r1.koid)
+        !k.get(alice(), &r1.koid)
             .unwrap()
             .properties
-            .get("body")
-            .is_none(),
+            .contains_key("body"),
         "replay must not overwrite content"
     );
 
@@ -217,7 +216,7 @@ fn t06f_resolve_idempotency_then_update_replaces_content() {
         .insert("body".into(), Value::Text("new".into()));
     let r3 = k.remember(upd).unwrap();
     assert_eq!(r3.version, r1.version + 1);
-    let ko = k.get(&alice(), &koid).unwrap();
+    let ko = k.get(alice(), &koid).unwrap();
     assert_eq!(ko.properties.get("body"), Some(&Value::Text("new".into())));
 }
 
@@ -254,7 +253,7 @@ fn t06c_strict_referential_policy_accepts_existing_target() {
     });
     let r = k.remember(req).unwrap();
     assert_eq!(r.version, 1);
-    let ko = k.get(&alice(), &r.koid).unwrap();
+    let ko = k.get(alice(), &r.koid).unwrap();
     assert_eq!(ko.relationships.len(), 1);
 }
 
@@ -360,8 +359,8 @@ fn t06j_transact_creates_multiple_objects_atomically() {
     assert_eq!(res[1].version, 1);
     assert_eq!(k.journal().unwrap().len(), 2);
     // both heads are readable
-    assert!(k.get(&alice(), &res[0].koid).is_ok());
-    assert!(k.get(&alice(), &res[1].koid).is_ok());
+    assert!(k.get(alice(), &res[0].koid).is_ok());
+    assert!(k.get(alice(), &res[1].koid).is_ok());
 }
 
 #[test]
@@ -408,7 +407,7 @@ fn t06l_transact_strict_referential_allows_intra_batch_targets() {
         .unwrap();
     assert_eq!(res.len(), 2);
     // child exists and its relationship target exists
-    assert!(k.get(&alice(), &res[1].koid).is_ok());
+    assert!(k.get(alice(), &res[1].koid).is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +423,7 @@ fn t07_lifecycle_matrix_all_25_pairs() {
         for to in states {
             let id = create_fact(&k, &alice(), "fact");
             drive_to(&k, &alice(), &id, from);
-            let res = k.evolve(&alice(), &id, to, Origin::System, None, None);
+            let res = k.evolve(alice(), &id, to, Origin::System, None, None);
             if from.can_transition(to) {
                 assert!(res.is_ok(), "{} -> {} must succeed", from, to);
             } else {
@@ -445,7 +444,7 @@ fn t08_evolve_emits_lifecycle_changed_with_actor_and_note() {
     let id = create_fact(&k, &alice(), "fact");
     let e = k
         .evolve(
-            &alice(),
+            alice(),
             &id,
             LifecycleState::Active,
             Origin::Human,
@@ -471,7 +470,7 @@ fn t09_forget_tombstone_marks_deleted_but_retains_lineage() {
     let id = create_fact(&k, &alice(), "fact");
     let f = k
         .forget(
-            &alice(),
+            alice(),
             &id,
             ForgetMode::Tombstone,
             None,
@@ -479,10 +478,10 @@ fn t09_forget_tombstone_marks_deleted_but_retains_lineage() {
         )
         .unwrap();
     assert_eq!(f.version, 2);
-    let ko = k.get(&alice(), &id).unwrap();
+    let ko = k.get(alice(), &id).unwrap();
     assert_eq!(ko.lifecycle.state, LifecycleState::Deleted);
     // lineage retained: both versions still traceable
-    let lineage = k.trace(&alice(), &id).unwrap();
+    let lineage = k.trace(alice(), &id).unwrap();
     assert_eq!(lineage.versions.len(), 2);
     assert_eq!(lineage.events.len(), 2);
     assert_eq!(lineage.events[1].kind, EventKind::Forgotten);
@@ -493,14 +492,14 @@ fn t10_forget_erase_removes_versions_but_keeps_proof_possible() {
     let (k, _c) = mk();
     let victim = create_fact(&k, &alice(), "secret");
     let witness = create_fact(&k, &alice(), "fact");
-    k.forget(&alice(), &victim, ForgetMode::Erase, None, None)
+    k.forget(alice(), &victim, ForgetMode::Erase, None, None)
         .unwrap();
 
-    assert!(matches!(k.get(&alice(), &victim), Err(KError::NotFound(_))));
+    assert!(matches!(k.get(alice(), &victim), Err(KError::NotFound(_))));
     // journal retained (3 events: 2 creates + 1 forgotten)
     assert_eq!(k.journal().unwrap().len(), 3);
     // audit chain over the whole journal still verifies, via tombstone stub
-    let proof = k.prove(&alice(), &witness).unwrap();
+    let proof = k.prove(alice(), &witness).unwrap();
     assert!(
         proof.chain_valid,
         "chain must remain valid after legal erasure"
@@ -606,10 +605,10 @@ fn t13_snapshot_reads_are_stable_under_concurrent_commits() {
     req.properties.insert("v".into(), Value::Int(2));
     k.remember(req).unwrap();
 
-    let old = k.get_at(&alice(), &id, snap).unwrap();
+    let old = k.get_at(alice(), &id, snap).unwrap();
     assert_eq!(old.version, 1);
     assert_eq!(old.properties.get("v"), None);
-    let new = k.get(&alice(), &id).unwrap();
+    let new = k.get(alice(), &id).unwrap();
     assert_eq!(new.version, 2);
     assert_eq!(new.properties.get("v"), Some(&Value::Int(2)));
 }
@@ -623,7 +622,7 @@ fn t14_trace_returns_full_lineage() {
     let (k, _c) = mk();
     let id = create_fact(&k, &alice(), "fact");
     k.evolve(
-        &alice(),
+        alice(),
         &id,
         LifecycleState::Active,
         Origin::Human,
@@ -634,7 +633,7 @@ fn t14_trace_returns_full_lineage() {
     k.remember(RememberRequest::update(alice(), id, meta("fact")))
         .unwrap();
 
-    let lin = k.trace(&alice(), &id).unwrap();
+    let lin = k.trace(alice(), &id).unwrap();
     assert_eq!(lin.versions.len(), 3);
     assert_eq!(lin.events.len(), 3);
     assert_eq!(
@@ -668,7 +667,7 @@ fn t15_explain_answers_why_believed() {
     let claim = k.remember(req).unwrap().koid;
     drive_to(&k, &alice(), &claim, LifecycleState::Verified);
 
-    let ex = k.explain(&alice(), &claim, None).unwrap();
+    let ex = k.explain(alice(), &claim, None).unwrap();
     assert_eq!(ex.source.as_deref(), Some("sec-10k-filing"));
     assert_eq!(ex.confidence, Some(0.99));
     assert!(ex.verified);
@@ -686,7 +685,7 @@ fn t16_prove_valid_chain() {
     let a = create_fact(&k, &alice(), "fact");
     let b = create_fact(&k, &alice(), "fact");
     k.evolve(
-        &alice(),
+        alice(),
         &a,
         LifecycleState::Active,
         Origin::System,
@@ -697,7 +696,7 @@ fn t16_prove_valid_chain() {
     k.remember(RememberRequest::update(alice(), b, meta("fact")))
         .unwrap();
 
-    let proof = k.prove(&alice(), &a).unwrap();
+    let proof = k.prove(alice(), &a).unwrap();
     assert!(proof.chain_valid);
     assert_eq!(proof.events, 4);
     let (seq, audit) = k.journal_head().unwrap();
@@ -720,7 +719,7 @@ fn t17_prove_detects_tampered_event() {
     b.put(ke_store_key(1), codec::encode_ke(&ke));
     store.write_batch(&b).unwrap();
 
-    let proof = k.prove(&alice(), &id).unwrap();
+    let proof = k.prove(alice(), &id).unwrap();
     assert!(
         !proof.chain_valid,
         "tampered event must break the audit chain"
@@ -741,7 +740,7 @@ fn t18_prove_detects_tampered_object_payload() {
     b.put(key, bytes);
     store.write_batch(&b).unwrap();
 
-    let proof = k.prove(&alice(), &id).unwrap();
+    let proof = k.prove(alice(), &id).unwrap();
     assert!(!proof.chain_valid, "tampered payload must be detected");
 }
 
@@ -755,7 +754,7 @@ fn t18b_prove_with_signing_key_verifies_signatures() {
     k.remember(RememberRequest::update(alice(), id, meta("fact")))
         .unwrap();
 
-    let proof = k.prove(&alice(), &id).unwrap();
+    let proof = k.prove(alice(), &id).unwrap();
     assert!(proof.chain_valid);
     assert!(proof.signatures_verified);
     // every event carries a signature
@@ -783,7 +782,7 @@ fn t18c_prove_detects_tampered_signature() {
     b.put(ke_store_key(1), codec::encode_ke(&ke));
     store.write_batch(&b).unwrap();
 
-    let proof = k.prove(&alice(), &id).unwrap();
+    let proof = k.prove(alice(), &id).unwrap();
     assert!(!proof.signatures_verified, "bad signature must be detected");
 }
 
@@ -924,7 +923,7 @@ fn t23_notify_delivers_commits_in_order_with_filter() {
         .unwrap();
 
     k.evolve(
-        &alice(),
+        alice(),
         &a,
         LifecycleState::Active,
         Origin::System,
@@ -954,7 +953,7 @@ fn t24_deterministic_replay_produces_identical_journal() {
     fn script(k: &Kernel) {
         let a = create_fact(k, &alice(), "fact");
         k.evolve(
-            &alice(),
+            alice(),
             &a,
             LifecycleState::Active,
             Origin::Human,
@@ -966,7 +965,7 @@ fn t24_deterministic_replay_produces_identical_journal() {
         req.properties.insert("n".into(), Value::Int(7));
         k.remember(req).unwrap();
         let _b = create_fact(k, &alice(), "note");
-        k.forget(&alice(), &a, ForgetMode::Tombstone, None, None)
+        k.forget(alice(), &a, ForgetMode::Tombstone, None, None)
             .unwrap();
     }
     let (k1, _c1) = mk();
@@ -981,8 +980,8 @@ fn t24_deterministic_replay_produces_identical_journal() {
     );
     assert_eq!(j1.len(), 5);
     // byte-identical encodings too
-    let b1: Vec<u8> = j1.iter().flat_map(|e| codec::encode_ke(e)).collect();
-    let b2: Vec<u8> = j2.iter().flat_map(|e| codec::encode_ke(e)).collect();
+    let b1: Vec<u8> = j1.iter().flat_map(codec::encode_ke).collect();
+    let b2: Vec<u8> = j2.iter().flat_map(codec::encode_ke).collect();
     assert_eq!(b1, b2);
 }
 
@@ -1049,7 +1048,7 @@ fn t26_reopen_recovers_journal_head_and_continues_chain() {
     // chain continues unbroken after reopen
     k2.remember(RememberRequest::update(alice(), id, meta("fact")))
         .unwrap();
-    let proof = k2.prove(&alice(), &id).unwrap();
+    let proof = k2.prove(alice(), &id).unwrap();
     assert!(proof.chain_valid);
     assert_eq!(proof.events, 2);
 }
@@ -2530,13 +2529,13 @@ fn t29_anonymous_and_unauthorised_access_denied() {
 
     // Empty-name subject (unauthenticated) cannot read.
     assert!(
-        k.get(&Subject::new(""), &created.koid).is_err(),
+        k.get(Subject::new(""), &created.koid).is_err(),
         "anonymous read must be denied"
     );
 
     // Different user with no grant cannot read.
     assert!(
-        k.get(&Subject::new("eve"), &created.koid).is_err(),
+        k.get(Subject::new("eve"), &created.koid).is_err(),
         "unauthorised read must be denied"
     );
 }
@@ -2600,12 +2599,12 @@ fn t31_scoped_owner_still_confined_cross_tenant() {
 
     // alice scoped to acme is still the owner — but tenant confinement
     // is checked first, so the read and trace are denied.
-    let err = k.get(&acme(), &ko.koid).unwrap_err();
+    let err = k.get(acme(), &ko.koid).unwrap_err();
     assert!(matches!(err, KError::AccessDenied { .. }));
-    assert!(k.trace(&acme(), &ko.koid).is_err());
+    assert!(k.trace(acme(), &ko.koid).is_err());
 
     // Same subject scoped to the matching tenant reads fine.
-    assert!(k.get(&alice().in_tenant("beta"), &ko.koid).is_ok());
+    assert!(k.get(alice().in_tenant("beta"), &ko.koid).is_ok());
 }
 
 #[test]
@@ -2616,7 +2615,7 @@ fn t32_untenanted_objects_visible_to_scoped_subjects() {
         .unwrap()
         .koid;
     // No tenant on the object — not confined, visible to any scoped subject.
-    assert!(k.get(&acme(), &ko).is_ok());
+    assert!(k.get(acme(), &ko).is_ok());
     assert_eq!(k.scan_by_type(&acme(), "fact").unwrap().len(), 1);
 }
 

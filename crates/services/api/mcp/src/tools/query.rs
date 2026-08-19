@@ -252,13 +252,18 @@ pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
             "timestamp": d.timestamp,
             "reason": d.reason,
             "sources": d.sources.iter().map(|s| {
-                let type_name = k
-                    .get(subject.clone(), s)
-                    .ok()
-                    .map(|src| src.metadata.type_name);
+                // Review P2-7: distinguish WHY a source cannot be resolved —
+                // deleted/never-existed vs exists-but-the-caller-cannot-read.
+                let (type_name, status) = match k.get(subject.clone(), s) {
+                    Ok(src) => (Some(src.metadata.type_name), "ok"),
+                    Err(KError::NotFound(_)) => (None, "not_found"),
+                    Err(KError::AccessDenied { .. }) => (None, "not_visible"),
+                    Err(_) => (None, "error"),
+                };
                 json!({
                     "koid": s.to_hex(),
                     "type_name": type_name,
+                    "status": status,
                 })
             }).collect::<Vec<_>>()
         })
@@ -284,7 +289,11 @@ pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
             "actor": i.actor,
             "reason": i.reason
         })),
-        "evidence": ko.evidence().iter().map(|e| json!({
+        // Review P2-6: trace is an epistemic-critical read — malformed
+        // evidence is an error here, not a silent drop (QL rows keep the
+        // lenient decode for display).
+        "evidence": ko.strict_evidence().map_err(|e| e.to_string())?
+            .iter().map(|e| json!({
             "source_artifact": e.source_artifact,
             "location": e.location,
             "revision": e.revision,

@@ -185,7 +185,7 @@ pub(crate) fn call_tool(
         ));
     }
     // A7: Check capability + rate limit before dispatch
-    if let Err(e) = check_capability(&session.roles, name) {
+    if let Err(e) = check_capability(session.trust_mode, &session.roles, name) {
         audit_log(db_path, &session.agent_id, name, "denied:capability", &e.1);
         return Err(e);
     }

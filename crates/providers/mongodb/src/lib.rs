@@ -230,7 +230,10 @@ mod tests {
     #[test]
     fn bson_scalars_to_value() {
         assert_eq!(bson_to_value(&Bson::Int32(42)), Value::Int(42));
-        assert_eq!(bson_to_value(&Bson::Double(3.14)), Value::Float(3.14));
+        assert_eq!(
+            bson_to_value(&Bson::Double(std::f64::consts::PI)),
+            Value::Float(std::f64::consts::PI)
+        );
         assert_eq!(
             bson_to_value(&Bson::String("hi".into())),
             Value::Text("hi".into())

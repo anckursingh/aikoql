@@ -39,13 +39,32 @@ Transitions go through the versioned commit pipeline: a new version, an
 `verified` only via `verify_knowledge` (evidence mandatory), `superseded`
 only via `supersede`/`resolve_conflict`, `contradicted` only via
 `contradict`/`invalidate`/resolution. The generic
-`transition_epistemic` is a **library-level primitive only** — it is not
-exposed on any protocol surface (MCP/REST/shell).
-- Enforced at: `crates/kernel/src/transaction/kernel.rs:1976` (doc contract);
+`admin_transition_epistemic` is a **library-level privileged primitive
+only** (review P0-2 — the `admin_` prefix is the contract, and the op is
+documented as explicitly privileged) — it is not exposed on any protocol
+surface (MCP/REST/shell).
+- Enforced at: `crates/kernel/src/transaction/kernel.rs:2044` (doc contract);
   `crates/services/api/mcp/src/tool_registry.rs` (no registration — the
   former tool was deleted, review P0-1).
 - Verified: `crates/services/api/mcp/tests/mcp_stdio.rs` m01 (tool list),
   k1 step 5 (raw `transition_epistemic` call is an error).
+
+**E4. Kernel-managed extension keys cannot be forged through `remember()`.**
+The public `remember()` boundary rejects any request carrying a
+kernel-managed extension key (epistemic status/history, lifecycle history,
+invalidation, evidence, derivation, confidence, valid_to, authority,
+scope, content trust) — epistemic state enters only via the semantic ops.
+`Kernel::KERNEL_MANAGED_EXTENSIONS` is public so callers can strip these
+keys from a read-modify-write update; the epistemic block is carried
+forward automatically by plain updates. `valid_from` is deliberately
+caller-settable — the caller's own temporal claim.
+- Enforced at: `crates/kernel/src/transaction/kernel.rs:1092`
+  (`KERNEL_MANAGED_EXTENSIONS` + guard at the head of pub `remember()`;
+  internal semantic ops route through `remember_trusted`).
+- Verified: `tests/evidence_wiring.rs`
+  (`create_stamps_authority_and_scope_by_origin` rejection block,
+  `authority_is_monotonic_up_without_admin`), `mcp_stdio.rs` k1 step 1b
+  (protocol-boundary rejection).
 
 ## Evidence
 
@@ -60,16 +79,38 @@ rejected, not downgraded.
   `assert_requires_evidence_...`, `verify_is_not_a_status_flip`,
   `invalidate_requires_evidence_...`), `tests/experiences.rs`.
 
-**EV2. Evidence is append-only.**
-Evidence is never replaced or dropped: semantic transitions merge new
-evidence onto the existing list.
-- Enforced at: `ops.rs:815-851` (supersession evidence append on
-  `superseded_by`), `ops.rs:969-983` (invalidation evidence append).
+**EV2. Evidence is append-only (and deduped).**
+Evidence is never replaced or dropped: semantic transitions append new
+evidence through one helper, `append_evidence`, which drops exact
+duplicates (review P2-3). The R12 head-prefix check remains in
+`remember_locked` as internal defense-in-depth.
+- Enforced at: `ops.rs:373` (`append_evidence`), used by
+  verify/supersede/invalidate.
 - Verified: `tests/transactions.rs`
   (`supersede_with_superseded_by_links_existing_successor` — evidence len 2
-  on the old claim).
+  on the old claim), `tests/evidence_wiring.rs`
+  (`evidence_is_append_only_on_update` — re-verifying the same evidence is
+  idempotent and not double-counted).
 
-**EV3. Evidence correction is a future model, not silent mutation.**
+**EV3. Confirmations are independent per verifier (review P2-4).**
+`verify_knowledge` keys each confirmation by `verifier | evidence`,
+recorded in `verification_keys` — the same verifier re-verifying the same
+evidence adds nothing; a distinct verifier adds one confirmation.
+- Enforced at: `ops.rs:359` (`confirmation_key`), keyed counting in
+  `verify_knowledge`.
+- Verified: `tests/transactions.rs`
+  (`verify_bumps_confirmations_and_never_lowers_score`),
+  `tests/evidence_wiring.rs` (`evidence_is_append_only_on_update`).
+
+**EV4. Epistemic-critical reads decode evidence strictly.**
+`trace` reads through `strict_evidence()`: a malformed evidence entry is a
+surface error, never silently skipped (review P2-6), and each source's
+status is reported as `ok` / `not_found` / `not_visible` (review P2-7).
+- Enforced at: `kom.rs:934` (`strict_evidence`), `mcp/src/tools/query.rs`
+  (`tool_trace`).
+- Verified: `mcp_stdio.rs` k3 trace section.
+
+**EV5. Evidence correction is a future model, not silent mutation.**
 Correction/supersession of evidence (`E1 -> SUPERSEDED_BY -> E2`, review
 P2-10) is deferred: the append-only record leaves room for it, and the
 relationship index already supports arbitrary typed edges.
@@ -77,12 +118,25 @@ relationship index already supports arbitrary typed edges.
 ## Temporal
 
 **T1. Valid time is a half-open interval `[valid_from, valid_to)`.**
-`valid_to` is exclusive; `valid_from < valid_to` when both exist (checked at
-stamp time).
-- Enforced at: `kom.rs:1038` (`valid_at`), `ops.rs:1312-1313`
-  (`set_valid_time` keeps `valid_from` and only sets `valid_to` when absent).
-- Verified: `crates/kernel/tests/temporal.rs`, `tests/experiences.rs`
-  (`match_experiences_filters_expired` — gone exactly at `valid_to`).
+`valid_to` is exclusive; `valid_from <= valid_to` when both exist —
+inversion is rejected at stamp time (review P1-1), equality is a legal
+zero-duration interval (a claim closed at its own assertion instant, or a
+future fact collapsed before it became valid: valid at no instant).
+- Enforced at: `kom.rs` (`valid_at`, `set_valid_time`) and
+  `kernel.rs:1243` (interval check in `remember_locked`).
+- Verified: `crates/kernel/tests/temporal.rs`
+  (`inverted_interval_is_rejected_zero_duration_is_legal`),
+  `tests/experiences.rs` (`match_experiences_filters_expired` — gone
+  exactly at `valid_to`).
+
+**T1b. Future facts collapse, never extend.**
+Invalidating or superseding a fact whose `valid_from` lies in the future
+closes the interval at `max(valid_from, now)` — the fact is never valid at
+any instant (review P1-1).
+- Enforced at: `kom.rs:1115` (`close_valid_time`) — the single
+  validity-closing path, used by supersede/invalidate/transitions.
+- Verified: `tests/temporal.rs`
+  (`invalidating_a_future_fact_collapses_it_to_never_valid`).
 
 **T2. `None` bounds are unbounded, never `0`.**
 `None valid_from` = −∞, `None valid_to` = +∞. `0` is a legitimate
@@ -111,6 +165,27 @@ sources, timestamp) and wire `DERIVED_FROM` edges to every source.
 **D2. Every source KO exists and is readable at derivation time.**
 - Enforced at: `kernel.rs:2311` (derive validates each source),
   `kernel.rs:1266-1275` (strict referential policy).
+
+**D3. Confidence scores are validated at the model boundary (review P1-7).**
+`ConfidenceContext::new` rejects non-finite and out-of-range scores
+(`!(0.0..=1.0).contains(score)`) — a bad score is a rejection, never a
+silent clamp.
+- Enforced at: `kom.rs:1317` (`ConfidenceContext::new`), called by
+  derive/verify/record_experience and the MCP tools.
+- Verified: `tests/derivation.rs`
+  (`confidence_context_rejects_non_finite_and_out_of_range_scores`).
+
+**D4. Derived knowledge inherits source evidence, never full trust
+(review P1-8, Model B).**
+When a derivation supplies no evidence of its own, the derived KO inherits
+the sources' strict evidence trails; an evidence-less source contributes
+nothing, and no source context yields an explicit low-confidence baseline
+(0.0), never implicit full trust.
+- Enforced at: `kernel.rs` `derive` (evidence inheritance + confidence
+  baseline).
+- Verified: `tests/derivation.rs`
+  (`confidence_baseline_comes_from_sources_never_silently_full`),
+  `tests/transactions.rs`.
 
 ## Invalidation
 
@@ -149,6 +224,15 @@ failure mid-sweep can leave earlier stamps committed (fail-safe direction:
 stamps are conservative, never phantom). Documented at
 `ops.rs:1299-1303`.
 
+**I5. Sweep outcomes are structured, never silent (review P1-5).**
+`supersede` / `invalidate` / `resolve_conflict` return `completed: bool`
+and `failed: [{koid, error}]` alongside the stamped set — a partial sweep
+is reported per dependent, not folded into a blanket failure.
+- Enforced at: `ops.rs` (`InvalidationFailure`, `SweepOutcome`, flattened
+  into `SupersedeResult` / `InvalidationResult` / `ConflictResolutionOutcome`).
+- Verified: `mcp_stdio.rs` k2/k4 (response shape includes `completed` and
+  `failed`).
+
 ## Conflict
 
 **C1. Conflict resolution is explicit and recorded.**
@@ -175,6 +259,18 @@ both claims are swept.
 - Verified: `tests/transactions.rs`
   (`resolve_replaced_wires_supersedes_edges_and_sweeps_dependents`).
 
+**C4. Every assertion carries an authority; defaults never inflate it
+(review P1-3/P1-4).**
+`contradict` always stamps an authority — the explicitly supplied level
+(validated) or the origin-derived default (`agent_derived` for agent
+assertions), never inheriting the contradicted claim's higher authority.
+Authority-ranked resolution requires a recorded authority on both sides:
+a missing authority fails closed with `InvalidObject`, never ranks as 0.
+- Enforced at: `ops.rs` (`contradict` authority stamp),
+  `resolve_conflict_by_authority` (`snapshot_authority_rank` → Option).
+- Verified: `tests/transactions.rs`
+  (`contradict_stamps_origin_derived_authority_by_default`).
+
 ## Experience
 
 **X1. Expired, invalidated, or superseded experiences are never returned.**
@@ -195,11 +291,18 @@ experience never enters the ranking stage (review P1-8/P1-9).
 
 **X3. Sharing is opt-in and revocable.**
 Cross-agent reuse requires `shared_with` Read grants; a later `remember`
-with an explicit security descriptor replaces the ACL, and revoked
-principals stop matching immediately.
+with an explicit security descriptor replaces the ACL (kernel-managed keys
+stripped per E4), and revoked principals stop matching immediately.
 - Enforced at: `ops.rs:1414-1430` (grant construction),
   `kernel.rs:1264` (security replace on update).
 - Verified: `tests/experiences.rs` (`revoked_experience_sharing_stops_matching`).
+
+**X4. TTL arithmetic cannot overflow (review P1-6).**
+`ttl_seconds` is converted to a validity end via checked math — an
+overflowing TTL (`u64::MAX` seconds) is rejected, never wrapped into an
+unbounded future.
+- Enforced at: `ops.rs` (`record_experience`, checked_mul/checked_add).
+- Verified: `tests/experiences.rs` (`record_experience_rejects_ttl_overflow`).
 
 ## Encryption
 
@@ -249,10 +352,24 @@ is an explicit error, never a guess.
 **A1. Epistemic decisions are separate capabilities.**
 `verify_knowledge` requires the `verifier` role, `invalidate` requires
 `operator`, `resolve_conflict`/`resolve_conflict_by_authority` require
-`arbiter` — over the MCP/REST gateway. Unauthenticated sessions and `admin`
-retain unrestricted access; direct kernel-library callers (embedded use)
-authorize at the ACL layer, which is always enforced.
-- Enforced at: `crates/services/api/mcp/src/authz.rs:49-63`
-  (restricted table) + kernel ACL authorization on every semantic op.
+`arbiter` — over the MCP/REST gateway. Unauthenticated stdio sessions and
+`admin` retain unrestricted access (the OS process boundary is the trust
+boundary); a role-less **TCP** session is fail-closed for every tool
+(review P1-10). Direct kernel-library callers (embedded use) authorize at
+the ACL layer, which is always enforced.
+- Enforced at: `crates/services/api/mcp/src/authz.rs`
+  (restricted table + trust-mode-aware passthrough) + kernel ACL
+  authorization on every semantic op.
 - Verified: `authz.rs` `capability_separation_of_duties`,
   `mcp_stdio.rs` (full suite green with the new table).
+
+**A2. Provenance actors are bound to the session identity (review P1-9).**
+Protocol tools (`derive`, `record_experience`, ...) bind the derivation/
+experience actor to the authenticated session subject (`subject_of(args).name`,
+injected before dispatch — on TCP forced to the token-assigned agent id).
+A caller-supplied `actor` argument is ignored, so provenance cannot be
+spoofed through the protocol boundary.
+- Enforced at: `mcp/src/tools/knowledge.rs` (actor binding),
+  `mcp/src/dispatcher.rs` (session identity injection).
+- Verified: `mcp_stdio.rs` k3 (caller passes `actor: "agent-7"`; the
+  stamped actor is the session subject).

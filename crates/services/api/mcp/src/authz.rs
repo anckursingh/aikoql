@@ -1,6 +1,7 @@
 //! RBAC capability checks + rate limiting (A7 Agent Gateway).
 //! Extracted from main.rs (R7 modularization). No behavior changes.
 
+use crate::session::TrustMode;
 use crate::*;
 /// Simple per-agent rate limiter: max calls per minute.
 /// Uses a sliding window — resets after 60s.
@@ -40,10 +41,25 @@ pub(crate) fn check_rate(
 }
 
 /// Capability grants: which roles can call which tools.
-/// Empty allowed list = unrestricted (admin/superuser).
-pub(crate) fn check_capability(roles: &[String], tool: &str) -> Result<(), (i64, String)> {
-    if roles.is_empty() || roles.contains(&"admin".to_string()) {
+/// Review P1-10: the empty-roles passthrough is trust-mode-aware — on stdio
+/// the OS process boundary IS the trust boundary (single-user local mode,
+/// role-less calls stay unrestricted). On TCP identity is server-assigned
+/// from a verified token; a role-less TCP session is denied here AND at the
+/// dispatch gate (defense in depth), never silently unrestricted.
+pub(crate) fn check_capability(
+    trust: TrustMode,
+    roles: &[String],
+    tool: &str,
+) -> Result<(), (i64, String)> {
+    if (trust == TrustMode::Stdio && roles.is_empty()) || roles.contains(&"admin".to_string()) {
         return Ok(()); // admin has full access
+    }
+    // Review P1-10: a role-less TCP session is fail-closed for EVERY tool,
+    // not just the restricted ones (the dispatch gate is the primary
+    // defense — this is belt+braces so no code path can silently treat an
+    // unauthenticated network caller as unrestricted).
+    if trust == TrustMode::Tcp && roles.is_empty() {
+        return Err((-32001, "untrusted TCP session: no roles assigned".into()));
     }
 
     // Sensitive tools require specific roles. Epistemic state changes need
@@ -91,7 +107,7 @@ pub(crate) static RATE_STORE: LazyLock<Mutex<HashMap<String, (Instant, u32)>>> =
 
 #[cfg(test)]
 mod tests {
-    use super::check_capability;
+    use super::{check_capability, TrustMode};
 
     fn roles(r: &[&str]) -> Vec<String> {
         r.iter().map(|s| s.to_string()).collect()
@@ -99,27 +115,60 @@ mod tests {
 
     #[test]
     fn capability_separation_of_duties() {
-        // Unauthenticated / admin sessions are unrestricted.
+        // Unauthenticated stdio / admin sessions are unrestricted (review
+        // P1-10: the passthrough is stdio-local).
         for r in [vec![], roles(&["admin"])] {
             for tool in ["verify_knowledge", "invalidate", "resolve_conflict"] {
-                assert!(check_capability(&r, tool).is_ok(), "{tool} for {r:?}");
+                assert!(
+                    check_capability(TrustMode::Stdio, &r, tool).is_ok(),
+                    "{tool} for {r:?}"
+                );
             }
+        }
+        // TCP with no roles is fail-closed at the capability gate too
+        // (the dispatch gate is the primary defense — this is belt+braces).
+        for tool in [
+            "verify_knowledge",
+            "invalidate",
+            "resolve_conflict",
+            "aikoql",
+        ] {
+            assert!(
+                check_capability(TrustMode::Tcp, &[], tool).is_err(),
+                "{tool}"
+            );
         }
         // A read-only analyst cannot verify, invalidate, or resolve.
         let analyst = roles(&["analyst"]);
         for tool in ["verify_knowledge", "invalidate", "resolve_conflict"] {
-            assert!(check_capability(&analyst, tool).is_err(), "{tool}");
+            assert!(
+                check_capability(TrustMode::Stdio, &analyst, tool).is_err(),
+                "{tool}"
+            );
         }
         // Each duty requires its own role — no cross-capability grants.
-        assert!(check_capability(&roles(&["verifier"]), "verify_knowledge").is_ok());
-        assert!(check_capability(&roles(&["verifier"]), "invalidate").is_err());
-        assert!(check_capability(&roles(&["operator"]), "invalidate").is_ok());
-        assert!(check_capability(&roles(&["operator"]), "resolve_conflict").is_err());
-        assert!(check_capability(&roles(&["arbiter"]), "resolve_conflict").is_ok());
-        assert!(check_capability(&roles(&["arbiter"]), "resolve_conflict_by_authority").is_ok());
-        assert!(check_capability(&roles(&["arbiter"]), "verify_knowledge").is_err());
+        assert!(
+            check_capability(TrustMode::Stdio, &roles(&["verifier"]), "verify_knowledge").is_ok()
+        );
+        assert!(check_capability(TrustMode::Stdio, &roles(&["verifier"]), "invalidate").is_err());
+        assert!(check_capability(TrustMode::Stdio, &roles(&["operator"]), "invalidate").is_ok());
+        assert!(
+            check_capability(TrustMode::Stdio, &roles(&["operator"]), "resolve_conflict").is_err()
+        );
+        assert!(
+            check_capability(TrustMode::Stdio, &roles(&["arbiter"]), "resolve_conflict").is_ok()
+        );
+        assert!(check_capability(
+            TrustMode::Stdio,
+            &roles(&["arbiter"]),
+            "resolve_conflict_by_authority"
+        )
+        .is_ok());
+        assert!(
+            check_capability(TrustMode::Stdio, &roles(&["arbiter"]), "verify_knowledge").is_err()
+        );
         // Non-epistemic tools are unaffected.
-        assert!(check_capability(&analyst, "aikoql").is_ok());
-        assert!(check_capability(&analyst, "remember").is_ok());
+        assert!(check_capability(TrustMode::Stdio, &analyst, "aikoql").is_ok());
+        assert!(check_capability(TrustMode::Stdio, &analyst, "remember").is_ok());
     }
 }
