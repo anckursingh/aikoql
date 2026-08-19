@@ -2,9 +2,9 @@
 
 **Architecture:** [MRFC-0005](MRFC-0005-System-Architecture.md) | [MRFC-0010](MRFC-0010-aikoql-Parser-Architecture-v2.md) | [MRFC-0020](MRFC-0020-Encryption-Key-Management-Architecture.md) | [MRFC-0030](#mrf-0030-active-knowledge-objects--the-knowledge-operating-system) — Active Knowledge Objects | [MRFC-0050](#mrf-0050-document-ocr--knowledge-ingestion) — Document OCR & Ingestion | [MRFC-0060](#mrf-0060-constraint-engine) — Schema, Constraint & Integrity Engine | **NEW: [MRFC-0070](#mrf-0070-agent-knowledge-interface--engineering-knowledge-compiler) — Agent Knowledge Interface & Engineering Knowledge Compiler**  
 **Conceptual Model:** [Universal Conceptual Model for Engineering Agents](Universal-Conceptual-Model-for-Engineering-Agents.md)  
-**Status:** Phases 1–5 complete, MRFC-0020 complete, API Layer done, MRFC-0030 Phase 7a–7d complete (9/9 Active KOs + Agent Runtime), MRFC-0040 complete, Studio Phase S2/S3/S4 complete (Document Compiler UI), MRFC-0050 Phase D1–D9 complete (full Document Knowledge Compiler pipeline), MRFC-0060 Phase C1–C9 + gap-filling complete (~95%), MRFC-0070 Phases A0–A10 complete (full Agent Knowledge Interface + Context Compiler).  
-**Last updated:** 2026-08-18 (R14 complete — benchmark infrastructure: 16-scenario scale suite at 100K + weekly regression CI with >20% alert; all 15 MVP-readiness phases done; + PRR production review triaged — 16 findings verified, 7 PRR phases queued; PRR-2 TCP auth DONE; PRR-3 offline embedding lifecycle DONE; PRR-1 Docker DONE (rust:1.97 builder, healthy container verified live); PRR-4 config pipeline DONE (TOML→env→CLI, AIKOQL_TCP_TOKEN landed, rate_limit enforced); PRR-5 packaging gate DONE (npm tarball gate + per-platform MCP smoke + plugin validation; run.js Windows checksum bug fixed); PRR-6 docs & config consistency DONE (compose dev-only + parameterized, providers candle|http|ollama, 11 tool-count sites cleaned, QUICKSTART macOS binaries); PRR-7 refactors DONE (cli.rs 1773→447 + admin/ingest/imports/model; server.rs deleted → transport/tool_registry/dispatcher/protocol; main.rs 617→459; tests moved to tests.rs; all suites green); + Docker distribution review remediated — GHCR multi-arch release images (amd64+arm64 native jobs, no qemu), :VERSION/:MINOR/:latest manifest merge, OCI labels, /data contract (/data/aikoql.redb + /data/models model-dir, stateless image), docker-compose.release.yml, container smoke in release)  
-**Next session:** watch the v0.1.18 release pipeline (first GHCR multi-arch images — docker-amd64/docker-arm64/manifest merge are the new jobs), then start the next phase below
+**Status:** Phases 1–5 complete, MRFC-0020 complete, API Layer done, MRFC-0030 Phase 7a–7d complete (9/9 Active KOs + Agent Runtime), MRFC-0040 complete, Studio Phase S2/S3/S4 complete (Document Compiler UI), MRFC-0050 Phase D1–D9 complete (full Document Knowledge Compiler pipeline), MRFC-0060 Phase C1–C9 + gap-filling complete (~95%), MRFC-0070 Phases A0–A10 complete (full Agent Knowledge Interface + Context Compiler). **v0.3 opened 2026-08-19 — Agent Knowledge OS (AIKOQL Reality-Check response): K1–K5 phased roadmap with evidence-based maturity marks (see §v0.3).**  
+**Last updated:** 2026-08-19 (v0.2 P0 done — encryption-at-rest wired into serve + all subcommands, DEK persistence fixed in kernel, manual e2e pass; v0.3 section added — reality-check analysis, per-capability re-scores with file:line evidence, K1-K5 phase marks, Knowledge Continuity Test exit criteria)  
+**Next session:** start K1 (Knowledge Object Kernel — wire evidence/authority/scope into the write path) and K2 (Temporal — valid_from/valid_to + temporal query operators) on `feature/mvp-launch`
 
 ---
 
@@ -3003,11 +3003,15 @@ P0:  start "Next phase" below (encryption-at-rest first) — v0.1.18 fully
 ### Next phase (post-MVP): v0.2 hardening
 
 ```text
-P0:  MRFC-0020 encryption at rest wired into serve — KMS, AES-256-GCM,
-     envelope encryption, and field-level policies already exist (MRFC-0020);
-     serve currently REJECTS encryption.enabled=true at startup (documented
-     in QUICKSTART). Task: connect RedbEngine opens to the LocalKMS key file,
-     wire passphrase/AIKOQL_PASSPHRASE, field-level policies per schema type.
+P0:  MRFC-0020 encryption at rest wired into serve ✅ DONE (2026-08-19) —
+     engine::open_kernel (mcp/src/engine.rs) is the single open path for serve
+     + all 8 subcommand sites; EncryptedStore uses the KEK as store key;
+     wrapped tenant DEKs persist inside the store (__encryption__/deks,
+     fail-closed load in with_field_encryption, crash-safe pre-commit persist
+     in remember — kernel e09/e10); keygen writes the 88-byte v2 envelope;
+     [encryption.policies] type→fields in TOML; AIKOQL_PASSPHRASE env beats
+     TOML passphrase; wrong/missing passphrase fails the open. KEK rotation
+     still unwired (would require full-store re-encrypt — ponytail note).
 P1:  Durable CDC + `notify` streaming — notify is intentionally unexposed
      (main.rs header); notification_subscribe already replays from the
      journal. Task: persistent change feed (journal positions, resume).
@@ -3019,3 +3023,64 @@ P3:  Docker build caching (cargo-chef) + distroless/minimal runtime —
      deferred from the container review until the release pipeline is
      proven deterministic (first GHCR publish = v0.1.18).
 ```
+
+---
+
+## v0.3 — Agent Knowledge OS (AIKOQL Reality-Check Response, 2026-08-19)
+
+**Source:** `AIKOQL_REALITY_CHECK.md` (external product review, 2026-08-19) — "From RAG Database to Agent Knowledge OS".
+**Review's verdict:** ~4/10 toward the north-star vision. The gap is not vector/graph/RAG features — it is that knowledge itself is not yet a first-class, versioned, evidence-backed, evolving computational object.
+**Our verdict:** direction confirmed by code audit (4 parallel evidence agents, every claim checked against `crates/`). The review's diagnosis stands; several of its scores underrate what is already built, and its §19 five-layer build order (Knowledge Object Kernel → Temporal → Evidence & Lineage → Knowledge Transactions → Agent Experience) is the right sequence. Adopted as **K1–K5**, marked below with evidence.
+
+### What the review got right (confirmed with file:line evidence)
+
+| Claim | Evidence |
+|---|---|
+| No valid_from/valid_to bitemporal model | Kernel KO has commit_ts-only MVCC (`kom.rs:632-653`); grep `valid_from\|valid_to\|bitemporal` across `crates/` → zero hits; ingestion `TemporalAssertion` is flattened to string properties at commit (`commit.rs:458-472`); no temporal query operators in the lexer (`lexer.rs:132-156`) |
+| Evidence/authority types exist but are not wired | Kernel `Evidence` (`evidence.rs:12-50`, 9 methods) has **zero production call sites** — dead code; `set_authority`/`set_scope` (`kom.rs:776,790`) never called; `ConflictDetector` (`kom.rs:961-993`) never invoked in production; `DERIVED_FROM`/`SUPERSEDES` (`kom.rs:874-878`) are constants — no code creates them |
+| No knowledge-transaction operations | observe/assert/verify/contradict/supersede/merge/invalidate — zero engine ops. A8's "workflow engine" mutates in-memory `KnowledgeIr` only (`reconciliation_workflow.rs:55-298`); `verify` is an ACL check (`kernel.rs:888`); `eval_contradictions` is report-only, creates no Conflict KOs (`eval.rs:177-227`) |
+| No derived-knowledge invalidation | Reasoning engine persists conclusions with `origin=Reason` but no premise links (`reasoning/src/lib.rs:95-123`); the constraint engine rejects writes only — no invalidation or recomputation of dependents |
+| No formal Agent Experience model | Zero structs for lesson/experience/outcome/goal in `crates/`; MRFC-0040 "Agent Experience" = developer ergonomics (session identity, error codes, batch); trigger execution results discarded (`knowledge_runtime.rs:298`); `agent_memory` TTL stored, never enforced (`tools/memory.rs:15,67`) |
+| Verification is not a production path | `LifecycleManager` is called only from tests; no production code ever transitions a KO to `Verified`; `last_verified`/source-reliability/confirmation-count fields: zero hits in `crates/` |
+
+### Where the review underrates (also confirmed)
+
+| Area | Review score | Verified reality |
+|---|---|---|
+| Knowledge Objects | 4/10 | ~6/10 — 11 of the review's own 15-item KO anatomy already exist: identity, type, attributes, relationships, embeddings, MVCC versions, ACL, 12-state lifecycle with enforced transition table (`kom.rs:507-598`), SemanticBlock provenance, ContentTrust, Conflict KO type. Missing: temporal validity, wired evidence, derivation edges, experience |
+| Provenance | 2/10 | ~4/10 — `prove()` is a real SHA-256 tamper-evidence audit chain (`kernel.rs:2153+`); SemanticBlock (source/confidence) on KOs; ContentTrust fail-closed spine (R8.2); per-candidate IR evidence; R12 provenance immutability. Gap: evidence detail dropped at commit (`ingest.rs:231-240`), no unified epistemic-status enum |
+| Knowledge lifecycle | 2/10 | ~4/10 — the 12-state machine + enforced transition table is real; the review missed it. But the MRFC-0070 states are never exercised by production flows, and Verified is never reached |
+| Multi-agent substrate | 1/10 | ~3/10 — real isolation infrastructure: tenant confinement in `authorize()` (`auth.rs:105-145`), server-derived TCP identity (PRR-2), RBAC, per-agent rate limits + audit. Missing: collective semantics — conflict resolution workflows, inter-agent trust, shared experience substrate |
+| DB OS | 3/10 | ~5/10 — "everything is a KO" is implemented: 9 Active KO types deployed + Knowledge Runtime (workflows, triggers, policies, program cache) |
+| Production readiness | 3/10 | ~6/10 — stale score: R1–R15 + PRR-1..8 all closed, v0.1.18 shipped on 3 channels (Release/GHCR/npm), encryption-at-rest P0 wired (2026-08-19), 16-scenario scale bench + weekly regression CI, 390+ tests |
+| Hybrid retrieval | 4/10 | ~5/10 — semantic embedding fusion live in compile_context (v0.1.11+); `SCORE BM25` + `USING EMBEDDING` + Fuse in aikoql (R13) |
+
+### The K1–K5 phase marks (the review's five layers, mapped to code)
+
+| Phase | Exists (evidence) | Missing (the work) | Mark |
+|---|---|---|---|
+| **K1 — Knowledge Object Kernel** | KO model, 12-state lifecycle, Authority(11 levels)/Scope(12)/EvidenceMethod(9), ContentTrust, 12 relation types, MVCC, ACL, constraint engine C1–C9 | Wire kernel `Evidence` into KO persistence; stamp authority/scope on production write paths; unified epistemic status (OBSERVED/EXTRACTED/INFERRED/ASSERTED/VERIFIED/CONTRADICTED/SUPERSEDED); stop dropping evidence detail at commit | ~60% |
+| **K2 — Temporal Knowledge** | Transaction-time MVCC (time-travel reads `raw_object_at`, Studio timeline); `TemporalAssertion` in IR; heuristic staleness (A4) | `valid_from`/`valid_to` on the kernel KO; temporal query operators (AS_OF/BETWEEN/HISTORICAL) through lexer→planner→runtime; wire the `SUPERSEDES` edge on evolve; clock-aware staleness detection | ~20% |
+| **K3 — Evidence & Lineage** | `prove()` audit chain; SemanticBlock; ContentTrust; per-candidate IR evidence; provenance immutability (R12) | Create `DERIVED_FROM` edges whenever knowledge is derived; persist full evidence (page/bbox/confidence-detail); confidence context model (source reliability, independent confirmations, `last_verified`); lineage traversal in `trace` | ~35% |
+| **K4 — Knowledge Transactions** | A8 proposal workflow (in-memory IR); constraint write-set dependency pattern (C6 — reusable for invalidation); ConflictDetector; `eval_contradictions` | Engine ops observe/assert/verify/contradict/supersede/merge/invalidate on the kernel; dependent-knowledge invalidation + recomputation; Conflict KO creation + persisted resolution workflow | ~15% |
+| **K5 — Agent Experience** | `agent_memory` KV; `decide`; in-process execution stats; context compiler (semantic+lexical fusion, justification, token budget) | Experience KO (actor/goal/context/action/preconditions/outcome/causal explanation/lesson/evidence/confidence/reuse conditions); execution-outcome capture (triggers, agent runs, programs); reuse-condition matching in `compile_context`; TTL enforcement | ~10% |
+
+### v0.3 execution order
+
+K1 → K2 → K3 → K4 → K5 (the review's order; each builds on the last). K1+K2 first: wired evidence and temporal validity are prerequisites for every higher layer. K4's invalidation graph reuses the C6 constraint write-set pattern; K5's reuse-condition matching plugs into the context compiler's ranking.
+
+### Exit criteria — the review's §20 proof
+
+**The AIKOQL Knowledge Continuity Test** — three agents, one environment:
+
+1. Agent 1 discovers: architecture uses Kafka.
+2. Agent 2 changes it: Kafka → Pulsar.
+3. Agent 3 asks: what does it use? what did it use previously? why did it change? who changed it? what evidence proves the change? what else is affected? what should I be careful about?
+
+Pass = deterministic answers with evidence chains for all 7 questions. Becomes a conformance suite when K4 lands.
+
+**Dogfood (§21):** aikoql's own repository as the first knowledge universe — `ingest-dir` + `compile_context` already do this (v0.1.15+); the review's question list ("why was the planner designed this way?", "what did previous coding agents learn?", …) becomes the acceptance checklist.
+
+### What we deliberately do NOT build (review §19 "do not prioritize")
+
+Another embedding model, vector index, RAG strategy, reranker, or LLM integration. Table stakes — the moat is the semantic knowledge model (review §4: one model from which relational/vector/graph/temporal/provenance strategies are derived).
