@@ -143,6 +143,38 @@ pub(crate) fn parse_action(args: &J) -> Result<Action, String> {
     }
 }
 
+/// Parse the canonical evidence array (K1/K3/K4 tools share this shape):
+/// [{source_artifact, method, location?, revision?, confidence?}]
+pub(crate) fn parse_evidence(args: &J) -> Result<Vec<Evidence>, String> {
+    let mut out = Vec::new();
+    if let Some(evs) = args.get("evidence").and_then(|e| e.as_array()) {
+        for ev in evs {
+            let source_artifact = ev
+                .get("source_artifact")
+                .and_then(|s| s.as_str())
+                .ok_or("evidence entries need source_artifact")?;
+            let method = ev
+                .get("method")
+                .and_then(|m| m.as_str())
+                .ok_or("evidence entries need method")?;
+            let method = EvidenceMethod::from_str(method)
+                .ok_or_else(|| format!("unknown evidence method: {}", method))?;
+            let mut e = Evidence::new(source_artifact, method);
+            if let Some(l) = ev.get("location").and_then(|l| l.as_str()) {
+                e = e.with_location(l);
+            }
+            if let Some(r) = ev.get("revision").and_then(|r| r.as_str()) {
+                e = e.with_revision(r);
+            }
+            if let Some(c) = ev.get("confidence").and_then(|c| c.as_f64()) {
+                e = e.with_confidence(c as f32);
+            }
+            out.push(e);
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn parse_fusion(args: &J) -> Fusion {
     match args.get("fusion").and_then(|f| f.as_str()).unwrap_or("rrf") {
         "vector" => Fusion::VectorOnly,

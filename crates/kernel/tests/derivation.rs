@@ -142,7 +142,7 @@ fn confidence_baseline_comes_from_sources_never_silently_full() {
 
     // Sources with explicit confidence contexts: baseline = mean score,
     // confirmations = number of sources carrying a context.
-    let mut set = |id: &KOID, score: f32| {
+    let set = |id: &KOID, score: f32| {
         let mut ko = k.get(&Subject::new("alice"), id).unwrap();
         ko.set_confidence_context(&ConfidenceContext {
             score,

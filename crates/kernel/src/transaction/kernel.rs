@@ -39,6 +39,12 @@ use crate::storage::store::{ConstraintCapabilities, StorageEngine, WriteBatch};
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 
+// v0.3 K4: knowledge transactions (observe/assert/verify/contradict/supersede/
+// merge/invalidate + conflict resolution). A child module so the ops share
+// kernel.rs's private fields (pipe/auth/clock) without widening their scope.
+mod ops;
+pub use ops::*;
+
 // ---------------------------------------------------------------------------
 // Clock & Hybrid Logical Clock (commit timestamps)
 // ---------------------------------------------------------------------------
@@ -562,7 +568,7 @@ pub use crate::knowledge::notify::{EventFilter, SubscriptionRecord};
 // Kernel
 // ---------------------------------------------------------------------------
 
-struct Pipeline {
+pub(crate) struct Pipeline {
     seq: u64,
     audit: [u8; 32],
 }
@@ -848,7 +854,7 @@ impl Kernel {
 
     // ---- internal read helpers -------------------------------------------
 
-    fn head_object(&self, koid: &KOID) -> KResult<Option<KnowledgeObject>> {
+    pub(crate) fn head_object(&self, koid: &KOID) -> KResult<Option<KnowledgeObject>> {
         self.objects.get(koid)
     }
 
@@ -1062,6 +1068,16 @@ impl Kernel {
 
     pub fn remember(&self, req: RememberRequest) -> KResult<Remembered> {
         let mut pipe = self.pipe.lock().unwrap();
+        self.remember_locked(&mut pipe, &req)
+    }
+
+    /// remember() with the pipe lock already held — internal to composite
+    /// knowledge ops (K4) so multi-KO operations commit under one lock.
+    pub(crate) fn remember_locked(
+        &self,
+        pipe: &mut Pipeline,
+        req: &RememberRequest,
+    ) -> KResult<Remembered> {
         if let Some(k) = &req.idempotency_key {
             if let Some((koid, version, commit_ts)) = self.repo.get_idem(k)? {
                 return Ok(Remembered {
@@ -1409,7 +1425,7 @@ impl Kernel {
         let is_auth_meta =
             req.metadata.type_name == ROLE_TYPE || req.metadata.type_name == POLICY_TYPE;
         let (commit_ts, _seq) = self.commit_version(
-            &mut pipe,
+            pipe,
             ko,
             kind,
             req.origin.clone(),
@@ -1417,7 +1433,6 @@ impl Kernel {
             req.note.clone(),
             req.idempotency_key.as_deref(),
         )?;
-        drop(pipe);
         if is_auth_meta {
             self.refresh_auth_cache()?;
         }
@@ -1945,6 +1960,31 @@ impl Kernel {
     ) -> KResult<EpistemicChanged> {
         let ctx = ctx.into();
         let mut pipe = self.pipe.lock().unwrap();
+        self.transition_epistemic_locked(
+            &mut pipe,
+            &ctx,
+            koid,
+            to,
+            origin,
+            superseded_by,
+            expected_version,
+            reason,
+        )
+    }
+
+    /// transition_epistemic() with the pipe lock already held — internal to
+    /// composite knowledge ops (K4).
+    pub(crate) fn transition_epistemic_locked(
+        &self,
+        pipe: &mut Pipeline,
+        ctx: &KnowledgeContext,
+        koid: &KOID,
+        to: EpistemicStatus,
+        origin: Origin,
+        superseded_by: Option<KOID>,
+        expected_version: Option<u64>,
+        reason: Option<String>,
+    ) -> KResult<EpistemicChanged> {
         let head = self.head_object(koid)?.ok_or(KError::NotFound(*koid))?;
         self.auth
             .read()
@@ -1991,7 +2031,7 @@ impl Kernel {
         }
         ko.push_epistemic_history(from, to, at, &ctx.subject.name, reason.as_deref());
         let (commit_ts, _seq) = self.commit_version(
-            &mut pipe,
+            pipe,
             ko,
             EventKind::EpistemicChanged,
             origin,

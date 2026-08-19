@@ -1076,6 +1076,32 @@ impl KnowledgeObject {
         self.extensions
             .insert(Self::EXT_CONFIDENCE.into(), confidence_to_value(c));
     }
+
+    // ---- v0.3 K4: Invalidation stamp (stored in extensions) ----
+
+    /// Extension key for the Invalidation record (Map: at/actor/reason).
+    /// Stamped when knowledge stops being supported — either directly
+    /// (`invalidate` op) or by dependency propagation (a premise was
+    /// superseded/invalidated). Distinct from Superseded/Contradicted:
+    /// this records WHY support vanished, not just the resulting state.
+    pub const EXT_INVALIDATION: &str = "invalidation";
+
+    /// The invalidation record, if this KO's support was withdrawn.
+    pub fn invalidation(&self) -> Option<Invalidation> {
+        self.extensions
+            .get(Self::EXT_INVALIDATION)
+            .and_then(invalidation_from_value)
+    }
+
+    /// Attach (or replace) the invalidation record.
+    pub fn set_invalidated(&mut self, at: u64, actor: &str, reason: &str) {
+        let mut m = PropertyMap::new();
+        m.insert("at".into(), Value::Int(at as i64));
+        m.insert("actor".into(), Value::Text(actor.into()));
+        m.insert("reason".into(), Value::Text(reason.into()));
+        self.extensions
+            .insert(Self::EXT_INVALIDATION.into(), Value::Map(m));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1209,6 +1235,40 @@ fn confidence_from_value(v: &Value) -> Option<ConfidenceContext> {
         last_verified: match m.get("last_verified") {
             Some(Value::Int(t)) if *t >= 0 => Some(*t as u64),
             _ => None,
+        },
+    })
+}
+
+/// v0.3 K4: record of knowledge losing its support — either directly
+/// (`invalidate` op) or propagated from an invalidated/superseded premise.
+/// Distinct from the epistemic state: this is the WHY, the status is the WHAT.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Invalidation {
+    /// Epoch millis when the support was withdrawn.
+    pub at: u64,
+    /// Who withdrew the support.
+    pub actor: String,
+    /// Why the support was withdrawn.
+    pub reason: String,
+}
+
+fn invalidation_from_value(v: &Value) -> Option<Invalidation> {
+    let m = match v {
+        Value::Map(m) => m,
+        _ => return None,
+    };
+    Some(Invalidation {
+        at: match m.get("at") {
+            Some(Value::Int(t)) if *t >= 0 => *t as u64,
+            _ => return None,
+        },
+        actor: match m.get("actor") {
+            Some(Value::Text(s)) => s.clone(),
+            _ => return None,
+        },
+        reason: match m.get("reason") {
+            Some(Value::Text(s)) => s.clone(),
+            _ => return None,
         },
     })
 }
@@ -1466,6 +1526,19 @@ impl ConflictResolution {
             self,
             ConflictResolution::Unresolved | ConflictResolution::UnderReview
         )
+    }
+
+    /// Parse the canonical wire form (as produced by `as_str`).
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "unresolved" => Some(ConflictResolution::Unresolved),
+            "under_review" => Some(ConflictResolution::UnderReview),
+            "resolved_a_preferred" => Some(ConflictResolution::ResolvedAPreferred),
+            "resolved_b_preferred" => Some(ConflictResolution::ResolvedBPreferred),
+            "resolved_both_valid" => Some(ConflictResolution::ResolvedBothValid),
+            "resolved_replaced" => Some(ConflictResolution::ResolvedReplaced),
+            _ => None,
+        }
     }
 }
 

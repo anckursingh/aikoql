@@ -277,6 +277,13 @@ pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
             "confirmations": c.confirmations,
             "last_verified": c.last_verified
         })),
+        // v0.3 K4: withdrawn support — when stamped, the trace answers
+        // INVALIDATED WHEN / BY WHOM / WHY.
+        "invalidation": ko.invalidation().map(|i| json!({
+            "at": i.at,
+            "actor": i.actor,
+            "reason": i.reason
+        })),
         "evidence": ko.evidence().iter().map(|e| json!({
             "source_artifact": e.source_artifact,
             "location": e.location,

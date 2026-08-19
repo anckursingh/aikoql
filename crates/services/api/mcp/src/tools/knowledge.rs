@@ -247,31 +247,7 @@ pub(crate) fn tool_derive(k: &Kernel, args: &J) -> Result<J, String> {
         .get("reason")
         .and_then(|r| r.as_str())
         .map(String::from);
-    if let Some(evs) = args.get("evidence").and_then(|e| e.as_array()) {
-        for ev in evs {
-            let source_artifact = ev
-                .get("source_artifact")
-                .and_then(|s| s.as_str())
-                .ok_or("evidence entries need source_artifact")?;
-            let method = ev
-                .get("method")
-                .and_then(|m| m.as_str())
-                .ok_or("evidence entries need method")?;
-            let method = EvidenceMethod::from_str(method)
-                .ok_or_else(|| format!("unknown evidence method: {}", method))?;
-            let mut e = Evidence::new(source_artifact, method);
-            if let Some(l) = ev.get("location").and_then(|l| l.as_str()) {
-                e = e.with_location(l);
-            }
-            if let Some(r) = ev.get("revision").and_then(|r| r.as_str()) {
-                e = e.with_revision(r);
-            }
-            if let Some(c) = ev.get("confidence").and_then(|c| c.as_f64()) {
-                e = e.with_confidence(c as f32);
-            }
-            req.evidence.push(e);
-        }
-    }
+    req.evidence = parse_evidence(args)?;
     if let Some(c) = args.get("confidence").and_then(|c| c.as_object()) {
         req.confidence = Some(ConfidenceContext {
             score: c.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0) as f32,
@@ -291,6 +267,242 @@ pub(crate) fn tool_verify(k: &Kernel, args: &J) -> Result<J, String> {
     k.verify(subject_of(args), &koid_of(args)?, parse_action(args)?)
         .map_err(|e| e.to_string())?;
     Ok(json!({"allowed": true}))
+}
+
+// ---------------------------------------------------------------------------
+// v0.3 K4 — knowledge transactions over MCP. Each tool is a first-class
+// kernel op (anti-CRUD-cosplay): evidence is mandatory, provenance is
+// stamped, conflict resolution never silently picks a side.
+// ---------------------------------------------------------------------------
+
+pub(crate) fn tool_observe(k: &Kernel, args: &J) -> Result<J, String> {
+    let type_name = args
+        .get("type_name")
+        .and_then(|t| t.as_str())
+        .ok_or("missing argument: type_name")?;
+    let mut req = ObservationRequest::new(subject_of(args), type_name);
+    req.properties = parse_properties(args)?;
+    req.evidence = parse_evidence(args)?;
+    req.valid_from = args.get("valid_from").and_then(|v| v.as_u64());
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.observe(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts
+    }))
+}
+
+pub(crate) fn tool_assert_knowledge(k: &Kernel, args: &J) -> Result<J, String> {
+    let type_name = args
+        .get("type_name")
+        .and_then(|t| t.as_str())
+        .ok_or("missing argument: type_name")?;
+    let mut req = AssertionRequest::new(subject_of(args), type_name);
+    req.properties = parse_properties(args)?;
+    req.authority = args
+        .get("authority")
+        .and_then(|a| a.as_str())
+        .map(String::from);
+    req.evidence = parse_evidence(args)?;
+    req.valid_from = args.get("valid_from").and_then(|v| v.as_u64());
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.assert_knowledge(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts
+    }))
+}
+
+pub(crate) fn tool_verify_knowledge(k: &Kernel, args: &J) -> Result<J, String> {
+    let mut req = VerificationRequest::new(subject_of(args), koid_of(args)?);
+    req.evidence = parse_evidence(args)?;
+    req.confidence = args
+        .get("confidence")
+        .and_then(|c| c.as_f64())
+        .map(|c| c as f32);
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.verify_knowledge(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts,
+        "status": r.status.as_str(),
+        "confirmations": r.confirmations,
+        "last_verified": r.last_verified
+    }))
+}
+
+pub(crate) fn tool_contradict(k: &Kernel, args: &J) -> Result<J, String> {
+    let claim_hex = args
+        .get("claim")
+        .and_then(|c| c.as_str())
+        .ok_or("missing argument: claim")?;
+    let mut req = ContradictionRequest::new(
+        subject_of(args),
+        KOID::from_hex(claim_hex).map_err(|e| e.to_string())?,
+    );
+    if let Some(t) = args.get("counter_type").and_then(|t| t.as_str()) {
+        req.counter_type = t.into();
+    }
+    req.counter_props = parse_properties(args)?;
+    req.authority = args
+        .get("authority")
+        .and_then(|a| a.as_str())
+        .map(String::from);
+    req.evidence = parse_evidence(args)?;
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.contradict(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "counter": r.counter.to_hex(),
+        "conflict": r.conflict.to_hex()
+    }))
+}
+
+pub(crate) fn tool_supersede(k: &Kernel, args: &J) -> Result<J, String> {
+    let old_hex = args
+        .get("old")
+        .and_then(|o| o.as_str())
+        .ok_or("missing argument: old")?;
+    let type_name = args
+        .get("type_name")
+        .and_then(|t| t.as_str())
+        .ok_or("missing argument: type_name")?;
+    let mut req = SupersedeRequest::new(
+        subject_of(args),
+        KOID::from_hex(old_hex).map_err(|e| e.to_string())?,
+        type_name,
+    );
+    req.properties = parse_properties(args)?;
+    req.evidence = parse_evidence(args)?;
+    req.reason = args
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .map(String::from);
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.supersede(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "old": r.old.to_hex(),
+        "new": r.new.to_hex(),
+        "invalidated_dependents": r
+            .invalidated_dependents
+            .iter()
+            .map(|d| d.to_hex())
+            .collect::<Vec<_>>()
+    }))
+}
+
+pub(crate) fn tool_merge(k: &Kernel, args: &J) -> Result<J, String> {
+    let type_name = args
+        .get("type_name")
+        .and_then(|t| t.as_str())
+        .ok_or("missing argument: type_name")?;
+    let sources = args
+        .get("sources")
+        .and_then(|s| s.as_array())
+        .ok_or("missing argument: sources")?
+        .iter()
+        .map(|s| {
+            let hex = s.as_str().ok_or("sources must be KOID hex strings")?;
+            KOID::from_hex(hex).map_err(|e| e.to_string())
+        })
+        .collect::<Result<Vec<KOID>, String>>()?;
+    let mut req = MergeRequest::new(subject_of(args), type_name, sources);
+    req.properties = match args.get("properties").and_then(|p| p.as_object()) {
+        Some(_) => Some(parse_properties(args)?),
+        None => None,
+    };
+    req.strategy = match args
+        .get("strategy")
+        .and_then(|s| s.as_str())
+        .unwrap_or("manual")
+    {
+        "manual" => MergeStrategy::Manual,
+        "newest_wins" => MergeStrategy::NewestWins,
+        "authority_wins" => MergeStrategy::AuthorityWins,
+        other => return Err(format!("invalid merge strategy: {}", other)),
+    };
+    req.evidence = parse_evidence(args)?;
+    req.reason = args
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .map(String::from);
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.merge(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts
+    }))
+}
+
+pub(crate) fn tool_invalidate(k: &Kernel, args: &J) -> Result<J, String> {
+    let mut req = InvalidationRequest::new(subject_of(args), koid_of(args)?);
+    req.evidence = parse_evidence(args)?;
+    req.reason = args
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .map(String::from);
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.invalidate(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "invalidated": r.invalidated.iter().map(|k| k.to_hex()).collect::<Vec<_>>()
+    }))
+}
+
+pub(crate) fn tool_resolve_conflict(k: &Kernel, args: &J) -> Result<J, String> {
+    let decision = args
+        .get("decision")
+        .and_then(|d| d.as_str())
+        .ok_or("missing argument: decision")?;
+    let decision = ConflictResolution::from_str(decision)
+        .ok_or_else(|| format!("unknown resolution decision: {}", decision))?;
+    let rationale = args
+        .get("rationale")
+        .and_then(|r| r.as_str())
+        .ok_or("missing argument: rationale")?;
+    let replacement = match args.get("replacement").and_then(|r| r.as_str()) {
+        Some(hex) => Some(KOID::from_hex(hex).map_err(|e| e.to_string())?),
+        None => None,
+    };
+    let out = k
+        .resolve_conflict(ConflictResolutionRequest {
+            context: subject_of(args).into(),
+            conflict: koid_of(args)?,
+            decision,
+            rationale: rationale.into(),
+            replacement,
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "conflict": out.conflict.to_hex(),
+        "decision": out.decision.as_str(),
+        "effects": out
+            .effects
+            .iter()
+            .map(|(k, st)| json!({"koid": k.to_hex(), "status": st.as_str()}))
+            .collect::<Vec<_>>()
+    }))
+}
+
+pub(crate) fn tool_resolve_conflict_by_authority(k: &Kernel, args: &J) -> Result<J, String> {
+    let rationale = args
+        .get("rationale")
+        .and_then(|r| r.as_str())
+        .ok_or("missing argument: rationale")?;
+    let out = k
+        .resolve_conflict_by_authority(subject_of(args), koid_of(args)?, rationale.into())
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "conflict": out.conflict.to_hex(),
+        "decision": out.decision.as_str(),
+        "effects": out
+            .effects
+            .iter()
+            .map(|(k, st)| json!({"koid": k.to_hex(), "status": st.as_str()}))
+            .collect::<Vec<_>>()
+    }))
 }
 
 pub(crate) fn tool_get(k: &Kernel, args: &J) -> Result<J, String> {

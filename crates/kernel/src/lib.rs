@@ -137,8 +137,12 @@ pub use knowledge::scope::{Scope, ScopeResolver};
 pub use storage::store::{ConstraintCapabilities, MemoryEngine, StorageEngine, WriteBatch};
 pub use storage::store_redb::RedbEngine;
 pub use transaction::kernel::{
-    Clock, ComplianceReport, DeriveRequest, EventFilter, Evolved, Explanation, ForgetMode,
-    Forgotten, Fusion, Kernel, KnowledgeContext, Lineage, ManualClock, OfflineProof, Proof,
-    PropertyFilter, RememberRequest, Remembered, ScoredKO, SimilarityQuery, Subject,
-    SubscriptionRecord, SystemClock, TransactionOp, VersionRecord,
+    AssertionRequest, Clock, ComplianceReport, ConflictResolutionOutcome,
+    ConflictResolutionRequest, ContradictionRequest, ContradictionResult, DeriveRequest,
+    EventFilter, Evolved, Explanation, ForgetMode, Forgotten, Fusion, InvalidationRequest,
+    InvalidationResult, Kernel, KnowledgeContext, Lineage, ManualClock, MergeRequest,
+    MergeStrategy, ObservationRequest, OfflineProof, Proof, PropertyFilter, RememberRequest,
+    Remembered, ScoredKO, SimilarityQuery, Subject, SubscriptionRecord, SupersedeRequest,
+    SupersedeResult, SystemClock, TransactionOp, VerificationRequest, VerificationResult,
+    VersionRecord,
 };

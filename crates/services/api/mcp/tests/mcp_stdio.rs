@@ -1431,3 +1431,284 @@ fn k3_derivation_and_lineage_end_to_end() {
 
     let _ = std::fs::remove_file(&db);
 }
+
+#[test]
+fn k4_knowledge_transactions_end_to_end() {
+    let db = tmp_db("k4");
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "k4", "version": "0"}}));
+    c.notify("notifications/initialized");
+
+    // 1. assert_knowledge: authority + evidence mandatory, stamped on the KO.
+    let a = c.call_tool(
+        "assert_knowledge",
+        json!({
+            "subject": "alice",
+            "type_name": "claim",
+            "properties": {"env": "prod", "cpu": 41},
+            "authority": "source_code",
+            "evidence": [{"source_artifact": "src/main.rs", "method": "ast_extraction"}]
+        }),
+    );
+    let a_koid = a["koid"].as_str().unwrap().to_string();
+    let ko = c.call_tool("get", json!({"subject": "alice", "koid": a_koid}));
+    assert_eq!(ko["extensions"]["epistemic_status"], "asserted");
+    assert_eq!(ko["extensions"]["authority"], "source_code");
+
+    // 2. observe + verify_knowledge: verification is not a status flip — it
+    // bumps the confidence context.
+    let o = c.call_tool(
+        "observe",
+        json!({
+            "subject": "alice",
+            "type_name": "sighting",
+            "properties": {"temp": 21},
+            "evidence": [{"source_artifact": "thermometer-1", "method": "runtime_observation"}]
+        }),
+    );
+    let o_koid = o["koid"].as_str().unwrap().to_string();
+    let v = c.call_tool(
+        "verify_knowledge",
+        json!({
+            "subject": "alice",
+            "koid": o_koid,
+            "evidence": [{"source_artifact": "ci-run-1", "method": "ci_observation"}]
+        }),
+    );
+    assert_eq!(v["status"], "verified");
+    assert_eq!(v["confirmations"], 1);
+    let oko = c.call_tool("get", json!({"subject": "alice", "koid": o_koid}));
+    assert_eq!(oko["extensions"]["epistemic_status"], "verified");
+
+    // 3. Derive a dependent from the claim (the invalidation input).
+    let d = c.call_tool(
+        "derive",
+        json!({
+            "subject": "alice",
+            "type_name": "conclusion",
+            "properties": {"cpu_is_high": true},
+            "sources": [a_koid],
+            "operation": "inference",
+            "reason": "elevated cpu"
+        }),
+    );
+    let d_koid = d["koid"].as_str().unwrap().to_string();
+
+    // 4. contradict: counter + persisted Conflict KO; original untouched.
+    let cc = c.call_tool(
+        "contradict",
+        json!({
+            "subject": "alice",
+            "claim": a_koid,
+            "properties": {"env": "prod", "cpu": 87},
+            "authority": "documentation",
+            "evidence": [{"source_artifact": "ops-runbook", "method": "doc_extraction"}]
+        }),
+    );
+    let counter_koid = cc["counter"].as_str().unwrap().to_string();
+    let conflict_koid = cc["conflict"].as_str().unwrap().to_string();
+    let ako = c.call_tool("get", json!({"subject": "alice", "koid": a_koid}));
+    assert_eq!(ako["extensions"]["epistemic_status"], "asserted");
+    let cko = c.call_tool("get", json!({"subject": "alice", "koid": conflict_koid}));
+    assert_eq!(cko["type_name"], "aikoql:conflict");
+    assert_eq!(cko["extensions"]["resolution"], "unresolved");
+    assert_eq!(cko["properties"]["claim_a"], a_koid.as_str());
+    assert_eq!(cko["properties"]["claim_b"], counter_koid.as_str());
+    // Per-assertion snapshots carry each side's authority + evidence.
+    assert_eq!(
+        cko["extensions"]["assertions"]["a"]["authority"],
+        "source_code"
+    );
+    assert_eq!(
+        cko["extensions"]["assertions"]["b"]["authority"],
+        "documentation"
+    );
+
+    // 5. resolve_conflict_by_authority: source_code (7) beats documentation
+    // (3) — the kernel ranks, the losing claim becomes Contradicted.
+    let res = c.call_tool(
+        "resolve_conflict_by_authority",
+        json!({
+            "subject": "alice",
+            "koid": conflict_koid,
+            "rationale": "code is ground truth"
+        }),
+    );
+    assert_eq!(res["decision"], "resolved_a_preferred");
+    assert_eq!(res["effects"].as_array().unwrap().len(), 1);
+    assert_eq!(res["effects"][0]["koid"], counter_koid.as_str());
+    assert_eq!(res["effects"][0]["status"], "contradicted");
+    let rko = c.call_tool("get", json!({"subject": "alice", "koid": conflict_koid}));
+    assert_eq!(rko["extensions"]["resolution"], "resolved_a_preferred");
+    assert_eq!(
+        rko["extensions"]["resolution_rationale"],
+        "code is ground truth"
+    );
+
+    // 6. supersede: old preserved + Superseded, dependent swept for staleness.
+    let s = c.call_tool(
+        "supersede",
+        json!({
+            "subject": "alice",
+            "old": a_koid,
+            "type_name": "claim",
+            "properties": {"env": "prod", "cpu": 55},
+            "evidence": [{"source_artifact": "re-measure", "method": "runtime_observation"}],
+            "reason": "new measurement"
+        }),
+    );
+    assert_eq!(s["old"], a_koid.as_str());
+    let new_koid = s["new"].as_str().unwrap().to_string();
+    assert_eq!(s["invalidated_dependents"].as_array().unwrap().len(), 1);
+    assert_eq!(s["invalidated_dependents"][0], d_koid.as_str());
+    let ako = c.call_tool("get", json!({"subject": "alice", "koid": a_koid}));
+    assert_eq!(ako["extensions"]["epistemic_status"], "superseded");
+    assert!(ako["extensions"]["valid_to"].as_u64().is_some());
+    let dko = c.call_tool("get", json!({"subject": "alice", "koid": d_koid}));
+    // Dependent: stamped invalidated, epistemic status untouched.
+    assert_eq!(dko["extensions"]["epistemic_status"], "inferred");
+    assert!(dko["extensions"]["invalidation"].is_object());
+
+    // 7. trace answers INVALIDATED WHEN / BY WHOM / WHY for the dependent.
+    let t = c.call_tool("trace", json!({"subject": "alice", "koid": d_koid}));
+    assert_eq!(t["invalidation"]["actor"], "alice");
+    assert!(t["invalidation"]["at"].as_u64().is_some());
+    assert!(!t["invalidation"]["reason"].as_str().unwrap().is_empty());
+
+    // 8. merge: first-class derivation with operation "merge".
+    let x = c.call_tool(
+        "assert_knowledge",
+        json!({
+            "subject": "alice",
+            "type_name": "claim",
+            "properties": {"region": "us"},
+            "authority": "ci_verified",
+            "evidence": [{"source_artifact": "ci-log", "method": "ci_observation"}]
+        }),
+    );
+    let x_koid = x["koid"].as_str().unwrap().to_string();
+    let m = c.call_tool(
+        "merge",
+        json!({
+            "subject": "alice",
+            "type_name": "merged",
+            "sources": [new_koid, x_koid],
+            "strategy": "newest_wins",
+            "evidence": [{"source_artifact": "merge-run", "method": "agent_analysis"}]
+        }),
+    );
+    let m_koid = m["koid"].as_str().unwrap().to_string();
+    let mko = c.call_tool("get", json!({"subject": "alice", "koid": m_koid}));
+    assert_eq!(mko["extensions"]["derivation"]["operation"], "merge");
+    assert_eq!(mko["properties"]["env"], "prod");
+    assert_eq!(mko["properties"]["region"], "us");
+
+    // 9. invalidate: target Contradicted + chain sweep in BFS order.
+    let y = c.call_tool(
+        "derive",
+        json!({
+            "subject": "alice",
+            "type_name": "conclusion",
+            "properties": {"region_is": "us"},
+            "sources": [x_koid],
+            "operation": "inference"
+        }),
+    );
+    let y_koid = y["koid"].as_str().unwrap().to_string();
+    let inv = c.call_tool(
+        "invalidate",
+        json!({
+            "subject": "alice",
+            "koid": x_koid,
+            "evidence": [{"source_artifact": "refuting-observation", "method": "runtime_observation"}],
+            "reason": "premise refuted"
+        }),
+    );
+    // x has TWO derived dependents: y (step 9) and the merged KO m (step 8,
+    // which folds x as a source) — both must be swept, plus the target.
+    assert_eq!(inv["invalidated"].as_array().unwrap().len(), 3);
+    assert_eq!(inv["invalidated"][0], x_koid.as_str());
+    let swept: Vec<&str> = inv["invalidated"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(swept.contains(&y_koid.as_str()) && swept.contains(&m_koid.as_str()));
+    let xko = c.call_tool("get", json!({"subject": "alice", "koid": x_koid}));
+    assert_eq!(xko["extensions"]["epistemic_status"], "contradicted");
+    assert_eq!(
+        xko["extensions"]["invalidation"]["reason"],
+        "premise refuted"
+    );
+    let yko = c.call_tool("get", json!({"subject": "alice", "koid": y_koid}));
+    assert_eq!(yko["extensions"]["epistemic_status"], "inferred");
+    assert!(yko["extensions"]["invalidation"].is_object());
+    let mko2 = c.call_tool("get", json!({"subject": "alice", "koid": m_koid}));
+    assert!(mko2["extensions"]["invalidation"].is_object());
+
+    // 10. Anti-CRUD-cosplay at the protocol boundary: unbacked operations
+    // fail (raw request — call_tool would panic on tool errors).
+    for (name, arguments) in [
+        (
+            "observe",
+            json!({"subject": "alice", "type_name": "sighting", "properties": {"temp": 1}}),
+        ),
+        (
+            "assert_knowledge",
+            json!({"subject": "alice", "type_name": "claim", "properties": {"x": 1}, "authority": "source_code"}),
+        ),
+        (
+            "verify_knowledge",
+            json!({"subject": "alice", "koid": o_koid}),
+        ),
+        ("invalidate", json!({"subject": "alice", "koid": m_koid})),
+    ] {
+        let bad = c.request("tools/call", json!({"name": name, "arguments": arguments}));
+        assert_eq!(
+            bad.get("isError").and_then(|b| b.as_bool()),
+            Some(true),
+            "{} without evidence must fail",
+            name
+        );
+    }
+
+    // 11. Authority tie: an explicit decision is required — never a silent
+    // pick (raw request; resolve_conflict_by_authority must fail).
+    let t1 = c.call_tool(
+        "assert_knowledge",
+        json!({
+            "subject": "alice",
+            "type_name": "claim",
+            "properties": {"p": 1},
+            "authority": "documentation",
+            "evidence": [{"source_artifact": "doc-a", "method": "doc_extraction"}]
+        }),
+    );
+    let t1_koid = t1["koid"].as_str().unwrap().to_string();
+    let tc = c.call_tool(
+        "contradict",
+        json!({
+            "subject": "alice",
+            "claim": t1_koid,
+            "properties": {"p": 2},
+            "authority": "documentation",
+            "evidence": [{"source_artifact": "doc-b", "method": "doc_extraction"}]
+        }),
+    );
+    let tie_conflict = tc["conflict"].as_str().unwrap().to_string();
+    let tie = c.request(
+        "tools/call",
+        json!({
+            "name": "resolve_conflict_by_authority",
+            "arguments": {
+                "subject": "alice",
+                "koid": tie_conflict,
+                "rationale": "rank"
+            }
+        }),
+    );
+    assert_eq!(tie.get("isError").and_then(|b| b.as_bool()), Some(true));
+
+    let _ = std::fs::remove_file(&db);
+}
