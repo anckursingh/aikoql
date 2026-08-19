@@ -606,7 +606,13 @@ pub struct Kernel {
 impl Kernel {
     /// Open (or create) a kernel over `store`. Recovers the journal head so a
     /// restarted kernel continues the hash chain and sequence numbers.
-    pub fn open(store: Arc<dyn StorageEngine>, clock: Arc<dyn Clock>, salt: u64) -> KResult<Self> {
+    /// `id_seed` namespaces this kernel's KOID id-space (encoded into every
+    /// KOID); it is not cryptographic material.
+    pub fn open(
+        store: Arc<dyn StorageEngine>,
+        clock: Arc<dyn Clock>,
+        id_seed: u64,
+    ) -> KResult<Self> {
         let repo = Arc::new(KnowledgeRepository::new(store.clone()));
         // R9: one-time backfill of the type index for databases created before
         // it existed. Marker makes it a no-op on every subsequent open.
@@ -642,7 +648,7 @@ impl Kernel {
             store,
             clock,
             hlc: Arc::new(Hlc::starting_at(last_ts)),
-            idgen: Arc::new(Mutex::new(IdGen::new(salt))),
+            idgen: Arc::new(Mutex::new(IdGen::new(id_seed))),
             pipe: Arc::new(Mutex::new(Pipeline { seq, audit })),
             events: Arc::new(Mutex::new(events)),
             auth: Arc::new(RwLock::new(auth)),

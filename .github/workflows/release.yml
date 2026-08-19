@@ -8,6 +8,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# CodeQL actions/missing-workflow-permissions: build jobs only read the repo;
+# jobs that write (github-release, docker-*, npm-publish) declare their own
+# job-level permissions blocks below.
+permissions:
+  contents: read
+
 jobs:
   # ── Version gate: git tag is the single source of truth ─────────
   validate-versions:

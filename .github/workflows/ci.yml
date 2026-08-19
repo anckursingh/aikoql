@@ -10,6 +10,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# CodeQL actions/missing-workflow-permissions: CI only reads the repo.
+permissions:
+  contents: read
+
 jobs:
   check:
     name: Check + Test (Windows)

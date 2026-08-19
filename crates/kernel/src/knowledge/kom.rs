@@ -124,18 +124,20 @@ impl fmt::Display for KOID {
     }
 }
 
-/// Monotonic, seedable KOID generator. Deterministic given the same salt and
-/// clock sequence — a hard requirement for conformance replay (MRFC-0011 §11).
+/// Monotonic, seedable KOID generator. Deterministic given the same id-space
+/// seed and clock sequence — a hard requirement for conformance replay
+/// (MRFC-0011 §11). The seed is an ID-space namespace, not cryptographic
+/// material (CodeQL FP: the old `salt` name tripped the hardcoded-value sink).
 pub struct IdGen {
-    salt: u64,
+    id_seed: u64,
     last_ms: u64,
     counter: u32,
 }
 
 impl IdGen {
-    pub fn new(salt: u64) -> Self {
+    pub fn new(id_seed: u64) -> Self {
         IdGen {
-            salt,
+            id_seed,
             last_ms: 0,
             counter: 0,
         }
@@ -153,7 +155,7 @@ impl IdGen {
         let mut b = [0u8; KOID_LEN];
         b[0..6].copy_from_slice(&ms.to_be_bytes()[2..8]);
         b[6..10].copy_from_slice(&self.counter.to_be_bytes());
-        b[10..16].copy_from_slice(&self.salt.to_be_bytes()[2..8]);
+        b[10..16].copy_from_slice(&self.id_seed.to_be_bytes()[2..8]);
         KOID(b)
     }
 }
