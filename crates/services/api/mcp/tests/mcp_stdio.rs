@@ -1712,3 +1712,159 @@ fn k4_knowledge_transactions_end_to_end() {
 
     let _ = std::fs::remove_file(&db);
 }
+
+// --- v0.3 K5: Agent Experience ---
+
+#[test]
+fn k5_experience_reuse_end_to_end() {
+    let db = tmp_db("k5");
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "k5", "version": "0"}}));
+    c.notify("notifications/initialized");
+
+    // 1. record_experience: evidence mandatory at the protocol boundary.
+    let bad = c.request(
+        "tools/call",
+        json!({
+            "name": "record_experience",
+            "arguments": {
+                "subject": "alice",
+                "goal": "refactor the rust parser",
+                "action": "split the lexer",
+                "outcome": "tests green"
+            }
+        }),
+    );
+    assert_eq!(bad.get("isError").and_then(|b| b.as_bool()), Some(true));
+
+    let r = c.call_tool(
+        "record_experience",
+        json!({
+            "subject": "alice",
+            "goal": "refactor the rust parser",
+            "action": "split the lexer",
+            "outcome": "tests green",
+            "lesson": "smaller functions first",
+            "reuse_conditions": ["rust", "parser"],
+            "evidence": [{"source_artifact": "run-log", "method": "agent_analysis"}],
+            "shared_with": ["bob"]
+        }),
+    );
+    let e_koid = r["koid"].as_str().unwrap().to_string();
+    let eko = c.call_tool("get", json!({"subject": "alice", "koid": e_koid}));
+    assert_eq!(eko["type_name"], "aikoql:experience");
+    assert_eq!(eko["extensions"]["epistemic_status"], "asserted");
+    assert_eq!(eko["extensions"]["authority"], "agent_derived");
+    assert!(eko["extensions"]["valid_to"].as_u64().is_some());
+    assert_eq!(eko["extensions"]["confidence"]["score"], 0.5);
+
+    // 2. Cross-agent reuse: bob matches only when ALL condition tokens
+    // appear; a stranger with no ACL grant sees nothing.
+    let m = c.call_tool(
+        "find_experiences",
+        json!({"subject": "bob", "task": "please refactor the rust parser again"}),
+    );
+    assert_eq!(m["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(m["matches"][0]["koid"], e_koid.as_str());
+    assert_eq!(m["matches"][0]["actor"], "alice");
+    let none = c.call_tool(
+        "find_experiences",
+        json!({"subject": "bob", "task": "refactor something else entirely"}),
+    );
+    assert_eq!(none["matches"].as_array().unwrap().len(), 0);
+    let stranger = c.call_tool(
+        "find_experiences",
+        json!({"subject": "carol", "task": "please refactor the rust parser again"}),
+    );
+    assert_eq!(stranger["matches"].as_array().unwrap().len(), 0);
+
+    // 3. compile_context injects the experiences section for a matching task.
+    let kb = c.call_tool(
+        "remember",
+        json!({
+            "subject": "bob",
+            "type_name": "knowledge_doc",
+            "properties": {"ir_json": "{\"entities\":[],\"relations\":[],\"facts\":[],\"events\":[],\"temporal\":[],\"document_id\":null,\"page_count\":0,\"extractor\":\"\"}"}
+        }),
+    );
+    let kb_koid = kb["koid"].as_str().unwrap().to_string();
+    let ctx_pkg = c.call_tool(
+        "compile_context",
+        json!({"subject": "bob", "koid": kb_koid, "task": "refactor the rust parser"}),
+    );
+    assert!(ctx_pkg["context_markdown"]
+        .as_str()
+        .unwrap()
+        .contains("Previous Agent Experience"));
+    assert_eq!(ctx_pkg["experiences"].as_array().unwrap().len(), 1);
+    assert_eq!(ctx_pkg["experiences"][0]["koid"], e_koid.as_str());
+    let ctx_none = c.call_tool(
+        "compile_context",
+        json!({"subject": "bob", "koid": kb_koid, "task": "paint the bikeshed"}),
+    );
+    assert_eq!(ctx_none["experiences"].as_array().unwrap().len(), 0);
+
+    // 4. agent_memory TTL enforcement: ttl=0 is dropped at read.
+    c.call_tool(
+        "agent_memory",
+        json!({"subject": "alice", "agent_id": "alice", "key": "gone", "value": "expired", "ttl": 0}),
+    );
+    c.call_tool(
+        "agent_memory",
+        json!({"subject": "alice", "agent_id": "alice", "key": "live", "value": "alive", "ttl": 3600}),
+    );
+    let mem = c.call_tool(
+        "agent_memory",
+        json!({"subject": "alice", "agent_id": "alice"}),
+    );
+    assert_eq!(mem["count"], 1);
+    assert_eq!(mem["expired_dropped"], 1);
+    assert_eq!(mem["memories"][0]["key"], "live");
+
+    // 5. execute_agent captures the run as an experience (non-fatal hook).
+    c.call_tool(
+        "deploy_program",
+        json!({
+            "name": "FindEngPeople",
+            "body": "MATCH Person WHERE dept == \"Eng\" RETURN name",
+            "language": "aikoql",
+            "subject": "tester"
+        }),
+    );
+    let agent = c.call_tool(
+        "deploy_agent",
+        json!({
+            "name": "HRAssistant",
+            "prompt": "You help find people in the org.",
+            "skills": ["FindEngPeople"],
+            "tools": [],
+            "policies": [],
+            "subject": "tester"
+        }),
+    );
+    let agent_koid = agent["koid"].as_str().unwrap();
+    let result = c.call_tool(
+        "execute_agent",
+        json!({"koid": agent_koid, "subject": "tester"}),
+    );
+    let log = result["execution_log"].as_array().unwrap();
+    let log_text = log
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        log_text.contains("experience captured:"),
+        "run outcome should be captured, got: {}",
+        log_text
+    );
+    // The capture is visible to the executor as a reusable experience.
+    let own = c.call_tool(
+        "find_experiences",
+        json!({"subject": "tester", "task": "find people in the org"}),
+    );
+    assert_eq!(own["matches"].as_array().unwrap().len(), 1);
+    assert_eq!(own["matches"][0]["actor"], "tester");
+
+    let _ = std::fs::remove_file(&db);
+}

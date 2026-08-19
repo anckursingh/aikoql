@@ -511,3 +511,93 @@ pub(crate) fn tool_get(k: &Kernel, args: &J) -> Result<J, String> {
         .map_err(|e| e.to_string())?;
     Ok(ko_json(&ko))
 }
+
+// ---------------------------------------------------------------------------
+// v0.3 K5 — Agent Experience
+// ---------------------------------------------------------------------------
+
+fn string_array(args: &J, key: &str) -> Vec<String> {
+    args.get(key)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn tool_record_experience(k: &Kernel, args: &J) -> Result<J, String> {
+    let goal = args
+        .get("goal")
+        .and_then(|g| g.as_str())
+        .ok_or("missing argument: goal")?;
+    let action = args
+        .get("action")
+        .and_then(|a| a.as_str())
+        .ok_or("missing argument: action")?;
+    let outcome = args
+        .get("outcome")
+        .and_then(|o| o.as_str())
+        .ok_or("missing argument: outcome")?;
+    let mut req = ExperienceRequest::new(subject_of(args), goal, action, outcome);
+    if let Some(a) = args.get("actor").and_then(|a| a.as_str()) {
+        req.actor = a.into();
+    }
+    req.preconditions = string_array(args, "preconditions");
+    req.causal_explanation = args
+        .get("causal_explanation")
+        .and_then(|c| c.as_str())
+        .map(String::from);
+    req.lesson = args
+        .get("lesson")
+        .and_then(|l| l.as_str())
+        .map(String::from);
+    req.reuse_conditions = string_array(args, "reuse_conditions");
+    req.evidence = parse_evidence(args)?;
+    req.confidence = args
+        .get("confidence")
+        .and_then(|c| c.as_f64())
+        .map(|c| c as f32);
+    req.ttl_seconds = args.get("ttl_seconds").and_then(|t| t.as_u64());
+    req.shared_with = string_array(args, "shared_with");
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.record_experience(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts
+    }))
+}
+
+pub(crate) fn tool_find_experiences(k: &Kernel, args: &J) -> Result<J, String> {
+    let task = args
+        .get("task")
+        .and_then(|t| t.as_str())
+        .ok_or("missing argument: task")?;
+    let limit = args
+        .get("limit")
+        .and_then(|l| l.as_u64())
+        .unwrap_or(5)
+        .min(50) as usize;
+    let matches = k
+        .match_experiences(subject_of(args), task, limit)
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "task": task,
+        "matches": matches
+            .iter()
+            .map(|(ko, score)| json!({
+                "koid": ko.koid.to_hex(),
+                "score": score,
+                "actor": ko.properties.get("actor").map(value_to_json),
+                "goal": ko.properties.get("goal").map(value_to_json),
+                "action": ko.properties.get("action").map(value_to_json),
+                "outcome": ko.properties.get("outcome").map(value_to_json),
+                "lesson": ko.properties.get("lesson").map(value_to_json),
+                "confidence": ko.confidence_context().map(|c| c.score)
+            }))
+            .collect::<Vec<_>>()
+    }))
+}

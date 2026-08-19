@@ -21,6 +21,13 @@
 //! Composite ops preflight everything (heads, versions, transitions, ACL)
 //! before the first commit, then commit sequentially under the pipe lock —
 //! the same validate-then-commit transaction discipline as `transact()`.
+//!
+//! v0.3 K5 adds the agent-experience pair:
+//! - `record_experience`: an execution outcome captured as a first-class
+//!   `aikoql:experience` KO (agent_derived authority, evidence mandatory,
+//!   TTL-bounded valid time, confidence context);
+//! - `match_experiences`: reuse-condition gating over an ACL-filtered scan,
+//!   confidence-weighted ranking, expired/invalidated experiences filtered.
 
 use super::*;
 use crate::knowledge::evidence::Evidence;
@@ -1199,5 +1206,292 @@ impl Kernel {
             out.push(k);
         }
         Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
+    // v0.3 K5 — Agent Experience
+    // -----------------------------------------------------------------------
+
+    /// Record an agent execution outcome as a first-class KO
+    /// (`aikoql:experience`). The kernel stamps status "asserted", authority
+    /// "agent_derived" (a run outcome is evidence for that run, never a
+    /// verified claim), the confidence context, and a valid-to bound from the
+    /// TTL. Evidence is mandatory, same as every other knowledge op — an
+    /// outcome nobody observed is not knowledge. Cross-agent reuse is opt-in
+    /// via `shared_with` (Read Allow ACL entries); by default only the actor
+    /// can match against it.
+    pub fn record_experience(&self, req: ExperienceRequest) -> KResult<Remembered> {
+        require_evidence(&req.evidence)?;
+        if req.goal.trim().is_empty()
+            || req.action.trim().is_empty()
+            || req.outcome.trim().is_empty()
+        {
+            return Err(KError::InvalidObject(
+                "an experience requires a goal, an action and an outcome".into(),
+            ));
+        }
+        let at = self.clock_now();
+        let ttl = req.ttl_seconds.unwrap_or(30 * 24 * 3600);
+        let confidence = ConfidenceContext {
+            score: req.confidence.unwrap_or(0.5).clamp(0.0, 1.0),
+            confirmations: 0,
+            last_verified: None,
+        };
+        let mut extensions = ExtensionMap::new();
+        extensions.insert(
+            KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
+            Value::Text("asserted".into()),
+        );
+        extensions.insert("authority".into(), Value::Text("agent_derived".into()));
+        extensions.insert(
+            KnowledgeObject::EXT_EVIDENCE.into(),
+            evidence_value(&req.evidence),
+        );
+        extensions.insert(
+            KnowledgeObject::EXT_VALID_FROM.into(),
+            Value::Int(at as i64),
+        );
+        extensions.insert(
+            KnowledgeObject::EXT_VALID_TO.into(),
+            Value::Int((at + ttl * 1000) as i64),
+        );
+        extensions.insert(
+            KnowledgeObject::EXT_CONFIDENCE.into(),
+            confidence_to_value(&confidence),
+        );
+
+        let mut properties = PropertyMap::new();
+        properties.insert("actor".into(), Value::Text(req.actor));
+        properties.insert("goal".into(), Value::Text(req.goal));
+        properties.insert("action".into(), Value::Text(req.action));
+        properties.insert("outcome".into(), Value::Text(req.outcome));
+        if !req.preconditions.is_empty() {
+            properties.insert(
+                "preconditions".into(),
+                Value::List(req.preconditions.into_iter().map(Value::Text).collect()),
+            );
+        }
+        if let Some(c) = req.causal_explanation {
+            properties.insert("causal_explanation".into(), Value::Text(c));
+        }
+        if let Some(l) = req.lesson {
+            properties.insert("lesson".into(), Value::Text(l));
+        }
+        if !req.reuse_conditions.is_empty() {
+            properties.insert(
+                "reuse_conditions".into(),
+                Value::List(req.reuse_conditions.into_iter().map(Value::Text).collect()),
+            );
+        }
+
+        let mut acl = Vec::new();
+        for principal in &req.shared_with {
+            acl.push(AclEntry {
+                principal: principal.clone(),
+                action: Action::Read,
+                effect: Effect::Allow,
+            });
+        }
+        let security = if acl.is_empty() {
+            None
+        } else {
+            Some(SecurityDescriptor {
+                owner: req.context.subject.name.clone(),
+                acl,
+                classification: None,
+            })
+        };
+
+        let rr = RememberRequest {
+            context: req.context.clone(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "aikoql:experience".into(),
+                tenant: req.context.tenant.clone(),
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties,
+            semantic: None,
+            relationships: vec![],
+            security,
+            extensions,
+            origin: Origin::Agent(req.context.subject.name.clone()),
+            note: req.note,
+            referential_policy: ReferentialPolicy::default(),
+        };
+        self.remember(rr)
+    }
+
+    /// Match recorded experiences against a task description for reuse.
+    ///
+    /// Eligibility gate: with `reuse_conditions`, EVERY condition token must
+    /// occur in the task tokens; without them, at least one goal token must
+    /// overlap. Ranking: confidence-weighted overlap (condition mode is
+    /// all-or-nothing, so its overlap is 1.0 and the score is the
+    /// confidence). Expired, invalidated and superseded experiences are
+    /// filtered out by `valid_at(now)` plus the invalidation stamp.
+    ///
+    /// The scan is ACL-filtered: an agent only ever matches experiences it is
+    /// allowed to read, which is what makes `shared_with` the reuse boundary.
+    pub fn match_experiences(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        task: &str,
+        limit: usize,
+    ) -> KResult<Vec<(KnowledgeObject, f32)>> {
+        let ctx = ctx.into();
+        let now = self.clock_now();
+        let task_tokens = tokenize(task);
+        let mut scored = Vec::new();
+        for ko in self.scan_by_type(&ctx.subject, "aikoql:experience")? {
+            if !ko.valid_at(now) || ko.invalidation().is_some() {
+                continue;
+            }
+            let conditions = string_list(&ko.properties, "reuse_conditions").unwrap_or_default();
+            let (eligible, overlap) = if conditions.is_empty() {
+                let goal_tokens = tokenize(&prop_text(&ko.properties, "goal"));
+                if goal_tokens.is_empty() {
+                    continue;
+                }
+                let hits = goal_tokens
+                    .iter()
+                    .filter(|t| task_tokens.contains(*t))
+                    .count();
+                (hits > 0, hits as f32 / goal_tokens.len() as f32)
+            } else {
+                let mut needed: Vec<String> = Vec::new();
+                for c in &conditions {
+                    needed.extend(tokenize(c));
+                }
+                // Conditions that carry no tokens fail closed: an unreadable
+                // gate must never open.
+                if needed.is_empty() {
+                    continue;
+                }
+                let hits = needed.iter().filter(|t| task_tokens.contains(*t)).count();
+                (hits == needed.len(), hits as f32 / needed.len() as f32)
+            };
+            if !eligible {
+                continue;
+            }
+            let confidence = ko
+                .confidence_context()
+                .map(|c| c.score.clamp(0.0, 1.0))
+                .unwrap_or(0.0);
+            let score = confidence * overlap;
+            if score > 0.0 {
+                scored.push((ko, score));
+            }
+        }
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        scored.truncate(limit);
+        Ok(scored)
+    }
+}
+
+/// A captured agent execution outcome (`aikoql:experience`), for reuse
+/// matching by later tasks.
+pub struct ExperienceRequest {
+    pub context: KnowledgeContext,
+    /// Which agent the experience belongs to (properties.actor).
+    pub actor: String,
+    /// What the run was trying to achieve. Required.
+    pub goal: String,
+    /// What the agent did. Required.
+    pub action: String,
+    /// What happened. Required.
+    pub outcome: String,
+    /// Preconditions that held when this experience was earned.
+    pub preconditions: Vec<String>,
+    /// Why the action produced the outcome.
+    pub causal_explanation: Option<String>,
+    /// The distilled lesson.
+    pub lesson: Option<String>,
+    /// Tokens that must ALL appear in a new task before this experience may
+    /// be reused. Empty means "reuse when the goal overlaps".
+    pub reuse_conditions: Vec<String>,
+    pub evidence: Vec<Evidence>,
+    /// Confidence override. Defaults to 0.5 with 0 confirmations — a fresh
+    /// capture is a hypothesis about the world, never full confidence.
+    pub confidence: Option<f32>,
+    /// Experience lifetime in seconds. Defaults to 30 days.
+    pub ttl_seconds: Option<u64>,
+    /// Other principals allowed to read (and therefore reuse) this experience.
+    pub shared_with: Vec<String>,
+    pub note: Option<String>,
+}
+
+impl ExperienceRequest {
+    pub fn new(
+        context: impl Into<KnowledgeContext>,
+        goal: impl Into<String>,
+        action: impl Into<String>,
+        outcome: impl Into<String>,
+    ) -> Self {
+        let context = context.into();
+        let actor = context.subject.name.clone();
+        ExperienceRequest {
+            context,
+            actor,
+            goal: goal.into(),
+            action: action.into(),
+            outcome: outcome.into(),
+            preconditions: Vec::new(),
+            causal_explanation: None,
+            lesson: None,
+            reuse_conditions: Vec::new(),
+            evidence: Vec::new(),
+            confidence: None,
+            ttl_seconds: None,
+            shared_with: Vec::new(),
+            note: None,
+        }
+    }
+}
+
+/// Lowercase alphanumeric runs — the same token boundary as the context
+/// compiler's tokenizer, kept dependency-free for the kernel. Common English
+/// function words are dropped from both sides: without this the goal-overlap
+/// gate would match on "the"/"and" and let every experience through.
+fn tokenize(text: &str) -> HashSet<String> {
+    const STOPWORDS: &[&str] = &[
+        "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "has", "have", "in",
+        "into", "is", "it", "its", "of", "on", "or", "that", "the", "their", "these", "this",
+        "those", "to", "was", "we", "were", "what", "when", "where", "which", "while", "with",
+        "would", "you", "your",
+    ];
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty() && !STOPWORDS.contains(t))
+        .map(|t| t.to_string())
+        .collect()
+}
+
+/// Property as a string list (List of Text, or a single Text). None when the
+/// property is absent or of another shape.
+fn string_list(props: &PropertyMap, key: &str) -> Option<Vec<String>> {
+    match props.get(key)? {
+        Value::List(items) => Some(
+            items
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Text(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect(),
+        ),
+        Value::Text(s) => Some(vec![s.clone()]),
+        _ => None,
+    }
+}
+
+/// Property text, empty when absent.
+fn prop_text(props: &PropertyMap, key: &str) -> String {
+    match props.get(key) {
+        Some(Value::Text(s)) => s.clone(),
+        _ => String::new(),
     }
 }

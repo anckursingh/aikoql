@@ -58,8 +58,29 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
     let all = kernel
         .scan_by_type(&subject, "aikoql:memory")
         .map_err(|e| e.to_string())?;
+    // v0.3 K5: TTL is now enforced on the read path — a memory whose
+    // commit_ts + ttl has passed is dropped from the result, never returned
+    // as if it were still live. commit_ts packs HLC millis in the high bits.
+    let now = kernel.clock_now();
+    let mut expired_dropped = 0usize;
     let memories: Vec<J> = all.iter()
         .filter(|ko| ko.properties.get("agent_id") == Some(&Value::Text(agent_id.to_string())))
+        .filter(|ko| {
+            let ttl_ms = ko
+                .properties
+                .get("ttl")
+                .and_then(|v| match v {
+                    Value::Int(i) => Some((*i).max(0) as u64),
+                    _ => None,
+                })
+                .unwrap_or(3600)
+                * 1000;
+            let alive = (ko.commit_ts >> 16) + ttl_ms > now;
+            if !alive {
+                expired_dropped += 1;
+            }
+            alive
+        })
         .map(|ko| json!({
             "koid": ko.koid.to_hex(),
             "key": ko.properties.get("key").and_then(|v| match v { Value::Text(s) => Some(s.as_str()), _ => None }),
@@ -67,7 +88,11 @@ pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> 
             "ttl": ko.properties.get("ttl").and_then(|v| match v { Value::Int(i) => Some(i), _ => None }),
         }))
         .collect();
-    Ok(json!({"memories": memories, "count": memories.len()}))
+    Ok(json!({
+        "memories": memories,
+        "count": memories.len(),
+        "expired_dropped": expired_dropped
+    }))
 }
 
 // ---- Memory Tools (MRFC-0070) ------------------------------------------

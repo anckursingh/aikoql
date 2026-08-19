@@ -139,10 +139,10 @@ pub use storage::store_redb::RedbEngine;
 pub use transaction::kernel::{
     AssertionRequest, Clock, ComplianceReport, ConflictResolutionOutcome,
     ConflictResolutionRequest, ContradictionRequest, ContradictionResult, DeriveRequest,
-    EventFilter, Evolved, Explanation, ForgetMode, Forgotten, Fusion, InvalidationRequest,
-    InvalidationResult, Kernel, KnowledgeContext, Lineage, ManualClock, MergeRequest,
-    MergeStrategy, ObservationRequest, OfflineProof, Proof, PropertyFilter, RememberRequest,
-    Remembered, ScoredKO, SimilarityQuery, Subject, SubscriptionRecord, SupersedeRequest,
-    SupersedeResult, SystemClock, TransactionOp, VerificationRequest, VerificationResult,
-    VersionRecord,
+    EventFilter, Evolved, ExperienceRequest, Explanation, ForgetMode, Forgotten, Fusion,
+    InvalidationRequest, InvalidationResult, Kernel, KnowledgeContext, Lineage, ManualClock,
+    MergeRequest, MergeStrategy, ObservationRequest, OfflineProof, Proof, PropertyFilter,
+    RememberRequest, Remembered, ScoredKO, SimilarityQuery, Subject, SubscriptionRecord,
+    SupersedeRequest, SupersedeResult, SystemClock, TransactionOp, VerificationRequest,
+    VerificationResult, VersionRecord,
 };
