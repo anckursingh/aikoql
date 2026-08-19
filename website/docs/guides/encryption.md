@@ -53,16 +53,30 @@ Wrong passphrase on open → `InvalidPassphrase` and the server exits. There is 
 
 ```
 Key Encryption Key (KEK)          — aikoql.key (v2 envelope, 88 bytes)
-    ↓ wraps
-Data Encryption Keys (DEKs)       — per-tenant, wrapped by KEK, persisted in the store
-    ↓ encrypt
-Field ciphertext                  — version || nonce || ciphertext || tag
+    ↓ HKDF-SHA256 domain separation
++-- aikoql/dek-wrap/v1            — wraps per-tenant DEKs
++-- aikoql/store/v1               — whole-store encryption key
++-- aikoql/field/v1               — field-level encryption key
 ```
 
 - The KEK wraps per-tenant Data Encryption Keys (DEKs); each tenant gets a unique DEK for key isolation.
+- Every key purpose is **domain-separated** through HKDF-SHA256 (RFC 5869, empty salt — the inputs are uniform 32-byte keys): the KEK is never used raw for two purposes, and each DEK is never reused across purposes. One key compromise cannot spread across purposes.
 - Wrapped DEKs are **persisted inside the encrypted store**, so field-encrypted data survives restarts — a fresh boot decrypts with the same KEK + passphrase.
 - `aikoql keygen` writes the v2 envelope. Legacy v1 key files (48 bytes) auto-migrate on first use.
 - Key audit events (creation, usage, failure) are logged to an append-only audit log.
+
+## Crypto Versioning
+
+The first encrypted open stamps a crypto-meta record (`__encryption__/meta`) into the store describing the exact derivation scheme:
+
+```text
+aikoql/crypto/v1 kdf=argon2id-v1 wrap=hkdf-sha256/dek-wrap/v1
+                  store=hkdf-sha256/store/v1 field=hkdf-sha256/field/v1
+```
+
+Every later open verifies it. A record it does not recognize is an **explicit error — aikoql never guesses crypto versions.** This is what makes future crypto migrations (KDF upgrades, cipher changes) possible without rewriting the whole database.
+
+Fail-closed guarantees: wrong passphrase → `InvalidPassphrase`; corrupt DEK record → open fails (no silent fresh-DEK mint that orphans ciphertext); tampered field ciphertext → AEAD authentication failure (no phantom plaintext).
 
 ## Field-Level Encryption
 

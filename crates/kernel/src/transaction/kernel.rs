@@ -31,7 +31,7 @@ use crate::object::ObjectManager;
 use crate::relationship::RelationshipManager;
 use crate::security::auth::{AuthManager, POLICY_TYPE, ROLE_TYPE};
 use crate::security::crypto::Crypto;
-use crate::security::envelope::{Envelope, DEKS_STORAGE_KEY};
+use crate::security::envelope::{Envelope, CRYPTO_META_KEY, CRYPTO_META_V1, DEKS_STORAGE_KEY};
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
 use crate::security::tenant::TenantManager;
 use crate::storage::repository::KnowledgeRepository;
@@ -688,6 +688,23 @@ impl Kernel {
         crypto: Arc<Crypto>,
         envelope: Arc<Envelope>,
     ) -> KResult<Self> {
+        // Crypto-version metadata: written on first open, verified on every
+        // later open. An unknown record fails closed — we never silently
+        // guess key material against a different crypto scheme.
+        if let Some(meta) = self.store.get(CRYPTO_META_KEY)? {
+            if meta != CRYPTO_META_V1 {
+                return Err(KError::Store(format!(
+                    "unsupported crypto metadata version: {:?}",
+                    String::from_utf8_lossy(&meta)
+                )));
+            }
+        } else {
+            let mut batch = WriteBatch::new();
+            batch.put(CRYPTO_META_KEY.to_vec(), CRYPTO_META_V1.to_vec());
+            self.store
+                .write_batch(&batch)
+                .map_err(|e| KError::Store(format!("crypto meta persist: {}", e)))?;
+        }
         if let Some(raw) = self.store.get(DEKS_STORAGE_KEY)? {
             let deks = Envelope::decode_wrapped_deks(&raw)
                 .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
@@ -1941,6 +1958,14 @@ impl Kernel {
     /// lands an `EpistemicChanged` event in the audit chain. Transitions
     /// create evidence: the history entry records from/to, wall-clock,
     /// actor, and reason.
+    ///
+    /// Library-level primitive — NOT exposed through any protocol surface
+    /// (MCP/REST/shell): agents must use the semantic ops (`observe`,
+    /// `assert_knowledge`, `verify_knowledge`, `contradict`, `supersede`,
+    /// `merge`, `invalidate`, `resolve_conflict`), which compose this
+    /// primitive with evidence validation, confidence updates, edges, and
+    /// dependent sweeps (review P0-1). Embedders building their own protocol
+    /// surfaces on the kernel accept that responsibility.
     ///
     /// v0.3 K2 supersession semantics: moving to `Superseded` ends the fact's
     /// validity now (stamps `valid_to` when absent) and, when `superseded_by`

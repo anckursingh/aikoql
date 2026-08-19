@@ -175,6 +175,12 @@ pub struct SupersedeRequest {
     pub evidence: Vec<Evidence>,
     pub reason: Option<String>,
     pub note: Option<String>,
+    /// Optional successor that already exists (e.g. asserted separately).
+    /// When set, no new KO is created: the old claim is stamped Superseded +
+    /// valid_to=now + SUPERSEDES → this KOID, the evidence is appended to the
+    /// old claim (it backs the supersession decision), and the dependent
+    /// sweep runs. The successor must exist, be readable, and be current.
+    pub superseded_by: Option<KOID>,
 }
 
 impl SupersedeRequest {
@@ -191,6 +197,7 @@ impl SupersedeRequest {
             evidence: Vec::new(),
             reason: None,
             note: None,
+            superseded_by: None,
         }
     }
 }
@@ -296,6 +303,9 @@ pub struct ConflictResolutionOutcome {
     pub decision: ConflictResolution,
     /// (koid, new epistemic status) for every claim the decision moved.
     pub effects: Vec<(KOID, EpistemicStatus)>,
+    /// Derived dependents stamped invalidated by the replacement sweep
+    /// (empty unless the decision was ResolvedReplaced).
+    pub invalidated_dependents: Vec<KOID>,
 }
 
 // ---------------------------------------------------------------------------
@@ -719,7 +729,8 @@ impl Kernel {
     // ---- supersede -------------------------------------------------------
 
     /// Replace a claim with a new generation, preserving the old. Composes
-    /// new-claim + supersession transition + dependent sweep under one lock.
+    /// new-claim (or validation of the named successor) + supersession
+    /// transition + dependent sweep under one lock.
     pub fn supersede(&self, req: SupersedeRequest) -> KResult<SupersedeResult> {
         require_evidence(&req.evidence)?;
         let ctx = req.context.clone();
@@ -736,57 +747,107 @@ impl Kernel {
                 "already superseded — supersede the successor instead".into(),
             ));
         }
-        let at = self.clock_now();
-        let mut ext = ExtensionMap::new();
-        ext.insert(
-            KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
-            Value::Text("asserted".into()),
-        );
-        ext.insert(
-            KnowledgeObject::EXT_EVIDENCE.into(),
-            evidence_value(&req.evidence),
-        );
-        ext.insert(
-            KnowledgeObject::EXT_VALID_FROM.into(),
-            Value::Int(at as i64),
-        );
-        let new = self.remember_locked(
-            &mut pipe,
-            &RememberRequest {
-                context: ctx.clone(),
-                koid: None,
-                expected_version: Some(0),
-                idempotency_key: None,
-                metadata: Metadata {
-                    type_name: req.type_name,
-                    tenant: ctx.tenant.clone(),
-                    schema_version: 1,
-                    tags: vec![],
-                },
-                properties: req.properties,
-                semantic: None,
-                relationships: vec![],
-                security: None,
-                extensions: ext,
-                origin: Origin::Agent(ctx.subject.name.clone()),
-                note: req.note,
-                referential_policy: ReferentialPolicy::default(),
-            },
-        )?;
+        // Successor: an existing KO named by the caller (superseded_by) or a
+        // fresh generation created right here.
+        let successor = match req.superseded_by {
+            Some(s) => {
+                self.validate_successor(&ctx, s)?;
+                s
+            }
+            None => {
+                let at = self.clock_now();
+                let mut ext = ExtensionMap::new();
+                ext.insert(
+                    KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
+                    Value::Text("asserted".into()),
+                );
+                ext.insert(
+                    KnowledgeObject::EXT_EVIDENCE.into(),
+                    evidence_value(&req.evidence),
+                );
+                ext.insert(
+                    KnowledgeObject::EXT_VALID_FROM.into(),
+                    Value::Int(at as i64),
+                );
+                self.remember_locked(
+                    &mut pipe,
+                    &RememberRequest {
+                        context: ctx.clone(),
+                        koid: None,
+                        expected_version: Some(0),
+                        idempotency_key: None,
+                        metadata: Metadata {
+                            type_name: req.type_name,
+                            tenant: ctx.tenant.clone(),
+                            schema_version: 1,
+                            tags: vec![],
+                        },
+                        properties: req.properties,
+                        semantic: None,
+                        relationships: vec![],
+                        security: None,
+                        extensions: ext,
+                        origin: Origin::Agent(ctx.subject.name.clone()),
+                        note: req.note,
+                        referential_policy: ReferentialPolicy::default(),
+                    },
+                )?
+                .koid
+            }
+        };
         let reason = req
             .reason
             .clone()
-            .unwrap_or_else(|| format!("superseded by {}", new.koid.to_hex()));
+            .unwrap_or_else(|| format!("superseded by {}", successor.to_hex()));
         self.transition_epistemic_locked(
             &mut pipe,
             &ctx,
             &req.old,
             EpistemicStatus::Superseded,
             Origin::Agent(ctx.subject.name.clone()),
-            Some(new.koid),
+            Some(successor),
             Some(old.version),
             Some(reason.clone()),
         )?;
+        // superseded_by path: the evidence backs the supersession decision
+        // itself — append it to the old claim so it is never silently dropped
+        // (review P0-1: evidence cannot disappear on a semantic op).
+        if req.superseded_by.is_some() {
+            let new_head = self
+                .head_object(&req.old)?
+                .ok_or(KError::NotFound(req.old))?;
+            let mut extensions = new_head.extensions.clone();
+            match extensions.get(KnowledgeObject::EXT_EVIDENCE).cloned() {
+                Some(Value::List(mut existing)) => {
+                    if let Value::List(fresh) = evidence_value(&req.evidence) {
+                        existing.extend(fresh);
+                    }
+                    extensions.insert(KnowledgeObject::EXT_EVIDENCE.into(), Value::List(existing));
+                }
+                _ => {
+                    extensions.insert(
+                        KnowledgeObject::EXT_EVIDENCE.into(),
+                        evidence_value(&req.evidence),
+                    );
+                }
+            }
+            let rr = RememberRequest {
+                context: ctx.clone(),
+                koid: Some(req.old),
+                expected_version: Some(new_head.version),
+                idempotency_key: None,
+                metadata: new_head.metadata.clone(),
+                properties: new_head.properties.clone(),
+                semantic: None,
+                relationships: new_head.relationships.clone(),
+                security: None,
+                extensions,
+                origin: Origin::System,
+                note: Some(reason.clone()),
+                referential_policy: ReferentialPolicy::default(),
+            };
+            self.remember_locked(&mut pipe, &rr)?;
+        }
         let roots = self.outbound_edges(&req.old, Some(DERIVED_FROM))?;
         let invalidated = self.invalidate_dependents_locked(
             &mut pipe,
@@ -796,7 +857,7 @@ impl Kernel {
         )?;
         Ok(SupersedeResult {
             old: req.old,
-            new: new.koid,
+            new: successor,
             invalidated_dependents: invalidated,
         })
     }
@@ -967,9 +1028,10 @@ impl Kernel {
             let replacement = req.replacement.ok_or_else(|| {
                 KError::InvalidObject("ResolvedReplaced requires a replacement KO".into())
             })?;
-            if self.head_object(&replacement)?.is_none() {
-                return Err(KError::NotFound(replacement));
-            }
+            // Preflight the replacement before the lock: it must exist, be
+            // readable, and be current — superseding both claims onto a dead
+            // replacement is meaningless (re-checked under the lock).
+            self.validate_successor(&req.context, replacement)?;
         }
         let ctx = req.context.clone();
         let mut pipe = self.pipe.lock().unwrap();
@@ -996,6 +1058,7 @@ impl Kernel {
         }
         let (claim_a, claim_b) = conflict_claims(&conflict)?;
         let mut effects = Vec::new();
+        let mut invalidated_dependents: Vec<KOID> = Vec::new();
         match req.decision {
             ConflictResolution::ResolvedAPreferred => {
                 self.transition_claim_if_legal(
@@ -1004,6 +1067,7 @@ impl Kernel {
                     &claim_b,
                     EpistemicStatus::Contradicted,
                     &req.rationale,
+                    None,
                     &mut effects,
                 )?;
             }
@@ -1014,29 +1078,45 @@ impl Kernel {
                     &claim_a,
                     EpistemicStatus::Contradicted,
                     &req.rationale,
+                    None,
                     &mut effects,
                 )?;
             }
             ConflictResolution::ResolvedBothValid => {}
             ConflictResolution::ResolvedReplaced => {
                 let replacement = req.replacement.expect("preflighted above");
-                self.transition_claim_if_legal(
-                    &mut pipe,
-                    &ctx,
-                    &claim_a,
-                    EpistemicStatus::Superseded,
-                    &req.rationale,
-                    &mut effects,
-                )?;
-                self.transition_claim_if_legal(
-                    &mut pipe,
-                    &ctx,
-                    &claim_b,
-                    EpistemicStatus::Superseded,
-                    &req.rationale,
-                    &mut effects,
-                )?;
-                let _ = replacement;
+                // Re-check the replacement under the lock (a concurrent op
+                // could have invalidated it after the preflight).
+                self.validate_successor(&ctx, replacement)?;
+                // The replacement is the semantic successor of BOTH claims:
+                // reuse the supersede() machinery — transition with
+                // superseded_by → SUPERSEDES edge + valid_to=now.
+                for claim in [claim_a, claim_b] {
+                    self.transition_claim_if_legal(
+                        &mut pipe,
+                        &ctx,
+                        &claim,
+                        EpistemicStatus::Superseded,
+                        &req.rationale,
+                        Some(replacement),
+                        &mut effects,
+                    )?;
+                }
+                // Downstream knowledge derived from either claim follows the
+                // normal invalidation policy — the same sweep supersede() runs.
+                for claim in [claim_a, claim_b] {
+                    let roots = self.outbound_edges(&claim, Some(DERIVED_FROM))?;
+                    invalidated_dependents.extend(self.invalidate_dependents_locked(
+                        &mut pipe,
+                        &ctx,
+                        roots,
+                        &format!(
+                            "premise {} was superseded by conflict replacement {}",
+                            claim.to_hex(),
+                            replacement.to_hex()
+                        ),
+                    )?);
+                }
             }
             ConflictResolution::Unresolved | ConflictResolution::UnderReview => unreachable!(),
         }
@@ -1077,6 +1157,7 @@ impl Kernel {
             conflict: req.conflict,
             decision: req.decision,
             effects,
+            invalidated_dependents,
         })
     }
 
@@ -1116,8 +1197,29 @@ impl Kernel {
 
     // ---- internals -------------------------------------------------------
 
+    /// A successor for supersession must exist, be readable by the actor, and
+    /// still be current (not superseded/contradicted/invalidated).
+    fn validate_successor(&self, ctx: &KnowledgeContext, s: KOID) -> KResult<KnowledgeObject> {
+        let succ = self.head_object(&s)?.ok_or(KError::NotFound(s))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &succ, Action::Read)?;
+        if matches!(
+            succ.epistemic_status(),
+            EpistemicStatus::Superseded | EpistemicStatus::Contradicted
+        ) || succ.invalidation().is_some()
+        {
+            return Err(KError::InvalidObject(
+                "successor is no longer current (superseded/contradicted/invalidated)".into(),
+            ));
+        }
+        Ok(succ)
+    }
+
     /// Transition a claim if the state machine allows; already-dead claims
     /// (Contradicted/Superseded) are skipped, anything illegal is an error.
+    /// `superseded_by` names the successor — only legal for Superseded.
     fn transition_claim_if_legal(
         &self,
         pipe: &mut Pipeline,
@@ -1125,6 +1227,7 @@ impl Kernel {
         koid: &KOID,
         to: EpistemicStatus,
         reason: &str,
+        superseded_by: Option<KOID>,
         effects: &mut Vec<(KOID, EpistemicStatus)>,
     ) -> KResult<()> {
         let head = self.head_object(koid)?.ok_or(KError::NotFound(*koid))?;
@@ -1144,7 +1247,7 @@ impl Kernel {
             koid,
             to,
             Origin::System,
-            None,
+            superseded_by,
             Some(head.version),
             Some(reason.into()),
         )?;
@@ -1153,9 +1256,11 @@ impl Kernel {
     }
 
     /// BFS over DERIVED_FROM dependents: stamp invalidation + valid_to=now on
-    /// each. Kernel-enforced dependency effect — no per-dependent ACL (the
-    /// sweep only stamps staleness; properties are untouched). Caller holds
-    /// the pipe lock. Cycle-safe via the visited set.
+    /// each. Kernel-enforced dependency effect. Each stamp routes through
+    /// remember_locked, which authorizes Write on the dependent for the
+    /// initiating subject — fail-closed: a subject that may not write a
+    /// dependent cannot stamp it either. Caller holds the pipe lock.
+    /// Cycle-safe via the visited set.
     fn invalidate_dependents_locked(
         &self,
         pipe: &mut Pipeline,
@@ -1164,7 +1269,11 @@ impl Kernel {
         reason: &str,
     ) -> KResult<Vec<KOID>> {
         let at = self.clock_now();
-        let mut out = Vec::new();
+        // Phase 1 — collect: discover the full dependent closure WITHOUT
+        // mutating anything (review P1-7: never mutate while discovering the
+        // dependency graph). Cycle-safe via the visited set; duplicate edges
+        // collapse to one stamp; already-stamped nodes stop the walk.
+        let mut to_stamp: Vec<KOID> = Vec::new();
         let mut visited: HashSet<KOID> = HashSet::new();
         let mut queue: VecDeque<KOID> = roots.into_iter().map(|(_, k)| k).collect();
         while let Some(k) = queue.pop_front() {
@@ -1182,6 +1291,19 @@ impl Kernel {
             for (_, dep) in self.outbound_edges(&k, Some(DERIVED_FROM))? {
                 queue.push_back(dep);
             }
+            to_stamp.push(k);
+        }
+        // Phase 2 — stamp: one remember per collected dependent, re-reading
+        // the head so the expected_version is fresh. The pipe lock keeps
+        // concurrent ops out; a storage error mid-loop can still leave an
+        // earlier stamp committed (the store layer has no cross-KO
+        // transaction — documented limitation).
+        let mut out = Vec::with_capacity(to_stamp.len());
+        for k in &to_stamp {
+            let head = self.head_object(k)?.ok_or(KError::NotFound(*k))?;
+            if head.invalidation().is_some() {
+                continue; // stamped between phases — idempotent
+            }
             let mut ko = head.clone();
             ko.set_invalidated(at, &ctx.subject.name, reason);
             if ko.valid_to().is_none() {
@@ -1189,7 +1311,7 @@ impl Kernel {
             }
             let rr = RememberRequest {
                 context: ctx.clone(),
-                koid: Some(k),
+                koid: Some(*k),
                 expected_version: Some(head.version),
                 idempotency_key: None,
                 metadata: ko.metadata.clone(),
@@ -1203,7 +1325,7 @@ impl Kernel {
                 referential_policy: ReferentialPolicy::default(),
             };
             self.remember_locked(pipe, &rr)?;
-            out.push(k);
+            out.push(*k);
         }
         Ok(out)
     }

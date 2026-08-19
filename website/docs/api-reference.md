@@ -138,13 +138,11 @@ Knowledge as a versioned, evidence-backed, evolving object — not just CRUD.
 
 | MCP tool | What it does |
 |---|---|
-| `transition_epistemic` | Move a KO's epistemic status under the constrained 7-state table (`observed → asserted → verified → contradicted → superseded`); supersession stamps `valid_to` and wires the SUPERSEDES edge |
-| `derive` | Derive a new KO from premise KOs: validates sources, wires DERIVED_FROM edges, stamps a derivation record (operation, actor, model, timestamp, reason, sources) |
 | `observe` | Record a direct observation. **Evidence mandatory** — unbacked observations are rejected |
 | `assert_knowledge` | Assert knowledge on explicit authority (e.g. `human_approved`, `source_code`, `test_verified`). Authority + evidence mandatory |
 | `verify_knowledge` | Independently verify a KO: bumps the confidence context (confirmations + `last_verified`, score never lowered). Not a status flip |
 | `contradict` | Register a competing assertion: counter-claim + CONTRADICTS edge + persisted `aikoql:conflict` KO with per-assertion authority/evidence snapshots. Original claim untouched until resolution |
-| `supersede` | Replace a claim with a new generation: old KO → Superseded + `valid_to` + SUPERSEDES edge; derived dependents swept for staleness |
+| `supersede` | Replace a claim: old KO → Superseded + `valid_to` + SUPERSEDES edge; `superseded_by` names an existing successor (evidence appended to the old claim) or a fresh generation is created; derived dependents swept for staleness |
 | `merge` | Merge 2+ sources into one KO as a first-class derivation (`manual` \| `newest_wins` \| `authority_wins`) |
 | `invalidate` | Withdraw support for a KO and everything derived from it: target → Contradicted where legal; every DERIVED_FROM dependent gets the invalidation stamp + `valid_to=now` |
 | `resolve_conflict` | Apply a resolution decision to a Conflict KO (`resolved_a_preferred` \| `resolved_b_preferred` \| `resolved_both_valid` \| `resolved_replaced`). Rationale mandatory — the kernel never silently picks |
@@ -159,8 +157,11 @@ Knowledge as a versioned, evidence-backed, evolving object — not just CRUD.
   "subject":"agent-a","type_name":"Claim","properties":{"text":"kernel commits under one pipe lock"},
   "authority":"source_code","evidence":[{"source_artifact":"crates/kernel/src/transaction/kernel.rs","method":"ast_extraction","confidence":0.9}]}}}
 
-{"method":"tools/call","params":{"name":"transition_epistemic","arguments":{
-  "subject":"agent-a","koid":"<koid>","to":"verified"}}}
+{"method":"tools/call","params":{"name":"verify_knowledge","arguments":{
+  "subject":"agent-a","koid":"<koid>",
+  "evidence":[{"source_artifact":"ops-review.md","method":"human_provided","confidence":0.9}],
+  "note":"human review"}}}
+// → {"koid":…,"status":"verified","confirmations":1,"last_verified":…}
 
 {"method":"tools/call","params":{"name":"trace","arguments":{
   "subject":"agent-a","koid":"<koid>"}}}

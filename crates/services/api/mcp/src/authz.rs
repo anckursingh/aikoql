@@ -46,7 +46,9 @@ pub(crate) fn check_capability(roles: &[String], tool: &str) -> Result<(), (i64,
         return Ok(()); // admin has full access
     }
 
-    // Sensitive tools require specific roles
+    // Sensitive tools require specific roles. Epistemic state changes need
+    // separation of duties (review P1-5): verifying, invalidating, and
+    // resolving conflicts are distinct capabilities.
     let restricted: &[(&str, &[&str])] = &[
         ("backup", &["operator"]),
         ("restore", &["operator"]),
@@ -59,6 +61,10 @@ pub(crate) fn check_capability(roles: &[String], tool: &str) -> Result<(), (i64,
         ("deploy_benchmark", &["developer"]),
         ("audit_report", &["auditor"]),
         ("compliance_report", &["auditor"]),
+        ("verify_knowledge", &["verifier"]),
+        ("invalidate", &["operator"]),
+        ("resolve_conflict", &["arbiter"]),
+        ("resolve_conflict_by_authority", &["arbiter"]),
     ];
 
     for (restricted_tool, allowed_roles) in restricted {
@@ -82,3 +88,38 @@ use std::sync::LazyLock;
 
 pub(crate) static RATE_STORE: LazyLock<Mutex<HashMap<String, (Instant, u32)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[cfg(test)]
+mod tests {
+    use super::check_capability;
+
+    fn roles(r: &[&str]) -> Vec<String> {
+        r.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn capability_separation_of_duties() {
+        // Unauthenticated / admin sessions are unrestricted.
+        for r in [vec![], roles(&["admin"])] {
+            for tool in ["verify_knowledge", "invalidate", "resolve_conflict"] {
+                assert!(check_capability(&r, tool).is_ok(), "{tool} for {r:?}");
+            }
+        }
+        // A read-only analyst cannot verify, invalidate, or resolve.
+        let analyst = roles(&["analyst"]);
+        for tool in ["verify_knowledge", "invalidate", "resolve_conflict"] {
+            assert!(check_capability(&analyst, tool).is_err(), "{tool}");
+        }
+        // Each duty requires its own role — no cross-capability grants.
+        assert!(check_capability(&roles(&["verifier"]), "verify_knowledge").is_ok());
+        assert!(check_capability(&roles(&["verifier"]), "invalidate").is_err());
+        assert!(check_capability(&roles(&["operator"]), "invalidate").is_ok());
+        assert!(check_capability(&roles(&["operator"]), "resolve_conflict").is_err());
+        assert!(check_capability(&roles(&["arbiter"]), "resolve_conflict").is_ok());
+        assert!(check_capability(&roles(&["arbiter"]), "resolve_conflict_by_authority").is_ok());
+        assert!(check_capability(&roles(&["arbiter"]), "verify_knowledge").is_err());
+        // Non-epistemic tools are unaffected.
+        assert!(check_capability(&analyst, "aikoql").is_ok());
+        assert!(check_capability(&analyst, "remember").is_ok());
+    }
+}

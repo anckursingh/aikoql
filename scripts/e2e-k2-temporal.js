@@ -84,12 +84,15 @@ function assert(cond, msg) {
   assert((await ql(`MATCH claim AS_OF ${nowMs + 60000} RETURN *`)).length === 2,
     'AS_OF now must see both generations');
 
-  // 5. Supersession through the protocol: validity ends ~now, edge old -> new.
-  const t = await c.call('transition_epistemic', {
-    subject: 'alice', koid: oldKoid, to: 'superseded',
-    superseded_by: newKoid, reason: 'migrated to rabbitmq',
+  // 5. Supersession through the semantic op (review P0-1): validity ends
+  // ~now, edge old -> new, evidence stamped on the old claim.
+  const t = await c.call('supersede', {
+    subject: 'alice', old: oldKoid, superseded_by: newKoid,
+    evidence: [{ source_artifact: 'migration-runbook.md', method: 'runtime_observation', confidence: 0.95 }],
+    reason: 'migrated to rabbitmq',
   });
-  assert(t.from === 'asserted' && t.to === 'superseded', 'transition must report asserted -> superseded');
+  assert(t.old === oldKoid && t.new === newKoid,
+    'supersede must supersede old onto the existing successor');
   const ko = await c.call('get', { subject: 'alice', koid: oldKoid });
   assert(ko.extensions.valid_to >= nowMs - 60000, 'supersession must end validity at ~now');
   const hits = await c.call('traverse', { subject: 'alice', koid: oldKoid, rel_type: 'supersedes' });
@@ -100,14 +103,20 @@ function assert(cond, msg) {
   assert(current.length === 1 && current[0].properties.text === 'we use rabbitmq',
     'superseded generation must drop out of current truth');
 
-  // 7. HISTORICAL reconstructs every committed version: old v1 + v2, new v1.
+  // 7. HISTORICAL reconstructs every committed version: old appears three
+  // times (created + superseded + evidence stamp), new once.
   const hist = await ql('MATCH claim HISTORICAL RETURN *');
-  assert(hist.length === 3, `HISTORICAL must return 3 versions, got ${hist.length}`);
+  assert(hist.length === 4, `HISTORICAL must return 4 versions, got ${hist.length}`);
   const oldVersions = hist.filter((r) => r.koid === oldKoid).map((r) => r.version);
-  assert(JSON.stringify(oldVersions) === '[1,2]', 'old versions must ascend in commit order');
+  assert(JSON.stringify(oldVersions) === '[1,2,3]', 'old versions must ascend in commit order');
 
-  // 8. EPISTEMIC filter: the successor passes review, verified only.
-  await c.call('transition_epistemic', { subject: 'alice', koid: newKoid, to: 'verified', reason: 'ops review' });
+  // 8. EPISTEMIC filter: the successor passes review (semantic verification),
+  // verified only.
+  await c.call('verify_knowledge', {
+    subject: 'alice', koid: newKoid,
+    evidence: [{ source_artifact: 'ops-review.md', method: 'human_provided', confidence: 0.9 }],
+    note: 'ops review',
+  });
   const verified = await ql('MATCH claim EPISTEMIC verified RETURN *');
   assert(verified.length === 1 && verified[0].koid === newKoid, 'EPISTEMIC verified must return only the successor');
 

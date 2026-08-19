@@ -241,6 +241,52 @@ fn match_experiences_respects_shared_with_acl() {
 }
 
 #[test]
+fn revoked_experience_sharing_stops_matching() {
+    // The P1-9 invariant: share -> revoke ACL -> find_experiences() must not
+    // return the experience. Eligibility (ACL) is enforced before ranking.
+    let (k, _clock, _store) = mk_kernel();
+    let kid = record(
+        &k,
+        "alice",
+        "secure the auth flow",
+        &[],
+        None,
+        None,
+        &["bob"],
+    );
+    assert_eq!(
+        k.match_experiences(&Subject::new("bob"), "secure the auth flow", 10)
+            .unwrap()
+            .len(),
+        1
+    );
+    // Revoke: remember with an explicit security descriptor REPLACES the ACL
+    // (no bob entry — and no silent fallback to the previous descriptor).
+    let ko = k.get(&Subject::new("alice"), &kid).unwrap();
+    let mut rr = RememberRequest::update(&Subject::new("alice"), kid, ko.metadata.clone());
+    rr.properties = ko.properties.clone();
+    rr.extensions = ko.extensions.clone();
+    rr.security = Some(SecurityDescriptor {
+        owner: "alice".into(),
+        acl: vec![],
+        classification: None,
+    });
+    k.remember(rr).unwrap();
+
+    assert!(k
+        .match_experiences(&Subject::new("bob"), "secure the auth flow", 10)
+        .unwrap()
+        .is_empty());
+    // The owner still matches her own experience.
+    assert_eq!(
+        k.match_experiences(&Subject::new("alice"), "secure the auth flow", 10)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn invalidated_experiences_are_not_matched() {
     let (k, _clock, _store) = mk_kernel();
     let kid = record(&k, "alice", "migrate the schema", &[], None, None, &[]);

@@ -93,11 +93,13 @@ function assert(cond, msg) {
     subject, type_name: 'DogfoodClaim',
     properties: { text: 'the aikoql kernel commits under one pipe lock and captures agent experiences' },
   });
-  const ts = await c.call('transition_epistemic', {
-    subject, koid: claimV1.koid, to: 'superseded',
-    superseded_by: claimV2.koid, reason: 'dogfood: experience capture landed in K5',
+  const ts = await c.call('supersede', {
+    subject, old: claimV1.koid, superseded_by: claimV2.koid,
+    evidence: [{ source_artifact: 'k5-pr.md', method: 'human_provided', confidence: 0.9 }],
+    reason: 'dogfood: experience capture landed in K5',
   });
-  assert(ts.from === 'asserted' && ts.to === 'superseded', 'supersession must report the transition');
+  assert(ts.old === claimV1.koid && ts.new === claimV2.koid,
+    'supersession must supersede generation 1 onto generation 2');
   const supersededKo = await c.call('get', { subject, koid: claimV1.koid });
   assert(typeof supersededKo.extensions.valid_to === 'number', 'supersession must stamp valid_to (when the change happened)');
   const claimV2b = await c.call('remember', {

@@ -1,0 +1,258 @@
+# AIKOQL Knowledge Invariants
+
+The invariants every AIKOQL operation must preserve. This is the contract the
+kernel enforces on every write path, and the checklist any change to the
+kernel or protocol surface must keep green (review PR #1, item 16).
+
+The overarching question (review final assessment):
+
+> Can any API call, concurrent transaction, authorization mistake, crash,
+> temporal edge case, or conflicting evidence cause AIKOQL to return a
+> knowledge state that violates its own invariants?
+
+Target answer: **no**. Each invariant below names its enforcement site(s)
+and its verification (kernel test / MCP test / e2e script).
+
+---
+
+## Epistemic
+
+**E1. Illegal epistemic transitions are rejected.**
+The `EpistemicStatus` state machine is the only legal move path;
+`can_transition` gates every change.
+- Enforced at: `crates/kernel/src/knowledge/kom.rs:1385` (machine),
+  `crates/kernel/src/transaction/kernel.rs:2002` (`transition_epistemic_locked`),
+  `crates/kernel/src/transaction/kernel/ops.rs:1228` (`transition_claim_if_legal`).
+- Verified: `crates/kernel/tests/epistemic.rs`, `tests/transactions.rs`
+  (`verify_rejects_illegal_epistemic_moves`, `supersede_rejects_already_superseded`,
+  `invalidate_requires_evidence_and_is_rejected_when_already_invalidated`).
+
+**E2. Every transition appends history and emits the correct event.**
+Transitions go through the versioned commit pipeline: a new version, an
+`EpistemicChanged` audit event, and an audit-hash chain entry.
+- Enforced at: `crates/kernel/src/transaction/kernel/ops.rs` transition calls
+  → `remember_locked` → `commit_version` (`kernel.rs:1005-1077`).
+- Verified: `tests/transactions.rs` (`knowledge_continuity_kafka_to_rabbitmq`
+  step 10: versions `[1,2,3]`, step 11: verification event note preserved).
+
+**E3. There is exactly one protocol path to each status.**
+`verified` only via `verify_knowledge` (evidence mandatory), `superseded`
+only via `supersede`/`resolve_conflict`, `contradicted` only via
+`contradict`/`invalidate`/resolution. The generic
+`transition_epistemic` is a **library-level primitive only** — it is not
+exposed on any protocol surface (MCP/REST/shell).
+- Enforced at: `crates/kernel/src/transaction/kernel.rs:1976` (doc contract);
+  `crates/services/api/mcp/src/tool_registry.rs` (no registration — the
+  former tool was deleted, review P0-1).
+- Verified: `crates/services/api/mcp/tests/mcp_stdio.rs` m01 (tool list),
+  k1 step 5 (raw `transition_epistemic` call is an error).
+
+## Evidence
+
+**EV1. Evidence is mandatory for every knowledge claim.**
+`observe`, `assert_knowledge`, `verify_knowledge`, `contradict`,
+`supersede`, `invalidate`, `merge` (with folded properties),
+`record_experience` all reject an empty evidence list — an unbacked claim is
+rejected, not downgraded.
+- Enforced at: `crates/kernel/src/transaction/kernel/ops.rs:315`
+  (`require_evidence`), called at the head of each semantic op.
+- Verified: `tests/transactions.rs` (`observe_requires_evidence_...`,
+  `assert_requires_evidence_...`, `verify_is_not_a_status_flip`,
+  `invalidate_requires_evidence_...`), `tests/experiences.rs`.
+
+**EV2. Evidence is append-only.**
+Evidence is never replaced or dropped: semantic transitions merge new
+evidence onto the existing list.
+- Enforced at: `ops.rs:815-851` (supersession evidence append on
+  `superseded_by`), `ops.rs:969-983` (invalidation evidence append).
+- Verified: `tests/transactions.rs`
+  (`supersede_with_superseded_by_links_existing_successor` — evidence len 2
+  on the old claim).
+
+**EV3. Evidence correction is a future model, not silent mutation.**
+Correction/supersession of evidence (`E1 -> SUPERSEDED_BY -> E2`, review
+P2-10) is deferred: the append-only record leaves room for it, and the
+relationship index already supports arbitrary typed edges.
+
+## Temporal
+
+**T1. Valid time is a half-open interval `[valid_from, valid_to)`.**
+`valid_to` is exclusive; `valid_from < valid_to` when both exist (checked at
+stamp time).
+- Enforced at: `kom.rs:1038` (`valid_at`), `ops.rs:1312-1313`
+  (`set_valid_time` keeps `valid_from` and only sets `valid_to` when absent).
+- Verified: `crates/kernel/tests/temporal.rs`, `tests/experiences.rs`
+  (`match_experiences_filters_expired` — gone exactly at `valid_to`).
+
+**T2. `None` bounds are unbounded, never `0`.**
+`None valid_from` = −∞, `None valid_to` = +∞. `0` is a legitimate
+timestamp, not the semantic representation of the unbounded past (review
+P0-2). The BETWEEN filter is Option-driven on both sides.
+- Enforced at: `crates/runtime/src/lib.rs:365` (BETWEEN overlap check).
+- Verified: `crates/runtime` `between_boundary_matrix_and_unbounded_sides`.
+
+**T3. AS_OF/HISTORICAL = transaction time; BETWEEN = valid time.**
+`MATCH` defaults to valid-at-now; `AS_OF`/`HISTORICAL` reconstruct committed
+transaction-time versions; `BETWEEN` filters valid-time overlap.
+- Enforced at: `crates/runtime/src/lib.rs` (query filter dispatch).
+- Verified: `mcp_stdio.rs` k2, `scripts/e2e-k2-temporal.js`,
+  `scripts/e2e-dogfood.js` Q2/Q3.
+
+## Derivation
+
+**D1. Every derived KO has provenance.**
+`derive` and `merge` stamp the derivation record (operation, actor, reason,
+sources, timestamp) and wire `DERIVED_FROM` edges to every source.
+- Enforced at: `kernel.rs:2311` (`derive`), `ops.rs:870` (`merge`).
+- Verified: `tests/transactions.rs`
+  (`merge_is_a_first_class_derivation_with_property_folding`),
+  `scripts/e2e-dogfood.js` Q4-Q6.
+
+**D2. Every source KO exists and is readable at derivation time.**
+- Enforced at: `kernel.rs:2311` (derive validates each source),
+  `kernel.rs:1266-1275` (strict referential policy).
+
+## Invalidation
+
+**I1. Invalidating a premise invalidates affected derived knowledge.**
+BFS over outbound `DERIVED_FROM` stamps every dependent: invalidation stamp
+(actor/at/reason) + `valid_to = now` — never an epistemic status change.
+- Enforced at: `ops.rs:1267-1334` (`invalidate_dependents_locked`).
+- Verified: `tests/transactions.rs`
+  (`invalidate_contradicts_target_and_sweeps_derivation_chain`,
+  `knowledge_continuity_kafka_to_rabbitmq` steps 8/12),
+  `scripts/e2e-dogfood.js` Q7/Q8.
+
+**I2. The sweep is cycle-safe, dedup-safe, and idempotent.**
+Collection happens before any mutation (collect-then-stamp, review P1-7);
+a visited set bounds cycles; duplicate edges collapse to one stamp;
+already-stamped nodes stop the walk.
+- Enforced at: `ops.rs:1275-1298` (Phase 1), `ops.rs:1304-1309` (Phase 2
+  re-check).
+- Verified: `tests/transactions.rs` (`sweep_terminates_on_derived_from_cycles`,
+  `sweep_collapses_duplicate_edges_to_one_stamp`,
+  `repeated_sweep_is_idempotent_per_dependent`).
+
+**I3. The sweep is authorization fail-closed.**
+Each dependent stamp routes through `remember_locked`, which authorizes
+Write for the initiating subject — a subject that may not write a dependent
+cannot stamp it either.
+- Enforced at: `kernel.rs:1260-1263` (update-path authorization).
+- Verified: `tests/transactions.rs`
+  (`resolve_replaced_wires_supersedes_edges_and_sweeps_dependents` runs a
+  cross-principal sweep; the denied case is covered by the ACL tests).
+
+**I4. Documented limitation: no cross-KO transaction.**
+All ops run under the single pipe lock, which serializes concurrent
+operations; the store layer has no multi-key atomic commit, so a storage
+failure mid-sweep can leave earlier stamps committed (fail-safe direction:
+stamps are conservative, never phantom). Documented at
+`ops.rs:1299-1303`.
+
+## Conflict
+
+**C1. Conflict resolution is explicit and recorded.**
+Resolution requires an unresolved Conflict KO, a real decision (never
+`Unresolved`), and a non-blank rationale; the Conflict KO records decision +
+rationale (+ replacement for `ResolvedReplaced`).
+- Enforced at: `ops.rs:1014` (`resolve_conflict`).
+- Verified: `tests/transactions.rs`
+  (`resolve_conflict_validates_decision_rationale_and_state`,
+  `resolve_conflict_applies_decision_and_records_rationale`).
+
+**C2. Equal-authority conflicts cannot be silently resolved.**
+Authority-ranked resolution errors on a tie — never a silent pick.
+- Enforced at: `ops.rs:1167` (`resolve_conflict_by_authority`).
+- Verified: `tests/transactions.rs`
+  (`authority_resolution_ranks_snapshots_and_rejects_ties`).
+
+**C3. `ResolvedReplaced` performs full successor semantics (review P0-3).**
+Both claims are superseded with `SUPERSEDES` edges to the replacement, the
+replacement is pre-validated (exists, readable, current), and dependents of
+both claims are swept.
+- Enforced at: `ops.rs:1087` (ResolvedReplaced arm reusing the supersede
+  machinery + `validate_successor` at `ops.rs:1203`).
+- Verified: `tests/transactions.rs`
+  (`resolve_replaced_wires_supersedes_edges_and_sweeps_dependents`).
+
+## Experience
+
+**X1. Expired, invalidated, or superseded experiences are never returned.**
+- Enforced at: `ops.rs:1477` (eligibility gate `valid_at(now)` +
+  invalidation stamp).
+- Verified: `tests/experiences.rs` (`match_experiences_filters_expired`,
+  `invalidated_experiences_are_not_matched`).
+
+**X2. ACL is checked before ranking/retrieval.**
+The candidate scan is ACL-filtered (read authorization per KO), and the
+eligibility gate runs before any scoring — an inaccessible or ineligible
+experience never enters the ranking stage (review P1-8/P1-9).
+- Enforced at: `ops.rs:1476` (ACL-filtered scan), `ops.rs:1477-1506`
+  (eligibility before scoring).
+- Verified: `tests/experiences.rs`
+  (`match_experiences_respects_shared_with_acl`,
+  `revoked_experience_sharing_stops_matching`).
+
+**X3. Sharing is opt-in and revocable.**
+Cross-agent reuse requires `shared_with` Read grants; a later `remember`
+with an explicit security descriptor replaces the ACL, and revoked
+principals stop matching immediately.
+- Enforced at: `ops.rs:1414-1430` (grant construction),
+  `kernel.rs:1264` (security replace on update).
+- Verified: `tests/experiences.rs` (`revoked_experience_sharing_stops_matching`).
+
+## Encryption
+
+**K1. Encrypted data cannot exist without recoverable key metadata.**
+Wrapped DEKs are persisted inside the store before/with the first
+field-encrypted commit; a corrupt or unreadable DEK record fails the open
+(fail-closed — never silently mint a fresh DEK that orphans ciphertext).
+- Enforced at: `kernel.rs:686-710` (DEK load + crypto-meta check on open),
+  `kernel.rs:1428` (DEK persist on remember).
+- Verified: `tests/encryption.rs` e09 (restart roundtrip), e10 (corrupt DEK
+  fails open).
+
+**K2. Wrong credentials fail closed.**
+`LocalKms` derives the KEK from the passphrase via Argon2id → ChaCha20-
+Poly1305 AEAD; a wrong passphrase (or tampered envelope) fails
+authentication — never yields a key.
+- Enforced at: `crates/kernel/src/security/kms.rs:217`
+  (`decrypt_v2_envelope` → `InvalidPassphrase`).
+- Verified: `tests/encryption.rs` e11.
+
+**K3. Tampered field ciphertext fails closed.**
+Field values are AES-256-GCM AEAD ciphertexts (`version || nonce || ct ||
+tag`); any modification fails authentication at decrypt — the kernel can
+never surface a phantom plaintext.
+- Enforced at: `crates/kernel/src/security/field_crypto.rs` (encrypt/decrypt).
+- Verified: `tests/encryption.rs` e13.
+
+**K4. Key purposes are domain-separated (review P0-4).**
+One KEK/DEK is never used raw for two purposes: HKDF-SHA256 (RFC 5869)
+derives `aikoql/dek-wrap/v1` (KEK→DEK wrap), `aikoql/store/v1` (store
+key), `aikoql/field/v1` (field key).
+- Enforced at: `crates/kernel/src/security/hkdf.rs` (verified against the
+  RFC 5869 A.1 test vector), `envelope.rs` (wrap/unwrap),
+  `field_crypto.rs`, `crates/services/api/mcp/src/engine.rs`.
+- Verified: `hkdf.rs` tests (`rfc5869_test_vector_a1`,
+  `domain_separation_yields_distinct_keys`).
+
+**K5. Crypto scheme is versioned; unknown versions fail closed (review P2-14).**
+The store carries a crypto-meta record (`__encryption__/meta`) stamped on
+first encrypted open and verified on every later open; an unknown version
+is an explicit error, never a guess.
+- Enforced at: `kernel.rs:695-708`, `envelope.rs:29` (`CRYPTO_META_V1`).
+- Verified: `tests/encryption.rs` e12.
+
+## Capability separation (review P1-5)
+
+**A1. Epistemic decisions are separate capabilities.**
+`verify_knowledge` requires the `verifier` role, `invalidate` requires
+`operator`, `resolve_conflict`/`resolve_conflict_by_authority` require
+`arbiter` — over the MCP/REST gateway. Unauthenticated sessions and `admin`
+retain unrestricted access; direct kernel-library callers (embedded use)
+authorize at the ACL layer, which is always enforced.
+- Enforced at: `crates/services/api/mcp/src/authz.rs:49-63`
+  (restricted table) + kernel ACL authorization on every semantic op.
+- Verified: `authz.rs` `capability_separation_of_duties`,
+  `mcp_stdio.rs` (full suite green with the new table).

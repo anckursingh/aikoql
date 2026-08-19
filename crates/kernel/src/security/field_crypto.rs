@@ -11,6 +11,7 @@ use crate::knowledge::kom::Value;
 use crate::security::audit::{KeyAuditLog, KeyEvent, KeyEventKind};
 use crate::security::crypto::Crypto;
 use crate::security::envelope::{Envelope, WrappedDek};
+use crate::security::hkdf::{self, DOMAIN_FIELD};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, RwLock};
 
@@ -114,8 +115,10 @@ impl FieldCrypto {
         if policy.is_empty() {
             return Ok(0);
         }
-        // ponytail: derive field-level key from tenant DEK (HKDF in prod).
-        let key = self.envelope.tenant_key(tenant)?;
+        // The field key is a domain-separated subkey of the tenant DEK —
+        // the DEK itself never encrypts data directly.
+        let dek = self.envelope.tenant_key(tenant)?;
+        let key = hkdf::domain_sep(&dek, DOMAIN_FIELD);
         let mut count = 0usize;
 
         for field_name in &policy.fields {
@@ -159,7 +162,8 @@ impl FieldCrypto {
         if policy.is_empty() {
             return Ok(0);
         }
-        let key = self.envelope.tenant_key(tenant)?;
+        let dek = self.envelope.tenant_key(tenant)?;
+        let key = hkdf::domain_sep(&dek, DOMAIN_FIELD);
         let mut count = 0usize;
 
         for field_name in &policy.fields {

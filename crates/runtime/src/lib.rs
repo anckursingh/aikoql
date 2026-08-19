@@ -358,12 +358,14 @@ impl Interpreter {
                         }
                         out
                     }
-                    // Valid-time overlap with [from, to): half-open. Timeless
-                    // facts (no bounds) overlap every window.
+                    // Valid-time overlap with [from, to): half-open. None
+                    // bounds are unbounded (None valid_from = -inf, None
+                    // valid_to = +inf) — `0` is NOT the semantic representation
+                    // of the unbounded past (review P0-2).
                     TemporalOp::Between { from, to } => kos
                         .into_iter()
                         .filter(|ko| {
-                            ko.valid_from().unwrap_or(0) < *to
+                            ko.valid_from().map(|vf| vf < *to).unwrap_or(true)
                                 && ko.valid_to().map(|t| t > *from).unwrap_or(true)
                         })
                         .collect(),
@@ -1181,10 +1183,29 @@ mod tests {
         v: i64,
         valid: Option<(u64, u64)>,
     ) -> KOID {
+        let (from, to) = match valid {
+            Some((f, t)) => (Some(f), Some(t)),
+            None => (None, None),
+        };
+        fact_with_open_validity(k, who, prop, v, from, to)
+    }
+
+    /// Fact with independently-optional bounds: None valid_from = -inf,
+    /// None valid_to = +inf (never `0`-as-unbounded — review P0-2).
+    fn fact_with_open_validity(
+        k: &Kernel,
+        who: &str,
+        prop: &str,
+        v: i64,
+        from: Option<u64>,
+        to: Option<u64>,
+    ) -> KOID {
         let mut ext = ExtensionMap::new();
-        if let Some((from, to)) = valid {
-            ext.insert("valid_from".into(), Value::Int(from as i64));
-            ext.insert("valid_to".into(), Value::Int(to as i64));
+        if let Some(f) = from {
+            ext.insert("valid_from".into(), Value::Int(f as i64));
+        }
+        if let Some(t) = to {
+            ext.insert("valid_to".into(), Value::Int(t as i64));
         }
         let mut props = PropertyMap::new();
         props.insert(prop.into(), Value::Int(v));
@@ -1326,6 +1347,47 @@ mod tests {
         // [5_000, 10_000): a not yet valid; c overlaps (valid at 9_999) →
         // included with the timeless fact.
         assert_eq!(between(5_000, 10_000).len(), 2);
+    }
+
+    #[test]
+    fn between_boundary_matrix_and_unbounded_sides() {
+        // Review P0-2/P1-6: a fact valid on [1000, 2000) against the full
+        // window matrix, with independently-unbounded sides.
+        let (k, _clock) = mk_with_clock();
+        fact_with_validity(&k, "alice", "windowed", 1, Some((1_000, 2_000)));
+        // valid on (-inf, 1000): valid_to only.
+        fact_with_open_validity(&k, "alice", "past_only", 2, None, Some(1_000));
+        // valid on [2000, +inf): valid_from only.
+        fact_with_open_validity(&k, "alice", "future_only", 3, Some(2_000), None);
+        // timeless: both bounds None.
+        fact_with_validity(&k, "alice", "timeless", 4, None);
+
+        let between = |from: u64, to: u64| {
+            let mut plan = scan_plan();
+            plan.operators.push(IrOp::Temporal {
+                op: TemporalOp::Between { from, to },
+            });
+            let mut vals: Vec<i64> = objects(Interpreter::execute(&k, &plan).unwrap())
+                .iter()
+                .filter_map(|ko| match ko.properties.iter().next() {
+                    Some((_, Value::Int(v))) => Some(*v),
+                    _ => None,
+                })
+                .collect();
+            vals.sort();
+            vals
+        };
+
+        // [0, 1000): windowed [1000, 2000) only TOUCHES at 1000 — half-open,
+        // so excluded; past_only overlaps; timeless included.
+        assert_eq!(between(0, 1_000), vec![2, 4]);
+        // [1000, 2000): the windowed fact's home window.
+        assert_eq!(between(1_000, 2_000), vec![1, 4]);
+        // [2000, 3000): windowed touches at 2000 — excluded; future_only
+        // included.
+        assert_eq!(between(2_000, 3_000), vec![3, 4]);
+        // A window spanning everything sees all four facts.
+        assert_eq!(between(0, 5_000), vec![1, 2, 3, 4]);
     }
 
     #[test]

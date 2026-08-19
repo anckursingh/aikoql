@@ -373,6 +373,75 @@ fn supersede_rejects_already_superseded() {
     ));
 }
 
+// ---- supersede onto an existing successor (superseded_by, review P0-1) ------
+
+#[test]
+fn supersede_with_superseded_by_links_existing_successor() {
+    let (k, clock, _store) = mk_kernel();
+    let old = assert_k(&k, "alice", "env", 1, "source_code");
+    let successor = assert_k(&k, "alice", "env", 2, "source_code");
+    let dep = derive_from(&k, "alice", old, "answer", 42);
+    clock.tick(1);
+
+    let mut sr = SupersedeRequest::new(Subject::new("alice"), old, "fact");
+    sr.superseded_by = Some(successor);
+    sr.evidence = vec![ev("migration-runbook")];
+    sr.reason = Some("migrated".into());
+    let res = k.supersede(sr).unwrap();
+
+    // No new generation is minted — the named successor IS the result.
+    assert_eq!(res.new, successor);
+    let successor_ko = k.get(&Subject::new("alice"), &successor).unwrap();
+    assert_eq!(successor_ko.version, 1);
+    assert_eq!(successor_ko.epistemic_status(), EpistemicStatus::Asserted);
+    assert_eq!(successor_ko.valid_to(), None);
+
+    // Old: Superseded + valid_to stamped + SUPERSEDES edge to the successor.
+    let old_ko = k.get(&Subject::new("alice"), &old).unwrap();
+    assert_eq!(old_ko.epistemic_status(), EpistemicStatus::Superseded);
+    assert_eq!(old_ko.valid_to(), Some(10_001));
+    assert_eq!(
+        k.outbound_edges(&old, Some(SUPERSEDES)).unwrap(),
+        vec![("supersedes".to_string(), successor)]
+    );
+    // Supersession evidence is appended to the old claim, never dropped.
+    assert_eq!(old_ko.evidence().len(), 2);
+    assert!(old_ko
+        .evidence()
+        .iter()
+        .any(|e| e.source_artifact == "migration-runbook"));
+
+    // The dependent was swept.
+    assert_eq!(res.invalidated_dependents, vec![dep]);
+    assert!(k
+        .get(&Subject::new("alice"), &dep)
+        .unwrap()
+        .invalidation()
+        .is_some());
+}
+
+#[test]
+fn supersede_with_superseded_by_rejects_dead_successor() {
+    let (k, _clock, _store) = mk_kernel();
+    let old = assert_k(&k, "alice", "env", 1, "source_code");
+    let dead = assert_k(&k, "alice", "env", 2, "source_code");
+    let mut ir = InvalidationRequest::new(Subject::new("alice"), dead);
+    ir.evidence = vec![ev("refuting-observation")];
+    k.invalidate(ir).unwrap();
+
+    let mut sr = SupersedeRequest::new(Subject::new("alice"), old, "fact");
+    sr.superseded_by = Some(dead);
+    sr.evidence = vec![ev("migration-runbook")];
+    assert!(matches!(
+        k.supersede(sr).unwrap_err(),
+        KError::InvalidObject(_)
+    ));
+    // The rejected supersession left the old claim untouched.
+    let old_ko = k.get(&Subject::new("alice"), &old).unwrap();
+    assert_eq!(old_ko.epistemic_status(), EpistemicStatus::Asserted);
+    assert_eq!(old_ko.valid_to(), None);
+}
+
 // ---- merge -----------------------------------------------------------------
 
 #[test]
@@ -468,6 +537,91 @@ fn invalidate_requires_evidence_and_is_rejected_when_already_invalidated() {
         k.invalidate(ir).unwrap_err(),
         KError::InvalidObject(_)
     ));
+}
+
+// ---- sweep robustness (review P1-7) ----------------------------------------
+
+#[test]
+fn sweep_terminates_on_derived_from_cycles() {
+    let (k, _clock, _store) = mk_kernel();
+    let a = assert_k(&k, "alice", "env", 1, "source_code");
+    let b = derive_from(&k, "alice", a, "mid", 10);
+    let c = derive_from(&k, "alice", b, "final", 100);
+    // Close the cycle: wire C -> A as an inbound DERIVED_FROM edge on A.
+    let a_ko = k.get(&Subject::new("alice"), &a).unwrap();
+    let mut rr = RememberRequest::update(&Subject::new("alice"), a, a_ko.metadata.clone());
+    rr.properties = a_ko.properties.clone();
+    rr.extensions = a_ko.extensions.clone();
+    rr.relationships = vec![RelationshipRef {
+        rel_type: DERIVED_FROM.into(),
+        target: c,
+        direction: Direction::Inbound,
+    }];
+    k.remember(rr).unwrap();
+
+    let mut ir = InvalidationRequest::new(Subject::new("alice"), a);
+    ir.evidence = vec![ev("refuting-observation")];
+    // Reaching here at all is the assertion — a cycle must not loop forever.
+    let res = k.invalidate(ir).unwrap();
+    let mut expected = vec![a, b, c];
+    expected.sort();
+    let mut got = res.invalidated;
+    got.sort();
+    assert_eq!(got, expected);
+    for koid in [b, c] {
+        let ko = k.get(&Subject::new("alice"), &koid).unwrap();
+        assert!(ko.invalidation().is_some());
+    }
+}
+
+#[test]
+fn sweep_collapses_duplicate_edges_to_one_stamp() {
+    let (k, _clock, _store) = mk_kernel();
+    let a = assert_k(&k, "alice", "env", 1, "source_code");
+    // Two identical premise edges on one derivation.
+    let mut req = DeriveRequest::new(Subject::new("alice"), "conclusion");
+    req.properties.insert("answer".into(), Value::Int(42));
+    req.sources = vec![a, a];
+    req.operation = "inference".into();
+    req.actor = "agent-7".into();
+    let b = k.derive(req).unwrap().koid;
+
+    let mut ir = InvalidationRequest::new(Subject::new("alice"), a);
+    ir.evidence = vec![ev("refuting-observation")];
+    let res = k.invalidate(ir).unwrap();
+    // B appears exactly once and is stamped exactly once (one version bump).
+    assert_eq!(res.invalidated, vec![a, b]);
+    let b_ko = k.get(&Subject::new("alice"), &b).unwrap();
+    assert_eq!(b_ko.version, 2); // v1 created, v2 invalidation stamp
+}
+
+#[test]
+fn repeated_sweep_is_idempotent_per_dependent() {
+    let (k, _clock, _store) = mk_kernel();
+    let a = assert_k(&k, "alice", "env", 1, "source_code");
+    let x = assert_k(&k, "alice", "env", 9, "documentation");
+    // B derives from BOTH premises — two invalidation sweeps will reach it.
+    let mut req = DeriveRequest::new(Subject::new("alice"), "conclusion");
+    req.properties.insert("answer".into(), Value::Int(42));
+    req.sources = vec![a, x];
+    req.operation = "inference".into();
+    req.actor = "agent-7".into();
+    let b = k.derive(req).unwrap().koid;
+
+    let mut ir = InvalidationRequest::new(Subject::new("alice"), a);
+    ir.evidence = vec![ev("refuting-observation")];
+    let res = k.invalidate(ir).unwrap();
+    assert_eq!(res.invalidated, vec![a, b]);
+    let b_ko = k.get(&Subject::new("alice"), &b).unwrap();
+    assert_eq!(b_ko.version, 2);
+
+    // The second premise sweep finds B already stamped and leaves it alone.
+    let mut ir = InvalidationRequest::new(Subject::new("alice"), x);
+    ir.evidence = vec![ev("refuting-observation-2")];
+    let res = k.invalidate(ir).unwrap();
+    assert_eq!(res.invalidated, vec![x]);
+    let b_ko = k.get(&Subject::new("alice"), &b).unwrap();
+    assert_eq!(b_ko.version, 2);
 }
 
 // ---- resolve_conflict ------------------------------------------------------
@@ -613,6 +767,215 @@ fn resolve_conflict_replaced_requires_replacement_and_supersedes_both() {
         conflict.extensions.get("replacement"),
         Some(&Value::Text(replacement.to_hex()))
     );
+}
+
+#[test]
+fn resolve_replaced_wires_supersedes_edges_and_sweeps_dependents() {
+    let (k, clock, _store) = mk_kernel();
+    let a = assert_k(&k, "alice", "env", 1, "source_code");
+    let dep_a = derive_from(&k, "bob", a, "answer", 42);
+    let mut cr = ContradictionRequest::new(Subject::new("bob"), a);
+    cr.counter_props.insert("env".into(), Value::Int(2));
+    cr.evidence = vec![ev("bob-observation")];
+    let cc = k.contradict(cr).unwrap();
+    let dep_b = derive_from(&k, "bob", cc.counter, "answer", 84);
+    let replacement = assert_k(&k, "alice", "env", 3, "human_approved");
+    clock.tick(1);
+
+    let out = k
+        .resolve_conflict(ConflictResolutionRequest {
+            context: Subject::new("bob").into(),
+            conflict: cc.conflict,
+            decision: ConflictResolution::ResolvedReplaced,
+            rationale: "both were wrong".into(),
+            replacement: Some(replacement),
+        })
+        .unwrap();
+
+    // Both claims superseded, valid_to stamped, SUPERSEDES edge to R each.
+    for claim in [a, cc.counter] {
+        let ko = k.get(&Subject::new("bob"), &claim).unwrap();
+        assert_eq!(ko.epistemic_status(), EpistemicStatus::Superseded);
+        assert_eq!(ko.valid_to(), Some(10_001));
+        assert_eq!(
+            k.outbound_edges(&claim, Some(SUPERSEDES)).unwrap(),
+            vec![("supersedes".to_string(), replacement)]
+        );
+    }
+    // The replacement stays current and untouched.
+    let r_ko = k.get(&Subject::new("alice"), &replacement).unwrap();
+    assert_eq!(r_ko.epistemic_status(), EpistemicStatus::Asserted);
+    assert_eq!(r_ko.valid_to(), None);
+
+    // Dependents of BOTH claims swept (staleness, not contradiction).
+    let mut swept = out.invalidated_dependents;
+    swept.sort();
+    let mut expected = vec![dep_a, dep_b];
+    expected.sort();
+    assert_eq!(swept, expected);
+    for dep in [dep_a, dep_b] {
+        let ko = k.get(&Subject::new("bob"), &dep).unwrap();
+        assert_eq!(ko.epistemic_status(), EpistemicStatus::Inferred);
+        assert!(ko.invalidation().is_some());
+        assert_eq!(ko.valid_to(), Some(10_001));
+    }
+}
+
+// ---- Knowledge Continuity scenario (review #15) ------------------------------
+// The 13-step flagship scenario, kernel-level: K1 epistemic states, K2
+// temporal reconstruction, K3 derivation lineage, K4 invalidation sweep,
+// K5 experience reuse — all in one story. The MCP/e2e layer covers the same
+// story through tools/call (mcp_stdio k1/k2/k4 + scripts/e2e-dogfood.js
+// Q1-Q10 + scripts/e2e-k2-temporal.js).
+
+#[test]
+fn knowledge_continuity_kafka_to_rabbitmq() {
+    let (k, clock, _store) = mk_kernel();
+    let agent = Subject::new("agent");
+    let human = Subject::new("human");
+
+    // 1+2. Agent observes: Kafka is used, with evidence attached.
+    let mut obs = ObservationRequest::new(&agent, "claim");
+    obs.properties
+        .insert("bus".into(), Value::Text("kafka".into()));
+    obs.evidence = vec![ev("migration-notes-2019")];
+    let kafka = k.observe(obs).unwrap().koid;
+    assert_eq!(
+        k.get(&agent, &kafka).unwrap().epistemic_status(),
+        EpistemicStatus::Observed
+    );
+
+    // 3. Agent derives: the system uses Kafka.
+    let derived = derive_from(&k, "agent", kafka, "system", 1);
+
+    // 4. Later: new evidence says RabbitMQ is used.
+    let mut obs = ObservationRequest::new(&agent, "claim");
+    obs.properties
+        .insert("bus".into(), Value::Text("rabbitmq".into()));
+    obs.evidence = vec![ev("migration-runbook-2025")];
+    let rabbit = k.observe(obs).unwrap().koid;
+
+    // 5. Agent asserts the contradiction (old claim untouched).
+    let mut cr = ContradictionRequest::new(agent.clone(), kafka);
+    cr.counter_props
+        .insert("bus".into(), Value::Text("rabbitmq".into()));
+    cr.evidence = vec![ev("migration-runbook-2025")];
+    let cc = k.contradict(cr).unwrap();
+    let counter = cc.counter;
+    let kafka_ko = k.get(&agent, &kafka).unwrap();
+    assert_eq!(kafka_ko.epistemic_status(), EpistemicStatus::Observed);
+
+    // 6. Human verifies the new evidence. The agent first submits the
+    // counter-claim for review (grants the human Write on it).
+    let counter_ko = k.get(&agent, &counter).unwrap();
+    let mut grant = RememberRequest::update(&agent, counter, counter_ko.metadata.clone());
+    grant.properties = counter_ko.properties.clone();
+    grant.extensions = counter_ko.extensions.clone();
+    grant.security = Some(SecurityDescriptor {
+        owner: "agent".into(),
+        acl: vec![
+            AclEntry {
+                principal: "human".into(),
+                action: Action::Read,
+                effect: Effect::Allow,
+            },
+            AclEntry {
+                principal: "human".into(),
+                action: Action::Write,
+                effect: Effect::Allow,
+            },
+        ],
+        classification: None,
+    });
+    k.remember(grant).unwrap();
+    let mut vr = VerificationRequest::new(human.clone(), counter);
+    vr.evidence = vec![ev("human-review-notes")];
+    vr.note = Some("human review".into());
+    let vres = k.verify_knowledge(vr).unwrap();
+    assert_eq!(vres.status, EpistemicStatus::Verified);
+    assert_eq!(vres.confirmations, 1);
+    let counter_ko = k.get(&agent, &counter).unwrap();
+    assert_eq!(counter_ko.epistemic_status(), EpistemicStatus::Verified);
+
+    // 7. System supersedes the old knowledge onto the verified claim.
+    clock.tick(1);
+    let mut sr = SupersedeRequest::new(agent.clone(), kafka, "claim");
+    sr.superseded_by = Some(counter);
+    sr.evidence = vec![ev("deployment-observed")];
+    sr.reason = Some("migrated to rabbitmq".into());
+    let sres = k.supersede(sr).unwrap();
+    assert_eq!(sres.new, counter);
+
+    // 8. Derived knowledge depending on Kafka is invalidated (swept).
+    assert_eq!(sres.invalidated_dependents, vec![derived]);
+    let derived_ko = k.get(&agent, &derived).unwrap();
+    let inv = derived_ko.invalidation().expect("sweep stamp");
+    assert_eq!(inv.actor, "agent");
+    assert!(inv.reason.contains("superseded"));
+    assert_eq!(derived_ko.epistemic_status(), EpistemicStatus::Inferred);
+
+    // 9. What do we currently know? The successor is current and verified;
+    // the Kafka claim is superseded with validity ended at the transition.
+    let kafka_ko = k.get(&agent, &kafka).unwrap();
+    assert_eq!(kafka_ko.epistemic_status(), EpistemicStatus::Superseded);
+    assert_eq!(kafka_ko.valid_to(), Some(10_001));
+    let counter_ko = k.get(&agent, &counter).unwrap();
+    assert_eq!(counter_ko.epistemic_status(), EpistemicStatus::Verified);
+    assert_eq!(counter_ko.valid_to(), None);
+    assert_eq!(
+        k.outbound_edges(&kafka, Some(SUPERSEDES)).unwrap(),
+        vec![("supersedes".to_string(), counter)]
+    );
+
+    // 10. What did we know before? The Kafka claim's committed versions are
+    // preserved: v1 observed (Kafka), then the supersession transitions.
+    let lineage = k.trace(&agent, &kafka).unwrap();
+    let versions: Vec<u64> = lineage.versions.iter().map(|v| v.version).collect();
+    assert_eq!(versions, vec![1, 2, 3]);
+    assert!(lineage.versions.iter().all(|v| v.commit_ts >= 10_000));
+    assert_eq!(
+        kafka_ko.properties.get("bus"),
+        Some(&Value::Text("kafka".into()))
+    );
+
+    // 11. Why do we believe RabbitMQ? The verified claim carries its evidence
+    // chain and the verification history.
+    let counter_ko = k.get(&agent, &counter).unwrap();
+    assert!(counter_ko
+        .evidence()
+        .iter()
+        .any(|e| e.source_artifact == "migration-runbook-2025"));
+    assert_eq!(counter_ko.confidence_context().unwrap().confirmations, 1);
+    let t = k.trace(&agent, &counter).unwrap();
+    assert!(t
+        .events
+        .iter()
+        .any(|e| e.note.as_deref() == Some("human review")));
+
+    // 12. What became stale? The derived KO is stamped with who/when/why.
+    let inv = k.get(&agent, &derived).unwrap().invalidation().unwrap();
+    assert_eq!(inv.actor, "agent");
+    assert_eq!(inv.at, 10_001);
+
+    // 13. Have we seen a similar migration before? Record and match.
+    let mut er = ExperienceRequest::new(
+        agent.clone(),
+        "migrate the message bus from kafka to rabbitmq",
+        "observed, contradicted, verified, superseded",
+        "system now uses rabbitmq",
+    );
+    er.reuse_conditions = vec!["message bus".into(), "migrate".into()];
+    er.evidence = vec![ev("this-test-run")];
+    let exp = k.record_experience(er).unwrap().koid;
+    let m = k
+        .match_experiences(
+            &agent,
+            "we must migrate the message bus to another broker again",
+            5,
+        )
+        .unwrap();
+    assert_eq!(m.len(), 1);
+    assert_eq!(m[0].0.koid, exp);
 }
 
 // ---- resolve_conflict_by_authority ------------------------------------------

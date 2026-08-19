@@ -452,3 +452,89 @@ fn e10_corrupt_dek_record_fails_closed() {
         .with_field_encryption(crypto, envelope);
     assert!(res.is_err(), "corrupt DEK record must fail the open");
 }
+
+/// e11: The wrong passphrase never yields a key — LocalKms fails closed with
+/// an authentication error instead of deriving garbage (review P1-13).
+#[test]
+fn e11_wrong_passphrase_fails_closed() {
+    let key_path = temp_path("e11-key");
+    let _ = std::fs::remove_file(&key_path);
+    let kms = LocalKms::new(&key_path);
+    kms.master_key("correct-horse")
+        .expect("first use creates the key file");
+    // A restart re-reads the file: same path, fresh instance (the instance
+    // cache is per-process; a new process derives from the envelope again).
+    let kms2 = LocalKms::new(&key_path);
+    let err = kms2.master_key("wrong-passphrase").unwrap_err();
+    assert!(
+        err.contains("InvalidPassphrase") || err.contains("authentication"),
+        "expected a passphrase-authentication error, got: {}",
+        err
+    );
+    let _ = std::fs::remove_file(&key_path);
+}
+
+/// e12: An unknown crypto-meta version fails the open (review P2-14) — the
+/// key derivation scheme is versioned, and unknown versions are never guessed.
+#[test]
+fn e12_unknown_crypto_meta_version_fails_open() {
+    use aikoql_kernel::security::envelope::CRYPTO_META_KEY;
+    let store: Arc<dyn StorageEngine> = Arc::new(MemoryEngine::new());
+    let mut batch = WriteBatch::new();
+    batch.put(
+        CRYPTO_META_KEY.to_vec(),
+        b"aikoql/crypto/v99 kdf=future-widget".to_vec(),
+    );
+    store.write_batch(&batch).unwrap();
+
+    let kms = MemKms::new();
+    let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+    let envelope = Arc::new(Envelope::init(&kms, "pw", crypto.clone()).unwrap());
+    let res = Kernel::open(store, Arc::new(ManualClock::new(50_000)), 0xE12)
+        .unwrap()
+        .with_field_encryption(crypto, envelope);
+    assert!(
+        res.is_err(),
+        "unknown crypto-meta version must fail the open, not guess"
+    );
+}
+
+/// e13: Tampered field ciphertext fails closed — AEAD authentication rejects
+/// the modification; the kernel can never surface a phantom plaintext
+/// (review P1-13).
+#[test]
+fn e13_tampered_field_ciphertext_fails_closed() {
+    let kms = MemKms::new();
+    let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+    let envelope = Arc::new(Envelope::init(&kms, "pw", crypto.clone()).unwrap());
+    let fc = FieldCrypto::new(crypto, envelope);
+    let policy = EncryptionPolicy::new(vec!["secret".to_string()]);
+
+    let mut props = BTreeMap::new();
+    props.insert("secret".into(), Value::Text("classified-data".into()));
+    fc.encrypt_fields("acme", "doc", &mut props, &policy)
+        .unwrap();
+
+    // Untampered: valid DEK decrypts back to the plaintext.
+    let mut clean = props.clone();
+    fc.decrypt_fields("acme", "doc", &mut clean, &policy)
+        .unwrap();
+    assert_eq!(
+        clean.get("secret"),
+        Some(&Value::Text("classified-data".into()))
+    );
+
+    // Flip one ciphertext byte: decryption must fail, never return garbage.
+    let mut tampered = props.clone();
+    if let Some(Value::Bytes(bytes)) = tampered.get_mut("secret") {
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x01;
+    } else {
+        panic!("secret must be encrypted Bytes at rest");
+    }
+    assert!(
+        fc.decrypt_fields("acme", "doc", &mut tampered, &policy)
+            .is_err(),
+        "tampered ciphertext must fail AEAD authentication"
+    );
+}

@@ -65,7 +65,7 @@ RememberRequest → Validation → OCC Check → HLC Assignment → Write Batch 
 
 The kernel now treats knowledge as a versioned, evidence-backed, evolving object:
 
-- **Epistemic Model** — Every KO carries an epistemic status (`observed`, `extracted`, `asserted`, `inferred`, `verified`, `contradicted`, `superseded`) over a constrained 7-state / 19-move transition table, with append-only epistemic history. `transition_epistemic` is the only legal state-move path.
+- **Epistemic Model** — Every KO carries an epistemic status (`observed`, `extracted`, `asserted`, `inferred`, `verified`, `contradicted`, `superseded`) over a constrained 7-state / 19-move transition table, with append-only epistemic history. Status changes happen only through the semantic ops (`observe`, `assert_knowledge`, `verify_knowledge`, `contradict`, `supersede`, `merge`, `invalidate`, `resolve_conflict`) — the kernel's generic transition primitive is library-level only and is not exposed on any protocol surface.
 - **Valid-Time** — `valid_from` / `valid_to` extensions (half-open `valid_at`) alongside MVCC commit-time. Supersession stamps `valid_to = now` and wires a SUPERSEDES edge. Default `MATCH` filters to facts valid now.
 - **Evidence** — Canonical evidence extension (source_artifact, location, revision, method, confidence). Mandatory on observe / assert / verify / invalidate — unbacked mutations are rejected at the kernel boundary.
 - **Derivation & Confidence** — First-class `Derivation` (operation, actor, model, timestamp, sources, reason) + `ConfidenceContext` (score, confirmations, last_verified). `kernel.derive()` wires DERIVED_FROM edges; invalidation sweeps every dependent via BFS and stamps it stale.

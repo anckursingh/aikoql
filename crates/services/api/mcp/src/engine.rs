@@ -6,6 +6,7 @@ use crate::config::RuntimeEncryption;
 use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto};
 use aikoql_kernel::security::envelope::Envelope;
 use aikoql_kernel::security::field_crypto::EncryptionPolicy;
+use aikoql_kernel::security::hkdf::{self, DOMAIN_STORE};
 use aikoql_kernel::security::kms::LocalKms;
 use aikoql_kernel::security::KeyManager;
 use aikoql_kernel::storage::encrypted::EncryptedStore;
@@ -26,13 +27,17 @@ pub(crate) fn open_kernel(db_path: &str, enc: &RuntimeEncryption) -> KResult<Ker
         ));
     };
     let kms = LocalKms::new(&enc.key_path);
-    // ponytail: KEK reused as the store key and for DEK wrapping (distinct
-    // AEADs with distinct nonce/AAD) — derive via HKDF when KEK rotation lands.
     let kek = kms.master_key(pass).map_err(KError::Store)?;
+    // The store key is a domain-separated subkey of the KEK — the KEK itself
+    // never encrypts data directly (DEK wrapping uses its own subkey).
+    let store_key = hkdf::domain_sep(&kek, DOMAIN_STORE);
     let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
     let envelope = Arc::new(Envelope::init(&kms, pass, crypto.clone()).map_err(KError::Store)?);
-    let store: Arc<dyn StorageEngine> =
-        Arc::new(EncryptedStore::new(Arc::new(engine), crypto.clone(), kek));
+    let store: Arc<dyn StorageEngine> = Arc::new(EncryptedStore::new(
+        Arc::new(engine),
+        crypto.clone(),
+        store_key,
+    ));
     let kernel = Kernel::open(store, Arc::new(SystemClock), 0xA9C9)?
         .with_field_encryption(crypto, envelope)?;
     for (type_name, fields) in &enc.policies {

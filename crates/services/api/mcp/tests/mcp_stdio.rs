@@ -186,6 +186,12 @@ fn m01_initialize_and_tools_list() {
     ] {
         assert!(names.contains(&expected), "missing tool: {}", expected);
     }
+    // Review P0-1: the generic epistemic transition is NOT part of the
+    // protocol surface — epistemic change goes through the semantic ops only.
+    assert!(
+        !names.contains(&"transition_epistemic"),
+        "transition_epistemic must not be exposed as an MCP tool"
+    );
 }
 
 #[test]
@@ -1150,22 +1156,31 @@ fn k1_epistemic_and_evidence_end_to_end() {
     let conf = ev["confidence"].as_f64().expect("confidence present");
     assert!((conf - 0.95).abs() < 1e-6, "confidence {} != 0.95", conf);
 
-    // 4. Epistemic transitions through the protocol, constrained table:
-    // asserted -> verified is legal, and the append-only history lands.
+    // 4. Epistemic transitions through the protocol via the semantic ops:
+    // verify_knowledge is the only route to `verified` (review P0-1 — the
+    // generic transition is not on the protocol surface), and the
+    // append-only history lands.
     let t = c.call_tool(
-        "transition_epistemic",
-        json!({"subject": "agent-researcher", "koid": koid, "to": "verified", "reason": "human review"}),
+        "verify_knowledge",
+        json!({
+            "subject": "agent-researcher",
+            "koid": koid,
+            "evidence": [{"source_artifact": "review-notes.md", "method": "human_provided", "confidence": 0.9}],
+            "note": "human review"
+        }),
     );
-    assert_eq!(t["from"], "asserted");
-    assert_eq!(t["to"], "verified");
+    assert_eq!(t["status"], "verified");
+    assert_eq!(t["confirmations"], 1);
     let ko = c.call_tool("get", json!({"subject": "agent-researcher", "koid": koid}));
+    assert_eq!(ko["extensions"]["epistemic_status"], "verified");
     let history = ko["extensions"]["epistemic_history"].as_array().unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0]["by"], "agent-researcher");
     assert_eq!(history[0]["reason"], "human review");
 
-    // 5. Illegal move surfaces as a tool error (table enforced in
-    // production, not just in the kernel).
+    // 5. The generic transition is NOT a protocol tool: the rawCall surfaces
+    // as a tool error, and illegal epistemic moves fail at the semantic ops
+    // (table enforced in production, not just in the kernel).
     let res = c.request(
         "tools/call",
         json!({
@@ -1251,26 +1266,37 @@ fn k2_temporal_operators_end_to_end() {
     );
     assert_eq!(as_of_now.len(), 2);
 
-    // 5. Supersession through the protocol: validity ends now and the
-    // SUPERSEDES edge old -> new is wired.
+    // 5. Supersession through the protocol via the semantic op: validity
+    // ends now and the SUPERSEDES edge old -> new is wired. The successor
+    // already exists, so supersede() with superseded_by supersedes without
+    // creating a new generation (review P0-1).
     let t = c.call_tool(
-        "transition_epistemic",
+        "supersede",
         json!({
             "subject": "alice",
-            "koid": old_koid,
-            "to": "superseded",
+            "old": old_koid,
             "superseded_by": new_koid,
+            "evidence": [{"source_artifact": "migration-runbook.md", "method": "runtime_observation", "confidence": 0.95}],
             "reason": "migrated to rabbitmq"
         }),
     );
-    assert_eq!(t["from"], "asserted");
-    assert_eq!(t["to"], "superseded");
+    assert_eq!(t["old"], old_koid.as_str());
+    assert_eq!(t["new"], new_koid.as_str());
     let ko = c.call_tool("get", json!({"subject": "alice", "koid": old_koid}));
+    assert_eq!(ko["extensions"]["epistemic_status"], "superseded");
     let valid_to = ko["extensions"]["valid_to"].as_i64().unwrap();
     assert!(
         (valid_to as u64) >= now_ms - 60_000,
         "supersession must end validity at ~now, got {}",
         valid_to
+    );
+    // The supersession evidence is stamped on the old claim — never dropped.
+    assert!(
+        ko["extensions"]["evidence"]
+            .as_array()
+            .map(|e| !e.is_empty())
+            .unwrap_or(false),
+        "supersession evidence must be stamped on the superseded claim"
     );
     let hits = c.call_tool(
         "traverse",
@@ -1285,22 +1311,28 @@ fn k2_temporal_operators_end_to_end() {
     assert_eq!(current.len(), 1);
     assert_eq!(current[0]["properties"]["text"], "we use rabbitmq");
 
-    // 7. HISTORICAL reconstructs every committed version: old appears twice
-    // (asserted + superseded), new once.
+    // 7. HISTORICAL reconstructs every committed version: old appears three
+    // times (created + superseded + evidence stamp), new once.
     let hist = ql(&mut c, "MATCH claim HISTORICAL RETURN *");
-    assert_eq!(hist.len(), 3);
+    assert_eq!(hist.len(), 4);
     let old_versions: Vec<u64> = hist
         .iter()
         .filter(|r| r["koid"] == old_koid.as_str())
         .map(|r| r["version"].as_u64().unwrap())
         .collect();
-    assert_eq!(old_versions, vec![1, 2], "ascending commit order");
+    assert_eq!(old_versions, vec![1, 2, 3], "ascending commit order");
 
     // 8. K1 leftover closed: protocol-level epistemic filter. The successor
-    // passes human review; EPISTEMIC verified returns only it.
+    // passes human review (semantic verification, review P0-1); EPISTEMIC
+    // verified returns only it.
     c.call_tool(
-        "transition_epistemic",
-        json!({"subject": "alice", "koid": new_koid, "to": "verified", "reason": "ops review"}),
+        "verify_knowledge",
+        json!({
+            "subject": "alice",
+            "koid": new_koid,
+            "evidence": [{"source_artifact": "ops-review.md", "method": "human_provided", "confidence": 0.9}],
+            "note": "ops review"
+        }),
     );
     let verified = ql(&mut c, "MATCH claim EPISTEMIC verified RETURN *");
     assert_eq!(verified.len(), 1);

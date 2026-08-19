@@ -180,42 +180,6 @@ pub(crate) fn tool_evolve(k: &Kernel, args: &J) -> Result<J, String> {
     }))
 }
 
-/// v0.3 K1: epistemic status transitions over MCP — the protocol surface for
-/// "how do we know this is true" (distinct from `evolve`'s lifecycle axis).
-pub(crate) fn tool_transition_epistemic(k: &Kernel, args: &J) -> Result<J, String> {
-    let to = args
-        .get("to")
-        .and_then(|x| x.as_str())
-        .ok_or("missing argument: to")?;
-    let to =
-        EpistemicStatus::from_str(to).ok_or_else(|| format!("unknown epistemic status: {}", to))?;
-    // v0.3 K2: naming the successor wires the SUPERSEDES edge + ends validity.
-    let superseded_by = match args.get("superseded_by").and_then(|s| s.as_str()) {
-        Some(hex) => Some(KOID::from_hex(hex).map_err(|e| e.to_string())?),
-        None => None,
-    };
-    let r = k
-        .transition_epistemic(
-            subject_of(args),
-            &koid_of(args)?,
-            to,
-            parse_origin(args),
-            superseded_by,
-            args.get("expected_version").and_then(|v| v.as_u64()),
-            args.get("reason")
-                .and_then(|r| r.as_str())
-                .map(String::from),
-        )
-        .map_err(|e| e.to_string())?;
-    Ok(json!({
-        "koid": r.koid.to_hex(),
-        "version": r.version,
-        "commit_ts": r.commit_ts,
-        "from": r.from.as_str(),
-        "to": r.to.as_str()
-    }))
-}
-
 pub(crate) fn tool_derive(k: &Kernel, args: &J) -> Result<J, String> {
     // v0.3 K3: first-class derivation through the protocol — premises are
     // validated, the derivation record + DERIVED_FROM edges are stamped by
@@ -365,15 +329,26 @@ pub(crate) fn tool_supersede(k: &Kernel, args: &J) -> Result<J, String> {
         .get("old")
         .and_then(|o| o.as_str())
         .ok_or("missing argument: old")?;
-    let type_name = args
-        .get("type_name")
-        .and_then(|t| t.as_str())
-        .ok_or("missing argument: type_name")?;
+    // An existing successor (superseded_by) supersedes without creating a new
+    // generation; type_name/properties are only needed for the create path.
+    let superseded_by = match args.get("superseded_by").and_then(|s| s.as_str()) {
+        Some(hex) => Some(KOID::from_hex(hex).map_err(|e| e.to_string())?),
+        None => None,
+    };
+    let type_name = match (
+        superseded_by,
+        args.get("type_name").and_then(|t| t.as_str()),
+    ) {
+        (None, Some(t)) => t,
+        (None, None) => return Err("missing argument: type_name".into()),
+        (Some(_), t) => t.unwrap_or("Claim"),
+    };
     let mut req = SupersedeRequest::new(
         subject_of(args),
         KOID::from_hex(old_hex).map_err(|e| e.to_string())?,
         type_name,
     );
+    req.superseded_by = superseded_by;
     req.properties = parse_properties(args)?;
     req.evidence = parse_evidence(args)?;
     req.reason = args
