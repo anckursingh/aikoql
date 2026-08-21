@@ -15,6 +15,9 @@
 //! structure + sentence boundaries + semantic similarity + modality
 //! transitions + an optional transformer score, where the boundary policy
 //! (this detector) owns the final decision and the scorer only proposes.
+//! PR-J adds `TransformerBoundaryDetector` — the rule base plus the scorer's
+//! P(same unit): no embedding layer, so an unconfigured scorer degrades to
+//! the rule detector (DoD row 10: the transformer is optional).
 
 use crate::ast::{table_payload_from_node, AstNode, BlockType, DocumentAst};
 use crate::chunking::fragment_text;
@@ -26,7 +29,7 @@ use crate::source::{EvidenceSource, SourceSpan};
 /// Splits a DocumentAst into coherent knowledge units.
 ///
 /// Implementations: RuleBoundaryDetector, EmbeddingBoundaryDetector (PR-H),
-/// HybridBoundaryDetector (PR-I). TransformerBoundaryDetector follows — the
+/// HybridBoundaryDetector (PR-I), TransformerBoundaryDetector (PR-J) — the
 /// transformer is a pluggable implementation, not an architectural
 /// dependency (HLD §16).
 pub trait KnowledgeBoundaryDetector: Send + Sync {
@@ -293,7 +296,11 @@ fn split_text_fragments(
 /// tokenizer would re-cut one — add with real embeddings). Pieces keep the
 /// parent's id with a `-l{n}` suffix, context and geometry; evidence is
 /// re-stamped `hybrid_boundary`.
-fn split_text_at_ceiling(fragments: &mut Vec<KnowledgeFragment>, max_chars: usize) {
+fn split_text_at_ceiling(
+    fragments: &mut Vec<KnowledgeFragment>,
+    max_chars: usize,
+    extractor: &str,
+) {
     let mut out: Vec<KnowledgeFragment> = Vec::new();
     for frag in fragments.drain(..) {
         let text = match &frag.content {
@@ -337,7 +344,7 @@ fn split_text_at_ceiling(fragments: &mut Vec<KnowledgeFragment>, max_chars: usiz
             p.fragment_id = format!("{base_id}-l{li}");
             p.content = FragmentContent::Text(piece.join(" "));
             for ev in &mut p.evidence {
-                ev.extractor = "hybrid_boundary".into();
+                ev.extractor = extractor.into();
             }
             out.push(p);
         }
@@ -350,12 +357,13 @@ fn split_text_at_ceiling(fragments: &mut Vec<KnowledgeFragment>, max_chars: usiz
 /// text+table, …) nests both into a `Mixed` composite that keeps the first
 /// fragment's id, source geometry and context — children keep their own
 /// modality and provenance, and `fragment_text` renders them recursively.
-/// Evidence is re-stamped `hybrid_boundary`; when the transformer score
-/// triggered the merge, the model that decided is recorded on it.
+/// Evidence is re-stamped with the caller's extractor; when the transformer
+/// score triggered the merge, the model that decided is recorded on it.
 fn merge_pair(
     mut a: KnowledgeFragment,
     mut b: KnowledgeFragment,
     via_model: Option<String>,
+    extractor: &str,
 ) -> KnowledgeFragment {
     let a_content = std::mem::replace(&mut a.content, FragmentContent::Text(String::new()));
     let b_content = std::mem::replace(&mut b.content, FragmentContent::Text(String::new()));
@@ -381,7 +389,7 @@ fn merge_pair(
     }
     a.evidence.extend(b.evidence);
     for ev in &mut a.evidence {
-        ev.extractor = "hybrid_boundary".into();
+        ev.extractor = extractor.into();
         if let Some(model) = &via_model {
             ev.model = Some(model.clone());
         }
@@ -461,7 +469,7 @@ impl KnowledgeBoundaryDetector for HybridBoundaryDetector<'_> {
         // split finally re-evaluates inside ceiling-cut pieces: they may
         // still carry topic shifts.
         self.merge(&mut fragments);
-        split_text_at_ceiling(&mut fragments, self.max_chars);
+        split_text_at_ceiling(&mut fragments, self.max_chars, "hybrid_boundary");
         split_text_fragments(
             &mut fragments,
             self.provider,
@@ -505,8 +513,83 @@ impl HybridBoundaryDetector<'_> {
             };
             let a = fragments.remove(i);
             let b = fragments.remove(i);
-            fragments.insert(i, merge_pair(a, b, via_model));
+            fragments.insert(i, merge_pair(a, b, via_model, "hybrid_boundary"));
             // same i: the merged unit may chain with the next one
+        }
+    }
+}
+
+/// Transformer boundary detector (PR-J, HLD §16 Phase 3) — the rule base
+/// plus a transformer `BoundaryScorer`:
+///
+/// ```text
+/// structural boundary   — RuleBoundaryDetector
+/// linguistic boundary   — long Text re-cut at sentence boundaries (max_chars)
+/// transformer score     — scorer's P(same unit) at/above `accept_threshold`
+///                          dissolves the boundary (the policy, not the
+///                          score, decides — HLD §16/§17)
+/// modality transition   — same-unit pairs across modalities nest into
+///                          Mixed composites, exactly as in the hybrid
+/// ```
+///
+/// No embedding layer: the transformer answers "does this boundary separate
+/// two semantically distinct knowledge units?" (HLD §17) and that alone
+/// drives the semantic decision. A scorer returning `None` has no opinion —
+/// the boundary stays, so the detector degrades to the rule detector when
+/// no transformer is configured (DoD row 10: transformer optional).
+pub struct TransformerBoundaryDetector<'a> {
+    scorer: &'a dyn BoundaryScorer,
+    accept_threshold: f32,
+    max_chars: usize,
+}
+
+impl<'a> TransformerBoundaryDetector<'a> {
+    pub fn new(scorer: &'a dyn BoundaryScorer) -> Self {
+        Self {
+            scorer,
+            accept_threshold: TRANSFORMER_ACCEPT,
+            max_chars: 800,
+        }
+    }
+
+    /// Re-tune the policy threshold for a real model's probability scale.
+    pub fn with_accept_threshold(mut self, threshold: f32) -> Self {
+        self.accept_threshold = threshold;
+        self
+    }
+}
+
+impl KnowledgeBoundaryDetector for TransformerBoundaryDetector<'_> {
+    fn name(&self) -> &str {
+        "transformer-boundary"
+    }
+
+    fn detect(&self, ast: &DocumentAst) -> Result<Vec<KnowledgeFragment>, BoundaryError> {
+        let mut fragments = RuleBoundaryDetector.detect(ast)?;
+        // Merge first so the scorer judges the natural document flow; the
+        // linguistic ceiling then bounds the RETRIEVAL unit size — the same
+        // order as the hybrid detector, minus its embedding layers.
+        self.merge(&mut fragments);
+        split_text_at_ceiling(&mut fragments, self.max_chars, "transformer_boundary");
+        finalize_neighbors(&mut fragments);
+        Ok(fragments)
+    }
+}
+
+impl TransformerBoundaryDetector<'_> {
+    fn merge(&self, fragments: &mut Vec<KnowledgeFragment>) {
+        let mut i = 0;
+        while i + 1 < fragments.len() {
+            let score = self.scorer.score_boundary(&fragments[i], &fragments[i + 1]);
+            match score {
+                Some(s) if s.probability >= self.accept_threshold => {
+                    let a = fragments.remove(i);
+                    let b = fragments.remove(i);
+                    fragments.insert(i, merge_pair(a, b, Some(s.model), "transformer_boundary"));
+                    // same i: the merged unit may chain with the next one
+                }
+                _ => i += 1,
+            }
         }
     }
 }
@@ -1374,6 +1457,128 @@ mod tests {
         let ast = figure_plus_text_ast("The payment flow processes invoices nightly.");
         let first = hybrid_detector().detect(&ast).unwrap();
         let second = hybrid_detector().detect(&ast).unwrap();
+        let ids1: Vec<&str> = first.iter().map(|f| f.fragment_id.as_str()).collect();
+        let ids2: Vec<&str> = second.iter().map(|f| f.fragment_id.as_str()).collect();
+        assert_eq!(ids1, ids2);
+        assert!(!ids1.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // PR-J: TransformerBoundaryDetector
+    // ------------------------------------------------------------------
+
+    /// Never has an opinion — the "no transformer configured" seam.
+    struct NoOpinionScorer;
+
+    impl BoundaryScorer for NoOpinionScorer {
+        fn score_boundary(
+            &self,
+            _prev: &KnowledgeFragment,
+            _next: &KnowledgeFragment,
+        ) -> Option<BoundaryScore> {
+            None
+        }
+    }
+
+    fn forcing_scorer(probability: f32) -> &'static ForcingScorer {
+        Box::leak(Box::new(ForcingScorer { probability }))
+    }
+
+    #[test]
+    fn transformer_merges_when_score_above_accept() {
+        let dm = doc(vec![
+            "The payment system processes invoices nightly.\n\nThe payment flow handles invoices every night.",
+        ]);
+        let ast = document_model_to_ast(&dm);
+        let detector = TransformerBoundaryDetector::new(forcing_scorer(0.9));
+        let fragments = detector.detect(&ast).unwrap();
+        assert_eq!(fragments.len(), 1, "strong score dissolves the boundary");
+        assert_eq!(fragments[0].modality, FragmentModality::Text);
+        assert!(fragments[0]
+            .evidence
+            .iter()
+            .all(|e| e.extractor == "transformer_boundary"));
+        assert!(fragments[0]
+            .evidence
+            .iter()
+            .any(|e| e.model.as_deref() == Some("mock-transformer")));
+    }
+
+    #[test]
+    fn transformer_keeps_boundary_below_accept() {
+        let dm = doc(vec![
+            "The payment system processes invoices nightly.\n\nThe office is closed for the winter holidays.",
+        ]);
+        let ast = document_model_to_ast(&dm);
+        let detector = TransformerBoundaryDetector::new(forcing_scorer(0.2));
+        let fragments = detector.detect(&ast).unwrap();
+        assert_eq!(fragments.len(), 2, "weak score leaves the boundary alone");
+    }
+
+    #[test]
+    fn transformer_no_opinion_keeps_rule_boundaries() {
+        // No scorer opinion → the detector degrades to the rule detector
+        // (DoD row 10: transformer optional).
+        let dm = doc(vec![
+            "The payment system processes invoices nightly.\n\nThe office is closed for the winter holidays.",
+        ]);
+        let ast = document_model_to_ast(&dm);
+        let detector = TransformerBoundaryDetector::new(&NoOpinionScorer);
+        let fragments = detector.detect(&ast).unwrap();
+        let rule = RuleBoundaryDetector.detect(&ast).unwrap();
+        assert_eq!(fragments.len(), rule.len());
+        assert_eq!(fragments[0].fragment_id, rule[0].fragment_id);
+        assert_eq!(fragments[1].fragment_id, rule[1].fragment_id);
+        assert!(fragments[0]
+            .evidence
+            .iter()
+            .all(|e| e.extractor != "transformer_boundary"));
+    }
+
+    #[test]
+    fn transformer_merges_figure_with_caption_text_into_mixed() {
+        let ast = figure_plus_text_ast("The payment flow processes invoices nightly.");
+        let detector = TransformerBoundaryDetector::new(forcing_scorer(0.9));
+        let fragments = detector.detect(&ast).unwrap();
+        assert_eq!(fragments.len(), 1, "scorer joins figure + caption");
+        assert_eq!(fragments[0].modality, FragmentModality::Mixed);
+        let rendered = crate::chunking::fragment_text(&fragments[0]);
+        assert!(rendered.contains("payment flow"), "figure caption inside");
+        assert!(rendered.contains("processes invoices"), "text inside");
+    }
+
+    #[test]
+    fn transformer_ceiling_bounds_long_text() {
+        // Same 1025-char paragraph as the hybrid ceiling test; the scorer
+        // has no opinion, so only the linguistic layer cuts.
+        let sentence = "The payment system processes invoices nightly and validates each transaction against the ledger before the settlement job runs and publishes a billing report to the finance team for review every single evening. ";
+        let dm = doc(vec![&sentence.repeat(5)]);
+        let ast = document_model_to_ast(&dm);
+        let detector = TransformerBoundaryDetector::new(&NoOpinionScorer);
+        let fragments = detector.detect(&ast).unwrap();
+        assert_eq!(fragments.len(), 2, "ceiling cuts at sentence boundaries");
+        assert_eq!(fragments[0].fragment_id, "frag-p1-b0-l0");
+        assert_eq!(fragments[1].fragment_id, "frag-p1-b0-l1");
+        for f in &fragments {
+            if let FragmentContent::Text(t) = &f.content {
+                assert!(
+                    t.chars().count() <= 800,
+                    "ceiling pieces must fit max_chars"
+                );
+            }
+        }
+        assert!(fragments.iter().all(|f| f
+            .evidence
+            .iter()
+            .all(|e| e.extractor == "transformer_boundary")));
+    }
+
+    #[test]
+    fn transformer_detector_is_deterministic() {
+        let ast = figure_plus_text_ast("The payment flow processes invoices nightly.");
+        let detector = TransformerBoundaryDetector::new(forcing_scorer(0.9));
+        let first = detector.detect(&ast).unwrap();
+        let second = detector.detect(&ast).unwrap();
         let ids1: Vec<&str> = first.iter().map(|f| f.fragment_id.as_str()).collect();
         let ids2: Vec<&str> = second.iter().map(|f| f.fragment_id.as_str()).collect();
         assert_eq!(ids1, ids2);

@@ -3250,7 +3250,7 @@ The HLD's core architectural position (doc §59): the **DocumentAst is the canon
 | Semantic segmentation between AST and IR (`KnowledgeFragment` + boundary detection) (§22/§37) | D4 goes straight AST → IR; chunking operates directly on the AST | **Missing → PR-C** |
 | Retrieval as projection (`DocumentChunker` → `RetrievalProjector`) (§41/§60) | `chunking.rs` chunks the AST itself | **Present but misplaced → PR-E** |
 | Visual classification (chart/diagram/image analyzers) (§17–20) | Block-level Figure marker heuristic only (`detect_figures`) | **Delivered → PR-F** (mock keyword classifier; VLM seam open) |
-| Transformer/embedding boundary detectors (§16) | None | **Delivered** — PR-G pinned the rule baseline (0.867); PR-H delivered `EmbeddingBoundaryDetector` (mock parity: 0.933/0.862/0.875); PR-I delivered `HybridBoundaryDetector` (all five §16 layers + `BoundaryScorer` transformer seam); a real transformer impl remains §60-gated on measured improvement |
+| Transformer/embedding boundary detectors (§16) | None | **Delivered** — PR-G pinned the rule baseline (0.867); PR-H `EmbeddingBoundaryDetector` (mock parity); PR-I `HybridBoundaryDetector` (all five §16 layers); PR-J `TransformerBoundaryDetector` + feature-gated `TransformScorer` (all four §16 detectors measured in the §60 matrix); a real model provider remains §60-gated on measured improvement |
 | No mandatory heavyweight AI (§56) | Clean — pdf-extract/tesseract only | **Conforms** |
 
 Decisions taken this round (with rationale):
@@ -3342,14 +3342,14 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 7 | Every semantic candidate has typed provenance | ✅ PR-D done — `Evidence.source: Option<EvidenceSource>` on every candidate; geometry sites carry `Region`, table facts carry `TableCell` |
 | 8 | Every visual-derived fact resolves to page/region | ✅ PR-F — diagram candidates carry `DiagramNode`/`DiagramEdge`, chart/formula/image facts carry `Region` evidence with page |
 | 9 | Retrieval chunks are derived projections | ✅ PR-E done — `HeadingProjector` projects whole fragments, never splits one |
-| 10 | Transformer boundary detection optional | ✅ No transformer dependency; `KnowledgeBoundaryDetector` trait is the seam |
+| 10 | Transformer boundary detection optional | ✅ No transformer dependency in the default build; `BoundaryScorer` seam + feature-gated `transform` module (PR-J); a `None` scorer degrades to the rule detector |
 | 11 | Model versions persisted | ✅ PR-F — `MODEL_VISUAL/CHART/DIAGRAM/IMAGE/FORMULA` consts stamped on every visual-derived candidate |
 | 12 | Asset processing content-addressed | ✅ PR-F — persistence wired end to end: `extract_document`/`compile_markdown_file` take an asset dir; identical bytes dedupe in the store |
 | 13 | Incremental ingestion at asset/page level | ✅ PR — `diff_document_models` (asset-granularity detection) + `compile_document_incremental` (page-splice) + `reproject_document` (model change) |
 | 14 | No mandatory heavyweight AI | ✅ Still lopdf/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 390 lib + 10 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 3×2 §60 matrix) + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 396 lib + 10 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 4×2 §60 matrix) + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
 | 19 | CI measures extraction + semantic regression | ✅ DoD 19 — 10 golden PDF fixtures + `multimodal_golden` gate (byte-stable snapshots + entity-recall assertions + per-stage metrics) runs in both CI OSes; dedicated `--nocapture` step publishes §53 metrics to CI logs |
 
@@ -3510,6 +3510,22 @@ HLD §16's first production detector — all five boundary layers: structure + s
 
 **Tests — PR-I (all green 2026-08-21)**: 390 lib tests (368 + 22 boundary); 10/10 acceptance; golden suite 1/1; retrieval-quality 1/1 (3×2 matrix above printed every run); `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets -- -D warnings` clean; `cargo test --workspace` green (61 suites, 0 failures).
 
-### Next implementation — TransformerBoundaryDetector
+### Implemented now — PR-J: TransformerBoundaryDetector (2026-08-21, commit on `feature/mvp-launch`)
 
-HLD §16 Phase 3 — a real `BoundaryScorer` implementation (transformer model, e.g. ONNX/ORT) plus its detector wiring. Per §60 the decision to ship a transformer rests on measured improvement (boundary quality, fact/relation extraction, retrieval recall) against ingestion cost and latency — the PR-I seam makes it a pluggable provider, not a new architecture.
+HLD §16 Phase 3 — the fourth detector and §60's final matrix column. Rule structure + linguistic ceiling + transformer-scored merges only: the scorer's P(same unit) at/above the policy threshold (0.7) dissolves the boundary; no embedding layer, so an unconfigured scorer degrades to the rule detector (DoD row 10: the transformer stays optional). The real scorer is a feature-gated HTTP client (`transform`), never in the default build — §56 intact.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/boundary.rs` | `TransformerBoundaryDetector` (`new` / `with_accept_threshold`): rule base → transformer merge pass → 800-char linguistic ceiling → neighbor finalize; merges re-stamp evidence `transformer_boundary` with the deciding model recorded; `merge_pair` / `split_text_at_ceiling` now take the extractor stamp as a parameter (hybrid passes `hybrid_boundary`); +6 tests (strong score merges, weak keeps, no-opinion degrades to rule ids, figure+caption → Mixed, ceiling bounds, determinism) — 28 boundary tests total. |
+| `crates/ingestion/src/transform.rs` | **New, feature-gated (`transform`).** `TransformScorer` — HTTP `POST {endpoint}/boundary-score` with `{"prev","next"}` → `BoundaryScore`; env-configured (`AIKOQL_TRANSFORM_ENDPOINT`/`_KEY`/`_MODEL`, default model `transform-v1`); `None` on any transport/parse failure — transformer output is untrusted and optional (HLD §17: the policy decides). Mirrors the PR-F `vlm` module pattern. +1 config test. |
+| `crates/ingestion/src/chunking.rs` + `lib.rs` | `fragment_text` made public — scorer implementors render the two candidate halves; exports `TransformerBoundaryDetector` + the feature-gated `transform` module. |
+| `crates/ingestion/Cargo.toml` | Feature `transform = ["dep:ureq"]` — reuses the already-optional ureq dep, no new graph dependency. |
+| `crates/ingestion/tests/retrieval_quality.rs` | §60 matrix is now the full 4 boundaries × 2 rankers: `MockTransformerScorer` (mock-embedding cosine calibrated to a probability — a mock transformer IS a similarity model); transformer corpus projects 14 chunks. |
+
+**§60 matrix measured (Recall@5/MRR/NDCG@5, 15 queries)**: rule-lexical **0.867/0.867/0.867** (baseline); rule-embedding **0.933/0.862/0.875**; embedding/transformer/hybrid cells each mirror their boundary's ranker cells (14 chunks each — the calibrated mock probability never crosses the 0.7 accept threshold on fixture adjacency). Honest read: transformer = parity on the mock, by construction — the mechanism (score → policy threshold → merge) is unit-verified via `ForcingScorer`/`NoOpinionScorer` probes. §60's transformer decision — measured gain on a real model provider vs ingestion cost/latency — remains open and is now fully instrumented end to end.
+
+**Tests — PR-J (all green 2026-08-21)**: 396 lib tests (368 + 28 boundary) + 397 with `--features transform`; 10/10 acceptance; golden suite 1/1; retrieval-quality 1/1 (4×2 matrix printed every run); `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets [--features transform] -- -D warnings` clean on both feature sets; `cargo test --workspace` green (61 suites, 0 failures).
+
+### Next implementation — PR-K: Visual retrieval (HLD §24, HLD PR-H)
+
+`VisualIndexRecord { asset_id, document_id, page, bbox, embedding, semantic_caption, fragment_ids }` — visual embeddings + a visual index as an access path (query → visual similarity → visual object → KnowledgeFragment → KO → evidence), never the source of truth. This is what fills the `visual=N/A` cell of the §60 instrument (a visual ranker over image embeddings) and the `ImagePayload.visual_embedding: Option<Vec<f32>>` field PR-F left empty.

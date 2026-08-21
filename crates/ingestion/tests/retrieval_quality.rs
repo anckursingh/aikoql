@@ -1,16 +1,24 @@
-//! PR-G + PR-H (HLD §60/§53): retrieval-quality benchmarks with the
-//! rule-vs-embedding comparison matrix.
+//! PR-G + PR-H + PR-I + PR-J (HLD §60/§53): retrieval-quality benchmarks
+//! with the four-boundary comparison matrix.
 //!
 //! §60 says the transformer decision must rest on *measured* retrieval
 //! quality, not intuition. PR-G pinned the rule pipeline's numbers; PR-H
-//! adds the first variant and the comparison itself:
+//! added the first variant and the comparison itself; PR-I and PR-J widen
+//! it to the full Rule vs Embedding vs Transformer vs Hybrid matrix:
 //!
 //! ```text
-//!                     lexical ranker   embedding ranker
-//! rule boundary       [baseline]       [variant]
-//! embedding boundary  [variant]        [variant]
-//! hybrid boundary     [variant]        [variant]
+//!                      lexical ranker   embedding ranker
+//! rule boundary        [baseline]       [variant]
+//! embedding boundary   [variant]        [variant]
+//! transformer boundary [variant]        [variant]
+//! hybrid boundary      [variant]        [variant]
 //! ```
+//!
+//! The transformer cell runs the `TransformerBoundaryDetector` (PR-J) with
+//! a deterministic mock scorer — the same mock char-ngram similarity
+//! calibrated to a probability: a mock transformer IS a similarity model,
+//! so its cell is honest about the mechanism while a real model's gain
+//! stays the §60 decision.
 //!
 //! Every golden fixture (HLD §52) compiles through the real mock pipeline
 //! (`compile_document_mock_with_detector`) and its retrieval projection
@@ -44,14 +52,14 @@
 //!
 //! Not covered here (both N/A for a mock-embedding pipeline, printed as
 //! such): hybrid retrieval recall and visual retrieval recall (§53) — they
-//! need a hybrid/VLM boundary, which later PRs add. `scanned.pdf` is also
-//! excluded: the mock compile runs without OCR, so it projects zero chunks
-//! and cannot be judged.
+//! need a hybrid ranker and a visual ranker, which later PRs add.
+//! `scanned.pdf` is also excluded: the mock compile runs without OCR, so it
+//! projects zero chunks and cannot be judged.
 //!
 //! ponytail: no stopword/IDF/position weights in the lexical ranker — replace
 //! with BM25 in the PR that adds a real model provider.
 
-use aikoql_ingestion::EmbeddingProvider;
+use aikoql_ingestion::{BoundaryScore, BoundaryScorer, EmbeddingProvider, KnowledgeFragment};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -307,6 +315,30 @@ fn ndcg_at_k(ranked: &[(&str, usize)], corpus: &[CorpusChunk], qrels: &[String],
     }
 }
 
+/// PR-J: deterministic mock transformer — a transformer scorer IS a
+/// similarity model, so the mock maps mock-embedding cosine to a
+/// probability on [0,1]: p = (cosine + 1) / 2. Same-topic text (mock band
+/// 0.16–0.51) lands at 0.58–0.75 — around the 0.7 accept threshold, exactly
+/// like a real boundary classifier mid-calibration.
+struct MockTransformerScorer;
+
+impl BoundaryScorer for MockTransformerScorer {
+    fn score_boundary(
+        &self,
+        prev: &KnowledgeFragment,
+        next: &KnowledgeFragment,
+    ) -> Option<BoundaryScore> {
+        let provider = aikoql_ingestion::MockEmbeddingProvider::new();
+        let a = provider.embed(&aikoql_ingestion::fragment_text(prev));
+        let b = provider.embed(&aikoql_ingestion::fragment_text(next));
+        let sim = aikoql_ingestion::cosine_similarity(&a, &b);
+        Some(BoundaryScore {
+            probability: (sim + 1.0) / 2.0,
+            model: "mock-transformer".into(),
+        })
+    }
+}
+
 /// One §60 matrix cell: (boundary label, corpus, ranker).
 struct Run {
     boundary: &'static str,
@@ -354,19 +386,22 @@ fn measure(run: &Run, qrels: &[Vec<String>]) -> [f32; 5] {
 
 #[test]
 fn rule_baseline_retrieval_quality() {
-    // Two corpora: the rule boundary detector (baseline) and the embedding
-    // boundary variant (PR-H, HLD §16).
+    // Four corpora: the rule boundary detector (baseline) and the
+    // embedding / transformer / hybrid variants (PR-H/PR-I/PR-J, HLD §16).
     let rule_corpus = corpus(&aikoql_ingestion::RuleBoundaryDetector);
     let emb_provider = aikoql_ingestion::MockEmbeddingProvider::new();
     let emb_detector = aikoql_ingestion::EmbeddingBoundaryDetector::new(&emb_provider);
     let emb_corpus = corpus(&emb_detector);
+    let tfm_detector = aikoql_ingestion::TransformerBoundaryDetector::new(&MockTransformerScorer);
+    let tfm_corpus = corpus(&tfm_detector);
     let hyb_provider = aikoql_ingestion::MockEmbeddingProvider::new();
     let hyb_detector = aikoql_ingestion::HybridBoundaryDetector::new(&hyb_provider);
     let hyb_corpus = corpus(&hyb_detector);
     eprintln!(
-        "[RETRIEVAL-STRUCTURE] rule_boundary_chunks={} embedding_boundary_chunks={} hybrid_boundary_chunks={}",
+        "[RETRIEVAL-STRUCTURE] rule_boundary_chunks={} embedding_boundary_chunks={} transformer_boundary_chunks={} hybrid_boundary_chunks={}",
         rule_corpus.len(),
         emb_corpus.len(),
+        tfm_corpus.len(),
         hyb_corpus.len()
     );
 
@@ -401,6 +436,16 @@ fn rule_baseline_retrieval_quality() {
         Run {
             boundary: "embedding-embedding",
             corpus: emb_corpus,
+            embedding_ranker: true,
+        },
+        Run {
+            boundary: "transformer-lexical",
+            corpus: tfm_corpus.clone(),
+            embedding_ranker: false,
+        },
+        Run {
+            boundary: "transformer-embedding",
+            corpus: tfm_corpus,
             embedding_ranker: true,
         },
         Run {

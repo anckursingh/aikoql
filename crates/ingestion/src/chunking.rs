@@ -324,7 +324,10 @@ fn collect_sections(fragments: &[KnowledgeFragment]) -> Vec<Section<'_>> {
 /// Tables render as pipe-delimited rows (all cell text preserved), visuals
 /// render their textual representations. A generated projection, never the
 /// canonical content — the canonical structure stays in the fragment.
-pub(crate) fn fragment_text(frag: &KnowledgeFragment) -> String {
+///
+/// Public (PR-J): scorer implementors render the two candidate halves
+/// (`BoundaryScorer`) with it.
+pub fn fragment_text(frag: &KnowledgeFragment) -> String {
     match &frag.content {
         FragmentContent::Text(s) | FragmentContent::Code(s) => s.clone(),
         FragmentContent::Table(table) => render_table(table),

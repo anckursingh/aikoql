@@ -107,6 +107,10 @@ impl IngestionPlugin for TextLineIngester {
 mod ocr;
 #[cfg(feature = "vlm")]
 pub mod vlm;
+// PR-J: transformer boundary scorer (HLD §16 Phase 3). Optional — never in
+// the default build (HLD §56/DoD row 10: no mandatory heavyweight AI).
+#[cfg(feature = "transform")]
+pub mod transform;
 pub use ocr::{
     page_needs_ocr, tool_available, BlockBbox, OcrProvider, OcrStats, OcrWord, TesseractCli,
 };
@@ -156,8 +160,8 @@ pub use commit::{
 
 mod chunking;
 pub use chunking::{
-    embed_chunks, project_and_embed, ChunkPosition, ChunkStructure, ChunkingStrategy,
-    DocumentChunk, EmbeddedChunk, HeadingProjector, RetrievalProjector,
+    embed_chunks, fragment_text, project_and_embed, ChunkPosition, ChunkStructure,
+    ChunkingStrategy, DocumentChunk, EmbeddedChunk, HeadingProjector, RetrievalProjector,
 };
 
 // PR-C: knowledge fragments + semantic boundary detection (D4).
@@ -168,6 +172,7 @@ mod boundary;
 pub use boundary::{
     BoundaryError, BoundaryScore, BoundaryScorer, EmbeddingBoundaryDetector,
     HybridBoundaryDetector, KnowledgeBoundaryDetector, RuleBoundaryDetector,
+    TransformerBoundaryDetector,
 };
 
 mod visual;

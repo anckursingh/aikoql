@@ -34,6 +34,10 @@ flate2 = "1"
 # NOT in the default build — self-hosted AIKOQL must not require a VLM
 # (HLD §33: "Do not invoke a VLM for every image").
 vlm = ["dep:ureq"]
+# PR-J HLD §16 Phase 3: optional transformer boundary scorer (ureq,
+# env-configured). NOT in the default build — HLD §56/DoD row 10:
+# no mandatory heavyweight AI.
+transform = ["dep:ureq"]
 
 [[bench]]
 name = "ingest_benchmark"
