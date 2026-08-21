@@ -3275,6 +3275,23 @@ Decisions taken this round (with rationale):
 | `crates/ingestion/src/lib.rs` | Module wiring + re-exports for all of the above. |
 | `crates/ingestion/tests/multimodal_acceptance.rs` | **New.** 6 acceptance tests (below). |
 
+### Implemented next — PR-E: Retrieval projection (2026-08-21, commit on `feature/mvp-launch`)
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/chunking.rs` | Refactored per HLD §41/§60: `DocumentChunker` → **`RetrievalProjector`** trait (`project(fragments, ir) → Vec<DocumentChunk>`), `MockDocumentChunker` → **`HeadingProjector`** (`chunk_and_embed` → **`project_and_embed`**). Chunks now derive from canonical `KnowledgeFragment`s, never the raw AST. **Atomicity invariant**: a chunk may group fragments but never split one — an oversized table fragment becomes its own chunk. Sections group by (page, `heading_path`); overlap is a text-tail carry between chunks in a section, reset per section. Each fragment modality has a text renderer (tables → pipe-delimited rows, images → caption/OCR, charts → title/axis/series, diagrams → node/edge labels, formulas → latex/plain). Chunk evidence is the projected fragments' provenance (extractor `rule_boundary`). 22 tests, incl. `oversized_table_fragment_stays_atomic` + `chunk_boundaries_align_with_fragment_boundaries`. |
+| `crates/ingestion/src/boundary.rs` | Container robustness: empty `Unknown`/Section wrapper nodes recurse into children (content under container nodes was silently dropped — surfaced by the hand-built-AST chunking tests). |
+| `crates/ingestion/src/pipeline.rs` | D8 phase renamed `D8-chunking` → `D8-projection`; `compile_document` takes `projector: &dyn RetrievalProjector`; projects `&fragments` instead of `&ast`. |
+| `crates/ingestion/src/lib.rs` | Exports renamed: `RetrievalProjector`, `HeadingProjector`, `project_and_embed` (old `DocumentChunker`/`MockDocumentChunker`/`chunk_and_embed` removed — no external callers). |
+| `crates/ingestion/tests/multimodal_acceptance.rs` | +1 acceptance test: `acceptance_chunks_project_whole_fragments_never_split` — table content lives in exactly one chunk, whole, through the full pipeline. |
+
+Pipeline is now the §60 target shape end to end:
+
+```text
+DocumentModel → Multimodal DocumentAst → KnowledgeFragment[] → KnowledgeIr
+                                                  └→ RetrievalProjection → DocumentChunk → Embedding
+```
+
 ### Tests (unit + e2e + acceptance) — all green 2026-08-21
 
 - **Unit**: 321 lib tests pass, including 6 new `boundary::tests` (structural boundaries, headings-as-context, table structure preserved, provenance + deterministic ids, empty doc, serde roundtrip) and 3 `source::tests`.
@@ -3300,7 +3317,7 @@ Decisions taken this round (with rationale):
 | 6 | Formulas retain mathematical representation | ✅ `FormulaPayload` types exist; extraction deferred to PR-F |
 | 7 | Every semantic candidate has typed provenance | ⏳ Types exist (`SourceSpan`/`EvidenceSource`); candidate wiring is PR-D |
 | 8 | Every visual-derived fact resolves to page/region | ⏳ With PR-D/PR-F |
-| 9 | Retrieval chunks are derived projections | ⏳ **Next implementation (PR-E)** — chunker refactor over fragments |
+| 9 | Retrieval chunks are derived projections | ✅ PR-E done — `HeadingProjector` projects whole fragments, never splits one |
 | 10 | Transformer boundary detection optional | ✅ No transformer dependency; `KnowledgeBoundaryDetector` trait is the seam |
 | 11 | Model versions persisted | ⏳ Future (PR-F onward) |
 | 12 | Asset processing content-addressed | ⏳ Future (`VisualAssetRef.content_hash` is the field; population is PR-B) |
@@ -3312,6 +3329,6 @@ Decisions taken this round (with rationale):
 | 18 | Multimodal golden fixtures exist | ⏳ Future (PR-E/PR-F benchmarks) |
 | 19 | CI measures extraction + semantic regression | ⏳ Future |
 
-### Next implementation — PR-E: Retrieval projection (HLD §60 step 2)
+### Next implementation — PR-D: Semantic pipeline (HLD §57, completes the §60 diagram)
 
-"Refactor the current `DocumentChunker` into a retrieval projection" — `Fragment → RetrievalProjection → DocumentChunk → Embedding`. The `KnowledgeBoundaryDetector` trait makes this a clean seam: chunking switches from consuming the raw AST to consuming `CompilationResult.fragments`, so chunk boundaries respect semantic segments (a chunk never starts mid-table). PR-B (extraction preservation: PDF/DOCX/HTML keep multimodal structure) and PR-D (AST → Fragment → IR + `EvidenceSource` wiring + `text: Option<String>`) slot in before or alongside. PR-G (transformer/embedding detectors) stays gated on the rule-baseline benchmarks that PR-E makes possible.
+PR-D changes the semantic leg from `AST → IR` to **`AST → Fragment → IR`**: `document_model_to_ir` starts consuming the fragment stream (modality-aware candidate extraction), the typed `EvidenceSource` replaces `Evidence.bbox_text` at the ~20 construction sites in one sweep, and `AstNode.text` migrates `String → Option<String>` with all `.text` consumers switching together. After that: PR-B (extraction preservation — PDF/DOCX/HTML keep multimodal structure) and PR-F (visual analyzers, mock-first). PR-G (transformer/embedding boundary detectors) stays gated on the rule-baseline benchmarks, which are now measurable against the PR-E projection.

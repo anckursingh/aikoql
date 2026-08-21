@@ -151,8 +151,8 @@ pub use commit::{
 
 mod chunking;
 pub use chunking::{
-    chunk_and_embed, embed_chunks, ChunkPosition, ChunkStructure, ChunkingStrategy, DocumentChunk,
-    DocumentChunker, EmbeddedChunk, MockDocumentChunker,
+    embed_chunks, project_and_embed, ChunkPosition, ChunkStructure, ChunkingStrategy,
+    DocumentChunk, EmbeddedChunk, HeadingProjector, RetrievalProjector,
 };
 
 // PR-C: knowledge fragments + semantic boundary detection (D4).

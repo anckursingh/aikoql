@@ -12,7 +12,7 @@
 
 use crate::ast::document_model_to_ast;
 use crate::boundary::{KnowledgeBoundaryDetector, RuleBoundaryDetector};
-use crate::chunking::{chunk_and_embed, DocumentChunker, EmbeddedChunk, MockDocumentChunker};
+use crate::chunking::{project_and_embed, EmbeddedChunk, HeadingProjector, RetrievalProjector};
 use crate::commit::{
     reconcile_and_plan, CommitAction, KnowledgeCommitPlan, KnowledgeReconciler,
     MockKnowledgeReconciler,
@@ -337,7 +337,7 @@ pub fn compile_document(
     analyzer: &dyn SemanticAnalyzer,
     resolver: &dyn EntityResolver,
     reconciler: &dyn KnowledgeReconciler,
-    chunker: &dyn DocumentChunker,
+    projector: &dyn RetrievalProjector,
     embedder: &dyn EmbeddingProvider,
     existing_kos: &[KnowledgeBaseEntry],
 ) -> CompilationResult {
@@ -386,9 +386,10 @@ pub fn compile_document(
     let commit_plan = reconcile_and_plan(&ir, &ontology, &resolution, existing_kos, reconciler);
     let dt_rec = time_now() - t_rec;
 
-    // D8: Chunking + embedding
+    // D8: Retrieval projection + embedding — chunks derive from canonical
+    // fragments (PR-E), never from the raw AST.
     let t_chk = time_now();
-    let embedded_chunks = chunk_and_embed(&ast, Some(&ir), chunker, embedder);
+    let embedded_chunks = project_and_embed(&fragments, Some(&ir), projector, embedder);
     let dt_chk = time_now() - t_chk;
 
     // Evidence trail
@@ -413,7 +414,7 @@ pub fn compile_document(
     );
     stats.add("D6-resolution", dt_res, resolution.stats.total_entities);
     stats.add("D7-reconcile", dt_rec, commit_plan.stats.total_actions);
-    stats.add("D8-chunking", dt_chk, embedded_chunks.len());
+    stats.add("D8-projection", dt_chk, embedded_chunks.len());
     stats.finish(total);
 
     CompilationResult {
@@ -437,14 +438,14 @@ pub fn compile_document_mock(
     let analyzer = crate::MockSemanticAnalyzer::new();
     let resolver = MockEntityResolver::new();
     let reconciler = MockKnowledgeReconciler::new();
-    let chunker = MockDocumentChunker::new();
+    let projector = HeadingProjector::new();
     let embedder = MockEmbeddingProvider::new();
     compile_document(
         doc,
         &analyzer,
         &resolver,
         &reconciler,
-        &chunker,
+        &projector,
         &embedder,
         existing_kos,
     )
@@ -526,7 +527,7 @@ mod tests {
         assert!(phase_names.contains(&"D5-ontology"));
         assert!(phase_names.contains(&"D6-resolution"));
         assert!(phase_names.contains(&"D7-reconcile"));
-        assert!(phase_names.contains(&"D8-chunking"));
+        assert!(phase_names.contains(&"D8-projection"));
         assert!(result.stats.total_us > 0);
     }
 
@@ -710,7 +711,7 @@ mod tests {
             &crate::MockSemanticAnalyzer::new(),
             &MockEntityResolver::new(),
             &MockKnowledgeReconciler::new(),
-            &MockDocumentChunker::new(),
+            &HeadingProjector::new(),
             &embedder,
             &[],
         );
@@ -748,7 +749,7 @@ mod tests {
             &crate::MockSemanticAnalyzer::new(),
             &resolver,
             &MockKnowledgeReconciler::new(),
-            &MockDocumentChunker::new(),
+            &HeadingProjector::new(),
             &MockEmbeddingProvider::new(),
             &kb,
         );

@@ -131,6 +131,47 @@ fn acceptance_retrieval_projection_still_functions() {
 }
 
 #[test]
+fn acceptance_chunks_project_whole_fragments_never_split() {
+    // PR-E invariant through the full pipeline: every chunk is composed of
+    // whole fragments. Table content appears in exactly one chunk, whole.
+    let doc = invoice_doc();
+    let result = compile_document_mock(&doc, &[]);
+
+    let table_chunks: Vec<&aikoql_ingestion::DocumentChunk> = result
+        .embedded_chunks
+        .iter()
+        .map(|ec| &ec.chunk)
+        .filter(|c| c.text.contains("Widget | 10"))
+        .collect();
+    assert_eq!(
+        table_chunks.len(),
+        1,
+        "table rows live in exactly one chunk"
+    );
+    let chunk = table_chunks[0];
+    assert!(
+        chunk.text.contains("Gadget | 5") && chunk.text.contains("$12.00"),
+        "the table chunk carries the whole table"
+    );
+
+    // Fragment and chunk sets must agree: chunk texts are built from the
+    // fragments emitted by the same compile, so the union of chunk content
+    // for the table equals the table fragment's rendered rows.
+    let table_fragment = result
+        .fragments
+        .iter()
+        .find(|f| f.modality == FragmentModality::Table)
+        .expect("table fragment");
+    match &table_fragment.content {
+        FragmentContent::Table(payload) => {
+            assert!(payload.cells.iter().any(|c| c.text == "$2.50"));
+            assert!(chunk.text.contains("Item | Qty | Unit Price"));
+        }
+        other => panic!("expected table content, got {:?}", other),
+    }
+}
+
+#[test]
 fn acceptance_serde_backward_and_forward_compatible() {
     let doc = invoice_doc();
     let result = compile_document_mock(&doc, &[]);

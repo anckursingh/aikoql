@@ -183,7 +183,17 @@ fn emit_block(
         // Visual modalities (Figure/Chart/Diagram/Formula) emit Text
         // fragments until PR-F classification attaches real assets —
         // the text content is the figure marker + caption.
-        _ => out.push(text_fragment(node, page, block_idx, heading_path)),
+        _ => {
+            // Empty container (Unknown/Section wrappers): recurse so wrapped
+            // content is never silently dropped.
+            if node.text.trim().is_empty() && !node.children.is_empty() {
+                for (child_idx, child) in node.children.iter().enumerate() {
+                    emit_block(child, page, child_idx, heading_path, out);
+                }
+            } else {
+                out.push(text_fragment(node, page, block_idx, heading_path));
+            }
+        }
     }
 }
 

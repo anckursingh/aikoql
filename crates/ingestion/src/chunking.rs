@@ -1,19 +1,25 @@
-//! D8: Document Chunking — semantic segmentation for vector retrieval.
+//! D8: Retrieval projection — packaging knowledge fragments for vector search.
 //!
-//! Splits a `DocumentAst` into semantically coherent chunks, enriches each
-//! chunk with document context (heading path, page, entity mentions), and
-//! optionally embeds chunks using an `EmbeddingProvider`. The output feeds
-//! into the vector engine for HNSW indexing and hybrid BM25+vector retrieval.
+//! PR-E (HLD §41/§60): chunking is a *projection* of the canonical
+//! `KnowledgeFragment` stream, never a second source of truth. The
+//! `KnowledgeBoundaryDetector` owns semantic segmentation; the projector only
+//! packages fragments into retrieval-sized chunks with structural metadata.
 //!
 //! # Architecture
-//! - `DocumentChunk` — text segment with structural metadata
+//! - `DocumentChunk` — retrieval unit with structural metadata
 //! - `EmbeddedChunk` — chunk + embedding vector, ready for the vector engine
-//! - `ChunkingStrategy` — how to split the document
-//! - `DocumentChunker` trait — pluggable chunking
-//! - `MockDocumentChunker` — heading-aware chunking with overlap
+//! - `ChunkingStrategy` — packaging policy (how much text per chunk)
+//! - `RetrievalProjector` trait — pluggable projection
+//! - `HeadingProjector` — heading-aware projection with overlap
+//!
+//! # Atomicity invariant
+//! A chunk may *group* fragments but never *split* one: a table fragment stays
+//! whole in one chunk even when it exceeds `max_chunk_chars`. Retrieval must
+//! never hand a consumer half a table.
 
-use crate::ast::{AstNode, BlockType, DocumentAst};
+use crate::ast::{ChartPayload, DiagramPayload, FormulaPayload, ImagePayload, TablePayload};
 use crate::embedding::EmbeddingProvider;
+use crate::fragment::{FragmentContent, KnowledgeFragment};
 use crate::ir::{Evidence, KnowledgeIr};
 
 // ---------------------------------------------------------------------------
@@ -35,7 +41,7 @@ pub struct DocumentChunk {
     pub structure: ChunkStructure,
     /// Entities mentioned in this chunk (from KnowledgeIr).
     pub entity_mentions: Vec<String>,
-    /// Provenance evidence.
+    /// Provenance evidence of the fragments projected into this chunk.
     pub evidence: Vec<Evidence>,
 }
 
@@ -57,7 +63,8 @@ pub struct ChunkPosition {
 pub struct ChunkStructure {
     /// Breadcrumb of headings leading to this chunk (e.g. ["Chapter 1", "Introduction"]).
     pub heading_path: Vec<String>,
-    /// The block type that generated this chunk (e.g. "paragraph", "list", "table").
+    /// The fragment modality that generated this chunk (e.g. "text", "table"),
+    /// or "mixed" when fragments of different modalities share a chunk.
     pub source_type: String,
     /// The section or heading text immediately above this chunk.
     pub section_title: Option<String>,
@@ -80,26 +87,27 @@ pub struct EmbeddedChunk {
 // Chunking strategy
 // ---------------------------------------------------------------------------
 
-/// How to segment a document into chunks.
+/// How to package fragments into chunks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChunkingStrategy {
-    /// Split at heading boundaries. Each heading + its content becomes a chunk.
-    /// Sub-headings create sub-chunks. Maximum chunk size is configurable.
+    /// Group fragments under a heading into chunks. Fragments are packed
+    /// greedily up to `max_chunk_chars`; an oversized fragment stays atomic.
     Heading {
-        /// Maximum characters per chunk before forced split.
+        /// Maximum characters per chunk before starting a new one.
         max_chunk_chars: usize,
         /// Character overlap between adjacent chunks for context continuity.
         overlap_chars: usize,
     },
-    /// Split at paragraph boundaries. Each paragraph is a chunk.
-    /// Adjacent small paragraphs may be merged.
+    /// One chunk per fragment group under a heading, packing small adjacent
+    /// fragments up to `max_chunk_chars`; never splits a fragment.
     Paragraph {
-        /// Maximum characters per chunk (merge paragraphs up to this limit).
+        /// Maximum characters per chunk.
         max_chunk_chars: usize,
         /// Minimum characters for a standalone chunk.
         min_chunk_chars: usize,
     },
-    /// Fixed-size sliding window with overlap.
+    /// Fixed-size sliding window over the flattened fragment stream.
+    /// Splits at fragment boundaries (never mid-fragment).
     FixedWindow {
         /// Window size in characters.
         window_chars: usize,
@@ -118,66 +126,81 @@ impl Default for ChunkingStrategy {
 }
 
 // ---------------------------------------------------------------------------
-// DocumentChunker trait
+// RetrievalProjector trait
 // ---------------------------------------------------------------------------
 
-/// Pluggable document chunking: DocumentAst → Vec<DocumentChunk>.
-pub trait DocumentChunker: Send + Sync {
-    /// Human-readable name (e.g. "mock-heading", "semantic-llm").
+/// Pluggable retrieval projection: KnowledgeFragment[] → Vec<DocumentChunk>.
+///
+/// Contract (HLD §59): the projector derives chunks from canonical fragments.
+/// It must never split a fragment, and must never invent content the fragment
+/// stream doesn't carry (heading text in a chunk is the heading_path echoed
+/// from fragment context).
+pub trait RetrievalProjector: Send + Sync {
+    /// Human-readable name (e.g. "heading-projection").
     fn name(&self) -> &str;
 
     /// Current chunking strategy.
     fn strategy(&self) -> &ChunkingStrategy;
 
-    /// Chunk a document AST into semantic segments.
+    /// Project fragments into retrieval chunks.
     /// The optional `ir` provides entity mentions for enrichment.
-    fn chunk(&self, ast: &DocumentAst, ir: Option<&KnowledgeIr>) -> Vec<DocumentChunk>;
+    fn project(
+        &self,
+        fragments: &[KnowledgeFragment],
+        ir: Option<&KnowledgeIr>,
+    ) -> Vec<DocumentChunk>;
 }
 
 // ---------------------------------------------------------------------------
-// Mock chunker — heading-based segmentation
+// Heading projector — heading-based projection
 // ---------------------------------------------------------------------------
 
-/// Heading-aware chunker using document structure.
+/// Heading-aware retrieval projection.
 ///
 /// Strategy:
-/// - Walks the AST depth-first, tracking the current heading path.
-/// - Content under each heading becomes a chunk.
-/// - Large sections (> max_chunk_chars) are split at paragraph boundaries.
-/// - Adjacent chunks overlap by `overlap_chars` characters for context continuity.
+/// - Groups fragments into sections by (page, heading_path).
+/// - Packs each section's fragments greedily into chunks up to
+///   `max_chunk_chars`; a fragment larger than the limit becomes its own
+///   atomic chunk.
+/// - Adjacent chunks overlap by `overlap_chars` characters (text-level tail
+///   carry; fragment boundaries are still respected).
 /// - Entity mentions from KnowledgeIr are attached to chunks.
-pub struct MockDocumentChunker {
+pub struct HeadingProjector {
     strategy: ChunkingStrategy,
 }
 
-impl Default for MockDocumentChunker {
+impl Default for HeadingProjector {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl MockDocumentChunker {
+impl HeadingProjector {
     pub fn new() -> Self {
-        MockDocumentChunker {
+        HeadingProjector {
             strategy: ChunkingStrategy::default(),
         }
     }
 
     pub fn with_strategy(strategy: ChunkingStrategy) -> Self {
-        MockDocumentChunker { strategy }
+        HeadingProjector { strategy }
     }
 }
 
-impl DocumentChunker for MockDocumentChunker {
+impl RetrievalProjector for HeadingProjector {
     fn name(&self) -> &str {
-        "mock-heading"
+        "heading-projection"
     }
 
     fn strategy(&self) -> &ChunkingStrategy {
         &self.strategy
     }
 
-    fn chunk(&self, ast: &DocumentAst, ir: Option<&KnowledgeIr>) -> Vec<DocumentChunk> {
+    fn project(
+        &self,
+        fragments: &[KnowledgeFragment],
+        ir: Option<&KnowledgeIr>,
+    ) -> Vec<DocumentChunk> {
         let (max_chunk, overlap) = match &self.strategy {
             ChunkingStrategy::Heading {
                 max_chunk_chars,
@@ -197,64 +220,59 @@ impl DocumentChunker for MockDocumentChunker {
             .and_then(|i| i.document_id.as_deref())
             .unwrap_or("unknown");
 
-        let mut chunks: Vec<DocumentChunk> = Vec::new();
-        let mut char_offset: usize = 0;
-        let heading_path: Vec<String> = Vec::new();
-
-        // Build entity mention lookup: text substring → entity names.
         let entity_map = build_entity_map(ir);
 
-        for (pi, page) in ast.pages.iter().enumerate() {
-            let page_num = (pi + 1) as u32;
-            let page_sections = collect_sections(&page.children, &heading_path);
+        let mut chunks: Vec<DocumentChunk> = Vec::new();
+        let mut char_offset: usize = 0;
 
-            for section in &page_sections {
-                if section.text.trim().is_empty() {
+        for section in collect_sections(fragments) {
+            let mut pending: Vec<&KnowledgeFragment> = Vec::new();
+            let mut pending_len: usize = 0;
+            let mut section_chunk_idx = 0usize;
+            // Overlap carry from the previous chunk in this section — a text
+            // tail for context continuity, reset per section (matches the
+            // pre-PR-E behavior of no cross-section overlap).
+            let mut carry: String = String::new();
+
+            for frag in section.fragments.iter() {
+                let text = fragment_text(frag);
+                if text.trim().is_empty() {
                     continue;
                 }
-
-                let entities = find_entity_mentions(&section.text, &entity_map);
-
-                // If the section is small enough, emit as a single chunk.
-                if section.text.len() <= max_chunk {
-                    let chunk_id = format!("{}/chunk-{:04}", document_id, chunks.len());
-                    chunks.push(DocumentChunk {
-                        chunk_id,
-                        text: section.text.clone(),
-                        char_count: section.text.len(),
-                        position: ChunkPosition {
-                            chunk_index: chunks.len(),
-                            start_page: page_num,
-                            end_page: page_num,
-                            char_offset,
-                        },
-                        structure: ChunkStructure {
-                            heading_path: section.heading_path.clone(),
-                            source_type: section.source_type.clone(),
-                            section_title: section.heading_path.last().cloned(),
-                            section_chunk_index: 0,
-                        },
-                        entity_mentions: entities,
-                        evidence: evidence_for_page(page_num),
-                    });
-                    char_offset += section.text.len();
-                    continue;
+                // Atomicity: an oversized fragment is its own chunk.
+                if !pending.is_empty() && pending_len + text.len() + 1 > max_chunk {
+                    let chunk_text = emit_chunk(
+                        &pending,
+                        &carry,
+                        &section,
+                        section_chunk_idx,
+                        &mut chunks,
+                        document_id,
+                        &mut char_offset,
+                        &entity_map,
+                    );
+                    section_chunk_idx += 1;
+                    pending.clear();
+                    pending_len = 0;
+                    if overlap > 0 && chunk_text.len() > overlap {
+                        carry = chunk_text[chunk_text.len() - overlap..].to_string();
+                    }
                 }
+                pending.push(frag);
+                pending_len += text.len() + 1;
+            }
 
-                // Large section — split at paragraph boundaries with overlap.
-                let sub_chunks = split_section(
-                    &section.text,
-                    max_chunk,
-                    overlap,
-                    &section.heading_path,
-                    &section.source_type,
-                    &entity_map,
+            if !pending.is_empty() {
+                emit_chunk(
+                    &pending,
+                    &carry,
+                    &section,
+                    section_chunk_idx,
+                    &mut chunks,
                     document_id,
-                    page_num,
-                    chunks.len(),
                     &mut char_offset,
+                    &entity_map,
                 );
-                chunks.extend(sub_chunks);
             }
         }
 
@@ -262,164 +280,264 @@ impl DocumentChunker for MockDocumentChunker {
     }
 }
 
-/// A logical section extracted from the AST.
+/// A logical section: fragments sharing (page, heading_path), in doc order.
 #[derive(Clone, Debug)]
-struct Section {
-    text: String,
+struct Section<'a> {
+    page: u32,
     heading_path: Vec<String>,
-    source_type: String,
+    fragments: Vec<&'a KnowledgeFragment>,
 }
 
-/// Walk AST nodes and collect text grouped by sections (heading boundaries).
-fn collect_sections(nodes: &[AstNode], initial_path: &[String]) -> Vec<Section> {
-    let mut sections: Vec<Section> = Vec::new();
-    let mut heading_path: Vec<String> = initial_path.to_vec();
-    let mut current_text = String::new();
-    let mut current_source = "paragraph".to_string();
+/// Group fragments into sections. A section boundary is a page change or a
+/// heading_path change; both come from the boundary detector.
+fn collect_sections(fragments: &[KnowledgeFragment]) -> Vec<Section<'_>> {
+    let mut sections: Vec<Section<'_>> = Vec::new();
 
-    for node in nodes {
-        match &node.block_type {
-            BlockType::Heading { level: _ } | BlockType::Title => {
-                // Flush prior section with current heading_path.
-                if !current_text.trim().is_empty() {
-                    sections.push(Section {
-                        text: std::mem::take(&mut current_text),
-                        heading_path: heading_path.clone(),
-                        source_type: std::mem::take(&mut current_source),
-                    });
-                }
-                // Update heading path for content under this heading.
-                heading_path.push(node.text.clone());
-                // Recurse into children with the updated heading path.
-                if !node.children.is_empty() {
-                    sections.extend(collect_sections(&node.children, &heading_path));
-                }
-                // The heading text itself starts the new section content.
-                current_text.push_str(&node.text);
-                current_text.push('\n');
-                current_source = format!("heading-{}", heading_path.len());
-            }
-            _ => {
-                if !node.text.trim().is_empty() {
-                    if !current_text.is_empty() && !current_text.ends_with('\n') {
-                        current_text.push('\n');
-                    }
-                    current_text.push_str(&node.text);
-                }
-                // Recurse into children with current heading_path.
-                if !node.children.is_empty() {
-                    sections.extend(collect_sections(&node.children, &heading_path));
-                }
-            }
+    for frag in fragments {
+        let page = frag
+            .source
+            .as_ref()
+            .map(|s| s.page)
+            .or(frag.context.page)
+            .unwrap_or(1);
+        let heading_path = frag.context.heading_path.clone();
+
+        let starts_new = match sections.last() {
+            Some(last) => last.page != page || last.heading_path != heading_path,
+            None => true,
+        };
+        if starts_new {
+            sections.push(Section {
+                page,
+                heading_path,
+                fragments: Vec::new(),
+            });
         }
-    }
-
-    // Flush final section with current heading_path.
-    if !current_text.trim().is_empty() {
-        sections.push(Section {
-            text: current_text,
-            heading_path,
-            source_type: current_source,
-        });
+        sections.last_mut().unwrap().fragments.push(frag);
     }
 
     sections
 }
 
-/// Split a large section into sub-chunks at sentence/paragraph boundaries with overlap.
-fn split_section(
-    text: &str,
-    max_chars: usize,
-    overlap: usize,
-    heading_path: &[String],
-    source_type: &str,
-    entity_map: &std::collections::HashMap<String, Vec<String>>,
+/// Render a fragment's canonical content into retrieval text.
+///
+/// Tables render as pipe-delimited rows (all cell text preserved), visuals
+/// render their textual representations. A generated projection, never the
+/// canonical content — the canonical structure stays in the fragment.
+fn fragment_text(frag: &KnowledgeFragment) -> String {
+    match &frag.content {
+        FragmentContent::Text(s) | FragmentContent::Code(s) => s.clone(),
+        FragmentContent::Table(table) => render_table(table),
+        FragmentContent::Image(image) => render_image(image),
+        FragmentContent::Chart(chart) => render_chart(chart),
+        FragmentContent::Diagram(diagram) => render_diagram(diagram),
+        FragmentContent::Formula(formula) => render_formula(formula),
+        FragmentContent::Mixed(children) => children
+            .iter()
+            .map(|child| fragment_text(child))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+fn render_table(table: &TablePayload) -> String {
+    let header = table
+        .headers
+        .iter()
+        .map(|h| h.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let mut lines = vec![header];
+    for row in &table.rows {
+        let cells = table
+            .headers
+            .iter()
+            .map(|h| {
+                table
+                    .cells
+                    .iter()
+                    .find(|c| c.row_id == row.id && c.column_id == h.id)
+                    .map(|c| c.text.as_str())
+                    .unwrap_or("")
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        lines.push(cells);
+    }
+    lines.join("\n")
+}
+
+fn render_image(image: &ImagePayload) -> String {
+    match (&image.caption, &image.ocr_text) {
+        (Some(caption), Some(ocr)) => format!("{}\n{}", caption, ocr),
+        (Some(caption), None) => caption.clone(),
+        (None, Some(ocr)) => ocr.clone(),
+        (None, None) => String::new(),
+    }
+}
+
+fn render_chart(chart: &ChartPayload) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(title) = &chart.title {
+        parts.push(title.clone());
+    }
+    for axis in [&chart.x_axis, &chart.y_axis].into_iter().flatten() {
+        if let Some(label) = &axis.label {
+            parts.push(label.clone());
+        }
+    }
+    for series in &chart.series {
+        parts.push(series.name.clone());
+    }
+    parts.join("\n")
+}
+
+fn render_diagram(diagram: &DiagramPayload) -> String {
+    let mut parts: Vec<String> = diagram.nodes.iter().map(|n| n.label.clone()).collect();
+    parts.extend(
+        diagram
+            .edges
+            .iter()
+            .filter_map(|e| e.label.clone())
+            .collect::<Vec<_>>(),
+    );
+    parts.join("\n")
+}
+
+fn render_formula(formula: &FormulaPayload) -> String {
+    formula
+        .latex
+        .clone()
+        .or_else(|| formula.plain_text.clone())
+        .unwrap_or_default()
+}
+
+/// Assemble + push one chunk for the given fragment set. Returns the chunk
+/// text so the caller can derive the next overlap carry.
+#[allow(clippy::too_many_arguments)] // projection assembly — one call site
+fn emit_chunk(
+    pending: &[&KnowledgeFragment],
+    carry: &str,
+    section: &Section<'_>,
+    section_chunk_idx: usize,
+    chunks: &mut Vec<DocumentChunk>,
     document_id: &str,
-    page_num: u32,
-    start_index: usize,
     char_offset: &mut usize,
-) -> Vec<DocumentChunk> {
-    let mut chunks: Vec<DocumentChunk> = Vec::new();
-    let paragraphs: Vec<&str> = text.split('\n').filter(|p| !p.trim().is_empty()).collect();
+    entity_map: &std::collections::HashMap<String, Vec<String>>,
+) -> String {
+    let text = assemble_text(
+        pending,
+        carry,
+        &section.heading_path,
+        section_chunk_idx == 0,
+    );
+    let chunk = make_chunk(
+        &text,
+        document_id,
+        chunks.len(),
+        section.page,
+        pending,
+        section,
+        section_chunk_idx,
+        char_offset,
+        entity_map,
+    );
+    chunks.push(chunk);
+    text
+}
 
-    let mut current = String::new();
-    let mut section_chunk_idx = 0usize;
-
-    for para in paragraphs {
-        // If adding this paragraph exceeds the limit, flush current chunk.
-        if !current.is_empty() && current.len() + para.len() + 1 > max_chars {
-            let chunk_idx = start_index + chunks.len();
-            let chunk_id = format!("{}/chunk-{:04}", document_id, chunk_idx);
-            let entities = find_entity_mentions(&current, entity_map);
-
-            chunks.push(DocumentChunk {
-                chunk_id,
-                text: current.clone(),
-                char_count: current.len(),
-                position: ChunkPosition {
-                    chunk_index: chunk_idx,
-                    start_page: page_num,
-                    end_page: page_num,
-                    char_offset: *char_offset,
-                },
-                structure: ChunkStructure {
-                    heading_path: heading_path.to_vec(),
-                    source_type: source_type.to_string(),
-                    section_title: heading_path.last().cloned(),
-                    section_chunk_index: section_chunk_idx,
-                },
-                entity_mentions: entities,
-                evidence: evidence_for_page(page_num),
-            });
-
-            *char_offset += current.len();
-            section_chunk_idx += 1;
-
-            // Start new chunk with overlap from the end of the previous.
-            if overlap > 0 && current.len() > overlap {
-                current = current[current.len() - overlap..].to_string();
-                current.push('\n');
-            } else {
-                current = String::new();
-            }
-        }
-
-        if !current.is_empty() {
-            current.push('\n');
-        }
-        current.push_str(para);
+/// Assemble a chunk's text from whole fragments, plus the overlap carry and
+/// (on the first chunk of a section) the heading path so retrieval matches
+/// heading terms. Later chunks inherit context via the overlap carry.
+fn assemble_text(
+    pending: &[&KnowledgeFragment],
+    carry: &str,
+    heading_path: &[String],
+    with_heading: bool,
+) -> String {
+    let mut text = String::new();
+    if !carry.is_empty() {
+        text.push_str(carry);
+        text.push('\n');
     }
-
-    // Flush final partial chunk.
-    if !current.trim().is_empty() {
-        let chunk_idx = start_index + chunks.len();
-        let chunk_id = format!("{}/chunk-{:04}", document_id, chunk_idx);
-        let entities = find_entity_mentions(&current, entity_map);
-
-        chunks.push(DocumentChunk {
-            chunk_id,
-            text: current,
-            char_count: 0, // computed below
-            position: ChunkPosition {
-                chunk_index: chunk_idx,
-                start_page: page_num,
-                end_page: page_num,
-                char_offset: *char_offset,
-            },
-            structure: ChunkStructure {
-                heading_path: heading_path.to_vec(),
-                source_type: source_type.to_string(),
-                section_title: heading_path.last().cloned(),
-                section_chunk_index: section_chunk_idx,
-            },
-            entity_mentions: entities,
-            evidence: evidence_for_page(page_num),
-        });
-        // Fix char_count for the last chunk.
-        chunks.last_mut().unwrap().char_count = chunks.last().unwrap().text.len();
+    if with_heading && !heading_path.is_empty() {
+        text.push_str(&heading_path.join("\n"));
+        text.push('\n');
     }
+    for (i, frag) in pending.iter().enumerate() {
+        if i > 0 {
+            text.push('\n');
+        }
+        text.push_str(&fragment_text(frag));
+    }
+    text
+}
 
-    chunks
+/// Build one DocumentChunk from the given fragment set.
+#[allow(clippy::too_many_arguments)] // projection assembly — one call site
+fn make_chunk(
+    text: &str,
+    document_id: &str,
+    chunk_index: usize,
+    page: u32,
+    frags: &[&KnowledgeFragment],
+    section: &Section<'_>,
+    section_chunk_index: usize,
+    char_offset: &mut usize,
+    entity_map: &std::collections::HashMap<String, Vec<String>>,
+) -> DocumentChunk {
+    let chunk_id = format!("{}/chunk-{:04}", document_id, chunk_index);
+
+    // Modality label: the single modality when all fragments agree, else mixed.
+    let mut modalities = frags
+        .iter()
+        .map(|f| modality_name(&f.modality))
+        .collect::<Vec<_>>();
+    modalities.dedup();
+    let source_type = if modalities.len() == 1 {
+        modalities[0].to_string()
+    } else {
+        "mixed".to_string()
+    };
+
+    let entities = find_entity_mentions(text, entity_map);
+    let evidence = frags.iter().flat_map(|f| f.evidence.clone()).collect();
+
+    let chunk = DocumentChunk {
+        chunk_id,
+        text: text.to_string(),
+        char_count: text.len(),
+        position: ChunkPosition {
+            chunk_index,
+            start_page: page,
+            end_page: page,
+            char_offset: *char_offset,
+        },
+        structure: ChunkStructure {
+            heading_path: section.heading_path.clone(),
+            source_type,
+            section_title: section.heading_path.last().cloned(),
+            section_chunk_index,
+        },
+        entity_mentions: entities,
+        evidence,
+    };
+    *char_offset += text.len();
+    chunk
+}
+
+fn modality_name(m: &crate::fragment::FragmentModality) -> &'static str {
+    use crate::fragment::FragmentModality as M;
+    match m {
+        M::Text => "text",
+        M::Table => "table",
+        M::Image => "image",
+        M::Chart => "chart",
+        M::Diagram => "diagram",
+        M::Formula => "formula",
+        M::Code => "code",
+        M::Mixed => "mixed",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -460,18 +578,6 @@ fn find_entity_mentions(
     result
 }
 
-/// Create a minimal evidence record for a page.
-fn evidence_for_page(page: u32) -> Vec<Evidence> {
-    vec![Evidence {
-        document_id: None,
-        page: Some(page),
-        bbox_text: None,
-        extractor: "mock-chunker".into(),
-        model: Some("mock-v1".into()),
-        confidence: 1.0,
-    }]
-}
-
 // ---------------------------------------------------------------------------
 // Embedding bridge
 // ---------------------------------------------------------------------------
@@ -495,14 +601,14 @@ pub fn embed_chunks(
         .collect()
 }
 
-/// Convenience: chunk + embed in one call.
-pub fn chunk_and_embed(
-    ast: &DocumentAst,
+/// Convenience: project + embed in one call.
+pub fn project_and_embed(
+    fragments: &[KnowledgeFragment],
     ir: Option<&KnowledgeIr>,
-    chunker: &dyn DocumentChunker,
+    projector: &dyn RetrievalProjector,
     provider: &dyn EmbeddingProvider,
 ) -> Vec<EmbeddedChunk> {
-    let chunks = chunker.chunk(ast, ir);
+    let chunks = projector.project(fragments, ir);
     embed_chunks(&chunks, provider)
 }
 
@@ -514,8 +620,9 @@ pub fn chunk_and_embed(
 mod tests {
     use super::*;
     use crate::ast::{AstNode, BlockType, DocumentAst};
+    use crate::boundary::{KnowledgeBoundaryDetector, RuleBoundaryDetector};
     use crate::embedding::MockEmbeddingProvider;
-    use crate::ir::{EntityCandidate, Evidence};
+    use crate::ir::EntityCandidate;
 
     fn make_ast(pages: Vec<Vec<AstNode>>) -> DocumentAst {
         let page_count = pages.len() as u32;
@@ -535,6 +642,14 @@ mod tests {
             page_count,
             source_type: "native".into(),
         }
+    }
+
+    /// Real PR-E flow: AST → boundary detector → fragments (what the
+    /// projector consumes in production).
+    fn fragments(ast: &DocumentAst) -> Vec<KnowledgeFragment> {
+        RuleBoundaryDetector
+            .detect(ast)
+            .expect("boundary detection")
     }
 
     fn paragraph(text: &str) -> AstNode {
@@ -569,19 +684,19 @@ mod tests {
         }
     }
 
-    // ── Basic chunking ──
+    // ── Basic projection ──
 
     #[test]
-    fn mock_chunker_has_name() {
-        let c = MockDocumentChunker::new();
-        assert_eq!(c.name(), "mock-heading");
+    fn projector_has_name() {
+        let p = HeadingProjector::new();
+        assert_eq!(p.name(), "heading-projection");
     }
 
     #[test]
     fn single_paragraph_becomes_one_chunk() {
         let ast = make_ast(vec![vec![paragraph("This is a single paragraph of text.")]]);
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, None);
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
 
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].text.contains("single paragraph"));
@@ -598,8 +713,8 @@ mod tests {
             paragraph("We used the following methods."),
         ]]);
 
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, None);
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
 
         assert!(chunks.len() >= 2);
         // First chunk should contain Introduction + its paragraph.
@@ -622,8 +737,8 @@ mod tests {
             paragraph("An overview of the topic."),
         ]]);
 
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, None);
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
 
         let overview = chunks.iter().find(|c| c.text.contains("Overview")).unwrap();
         assert!(overview
@@ -636,7 +751,7 @@ mod tests {
             .contains(&"Overview".to_string()));
     }
 
-    // ── Large section splitting ──
+    // ── Large section splitting (fragment-atomic) ──
 
     #[test]
     fn large_section_is_split() {
@@ -657,11 +772,11 @@ mod tests {
         }]]);
 
         // Use a small max_chunk_chars to force splits.
-        let chunker = MockDocumentChunker::with_strategy(ChunkingStrategy::Heading {
+        let projector = HeadingProjector::with_strategy(ChunkingStrategy::Heading {
             max_chunk_chars: 5000,
             overlap_chars: 100,
         });
-        let chunks = chunker.chunk(&ast, None);
+        let chunks = projector.project(&fragments(&ast), None);
 
         // Should produce multiple chunks for the long section.
         assert!(
@@ -676,6 +791,125 @@ mod tests {
                 .heading_path
                 .contains(&"Long Section".to_string()));
         }
+    }
+
+    #[test]
+    fn oversized_table_fragment_stays_atomic() {
+        // A table larger than max_chunk_chars must be its own chunk — never
+        // split across chunks (HLD §59: no half a table in retrieval).
+        let mut rows = String::from("| Column A | Column B |\n");
+        for i in 0..40 {
+            rows.push_str(&format!("| row {} alpha | row {} beta |\n", i, i));
+        }
+        let nodes = vec![
+            heading(1, "Data"),
+            paragraph("Short intro."),
+            AstNode {
+                block_type: BlockType::Table,
+                text: String::new(),
+                children: table_children(&rows),
+                bbox: None,
+                confidence: None,
+                ..Default::default()
+            },
+        ];
+        let ast = make_ast(vec![vec![AstNode {
+            block_type: BlockType::Unknown,
+            text: String::new(),
+            children: nodes,
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        }]]);
+
+        let projector = HeadingProjector::with_strategy(ChunkingStrategy::Heading {
+            max_chunk_chars: 100,
+            overlap_chars: 20,
+        });
+        let chunks = projector.project(&fragments(&ast), None);
+
+        let table_chunk = chunks
+            .iter()
+            .find(|c| c.structure.source_type == "table")
+            .expect("one atomic table chunk");
+        assert_eq!(table_chunk.structure.heading_path, vec!["Data".to_string()]);
+        assert!(
+            table_chunk.text.contains("row 0 alpha") && table_chunk.text.contains("row 39 beta"),
+            "table chunk contains the whole table"
+        );
+        // No other chunk carries table content.
+        let others: Vec<&DocumentChunk> = chunks
+            .iter()
+            .filter(|c| c.structure.source_type != "table")
+            .collect();
+        for other in others {
+            assert!(
+                !other.text.contains("row 0 alpha") && !other.text.contains("row 39 beta"),
+                "no chunk may contain a partial table"
+            );
+        }
+    }
+
+    /// Build table-row children the way `build_table_node` does (first row
+    /// becomes headers, remaining rows become cells).
+    fn table_children(rows_text: &str) -> Vec<AstNode> {
+        let mut lines: Vec<&str> = rows_text.lines().filter(|l| !l.trim().is_empty()).collect();
+        let header_cells: Vec<String> = lines
+            .remove(0)
+            .split('|')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let mut children = vec![AstNode {
+            block_type: BlockType::TableRow,
+            text: String::new(),
+            children: header_cells
+                .iter()
+                .map(|c| AstNode {
+                    block_type: BlockType::TableCell {
+                        row_span: 1,
+                        col_span: 1,
+                    },
+                    text: c.clone(),
+                    children: vec![],
+                    bbox: None,
+                    confidence: None,
+                    ..Default::default()
+                })
+                .collect(),
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        }];
+        for line in &lines {
+            let cells: Vec<String> = line
+                .split('|')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            children.push(AstNode {
+                block_type: BlockType::TableRow,
+                text: String::new(),
+                children: cells
+                    .iter()
+                    .map(|c| AstNode {
+                        block_type: BlockType::TableCell {
+                            row_span: 1,
+                            col_span: 1,
+                        },
+                        text: c.clone(),
+                        children: vec![],
+                        bbox: None,
+                        confidence: None,
+                        ..Default::default()
+                    })
+                    .collect(),
+                bbox: None,
+                confidence: None,
+                ..Default::default()
+            });
+        }
+        children
     }
 
     // ── Entity enrichment ──
@@ -694,8 +928,8 @@ mod tests {
             ..Default::default()
         };
 
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, Some(&ir));
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), Some(&ir));
 
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0]
@@ -709,8 +943,8 @@ mod tests {
     #[test]
     fn entity_enrichment_handles_missing_ir() {
         let ast = make_ast(vec![vec![paragraph("Acme Corporation text.")]]);
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, None);
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
 
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].entity_mentions.is_empty());
@@ -721,8 +955,8 @@ mod tests {
     #[test]
     fn embed_chunks_produces_vectors() {
         let ast = make_ast(vec![vec![paragraph("Short text chunk.")]]);
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, None);
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
         let provider = MockEmbeddingProvider::new();
 
         let embedded = embed_chunks(&chunks, &provider);
@@ -732,12 +966,12 @@ mod tests {
     }
 
     #[test]
-    fn chunk_and_embed_convenience() {
+    fn project_and_embed_convenience() {
         let ast = make_ast(vec![vec![paragraph("Quick brown fox.")]]);
-        let chunker = MockDocumentChunker::new();
+        let projector = HeadingProjector::new();
         let provider = MockEmbeddingProvider::new();
 
-        let embedded = chunk_and_embed(&ast, None, &chunker, &provider);
+        let embedded = project_and_embed(&fragments(&ast), None, &projector, &provider);
         assert!(!embedded.is_empty());
         assert!(!embedded[0].embedding.is_empty());
     }
@@ -745,8 +979,8 @@ mod tests {
     #[test]
     fn embedding_is_normalized() {
         let ast = make_ast(vec![vec![paragraph("Test chunk for embedding.")]]);
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, None);
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
         let provider = MockEmbeddingProvider::new();
 
         let embedded = embed_chunks(&chunks, &provider);
@@ -776,8 +1010,8 @@ mod tests {
             paragraph("Text C."),
         ]]);
 
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, None);
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
 
         let ids: std::collections::HashSet<&str> =
             chunks.iter().map(|c| c.chunk_id.as_str()).collect();
@@ -789,16 +1023,16 @@ mod tests {
     #[test]
     fn empty_document_produces_no_chunks() {
         let ast = make_ast(vec![]);
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, None);
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
         assert!(chunks.is_empty());
     }
 
     #[test]
     fn whitespace_only_nodes_produce_no_chunks() {
         let ast = make_ast(vec![vec![paragraph("   "), paragraph("\n\n")]]);
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, None);
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
         assert!(chunks.is_empty());
     }
 
@@ -811,11 +1045,11 @@ mod tests {
             paragraph("Second paragraph with different content."),
         ]]);
 
-        let chunker = MockDocumentChunker::with_strategy(ChunkingStrategy::Paragraph {
+        let projector = HeadingProjector::with_strategy(ChunkingStrategy::Paragraph {
             max_chunk_chars: 4096,
             min_chunk_chars: 10,
         });
-        let chunks = chunker.chunk(&ast, None);
+        let chunks = projector.project(&fragments(&ast), None);
 
         assert!(!chunks.is_empty());
     }
@@ -827,13 +1061,13 @@ mod tests {
         let text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".repeat(10); // 260 chars
         let ast = make_ast(vec![vec![paragraph(&text)]]);
 
-        let chunker = MockDocumentChunker::with_strategy(ChunkingStrategy::FixedWindow {
+        let projector = HeadingProjector::with_strategy(ChunkingStrategy::FixedWindow {
             window_chars: 100,
             overlap_chars: 20,
         });
-        let chunks = chunker.chunk(&ast, None);
+        let chunks = projector.project(&fragments(&ast), None);
 
-        // With FixedWindow but running through the mock (heading code path), it acts
+        // With FixedWindow but running through the heading projector, it acts
         // like heading strategy with window_chars as max. Still produces chunks.
         assert!(!chunks.is_empty());
     }
@@ -841,13 +1075,14 @@ mod tests {
     // ── Evidence on chunks ──
 
     #[test]
-    fn chunks_have_evidence() {
+    fn chunks_carry_fragment_evidence() {
         let ast = make_ast(vec![vec![paragraph("Evidence test.")]]);
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, None);
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
 
+        // Chunk evidence is the projected fragments' provenance.
         assert_eq!(chunks[0].evidence.len(), 1);
-        assert_eq!(chunks[0].evidence[0].extractor, "mock-chunker");
+        assert_eq!(chunks[0].evidence[0].extractor, "rule_boundary");
         assert_eq!(chunks[0].evidence[0].page, Some(1));
     }
 
@@ -860,8 +1095,8 @@ mod tests {
             vec![paragraph("Page two content.")],
         ]);
 
-        let chunker = MockDocumentChunker::new();
-        let chunks = chunker.chunk(&ast, None);
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
 
         let page1 = chunks.iter().find(|c| c.position.start_page == 1).unwrap();
         assert!(page1.text.contains("Page one"));
@@ -873,21 +1108,90 @@ mod tests {
     // ── Trait object ──
 
     #[test]
-    fn mock_implements_document_chunker_trait() {
-        let chunker: &dyn DocumentChunker = &MockDocumentChunker::new();
-        assert_eq!(chunker.name(), "mock-heading");
+    fn heading_implements_retrieval_projector_trait() {
+        let projector: &dyn RetrievalProjector = &HeadingProjector::new();
+        assert_eq!(projector.name(), "heading-projection");
 
         let ast = make_ast(vec![vec![paragraph("Test.")]]);
-        let chunks = chunker.chunk(&ast, None);
+        let chunks = projector.project(&fragments(&ast), None);
         assert_eq!(chunks.len(), 1);
+    }
+
+    // ── Projection properties ──
+
+    #[test]
+    fn table_fragment_projects_as_table_chunk() {
+        let rows = "| Name | Age |\n| Alice | 30 |\n| Bob | 25 |";
+        let ast = make_ast(vec![vec![AstNode {
+            block_type: BlockType::Table,
+            text: String::new(),
+            children: table_children(rows),
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        }]]);
+
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].structure.source_type, "table");
+        assert!(chunks[0].text.contains("Name | Age"));
+        assert!(chunks[0].text.contains("Alice | 30"));
+    }
+
+    #[test]
+    fn chunk_boundaries_align_with_fragment_boundaries() {
+        // Every chunk's text is composed of whole fragment texts — a chunk
+        // never starts or ends mid-fragment. On a mixed doc, table content
+        // appears exactly once, in exactly one chunk (whole, never split).
+        let rows = "| K | V |\n| a | 1 |\n| b | 2 |";
+        let nodes = vec![
+            paragraph("Context paragraph before the table."),
+            AstNode {
+                block_type: BlockType::Table,
+                text: String::new(),
+                children: table_children(rows),
+                bbox: None,
+                confidence: None,
+                ..Default::default()
+            },
+            paragraph("Context paragraph after the table."),
+        ];
+        let ast = make_ast(vec![vec![AstNode {
+            block_type: BlockType::Unknown,
+            text: String::new(),
+            children: nodes,
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        }]]);
+
+        let projector = HeadingProjector::new();
+        let chunks = projector.project(&fragments(&ast), None);
+
+        let table_carriers: Vec<&DocumentChunk> =
+            chunks.iter().filter(|c| c.text.contains("K | V")).collect();
+        assert_eq!(
+            table_carriers.len(),
+            1,
+            "table content lives in exactly one chunk"
+        );
+        let chunk = table_carriers[0];
+        assert!(
+            chunk.text.contains("a | 1") && chunk.text.contains("b | 2"),
+            "the one chunk carries the whole table"
+        );
+        // Paragraphs sharing the section ride along; the chunk reports mixed.
+        assert_eq!(chunk.structure.source_type, "mixed");
     }
 
     // ── Default strategy ──
 
     #[test]
     fn default_strategy_is_heading() {
-        let chunker = MockDocumentChunker::new();
-        match chunker.strategy() {
+        let projector = HeadingProjector::new();
+        match projector.strategy() {
             ChunkingStrategy::Heading {
                 max_chunk_chars,
                 overlap_chars,
