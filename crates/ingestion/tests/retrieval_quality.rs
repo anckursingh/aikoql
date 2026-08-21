@@ -1,17 +1,19 @@
-//! PR-G + PR-H + PR-I + PR-J (HLD §60/§53): retrieval-quality benchmarks
-//! with the four-boundary comparison matrix.
+//! PR-G + PR-H + PR-I + PR-J + PR-L (HLD §60/§53): retrieval-quality
+//! benchmarks with the four-boundary comparison matrix.
 //!
 //! §60 says the transformer decision must rest on *measured* retrieval
 //! quality, not intuition. PR-G pinned the rule pipeline's numbers; PR-H
 //! added the first variant and the comparison itself; PR-I and PR-J widen
-//! it to the full Rule vs Embedding vs Transformer vs Hybrid matrix:
+//! it to the full Rule vs Embedding vs Transformer vs Hybrid matrix;
+//! PR-L adds the hybrid ranker (lexical+embedding reciprocal rank fusion)
+//! as a third ranker slot, filling the §53 "hybrid retrieval recall" cell:
 //!
 //! ```text
-//!                      lexical ranker   embedding ranker
-//! rule boundary        [baseline]       [variant]
-//! embedding boundary   [variant]        [variant]
-//! transformer boundary [variant]        [variant]
-//! hybrid boundary      [variant]        [variant]
+//!                      lexical ranker   embedding ranker   hybrid ranker
+//! rule boundary        [baseline]       [variant]          [variant]
+//! embedding boundary   [variant]        [variant]          [variant]
+//! transformer boundary [variant]        [variant]          [variant]
+//! hybrid boundary      [variant]        [variant]          [variant]
 //! ```
 //!
 //! The transformer cell runs the `TransformerBoundaryDetector` (PR-J) with
@@ -27,9 +29,10 @@
 //! fixtures compete. Hand-authored queries carry qrels ((fixture,
 //! chunk-index) pairs) resolved to chunk text from the rule corpus; the
 //! variant corpus is judged by the same qrel text via containment (split
-//! sub-chunks and merged super-chunks both count as relevant). Two rankers:
-//! bare token overlap (the rule-baseline instrument) and embedding cosine
-//! over the `EmbeddingProvider` seam. Metrics are macro-averaged over
+//! sub-chunks and merged super-chunks both count as relevant). Three
+//! rankers: bare token overlap (the rule-baseline instrument), embedding
+//! cosine over the `EmbeddingProvider` seam, and their reciprocal-rank
+//! fusion (the §53 hybrid retriever). Metrics are macro-averaged over
 //! queries: Recall@1/3/5, MRR, NDCG@5/10; every cell prints its per-query
 //! lines and one summary line.
 //!
@@ -54,8 +57,7 @@
 //! index (`VisualIndexRecord`s derived from visual fragments), and a small
 //! set of visual queries is ranked by query-vs-record embedding cosine,
 //! judged against the same qrel text via caption containment — visual
-//! retrieval recall (§53), printed as `[RETRIEVAL-VISUAL]`. Hybrid
-//! retrieval recall (a hybrid ranker) remains N/A, printed as such.
+//! retrieval recall (§53), printed as `[RETRIEVAL-VISUAL]`.
 //! `scanned.pdf` is also excluded: the mock compile runs without OCR, so it
 //! projects zero chunks and cannot be judged.
 //!
@@ -65,7 +67,7 @@
 use aikoql_ingestion::{
     BoundaryScore, BoundaryScorer, EmbeddingProvider, KnowledgeFragment, VisualIndexRecord,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 const FIXTURE_DIR: &str = "tests/fixtures/multimodal";
@@ -329,6 +331,46 @@ fn rank<'a>(corpus: &[CorpusChunk<'a>], query: &str, embedding: bool) -> Vec<(&'
     scored.into_iter().map(|(_, f, i)| (f, i)).collect()
 }
 
+/// §53 hybrid ranker (PR-L): reciprocal rank fusion of the lexical and
+/// embedding ranked lists — score(d) = Σ 1/(60 + rankᵣ(d)) over the rankers
+/// that retrieve d (standard RRF k=60; no score normalization needed because
+/// ranks are comparable). Chunks retrieved by both rankers rank strongly,
+/// one-ranker chunks stay reachable — a hybrid retriever's characteristic
+/// recall over lexical misses.
+fn rank_hybrid<'a>(corpus: &[CorpusChunk<'a>], query: &str) -> Vec<(&'a str, usize)> {
+    let lex = rank(corpus, query, false);
+    let emb = rank(corpus, query, true);
+    let pos: HashMap<(&str, usize), usize> = corpus
+        .iter()
+        .enumerate()
+        .map(|(p, (f, i, _))| ((*f, *i), p))
+        .collect();
+    let mut scores = vec![0.0f32; corpus.len()];
+    for (r, pair) in lex.iter().enumerate() {
+        if let Some(&p) = pos.get(pair) {
+            scores[p] += 1.0 / (60.0 + r as f32 + 1.0);
+        }
+    }
+    for (r, pair) in emb.iter().enumerate() {
+        if let Some(&p) = pos.get(pair) {
+            scores[p] += 1.0 / (60.0 + r as f32 + 1.0);
+        }
+    }
+    let mut ranked: Vec<(f32, &'a str, usize)> = scores
+        .into_iter()
+        .enumerate()
+        .filter(|(_, s)| *s > 0.0)
+        .map(|(p, s)| (s, corpus[p].0, corpus[p].1))
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap()
+            .then_with(|| a.1.cmp(b.1))
+            .then(a.2.cmp(&b.2))
+    });
+    ranked.into_iter().map(|(_, f, i)| (f, i)).collect()
+}
+
 /// Fraction of relevant chunks appearing in the top-K ranks (binary relevance).
 fn recall_at_k(
     ranked: &[(&str, usize)],
@@ -418,11 +460,18 @@ impl BoundaryScorer for MockTransformerScorer {
     }
 }
 
+/// §60 ranker slot (PR-L adds the hybrid fusion as the third slot).
+enum Ranker {
+    Lexical,
+    Embedding,
+    Hybrid,
+}
+
 /// One §60 matrix cell: (boundary label, corpus, ranker).
 struct Run {
     boundary: &'static str,
     corpus: Vec<CorpusChunk<'static>>,
-    embedding_ranker: bool,
+    ranker: Ranker,
 }
 
 /// Run every query through the cell; print one line per query and return
@@ -433,7 +482,11 @@ fn measure(run: &Run, qrels: &[Vec<String>]) -> [f32; 5] {
     let mut ndcg5_sum = 0.0f32;
 
     for (qi, q) in QUERIES.iter().enumerate() {
-        let ranked = rank(&run.corpus, q.text, run.embedding_ranker);
+        let ranked = match run.ranker {
+            Ranker::Lexical => rank(&run.corpus, q.text, false),
+            Ranker::Embedding => rank(&run.corpus, q.text, true),
+            Ranker::Hybrid => rank_hybrid(&run.corpus, q.text),
+        };
         let (r1, r3, r5) = (
             recall_at_k(&ranked, &run.corpus, &qrels[qi], 1),
             recall_at_k(&ranked, &run.corpus, &qrels[qi], 3),
@@ -504,51 +557,71 @@ fn rule_baseline_retrieval_quality() {
         Run {
             boundary: "rule-lexical",
             corpus: rule_corpus.clone(),
-            embedding_ranker: false,
+            ranker: Ranker::Lexical,
         },
         Run {
             boundary: "rule-embedding",
+            corpus: rule_corpus.clone(),
+            ranker: Ranker::Embedding,
+        },
+        Run {
+            boundary: "rule-hybrid",
             // Cloned: the visual-recall loop below resolves qrel text from
             // the rule corpus after the runs consume theirs.
             corpus: rule_corpus.clone(),
-            embedding_ranker: true,
+            ranker: Ranker::Hybrid,
         },
         Run {
             boundary: "embedding-lexical",
             corpus: emb_corpus.clone(),
-            embedding_ranker: false,
+            ranker: Ranker::Lexical,
         },
         Run {
             boundary: "embedding-embedding",
+            corpus: emb_corpus.clone(),
+            ranker: Ranker::Embedding,
+        },
+        Run {
+            boundary: "embedding-hybrid",
             corpus: emb_corpus,
-            embedding_ranker: true,
+            ranker: Ranker::Hybrid,
         },
         Run {
             boundary: "transformer-lexical",
             corpus: tfm_corpus.clone(),
-            embedding_ranker: false,
+            ranker: Ranker::Lexical,
         },
         Run {
             boundary: "transformer-embedding",
+            corpus: tfm_corpus.clone(),
+            ranker: Ranker::Embedding,
+        },
+        Run {
+            boundary: "transformer-hybrid",
             corpus: tfm_corpus,
-            embedding_ranker: true,
+            ranker: Ranker::Hybrid,
         },
         Run {
             boundary: "hybrid-lexical",
             corpus: hyb_corpus.clone(),
-            embedding_ranker: false,
+            ranker: Ranker::Lexical,
         },
         Run {
             boundary: "hybrid-embedding",
+            corpus: hyb_corpus.clone(),
+            ranker: Ranker::Embedding,
+        },
+        Run {
+            boundary: "hybrid-hybrid",
             corpus: hyb_corpus,
-            embedding_ranker: true,
+            ranker: Ranker::Hybrid,
         },
     ];
 
     let base = measure(&runs[0], &qrels);
     eprintln!(
         "[RETRIEVAL-BASELINE] {} queries={} recall@1={:.3} recall@3={:.3} recall@5={:.3} \
-         mrr={:.3} ndcg@5={:.3} hybrid=N/A visual=measured below",
+         mrr={:.3} ndcg@5={:.3} hybrid=measured below visual=measured below",
         runs[0].boundary,
         QUERIES.len(),
         base[0],

@@ -3250,7 +3250,7 @@ The HLD's core architectural position (doc §59): the **DocumentAst is the canon
 | Semantic segmentation between AST and IR (`KnowledgeFragment` + boundary detection) (§22/§37) | D4 goes straight AST → IR; chunking operates directly on the AST | **Missing → PR-C** |
 | Retrieval as projection (`DocumentChunker` → `RetrievalProjector`) (§41/§60) | `chunking.rs` chunks the AST itself | **Present but misplaced → PR-E** |
 | Visual classification (chart/diagram/image analyzers) (§17–20) | Block-level Figure marker heuristic only (`detect_figures`) | **Delivered → PR-F** (mock keyword classifier; VLM seam open) |
-| Transformer/embedding boundary detectors (§16) | None | **Delivered** — PR-G pinned the rule baseline (0.867); PR-H `EmbeddingBoundaryDetector` (mock parity); PR-I `HybridBoundaryDetector` (all five §16 layers); PR-J `TransformerBoundaryDetector` + feature-gated `TransformScorer` (all four §16 detectors measured in the §60 matrix); a real model provider remains §60-gated on measured improvement |
+| Transformer/embedding boundary detectors (§16) | None | **Delivered** — PR-G pinned the rule baseline (0.867); PR-H `EmbeddingBoundaryDetector` (mock parity); PR-I `HybridBoundaryDetector` (all five §16 layers); PR-J `TransformerBoundaryDetector` + feature-gated `TransformScorer` (all four §16 detectors measured in the §60 matrix); PR-K visual index (R@5=1.000) + PR-L hybrid RRF ranker (recall@5=0.933) — every §60/§53 cell measured; a real model provider remains §60-gated on measured improvement |
 | No mandatory heavyweight AI (§56) | Clean — pdf-extract/tesseract only | **Conforms** |
 
 Decisions taken this round (with rationale):
@@ -3349,7 +3349,7 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 14 | No mandatory heavyweight AI | ✅ Still lopdf/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 403 lib (+404 with `--features transform`) + 10 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 4×2 §60 matrix + 2 visual queries × 4 corpora, visual R@1/3/5 = 1.000) + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 403 lib (+404 with `--features transform`) + 10 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 4×3 §60 matrix + 2 visual queries × 4 corpora; visual R@1/3/5 = 1.000, hybrid recall@5 = 0.933) + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
 | 19 | CI measures extraction + semantic regression | ✅ DoD 19 — 10 golden PDF fixtures + `multimodal_golden` gate (byte-stable snapshots + entity-recall assertions + per-stage metrics) runs in both CI OSes; dedicated `--nocapture` step publishes §53 metrics to CI logs |
 
@@ -3543,6 +3543,17 @@ HLD §24/§53 — visual retrieval recall measured. Files:
 
 **Tests — PR-K (all green 2026-08-21)**: 403 lib tests (368 + 28 boundary + 5 visual_index + 2 visual caption-association) + 404 with `--features transform`; 10/10 acceptance; golden suite 1/1 (regenerated); retrieval-quality 1/1 (4×2 matrix + 4 visual-recall lines printed every run); `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets [--features transform] -- -D warnings` clean on both feature sets; `cargo test --workspace` green (61 suites, 0 failures).
 
-### Next implementation — PR-L: Hybrid retrieval surface (HLD §53 "hybrid retrieval recall")
+### Implemented now — PR-L: Hybrid retrieval surface (2026-08-21, commit on `feature/mvp-launch`)
 
-PR-K filled the last measured cell of the §60 instrument (`visual=1.000`); the remaining `hybrid retrieval recall` cell waits on a retrieval layer that fuses the lexical + embedding + visual rankers (the §60 instrument already measures each variant's corpus, so the fusion layer is a rank-combination step over existing measurements). Candidates also queued: OCR/VLM provider wiring behind the existing seams (PR-F), `DiagramPayload.asset` for a visual diagram ranker (visual_index.rs ponytail note), and the §60 real-model-provider decision (now fully instrumented on all four detectors).
+HLD §53 "hybrid retrieval recall" — the last N/A cell of the §60 instrument is now measured. No production API: the HLD's §53 is a *measurement* requirement, and the instrument (CI-gated test) is where the other retrieval metrics live — a production retriever stays the kernel/context-compiler's job until the HLD specs one.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/tests/retrieval_quality.rs` | `rank_hybrid`: reciprocal rank fusion (RRF, k=60) of the lexical + embedding ranked lists — score(d) = Σ 1/(60 + rankᵣ(d)) over the rankers that retrieve d; no score normalization needed, ranks are comparable. `Run`'s `embedding_ranker: bool` became a `Ranker { Lexical, Embedding, Hybrid }` slot; the matrix is now 4 boundaries × 3 rankers = 12 cells, parity-gated like the rest. |
+
+**Measured (2026-08-21)** — hybrid cells, all four corpora identical: recall@1=0.867 recall@3=0.867 **recall@5=0.933** MRR=0.890 NDCG@5=0.895. The fusion dominates both single rankers: it keeps the lexical ranker's top-1 precision (0.867 vs embedding's 0.800) and gains the embedding ranker's recall@5 (0.933 vs lexical's 0.867) — the lexical-miss paraphrase queries are recovered into the top-5 while nothing regresses (parity gate green; +0.023 MRR over baseline). §53 cell: **hybrid retrieval recall (R@5) = 0.933** on the rule baseline, floors 0.75 green.
+
+### Next implementation — PR-M: multimodal embeddings (§23)
+
+The §60 matrix is now fully measured (4 boundaries × 3 rankers + visual + hybrid recall cells). Next per the HLD: the `MultimodalEmbeddingProvider` seam (§23 — `embed_text`/`embed_image`/`embed_multimodal`, optional in the base build), which is the foundation for real (non-mock) visual embeddings behind the `visual_index` access path and the §60 real-model-provider decision. Candidates also queued: OCR/VLM provider wiring behind the existing seams (PR-F), `DiagramPayload.asset` for a visual diagram ranker (visual_index.rs ponytail note), PDF chart-drawing asset extraction (the chart visual-query ceiling noted in PR-K).
+
