@@ -9,6 +9,7 @@
 //!                     lexical ranker   embedding ranker
 //! rule boundary       [baseline]       [variant]
 //! embedding boundary  [variant]        [variant]
+//! hybrid boundary     [variant]        [variant]
 //! ```
 //!
 //! Every golden fixture (HLD §52) compiles through the real mock pipeline
@@ -359,13 +360,17 @@ fn rule_baseline_retrieval_quality() {
     let emb_provider = aikoql_ingestion::MockEmbeddingProvider::new();
     let emb_detector = aikoql_ingestion::EmbeddingBoundaryDetector::new(&emb_provider);
     let emb_corpus = corpus(&emb_detector);
+    let hyb_provider = aikoql_ingestion::MockEmbeddingProvider::new();
+    let hyb_detector = aikoql_ingestion::HybridBoundaryDetector::new(&hyb_provider);
+    let hyb_corpus = corpus(&hyb_detector);
     eprintln!(
-        "[RETRIEVAL-STRUCTURE] rule_boundary_chunks={} embedding_boundary_chunks={}",
+        "[RETRIEVAL-STRUCTURE] rule_boundary_chunks={} embedding_boundary_chunks={} hybrid_boundary_chunks={}",
         rule_corpus.len(),
-        emb_corpus.len()
+        emb_corpus.len(),
+        hyb_corpus.len()
     );
 
-    // Qrel text resolved from the rule corpus; the variant corpus is judged
+    // Qrel text resolved from the rule corpus; variant corpora are judged
     // by containment against the same text.
     let qrels: Vec<Vec<String>> = QUERIES
         .iter()
@@ -396,6 +401,16 @@ fn rule_baseline_retrieval_quality() {
         Run {
             boundary: "embedding-embedding",
             corpus: emb_corpus,
+            embedding_ranker: true,
+        },
+        Run {
+            boundary: "hybrid-lexical",
+            corpus: hyb_corpus.clone(),
+            embedding_ranker: false,
+        },
+        Run {
+            boundary: "hybrid-embedding",
+            corpus: hyb_corpus,
             embedding_ranker: true,
         },
     ];

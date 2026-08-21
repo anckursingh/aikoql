@@ -3250,7 +3250,7 @@ The HLD's core architectural position (doc §59): the **DocumentAst is the canon
 | Semantic segmentation between AST and IR (`KnowledgeFragment` + boundary detection) (§22/§37) | D4 goes straight AST → IR; chunking operates directly on the AST | **Missing → PR-C** |
 | Retrieval as projection (`DocumentChunker` → `RetrievalProjector`) (§41/§60) | `chunking.rs` chunks the AST itself | **Present but misplaced → PR-E** |
 | Visual classification (chart/diagram/image analyzers) (§17–20) | Block-level Figure marker heuristic only (`detect_figures`) | **Delivered → PR-F** (mock keyword classifier; VLM seam open) |
-| Transformer/embedding boundary detectors (§16) | None | **In progress** — PR-G pinned the rule baseline (0.867); PR-H delivered `EmbeddingBoundaryDetector` + the §60 Rule-vs-Embedding matrix (mock parity: 0.933/0.862/0.875); Hybrid/Transformer follow |
+| Transformer/embedding boundary detectors (§16) | None | **Delivered** — PR-G pinned the rule baseline (0.867); PR-H delivered `EmbeddingBoundaryDetector` (mock parity: 0.933/0.862/0.875); PR-I delivered `HybridBoundaryDetector` (all five §16 layers + `BoundaryScorer` transformer seam); a real transformer impl remains §60-gated on measured improvement |
 | No mandatory heavyweight AI (§56) | Clean — pdf-extract/tesseract only | **Conforms** |
 
 Decisions taken this round (with rationale):
@@ -3349,7 +3349,7 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 14 | No mandatory heavyweight AI | ✅ Still lopdf/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 383 lib + 10 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 2×2 §60 matrix) + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 390 lib + 10 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 3×2 §60 matrix) + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
 | 19 | CI measures extraction + semantic regression | ✅ DoD 19 — 10 golden PDF fixtures + `multimodal_golden` gate (byte-stable snapshots + entity-recall assertions + per-stage metrics) runs in both CI OSes; dedicated `--nocapture` step publishes §53 metrics to CI logs |
 
@@ -3495,6 +3495,21 @@ Two honest readings: (1) the embedding *boundary* changes nothing on these fixtu
 
 **Tests — PR-H (all green 2026-08-21)**: 383 lib tests (368 + 15 boundary); 10/10 acceptance; golden suite 1/1; retrieval-quality 1/1 (matrix above printed every run); `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets -- -D warnings` clean; `cargo test --workspace` green (61 suites, 0 failures).
 
-### Next implementation — PR-I
+### Implemented now — PR-I: HybridBoundaryDetector (2026-08-21, commit on `feature/mvp-launch`)
 
-PR-I — `HybridBoundaryDetector` (HLD §16): the first production detector — structure boundaries + sentence boundaries + semantic similarity + modality boundaries + optional transformer score, per §16's hybrid definition. It is where the modality-boundary merging deferred in PR-H lands (Text↔Figure/Table adjacency), and it plugs into the same `compile_document_with_detector` seam + §60 matrix; the transformer score stays optional (a pluggable implementation, not an architectural dependency — §60 decides it on measured improvement).
+HLD §16's first production detector — all five boundary layers: structure + sentence boundaries (from the rule detector), semantic similarity (embedding merge/split), modality boundaries (figure+caption adjacency merges into `Mixed` composites), and an optional transformer score via the `BoundaryScorer` seam. Pass order: **merge → linguistic ceiling → semantic split** — merging first lets the semantic layer see the natural document flow; the 800-char ceiling then bounds retrieval-unit size; the split finally re-evaluates topic shifts inside ceiling-cut pieces.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/boundary.rs` | `HybridBoundaryDetector` (`new` / `with_thresholds` / `with_scorer`): merge pass (cosine ≥ 0.55, or transformer score ≥ 0.7 via `BoundaryScorer`), `split_text_at_ceiling` (800 chars, sentence-aligned, `-l{n}` ids; one over-long sentence stays whole — `ponytail:`), semantic split (cosine < 0.10, `-s{n}` ids) shared with the embedding detector via extracted `split_text_fragments`; `BoundaryScore` + `BoundaryScorer` trait (HLD §17 — a score, not a decision: the boundary policy decides); `merge_pair` builds `FragmentModality::Mixed` composites for cross-modality merges (evidence re-stamped `hybrid_boundary`; transformer model recorded when it forced the merge); +7 tests (figure+caption → Mixed with both halves rendered, unrelated figure/text stays split, ceiling split with neighbor links, similar paragraphs join as Text, transformer forces merge below the semantic threshold, weak transformer score keeps the boundary, determinism) — 22 boundary tests total. |
+| `crates/ingestion/src/ir.rs` | Mixed composites now feed the semantic leg: `text_units` (relation co-occurrence) + `content_units` (table/visual loops) recurse through `FragmentContent::Mixed`, so knowledge nested by hybrid merges still becomes candidates with owner-level (page/fragment id) evidence. |
+| `crates/ingestion/src/lib.rs` | Exports `BoundaryScore`, `BoundaryScorer`, `HybridBoundaryDetector`. |
+| `crates/ingestion/tests/retrieval_quality.rs` | §60 matrix widened to 3 boundaries × 2 rankers (rule/embedding/hybrid corpora); hybrid cells mirror the rule cells (14 chunks each — no fixture text exceeds the ceiling, and the mock provider's 0.16–0.51 no-topic-gap band never crosses the thresholds); parity gate green. |
+
+**§60 matrix measured (Recall@5/MRR/NDCG@5, 15 queries)**: rule-lexical **0.867/0.867/0.867** (baseline); rule-embedding **0.933/0.862/0.875**; embedding and hybrid cells mirror their boundary's ranker cells. Honest read: hybrid = parity on the mock provider (thresholds deliberately never fire in the mock band — the mechanism is unit-verified via synthetic probes instead); measured gain requires a real model provider, which is exactly the §60 transformer decision.
+
+**Tests — PR-I (all green 2026-08-21)**: 390 lib tests (368 + 22 boundary); 10/10 acceptance; golden suite 1/1; retrieval-quality 1/1 (3×2 matrix above printed every run); `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets -- -D warnings` clean; `cargo test --workspace` green (61 suites, 0 failures).
+
+### Next implementation — TransformerBoundaryDetector
+
+HLD §16 Phase 3 — a real `BoundaryScorer` implementation (transformer model, e.g. ONNX/ORT) plus its detector wiring. Per §60 the decision to ship a transformer rests on measured improvement (boundary quality, fact/relation extraction, retrieval recall) against ingestion cost and latency — the PR-I seam makes it a pluggable provider, not a new architecture.

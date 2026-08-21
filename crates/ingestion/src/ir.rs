@@ -521,229 +521,250 @@ impl MockSemanticAnalyzer {
         }
 
         // Modality-aware: table cells are knowledge with cell-level
-        // provenance (HLD §14 differentiator).
+        // provenance (HLD §14 differentiator). PR-I: hybrid modality merges
+        // nest content inside Mixed composites — walk them so nested tables
+        // keep contributing cell facts.
         for frag in fragments {
-            let FragmentContent::Table(table) = &frag.content else {
-                continue;
-            };
-            for cell in &table.cells {
-                if cell.text.trim().is_empty() {
+            let mut units: Vec<(&KnowledgeFragment, &FragmentContent)> = Vec::new();
+            content_units(frag, &mut units);
+            for (owner, content) in units {
+                let FragmentContent::Table(table) = content else {
                     continue;
+                };
+                for cell in &table.cells {
+                    if cell.text.trim().is_empty() {
+                        continue;
+                    }
+                    let header = table
+                        .headers
+                        .iter()
+                        .find(|h| h.id == cell.column_id)
+                        .map(|h| h.text.as_str())
+                        .unwrap_or("");
+                    ir.facts.push(FactCandidate {
+                        statement: if header.is_empty() {
+                            cell.text.clone()
+                        } else {
+                            format!("{}: {}", header, cell.text)
+                        },
+                        entities: Vec::new(),
+                        confidence: self.confidence * cell.confidence,
+                        evidence: Evidence {
+                            document_id: None,
+                            page: owner.context.page,
+                            source: Some(EvidenceSource::TableCell {
+                                table_id: owner.fragment_id.clone(),
+                                cell_id: format!("{}-{}", cell.row_id, cell.column_id),
+                            }),
+                            extractor: extractor.clone(),
+                            model: Some("mock-v1".into()),
+                            confidence: self.confidence,
+                        },
+                    });
                 }
-                let header = table
-                    .headers
-                    .iter()
-                    .find(|h| h.id == cell.column_id)
-                    .map(|h| h.text.as_str())
-                    .unwrap_or("");
-                ir.facts.push(FactCandidate {
-                    statement: if header.is_empty() {
-                        cell.text.clone()
-                    } else {
-                        format!("{}: {}", header, cell.text)
-                    },
-                    entities: Vec::new(),
-                    confidence: self.confidence * cell.confidence,
-                    evidence: Evidence {
-                        document_id: None,
-                        page: frag.context.page,
-                        source: Some(EvidenceSource::TableCell {
-                            table_id: frag.fragment_id.clone(),
-                            cell_id: format!("{}-{}", cell.row_id, cell.column_id),
-                        }),
-                        extractor: extractor.clone(),
-                        model: Some("mock-v1".into()),
-                        confidence: self.confidence,
-                    },
-                });
             }
         }
 
         // PR-F: visual fragments → typed knowledge (HLD §10–§13). Diagram
         // nodes/edges become entities/relations with diagram-level evidence;
         // charts/formulas/images contribute facts carrying their model
-        // version (DoD row 11).
+        // version (DoD row 11). PR-I: hybrid modality merges nest visual
+        // content inside Mixed composites — walk them so nested visuals keep
+        // contributing typed knowledge (evidence comes from the owning
+        // child, not the composite).
         for frag in fragments {
-            match &frag.content {
-                FragmentContent::Diagram(diagram) => {
-                    for node in &diagram.nodes {
-                        if ir.entities.iter().any(|e| e.name == node.label) {
-                            continue;
-                        }
-                        ir.entities.push(EntityCandidate {
-                            name: node.label.clone(),
-                            type_hint: Some("DiagramNode".into()),
-                            mentions: vec![node.label.clone()],
-                            confidence: self.confidence * node.confidence,
-                            evidence: Evidence {
-                                document_id: None,
-                                page: frag.context.page,
-                                source: Some(EvidenceSource::DiagramNode {
-                                    diagram_id: frag.fragment_id.clone(),
-                                    node_id: node.id.clone(),
-                                }),
-                                extractor: extractor.clone(),
-                                model: Some(MODEL_DIAGRAM.into()),
+            let mut units: Vec<(&KnowledgeFragment, &FragmentContent)> = Vec::new();
+            content_units(frag, &mut units);
+            for (owner, content) in units {
+                match content {
+                    FragmentContent::Diagram(diagram) => {
+                        for node in &diagram.nodes {
+                            if ir.entities.iter().any(|e| e.name == node.label) {
+                                continue;
+                            }
+                            ir.entities.push(EntityCandidate {
+                                name: node.label.clone(),
+                                type_hint: Some("DiagramNode".into()),
+                                mentions: vec![node.label.clone()],
                                 confidence: self.confidence * node.confidence,
-                            },
-                        });
-                    }
-                    for edge in &diagram.edges {
-                        let predicate = edge.label.clone().unwrap_or_else(|| "related_to".into());
-                        if ir.relations.iter().any(|r| {
-                            r.subject == edge.source
-                                && r.object == edge.target
-                                && r.predicate == predicate
-                        }) {
-                            continue;
+                                evidence: Evidence {
+                                    document_id: None,
+                                    page: owner.context.page,
+                                    source: Some(EvidenceSource::DiagramNode {
+                                        diagram_id: owner.fragment_id.clone(),
+                                        node_id: node.id.clone(),
+                                    }),
+                                    extractor: extractor.clone(),
+                                    model: Some(MODEL_DIAGRAM.into()),
+                                    confidence: self.confidence * node.confidence,
+                                },
+                            });
                         }
-                        ir.relations.push(RelationCandidate {
-                            subject: edge.source.clone(),
-                            object: edge.target.clone(),
-                            predicate,
-                            confidence: self.confidence * edge.confidence,
-                            evidence: Evidence {
-                                document_id: None,
-                                page: frag.context.page,
-                                source: Some(EvidenceSource::DiagramEdge {
-                                    diagram_id: frag.fragment_id.clone(),
-                                    edge_id: format!("{}->{}", edge.source, edge.target),
-                                }),
-                                extractor: extractor.clone(),
-                                model: Some(MODEL_DIAGRAM.into()),
+                        for edge in &diagram.edges {
+                            let predicate =
+                                edge.label.clone().unwrap_or_else(|| "related_to".into());
+                            if ir.relations.iter().any(|r| {
+                                r.subject == edge.source
+                                    && r.object == edge.target
+                                    && r.predicate == predicate
+                            }) {
+                                continue;
+                            }
+                            ir.relations.push(RelationCandidate {
+                                subject: edge.source.clone(),
+                                object: edge.target.clone(),
+                                predicate,
                                 confidence: self.confidence * edge.confidence,
-                            },
-                        });
+                                evidence: Evidence {
+                                    document_id: None,
+                                    page: owner.context.page,
+                                    source: Some(EvidenceSource::DiagramEdge {
+                                        diagram_id: owner.fragment_id.clone(),
+                                        edge_id: format!("{}->{}", edge.source, edge.target),
+                                    }),
+                                    extractor: extractor.clone(),
+                                    model: Some(MODEL_DIAGRAM.into()),
+                                    confidence: self.confidence * edge.confidence,
+                                },
+                            });
+                        }
                     }
-                }
-                FragmentContent::Chart(chart) => {
-                    let title = chart
-                        .title
-                        .clone()
-                        .unwrap_or_else(|| "Untitled chart".into());
-                    ir.facts.push(FactCandidate {
-                        statement: format!("Chart: {} ({:?})", title, chart.chart_type),
-                        entities: Vec::new(),
-                        confidence: self.confidence,
-                        evidence: Evidence {
-                            document_id: None,
-                            page: frag.context.page,
-                            source: frag
-                                .source
-                                .as_ref()
-                                .and_then(|s| s.bbox.as_ref())
-                                .map(|b| EvidenceSource::Region { bbox: b.clone() }),
-                            extractor: extractor.clone(),
-                            model: Some(MODEL_CHART.into()),
-                            confidence: self.confidence,
-                        },
-                    });
-                }
-                FragmentContent::Formula(formula) => {
-                    if let Some(text) = formula.plain_text.clone().or_else(|| formula.latex.clone())
-                    {
+                    FragmentContent::Chart(chart) => {
+                        let title = chart
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| "Untitled chart".into());
                         ir.facts.push(FactCandidate {
-                            statement: format!("Formula: {}", text),
+                            statement: format!("Chart: {} ({:?})", title, chart.chart_type),
                             entities: Vec::new(),
                             confidence: self.confidence,
                             evidence: Evidence {
                                 document_id: None,
-                                page: frag.context.page,
-                                source: None,
-                                extractor: extractor.clone(),
-                                model: Some(MODEL_FORMULA.into()),
-                                confidence: self.confidence,
-                            },
-                        });
-                    }
-                }
-                FragmentContent::Image(image) => {
-                    let caption = image
-                        .caption
-                        .clone()
-                        .unwrap_or_else(|| format!("asset {}", image.asset.content_hash));
-                    ir.facts.push(FactCandidate {
-                        statement: format!("Image: {}", caption),
-                        entities: Vec::new(),
-                        confidence: self.confidence,
-                        evidence: Evidence {
-                            document_id: None,
-                            page: frag.context.page,
-                            source: frag
-                                .source
-                                .as_ref()
-                                .and_then(|s| s.bbox.as_ref())
-                                .map(|b| EvidenceSource::Region { bbox: b.clone() }),
-                            extractor: extractor.clone(),
-                            model: Some(MODEL_IMAGE.into()),
-                            confidence: self.confidence,
-                        },
-                    });
-                    // OCR fill (HLD §33): scanned text becomes knowledge with
-                    // the provider name as the model (DoD row 14).
-                    if let Some(ocr_text) = image.ocr_text.clone() {
-                        let snippet: String = ocr_text.chars().take(200).collect();
-                        ir.facts.push(FactCandidate {
-                            statement: format!("OCR text: {}", snippet),
-                            entities: Vec::new(),
-                            confidence: self.confidence,
-                            evidence: Evidence {
-                                document_id: None,
-                                page: frag.context.page,
-                                source: frag
+                                page: owner.context.page,
+                                source: owner
                                     .source
                                     .as_ref()
                                     .and_then(|s| s.bbox.as_ref())
                                     .map(|b| EvidenceSource::Region { bbox: b.clone() }),
                                 extractor: extractor.clone(),
-                                model: Some(
-                                    image
-                                        .ocr_model
-                                        .clone()
-                                        .unwrap_or_else(|| MODEL_IMAGE.into()),
-                                ),
+                                model: Some(MODEL_CHART.into()),
                                 confidence: self.confidence,
                             },
                         });
                     }
+                    FragmentContent::Formula(formula) => {
+                        if let Some(text) =
+                            formula.plain_text.clone().or_else(|| formula.latex.clone())
+                        {
+                            ir.facts.push(FactCandidate {
+                                statement: format!("Formula: {}", text),
+                                entities: Vec::new(),
+                                confidence: self.confidence,
+                                evidence: Evidence {
+                                    document_id: None,
+                                    page: owner.context.page,
+                                    source: None,
+                                    extractor: extractor.clone(),
+                                    model: Some(MODEL_FORMULA.into()),
+                                    confidence: self.confidence,
+                                },
+                            });
+                        }
+                    }
+                    FragmentContent::Image(image) => {
+                        let caption = image
+                            .caption
+                            .clone()
+                            .unwrap_or_else(|| format!("asset {}", image.asset.content_hash));
+                        ir.facts.push(FactCandidate {
+                            statement: format!("Image: {}", caption),
+                            entities: Vec::new(),
+                            confidence: self.confidence,
+                            evidence: Evidence {
+                                document_id: None,
+                                page: owner.context.page,
+                                source: owner
+                                    .source
+                                    .as_ref()
+                                    .and_then(|s| s.bbox.as_ref())
+                                    .map(|b| EvidenceSource::Region { bbox: b.clone() }),
+                                extractor: extractor.clone(),
+                                model: Some(MODEL_IMAGE.into()),
+                                confidence: self.confidence,
+                            },
+                        });
+                        // OCR fill (HLD §33): scanned text becomes knowledge with
+                        // the provider name as the model (DoD row 14).
+                        if let Some(ocr_text) = image.ocr_text.clone() {
+                            let snippet: String = ocr_text.chars().take(200).collect();
+                            ir.facts.push(FactCandidate {
+                                statement: format!("OCR text: {}", snippet),
+                                entities: Vec::new(),
+                                confidence: self.confidence,
+                                evidence: Evidence {
+                                    document_id: None,
+                                    page: owner.context.page,
+                                    source: owner
+                                        .source
+                                        .as_ref()
+                                        .and_then(|s| s.bbox.as_ref())
+                                        .map(|b| EvidenceSource::Region { bbox: b.clone() }),
+                                    extractor: extractor.clone(),
+                                    model: Some(
+                                        image
+                                            .ocr_model
+                                            .clone()
+                                            .unwrap_or_else(|| MODEL_IMAGE.into()),
+                                    ),
+                                    confidence: self.confidence,
+                                },
+                            });
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
         // Relations: co-occurring entity pairs within a text fragment.
+        // PR-I: hybrid modality merges nest Text inside Mixed composites —
+        // their co-occurrence relations must still be found, so walk the
+        // text units recursively (each unit keeps its own fragment for
+        // evidence provenance).
         if ir.entities.len() >= 2 {
             for frag in fragments {
-                if frag.modality != FragmentModality::Text {
-                    continue;
-                }
-                let FragmentContent::Text(text) = &frag.content else {
-                    continue;
-                };
-                let entities_in: Vec<&String> = ir
-                    .entities
-                    .iter()
-                    .filter(|e| text.contains(&e.name))
-                    .map(|e| &e.name)
-                    .collect();
-                for i in 0..entities_in.len() {
-                    for j in (i + 1)..entities_in.len() {
-                        let subj = entities_in[i].clone();
-                        let obj = entities_in[j].clone();
-                        if ir
-                            .relations
-                            .iter()
-                            .any(|r| r.subject == subj && r.object == obj)
-                        {
-                            continue;
+                let mut texts: Vec<(&KnowledgeFragment, &str)> = Vec::new();
+                text_units(frag, &mut texts);
+                for (owner, text) in texts {
+                    let entities_in: Vec<&String> = ir
+                        .entities
+                        .iter()
+                        .filter(|e| text.contains(&e.name))
+                        .map(|e| &e.name)
+                        .collect();
+                    for i in 0..entities_in.len() {
+                        for j in (i + 1)..entities_in.len() {
+                            let subj = entities_in[i].clone();
+                            let obj = entities_in[j].clone();
+                            if ir
+                                .relations
+                                .iter()
+                                .any(|r| r.subject == subj && r.object == obj)
+                            {
+                                continue;
+                            }
+                            ir.relations.push(RelationCandidate {
+                                subject: subj,
+                                predicate: "related_to".into(),
+                                object: obj,
+                                confidence: self.confidence * 0.7,
+                                evidence: fragment_evidence(
+                                    owner,
+                                    &extractor,
+                                    self.confidence * 0.7,
+                                ),
+                            });
                         }
-                        ir.relations.push(RelationCandidate {
-                            subject: subj,
-                            predicate: "related_to".into(),
-                            object: obj,
-                            confidence: self.confidence * 0.7,
-                            evidence: fragment_evidence(frag, &extractor, self.confidence * 0.7),
-                        });
                     }
                 }
             }
@@ -756,6 +777,40 @@ impl MockSemanticAnalyzer {
 // ---------------------------------------------------------------------------
 // Mock helpers — heuristic extraction
 // ---------------------------------------------------------------------------
+
+/// Text units inside a fragment, each with its owning fragment for evidence
+/// provenance: the fragment's own Text, plus every Text child of a Mixed
+/// composite (PR-I — hybrid modality merges nest captions/paragraphs inside
+/// Mixed fragments).
+fn text_units<'a>(frag: &'a KnowledgeFragment, out: &mut Vec<(&'a KnowledgeFragment, &'a str)>) {
+    match &frag.content {
+        FragmentContent::Text(text) => out.push((frag, text)),
+        FragmentContent::Mixed(children) => {
+            for child in children {
+                text_units(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Content units inside a fragment, each with its owning fragment for
+/// evidence provenance: Mixed composites recurse into their children; every
+/// other content is its own unit (PR-I — hybrid modality merges nest typed
+/// content inside Mixed fragments).
+fn content_units<'a>(
+    frag: &'a KnowledgeFragment,
+    out: &mut Vec<(&'a KnowledgeFragment, &'a FragmentContent)>,
+) {
+    match &frag.content {
+        FragmentContent::Mixed(children) => {
+            for child in children {
+                content_units(child, out);
+            }
+        }
+        other => out.push((frag, other)),
+    }
+}
 
 /// Evidence for a candidate derived from a fragment: page from fragment
 /// context, region from the fragment's bbox when one exists.

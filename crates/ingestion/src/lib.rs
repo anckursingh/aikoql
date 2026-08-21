@@ -166,7 +166,8 @@ pub use fragment::{FragmentContent, FragmentContext, FragmentModality, Knowledge
 
 mod boundary;
 pub use boundary::{
-    BoundaryError, EmbeddingBoundaryDetector, KnowledgeBoundaryDetector, RuleBoundaryDetector,
+    BoundaryError, BoundaryScore, BoundaryScorer, EmbeddingBoundaryDetector,
+    HybridBoundaryDetector, KnowledgeBoundaryDetector, RuleBoundaryDetector,
 };
 
 mod visual;
