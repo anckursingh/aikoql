@@ -919,12 +919,13 @@ fn attr_value(tag: &str, attr: &str) -> Option<String> {
     Some(after[..end].to_string())
 }
 
-/// Basic XML entity unescape for run text (WordXML escapes these five).
+/// Basic XML entity unescape for run text (WordXML/HTML escape these).
 fn xml_unescape(s: &str) -> String {
     s.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
         .replace("&amp;", "&")
 }
 
@@ -1198,15 +1199,16 @@ fn pdf_asset_image(
 
 fn extract_html(path: &str) -> Result<DocumentModel, String> {
     let html = std::fs::read_to_string(path).map_err(|e| format!("read html: {}", e))?;
-    let text = strip_xml_tags(&html);
-    let trimmed = text.trim().to_string();
-    let char_count = trimmed.len();
+    // HLD §31: all source formats converge on the same canonical AST —
+    // strip-first extraction is replaced by the structural walk.
+    let text = parse_html_structure(&html).trim().to_string();
+    let char_count = text.len();
     Ok(DocumentModel {
-        page_count: if trimmed.is_empty() { 0 } else { 1 },
+        page_count: if text.is_empty() { 0 } else { 1 },
         pages: vec![PageModel {
             page_number: 1,
             char_count,
-            text: trimmed,
+            text,
             source: "native".into(),
             ocr_confidence: None,
             images: Vec::new(),
@@ -1214,6 +1216,337 @@ fn extract_html(path: &str) -> Result<DocumentModel, String> {
         total_chars: char_count,
         ocr_stats: None,
     })
+}
+
+/// HLD §31: HTML → the canonical classify_blocks dialect — ATX headings,
+/// pipe tables, `- `/`N. ` lists, `[text](url)` links, `![alt](src)`
+/// images. script/style/head/title/noscript/template content is skipped
+/// entirely. Unknown inline tags (b/em/span/…) are transparent; unknown
+/// block tags flow as text. Missing close tags get implied closes when the
+/// next sibling opens (loose real-world HTML).
+///
+/// Note: single-item ordered lists classify as headings downstream (the
+/// existing numeric-prefix heuristic) — multi-item lists are the common
+/// case and group correctly.
+fn parse_html_structure(html: &str) -> String {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Kind {
+        Block,
+        Heading(u8),
+        List { ordered: bool, index: usize },
+        Li { ordered: bool, index: usize },
+        Row,
+        Cell,
+        Link,
+    }
+    struct Ctx {
+        kind: Kind,
+        text: String,
+        href: Option<String>,
+        cells: Vec<String>,
+    }
+
+    /// Collapse whitespace + unescape entities, appending to a flow buffer.
+    fn append_flow(target: &mut String, chunk: &str) {
+        let collapsed: String = chunk.split_whitespace().collect::<Vec<_>>().join(" ");
+        if collapsed.is_empty() {
+            return;
+        }
+        // Inline punctuation joins without a space ("guide</a>." → "guide].").
+        let needs_space = !target.is_empty()
+            && !target.ends_with([' ', '\n', '('])
+            && !collapsed.starts_with([',', '.', ';', ':', '!', '?', ')', ']', '}']);
+        if needs_space {
+            target.push(' ');
+        }
+        target.push_str(&xml_unescape(&collapsed));
+    }
+
+    /// Append an already-formatted block to the innermost buffer (verbatim —
+    /// no whitespace collapse) or to the output.
+    fn emit(stack: &mut [Ctx], out: &mut String, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        if let Some(top) = stack.last_mut() {
+            if !top.text.is_empty() && !top.text.ends_with('\n') && !s.starts_with('\n') {
+                top.text.push(' ');
+            }
+            top.text.push_str(s);
+        } else {
+            out.push_str(s);
+        }
+    }
+
+    fn close_top(stack: &mut Vec<Ctx>, out: &mut String) {
+        let Some(ctx) = stack.pop() else { return };
+        let text = ctx.text.trim().to_string();
+        match ctx.kind {
+            Kind::Block => {
+                if !text.is_empty() {
+                    emit(stack, out, &format!("{}\n\n", text));
+                }
+            }
+            Kind::Heading(level) => {
+                if !text.is_empty() {
+                    emit(
+                        stack,
+                        out,
+                        &format!("{} {}\n\n", "#".repeat(level as usize), text),
+                    );
+                }
+            }
+            Kind::List { .. } => {
+                if !text.is_empty() {
+                    emit(stack, out, &format!("{}\n\n", text));
+                }
+            }
+            Kind::Li { ordered, index } => {
+                if !text.is_empty() {
+                    let prefix = if ordered {
+                        format!("{}. ", index)
+                    } else {
+                        "- ".into()
+                    };
+                    emit(stack, out, &format!("{}{}\n", prefix, text));
+                }
+            }
+            Kind::Link => {
+                let s = match ctx.href {
+                    Some(h) if !text.is_empty() => format!("[{}]({})", text, h),
+                    _ => text,
+                };
+                emit(stack, out, &s);
+            }
+            Kind::Cell => {
+                if let Some(row) = stack.last_mut() {
+                    if row.kind == Kind::Row {
+                        row.cells.push(text);
+                        return;
+                    }
+                }
+                emit(stack, out, &text);
+            }
+            Kind::Row => emit(stack, out, &format!("| {} |\n", ctx.cells.join(" | "))),
+        }
+    }
+
+    let mut out = String::new();
+    let mut stack: Vec<Ctx> = Vec::new();
+    let mut rest = html;
+
+    while let Some(pos) = rest.find('<') {
+        let before = &rest[..pos];
+        if let Some(top) = stack.last_mut() {
+            append_flow(&mut top.text, before);
+        } else {
+            append_flow(&mut out, before);
+        }
+        rest = &rest[pos..];
+        let Some(tag_end) = rest.find('>') else { break };
+        let tag = &rest[..tag_end + 1];
+        rest = &rest[tag_end + 1..];
+
+        let inner = tag
+            .trim_start_matches('<')
+            .trim_end_matches('>')
+            .trim_end_matches('/');
+        let (name, closing) = match inner.strip_prefix('/') {
+            Some(n) => (n, true),
+            None => (inner, false),
+        };
+        let bare: &str = name
+            .trim_start()
+            .split(|c: char| c.is_whitespace())
+            .next()
+            .unwrap_or("");
+        let lower = bare.to_ascii_lowercase();
+
+        if !closing {
+            match lower.as_str() {
+                // Script/style/head content is not text: jump to the close.
+                "script" | "style" | "head" | "noscript" | "title" | "template" => {
+                    let needle = format!("</{}", lower);
+                    let lc = rest.to_ascii_lowercase();
+                    if let Some(p) = lc.find(&needle) {
+                        let end = rest[p..].find('>').map(|e| p + e + 1).unwrap_or(rest.len());
+                        rest = &rest[end..];
+                    }
+                }
+                "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                    let level = lower.as_bytes()[1] - b'0';
+                    stack.push(Ctx {
+                        kind: Kind::Heading(level),
+                        text: String::new(),
+                        href: None,
+                        cells: Vec::new(),
+                    });
+                }
+                "p" | "div" | "section" | "article" | "main" | "header" | "footer" | "aside"
+                | "figure" | "figcaption" | "blockquote" | "pre" | "details" | "summary" => {
+                    // Implied close of a sibling block/li (loose HTML).
+                    if matches!(
+                        stack.last().map(|c| c.kind),
+                        Some(Kind::Block) | Some(Kind::Li { .. })
+                    ) {
+                        close_top(&mut stack, &mut out);
+                    }
+                    stack.push(Ctx {
+                        kind: Kind::Block,
+                        text: String::new(),
+                        href: None,
+                        cells: Vec::new(),
+                    });
+                }
+                "ul" | "ol" => {
+                    if matches!(
+                        stack.last().map(|c| c.kind),
+                        Some(Kind::Block) | Some(Kind::Li { .. })
+                    ) {
+                        close_top(&mut stack, &mut out);
+                    }
+                    stack.push(Ctx {
+                        kind: Kind::List {
+                            ordered: lower == "ol",
+                            index: 0,
+                        },
+                        text: String::new(),
+                        href: None,
+                        cells: Vec::new(),
+                    });
+                }
+                "li" => {
+                    if matches!(stack.last().map(|c| c.kind), Some(Kind::Li { .. })) {
+                        close_top(&mut stack, &mut out);
+                    }
+                    // Numbering comes from the innermost enclosing list.
+                    let mut ordered = false;
+                    let mut index = 0usize;
+                    for c in stack.iter_mut().rev() {
+                        if let Kind::List {
+                            ordered: o,
+                            index: i,
+                        } = &mut c.kind
+                        {
+                            *i += 1;
+                            ordered = *o;
+                            index = *i;
+                            break;
+                        }
+                    }
+                    stack.push(Ctx {
+                        kind: Kind::Li { ordered, index },
+                        text: String::new(),
+                        href: None,
+                        cells: Vec::new(),
+                    });
+                }
+                "tr" => {
+                    if matches!(stack.last().map(|c| c.kind), Some(Kind::Cell)) {
+                        close_top(&mut stack, &mut out);
+                    }
+                    stack.push(Ctx {
+                        kind: Kind::Row,
+                        text: String::new(),
+                        href: None,
+                        cells: Vec::new(),
+                    });
+                }
+                "td" | "th" => {
+                    if matches!(stack.last().map(|c| c.kind), Some(Kind::Cell)) {
+                        close_top(&mut stack, &mut out);
+                    }
+                    stack.push(Ctx {
+                        kind: Kind::Cell,
+                        text: String::new(),
+                        href: None,
+                        cells: Vec::new(),
+                    });
+                }
+                "a" => stack.push(Ctx {
+                    kind: Kind::Link,
+                    text: String::new(),
+                    href: html_attr(tag, "href"),
+                    cells: Vec::new(),
+                }),
+                "br" => {
+                    let target = match stack.last_mut() {
+                        Some(t) => &mut t.text,
+                        None => &mut out,
+                    };
+                    target.push('\n');
+                }
+                "hr" => emit(&mut stack, &mut out, "\n\n"),
+                "img" => {
+                    let alt = html_attr(tag, "alt").unwrap_or_default();
+                    let src = html_attr(tag, "src").unwrap_or_default();
+                    emit(&mut stack, &mut out, &format!("![{}]({})", alt, src));
+                }
+                _ => {}
+            }
+        } else {
+            // Closing tag: pop only when it matches the open context.
+            let should_close = match lower.as_str() {
+                "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                    matches!(stack.last().map(|c| c.kind), Some(Kind::Heading(_)))
+                }
+                "p" | "div" | "section" | "article" | "main" | "header" | "footer" | "aside"
+                | "figure" | "figcaption" | "blockquote" | "pre" | "details" | "summary" => {
+                    matches!(stack.last().map(|c| c.kind), Some(Kind::Block))
+                }
+                "ul" | "ol" => matches!(stack.last().map(|c| c.kind), Some(Kind::List { .. })),
+                "li" => matches!(stack.last().map(|c| c.kind), Some(Kind::Li { .. })),
+                "tr" => matches!(stack.last().map(|c| c.kind), Some(Kind::Row)),
+                "td" | "th" => matches!(stack.last().map(|c| c.kind), Some(Kind::Cell)),
+                "a" => matches!(stack.last().map(|c| c.kind), Some(Kind::Link)),
+                "table" => {
+                    if matches!(stack.last().map(|c| c.kind), Some(Kind::Cell)) {
+                        close_top(&mut stack, &mut out);
+                    }
+                    if matches!(stack.last().map(|c| c.kind), Some(Kind::Row)) {
+                        close_top(&mut stack, &mut out);
+                    }
+                    // Blank line after the table block (classify_blocks
+                    // groups pipe rows into one Table node).
+                    emit(&mut stack, &mut out, "\n\n");
+                    false
+                }
+                _ => false,
+            };
+            if should_close {
+                close_top(&mut stack, &mut out);
+            }
+        }
+    }
+
+    // Trailing text, then close any unclosed contexts (EOF implied closes).
+    if let Some(top) = stack.last_mut() {
+        append_flow(&mut top.text, rest);
+    } else {
+        append_flow(&mut out, rest);
+    }
+    while !stack.is_empty() {
+        close_top(&mut stack, &mut out);
+    }
+    out.trim().to_string()
+}
+
+/// Case-insensitive attribute lookup on an HTML tag (`href="…"`, `alt='…'`).
+// ponytail: `to_ascii_lowercase` offsets can shift for non-ASCII attribute
+// *values* earlier in the tag (rare); byte-exact for ASCII-only tags.
+fn html_attr(tag: &str, attr: &str) -> Option<String> {
+    let lc = tag.to_ascii_lowercase();
+    let needle = format!("{}=\"", attr.to_ascii_lowercase());
+    if let Some(pos) = lc.find(&needle) {
+        let rest_t = &tag[pos + needle.len()..];
+        return rest_t.find('"').map(|e| xml_unescape(&rest_t[..e]));
+    }
+    let needle = format!("{}='", attr.to_ascii_lowercase());
+    if let Some(pos) = lc.find(&needle) {
+        let rest_t = &tag[pos + needle.len()..];
+        return rest_t.find('\'').map(|e| xml_unescape(&rest_t[..e]));
+    }
+    None
 }
 
 fn extract_text(path: &str) -> Result<DocumentModel, String> {
@@ -1291,6 +1624,65 @@ mod tests {
         assert_eq!(doc.page_count, 1);
         assert!(doc.pages[0].text.contains("Title"));
         assert!(doc.pages[0].text.contains("Content here"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn extract_html_preserves_structure() {
+        // HLD §31: headings, tables (loose td), lists, links, img+alt,
+        // sections — with script/style/head content dropped.
+        let dir = std::env::temp_dir().join("aikoql-d1-html-struct");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("struct.html");
+        std::fs::write(
+            &path,
+            r#"<html><head><title>ignored</title><style>.x { }</style></head><body>
+<section><h1>Main Title</h1><p>Intro <b>bold</b> &amp; scope.</p></section>
+<h2>Metrics</h2>
+<table><thead><tr><th>Name</th><th>Value</th></tr></thead>
+<tr><td>A<td>B</tr></table>
+<ul><li>first</li><li>second</li></ul>
+<ol><li>Alpha</li><li>Beta</li></ol>
+<p>See the <a href="https://example.com">guide</a>.</p>
+<figure><img src="img/logo.png" alt="logo"></figure>
+<script>var x = 1 < 2;</script>
+</body></html>"#,
+        )
+        .unwrap();
+        let doc = extract_document(&path.to_string_lossy(), "text/html", None).unwrap();
+        assert_eq!(doc.page_count, 1);
+        let text = &doc.pages[0].text;
+        assert!(text.contains("# Main Title"), "h1 → ATX: {}", text);
+        assert!(text.contains("## Metrics"), "h2 → ATX");
+        assert!(
+            text.contains("Intro bold & scope."),
+            "inline tags + entities: {}",
+            text
+        );
+        assert!(
+            text.contains("| Name | Value |"),
+            "thead header row: {}",
+            text
+        );
+        assert!(
+            text.contains("| A | B |"),
+            "loose td implied close: {}",
+            text
+        );
+        assert!(text.contains("- first\n- second"), "ul list: {}", text);
+        assert!(text.contains("1. Alpha\n2. Beta"), "ol list: {}", text);
+        assert!(
+            text.contains("[guide](https://example.com)"),
+            "link: {}",
+            text
+        );
+        assert!(
+            text.contains("![logo](img/logo.png)"),
+            "img + alt: {}",
+            text
+        );
+        assert!(!text.contains("var x"), "script content dropped");
+        assert!(!text.contains("ignored"), "head content dropped");
         std::fs::remove_dir_all(&dir).ok();
     }
 
