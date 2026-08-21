@@ -232,6 +232,28 @@
               }
             },
             "text": null
+          },
+          {
+            "asset": {
+              "asset_id": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "content_hash": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "mime_type": "image/svg+xml",
+              "source": {
+                "bbox": null,
+                "document_id": null,
+                "end_offset": null,
+                "node_id": null,
+                "page": 1,
+                "start_offset": null
+              }
+            },
+            "bbox": null,
+            "block_type": "Image",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": null
           }
         ],
         "confidence": null,
@@ -667,7 +689,19 @@
         "confidence": 1.0,
         "content": {
           "Chart": {
-            "asset": null,
+            "asset": {
+              "asset_id": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "content_hash": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "mime_type": "image/svg+xml",
+              "source": {
+                "bbox": null,
+                "document_id": null,
+                "end_offset": null,
+                "node_id": null,
+                "page": 1,
+                "start_offset": null
+              }
+            },
             "chart_type": "Bar",
             "extracted_data": {
               "cells": [
@@ -1340,13 +1374,154 @@
         },
         {
           "duration_us": 0,
-          "item_count": 0,
+          "item_count": 1,
           "phase": "D8-visual-index"
         }
       ],
       "total_us": 0
     },
-    "visual_index": []
+    "visual_index": [
+      {
+        "asset_id": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+        "bbox": null,
+        "document_id": "",
+        "embedding": [
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.09712858498096466,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.2913857400417328,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.0,
+          0.09712858498096466,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.09712858498096466,
+          0.09712858498096466,
+          0.0,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.0,
+          0.09712858498096466,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.19425716996192932,
+          0.0,
+          0.09712858498096466,
+          0.19425716996192932,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "fragment_ids": [
+          "frag-p1-b0"
+        ],
+        "page": 1,
+        "semantic_caption": "Figure 1: Revenue bar chart by quarter\nRevenue in USD millions"
+      }
+    ]
   },
   "document": {
     "ocr_stats": {
@@ -1359,7 +1534,24 @@
     "pages": [
       {
         "char_count": 126,
-        "images": [],
+        "images": [
+          {
+            "asset": {
+              "asset_id": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "content_hash": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "mime_type": "image/svg+xml",
+              "source": {
+                "bbox": null,
+                "document_id": null,
+                "end_offset": null,
+                "node_id": null,
+                "page": 1,
+                "start_offset": null
+              }
+            },
+            "bbox": null
+          }
+        ],
         "ocr_confidence": null,
         "page_number": 1,
         "source": "native",

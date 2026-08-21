@@ -1347,7 +1347,9 @@ fn detect_figures(nodes: Vec<AstNode>) -> Vec<AstNode> {
     out
 }
 
-fn parse_figure_marker(text: &str) -> Option<String> {
+/// pub(crate): the PDF vector-graphics extraction (lib.rs, PR-N) reuses it
+/// to decide whether a page's drawings back a marked figure/chart.
+pub(crate) fn parse_figure_marker(text: &str) -> Option<String> {
     let t = text.trim();
     for prefix in &["Figure ", "Fig. ", "Fig "] {
         if let Some(rest) = t.strip_prefix(prefix) {

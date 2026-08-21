@@ -384,3 +384,42 @@ fn acceptance_end_to_end_text_file_ingestion() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn acceptance_pdf_chart_drawing_extracts_svg_asset() {
+    // PR-N (HLD §24): charts.pdf's vector-drawn bars (content-stream path
+    // operators) become an SVG asset that the chart node adopts — the chart
+    // fragment and the visual index both carry it.
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/multimodal/charts.pdf");
+    let dm = extract_document(&fixture.to_string_lossy(), "application/pdf", None)
+        .expect("charts.pdf extracts");
+    let result = compile_document_mock(&dm, &[]);
+
+    let chart_frag = result
+        .fragments
+        .iter()
+        .find(|f| f.modality == FragmentModality::Chart)
+        .expect("chart fragment");
+    let FragmentContent::Chart(chart) = &chart_frag.content else {
+        panic!("expected chart content, got {:?}", chart_frag.content);
+    };
+    let asset = chart.asset.as_ref().expect("chart carries a visual asset");
+    assert_eq!(asset.mime_type, "image/svg+xml");
+    assert_eq!(
+        asset.content_hash, asset.asset_id,
+        "content-addressed like every persisted asset"
+    );
+
+    // The visual index carries the chart record (HLD §24 access path).
+    let record = result
+        .visual_index
+        .iter()
+        .find(|r| r.asset_id == asset.asset_id)
+        .expect("chart record in visual index");
+    assert_eq!(
+        record.semantic_caption.as_deref(),
+        Some("Figure 1: Revenue bar chart by quarter\nRevenue in USD millions")
+    );
+    assert_eq!(record.page, 1);
+}

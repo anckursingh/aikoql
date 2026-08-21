@@ -546,7 +546,7 @@ fn ocr_asset(
     Some((text, ocr.name().to_string()))
 }
 
-fn classify_visuals_in_children(nodes: &mut [AstNode]) {
+fn classify_visuals_in_children(nodes: &mut Vec<AstNode>) {
     let mut claimed = vec![false; nodes.len()];
     for i in 0..nodes.len() {
         // Caption context: a following sibling (markdown convention — the
@@ -618,6 +618,45 @@ fn classify_visuals_in_children(nodes: &mut [AstNode]) {
             }
         }
         nodes[i].payload = Some(AstPayload::Chart(chart));
+    }
+
+    // PR-N (HLD §24): adopt the page's vector-graphics SVG asset for
+    // asset-less chart nodes — PDF chart drawings extracted from
+    // content-stream path operators. The SVG node is a page-level
+    // placeholder, not a semantic image, so it is consumed by the chart.
+    // ponytail: one SVG per page serves the first asset-less chart; two
+    // charts per page share nothing until region-level extraction exists
+    // (needs per-op geometry + figure bboxes — a real layout model).
+    let mut adopted: Vec<usize> = Vec::new();
+    for i in 0..nodes.len() {
+        let chart_needs_asset = nodes[i].block_type == BlockType::Chart
+            && matches!(&nodes[i].payload, Some(AstPayload::Chart(c)) if c.asset.is_none());
+        if !chart_needs_asset {
+            continue;
+        }
+        let Some(j) = nodes.iter().enumerate().find_map(|(j, n)| {
+            let is_svg = n
+                .asset
+                .as_ref()
+                .map(|a| a.mime_type == "image/svg+xml")
+                .unwrap_or(false);
+            is_svg.then_some(j)
+        }) else {
+            continue;
+        };
+        let svg_asset = nodes[j].asset.clone();
+        if let Some(AstPayload::Chart(chart)) = nodes[i].payload.as_mut() {
+            chart.asset = svg_asset;
+            adopted.push(j);
+        }
+    }
+    if !adopted.is_empty() {
+        let mut i = 0;
+        nodes.retain(|_| {
+            let keep = !adopted.contains(&i);
+            i += 1;
+            keep
+        });
     }
 }
 
@@ -1271,5 +1310,55 @@ mod tests {
             }
             other => panic!("expected formula payload, got {:?}", other),
         }
+    }
+
+    fn svg_image_node() -> AstNode {
+        let mut n = visual_node(BlockType::Image, None, vec![]);
+        n.asset = Some(VisualAssetRef {
+            mime_type: "image/svg+xml".into(),
+            ..asset()
+        });
+        n
+    }
+
+    #[test]
+    fn chart_adopts_svg_vector_asset() {
+        // PR-N: a figure-marked chart (no raster asset) adopts the page's
+        // extracted vector-graphics SVG as its visual; the placeholder SVG
+        // node is consumed.
+        let mut ast = ast_with(vec![
+            visual_node(
+                BlockType::Image,
+                Some("Figure 1: Revenue bar chart by quarter"),
+                vec![],
+            ),
+            svg_image_node(),
+        ]);
+        classify_visuals(&mut ast);
+        let nodes = &ast.pages[0].children;
+        assert_eq!(nodes.len(), 1, "svg node consumed by the chart");
+        assert_eq!(nodes[0].block_type, BlockType::Chart);
+        match &nodes[0].payload {
+            Some(AstPayload::Chart(c)) => {
+                assert_eq!(
+                    c.asset.as_ref().map(|a| a.asset_id.as_str()),
+                    Some("h"),
+                    "chart carries the svg asset"
+                );
+            }
+            other => panic!("expected chart payload, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn svg_asset_without_chart_stays_an_image() {
+        let mut ast = ast_with(vec![
+            visual_node(BlockType::Paragraph, Some("plain prose"), vec![]),
+            svg_image_node(),
+        ]);
+        classify_visuals(&mut ast);
+        let nodes = &ast.pages[0].children;
+        assert_eq!(nodes.len(), 2, "nothing adopts the svg node");
+        assert_eq!(nodes[1].block_type, BlockType::Image);
     }
 }

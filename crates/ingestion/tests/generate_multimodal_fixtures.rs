@@ -51,11 +51,26 @@ impl PdfBuilder {
     /// Add a page: `lines` are written top-down (one Tj per line, empty
     /// line = blank), `images` are named DCTDecode JPEG XObjects.
     fn page(&mut self, lines: &[&str], images: &[(&str, &'static [u8])]) {
+        self.page_with_rects(lines, images, &[]);
+    }
+
+    /// `rects` are filled rectangles (x, y, w, h in PDF points, y-up) drawn
+    /// after the text — the vector-drawn chart bars in charts.pdf (PR-N:
+    /// the extraction-side SVG asset needs real path operators to work on).
+    fn page_with_rects(
+        &mut self,
+        lines: &[&str],
+        images: &[(&str, &'static [u8])],
+        rects: &[(i64, i64, i64, i64)],
+    ) {
         let mut content = Vec::new();
         let mut y: i64 = 740;
         for line in lines {
             content.extend(format!("BT /F1 12 Tf 72 {} Td ({}) Tj ET\n", y, line).into_bytes());
             y -= 14;
+        }
+        for (x, ry, w, h) in rects {
+            content.extend(format!("{x} {ry} {w} {h} re f\n").into_bytes());
         }
 
         let xobjs: Vec<(&str, lopdf::Object)> = images
@@ -217,8 +232,10 @@ fn generate_multimodal_fixtures() {
 
     // 5. charts.pdf — figure marker + caption + adjacent table: the chart
     // specialist pass fills axes/series from the table (HLD §33, no VLM).
+    // Two vector-drawn bars (PR-N): real path operators in the content
+    // stream, so the chart has a visual to extract into an SVG asset.
     let mut b = PdfBuilder::new();
-    b.page(
+    b.page_with_rects(
         &[
             "Figure 1: Revenue bar chart by quarter",
             "Revenue in USD millions",
@@ -228,6 +245,7 @@ fn generate_multimodal_fixtures() {
             "| Q2 | 1500 |",
         ],
         &[],
+        &[(72, 640, 60, 30), (72, 665, 60, 38)],
     );
     b.save("charts.pdf");
 

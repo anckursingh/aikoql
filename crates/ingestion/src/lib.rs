@@ -403,8 +403,10 @@ fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, Str
 
     // HLD §29: embedded-image extraction via lopdf. Raster streams (JPEG/JPX/
     // CCITT/Flate) and vector-only content streams all become persisted,
-    // content-addressed assets.
-    let images_by_page = extract_pdf_images(path, asset_dir);
+    // content-addressed assets. PR-N adds vector-drawn figure/chart graphics
+    // as SVG assets (page text needed for the visual-marker filter).
+    let page_texts: Vec<String> = native_pages.iter().map(|p| p.text.clone()).collect();
+    let images_by_page = extract_pdf_images(path, asset_dir, &page_texts);
     for (page_idx, images) in images_by_page.into_iter().enumerate() {
         if let Some(page) = native_pages.get_mut(page_idx) {
             page.images = images;
@@ -1002,7 +1004,11 @@ fn normalize_zip_path(path: &str) -> String {
 /// Vector graphics: content streams containing path-drawing operators but no
 /// text operators are persisted as vector assets. Streams with text (or that
 /// only invoke XObjects) are not vector-only and are skipped.
-fn extract_pdf_images(path: &str, asset_dir: Option<&str>) -> Vec<Vec<DocumentImage>> {
+fn extract_pdf_images(
+    path: &str,
+    asset_dir: Option<&str>,
+    page_texts: &[String],
+) -> Vec<Vec<DocumentImage>> {
     let mut pages: Vec<Vec<DocumentImage>> = Vec::new();
     let doc = match lopdf::Document::load(path) {
         Ok(d) => d,
@@ -1062,39 +1068,53 @@ fn extract_pdf_images(path: &str, asset_dir: Option<&str>) -> Vec<Vec<DocumentIm
         }
         // Vector graphics: vector-only content streams (drawing operators,
         // no text operators, no XObject invocations).
-        if let Some(contents) = page.get(b"Contents").ok().cloned() {
-            let streams: Vec<lopdf::Stream> = match contents {
-                lopdf::Object::Reference(id) => match doc.get_object(id) {
-                    Ok(lopdf::Object::Stream(s)) => vec![s.clone()],
-                    _ => vec![],
-                },
-                lopdf::Object::Stream(s) => vec![s.clone()],
-                lopdf::Object::Array(arr) => arr
-                    .iter()
-                    .filter_map(|e| match e {
-                        lopdf::Object::Reference(id) => doc.get_object(*id).ok(),
-                        _ => None,
-                    })
-                    .filter_map(|o| match o {
-                        lopdf::Object::Stream(s) => Some(s.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-                _ => vec![],
-            };
-            for stream in streams {
+        let streams = page_content_streams(&doc, &page);
+        for stream in &streams {
+            let bytes = stream
+                .get_plain_content()
+                .unwrap_or_else(|_| stream.content.clone());
+            if is_vector_only_content(&bytes) {
+                images.push(pdf_asset_image(
+                    &bytes,
+                    "application/x-pdf-vector",
+                    page_num,
+                    asset_dir,
+                    "pdf vector graphics",
+                ));
+            }
+        }
+
+        // PR-N (HLD §24 chart ceiling): vector-drawn charts on text pages —
+        // path operators AND text operators, so neither branch above
+        // captures them. The drawing ops become one minimal SVG asset; the
+        // visual classifier adopts it for asset-less chart nodes on this
+        // page. Marker filter: only pages whose text names a figure/chart.
+        if has_visual_marker(page_texts.get(page_idx).map(|s| s.as_str()).unwrap_or("")) {
+            let mut ops: Vec<lopdf::content::Operation> = Vec::new();
+            for stream in &streams {
                 let bytes = stream
                     .get_plain_content()
                     .unwrap_or_else(|_| stream.content.clone());
                 if is_vector_only_content(&bytes) {
-                    images.push(pdf_asset_image(
-                        &bytes,
-                        "application/x-pdf-vector",
-                        page_num,
-                        asset_dir,
-                        "pdf vector graphics",
-                    ));
+                    continue; // already captured as x-pdf-vector above
                 }
+                if let Ok(mut decoded) = lopdf::content::Content::decode(&bytes) {
+                    ops.append(&mut decoded.operations);
+                }
+                // ponytail: 2000-op cap bounds the SVG size on hostile content.
+                if ops.len() >= 2000 {
+                    break;
+                }
+            }
+            let (w, h) = page_media_box(&page);
+            if let Some(svg) = vector_svg(&ops, w, h) {
+                images.push(pdf_asset_image(
+                    svg.as_bytes(),
+                    "image/svg+xml",
+                    page_num,
+                    asset_dir,
+                    "pdf chart vector graphics (svg)",
+                ));
             }
         }
         pages.push(images);
@@ -1210,6 +1230,174 @@ fn is_vector_only_content(content: &[u8]) -> bool {
         || content.windows(2).any(|w| w == b"TJ");
     let has_xobjects = content.windows(3).any(|w| w == b" Do");
     has_path_ops && !has_text && !has_xobjects
+}
+
+/// Collect a page's content streams (Contents may be a stream, a reference
+/// to one, or an array of references).
+fn page_content_streams(doc: &lopdf::Document, page: &lopdf::Dictionary) -> Vec<lopdf::Stream> {
+    let Some(contents) = page.get(b"Contents").ok().cloned() else {
+        return Vec::new();
+    };
+    match contents {
+        lopdf::Object::Reference(id) => match doc.get_object(id) {
+            Ok(lopdf::Object::Stream(s)) => vec![s.clone()],
+            _ => vec![],
+        },
+        lopdf::Object::Stream(s) => vec![s.clone()],
+        lopdf::Object::Array(arr) => arr
+            .iter()
+            .filter_map(|e| match e {
+                lopdf::Object::Reference(id) => doc.get_object(*id).ok(),
+                _ => None,
+            })
+            .filter_map(|o| match o {
+                lopdf::Object::Stream(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
+/// Page MediaBox width/height in points (612×792 US-letter when absent).
+fn page_media_box(page: &lopdf::Dictionary) -> (f64, f64) {
+    let vals: Vec<f64> = page
+        .get(b"MediaBox")
+        .ok()
+        .and_then(|o| o.as_array().ok())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| match v {
+                    lopdf::Object::Integer(i) => Some(*i as f64),
+                    lopdf::Object::Real(r) => Some(*r as f64),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| vec![0.0, 0.0, 612.0, 792.0]);
+    (vals[2] - vals[0], vals[3] - vals[1])
+}
+
+/// Page text names a visual worth extracting (figure/chart marker).
+fn has_visual_marker(text: &str) -> bool {
+    if crate::ast::parse_figure_marker(text).is_some() {
+        return true;
+    }
+    text.lines().any(|line| {
+        line.match_indices("Chart").any(|(i, _)| {
+            let rest = line[i + 5..].trim_start();
+            rest.starts_with(|c: char| c.is_ascii_digit()) || rest.starts_with([':', '.', '—', '-'])
+        })
+    })
+}
+
+/// PR-N: minimal SVG from content-stream operations — path operators
+/// (m/l/c/re) painted by fill/stroke ops. Text, XObject, and graphics-state
+/// ops are skipped; the y-axis is flipped (PDF y-up → SVG y-down).
+/// ponytail: one flat path list with current rgb/gray color state only —
+/// CMYK/named color spaces keep the previous color, and `n` (clip) paints
+/// nothing.
+fn vector_svg(ops: &[lopdf::content::Operation], width: f64, height: f64) -> Option<String> {
+    let mut d = String::new();
+    let mut fill = (0u8, 0u8, 0u8);
+    let mut stroke = (0u8, 0u8, 0u8);
+    let mut parts: Vec<String> = Vec::new();
+    for op in ops {
+        let nums: Vec<f64> = op
+            .operands
+            .iter()
+            .filter_map(|o| match o {
+                lopdf::Object::Real(r) => Some(*r as f64),
+                lopdf::Object::Integer(i) => Some(*i as f64),
+                _ => None,
+            })
+            .collect();
+        match op.operator.as_str() {
+            "m" if nums.len() == 2 => {
+                d.push_str(&format!("M {} {}\n", svg_num(nums[0]), svg_num(nums[1])));
+            }
+            "l" if nums.len() == 2 => {
+                d.push_str(&format!("L {} {}\n", svg_num(nums[0]), svg_num(nums[1])));
+            }
+            "c" if nums.len() == 6 => {
+                d.push_str(&format!(
+                    "C {} {} {} {} {} {}\n",
+                    svg_num(nums[0]),
+                    svg_num(nums[1]),
+                    svg_num(nums[2]),
+                    svg_num(nums[3]),
+                    svg_num(nums[4]),
+                    svg_num(nums[5]),
+                ));
+            }
+            "re" if nums.len() == 4 => {
+                let (x, y, w, h) = (nums[0], nums[1], nums[2], nums[3]);
+                d.push_str(&format!(
+                    "M {} {} L {} {} L {} {} L {} {} Z\n",
+                    svg_num(x),
+                    svg_num(y),
+                    svg_num(x + w),
+                    svg_num(y),
+                    svg_num(x + w),
+                    svg_num(y + h),
+                    svg_num(x),
+                    svg_num(y + h),
+                ));
+            }
+            "rg" if nums.len() == 3 => fill = rgb(nums[0], nums[1], nums[2]),
+            "RG" if nums.len() == 3 => stroke = rgb(nums[0], nums[1], nums[2]),
+            "g" if nums.len() == 1 => fill = gray(nums[0]),
+            "G" if nums.len() == 1 => stroke = gray(nums[0]),
+            "S" | "s" | "f" | "F" | "f*" | "B" | "B*" | "b" | "b*" => {
+                if !d.is_empty() {
+                    parts.push(format!(
+                        "<path d=\"{}\" fill=\"rgb({},{},{})\" stroke=\"rgb({},{},{})\"/>",
+                        d.trim(),
+                        fill.0,
+                        fill.1,
+                        fill.2,
+                        stroke.0,
+                        stroke.1,
+                        stroke.2,
+                    ));
+                    d.clear();
+                }
+            }
+            "n" => d.clear(), // clip path — nothing painted
+            _ => {}
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\"><g transform=\"scale(1,-1) translate(0,-{})\">{}</g></svg>",
+        svg_num(width),
+        svg_num(height),
+        svg_num(height),
+        parts.concat(),
+    ))
+}
+
+fn svg_num(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v}")
+    }
+}
+
+fn rgb(r: f64, g: f64, b: f64) -> (u8, u8, u8) {
+    (byte_color(r), byte_color(g), byte_color(b))
+}
+
+fn gray(v: f64) -> (u8, u8, u8) {
+    let c = byte_color(v);
+    (c, c, c)
+}
+
+fn byte_color(v: f64) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 /// Hash + persist bytes and build the page-level image entry.
@@ -1642,6 +1830,83 @@ mod tests {
         let p = TextLineIngester;
         assert_eq!(p.name(), "text-line");
         assert!(p.supported_types().contains(&"text/plain"));
+    }
+
+    fn op(operator: &str, operands: Vec<lopdf::Object>) -> lopdf::content::Operation {
+        lopdf::content::Operation {
+            operator: operator.into(),
+            operands,
+        }
+    }
+
+    fn num(v: i64) -> lopdf::Object {
+        lopdf::Object::Integer(v)
+    }
+
+    #[test]
+    fn vector_svg_renders_filled_rects() {
+        // `72 640 60 30 re f` — the charts.pdf bars.
+        let ops = vec![
+            op("re", vec![num(72), num(640), num(60), num(30)]),
+            op("f", vec![]),
+        ];
+        let svg = vector_svg(&ops, 612.0, 792.0).expect("painted path → svg");
+        assert!(
+            svg.contains("M 72 640 L 132 640 L 132 670 L 72 670 Z"),
+            "rect expanded to subpath, got: {svg}"
+        );
+        assert!(svg.contains("viewBox=\"0 0 612 792\""), "page-size viewBox");
+        assert!(
+            svg.contains("scale(1,-1)"),
+            "PDF y-up flipped to SVG y-down"
+        );
+    }
+
+    #[test]
+    fn vector_svg_skips_text_and_unpainted_paths() {
+        let ops = vec![
+            op("BT", vec![]),
+            op(
+                "Tj",
+                vec![lopdf::Object::String(
+                    "label".as_bytes().to_vec(),
+                    lopdf::StringFormat::Literal,
+                )],
+            ),
+            op("ET", vec![]),
+            op("re", vec![num(0), num(0), num(10), num(10)]),
+            op("n", vec![]), // clip: nothing painted
+        ];
+        assert!(
+            vector_svg(&ops, 100.0, 100.0).is_none(),
+            "text + clip only → no svg"
+        );
+    }
+
+    #[test]
+    fn vector_svg_applies_colors() {
+        let ops = vec![
+            op(
+                "rg",
+                vec![
+                    lopdf::Object::Real(1.0),
+                    lopdf::Object::Real(0.0),
+                    lopdf::Object::Real(0.0),
+                ],
+            ),
+            op("re", vec![num(0), num(0), num(5), num(5)]),
+            op("f", vec![]),
+        ];
+        let svg = vector_svg(&ops, 100.0, 100.0).expect("svg");
+        assert!(svg.contains("fill=\"rgb(255,0,0)\""), "red fill applied");
+    }
+
+    #[test]
+    fn has_visual_marker_detects_figures_and_charts() {
+        assert!(has_visual_marker("Figure 1: Revenue bar chart"));
+        assert!(has_visual_marker("see the Chart 2: quarterly growth below"));
+        assert!(!has_visual_marker("Acme publishes quarterly reports."));
+        assert!(!has_visual_marker(""));
     }
 
     #[test]

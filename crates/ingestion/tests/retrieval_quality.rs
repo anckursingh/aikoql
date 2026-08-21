@@ -161,12 +161,12 @@ const QUERIES: &[Query] = &[
     },
 ];
 
-/// Visual queries (§53 visual retrieval recall, PR-K): qrels resolved from
-/// the rule corpus (containment) and judged against visual index records'
-/// captions. Both probe the same visual object — an exact-phrase query and
-/// a paraphrase — because images.pdf carries the only asset-backed visuals
-/// in the fixture set: PDF chart drawings are not extracted as assets, so
-/// no chart records exist to judge (ponytail ceiling, visual_index.rs).
+/// Visual queries (§53 visual retrieval recall, PR-K/PR-N): qrels resolved
+/// from the rule corpus (containment) and judged against visual index
+/// records' captions. The logo pair probes the same visual object (exact
+/// phrase + paraphrase); the chart query probes the PR-N chart record —
+/// charts.pdf's vector-drawn bars are extracted as an SVG asset, so the
+/// chart is now retrievable.
 const VISUAL_QUERIES: &[Query] = &[
     Query {
         text: "What logo is shown in figure 3?",
@@ -175,6 +175,10 @@ const VISUAL_QUERIES: &[Query] = &[
     Query {
         text: "What does the company logo depict?",
         relevant: &[("images.pdf", 0)],
+    },
+    Query {
+        text: "What does the bar chart in figure 1 show?",
+        relevant: &[("charts.pdf", 0)],
     },
 ];
 
