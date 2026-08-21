@@ -65,6 +65,20 @@ impl KnowledgeBoundaryDetector for RuleBoundaryDetector {
             heading_path.clear(); // headings do not cross page boundaries
         }
 
+        // PR-C: document-hash prefix — fragment ids are globally unique
+        // across documents (`frag-{hash8}-p{page}-b{block}`), and the
+        // context carries the document identity.
+        if let Some(doc_id) = ast.document_id.as_deref() {
+            let hash8: String = doc_id.chars().take(8).collect();
+            if !hash8.is_empty() {
+                for frag in &mut fragments {
+                    let short = frag.fragment_id.strip_prefix("frag-").unwrap_or("");
+                    frag.fragment_id = format!("frag-{}-{}", hash8, short);
+                    frag.context.document_id = Some(doc_id.to_string());
+                }
+            }
+        }
+
         // Neighbor links for context (previous/next fragment ids).
         let ids: Vec<String> = fragments.iter().map(|f| f.fragment_id.clone()).collect();
         for (i, frag) in fragments.iter_mut().enumerate() {
@@ -419,6 +433,29 @@ mod tests {
             first[0].context.neighboring_fragments,
             vec![first[1].fragment_id.clone()]
         );
+    }
+
+    #[test]
+    fn fragment_ids_carry_document_hash_prefix() {
+        let dm = doc(vec!["Paragraph one.\n\nParagraph two."]);
+        let mut ast = document_model_to_ast(&dm);
+        ast.document_id = Some("0123456789abcdef".into());
+        let frags = RuleBoundaryDetector.detect(&ast).unwrap();
+
+        assert_eq!(frags.len(), 2);
+        assert_eq!(frags[0].fragment_id, "frag-01234567-p1-b0");
+        assert_eq!(frags[1].fragment_id, "frag-01234567-p1-b1");
+        for f in &frags {
+            assert_eq!(f.context.document_id.as_deref(), Some("0123456789abcdef"));
+        }
+        // Neighbor links use the prefixed ids.
+        assert_eq!(
+            frags[0].context.neighboring_fragments,
+            vec!["frag-01234567-p1-b1".to_string()]
+        );
+        // Deterministic across runs.
+        let again = RuleBoundaryDetector.detect(&ast).unwrap();
+        assert_eq!(frags[0].fragment_id, again[0].fragment_id);
     }
 
     #[test]

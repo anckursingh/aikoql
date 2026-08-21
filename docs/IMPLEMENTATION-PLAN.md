@@ -3414,6 +3414,18 @@ Per the "do not skip anything" directive, the PR-F extraction deferrals are clos
 - **Acceptance**: 10/10.
 - **Gates**: `cargo fmt --all` clean, `cargo clippy --workspace --all-targets` clean (0 warnings) on BOTH default and `--features vlm`, `cargo test --workspace` green (all crates, exit 0).
 
-### Next implementation — PR-C
+### Implemented now — PR-C: document-hash fragment-id prefix (2026-08-21)
 
-PR-F completion is done. Next in order: PR-C — document-hash fragment-id prefix (`frag-{hash8}-p{page}-b{block}`, consumes `DocumentAst.document_id`, landed in PR-B). Then DoD 13 (incremental ingestion at asset/page level, HLD §45) and DoD 19 (golden PDF suite + CI regression gate, HLD §52/§53). PR-G stays gated on the rule-baseline benchmarks (§60).
+Closes the §22/§37 deferral noted at line 3264: fragment ids are now globally unique across documents, not just position-stable within one.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/boundary.rs` | `RuleBoundaryDetector.detect` post-pass: when `DocumentAst.document_id` is set, every fragment id becomes `frag-{hash8}-p{page}-b{block}` (first 8 chars of the document id) and `FragmentContext.document_id` is stamped — before neighbor links are computed, so links carry prefixed ids. No document id → ids stay `frag-p{page}-b{block}` (unchanged behavior for the `document_model_to_ast` path, which has no id source yet). |
+| `crates/ingestion/src/fragment.rs` | `FragmentContext.document_id: Option<String>` (`#[serde(default)]`). |
+| Tests | +1 `boundary::tests::fragment_ids_carry_document_hash_prefix` — prefixed ids, stamped context, prefixed neighbor links, determinism across runs. |
+
+**Tests — PR-C (all green 2026-08-21)**: 368 lib tests (+1); 10/10 acceptance (markdown compile path now emits document-prefixed fragment ids end to end); `cargo clippy --workspace --all-targets` clean; `cargo test --workspace` green.
+
+### Next implementation — DoD 13, then DoD 19
+
+Next in order: DoD 13 — incremental ingestion at asset/page level (HLD §45); then DoD 19 — golden PDF suite + CI extraction/semantic regression gate (HLD §52/§53). PR-G stays gated on the rule-baseline benchmarks (§60).

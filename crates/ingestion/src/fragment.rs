@@ -69,4 +69,8 @@ pub struct FragmentContext {
     pub neighboring_fragments: Vec<String>,
     #[serde(default)]
     pub parent_fragment: Option<String>,
+    /// Owning document id (PR-C) — set by boundary detection when the AST
+    /// carries one.
+    #[serde(default)]
+    pub document_id: Option<String>,
 }
