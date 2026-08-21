@@ -111,6 +111,11 @@ pub mod vlm;
 // the default build (HLD §56/DoD row 10: no mandatory heavyweight AI).
 #[cfg(feature = "transform")]
 pub mod transform;
+// PR-P (HLD §60): remote embedding provider — the seam that makes the
+// real-model experiment measurable. Optional — never in the default build
+// (the mock stays the provider until the §60 gate verdict is GO).
+#[cfg(feature = "remote_emb")]
+pub mod remote_emb;
 pub use ocr::{
     page_needs_ocr, tool_available, BlockBbox, OcrProvider, OcrStats, OcrWord, TesseractCli,
 };

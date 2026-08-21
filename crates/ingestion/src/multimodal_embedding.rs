@@ -19,7 +19,9 @@
 //! A real provider is NOT part of the base build (HLD §23: "Do not require
 //! this provider in the base build") — the pipeline runs on the text
 //! `EmbeddingProvider` and the architecture works without any multimodal
-//! model; a real provider arrives behind the §60 real-model decision.
+//! model; the §60 real-model experiment (PR-P) measures
+//! `remote_emb::RemoteEmbeddingProvider` (feature `remote_emb`) against
+//! this mock before any default flip.
 
 use crate::embedding::char_ngram_embed;
 

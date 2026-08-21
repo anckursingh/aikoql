@@ -3350,7 +3350,7 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 14 | No mandatory heavyweight AI | ✅ Still lopdf/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 418 lib (+419 with `--features transform`, +425 with `--features vlm`) + 11 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 4×3 §60 matrix + 3 visual queries × 4 corpora; visual R@1/3/5 = 1.000, hybrid recall@5 = 0.933) + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 418 lib (+419 with `--features transform`, +423 with `--features remote_emb`, +425 with `--features vlm`, +431 `--all-features`) + 11 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 4×3 §60 matrix + 3 visual queries × 4 corpora; visual R@1/3/5 = 1.000, hybrid recall@5 = 0.933) + real-model bench (env-gated SKIP without endpoint) + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
 | 19 | CI measures extraction + semantic regression | ✅ DoD 19 — 10 golden PDF fixtures + `multimodal_golden` gate (byte-stable snapshots + entity-recall assertions + per-stage metrics) runs in both CI OSes; dedicated `--nocapture` step publishes §53 metrics to CI logs |
 
@@ -3603,7 +3603,39 @@ The PR-F seams are no longer dead code: the compile pipeline now selects its vis
 
 **Tests — PR-O (all green 2026-08-21)**: 418 lib base (+1 visual_index diagram-asset test) + 419 `--features transform` + 425 `--features vlm` (+7: config/staged-diagram/parse-json×2/dedup/analyzers-from-env + pre-existing vlm tests, env race fixed); 11/11 acceptance; golden suite 1/1 (regenerated, +7 null lines); retrieval-quality 1/1 (untouched matrix); `cargo fmt` + clippy `-D warnings` clean on **all three** feature sets (base/vlm/transform); `cargo test --workspace` green (61 suites).
 
-### Next implementation — §60 real-model decision
+### Implemented now — PR-P: §60 real-model experiment — spec + measurement harness (2026-08-21, commit on `feature/mvp-launch`)
 
-The seams are now fully wired (OCR tesseract, VLM classifier/image/diagram behind feature+env, mm embedding provider). The remaining question is a *measurement* one: the §60 instrument is mock-only today. The next PR decides whether to gate a real embedding provider on a measured improvement (PR-M's `MultimodalEmbeddingProvider` seam is the foundation), which requires a real-model test corpus and a live-endpoint CI path or a fixture-replay harness — the first step is speccing the §60 real-model experiment in the plan doc (metrics, thresholds, rollback).
+The §60 decision ("based on measured improvement, rather than intuition") is now executable. PR-P (1) writes the experiment spec into this plan and (2) builds the harness that measures it: the §60 retrieval engine moved to a shared `tests/common/` module parameterized over the `EmbeddingProvider` seam, and a feature-gated `RemoteEmbeddingProvider` (`remote_emb`, ureq, env-configured) plugs a live OpenAI-compatible `/embeddings` endpoint into the same instrument.
+
+**§60 real-model experiment — spec**
+
+- **Question**: does a real embedding model measurably beat the pinned mock char-ngram baseline (rule-lexical 0.867/0.867/0.867) on the §60 instrument?
+- **Corpus**: the 10 HLD §52 golden fixtures, 15 text queries + 3 visual queries — unchanged, the same corpus that pins the mock baseline (`scanned.pdf` excluded as before).
+- **Measured cells**: rule-lexical (baseline), rule-embedding, rule-hybrid, embedding-boundary × embedding ranker (boundary quality), visual ranker on the rule corpus. **Metrics**: macro Recall@1/3/5, MRR, NDCG@5 (+NDCG@10 per query), visual R@1/3/5, embedding API call count (ingestion cost), wall time (latency). The HLD §60 list also names fact/relation extraction quality — no instrument exists for those yet (deferred, see below).
+- **Thresholds (gate)**: GO iff (a) every cell metric ≥ baseline − 0.02 (no material regression — the parity floor the variant matrix already uses) AND (b) Recall@5 ≥ baseline + 0.05 on the rule-embedding cell (a measured semantic win: the two paraphrase probes sit at 0.0 in the baseline, so +0.05 means the model resolves at least one of them; the mock's own measured "gain" is 0.867→0.933 = +0.066, so a real model must beat mock scale to matter).
+- **Rollback**: the mock stays the default provider regardless of the verdict; a GO only authorizes a *follow-up* PR that flips the default behind the existing feature gate. Instant rollback = unset `AIKOQL_EMBEDDING_ENDPOINT` (env + feature gate, never in the base build; no CI job dials a model — the bench test SKIPs without the env).
+- **Run** (manual, needs a live endpoint):
+  ```powershell
+  $env:AIKOQL_EMBEDDING_ENDPOINT = "https://api.example.com/v1"
+  cargo test --features remote_emb --test real_model_bench -- --nocapture
+  ```
+- **Verified locally** against a stub endpoint (constant-vector server, no real model): baseline reproduced (0.867/0.867/0.867), cells measured with correct NO-GO verdicts (constant vectors score nothing semantically — the gate correctly rejects), visual ranker ran, ingestion cost = 47 API calls (embeddings cached per unique text), 434 ms wall.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/remote_emb.rs` | **New** `RemoteEmbeddingProvider` (feature `remote_emb` = `dep:ureq`, never in the base build): `RemoteEmbeddingConfig::from_env` (`AIKOQL_EMBEDDING_ENDPOINT` required, `_KEY`/`_MODEL`/`_DIMS` optional, model default `text-embedding-3-small`); POST `{endpoint}/embeddings`, parses `data[0].embedding`, adopts the response dimensionality unless env-pinned; any transport/parse failure degrades to a zero vector (§58 untrusted output — never silently mock numbers) and every attempt is counted (`call_count` = the §60 cost metric). Implements both `EmbeddingProvider` and `MultimodalEmbeddingProvider` (text channel = endpoint; `ponytail:` image channel zeros — text-only endpoint, `TextImage` dispatch stays text-dominant so visual records embed captions). |
+| `crates/ingestion/tests/common/mod.rs` | The §60 engine moved out of `retrieval_quality.rs` (corpus, QUERIES/VISUAL_QUERIES, lexical/embedding/hybrid rankers, visual ranker, R@K/MRR/NDCG, `Run`/`measure`) and parameterized over `&dyn EmbeddingProvider` — one source of truth, shared by the mock-pinned test and the real-model bench. `corpus()` now calls the full `compile_document_with_detector` with mock components + the given provider (byte-identical to the former `compile_document_mock_with_detector` wrapper — the 0.867 baseline re-verified). |
+| `crates/ingestion/tests/retrieval_quality.rs` | The pinned mock test, now thin: mock provider, `MockTransformerScorer`, baseline asserts (floors 0.75, parity 0.02) — unchanged behavior, engine in `common`. |
+| `crates/ingestion/tests/real_model_bench.rs` | **New** measurement (whole file `#![cfg(feature = "remote_emb")]`): SKIPs without the env; with it, builds the two corpora through a `CachedEmbeddings` wrapper (each unique text embeds ONCE — the run must not bill the endpoint per query scan), measures the 4 cells + visual ranker, prints `[REAL-MODEL]` lines with per-cell GO/NO-GO verdicts, cost, and wall time. No asserts on measured scores (a model's numbers are what they are); `gate_verdict` (the spec's thresholds) is a pure fn with its own tests. |
+| `crates/ingestion/src/lib.rs` | `#[cfg(feature = "remote_emb")] pub mod remote_emb;` |
+| `crates/ingestion/src/multimodal_embedding.rs` | Module doc: "a real provider arrives behind the §60 real-model decision" → points at `remote_emb`. |
+| `crates/ingestion/Cargo.toml` | Feature `remote_emb = ["dep:ureq"]` (same optional-ureq pattern as `vlm`/`transform`). |
+
+**Deliberate scope**: no BM25 upgrade in this PR (the pinned baseline must stay stable while the experiment runs — BM25 arrives in the PR that re-pins the baseline, per the engine's `ponytail:` note); no fixture-replay corpus (the golden corpus IS the corpus; the std-only stub-server tests prove the live path without a model); no CI job (env-gated SKIP, matching the vlm/transform precedent); no provider-default flip (that is exactly what the experiment decides, in a follow-up PR).
+
+**Tests — PR-P (all green 2026-08-21)**: 418 lib base (unchanged — the engine move adds no tests) + 419 `--features transform` + 423 `--features remote_emb` (+5: config-from-env, unreachable-degrade, stub-parse+dim-adoption, stub-500-degrade, mm-channel) + 425 `--features vlm` + 431 `--all-features`; `real_model_bench` +4 (gate-verdict suite ×4 cases + SKIP measurement); 11/11 acceptance; golden 1/1; retrieval-quality 1/1 (baseline 0.867 re-verified after the engine move); clippy `-D warnings` clean on base + `--all-features` (both cfg states); `cargo test --workspace` green. One stub-server test race root-caused and fixed (respond-before-request-body-complete raced the client's send under parallel load → the stub now reads the full request before responding; 5 consecutive clean runs).
+
+### Next implementation
+
+The **§60 real-model run itself** — the harness is ready; it needs a live OpenAI-compatible embedding endpoint (any provider; the user's call). The verdict prints GO/NO-GO per cell. Remaining §60 metric gap: **fact/relation extraction quality** — the two HLD §60 metrics with no instrument yet; next code milestone is either that instrument or the next HLD milestone after §60.
 

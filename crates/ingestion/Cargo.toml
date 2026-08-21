@@ -38,6 +38,10 @@ vlm = ["dep:ureq"]
 # env-configured). NOT in the default build — HLD §56/DoD row 10:
 # no mandatory heavyweight AI.
 transform = ["dep:ureq"]
+# PR-P HLD §60: optional remote embedding provider (ureq, env-configured) —
+# the §60 real-model experiment harness. NOT in the default build: the mock
+# provider stays until the measured gate verdict is GO (rollback = unset env).
+remote_emb = ["dep:ureq"]
 
 [[bench]]
 name = "ingest_benchmark"
