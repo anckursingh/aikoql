@@ -1105,7 +1105,9 @@ fn m15_document_compile_pipeline() {
     let phases_arr = stats["phases"].as_array().unwrap();
     assert_eq!(phases_arr.len(), 7, "pipeline must have 7 phases (D3-D8)");
     assert!(
-        phases_arr.iter().any(|p| p["phase"].as_str() == Some("D4-fragments")),
+        phases_arr
+            .iter()
+            .any(|p| p["phase"].as_str() == Some("D4-fragments")),
         "the boundary stream phase must be reported"
     );
     assert!(stats["total_us"].as_u64().unwrap() > 0);

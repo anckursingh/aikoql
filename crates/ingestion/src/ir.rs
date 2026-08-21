@@ -306,8 +306,8 @@ impl MockSemanticAnalyzer {
                     let mentions: Vec<String> = page
                         .children
                         .iter()
-                        .filter(|c| c.text.contains(&entity_name))
-                        .map(|c| c.text.clone())
+                        .filter(|c| c.text.as_deref().unwrap_or_default().contains(&entity_name))
+                        .map(|c| c.text.clone().unwrap_or_default())
                         .collect();
                     ir.entities.push(EntityCandidate {
                         name: entity_name.clone(),
@@ -335,10 +335,12 @@ impl MockSemanticAnalyzer {
                 if matches!(child.block_type, BlockType::Heading { .. })
                     || matches!(child.block_type, BlockType::Title)
                 {
-                    let entities: Vec<String> = extract_capitalized_phrases(&child.text);
-                    if !child.text.is_empty() && !entities.is_empty() {
+                    let entities: Vec<String> =
+                        extract_capitalized_phrases(child.text.as_deref().unwrap_or_default());
+                    if !child.text.as_deref().unwrap_or_default().is_empty() && !entities.is_empty()
+                    {
                         ir.facts.push(FactCandidate {
-                            statement: child.text.clone(),
+                            statement: child.text.clone().unwrap_or_default(),
                             entities,
                             confidence: self.confidence,
                             evidence: Evidence {
@@ -599,8 +601,10 @@ fn fragment_evidence(frag: &KnowledgeFragment, extractor: &str, confidence: f32)
 fn collect_text(nodes: &[crate::AstNode]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for node in nodes {
-        if !node.text.trim().is_empty() {
-            lines.push(node.text.clone());
+        if let Some(text) = &node.text {
+            if !text.trim().is_empty() {
+                lines.push(text.clone());
+            }
         }
         if !node.children.is_empty() {
             lines.push(collect_text(&node.children));
@@ -940,7 +944,7 @@ mod tests {
             .into_iter()
             .map(|children| AstNode {
                 block_type: BlockType::Unknown,
-                text: String::new(),
+                text: None,
                 children,
                 bbox: None,
                 confidence: None,
@@ -951,13 +955,14 @@ mod tests {
             pages,
             page_count,
             source_type: "native".into(),
+            document_id: None,
         }
     }
 
     fn paragraph(text: &str) -> AstNode {
         AstNode {
             block_type: BlockType::Paragraph,
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
@@ -968,7 +973,7 @@ mod tests {
     fn heading(level: u8, text: &str) -> AstNode {
         AstNode {
             block_type: BlockType::Heading { level },
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
@@ -979,7 +984,7 @@ mod tests {
     fn title(text: &str) -> AstNode {
         AstNode {
             block_type: BlockType::Title,
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
@@ -990,7 +995,7 @@ mod tests {
     fn table_node() -> AstNode {
         AstNode {
             block_type: BlockType::Table,
-            text: String::new(),
+            text: None,
             children: vec![],
             bbox: None,
             confidence: None,
@@ -1403,11 +1408,11 @@ mod tests {
             heading(1, "Vendors"),
             AstNode {
                 block_type: BlockType::List { ordered: false },
-                text: String::new(),
+                text: None,
                 children: vec![
                     AstNode {
                         block_type: BlockType::ListItem,
-                        text: "Acme Corporation".into(),
+                        text: Some("Acme Corporation".into()),
                         children: vec![],
                         bbox: None,
                         confidence: None,
@@ -1415,7 +1420,7 @@ mod tests {
                     },
                     AstNode {
                         block_type: BlockType::ListItem,
-                        text: "Globex Industries".into(),
+                        text: Some("Globex Industries".into()),
                         children: vec![],
                         bbox: None,
                         confidence: None,
@@ -1442,17 +1447,17 @@ mod tests {
             paragraph("The following vendors are approved:"),
             AstNode {
                 block_type: BlockType::Table,
-                text: "Acme Corporation\tGlobex Industries".into(),
+                text: Some("Acme Corporation\tGlobex Industries".into()),
                 children: vec![AstNode {
                     block_type: BlockType::TableRow,
-                    text: String::new(),
+                    text: None,
                     children: vec![
                         AstNode {
                             block_type: BlockType::TableCell {
                                 row_span: 1,
                                 col_span: 1,
                             },
-                            text: "Acme Corporation".into(),
+                            text: Some("Acme Corporation".into()),
                             children: vec![],
                             bbox: None,
                             confidence: None,
@@ -1463,7 +1468,7 @@ mod tests {
                                 row_span: 1,
                                 col_span: 1,
                             },
-                            text: "Globex Industries".into(),
+                            text: Some("Globex Industries".into()),
                             children: vec![],
                             bbox: None,
                             confidence: None,

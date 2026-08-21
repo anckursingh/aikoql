@@ -630,7 +630,7 @@ mod tests {
             .into_iter()
             .map(|children| AstNode {
                 block_type: BlockType::Unknown,
-                text: String::new(),
+                text: None,
                 children,
                 bbox: None,
                 confidence: None,
@@ -641,6 +641,7 @@ mod tests {
             pages,
             page_count,
             source_type: "native".into(),
+            document_id: None,
         }
     }
 
@@ -655,7 +656,7 @@ mod tests {
     fn paragraph(text: &str) -> AstNode {
         AstNode {
             block_type: BlockType::Paragraph,
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
@@ -666,7 +667,7 @@ mod tests {
     fn heading(level: u8, text: &str) -> AstNode {
         AstNode {
             block_type: BlockType::Heading { level },
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
@@ -764,7 +765,7 @@ mod tests {
 
         let ast = make_ast(vec![vec![AstNode {
             block_type: BlockType::Unknown,
-            text: String::new(),
+            text: None,
             children: nodes,
             bbox: None,
             confidence: None,
@@ -806,7 +807,7 @@ mod tests {
             paragraph("Short intro."),
             AstNode {
                 block_type: BlockType::Table,
-                text: String::new(),
+                text: None,
                 children: table_children(&rows),
                 bbox: None,
                 confidence: None,
@@ -815,7 +816,7 @@ mod tests {
         ];
         let ast = make_ast(vec![vec![AstNode {
             block_type: BlockType::Unknown,
-            text: String::new(),
+            text: None,
             children: nodes,
             bbox: None,
             confidence: None,
@@ -862,7 +863,7 @@ mod tests {
             .collect();
         let mut children = vec![AstNode {
             block_type: BlockType::TableRow,
-            text: String::new(),
+            text: None,
             children: header_cells
                 .iter()
                 .map(|c| AstNode {
@@ -870,7 +871,7 @@ mod tests {
                         row_span: 1,
                         col_span: 1,
                     },
-                    text: c.clone(),
+                    text: Some(c.clone()),
                     children: vec![],
                     bbox: None,
                     confidence: None,
@@ -889,7 +890,7 @@ mod tests {
                 .collect();
             children.push(AstNode {
                 block_type: BlockType::TableRow,
-                text: String::new(),
+                text: None,
                 children: cells
                     .iter()
                     .map(|c| AstNode {
@@ -897,7 +898,7 @@ mod tests {
                             row_span: 1,
                             col_span: 1,
                         },
-                        text: c.clone(),
+                        text: Some(c.clone()),
                         children: vec![],
                         bbox: None,
                         confidence: None,
@@ -1124,7 +1125,7 @@ mod tests {
         let rows = "| Name | Age |\n| Alice | 30 |\n| Bob | 25 |";
         let ast = make_ast(vec![vec![AstNode {
             block_type: BlockType::Table,
-            text: String::new(),
+            text: None,
             children: table_children(rows),
             bbox: None,
             confidence: None,
@@ -1150,7 +1151,7 @@ mod tests {
             paragraph("Context paragraph before the table."),
             AstNode {
                 block_type: BlockType::Table,
-                text: String::new(),
+                text: None,
                 children: table_children(rows),
                 bbox: None,
                 confidence: None,
@@ -1160,7 +1161,7 @@ mod tests {
         ];
         let ast = make_ast(vec![vec![AstNode {
             block_type: BlockType::Unknown,
-            text: String::new(),
+            text: None,
             children: nodes,
             bbox: None,
             confidence: None,

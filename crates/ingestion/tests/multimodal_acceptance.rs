@@ -246,6 +246,48 @@ fn acceptance_semantic_ir_cites_typed_sources() {
 }
 
 #[test]
+fn acceptance_markdown_images_fail_soft_and_legacy_text_deserializes() {
+    // PR-B: standalone images become content-addressed Image nodes (asserted
+    // at the AST level in markdown.rs unit tests, which use the real fs).
+    // Here: the public compile path must not hard-fail on present OR missing
+    // image files, entities keep flowing, document_id propagates, and legacy
+    // JSON with a plain-string `text` key still deserializes as Some.
+    let dir = std::env::temp_dir().join("aikoql-multimodal-acceptance-assets");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("logo.png"), b"\x89PNG fake bytes").unwrap();
+    let md = dir.join("doc.md");
+    std::fs::write(
+        &md,
+        "# Asset Doc\n\nIntro paragraph.\n\n![Logo](logo.png)\n\n![Missing](gone.png)\n",
+    )
+    .unwrap();
+
+    let ir = aikoql_ingestion::compile_markdown_file(
+        &md.to_string_lossy(),
+        Some("doc.md".into()),
+    )
+    .expect("markdown with present and missing images compiles");
+
+    assert!(
+        ir.entities.iter().any(|e| e.name == "Asset Doc"),
+        "entities still flow through the asset-bearing document"
+    );
+    assert_eq!(
+        ir.document_id.as_deref(),
+        Some("doc.md"),
+        "document_id propagates through the markdown compile"
+    );
+
+    // HLD §7 back-compat: pre-migration JSON has `text` as a plain string.
+    let node: aikoql_ingestion::AstNode =
+        serde_json::from_str(r#"{"block_type":"Paragraph","text":"hello"}"#)
+            .expect("legacy plain-string text key deserializes");
+    assert_eq!(node.text.as_deref(), Some("hello"));
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn acceptance_end_to_end_text_file_ingestion() {
     // Full journey from a real file on disk through extraction to fragments.
     let dir = std::env::temp_dir().join("aikoql-multimodal-acceptance");

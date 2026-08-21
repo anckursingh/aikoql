@@ -92,7 +92,7 @@ fn emit_block(
     match &node.block_type {
         BlockType::Heading { .. } | BlockType::Title => {
             // Headings are structural context, not content fragments.
-            heading_path.push(node.text.clone());
+            heading_path.push(node.text.clone().unwrap_or_default());
         }
         BlockType::Table => {
             // The canonical AST already carries the TablePayload (attached by
@@ -137,7 +137,7 @@ fn emit_block(
             out.push(KnowledgeFragment {
                 fragment_id: fragment_id(page, block_idx),
                 modality: FragmentModality::Code,
-                content: FragmentContent::Code(node.text.clone()),
+                content: FragmentContent::Code(node.text.clone().unwrap_or_default()),
                 context: FragmentContext {
                     heading_path: heading_path.clone(),
                     page: Some(page),
@@ -162,10 +162,10 @@ fn emit_block(
                 .children
                 .iter()
                 .filter_map(|item| {
-                    if item.text.trim().is_empty() {
+                    if item.text.as_deref().unwrap_or_default().trim().is_empty() {
                         None
                     } else {
-                        Some(item.text.trim().to_string())
+                        Some(item.text.as_deref().unwrap_or_default().trim().to_string())
                     }
                 })
                 .collect::<Vec<_>>()
@@ -186,7 +186,9 @@ fn emit_block(
         _ => {
             // Empty container (Unknown/Section wrappers): recurse so wrapped
             // content is never silently dropped.
-            if node.text.trim().is_empty() && !node.children.is_empty() {
+            if node.text.as_deref().unwrap_or_default().trim().is_empty()
+                && !node.children.is_empty()
+            {
                 for (child_idx, child) in node.children.iter().enumerate() {
                     emit_block(child, page, child_idx, heading_path, out);
                 }
@@ -208,7 +210,7 @@ fn text_fragment(
         block_idx,
         heading_path,
         node,
-        FragmentContent::Text(node.text.clone()),
+        FragmentContent::Text(node.text.clone().unwrap_or_default()),
     )
 }
 

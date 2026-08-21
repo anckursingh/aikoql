@@ -109,6 +109,9 @@ pub use ocr::{
     page_needs_ocr, tool_available, BlockBbox, OcrProvider, OcrStats, OcrWord, TesseractCli,
 };
 
+mod asset_store;
+pub use asset_store::{content_hash, load_asset, mime_from_extension, store_asset};
+
 mod ast;
 pub use ast::{
     classify_blocks_enriched, document_model_to_ast, document_model_to_ast_enriched,

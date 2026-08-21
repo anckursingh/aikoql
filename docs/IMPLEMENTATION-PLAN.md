@@ -3257,7 +3257,7 @@ Decisions taken this round (with rationale):
 
 - **PR-A + PR-C primitives only** — exactly the §60 first milestone: `SourceSpan`, `VisualAssetRef`, `AstPayload`, `KnowledgeFragment`, `KnowledgeBoundaryDetector`. No model changes, no chunker refactor yet.
 - **`Evidence` struct** — the typed `EvidenceSource` swap was one sweep in PR-D (~24 construction sites across 9 files): done, `bbox_text` is gone from the wire format (legacy JSON deserializes; the key is dropped).
-- **`AstNode.text` stays `String` for now** — the HLD's `Option<String>` migration moved to PR-F, where text-less visual nodes actually appear. Doing it in PR-D would be ~90 mechanical `.text`-consumer edits with zero behavior gain.
+- **`AstNode.text → Option<String>`** — the HLD §7 migration landed with PR-B (where content-addressed `Image` nodes are the first text-less/asset-bearing nodes): `#[serde(default)]` keeps legacy JSON (plain-string `text`) deserializing as `Some(_)`; ~70 consumer sites switched in one compiler-driven sweep.
 - **Headings are `FragmentContext.heading_path`, not fragments** — heading text reaches consumers through context; emitting it as its own fragment duplicates the content.
 - **`AstPayload`/`FragmentContent` per-modality, not one blob** — a table fragment keeps `TablePayload` (headers/rows/typed `ScalarValue` cells); interpretation is derived from the source representation, never substituted for it (§59).
 - **`RuleBoundaryDetector` in one `boundary.rs`** — the doc's directory-per-detector layout is premature; one file per future detector was *not* created (ponytail: do not create all directories immediately).
@@ -3307,7 +3307,7 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | `crates/services/api/mcp/src/ingest.rs` | Kernel KO location strings render the typed source via `evidence_source_label` (`"table frag-p1-b2 cell 0-h1"`, `"bbox (…)"`, …). |
 | `crates/ingestion/tests/multimodal_acceptance.rs` | +1 acceptance: `acceptance_semantic_ir_cites_typed_sources` — cell facts carry `TableCell` evidence through the full pipeline. |
 
-**Deferred from the PR-D plan:** `AstNode.text → Option<String>` moved to PR-F (first text-less visual nodes) — ~90 mechanical consumer edits with zero behavior gain here, same rationale as the earlier `bbox_text` deferral.
+**Deferred from the PR-D plan:** `AstNode.text → Option<String>` was deferred here (~90 mechanical consumer edits, zero behavior gain for PR-D itself) and landed with PR-B, where the first text-less asset-bearing nodes (`Image`) actually appear.
 
 ### Tests — PR-D (all green 2026-08-21)
 
@@ -3337,22 +3337,44 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 2 | Tables remain structured | ✅ Typed `TablePayload` in canonical AST + table fragments (this round) |
 | 3 | Chart data representable structurally | ✅ `ChartPayload` types exist; extraction deferred to PR-F |
 | 4 | Diagram nodes/edges representable | ✅ `DiagramPayload` types exist; extraction deferred to PR-F |
-| 5 | Images retain original assets | ⏳ `VisualAssetRef` + `AstNode.asset` exist; asset population deferred to PR-B/PR-F |
+| 5 | Images retain original assets | ✅ Markdown standalone images → content-addressed `Image` nodes (PR-B); docx/pdf embedded-image extraction still PR-F |
 | 6 | Formulas retain mathematical representation | ✅ `FormulaPayload` types exist; extraction deferred to PR-F |
 | 7 | Every semantic candidate has typed provenance | ✅ PR-D done — `Evidence.source: Option<EvidenceSource>` on every candidate; geometry sites carry `Region`, table facts carry `TableCell` |
 | 8 | Every visual-derived fact resolves to page/region | ⏳ Table-cell facts resolve to cell-level evidence (PR-D); visual analyzers are PR-F |
 | 9 | Retrieval chunks are derived projections | ✅ PR-E done — `HeadingProjector` projects whole fragments, never splits one |
 | 10 | Transformer boundary detection optional | ✅ No transformer dependency; `KnowledgeBoundaryDetector` trait is the seam |
 | 11 | Model versions persisted | ⏳ Future (PR-F onward) |
-| 12 | Asset processing content-addressed | ⏳ Future (`VisualAssetRef.content_hash` is the field; population is PR-B) |
+| 12 | Asset processing content-addressed | ✅ sha256 content-addressed store (`asset_store.rs`) + hash population on markdown images (PR-B); persistence wiring lands when PR-F consumes assets |
 | 13 | Incremental ingestion at asset/page level | ⏳ Future |
 | 14 | No mandatory heavyweight AI | ✅ Still pdf-extract/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 321 + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 335 lib + 9 acceptance + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ⏳ Future (PR-E/PR-F benchmarks) |
 | 19 | CI measures extraction + semantic regression | ⏳ Future |
 
-### Next implementation — PR-B: Extraction preservation (HLD §57)
+### Implemented now — PR-B: Extraction preservation (2026-08-21, commit on `feature/mvp-launch`)
 
-PR-B makes PDF/DOCX/HTML extraction keep the multimodal structure the canonical AST can already represent: real extractors emit `Figure`/`Chart`/`Diagram`/`Formula` blocks with payloads + `VisualAssetRef`s instead of text-only blocks (asset population, content-addressed storage — DoD rows 5, 12), `DocumentAst` gains a `document_id` (needed for the document-hash fragment-id prefix deferred in PR-C). Also lands the `AstNode.text → Option<String>` migration deferred from PR-D, with all `.text` consumers switching together. After that: PR-F (visual analyzers, mock-first). PR-G (transformer/embedding boundary detectors) stays gated on the rule-baseline benchmarks, which are now measurable against the PR-E projection and the PR-D semantic leg.
+Extraction now preserves assets where a real extractor can populate them today: markdown standalone images become content-addressed `Image` nodes, `DocumentAst` carries a `document_id` (PR-C's document-hash fragment-id prefix consumes it), and the `AstNode.text → Option<String>` migration (HLD §7, deferred from PR-D) landed with every consumer switching in one sweep.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/asset_store.rs` | **New.** Content-addressed storage: `content_hash` (sha256 hex), `mime_from_extension`, `store_asset` (writes `{dir}/{hash}.bin` only if absent — identical bytes dedupe), `load_asset`. 5 tests incl. known-vector sha256, dedupe, missing→None. |
+| `crates/ingestion/src/markdown.rs` | Standalone `![alt](path)` lines → `BlockType::Image` nodes with `text = Some(alt)` + `asset = Some(VisualAssetRef)` (content_hash = sha256 of file bytes, mime from extension). Missing/unreadable file → Image node without asset (fail-soft; alt text survives). Inline images mid-paragraph stay raw text (ponytail deferral). Images resolve relative to the document's directory (`compile_markdown_file` passes the file's parent as base dir; the string variant has none). 3 tests (asset populated + content-addressed, missing fails soft, inline stays text). |
+| `crates/ingestion/src/ast.rs` | `AstNode.text: String → Option<String>` (`#[serde(default)]` — legacy JSON with a plain-string `text` key deserializes as `Some(_)`); `None` = page containers, structured nodes, visual-only nodes. `DocumentAst.document_id: Option<String>` (`#[serde(default)]`). |
+| `crates/ingestion/src/{ir,boundary,chunking,markdown}.rs` + tests | ~70 `.text` consumer sites switched together (constructors → `Some(..)`/`None`; readers → `.as_deref().unwrap_or_default()`; list-continuation mutation → `get_or_insert_with`). |
+| `crates/ingestion/src/lib.rs` | `mod asset_store` + re-exports (`content_hash`, `store_asset`, `load_asset`, `mime_from_extension`). |
+| `crates/ingestion/Cargo.toml` | `sha2 = "0.10"` (already in the workspace lockfile — no new graph dependency). |
+| `crates/ingestion/tests/multimodal_acceptance.rs` | +1 acceptance (9/9): public markdown compile path fails soft on present AND missing images, entities + `document_id` flow through, legacy plain-string `text` JSON deserializes as `Some`. |
+
+**Ponytail boundaries (documented ceilings):** `Figure`/`Chart`/`Diagram`/`Formula` *block emission* stays PR-F — markdown has no reliable figure/diagram syntax without speculative heuristics, and the docx/pdf extractors' embedded-image extraction is PR-F (docx zip reading already exists; pdf image extraction does not). The AST-side types (`asset`/`payload`) now exist, so PR-F populates instead of redesigning. The asset store ships and hashes are populated, but persistence (an asset directory param on `compile_document`) is NOT wired yet — no consumer exists; wiring lands when PR-F consumes assets. `document_model_to_ast` leaves `document_id: None` (DocumentModel has no id source) — markdown compilers set it from their `document_id` param.
+
+### Tests — PR-B (all green 2026-08-21)
+
+- **Unit**: 335 lib tests (+8): 5 `asset_store::tests` (sha256 known vector, roundtrip, dedupe, missing→None, mime map) + 3 `markdown::tests` (`standalone_image_becomes_node_with_content_addressed_asset`, `missing_image_fails_soft`, `inline_image_stays_in_paragraph_text`).
+- **Acceptance**: 9/9 (+1, above).
+- **Gates**: `cargo fmt --all` clean, `cargo clippy --workspace --all-targets` clean (0 warnings), `cargo test --workspace` green (all crates, exit 0).
+
+### Next implementation — PR-F: Visual analyzers (mock-first, HLD §17–20)
+
+PR-F lands chart/diagram/formula block emission + docx/pdf embedded-image extraction (populating the `asset`/`payload` types PR-A/B built), mock-first analyzers for `Figure`/`Chart`/`Diagram`/`Formula` classification, and the asset-store persistence wiring (an asset directory parameter on `compile_document`) so hashed assets are actually stored — completing DoD rows 3, 4, 5 (docx/pdf), 6, 8, 11. PR-C (document-hash fragment-id prefix) can consume `DocumentAst.document_id` at any point after this. PR-G (transformer/embedding boundary detectors) stays gated on the rule-baseline benchmarks (§60), now measurable against the PR-E projection and the PR-D semantic leg.

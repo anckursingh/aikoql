@@ -63,10 +63,13 @@ pub struct BoundingBox {
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct AstNode {
     pub block_type: BlockType,
-    /// Text representation if available. Empty string = none (page
-    /// containers, structured nodes). The HLD's `Option<String>` migration
-    /// lands with PR-D — every `.text` consumer must switch together.
-    pub text: String,
+    /// Text representation if available. `None` = none (page containers,
+    /// structured nodes, visual-only nodes whose representation lives in
+    /// `asset`/`payload`). HLD §7 migration lands with PR-B — every `.text`
+    /// consumer switches together; `#[serde(default)]` keeps legacy JSON
+    /// (plain string `text` key) deserializing as `Some(_)`.
+    #[serde(default)]
+    pub text: Option<String>,
     #[serde(default)]
     pub children: Vec<AstNode>,
     pub bbox: Option<BoundingBox>,
@@ -301,7 +304,7 @@ pub fn table_payload_from_node(node: &AstNode) -> Option<TablePayload> {
             for (col_idx, cell_node) in row_node.children.iter().enumerate() {
                 headers.push(TableHeader {
                     id: format!("h{}", col_idx),
-                    text: cell_node.text.clone(),
+                    text: cell_node.text.clone().unwrap_or_default(),
                     level: 1,
                     parent_id: None,
                 });
@@ -324,8 +327,8 @@ pub fn table_payload_from_node(node: &AstNode) -> Option<TablePayload> {
                 id: format!("{}-{}", row_id, col_idx),
                 row_id: row_id.clone(),
                 column_id,
-                text: cell_node.text.clone(),
-                value: parse_scalar_value(&cell_node.text),
+                text: cell_node.text.clone().unwrap_or_default(),
+                value: parse_scalar_value(cell_node.text.as_deref().unwrap_or_default()),
                 bbox: cell_node.bbox.clone(),
                 confidence,
             });
@@ -391,6 +394,10 @@ pub struct DocumentAst {
     pub page_count: u32,
     /// Provenance: "native", "ocr", or "mixed".
     pub source_type: String,
+    /// Stable document identity (file path, hash, or external id). Populated
+    /// by extractors/adapters; PR-C derives fragment-id prefixes from it.
+    #[serde(default)]
+    pub document_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +415,7 @@ pub fn document_model_to_ast(doc: &DocumentModel) -> DocumentAst {
         let blocks = classify_blocks(&page.text, page.page_number);
         pages.push(AstNode {
             block_type: BlockType::Unknown, // page container
-            text: String::new(),
+            text: None,
             children: blocks,
             bbox: None,
             confidence: page.ocr_confidence,
@@ -422,6 +429,7 @@ pub fn document_model_to_ast(doc: &DocumentModel) -> DocumentAst {
         page_count: doc.page_count,
         pages,
         source_type,
+        document_id: None,
     }
 }
 
@@ -482,7 +490,7 @@ fn classify_blocks(text: &str, _page: u32) -> Vec<AstNode> {
             flush_list(&mut list_buffer, &mut nodes);
             nodes.push(AstNode {
                 block_type: BlockType::Code,
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
@@ -507,7 +515,7 @@ fn classify_blocks(text: &str, _page: u32) -> Vec<AstNode> {
             // Let detect_figures post-pass handle this.
             nodes.push(AstNode {
                 block_type: BlockType::Paragraph,
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
@@ -531,7 +539,7 @@ fn classify_blocks(text: &str, _page: u32) -> Vec<AstNode> {
         // ── Default: paragraph ──
         nodes.push(AstNode {
             block_type: BlockType::Paragraph,
-            text: trimmed.to_string(),
+            text: Some(trimmed.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
@@ -575,13 +583,13 @@ fn flush_list(buffer: &mut Vec<AstNode>, out: &mut Vec<AstNode>) {
     let items = std::mem::take(buffer);
     let ordered = items.first().is_some_and(|item| {
         // Ordered if the first item starts with a digit followed by "." or ")"
-        let t = item.text.trim();
+        let t = item.text.as_deref().unwrap_or_default().trim();
         t.chars().next().is_some_and(|c| c.is_ascii_digit())
             && t.chars().nth(1).is_some_and(|c| c == '.' || c == ')')
     });
     out.push(AstNode {
         block_type: BlockType::List { ordered },
-        text: String::new(),
+        text: None,
         children: items,
         bbox: None,
         confidence: None,
@@ -607,7 +615,7 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
         let level = dots.clamp(1, 3); // "1." → 1 dot → level 1; "1.1.1" → 3 dots → level 3
         return Some(AstNode {
             block_type: BlockType::Heading { level },
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
@@ -627,7 +635,7 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
                 block_type: BlockType::Heading {
                     level: *default_level,
                 },
-                text: text.to_string(),
+                text: Some(text.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
@@ -660,7 +668,7 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
 
         return Some(AstNode {
             block_type: BlockType::Heading { level },
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
@@ -734,7 +742,7 @@ fn build_list_items(lines: &[&str], _text: &str) -> AstNode {
     // ponytail: single block only, multi-paragraph list items deferred
     AstNode {
         block_type: BlockType::ListItem,
-        text: lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" "),
+        text: Some(lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ")),
         children: vec![],
         bbox: None,
         confidence: None,
@@ -805,7 +813,7 @@ fn build_table_node(lines: &[&str], _text: &str) -> AstNode {
                     row_span: 1,
                     col_span: 1,
                 },
-                text: c.to_string(),
+                text: Some(c.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
@@ -815,7 +823,7 @@ fn build_table_node(lines: &[&str], _text: &str) -> AstNode {
 
         rows.push(AstNode {
             block_type: BlockType::TableRow,
-            text: String::new(),
+            text: None,
             children: cell_nodes,
             bbox: None,
             confidence: None,
@@ -825,7 +833,7 @@ fn build_table_node(lines: &[&str], _text: &str) -> AstNode {
 
     let table = AstNode {
         block_type: BlockType::Table,
-        text: String::new(),
+        text: None,
         children: rows,
         bbox: None,
         confidence: None,
@@ -896,7 +904,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
             flush_list(&mut list_buffer, &mut nodes);
             nodes.push(AstNode {
                 block_type: BlockType::Code,
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
@@ -937,7 +945,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
             {
                 nodes.push(AstNode {
                     block_type: BlockType::Header,
-                    text: trimmed.to_string(),
+                    text: Some(trimmed.to_string()),
                     children: vec![],
                     bbox: Some(BoundingBox {
                         page,
@@ -955,7 +963,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
             if h.top > 2500 && h.height < 50 {
                 nodes.push(AstNode {
                     block_type: BlockType::Footer,
-                    text: trimmed.to_string(),
+                    text: Some(trimmed.to_string()),
                     children: vec![],
                     bbox: Some(BoundingBox {
                         page,
@@ -979,7 +987,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
             let h = hint.unwrap();
             nodes.push(AstNode {
                 block_type: BlockType::Title,
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: Some(BoundingBox {
                     page,
@@ -1003,7 +1011,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
             let level = heading_level_from_text(first);
             nodes.push(AstNode {
                 block_type: BlockType::Heading { level },
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: Some(BoundingBox {
                     page,
@@ -1022,7 +1030,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
         if parse_figure_marker(trimmed).is_some() {
             let mut para = AstNode {
                 block_type: BlockType::Paragraph,
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
@@ -1079,7 +1087,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
         // ── Default: paragraph ──
         let mut para = AstNode {
             block_type: BlockType::Paragraph,
-            text: trimmed.to_string(),
+            text: Some(trimmed.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
@@ -1173,7 +1181,7 @@ fn merge_list_continuations(nodes: Vec<AstNode>) -> Vec<AstNode> {
 fn is_continuation_paragraph(node: &AstNode) -> bool {
     // A paragraph is a continuation if it doesn't look like a new structural
     // element: no list markers, no heading patterns, no figure markers.
-    let t = node.text.trim();
+    let t = node.text.as_deref().unwrap_or_default().trim();
     if t.is_empty() {
         return false;
     }
@@ -1243,7 +1251,7 @@ fn detect_figures(nodes: Vec<AstNode>) -> Vec<AstNode> {
         let node = &nodes[i];
 
         if node.block_type == BlockType::Paragraph {
-            if let Some(_fig_num) = parse_figure_marker(&node.text) {
+            if let Some(_fig_num) = parse_figure_marker(node.text.as_deref().unwrap_or_default()) {
                 let caption =
                     if i + 1 < nodes.len() && nodes[i + 1].block_type == BlockType::Paragraph {
                         i += 1;
@@ -1259,7 +1267,7 @@ fn detect_figures(nodes: Vec<AstNode>) -> Vec<AstNode> {
                     } else {
                         AstNode {
                             block_type: BlockType::Caption,
-                            text: String::new(),
+                            text: None,
                             children: vec![],
                             bbox: None,
                             confidence: None,
@@ -1319,7 +1327,7 @@ pub fn document_model_to_ast_enriched(
 
         pages.push(AstNode {
             block_type: BlockType::Unknown,
-            text: String::new(),
+            text: None,
             children: blocks,
             bbox: None,
             confidence: page.ocr_confidence,
@@ -1333,6 +1341,7 @@ pub fn document_model_to_ast_enriched(
         page_count: doc.page_count,
         pages,
         source_type,
+        document_id: None,
     }
 }
 
@@ -1440,7 +1449,11 @@ mod tests {
         let blocks = classify_blocks("1. Introduction", 1);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].block_type, BlockType::Heading { level: 1 });
-        assert!(blocks[0].text.contains("Introduction"));
+        assert!(blocks[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Introduction"));
     }
 
     #[test]
@@ -1527,13 +1540,25 @@ mod tests {
 
         // Heading
         assert!(matches!(blocks[0].block_type, BlockType::Heading { .. }));
-        assert!(blocks[0].text.contains("Payment Terms"));
+        assert!(blocks[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Payment Terms"));
 
         // Paragraphs
         assert_eq!(blocks[1].block_type, BlockType::Paragraph);
-        assert!(blocks[1].text.contains("30 days"));
+        assert!(blocks[1]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("30 days"));
         assert_eq!(blocks[2].block_type, BlockType::Paragraph);
-        assert!(blocks[2].text.contains("1.5%"));
+        assert!(blocks[2]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("1.5%"));
 
         // Table
         assert_eq!(blocks[3].block_type, BlockType::Table);
@@ -1541,7 +1566,10 @@ mod tests {
                                                  // First row (header)
         assert_eq!(blocks[3].children[0].block_type, BlockType::TableRow);
         assert_eq!(blocks[3].children[0].children.len(), 4);
-        assert_eq!(blocks[3].children[0].children[0].text, "Item");
+        assert_eq!(
+            blocks[3].children[0].children[0].text.as_deref(),
+            Some("Item")
+        );
     }
 
     // ── Code block ──
@@ -1568,13 +1596,14 @@ mod tests {
         let ast = DocumentAst {
             page_count: 1,
             source_type: "native".into(),
+            document_id: None,
             pages: vec![AstNode {
                 block_type: BlockType::Unknown,
-                text: String::new(),
+                text: None,
                 children: vec![
                     AstNode {
                         block_type: BlockType::Heading { level: 1 },
-                        text: "Title".into(),
+                        text: Some("Title".into()),
                         children: vec![],
                         bbox: None,
                         confidence: None,
@@ -1582,7 +1611,7 @@ mod tests {
                     },
                     AstNode {
                         block_type: BlockType::Paragraph,
-                        text: "Body text.".into(),
+                        text: Some("Body text.".into()),
                         children: vec![],
                         bbox: None,
                         confidence: None,
@@ -1632,7 +1661,11 @@ mod tests {
         assert_eq!(blocks.len(), 3);
         assert_eq!(blocks[0].block_type, BlockType::Paragraph);
         assert!(matches!(blocks[1].block_type, BlockType::Heading { .. }));
-        assert!(blocks[1].text.contains("PAYMENT TERMS"));
+        assert!(blocks[1]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("PAYMENT TERMS"));
         assert_eq!(blocks[2].block_type, BlockType::Paragraph);
     }
 
@@ -1647,7 +1680,11 @@ mod tests {
         let blocks = classify_blocks_enriched(text, 1, &bboxes);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].block_type, BlockType::Title);
-        assert!(blocks[0].text.contains("INVOICE"));
+        assert!(blocks[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("INVOICE"));
         assert_eq!(blocks[1].block_type, BlockType::Paragraph);
     }
 
@@ -1661,7 +1698,11 @@ mod tests {
         let blocks = classify_blocks_enriched(text, 1, &bboxes);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].block_type, BlockType::Header);
-        assert!(blocks[0].text.contains("Page 1"));
+        assert!(blocks[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Page 1"));
         assert_eq!(blocks[1].block_type, BlockType::Paragraph);
     }
 
@@ -1676,7 +1717,11 @@ mod tests {
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].block_type, BlockType::Paragraph);
         assert_eq!(blocks[1].block_type, BlockType::Footer);
-        assert!(blocks[1].text.contains("Confidential"));
+        assert!(blocks[1]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Confidential"));
     }
 
     #[test]
@@ -1723,7 +1768,11 @@ mod tests {
         assert_eq!(item1.block_type, BlockType::ListItem);
         assert_eq!(item1.children.len(), 1);
         assert_eq!(item1.children[0].block_type, BlockType::Paragraph);
-        assert!(item1.children[0].text.contains("Continuation"));
+        assert!(item1.children[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Continuation"));
 
         let item2 = &blocks[0].children[1];
         assert_eq!(item2.block_type, BlockType::ListItem);
@@ -1776,10 +1825,14 @@ mod tests {
             .iter()
             .find(|b| b.block_type == BlockType::Image)
             .unwrap();
-        assert!(fig.text.contains("Figure 1"));
+        assert!(fig.text.as_deref().unwrap_or_default().contains("Figure 1"));
         assert_eq!(fig.children.len(), 1);
         assert_eq!(fig.children[0].block_type, BlockType::Caption);
-        assert!(fig.children[0].text.contains("diagram caption"));
+        assert!(fig.children[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("diagram caption"));
     }
 
     #[test]
@@ -1791,7 +1844,7 @@ mod tests {
             .iter()
             .find(|b| b.block_type == BlockType::Image)
             .unwrap();
-        assert!(fig.text.contains("Fig. 2"));
+        assert!(fig.text.as_deref().unwrap_or_default().contains("Fig. 2"));
         assert_eq!(fig.children[0].block_type, BlockType::Caption);
     }
 

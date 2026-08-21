@@ -21,6 +21,7 @@ use crate::fragment::KnowledgeFragment;
 use crate::ir::{
     EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate, SemanticAnalyzer,
 };
+use crate::source::{SourceSpan, VisualAssetRef};
 
 // ---------------------------------------------------------------------------
 // Classification
@@ -143,7 +144,7 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                         sections.push(s);
                     }
                     current_section = Some(Section {
-                        heading: node.text.clone(),
+                        heading: node.text.clone().unwrap_or_default(),
                         level: *level,
                         paragraphs: Vec::new(),
                         list_items: Vec::new(),
@@ -153,7 +154,7 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                 BlockType::Title => {
                     if current_section.is_none() {
                         current_section = Some(Section {
-                            heading: node.text.clone(),
+                            heading: node.text.clone().unwrap_or_default(),
                             level: 0,
                             paragraphs: Vec::new(),
                             list_items: Vec::new(),
@@ -162,15 +163,16 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                     } else {
                         // Title in body — treat as paragraph
                         if let Some(ref mut s) = current_section {
-                            if !node.text.trim().is_empty() {
-                                s.paragraphs.push(node.text.clone());
+                            let t = node.text.as_deref().unwrap_or_default();
+                            if !t.trim().is_empty() {
+                                s.paragraphs.push(t.to_string());
                             }
                         }
                     }
                 }
                 BlockType::Paragraph => {
                     if let Some(ref mut s) = current_section {
-                        let t = node.text.trim();
+                        let t = node.text.as_deref().unwrap_or_default().trim();
                         if !t.is_empty() {
                             s.paragraphs.push(t.to_string());
                         }
@@ -180,7 +182,7 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                     // Recurse into list children for list items
                     for child in &node.children {
                         if matches!(child.block_type, BlockType::ListItem) {
-                            let t = child.text.trim();
+                            let t = child.text.as_deref().unwrap_or_default().trim();
                             if !t.is_empty() {
                                 if let Some(ref mut s) = current_section {
                                     s.list_items.push(t.to_string());
@@ -191,7 +193,7 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                 }
                 BlockType::ListItem => {
                     if let Some(ref mut s) = current_section {
-                        let t = node.text.trim();
+                        let t = node.text.as_deref().unwrap_or_default().trim();
                         if !t.is_empty() {
                             s.list_items.push(t.to_string());
                         }
@@ -202,17 +204,20 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                         // Try to detect language from first line or leave as ""
                         let lang = node
                             .text
+                            .as_deref()
+                            .unwrap_or_default()
                             .lines()
                             .next()
                             .filter(|l| !l.contains(' '))
                             .unwrap_or("");
-                        s.code_blocks.push((lang.to_string(), node.text.clone()));
+                        s.code_blocks
+                            .push((lang.to_string(), node.text.clone().unwrap_or_default()));
                     }
                 }
                 _ => {
                     // Other block types — collect text into current section
                     if let Some(ref mut s) = current_section {
-                        let t = node.text.trim();
+                        let t = node.text.as_deref().unwrap_or_default().trim();
                         if !t.is_empty() {
                             s.paragraphs.push(t.to_string());
                         }
@@ -724,8 +729,10 @@ fn extract_markdown_links(text: &str) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 /// Parse Markdown text directly into a `DocumentAst` with proper
-/// `# Heading`, `- list`, and `` ``` `` code-fence recognition.
-fn markdown_text_to_ast(content: &str) -> DocumentAst {
+/// `# Heading`, `- list`, `` ``` `` code-fence, and standalone `![alt](src)`
+/// image recognition. Image paths resolve against `base_dir`; `None` leaves
+/// images asset-less (the alt text still lands in the node).
+fn markdown_text_to_ast(content: &str, base_dir: Option<&std::path::Path>) -> DocumentAst {
     let lines: Vec<&str> = content.lines().collect();
     let mut nodes: Vec<AstNode> = Vec::new();
     let mut i = 0;
@@ -737,6 +744,22 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
 
         // Blank line → paragraph boundary, skip
         if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        // Standalone image: ![alt](path) — the asset is content-addressed
+        // (DoD rows 5/12). Inline images mid-paragraph stay raw text.
+        if let Some((alt, src)) = parse_image_syntax(trimmed) {
+            nodes.push(AstNode {
+                block_type: BlockType::Image,
+                text: Some(alt),
+                children: vec![],
+                bbox: None,
+                confidence: None,
+                asset: image_asset(&src, base_dir),
+                ..Default::default()
+            });
             i += 1;
             continue;
         }
@@ -772,7 +795,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             let code_text = header + &code_lines.join("\n");
             nodes.push(AstNode {
                 block_type: BlockType::Code,
-                text: code_text,
+                text: Some(code_text),
                 children: vec![],
                 bbox: None,
                 confidence: None,
@@ -788,7 +811,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             let text = text.trim_end_matches('#').trim();
             nodes.push(AstNode {
                 block_type: BlockType::Heading { level: level as u8 },
-                text: text.to_string(),
+                text: Some(text.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
@@ -805,7 +828,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                 let level = if next_trimmed.starts_with('=') { 1 } else { 2 };
                 nodes.push(AstNode {
                     block_type: BlockType::Heading { level },
-                    text: trimmed.to_string(),
+                    text: Some(trimmed.to_string()),
                     children: vec![],
                     bbox: None,
                     confidence: None,
@@ -822,7 +845,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             let item_text = trimmed[prefix_len..].trim().to_string();
             let mut list_items: Vec<AstNode> = vec![AstNode {
                 block_type: BlockType::ListItem,
-                text: item_text,
+                text: Some(item_text),
                 children: vec![],
                 bbox: None,
                 confidence: None,
@@ -840,7 +863,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                     let pl = md_list_prefix_len(next);
                     list_items.push(AstNode {
                         block_type: BlockType::ListItem,
-                        text: next[pl..].trim().to_string(),
+                        text: Some(next[pl..].trim().to_string()),
                         children: vec![],
                         bbox: None,
                         confidence: None,
@@ -850,10 +873,11 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                 } else {
                     // Continuation line (indented paragraph of current list item)
                     if let Some(last) = list_items.last_mut() {
-                        if !last.text.ends_with('\n') {
-                            last.text.push('\n');
+                        let last_text = last.text.get_or_insert_with(String::new);
+                        if !last_text.ends_with('\n') {
+                            last_text.push('\n');
                         }
-                        last.text.push_str(next);
+                        last_text.push_str(next);
                     }
                     i += 1;
                 }
@@ -861,7 +885,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             let ordered = trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
             nodes.push(AstNode {
                 block_type: BlockType::List { ordered },
-                text: String::new(),
+                text: None,
                 children: list_items,
                 bbox: None,
                 confidence: None,
@@ -893,7 +917,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             }
             nodes.push(AstNode {
                 block_type: BlockType::Paragraph,
-                text: q_lines.join("\n"),
+                text: Some(q_lines.join("\n")),
                 children: vec![],
                 bbox: None,
                 confidence: None,
@@ -929,7 +953,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
         }
         nodes.push(AstNode {
             block_type: BlockType::Paragraph,
-            text: para_lines.join("\n"),
+            text: Some(para_lines.join("\n")),
             children: vec![],
             bbox: None,
             confidence: None,
@@ -941,14 +965,52 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
         page_count: 1,
         pages: vec![AstNode {
             block_type: BlockType::Unknown,
-            text: String::new(),
+            text: None,
             children: nodes,
             bbox: None,
             confidence: None,
             ..Default::default()
         }],
         source_type: "markdown-native".into(),
+        document_id: None,
     }
+}
+
+/// `![alt](path)` → (alt, path). Whole-line images only — inline images in
+/// prose stay raw markdown text (ponytail: inline parse deferred until needed).
+fn parse_image_syntax(line: &str) -> Option<(String, String)> {
+    let rest = line.strip_prefix("![")?;
+    let close = rest.find("](")?;
+    let tail = &rest[close + 2..];
+    let end = tail.find(')')?;
+    if !tail[end + 1..].trim().is_empty() {
+        return None; // trailing text → not a standalone image
+    }
+    Some((rest[..close].to_string(), tail[..end].to_string()))
+}
+
+/// Populate a `VisualAssetRef` for an image path resolved against `base_dir`.
+/// Fail-soft: missing/unreadable files leave the node asset-less — the AST
+/// never hard-fails on asset extraction.
+fn image_asset(src: &str, base_dir: Option<&std::path::Path>) -> Option<VisualAssetRef> {
+    let path = base_dir
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(src);
+    let bytes = std::fs::read(&path).ok()?;
+    let hash = crate::asset_store::content_hash(&bytes);
+    Some(VisualAssetRef {
+        asset_id: hash.clone(),
+        mime_type: crate::asset_store::mime_from_extension(src),
+        content_hash: hash,
+        source: SourceSpan {
+            document_id: None,
+            page: 1,
+            start_offset: None,
+            end_offset: None,
+            bbox: None,
+            node_id: None,
+        },
+    })
 }
 
 fn atx_heading_level(line: &str) -> Option<usize> {
@@ -1039,7 +1101,12 @@ pub fn compile_markdown_file(
 ) -> Result<KnowledgeIr, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("read markdown '{}': {}", path, e))?;
-    compile_markdown_string(&content, document_id)
+    // Images resolve relative to the document's directory (PR-B asset
+    // preservation); the string variant has no base dir and stays asset-less.
+    let mut ast = markdown_text_to_ast(&content, std::path::Path::new(path).parent());
+    ast.document_id = document_id.clone();
+    let analyzer = MarkdownSemanticAnalyzer::new(document_id);
+    Ok(analyzer.analyze(&ast, &[]))
 }
 
 /// Compile a Markdown string into KnowledgeIr using native Markdown parsing.
@@ -1047,7 +1114,8 @@ pub fn compile_markdown_string(
     content: &str,
     document_id: Option<String>,
 ) -> Result<KnowledgeIr, String> {
-    let ast = markdown_text_to_ast(content);
+    let mut ast = markdown_text_to_ast(content, None);
+    ast.document_id = document_id.clone();
     let analyzer = MarkdownSemanticAnalyzer::new(document_id);
     Ok(analyzer.analyze(&ast, &[]))
 }
@@ -1137,6 +1205,60 @@ mod tests {
         let links = extract_markdown_links("See [the docs](docs/API.md) and [[architecture]]");
         assert!(links.contains(&"docs/API.md".to_string()));
         assert!(links.contains(&"architecture".to_string()));
+    }
+
+    // ── PR-B: image preservation (DoD rows 5, 12) ──
+
+    #[test]
+    fn standalone_image_becomes_node_with_content_addressed_asset() {
+        let dir = std::env::temp_dir().join("aikoql-md-image-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("logo.png");
+        std::fs::write(&img, b"\x89PNG fake bytes").unwrap();
+
+        let md = "# Doc\n\n![Architecture diagram](logo.png)\n\nBody text.";
+        let ast = markdown_text_to_ast(md, Some(&dir));
+        let image = ast.pages[0]
+            .children
+            .iter()
+            .find(|n| n.block_type == BlockType::Image)
+            .expect("image node");
+        assert_eq!(image.text.as_deref(), Some("Architecture diagram"));
+        let asset = image.asset.as_ref().expect("populated asset");
+        assert_eq!(asset.mime_type, "image/png");
+        assert_eq!(
+            asset.content_hash,
+            crate::asset_store::content_hash(b"\x89PNG fake bytes")
+        );
+        assert_eq!(asset.asset_id, asset.content_hash);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_image_fails_soft() {
+        let md = "![Diagram](does-not-exist.png)";
+        let ast = markdown_text_to_ast(md, None);
+        let image = ast.pages[0]
+            .children
+            .iter()
+            .find(|n| n.block_type == BlockType::Image)
+            .expect("image node");
+        assert!(image.asset.is_none(), "missing file → asset-less node");
+        assert_eq!(image.text.as_deref(), Some("Diagram"));
+    }
+
+    #[test]
+    fn inline_image_stays_in_paragraph_text() {
+        let md = "See ![x](y.png) for details.";
+        let ast = markdown_text_to_ast(md, None);
+        assert_eq!(ast.pages[0].children.len(), 1);
+        assert_eq!(ast.pages[0].children[0].block_type, BlockType::Paragraph);
+        assert!(ast.pages[0].children[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("![x](y.png)"));
     }
 
     #[test]
