@@ -6,20 +6,24 @@
 //!
 //! Production detector: `RuleBoundaryDetector` — hard structural boundaries
 //! (heading/table/figure/code/list blocks, page transitions) plus heading-path
-//! context. Semantic-similarity scoring (embedding/transformer/hybrid) is
-//! deliberately absent until the rule baseline exists to benchmark against
-//! (HLD §60).
+//! context. PR-H adds `EmbeddingBoundaryDetector` — the rule structure plus a
+//! semantic-similarity layer over the `EmbeddingProvider` seam (HLD §16/§60):
+//! adjacent Text fragments above `merge_threshold` join; long Text fragments
+//! split at sentence boundaries where consecutive sentences drop below
+//! `split_threshold`. It exists to be measured against the rule baseline.
 
 use crate::ast::{table_payload_from_node, AstNode, BlockType, DocumentAst};
+use crate::embedding::{cosine_similarity, EmbeddingProvider};
 use crate::fragment::{FragmentContent, FragmentContext, FragmentModality, KnowledgeFragment};
 use crate::ir::Evidence;
 use crate::source::{EvidenceSource, SourceSpan};
 
 /// Splits a DocumentAst into coherent knowledge units.
 ///
-/// Implementations: RuleBoundaryDetector (now), EmbeddingBoundaryDetector /
-/// TransformerBoundaryDetector / HybridBoundaryDetector (after baseline
-/// metrics — HLD §16).
+/// Implementations: RuleBoundaryDetector, EmbeddingBoundaryDetector (PR-H).
+/// TransformerBoundaryDetector / HybridBoundaryDetector follow — the
+/// transformer is a pluggable implementation, not an architectural
+/// dependency (HLD §16).
 pub trait KnowledgeBoundaryDetector: Send + Sync {
     fn name(&self) -> &str;
 
@@ -79,21 +83,204 @@ impl KnowledgeBoundaryDetector for RuleBoundaryDetector {
             }
         }
 
-        // Neighbor links for context (previous/next fragment ids).
-        let ids: Vec<String> = fragments.iter().map(|f| f.fragment_id.clone()).collect();
-        for (i, frag) in fragments.iter_mut().enumerate() {
-            let mut neighbors = Vec::with_capacity(2);
-            if i > 0 {
-                neighbors.push(ids[i - 1].clone());
-            }
-            if i + 1 < ids.len() {
-                neighbors.push(ids[i + 1].clone());
-            }
-            frag.context.neighboring_fragments = neighbors;
-        }
-
+        finalize_neighbors(&mut fragments);
         Ok(fragments)
     }
+}
+
+/// Semantic-similarity boundary detector (PR-H, HLD §16/§60).
+///
+/// Structure comes from `RuleBoundaryDetector`; the embedding layer then
+/// (1) merges adjacent Text fragments whose rendered texts embed above
+/// `merge_threshold` (topic continuity across block boundaries) and
+/// (2) splits long Text fragments at sentence boundaries where consecutive
+/// sentences drop below `split_threshold` (topic shift inside a block).
+/// Non-Text fragments are modality boundaries and are never merged or split.
+/// The vector source is the pluggable `EmbeddingProvider` seam — a real
+/// model provider later swaps in without touching the detector.
+pub struct EmbeddingBoundaryDetector<'a> {
+    provider: &'a dyn EmbeddingProvider,
+    merge_threshold: f32,
+    split_threshold: f32,
+}
+
+impl<'a> EmbeddingBoundaryDetector<'a> {
+    pub fn new(provider: &'a dyn EmbeddingProvider) -> Self {
+        // Defaults tuned to the mock char-ngram provider: its cosine
+        // between any two English sentences lands in a tight 0.16–0.51 band
+        // with no topic gap (measured), so the split layer must only fire on
+        // strong divergence to avoid over-fragmenting. A real model provider
+        // widens the band and can raise both thresholds.
+        EmbeddingBoundaryDetector {
+            provider,
+            merge_threshold: 0.55,
+            split_threshold: 0.10,
+        }
+    }
+
+    /// Tuned thresholds: merge joins fragments at or above `merge`; a long
+    /// text fragment splits where consecutive sentences fall below `split`.
+    pub fn with_thresholds(provider: &'a dyn EmbeddingProvider, merge: f32, split: f32) -> Self {
+        EmbeddingBoundaryDetector {
+            provider,
+            merge_threshold: merge,
+            split_threshold: split,
+        }
+    }
+}
+
+impl KnowledgeBoundaryDetector for EmbeddingBoundaryDetector<'_> {
+    fn name(&self) -> &str {
+        "embedding-boundary"
+    }
+
+    fn detect(&self, ast: &DocumentAst) -> Result<Vec<KnowledgeFragment>, BoundaryError> {
+        let mut fragments = RuleBoundaryDetector.detect(ast)?;
+        self.merge(&mut fragments);
+        self.split(&mut fragments);
+        finalize_neighbors(&mut fragments);
+        Ok(fragments)
+    }
+}
+
+impl EmbeddingBoundaryDetector<'_> {
+    /// Join adjacent Text fragments that stay on the same topic. Only
+    /// Text+Text pairs merge: modality boundaries are hard (§16 Hybrid
+    /// owns modality merging). The merged fragment keeps the first
+    /// fragment's id/source/context; both evidence trails are kept.
+    fn merge(&self, fragments: &mut Vec<KnowledgeFragment>) {
+        let mut i = 0;
+        while i + 1 < fragments.len() {
+            let (a_text, b_text) = match (&fragments[i].content, &fragments[i + 1].content) {
+                (FragmentContent::Text(a), FragmentContent::Text(b)) => (a.clone(), b.clone()),
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            };
+            let sim =
+                cosine_similarity(&self.provider.embed(&a_text), &self.provider.embed(&b_text));
+            if sim >= self.merge_threshold {
+                let b = fragments.remove(i + 1);
+                let a = &mut fragments[i];
+                if let FragmentContent::Text(t) = &mut a.content {
+                    t.push('\n');
+                    t.push_str(&b_text);
+                }
+                a.evidence.extend(b.evidence);
+                // same i: the merged fragment may chain with the next one
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Split long Text fragments at sentence boundaries where the topic
+    /// shifts (consecutive-sentence similarity below `split_threshold`).
+    /// Split pieces keep the parent's id with a `-s{n}` suffix, context,
+    /// and geometry; their evidence is re-stamped `embedding_boundary`.
+    fn split(&self, fragments: &mut Vec<KnowledgeFragment>) {
+        let mut out: Vec<KnowledgeFragment> = Vec::new();
+        for frag in fragments.drain(..) {
+            let text = match &frag.content {
+                FragmentContent::Text(t) => t.clone(),
+                _ => {
+                    out.push(frag);
+                    continue;
+                }
+            };
+            // Short fragments are already one coherent unit; splitting them
+            // would only fragment retrieval.
+            if text.chars().count() < 160 {
+                out.push(frag);
+                continue;
+            }
+            let units = sentences(&text);
+            if units.len() < 2 {
+                out.push(frag);
+                continue;
+            }
+            // Greedy grouping: a new segment starts when the next sentence
+            // diverges from the running segment's ACCUMULATED text. Compared
+            // against the last sentence alone, accumulation strengthens the
+            // within-topic signal for weak (char-ngram) providers.
+            let mut segments: Vec<Vec<String>> = vec![Vec::new()];
+            for unit in units {
+                let similar = segments
+                    .last()
+                    .and_then(|s| (!s.is_empty()).then(|| s.join(" ")))
+                    .is_none_or(|accumulated| {
+                        cosine_similarity(
+                            &self.provider.embed(&accumulated),
+                            &self.provider.embed(&unit),
+                        ) >= self.split_threshold
+                    });
+                if similar {
+                    segments.last_mut().expect("segment exists").push(unit);
+                } else {
+                    segments.push(vec![unit]);
+                }
+            }
+            if segments.len() == 1 {
+                out.push(frag);
+                continue;
+            }
+            let base_id = frag.fragment_id.clone();
+            for (si, seg) in segments.into_iter().enumerate() {
+                let mut piece = frag.clone();
+                piece.fragment_id = format!("{base_id}-s{si}");
+                piece.content = FragmentContent::Text(seg.join(" "));
+                for ev in &mut piece.evidence {
+                    ev.extractor = "embedding_boundary".into();
+                }
+                out.push(piece);
+            }
+        }
+        *fragments = out;
+    }
+}
+
+/// (Re)link neighboring fragment ids — shared by every detector so context
+/// stays consistent after merge/split transforms.
+fn finalize_neighbors(fragments: &mut [KnowledgeFragment]) {
+    let ids: Vec<String> = fragments.iter().map(|f| f.fragment_id.clone()).collect();
+    for (i, frag) in fragments.iter_mut().enumerate() {
+        let mut neighbors = Vec::with_capacity(2);
+        if i > 0 {
+            neighbors.push(ids[i - 1].clone());
+        }
+        if i + 1 < ids.len() {
+            neighbors.push(ids[i + 1].clone());
+        }
+        frag.context.neighboring_fragments = neighbors;
+    }
+}
+
+/// Split text into sentence units on `. `/`! `/`? ` boundaries; a period
+/// directly preceded by an ASCII digit (list prefixes like `1.`, decimals,
+/// years) does not end a sentence. Newlines stay inside their sentence unit.
+/// ponytail: no abbreviation handling — `Dr. Smith` splits in two; fine for
+/// segmentation scoring, add a tokenizer when real embeddings land.
+fn sentences(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut units: Vec<String> = Vec::new();
+    let mut start = 0usize;
+    for i in 1..chars.len() {
+        let prev = chars[i - 1];
+        let c = chars[i];
+        if c == ' ' && (prev == '.' || prev == '!' || prev == '?') {
+            if prev == '.' && i >= 2 && chars[i - 2].is_ascii_digit() {
+                continue;
+            }
+            units.push(chars[start..i].iter().collect());
+            start = i + 1; // skip the space
+        }
+    }
+    let rest: String = chars[start..].iter().collect();
+    if !rest.trim().is_empty() {
+        units.push(rest);
+    }
+    units
 }
 
 fn emit_block(
@@ -546,5 +733,164 @@ mod tests {
         let back: Vec<KnowledgeFragment> = serde_json::from_str(&json).unwrap();
         assert_eq!(back.len(), fragments.len());
         assert_eq!(back[0].fragment_id, fragments[0].fragment_id);
+    }
+
+    // ------------------------------------------------------------------
+    // PR-H: EmbeddingBoundaryDetector
+    //
+    // The detector is provider-agnostic; its mechanics are tested with a
+    // synthetic provider that gives topics clean, separable vectors (the
+    // mock char-ngram provider's cosine band has no topic gap — measured —
+    // so it cannot exercise the split layer deterministically).
+    // ------------------------------------------------------------------
+
+    /// Topic vectors: payment/billing words → [1,0], holiday/office words
+    /// → [0,1], anything else → the zero vector (cosine 0).
+    struct ProbeProvider;
+
+    impl EmbeddingProvider for ProbeProvider {
+        fn name(&self) -> &str {
+            "probe-topics"
+        }
+
+        fn dimensions(&self) -> usize {
+            2
+        }
+
+        fn embed(&self, text: &str) -> Vec<f32> {
+            let lower = text.to_lowercase();
+            let is_billing = [
+                "payment",
+                "invoice",
+                "billing",
+                "processes",
+                "validated",
+                "settle",
+                "ledger",
+            ]
+            .iter()
+            .any(|w| lower.contains(w));
+            let is_holiday = [
+                "holiday", "office", "vacation", "november", "december", "winter", "closed",
+            ]
+            .iter()
+            .any(|w| lower.contains(w));
+            match (is_billing, is_holiday) {
+                (true, false) => vec![1.0, 0.0],
+                (false, true) => vec![0.0, 1.0],
+                _ => vec![0.0, 0.0],
+            }
+        }
+    }
+
+    fn embedding_detector() -> EmbeddingBoundaryDetector<'static> {
+        let provider: &'static ProbeProvider = Box::leak(Box::new(ProbeProvider));
+        EmbeddingBoundaryDetector::new(provider)
+    }
+
+    #[test]
+    fn merge_joins_similar_adjacent_text_fragments() {
+        let dm = doc(vec![
+            "The payment system processes invoices nightly.\n\nInvoices are processed nightly by the payment system.",
+        ]);
+        let ast = document_model_to_ast(&dm);
+        let rule = RuleBoundaryDetector.detect(&ast).unwrap();
+        assert_eq!(rule.len(), 2, "rule emits one fragment per paragraph");
+        let merged = embedding_detector().detect(&ast).unwrap();
+        assert_eq!(
+            merged.len(),
+            1,
+            "similar paragraphs merge into one fragment"
+        );
+        match &merged[0].content {
+            FragmentContent::Text(t) => {
+                assert!(t.contains("processes invoices nightly"));
+                assert!(t.contains("processed nightly"));
+            }
+            other => panic!("expected text content, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn merge_keeps_dissimilar_fragments_separate() {
+        let dm = doc(vec![
+            "The payment system processes invoices nightly.\n\nThe company cafeteria serves lunch at noon.",
+        ]);
+        let ast = document_model_to_ast(&dm);
+        let fragments = embedding_detector().detect(&ast).unwrap();
+        assert_eq!(fragments.len(), 2, "different topics stay separate");
+    }
+
+    #[test]
+    fn split_cuts_long_text_at_semantic_shift() {
+        // Two topics in one long paragraph: payment processing, then a
+        // hard topic shift into holiday scheduling.
+        let dm = doc(vec![concat!(
+            "The payment system processes invoices nightly. ",
+            "Invoices are validated by the ledger team every evening. ",
+            "Payments settle through the billing pipeline. ",
+            "The office is closed for the winter holidays. ",
+            "Team vacations must be approved by December first. ",
+            "Holiday schedules are published in November. "
+        )]);
+        let ast = document_model_to_ast(&dm);
+        let rule = RuleBoundaryDetector.detect(&ast).unwrap();
+        assert_eq!(rule.len(), 1, "rule leaves the paragraph whole");
+        let split = embedding_detector().detect(&ast).unwrap();
+        assert_eq!(split.len(), 2, "topic shift splits the fragment");
+        assert_eq!(split[0].fragment_id, "frag-p1-b0-s0");
+        assert_eq!(split[1].fragment_id, "frag-p1-b0-s1");
+        match &split[0].content {
+            FragmentContent::Text(t) => {
+                assert!(t.contains("billing pipeline"));
+                assert!(!t.contains("holidays"));
+            }
+            other => panic!("expected text content, got {:?}", other),
+        }
+        assert_eq!(
+            split[0].context.neighboring_fragments,
+            vec!["frag-p1-b0-s1".to_string()]
+        );
+        // Split pieces re-stamp their provenance.
+        assert!(split.iter().all(|f| f
+            .evidence
+            .iter()
+            .all(|e| e.extractor == "embedding_boundary")));
+    }
+
+    #[test]
+    fn digit_prefixed_sentences_do_not_fragment_list_items() {
+        let text = "1. First item is here. 2. Second item is there. 3. Final item is everywhere.";
+        let units = sentences(text);
+        assert_eq!(units.len(), 3, "one unit per list item");
+        assert_eq!(units[0], "1. First item is here.");
+        assert_eq!(units[1], "2. Second item is there.");
+    }
+
+    #[test]
+    fn short_text_is_never_split() {
+        let dm = doc(vec![
+            "Short paragraph under the split gate. It stays whole.",
+        ]);
+        let ast = document_model_to_ast(&dm);
+        let fragments = embedding_detector().detect(&ast).unwrap();
+        assert_eq!(fragments.len(), 1);
+    }
+
+    #[test]
+    fn embedding_detector_is_deterministic() {
+        let dm = doc(vec![concat!(
+            "The payment system processes invoices nightly. ",
+            "Invoices are validated by the ledger team every evening. ",
+            "The office is closed for the winter holidays. ",
+            "Holiday schedules are published in November. "
+        )]);
+        let ast = document_model_to_ast(&dm);
+        let first = embedding_detector().detect(&ast).unwrap();
+        let second = embedding_detector().detect(&ast).unwrap();
+        let ids1: Vec<&str> = first.iter().map(|f| f.fragment_id.as_str()).collect();
+        let ids2: Vec<&str> = second.iter().map(|f| f.fragment_id.as_str()).collect();
+        assert_eq!(ids1, ids2);
+        assert!(!ids1.is_empty());
     }
 }

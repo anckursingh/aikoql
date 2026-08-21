@@ -165,7 +165,9 @@ mod fragment;
 pub use fragment::{FragmentContent, FragmentContext, FragmentModality, KnowledgeFragment};
 
 mod boundary;
-pub use boundary::{BoundaryError, KnowledgeBoundaryDetector, RuleBoundaryDetector};
+pub use boundary::{
+    BoundaryError, EmbeddingBoundaryDetector, KnowledgeBoundaryDetector, RuleBoundaryDetector,
+};
 
 mod visual;
 pub use visual::{
@@ -177,7 +179,8 @@ pub use visual::{
 mod pipeline;
 pub use pipeline::{
     compile_document, compile_document_incremental, compile_document_mock,
-    compile_document_mock_with_assets, diff_document_models, reproject_document, AssetChange,
+    compile_document_mock_with_assets, compile_document_mock_with_detector,
+    compile_document_with_detector, diff_document_models, reproject_document, AssetChange,
     CompilationResult, DocumentDelta, EvidenceNode, EvidenceTrail, ImageDelta, PhaseStats,
     PipelineStats,
 };

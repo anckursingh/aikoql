@@ -344,6 +344,34 @@ pub fn compile_document(
     existing_kos: &[KnowledgeBaseEntry],
     asset_dir: Option<&str>,
 ) -> CompilationResult {
+    compile_document_with_detector(
+        doc,
+        analyzer,
+        resolver,
+        reconciler,
+        projector,
+        embedder,
+        &RuleBoundaryDetector,
+        existing_kos,
+        asset_dir,
+    )
+}
+
+/// `compile_document` with a pluggable boundary detector (PR-H, HLD §16/§60):
+/// the D4 segmentation step runs `detector.detect(&ast)` — the seam the
+/// embedding / transformer / hybrid variants plug into. The rule detector
+/// remains the default.
+pub fn compile_document_with_detector(
+    doc: &DocumentModel,
+    analyzer: &dyn SemanticAnalyzer,
+    resolver: &dyn EntityResolver,
+    reconciler: &dyn KnowledgeReconciler,
+    projector: &dyn RetrievalProjector,
+    embedder: &dyn EmbeddingProvider,
+    detector: &dyn KnowledgeBoundaryDetector,
+    existing_kos: &[KnowledgeBaseEntry],
+    asset_dir: Option<&str>,
+) -> CompilationResult {
     let t0 = time_now();
 
     // D3: DocumentModel → DocumentAst (+ PR-F visual classification:
@@ -364,9 +392,10 @@ pub fn compile_document(
     let dt_ast = time_now() - t_ast;
 
     // D4-fragments: DocumentAst → KnowledgeFragment[] (semantic segmentation).
-    // Rule-based now; fails soft so ingestion never hard-fails on it.
+    // Pluggable detector (rule by default); fails soft so ingestion never
+    // hard-fails on it.
     let t_frag = time_now();
-    let fragments = match RuleBoundaryDetector.detect(&ast) {
+    let fragments = match detector.detect(&ast) {
         Ok(f) => f,
         Err(e) => {
             eprintln!(
@@ -462,18 +491,30 @@ pub fn compile_document_mock_with_assets(
     existing_kos: &[KnowledgeBaseEntry],
     asset_dir: Option<&str>,
 ) -> CompilationResult {
+    compile_document_mock_with_detector(doc, existing_kos, asset_dir, &RuleBoundaryDetector)
+}
+
+/// Mock pipeline with a pluggable boundary detector (PR-H, HLD §16/§60):
+/// the benchmark seam that runs a detector variant end to end.
+pub fn compile_document_mock_with_detector(
+    doc: &DocumentModel,
+    existing_kos: &[KnowledgeBaseEntry],
+    asset_dir: Option<&str>,
+    detector: &dyn KnowledgeBoundaryDetector,
+) -> CompilationResult {
     let analyzer = crate::MockSemanticAnalyzer::new();
     let resolver = MockEntityResolver::new();
     let reconciler = MockKnowledgeReconciler::new();
     let projector = HeadingProjector::new();
     let embedder = MockEmbeddingProvider::new();
-    compile_document(
+    compile_document_with_detector(
         doc,
         &analyzer,
         &resolver,
         &reconciler,
         &projector,
         &embedder,
+        detector,
         existing_kos,
         asset_dir,
     )

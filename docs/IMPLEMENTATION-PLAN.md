@@ -3250,7 +3250,7 @@ The HLD's core architectural position (doc §59): the **DocumentAst is the canon
 | Semantic segmentation between AST and IR (`KnowledgeFragment` + boundary detection) (§22/§37) | D4 goes straight AST → IR; chunking operates directly on the AST | **Missing → PR-C** |
 | Retrieval as projection (`DocumentChunker` → `RetrievalProjector`) (§41/§60) | `chunking.rs` chunks the AST itself | **Present but misplaced → PR-E** |
 | Visual classification (chart/diagram/image analyzers) (§17–20) | Block-level Figure marker heuristic only (`detect_figures`) | **Delivered → PR-F** (mock keyword classifier; VLM seam open) |
-| Transformer/embedding boundary detectors (§16) | None | **Baseline pinned → PR-H** — PR-G measured the rule pipeline (Recall@K = MRR = NDCG@5 = 0.867); embedding/transformer variants are measured against it |
+| Transformer/embedding boundary detectors (§16) | None | **In progress** — PR-G pinned the rule baseline (0.867); PR-H delivered `EmbeddingBoundaryDetector` + the §60 Rule-vs-Embedding matrix (mock parity: 0.933/0.862/0.875); Hybrid/Transformer follow |
 | No mandatory heavyweight AI (§56) | Clean — pdf-extract/tesseract only | **Conforms** |
 
 Decisions taken this round (with rationale):
@@ -3349,7 +3349,7 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 14 | No mandatory heavyweight AI | ✅ Still lopdf/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 377 lib + 10 acceptance + 10-fixture golden suite + PR-G retrieval-quality gate (15 queries, baseline 0.867) + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 383 lib + 10 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 2×2 §60 matrix) + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
 | 19 | CI measures extraction + semantic regression | ✅ DoD 19 — 10 golden PDF fixtures + `multimodal_golden` gate (byte-stable snapshots + entity-recall assertions + per-stage metrics) runs in both CI OSes; dedicated `--nocapture` step publishes §53 metrics to CI logs |
 
@@ -3469,6 +3469,32 @@ HLD §60/§53: the rule pipeline's retrieval numbers are now pinned as the basel
 
 **Tests — PR-G (all green 2026-08-21)**: 377 lib tests; 10/10 acceptance; golden suite 1/1; retrieval-quality 1/1 (baseline 0.867 pinned above); `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets` clean; `cargo test --workspace` green (61 suites, 0 failures).
 
-### Next implementation — PR-H
+### Implemented now — PR-H: embedding boundary variant + §60 Rule-vs-Embedding matrix (2026-08-21)
 
-PR-H — embedding boundary variant (HLD §16/§60): `EmbeddingBoundaryDetector` (semantic segmentation through the `EmbeddingProvider` seam) + embedding-ranked retrieval, measured against the PR-G rule baseline (Recall@K = MRR = NDCG@5 = 0.867 on the 15-query set) — the §60 "Rule vs Embedding" first comparison. The two paraphrase probes are the headroom the embedding variant must close.
+HLD §16's second detector, `EmbeddingBoundaryDetector`, is live behind the new `KnowledgeBoundaryDetector` seam in the compile pipeline, and §60's first comparison is measured. The detector runs two semantic passes over the rule detector's fragments: **merge** (adjacent Text+Text pairs whose cosine ≥ 0.55 join; modality boundaries are hard — merging them is the Hybrid's job) and **split** (Text fragments ≥ 160 chars re-segmented at sentence boundaries, comparing each next sentence against the *accumulated* segment via `EmbeddingProvider::embed` + cosine < 0.10). Defaults are tuned to the mock char-ngram provider, whose cosine between arbitrary English sentences sits in a tight 0.16–0.51 band with no topic gap (measured in-session): the split layer only fires on strong divergence so the variant never over-fragments — `with_thresholds` widens both for a real model provider, whose band actually separates topics.
+
+The pipeline seam (`compile_document_with_detector`, + mock variant `compile_document_mock_with_detector`) makes the D4 segmentation step pluggable; `compile_document` still delegates to `RuleBoundaryDetector`, so external callers and the golden suite are untouched.
+
+**Measured §60 matrix** (Recall@5 / MRR / NDCG@5 over the 15-query set; hybrid + visual retrieval recall remain N/A):
+
+| cell | R@1 | R@3 | R@5 | MRR | NDCG@5 |
+|---|---|---|---|---|---|
+| rule boundary × lexical ranker (**baseline**) | 0.867 | 0.867 | **0.867** | **0.867** | **0.867** |
+| rule boundary × embedding ranker | 0.800 | 0.933 | **0.933** | 0.862 | 0.875 |
+| embedding boundary × lexical ranker | 0.867 | 0.867 | **0.867** | **0.867** | **0.867** |
+| embedding boundary × embedding ranker | 0.800 | 0.933 | **0.933** | 0.862 | 0.875 |
+
+Two honest readings: (1) the embedding *boundary* changes nothing on these fixtures — both corpora project 14 chunks, the conservative thresholds correctly never fire in the mock's band (the seam and its mechanism are instead unit-verified via a synthetic two-topic `ProbeProvider`); (2) the mock embedding *ranker* trades a little MRR for recall (it ranks everything, shifting a few rank-1s to rank-2/3) — parity within noise, per §60 the measured gain must come from a real model provider, not the mock. The gate asserts the baseline floors ≥ 0.75 (PR-G pin) and every variant metric within 0.02 of baseline: variants pass, real regressions (chunk text loss, projection breakage) fail CI. Qrels are content-matched (equality or containment vs the rule corpus's chunk text), so variant corpora with changed chunk indices stay judgeable.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/boundary.rs` | **`EmbeddingBoundaryDetector`** (`new` / `with_thresholds`): merge pass + sentence-based split pass (list prefixes, decimals and years do not end sentences — `ponytail:` no abbreviation handling, "Dr. Smith" splits), evidence re-stamped `embedding_boundary`; shared `finalize_neighbors` extracted from the rule detector; +6 tests (merge joins/keeps, split at shift via synthetic `ProbeProvider`, list digits, short text, determinism) — 15 boundary tests total. |
+| `crates/ingestion/src/pipeline.rs` | D4 segmentation now `detector.detect(&ast)` via new `compile_document_with_detector` (+ `compile_document_mock_with_detector`); `compile_document` unchanged externally (delegates with `&RuleBoundaryDetector`). |
+| `crates/ingestion/src/lib.rs` | Exports `EmbeddingBoundaryDetector`, `compile_document_with_detector`, `compile_document_mock_with_detector`. |
+| `crates/ingestion/tests/retrieval_quality.rs` | Rebuilt as the §60 instrument: two corpora × two rankers (lexical + embedding cosine over `MockEmbeddingProvider`), content-matched qrels, `[RETRIEVAL-STRUCTURE]` + per-cell `[RETRIEVAL-Q …]` lines + baseline/variant summaries; parity gate (0.02 tolerance) on top of the PR-G floors. |
+
+**Tests — PR-H (all green 2026-08-21)**: 383 lib tests (368 + 15 boundary); 10/10 acceptance; golden suite 1/1; retrieval-quality 1/1 (matrix above printed every run); `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets -- -D warnings` clean; `cargo test --workspace` green (61 suites, 0 failures).
+
+### Next implementation — PR-I
+
+PR-I — `HybridBoundaryDetector` (HLD §16): the first production detector — structure boundaries + sentence boundaries + semantic similarity + modality boundaries + optional transformer score, per §16's hybrid definition. It is where the modality-boundary merging deferred in PR-H lands (Text↔Figure/Table adjacency), and it plugs into the same `compile_document_with_detector` seam + §60 matrix; the transformer score stays optional (a pluggable implementation, not an architectural dependency — §60 decides it on measured improvement).
