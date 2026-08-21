@@ -317,7 +317,8 @@ pub(crate) fn get_ir_for_koid(
             let doc =
                 aikoql_ingestion::extract_document(&artifact_path, &mime_type, Some(&asset_dir))
                     .map_err(|e| format!("extract: {}", e))?;
-            let cr = aikoql_ingestion::compile_document_mock(&doc, &[]);
+            let cr =
+                aikoql_ingestion::compile_document_mock_with_assets(&doc, &[], Some(&asset_dir));
             let cr_v = serde_json::to_value(&cr).map_err(|e| format!("serialize facts: {}", e))?;
             aikoql_ingestion::KnowledgeIr {
                 facts: serde_json::from_value(cr_v).map_err(|e| format!("decode facts: {}", e))?,

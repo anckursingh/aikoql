@@ -243,7 +243,7 @@ pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Resu
         let asset_dir = format!("{}.assets", artifact_path);
         let doc = aikoql_ingestion::extract_document(&artifact_path, &mime_type, Some(&asset_dir))
             .map_err(|e| format!("extract for compile: {}", e))?;
-        let cr = aikoql_ingestion::compile_document_mock(&doc, &[]);
+        let cr = aikoql_ingestion::compile_document_mock_with_assets(&doc, &[], Some(&asset_dir));
         serde_json::to_value(&cr).map_err(|e| format!("serialize: {}", e))?
     };
 

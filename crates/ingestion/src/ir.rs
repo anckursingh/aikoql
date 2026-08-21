@@ -666,6 +666,33 @@ impl MockSemanticAnalyzer {
                             confidence: self.confidence,
                         },
                     });
+                    // OCR fill (HLD §33): scanned text becomes knowledge with
+                    // the provider name as the model (DoD row 14).
+                    if let Some(ocr_text) = image.ocr_text.clone() {
+                        let snippet: String = ocr_text.chars().take(200).collect();
+                        ir.facts.push(FactCandidate {
+                            statement: format!("OCR text: {}", snippet),
+                            entities: Vec::new(),
+                            confidence: self.confidence,
+                            evidence: Evidence {
+                                document_id: None,
+                                page: frag.context.page,
+                                source: frag
+                                    .source
+                                    .as_ref()
+                                    .and_then(|s| s.bbox.as_ref())
+                                    .map(|b| EvidenceSource::Region { bbox: b.clone() }),
+                                extractor: extractor.clone(),
+                                model: Some(
+                                    image
+                                        .ocr_model
+                                        .clone()
+                                        .unwrap_or_else(|| MODEL_IMAGE.into()),
+                                ),
+                                confidence: self.confidence,
+                            },
+                        });
+                    }
                 }
                 _ => {}
             }

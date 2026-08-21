@@ -340,6 +340,7 @@ pub fn compile_document(
     projector: &dyn RetrievalProjector,
     embedder: &dyn EmbeddingProvider,
     existing_kos: &[KnowledgeBaseEntry],
+    asset_dir: Option<&str>,
 ) -> CompilationResult {
     let t0 = time_now();
 
@@ -347,7 +348,17 @@ pub fn compile_document(
     // extracted images get payloads, captioned figures re-typed).
     let t_ast = time_now();
     let mut ast = document_model_to_ast(doc);
-    crate::visual::classify_visuals(&mut ast);
+    // PR-F: extracted images get payloads, captioned figures re-typed.
+    // With an asset dir, Screenshot/ScannedText images also get an OCR
+    // fill (HLD §33: OCR only if needed — provider gates itself).
+    match asset_dir {
+        Some(dir) => crate::visual::classify_visuals_with_assets(
+            &mut ast,
+            Some(dir),
+            &crate::ocr::TesseractCli::new(),
+        ),
+        None => crate::visual::classify_visuals(&mut ast),
+    };
     let dt_ast = time_now() - t_ast;
 
     // D4-fragments: DocumentAst → KnowledgeFragment[] (semantic segmentation).
@@ -439,6 +450,16 @@ pub fn compile_document_mock(
     doc: &DocumentModel,
     existing_kos: &[KnowledgeBaseEntry],
 ) -> CompilationResult {
+    compile_document_mock_with_assets(doc, existing_kos, None)
+}
+
+/// Mock pipeline with an asset dir: Screenshot/ScannedText images OCR'd
+/// from persisted assets when tesseract is available (PR-F, HLD §33).
+pub fn compile_document_mock_with_assets(
+    doc: &DocumentModel,
+    existing_kos: &[KnowledgeBaseEntry],
+    asset_dir: Option<&str>,
+) -> CompilationResult {
     let analyzer = crate::MockSemanticAnalyzer::new();
     let resolver = MockEntityResolver::new();
     let reconciler = MockKnowledgeReconciler::new();
@@ -452,6 +473,7 @@ pub fn compile_document_mock(
         &projector,
         &embedder,
         existing_kos,
+        asset_dir,
     )
 }
 
@@ -721,6 +743,7 @@ mod tests {
             &HeadingProjector::new(),
             &embedder,
             &[],
+            None,
         );
 
         for ec in &result.embedded_chunks {
@@ -760,6 +783,7 @@ mod tests {
             &HeadingProjector::new(),
             &MockEmbeddingProvider::new(),
             &kb,
+            None,
         );
 
         // "Acme Corp" exact match → matched. "Acme Corporation" substring → matched (score >= 0.7).

@@ -974,14 +974,44 @@ fn markdown_text_to_ast(
             para_lines.push(next);
             i += 1;
         }
-        nodes.push(AstNode {
-            block_type: BlockType::Paragraph,
-            text: Some(para_lines.join("\n")),
-            children: vec![],
-            bbox: None,
-            confidence: None,
-            ..Default::default()
-        });
+        let para_text = para_lines.join("\n");
+        if para_text.contains("![") {
+            // PR-F: inline images split the paragraph into text segments
+            // around asset-backed Image nodes (HLD §13).
+            for (segment, image) in split_inline_images(&para_text) {
+                let segment = segment.trim().to_string();
+                if !segment.is_empty() {
+                    nodes.push(AstNode {
+                        block_type: BlockType::Paragraph,
+                        text: Some(segment),
+                        children: vec![],
+                        bbox: None,
+                        confidence: None,
+                        ..Default::default()
+                    });
+                }
+                if let Some((alt, src)) = image {
+                    nodes.push(AstNode {
+                        block_type: BlockType::Image,
+                        text: Some(alt),
+                        children: vec![],
+                        bbox: None,
+                        confidence: None,
+                        asset: image_asset(&src, base_dir, asset_dir),
+                        ..Default::default()
+                    });
+                }
+            }
+        } else {
+            nodes.push(AstNode {
+                block_type: BlockType::Paragraph,
+                text: Some(para_text),
+                children: vec![],
+                bbox: None,
+                confidence: None,
+                ..Default::default()
+            });
+        }
     }
 
     let mut ast = DocumentAst {
@@ -998,13 +1028,24 @@ fn markdown_text_to_ast(
         document_id: None,
     };
     // PR-F: classification pass — visual nodes gain payloads, captioned
-    // images are re-typed (chart/diagram/formula).
-    crate::visual::classify_visuals(&mut ast);
+    // images are re-typed (chart/diagram/formula). With persisted assets,
+    // Screenshot/ScannedText images also get an OCR fill (§33).
+    match asset_dir {
+        Some(dir) => {
+            let dir_str = dir.to_string_lossy();
+            crate::visual::classify_visuals_with_assets(
+                &mut ast,
+                Some(&dir_str),
+                &crate::ocr::TesseractCli::new(),
+            );
+        }
+        None => crate::visual::classify_visuals(&mut ast),
+    }
     ast
 }
 
 /// `![alt](path)` → (alt, path). Whole-line images only — inline images in
-/// prose stay raw markdown text (ponytail: inline parse deferred until needed).
+/// prose are split out by `split_inline_images` instead.
 fn parse_image_syntax(line: &str) -> Option<(String, String)> {
     let rest = line.strip_prefix("![")?;
     let close = rest.find("](")?;
@@ -1014,6 +1055,40 @@ fn parse_image_syntax(line: &str) -> Option<(String, String)> {
         return None; // trailing text → not a standalone image
     }
     Some((rest[..close].to_string(), tail[..end].to_string()))
+}
+
+/// Split prose on inline `![alt](src)` occurrences into (text, image?)
+/// segments. Text segments may be empty (image at line start/end). Image
+/// syntax with a missing `](` or `)` leaves the rest as one text segment.
+/// ponytail: linear scan, no nesting — src containing `)` truncates.
+fn split_inline_images(text: &str) -> Vec<(String, Option<(String, String)>)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    loop {
+        let Some(start) = rest.find("![") else {
+            out.push((rest.to_string(), None));
+            break;
+        };
+        let Some(close) = rest[start + 2..].find("](") else {
+            out.push((rest.to_string(), None));
+            break;
+        };
+        let close = start + 2 + close;
+        let Some(end) = rest[close + 2..].find(')') else {
+            out.push((rest.to_string(), None));
+            break;
+        };
+        let end = close + 2 + end;
+        out.push((
+            rest[..start].to_string(),
+            Some((
+                rest[start + 2..close].to_string(),
+                rest[close + 2..end].to_string(),
+            )),
+        ));
+        rest = &rest[end + 1..];
+    }
+    out
 }
 
 /// Populate a `VisualAssetRef` for an image path resolved against `base_dir`.
@@ -1405,16 +1480,38 @@ mod tests {
     }
 
     #[test]
-    fn inline_image_stays_in_paragraph_text() {
+    fn inline_image_splits_paragraph_into_image_node() {
         let md = "See ![x](y.png) for details.";
         let ast = markdown_text_to_ast(md, None, None);
-        assert_eq!(ast.pages[0].children.len(), 1);
-        assert_eq!(ast.pages[0].children[0].block_type, BlockType::Paragraph);
-        assert!(ast.pages[0].children[0]
-            .text
-            .as_deref()
-            .unwrap_or_default()
-            .contains("![x](y.png)"));
+        let nodes = &ast.pages[0].children;
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[0].block_type, BlockType::Paragraph);
+        assert_eq!(nodes[0].text.as_deref(), Some("See"));
+        assert_eq!(nodes[1].block_type, BlockType::Image);
+        assert_eq!(nodes[1].text.as_deref(), Some("x"));
+        assert_eq!(nodes[2].block_type, BlockType::Paragraph);
+        assert_eq!(nodes[2].text.as_deref(), Some("for details."));
+    }
+
+    #[test]
+    fn split_inline_images_handles_multiple_and_edges() {
+        let segs = split_inline_images("a ![x](1.png) b ![y](2.png)");
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0], ("a ".into(), Some(("x".into(), "1.png".into()))));
+        assert_eq!(segs[1], (" b ".into(), Some(("y".into(), "2.png".into()))));
+        assert_eq!(segs[2], ("".into(), None));
+
+        // Image at line start, no text after.
+        let segs = split_inline_images("![lead](l.png)");
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0], ("".into(), Some(("lead".into(), "l.png".into()))));
+        assert_eq!(segs[1], ("".into(), None));
+
+        // Unbalanced syntax → one text segment, nothing lost.
+        let segs = split_inline_images("broken ![x](no-close");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].0, "broken ![x](no-close");
+        assert_eq!(segs[0].1, None);
     }
 
     #[test]

@@ -105,6 +105,8 @@ impl IngestionPlugin for TextLineIngester {
 // ---------------------------------------------------------------------------
 
 mod ocr;
+#[cfg(feature = "vlm")]
+pub mod vlm;
 pub use ocr::{
     page_needs_ocr, tool_available, BlockBbox, OcrProvider, OcrStats, OcrWord, TesseractCli,
 };
@@ -174,8 +176,8 @@ pub use visual::{
 
 mod pipeline;
 pub use pipeline::{
-    compile_document, compile_document_mock, CompilationResult, EvidenceNode, EvidenceTrail,
-    PhaseStats, PipelineStats,
+    compile_document, compile_document_mock, compile_document_mock_with_assets, CompilationResult,
+    EvidenceNode, EvidenceTrail, PhaseStats, PipelineStats,
 };
 
 // Phase A1: Markdown-to-Knowledge Compiler

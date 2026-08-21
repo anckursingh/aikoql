@@ -266,6 +266,10 @@ pub struct ImagePayload {
     pub asset: crate::source::VisualAssetRef,
     #[serde(default)]
     pub ocr_text: Option<String>,
+    /// Provider/model that produced `ocr_text` (DoD row 14: model versions
+    /// persisted — e.g. "tesseract-cli").
+    #[serde(default)]
+    pub ocr_model: Option<String>,
     #[serde(default)]
     pub caption: Option<String>,
     #[serde(default)]

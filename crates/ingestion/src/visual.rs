@@ -391,6 +391,7 @@ impl ImageAnalyzer for MockImageAnalyzer {
         Some(ImagePayload {
             asset,
             ocr_text: None,
+            ocr_model: None,
             caption: caption_text(node),
             detected_objects: Vec::new(),
             visual_embedding: None,
@@ -437,9 +438,95 @@ fn node_text(node: &AstNode) -> String {
 /// payloads stay as-is — boundary detection falls back to text fragments,
 /// so a degraded analyzer never loses content.
 pub fn classify_visuals(ast: &mut crate::ast::DocumentAst) {
+    classify_visuals_inner(ast, None, None);
+}
+
+/// Classification + OCR fill for Screenshot/ScannedText images (HLD §33:
+/// "OCR only if needed"). `asset_dir` locates persisted `{hash}.bin`
+/// assets; `ocr` is the provider (tesseract CLI in production, mocks in
+/// tests). Both degrade silently: no provider → no OCR, no asset file →
+/// no OCR.
+pub fn classify_visuals_with_assets(
+    ast: &mut crate::ast::DocumentAst,
+    asset_dir: Option<&str>,
+    ocr: &dyn crate::ocr::OcrProvider,
+) {
+    classify_visuals_inner(ast, asset_dir, Some(ocr));
+}
+
+fn classify_visuals_inner(
+    ast: &mut crate::ast::DocumentAst,
+    asset_dir: Option<&str>,
+    ocr: Option<&dyn crate::ocr::OcrProvider>,
+) {
     for page in &mut ast.pages {
         classify_visuals_in_children(&mut page.children);
+        if let (Some(dir), Some(provider)) = (asset_dir, ocr) {
+            if provider.available() {
+                fill_ocr_in_children(&mut page.children, dir, provider);
+            }
+        }
     }
+}
+
+/// OCR pass (post-classification): Screenshot/ScannedText images get
+/// `ocr_text` + `ocr_model` filled from their persisted asset.
+fn fill_ocr_in_children(nodes: &mut [AstNode], asset_dir: &str, ocr: &dyn crate::ocr::OcrProvider) {
+    for node in nodes {
+        if !node.children.is_empty() {
+            fill_ocr_in_children(&mut node.children, asset_dir, ocr);
+        }
+        if !matches!(node.block_type, BlockType::Image | BlockType::Figure) {
+            continue;
+        }
+        if !matches!(
+            MockVisualClassifier.classify(node),
+            VisualClassification::Screenshot | VisualClassification::ScannedText
+        ) {
+            continue;
+        }
+        let Some(AstPayload::Image(mut payload)) = node.payload.take() else {
+            continue;
+        };
+        if payload.ocr_text.is_none() {
+            if let Some((text, model)) = ocr_asset(asset_dir, &payload.asset, ocr) {
+                payload.ocr_text = Some(text);
+                payload.ocr_model = Some(model);
+            }
+        }
+        node.payload = Some(AstPayload::Image(payload));
+    }
+}
+
+/// OCR one persisted asset: load bytes, write a temp file with the right
+/// extension (tesseract sniffs the format), recognize, clean up. Returns
+/// (text, provider name) or None on any failure.
+fn ocr_asset(
+    asset_dir: &str,
+    asset: &crate::source::VisualAssetRef,
+    ocr: &dyn crate::ocr::OcrProvider,
+) -> Option<(String, String)> {
+    let ext = match asset.mime_type.as_str() {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/bmp" => "bmp",
+        "image/tiff" => "tiff",
+        "image/webp" => "webp",
+        _ => return None, // tesseract can't handle unknown formats
+    };
+    let bytes = crate::asset_store::load_asset(asset_dir, &asset.content_hash)?;
+    let dir = std::env::temp_dir().join("aikoql-ocr");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("{}.{}", asset.content_hash, ext));
+    std::fs::write(&path, &bytes).ok()?;
+    let result = ocr.recognize(&path.to_string_lossy(), "eng", &dir.to_string_lossy());
+    std::fs::remove_file(&path).ok();
+    let text = result.ok()?.text.trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    Some((text, ocr.name().to_string()))
 }
 
 fn classify_visuals_in_children(nodes: &mut [AstNode]) {
@@ -853,6 +940,133 @@ mod tests {
                 assert!(c.x_axis.is_none());
             }
             other => panic!("expected chart payload, got {:?}", other),
+        }
+    }
+
+    struct MockOcr {
+        available: bool,
+        text: &'static str,
+    }
+
+    impl crate::ocr::OcrProvider for MockOcr {
+        fn name(&self) -> &str {
+            "mock-ocr"
+        }
+        fn available(&self) -> bool {
+            self.available
+        }
+        fn recognize(
+            &self,
+            _image_path: &str,
+            _language: &str,
+            _work_dir: &str,
+        ) -> Result<crate::ocr::OcrPageResult, String> {
+            Ok(crate::ocr::OcrPageResult {
+                text: self.text.into(),
+                confidence: 90.0,
+                word_confidences: vec![],
+                word_count: 2,
+                words: vec![],
+                block_bboxes: vec![],
+            })
+        }
+    }
+
+    #[test]
+    fn ocr_fill_adds_ocr_text_to_screenshot_images() {
+        let dir = std::env::temp_dir().join(format!("aikoql-test-assets-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let hash = crate::asset_store::store_asset(&dir.to_string_lossy(), b"fake-png").unwrap();
+        let mut n = visual_node(BlockType::Image, Some("screenshot of cli"), vec![]);
+        n.asset = Some(VisualAssetRef {
+            asset_id: hash.clone(),
+            mime_type: "image/png".into(),
+            content_hash: hash,
+            source: SourceSpan {
+                document_id: None,
+                page: 1,
+                start_offset: None,
+                end_offset: None,
+                bbox: None,
+                node_id: None,
+            },
+        });
+        let mut ast = ast_with(vec![n]);
+        let dir_str = dir.to_string_lossy().to_string();
+        classify_visuals_with_assets(
+            &mut ast,
+            Some(&dir_str),
+            &MockOcr {
+                available: true,
+                text: "INVOICE TOTAL 42",
+            },
+        );
+        match &ast.pages[0].children[0].payload {
+            Some(AstPayload::Image(i)) => {
+                assert_eq!(i.ocr_text.as_deref(), Some("INVOICE TOTAL 42"));
+                assert_eq!(i.ocr_model.as_deref(), Some("mock-ocr"));
+            }
+            other => panic!("expected image payload, got {:?}", other),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ocr_fill_skips_when_unavailable_or_not_text_classified() {
+        // Provider unavailable → pass skipped entirely.
+        let mut ast = ast_with(vec![visual_node(
+            BlockType::Image,
+            Some("screenshot of cli"),
+            vec![],
+        )]);
+        ast.pages[0].children[0].asset = Some(asset());
+        classify_visuals_with_assets(
+            &mut ast,
+            Some("no-such-dir"),
+            &MockOcr {
+                available: false,
+                text: "X",
+            },
+        );
+        match &ast.pages[0].children[0].payload {
+            Some(AstPayload::Image(i)) => assert!(i.ocr_text.is_none()),
+            other => panic!("expected image payload, got {:?}", other),
+        }
+
+        // Available provider, but a plain logo → not Screenshot/ScannedText.
+        let mut ast = ast_with(vec![visual_node(BlockType::Image, Some("logo"), vec![])]);
+        ast.pages[0].children[0].asset = Some(asset());
+        classify_visuals_with_assets(
+            &mut ast,
+            Some("no-such-dir"),
+            &MockOcr {
+                available: true,
+                text: "X",
+            },
+        );
+        match &ast.pages[0].children[0].payload {
+            Some(AstPayload::Image(i)) => assert!(i.ocr_text.is_none()),
+            other => panic!("expected image payload, got {:?}", other),
+        }
+
+        // Screenshot with a missing asset file → load fails soft.
+        let mut ast = ast_with(vec![visual_node(
+            BlockType::Image,
+            Some("scan of invoice"),
+            vec![],
+        )]);
+        ast.pages[0].children[0].asset = Some(asset());
+        classify_visuals_with_assets(
+            &mut ast,
+            Some("no-such-dir"),
+            &MockOcr {
+                available: true,
+                text: "X",
+            },
+        );
+        match &ast.pages[0].children[0].payload {
+            Some(AstPayload::Image(i)) => assert!(i.ocr_text.is_none()),
+            other => panic!("expected image payload, got {:?}", other),
         }
     }
 
