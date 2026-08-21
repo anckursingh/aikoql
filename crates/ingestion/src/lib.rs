@@ -111,9 +111,16 @@ pub use ocr::{
 
 mod ast;
 pub use ast::{
-    classify_blocks_enriched, document_model_to_ast, document_model_to_ast_enriched, AstNode,
-    BlockType, BoundingBox, DocumentAst,
+    classify_blocks_enriched, document_model_to_ast, document_model_to_ast_enriched,
+    table_payload_from_node, AstNode, AstPayload, Axis, BlockType, BoundingBox, ChartPayload,
+    ChartPoint, ChartSeries, ChartType, DetectedObject, DiagramEdge, DiagramNode, DiagramPayload,
+    DocumentAst, FormulaPayload, ImagePayload, ScalarValue, TableCell, TableHeader, TablePayload,
+    TableRow,
 };
+
+// PR-A: typed provenance for multimodal sources.
+mod source;
+pub use source::{EvidenceSource, SourceSpan, VisualAssetRef};
 
 mod ir;
 pub use ir::{
@@ -147,6 +154,13 @@ pub use chunking::{
     chunk_and_embed, embed_chunks, ChunkPosition, ChunkStructure, ChunkingStrategy, DocumentChunk,
     DocumentChunker, EmbeddedChunk, MockDocumentChunker,
 };
+
+// PR-C: knowledge fragments + semantic boundary detection (D4).
+mod fragment;
+pub use fragment::{FragmentContent, FragmentContext, FragmentModality, KnowledgeFragment};
+
+mod boundary;
+pub use boundary::{BoundaryError, KnowledgeBoundaryDetector, RuleBoundaryDetector};
 
 mod pipeline;
 pub use pipeline::{

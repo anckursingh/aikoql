@@ -527,6 +527,7 @@ mod tests {
                 children,
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             })
             .collect();
         DocumentAst {
@@ -543,6 +544,7 @@ mod tests {
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         }
     }
 
@@ -553,6 +555,7 @@ mod tests {
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         }
     }
 
@@ -650,6 +653,7 @@ mod tests {
             children: nodes,
             bbox: None,
             confidence: None,
+            ..Default::default()
         }]]);
 
         // Use a small max_chunk_chars to force splits.

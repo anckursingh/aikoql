@@ -3236,3 +3236,82 @@ Fourth reviewer round (`AIKOQL_PR1_Updated_Code_Functionality_Review.md`). Verdi
 ### Ripple fixes surfaced by the new boundary
 
 The P0-1 guard exposed real production callers that were cloning stored extensions back into `remember()`: `GraphEngine::relate` (engines/graph) now strips managed keys before the read-modify-write, and the experiences/transactions/runtime fixtures do the same. Kernel suite green end-to-end (17 binaries, 0 failures), `aikoql-mcp` green (42 + 3 + 20), `aikoql-runtime` green (19), workspace clean.
+
+## Multimodal Document Ingestion (2026-08-21) — HLD/LLD in `docs/AIKOQL_Multimodal_Document_Ingestion_HLD_LLD.md`
+
+### Architect assessment — what the HLD requires vs. what the codebase had
+
+The HLD's core architectural position (doc §59): the **DocumentAst is the canonical product** of ingestion; chunks/embeddings are derived *projections*, never the source of truth. Auditing the existing `crates/ingestion` against that position:
+
+| HLD requirement | Existing code | Verdict |
+|---|---|---|
+| Canonical AST with typed payloads (§9–13) | `ast.rs` D3 exists, but text-only — tables classified as blocks, no typed cells, no chart/diagram/formula payloads | **Missing → PR-A** |
+| Typed provenance (`SourceSpan`, `EvidenceSource`) (§14) | `Evidence.bbox_text` is a string; no typed geometry anywhere | **Missing → PR-A** |
+| Semantic segmentation between AST and IR (`KnowledgeFragment` + boundary detection) (§22/§37) | D4 goes straight AST → IR; chunking operates directly on the AST | **Missing → PR-C** |
+| Retrieval as projection (`DocumentChunker` → `RetrievalProjector`) (§41/§60) | `chunking.rs` chunks the AST itself | **Present but misplaced → PR-E** |
+| Visual classification (chart/diagram/image analyzers) (§17–20) | Block-level Figure marker heuristic only (`detect_figures`) | **Deferred → PR-F** (mock-first) |
+| Transformer/embedding boundary detectors (§16) | None | **Deferred → PR-G**, gated on rule-baseline benchmarks (§60) |
+| No mandatory heavyweight AI (§56) | Clean — pdf-extract/tesseract only | **Conforms** |
+
+Decisions taken this round (with rationale):
+
+- **PR-A + PR-C primitives only** — exactly the §60 first milestone: `SourceSpan`, `VisualAssetRef`, `AstPayload`, `KnowledgeFragment`, `KnowledgeBoundaryDetector`. No model changes, no chunker refactor yet.
+- **`Evidence` struct untouched** — the typed `EvidenceSource` enum is defined and exported, but swapping `bbox_text` onto typed sources touches ~20 construction sites. That migration lands as one sweep with PR-D (AST → Fragment → IR), when candidates actually carry `source_fragments` — churn with zero behavior gain until then.
+- **`AstNode.text` stays `String`** — the HLD's `Option<String>` migration also lands with PR-D, so every `.text` consumer switches together.
+- **Headings are `FragmentContext.heading_path`, not fragments** — heading text reaches consumers through context; emitting it as its own fragment duplicates the content.
+- **`AstPayload`/`FragmentContent` per-modality, not one blob** — a table fragment keeps `TablePayload` (headers/rows/typed `ScalarValue` cells); interpretation is derived from the source representation, never substituted for it (§59).
+- **`RuleBoundaryDetector` in one `boundary.rs`** — the doc's directory-per-detector layout is premature; one file per future detector was *not* created (ponytail: do not create all directories immediately).
+- **Deterministic fragment ids `frag-p{page}-b{block}`** — position-stable per document layout; document-hash prefix deferred until `DocumentAst` carries a `document_id` (PR-B).
+
+### Implemented this round — PR-A + PR-C primitives (HLD §60 first milestone)
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/source.rs` | **New.** `SourceSpan` (document_id/page/offsets/bbox/node_id), `VisualAssetRef` (asset_id/mime_type/content_hash/source), `EvidenceSource` enum — 7 typed variants (TextSpan/Region/TableCell/ChartPoint/DiagramNode/DiagramEdge/Asset). All optional fields `#[serde(default)]` for backward compat. |
+| `crates/ingestion/src/ast.rs` | `AstNode` gains `node_id`, `asset`, `payload` (`#[serde(default)]`, `Default` derive). `BlockType` gains `Figure/Chart/Diagram/Formula` + `#[default] Unknown`. New payload types: `AstPayload`, `TablePayload`/`TableHeader`/`TableRow`/`TableCell` + `ScalarValue` (Text/Integer/Float/Boolean/Date/Currency), `ChartPayload`/`ChartType`/`Axis`/`ChartSeries`/`ChartPoint`, `DiagramPayload`/`DiagramNode`/`DiagramEdge`, `FormulaPayload` (latex/mathml/plain_text), `ImagePayload` + `DetectedObject`. `table_payload_from_node()` converts block children into typed tables (typed scalar parsing incl. `$2.50` → Currency); `build_table_node` now attaches the payload so the canonical AST self-describes tables. |
+| `crates/ingestion/src/fragment.rs` | **New.** `KnowledgeFragment` (fragment_id/modality/content/context/source/evidence/confidence), `FragmentModality` (8 variants incl. Table/Chart/Diagram/Formula), `FragmentContent` (per-modality, `Mixed` for composites), `FragmentContext` (heading_path/page/neighboring_fragments/parent_fragment). |
+| `crates/ingestion/src/boundary.rs` | **New.** `KnowledgeBoundaryDetector` trait (Send + Sync; detect(ast) → `Result<Vec<KnowledgeFragment>, BoundaryError>`), manual `Display`/`Error` impl (no new dependency). `RuleBoundaryDetector`: one fragment per top-level block, headings tracked as context, tables → typed `TablePayload` fragments, lists joined, code preserved, visual modalities emit Text until PR-F; each fragment carries `SourceSpan` + `Evidence` (extractor `rule_boundary`, page, bbox text, confidence); neighbor links filled after the walk. 6 unit tests (structure, heading context, table structure preservation, provenance + determinism, empty doc, serde). |
+| `crates/ingestion/src/pipeline.rs` | `CompilationResult` gains `#[serde(default)] fragments: Vec<KnowledgeFragment>`. `compile_document` runs `RuleBoundaryDetector` after D3 with fail-soft `eprintln` degradation (matching the OCR-error idiom — ingestion never hard-fails on segmentation). New `D4-fragments` stats phase (7 phases total). |
+| `crates/ingestion/src/lib.rs` | Module wiring + re-exports for all of the above. |
+| `crates/ingestion/tests/multimodal_acceptance.rs` | **New.** 6 acceptance tests (below). |
+
+### Tests (unit + e2e + acceptance) — all green 2026-08-21
+
+- **Unit**: 321 lib tests pass, including 6 new `boundary::tests` (structural boundaries, headings-as-context, table structure preserved, provenance + deterministic ids, empty doc, serde roundtrip) and 3 `source::tests`.
+- **e2e**: existing `tests/e2e_pipeline.rs` + doc-tests unchanged and green — chunking/IR/commit-plan behavior untouched by the new phase.
+- **Acceptance** (`tests/multimodal_acceptance.rs`, 6/6):
+  1. Compilation yields modality-preserving fragments — table stays a `TablePayload` with typed `ScalarValue` cells; paragraph under "1. Payment Terms" carries `heading_path`.
+  2. Every fragment carries a typed `SourceSpan` + `rule_boundary` evidence; neighbors link in document order.
+  3. Retrieval projection (embedded chunks) still functions from the same compile.
+  4. Serde backward/forward compatible — legacy JSON without `fragments` deserializes to empty.
+  5. Fragment ids deterministic across compiles.
+  6. End-to-end: real file on disk → `extract_document` → `compile_document_mock` → fragments, secrets intact.
+- **Gates**: `cargo fmt --check` clean, `cargo clippy --all-targets` clean (single `large_enum_variant` on `AstPayload` allowed with a `ponytail:` comment — AST nodes are transient), `cargo check --workspace` clean.
+
+### Milestone status — HLD §58 DoD checklist
+
+| # | §58 criterion | Status |
+|---|---|---|
+| 1 | Text documents work as well as current implementation | ✅ Existing tests green; fragments added without altering D4–D8 behavior |
+| 2 | Tables remain structured | ✅ Typed `TablePayload` in canonical AST + table fragments (this round) |
+| 3 | Chart data representable structurally | ✅ `ChartPayload` types exist; extraction deferred to PR-F |
+| 4 | Diagram nodes/edges representable | ✅ `DiagramPayload` types exist; extraction deferred to PR-F |
+| 5 | Images retain original assets | ⏳ `VisualAssetRef` + `AstNode.asset` exist; asset population deferred to PR-B/PR-F |
+| 6 | Formulas retain mathematical representation | ✅ `FormulaPayload` types exist; extraction deferred to PR-F |
+| 7 | Every semantic candidate has typed provenance | ⏳ Types exist (`SourceSpan`/`EvidenceSource`); candidate wiring is PR-D |
+| 8 | Every visual-derived fact resolves to page/region | ⏳ With PR-D/PR-F |
+| 9 | Retrieval chunks are derived projections | ⏳ **Next implementation (PR-E)** — chunker refactor over fragments |
+| 10 | Transformer boundary detection optional | ✅ No transformer dependency; `KnowledgeBoundaryDetector` trait is the seam |
+| 11 | Model versions persisted | ⏳ Future (PR-F onward) |
+| 12 | Asset processing content-addressed | ⏳ Future (`VisualAssetRef.content_hash` is the field; population is PR-B) |
+| 13 | Incremental ingestion at asset/page level | ⏳ Future |
+| 14 | No mandatory heavyweight AI | ✅ Still pdf-extract/tesseract only |
+| 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
+| 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
+| 17 | Existing ingestion tests green | ✅ 321 + e2e + doc-tests |
+| 18 | Multimodal golden fixtures exist | ⏳ Future (PR-E/PR-F benchmarks) |
+| 19 | CI measures extraction + semantic regression | ⏳ Future |
+
+### Next implementation — PR-E: Retrieval projection (HLD §60 step 2)
+
+"Refactor the current `DocumentChunker` into a retrieval projection" — `Fragment → RetrievalProjection → DocumentChunk → Embedding`. The `KnowledgeBoundaryDetector` trait makes this a clean seam: chunking switches from consuming the raw AST to consuming `CompilationResult.fragments`, so chunk boundaries respect semantic segments (a chunk never starts mid-table). PR-B (extraction preservation: PDF/DOCX/HTML keep multimodal structure) and PR-D (AST → Fragment → IR + `EvidenceSource` wiring + `text: Option<String>`) slot in before or alongside. PR-G (transformer/embedding detectors) stays gated on the rule-baseline benchmarks that PR-E makes possible.

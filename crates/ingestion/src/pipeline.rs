@@ -11,12 +11,14 @@
 //! - `compile_document()` — one-call pipeline: DocumentModel → result
 
 use crate::ast::document_model_to_ast;
+use crate::boundary::{KnowledgeBoundaryDetector, RuleBoundaryDetector};
 use crate::chunking::{chunk_and_embed, DocumentChunker, EmbeddedChunk, MockDocumentChunker};
 use crate::commit::{
     reconcile_and_plan, CommitAction, KnowledgeCommitPlan, KnowledgeReconciler,
     MockKnowledgeReconciler,
 };
 use crate::embedding::{EmbeddingProvider, MockEmbeddingProvider};
+use crate::fragment::KnowledgeFragment;
 use crate::ir::{document_model_to_ir, Evidence, KnowledgeIr, SemanticAnalyzer};
 use crate::ontology::{discover_ontology_from_ir, OntologyProposal};
 use crate::resolution::{
@@ -80,6 +82,11 @@ pub struct CompilationResult {
     pub commit_plan: KnowledgeCommitPlan,
     /// Embedded document chunks for vector retrieval.
     pub embedded_chunks: Vec<EmbeddedChunk>,
+    /// D4-fragments: modality-preserving knowledge fragments (canonical
+    /// segmentation). Chunks are a retrieval projection of these, never
+    /// their replacement (HLD §59).
+    #[serde(default)]
+    pub fragments: Vec<KnowledgeFragment>,
     /// Full evidence trail for explainability.
     pub evidence_trail: EvidenceTrail,
     /// Phase-level statistics.
@@ -341,6 +348,21 @@ pub fn compile_document(
     let ast = document_model_to_ast(doc);
     let dt_ast = time_now() - t_ast;
 
+    // D4-fragments: DocumentAst → KnowledgeFragment[] (semantic segmentation).
+    // Rule-based now; fails soft so ingestion never hard-fails on it.
+    let t_frag = time_now();
+    let fragments = match RuleBoundaryDetector.detect(&ast) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!(
+                "boundary detection degraded: {} — continuing without fragments",
+                e
+            );
+            Vec::new()
+        }
+    };
+    let dt_frag = time_now() - t_frag;
+
     // D4: DocumentAst → KnowledgeIr
     let t_ir = time_now();
     let raw_ir = document_model_to_ir(doc, analyzer);
@@ -382,6 +404,7 @@ pub fn compile_document(
     let total = time_now() - t0;
     let mut stats = PipelineStats::default();
     stats.add("D3-ast", dt_ast, ast.pages.len());
+    stats.add("D4-fragments", dt_frag, fragments.len());
     stats.add("D4-ir", dt_ir, ir.total_candidates());
     stats.add(
         "D5-ontology",
@@ -399,6 +422,7 @@ pub fn compile_document(
         resolution,
         commit_plan,
         embedded_chunks,
+        fragments,
         evidence_trail,
         stats,
         secret_findings,
@@ -482,7 +506,7 @@ mod tests {
 
         assert!(!result.ir.is_empty());
         assert!(!result.embedded_chunks.is_empty());
-        assert_eq!(result.stats.phases.len(), 6);
+        assert_eq!(result.stats.phases.len(), 7);
     }
 
     #[test]
@@ -497,6 +521,7 @@ mod tests {
             .map(|p| p.phase.as_str())
             .collect();
         assert!(phase_names.contains(&"D3-ast"));
+        assert!(phase_names.contains(&"D4-fragments"));
         assert!(phase_names.contains(&"D4-ir"));
         assert!(phase_names.contains(&"D5-ontology"));
         assert!(phase_names.contains(&"D6-resolution"));

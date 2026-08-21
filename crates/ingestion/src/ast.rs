@@ -15,22 +15,36 @@ use crate::ocr::BlockBbox;
 use crate::DocumentModel;
 
 /// Classification of a structural block in a document.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum BlockType {
     Title,
-    Heading { level: u8 },
+    Heading {
+        level: u8,
+    },
     Paragraph,
-    List { ordered: bool },
+    List {
+        ordered: bool,
+    },
     ListItem,
     Table,
     TableRow,
-    TableCell { row_span: u32, col_span: u32 },
+    TableCell {
+        row_span: u32,
+        col_span: u32,
+    },
     Image,
+    /// Multimodal variants (HLD §7): a chart is not merely an image, a
+    /// diagram carries graph-like semantics, a figure is an arbitrary visual.
+    Figure,
+    Chart,
+    Diagram,
+    Formula,
     Caption,
     Header,
     Footer,
     Footnote,
     Code,
+    #[default]
     Unknown,
 }
 
@@ -46,14 +60,327 @@ pub struct BoundingBox {
 
 /// A node in the document AST. Recursive: a Section contains Headings,
 /// Paragraphs, Tables; a Table contains TableRows; etc.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct AstNode {
     pub block_type: BlockType,
+    /// Text representation if available. Empty string = none (page
+    /// containers, structured nodes). The HLD's `Option<String>` migration
+    /// lands with PR-D — every `.text` consumer must switch together.
     pub text: String,
     #[serde(default)]
     pub children: Vec<AstNode>,
     pub bbox: Option<BoundingBox>,
     pub confidence: Option<f32>,
+    /// Stable node identity for provenance links (`SourceSpan.node_id`,
+    /// `EvidenceSource::TableCell`). Assigned by producers; the boundary
+    /// detector currently derives position-based fragment ids instead.
+    #[serde(default)]
+    pub node_id: Option<String>,
+    /// Original visual asset for Figure/Chart/Diagram/Image nodes.
+    #[serde(default)]
+    pub asset: Option<crate::source::VisualAssetRef>,
+    /// Typed structured payload for Table/Chart/Diagram/Formula nodes.
+    #[serde(default)]
+    pub payload: Option<AstPayload>,
+}
+
+// ---------------------------------------------------------------------------
+// Canonical multimodal payloads (HLD §9–13)
+// ---------------------------------------------------------------------------
+
+/// Typed structured content attached to multimodal AST nodes. The original
+/// text/visual representation always stays available alongside the payload —
+/// interpretation is derived from the source, never substituted for it.
+// ponytail: AST nodes are transient per-document; boxing a payload variant
+// saves bytes on a structure that lives seconds. Box if payloads get cached.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum AstPayload {
+    Table(TablePayload),
+    Chart(ChartPayload),
+    Diagram(DiagramPayload),
+    Formula(FormulaPayload),
+}
+
+/// Typed scalar for table cells. The original cell text stays available.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ScalarValue {
+    Text(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+    Date(String),
+    Currency { amount: f64, currency: String },
+}
+
+/// Structured table — row/column relationships are knowledge, not text soup.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TablePayload {
+    pub headers: Vec<TableHeader>,
+    pub rows: Vec<TableRow>,
+    pub cells: Vec<TableCell>,
+    #[serde(default)]
+    pub footnotes: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TableHeader {
+    pub id: String,
+    pub text: String,
+    pub level: u8,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TableRow {
+    pub id: String,
+    pub index: usize,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TableCell {
+    pub id: String,
+    pub row_id: String,
+    pub column_id: String,
+    pub text: String,
+    #[serde(default)]
+    pub value: Option<ScalarValue>,
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+    pub confidence: f32,
+}
+
+/// Chart: visual evidence + structured interpretation.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ChartPayload {
+    pub chart_type: ChartType,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub x_axis: Option<Axis>,
+    #[serde(default)]
+    pub y_axis: Option<Axis>,
+    #[serde(default)]
+    pub series: Vec<ChartSeries>,
+    /// Extracted data table, when a chart parser recovers one (PR-F).
+    #[serde(default)]
+    pub extracted_data: Option<TablePayload>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ChartType {
+    Bar,
+    Line,
+    Pie,
+    Scatter,
+    Area,
+    Histogram,
+    Combo,
+    Unknown,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Axis {
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ChartSeries {
+    pub name: String,
+    #[serde(default)]
+    pub values: Vec<ChartPoint>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ChartPoint {
+    pub x: String,
+    pub y: f64,
+    pub confidence: f32,
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+}
+
+/// Diagram: nodes + edges — naturally maps to knowledge relationships.
+/// The visual diagram remains evidence; the extracted graph becomes knowledge.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DiagramPayload {
+    #[serde(default)]
+    pub nodes: Vec<DiagramNode>,
+    #[serde(default)]
+    pub edges: Vec<DiagramEdge>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DiagramNode {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub node_type: Option<String>,
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+    pub confidence: f32,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DiagramEdge {
+    pub source: String,
+    pub target: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    pub confidence: f32,
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+}
+
+/// Formula: keep the mathematical representation, not just OCR text.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct FormulaPayload {
+    #[serde(default)]
+    pub latex: Option<String>,
+    #[serde(default)]
+    pub mathml: Option<String>,
+    #[serde(default)]
+    pub plain_text: Option<String>,
+}
+
+/// Image: multiple representations. A generated caption is a projection,
+/// never the canonical content.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ImagePayload {
+    pub asset: crate::source::VisualAssetRef,
+    #[serde(default)]
+    pub ocr_text: Option<String>,
+    #[serde(default)]
+    pub caption: Option<String>,
+    #[serde(default)]
+    pub detected_objects: Vec<DetectedObject>,
+    #[serde(default)]
+    pub visual_embedding: Option<Vec<f32>>,
+}
+
+/// Object detected inside a visual asset (PR-F visual analysis).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DetectedObject {
+    pub label: String,
+    pub confidence: f32,
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+}
+
+// ---------------------------------------------------------------------------
+// Payload construction from existing AST structure
+// ---------------------------------------------------------------------------
+
+/// Convert a Table AST node (Table → TableRow → TableCell) into a structured
+/// TablePayload. First row becomes single-level headers; remaining rows map
+/// cells to header columns. Returns `None` for non-table nodes.
+pub fn table_payload_from_node(node: &AstNode) -> Option<TablePayload> {
+    if node.block_type != BlockType::Table || node.children.is_empty() {
+        return None;
+    }
+
+    let mut headers: Vec<TableHeader> = Vec::new();
+    let mut rows: Vec<TableRow> = Vec::new();
+    let mut cells: Vec<TableCell> = Vec::new();
+
+    for (row_idx, row_node) in node.children.iter().enumerate() {
+        if row_node.block_type != BlockType::TableRow {
+            continue;
+        }
+        let row_id = format!("r{}", row_idx);
+
+        if row_idx == 0 {
+            for (col_idx, cell_node) in row_node.children.iter().enumerate() {
+                headers.push(TableHeader {
+                    id: format!("h{}", col_idx),
+                    text: cell_node.text.clone(),
+                    level: 1,
+                    parent_id: None,
+                });
+            }
+            continue;
+        }
+
+        rows.push(TableRow {
+            id: row_id.clone(),
+            index: row_idx,
+        });
+
+        for (col_idx, cell_node) in row_node.children.iter().enumerate() {
+            let column_id = headers
+                .get(col_idx)
+                .map(|h| h.id.clone())
+                .unwrap_or_else(|| format!("c{}", col_idx));
+            let confidence = cell_node.confidence.unwrap_or(1.0);
+            cells.push(TableCell {
+                id: format!("{}-{}", row_id, col_idx),
+                row_id: row_id.clone(),
+                column_id,
+                text: cell_node.text.clone(),
+                value: parse_scalar_value(&cell_node.text),
+                bbox: cell_node.bbox.clone(),
+                confidence,
+            });
+        }
+    }
+
+    Some(TablePayload {
+        headers,
+        rows,
+        cells,
+        footnotes: Vec::new(),
+    })
+}
+
+/// Best-effort typed scalar for a table cell. The original text is always
+/// preserved on `TableCell.text` — this is an interpretation, not a rewrite.
+fn parse_scalar_value(text: &str) -> Option<ScalarValue> {
+    let t = text.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if let Ok(i) = t.parse::<i64>() {
+        return Some(ScalarValue::Integer(i));
+    }
+    if t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("false") {
+        return Some(ScalarValue::Boolean(t.eq_ignore_ascii_case("true")));
+    }
+    // Currency: symbol prefix + parseable amount.
+    for symbol in ["$", "€", "£", "₹"] {
+        if let Some(rest) = t.strip_prefix(symbol) {
+            if let Ok(amount) = rest.trim().replace(',', "").parse::<f64>() {
+                return Some(ScalarValue::Currency {
+                    amount,
+                    currency: symbol.to_string(),
+                });
+            }
+        }
+    }
+    // Date: YYYY-MM-DD.
+    let digits_only: Vec<&str> = t.split('-').collect();
+    if digits_only.len() == 3
+        && digits_only[0].len() == 4
+        && digits_only[0].chars().all(|c| c.is_ascii_digit())
+        && digits_only[1].len() == 2
+        && digits_only[2].len() == 2
+        && digits_only[1..]
+            .iter()
+            .all(|p| p.chars().all(|c| c.is_ascii_digit()))
+    {
+        return Some(ScalarValue::Date(t.to_string()));
+    }
+    if let Ok(f) = t.parse::<f64>() {
+        return Some(ScalarValue::Float(f));
+    }
+    None
 }
 
 /// Provider-independent document structure produced by physical analysis.
@@ -85,6 +412,7 @@ pub fn document_model_to_ast(doc: &DocumentModel) -> DocumentAst {
             children: blocks,
             bbox: None,
             confidence: page.ocr_confidence,
+            ..Default::default()
         });
     }
 
@@ -158,6 +486,7 @@ fn classify_blocks(text: &str, _page: u32) -> Vec<AstNode> {
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -182,6 +511,7 @@ fn classify_blocks(text: &str, _page: u32) -> Vec<AstNode> {
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -205,6 +535,7 @@ fn classify_blocks(text: &str, _page: u32) -> Vec<AstNode> {
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         });
     }
 
@@ -254,6 +585,7 @@ fn flush_list(buffer: &mut Vec<AstNode>, out: &mut Vec<AstNode>) {
         children: items,
         bbox: None,
         confidence: None,
+        ..Default::default()
     });
 }
 
@@ -279,6 +611,7 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         });
     }
 
@@ -298,6 +631,7 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
         }
     }
@@ -330,6 +664,7 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         });
     }
 
@@ -403,6 +738,7 @@ fn build_list_items(lines: &[&str], _text: &str) -> AstNode {
         children: vec![],
         bbox: None,
         confidence: None,
+        ..Default::default()
     }
 }
 
@@ -473,6 +809,7 @@ fn build_table_node(lines: &[&str], _text: &str) -> AstNode {
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             })
             .collect();
 
@@ -482,16 +819,22 @@ fn build_table_node(lines: &[&str], _text: &str) -> AstNode {
             children: cell_nodes,
             bbox: None,
             confidence: None,
+            ..Default::default()
         });
     }
 
-    AstNode {
+    let table = AstNode {
         block_type: BlockType::Table,
         text: String::new(),
         children: rows,
         bbox: None,
         confidence: None,
-    }
+        ..Default::default()
+    };
+    // Attach the typed payload so the canonical AST self-describes the table
+    // (HLD §9 — a table must remain a table, not text soup).
+    let payload = table_payload_from_node(&table).map(AstPayload::Table);
+    AstNode { payload, ..table }
 }
 
 /// Mode (most frequent value) of a usize slice.
@@ -557,6 +900,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -603,6 +947,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
                         height: h.height as f32,
                     }),
                     confidence: Some(h.avg_confidence),
+                    ..Default::default()
                 });
                 continue;
             }
@@ -620,6 +965,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
                         height: h.height as f32,
                     }),
                     confidence: Some(h.avg_confidence),
+                    ..Default::default()
                 });
                 continue;
             }
@@ -643,6 +989,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
                     height: h.height as f32,
                 }),
                 confidence: Some(h.avg_confidence),
+                ..Default::default()
             });
             continue;
         }
@@ -666,6 +1013,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
                     height: h.height as f32,
                 }),
                 confidence: Some(h.avg_confidence),
+                ..Default::default()
             });
             continue;
         }
@@ -678,6 +1026,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             };
             if let Some(hint) = hint {
                 para.bbox = Some(BoundingBox {
@@ -734,6 +1083,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         };
         if let Some(hint) = hint {
             para.bbox = Some(BoundingBox {
@@ -904,6 +1254,7 @@ fn detect_figures(nodes: Vec<AstNode>) -> Vec<AstNode> {
                             children: vec![],
                             bbox: cap.bbox.clone(),
                             confidence: cap.confidence,
+                            ..Default::default()
                         }
                     } else {
                         AstNode {
@@ -912,6 +1263,7 @@ fn detect_figures(nodes: Vec<AstNode>) -> Vec<AstNode> {
                             children: vec![],
                             bbox: None,
                             confidence: None,
+                            ..Default::default()
                         }
                     };
 
@@ -921,6 +1273,7 @@ fn detect_figures(nodes: Vec<AstNode>) -> Vec<AstNode> {
                     children: vec![caption],
                     bbox: node.bbox.clone(),
                     confidence: node.confidence,
+                    ..Default::default()
                 });
                 i += 1;
                 continue;
@@ -970,6 +1323,7 @@ pub fn document_model_to_ast_enriched(
             children: blocks,
             bbox: None,
             confidence: page.ocr_confidence,
+            ..Default::default()
         });
     }
 
@@ -1224,6 +1578,7 @@ mod tests {
                         children: vec![],
                         bbox: None,
                         confidence: None,
+                        ..Default::default()
                     },
                     AstNode {
                         block_type: BlockType::Paragraph,
@@ -1231,10 +1586,12 @@ mod tests {
                         children: vec![],
                         bbox: None,
                         confidence: None,
+                        ..Default::default()
                     },
                 ],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             }],
         };
 

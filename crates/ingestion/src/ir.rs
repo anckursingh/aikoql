@@ -747,6 +747,7 @@ mod tests {
                 children,
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             })
             .collect();
         DocumentAst {
@@ -763,6 +764,7 @@ mod tests {
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         }
     }
 
@@ -773,6 +775,7 @@ mod tests {
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         }
     }
 
@@ -783,6 +786,7 @@ mod tests {
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         }
     }
 
@@ -1158,6 +1162,7 @@ mod tests {
                         children: vec![],
                         bbox: None,
                         confidence: None,
+                        ..Default::default()
                     },
                     AstNode {
                         block_type: BlockType::ListItem,
@@ -1165,10 +1170,12 @@ mod tests {
                         children: vec![],
                         bbox: None,
                         confidence: None,
+                        ..Default::default()
                     },
                 ],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             },
         ]]);
 
@@ -1200,6 +1207,7 @@ mod tests {
                             children: vec![],
                             bbox: None,
                             confidence: None,
+                            ..Default::default()
                         },
                         AstNode {
                             block_type: BlockType::TableCell {
@@ -1210,13 +1218,16 @@ mod tests {
                             children: vec![],
                             bbox: None,
                             confidence: None,
+                            ..Default::default()
                         },
                     ],
                     bbox: None,
                     confidence: None,
+                    ..Default::default()
                 }],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             },
         ]]);
 

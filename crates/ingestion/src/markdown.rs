@@ -775,6 +775,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -790,6 +791,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             i += 1;
             continue;
@@ -806,6 +808,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                     children: vec![],
                     bbox: None,
                     confidence: None,
+                    ..Default::default()
                 });
                 i += 2;
                 continue;
@@ -822,6 +825,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             }];
             i += 1;
             // Collect continuation items
@@ -839,6 +843,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                         children: vec![],
                         bbox: None,
                         confidence: None,
+                        ..Default::default()
                     });
                     i += 1;
                 } else {
@@ -859,6 +864,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                 children: list_items,
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -890,6 +896,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -925,6 +932,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         });
     }
 
@@ -936,6 +944,7 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             children: nodes,
             bbox: None,
             confidence: None,
+            ..Default::default()
         }],
         source_type: "markdown-native".into(),
     }
