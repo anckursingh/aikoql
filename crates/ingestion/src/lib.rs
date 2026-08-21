@@ -176,8 +176,10 @@ pub use visual::{
 
 mod pipeline;
 pub use pipeline::{
-    compile_document, compile_document_mock, compile_document_mock_with_assets, CompilationResult,
-    EvidenceNode, EvidenceTrail, PhaseStats, PipelineStats,
+    compile_document, compile_document_incremental, compile_document_mock,
+    compile_document_mock_with_assets, diff_document_models, reproject_document, AssetChange,
+    CompilationResult, DocumentDelta, EvidenceNode, EvidenceTrail, ImageDelta, PhaseStats,
+    PipelineStats,
 };
 
 // Phase A1: Markdown-to-Knowledge Compiler

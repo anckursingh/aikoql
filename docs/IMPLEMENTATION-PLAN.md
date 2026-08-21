@@ -3345,11 +3345,11 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 10 | Transformer boundary detection optional | ✅ No transformer dependency; `KnowledgeBoundaryDetector` trait is the seam |
 | 11 | Model versions persisted | ✅ PR-F — `MODEL_VISUAL/CHART/DIAGRAM/IMAGE/FORMULA` consts stamped on every visual-derived candidate |
 | 12 | Asset processing content-addressed | ✅ PR-F — persistence wired end to end: `extract_document`/`compile_markdown_file` take an asset dir; identical bytes dedupe in the store |
-| 13 | Incremental ingestion at asset/page level | ⏳ Future |
+| 13 | Incremental ingestion at asset/page level | ✅ PR — `diff_document_models` (asset-granularity detection) + `compile_document_incremental` (page-splice) + `reproject_document` (model change) |
 | 14 | No mandatory heavyweight AI | ✅ Still pdf-extract/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 353 lib + 10 acceptance + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 375 lib + 10 acceptance + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
 | 19 | CI measures extraction + semantic regression | ⏳ Future |
 
@@ -3426,6 +3426,20 @@ Closes the §22/§37 deferral noted at line 3264: fragment ids are now globally 
 
 **Tests — PR-C (all green 2026-08-21)**: 368 lib tests (+1); 10/10 acceptance (markdown compile path now emits document-prefixed fragment ids end to end); `cargo clippy --workspace --all-targets` clean; `cargo test --workspace` green.
 
-### Next implementation — DoD 13, then DoD 19
+### Implemented now — DoD 13: incremental ingestion at asset/page level (2026-08-21)
 
-Next in order: DoD 13 — incremental ingestion at asset/page level (HLD §45); then DoD 19 — golden PDF suite + CI extraction/semantic regression gate (HLD §52/§53). PR-G stays gated on the rule-baseline benchmarks (§60).
+HLD §45: instead of "document changed → reprocess entire document", the pipeline now supports: document unchanged → skip; page changed → process that page; image hash changed → process its page (asset-granularity detection); page removed → drop its candidates; semantic model changed → re-run the projection only.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/ir.rs` | `KnowledgeIr::retain_pages(&HashSet<u32>)` — drops candidates whose evidence pins them to a dropped page; candidates without a page (document-level provenance) always survive. |
+| `crates/ingestion/src/pipeline.rs` | `DocumentDelta` / `ImageDelta` / `AssetChange` + `diff_document_models(prev, next)` — pages matched by `page_number`; a page changes when its text or any image hash changes (image deltas matched by page + slot index → `Added`/`Changed`/`Removed`); removed and added pages detected. `compile_document_incremental(doc, prev_doc, prev, …)` — empty delta → previous result returned untouched; all pages changed → full compile; otherwise page splice: changed pages carry content, unchanged pages become empty placeholders (index-based AST page numbering stays identical), fresh compile runs on the splice, then kept-page fragments/IR/chunks from the previous run merge with fresh changed-page output (interleaved in page order, neighbor links re-stamped, secrets kept fail-closed) and D5–D8 re-run over the merged IR. `reproject_document(prev, projector, embedder)` — §45's semantic-model-change path: chunks re-projected/embedded with a new provider, fragments + IR untouched. |
+| Tests | +7 (375 lib total): `retain_pages_keeps_kept_and_document_level_candidates`; `diff_document_models_detects_page_and_image_changes`; `incremental_unchanged_document_returns_previous_result`; `incremental_single_page_change_splices_fragments_and_ir`; `incremental_removed_page_drops_its_candidates`; `incremental_all_pages_changed_falls_back_to_full_compile`; `reproject_document_reuses_ir_with_new_embedder`. |
+
+Known ceilings (documented as `ponytail:` comments in code): image deltas matched by page + slot index (stable for our extractors; bbox matching is the upgrade); heading context for a changed page comes only from that page (boundary detection clears heading paths at page boundaries); the spliced compile inherits position-based fragment ids until `DocumentAst.document_id` is wired to extraction.
+
+**Tests — DoD 13 (all green 2026-08-21)**: 375 lib tests (+7); 10/10 multimodal acceptance; e2e pipeline green; `cargo clippy -p aikoql-ingestion --all-targets` clean; `cargo test --workspace` green (58 suites, 0 failures).
+
+### Next implementation — DoD 19
+
+DoD 19 — golden PDF suite (10 fixtures per HLD §52) + CI extraction/semantic regression gate (§53). PR-G stays gated on the rule-baseline benchmarks (§60).

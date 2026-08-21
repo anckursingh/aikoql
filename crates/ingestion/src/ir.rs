@@ -195,6 +195,19 @@ pub struct KnowledgeIr {
 }
 
 impl KnowledgeIr {
+    /// Drop candidates whose evidence pins them to a page outside `kept`
+    /// (HLD §45 incremental splice: unchanged pages keep their candidates,
+    /// changed/removed pages drop theirs). Candidates without a page
+    /// (document-level provenance) always survive.
+    pub fn retain_pages(&mut self, kept: &std::collections::HashSet<u32>) {
+        let keep = |e: &Evidence| e.page.map_or(true, |p| kept.contains(&p));
+        self.entities.retain(|c| keep(&c.evidence));
+        self.relations.retain(|c| keep(&c.evidence));
+        self.facts.retain(|c| keep(&c.evidence));
+        self.events.retain(|c| keep(&c.evidence));
+        self.temporal.retain(|c| keep(&c.evidence));
+    }
+
     /// True when no candidates of any kind were found.
     pub fn is_empty(&self) -> bool {
         self.entities.is_empty()
@@ -1102,6 +1115,57 @@ mod tests {
     use super::*;
     use crate::ast::{AstNode, BlockType, DocumentAst};
     use crate::visual::DiagramAnalyzer;
+
+    #[test]
+    fn retain_pages_keeps_kept_and_document_level_candidates() {
+        use std::collections::HashSet;
+
+        let mut ir = KnowledgeIr::default();
+        ir.entities.push(EntityCandidate {
+            name: "Kept Corp".into(),
+            type_hint: None,
+            mentions: vec![],
+            confidence: 1.0,
+            evidence: Evidence {
+                page: Some(1),
+                ..Default::default()
+            },
+        });
+        ir.entities.push(EntityCandidate {
+            name: "Dropped Corp".into(),
+            type_hint: None,
+            mentions: vec![],
+            confidence: 1.0,
+            evidence: Evidence {
+                page: Some(2),
+                ..Default::default()
+            },
+        });
+        ir.entities.push(EntityCandidate {
+            name: "Document Level".into(),
+            type_hint: None,
+            mentions: vec![],
+            confidence: 1.0,
+            evidence: Evidence {
+                page: None,
+                ..Default::default()
+            },
+        });
+        ir.facts.push(FactCandidate {
+            statement: "dropped fact".into(),
+            evidence: Evidence {
+                page: Some(2),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        ir.retain_pages(&HashSet::from([1]));
+
+        let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["Kept Corp", "Document Level"]);
+        assert!(ir.facts.is_empty());
+    }
 
     fn make_ast(pages: Vec<Vec<AstNode>>) -> DocumentAst {
         let page_count = pages.len() as u32;

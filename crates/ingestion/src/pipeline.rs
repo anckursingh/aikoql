@@ -20,12 +20,14 @@ use crate::commit::{
 use crate::embedding::{EmbeddingProvider, MockEmbeddingProvider};
 use crate::fragment::KnowledgeFragment;
 use crate::ir::{Evidence, KnowledgeIr, SemanticAnalyzer};
+use crate::merge::merge_knowledge_ir;
 use crate::ontology::{discover_ontology_from_ir, OntologyProposal};
 use crate::resolution::{
     resolve_entities, EntityResolver, KnowledgeBaseEntry, MockEntityResolver, ResolutionResult,
 };
 use crate::secret_filter::{filter_secrets, SecretFinding};
-use crate::DocumentModel;
+use crate::{DocumentModel, PageModel};
+use std::collections::{BTreeMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Pipeline stats
@@ -477,6 +479,374 @@ pub fn compile_document_mock_with_assets(
     )
 }
 
+// ---------------------------------------------------------------------------
+// HLD §45: incremental compilation
+// ---------------------------------------------------------------------------
+
+/// Change kind for an embedded image asset.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum AssetChange {
+    Added,
+    Changed,
+    Removed,
+}
+
+/// One image asset that changed between two document revisions.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ImageDelta {
+    /// Page the asset lives on (1-based).
+    pub page: u32,
+    pub content_hash: String,
+    pub change: AssetChange,
+}
+
+/// Difference between two revisions of the same document (HLD §45).
+///
+/// Detection granularity is the asset (page text, per-image content hash);
+/// processing granularity is the page — a changed asset marks its page for
+/// reprocessing. `changed_pages` includes pages added in `next`.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DocumentDelta {
+    pub changed_pages: Vec<u32>,
+    /// Pages present in `prev` but absent from `next`.
+    pub removed_pages: Vec<u32>,
+    /// Image-level deltas (every entry's page is also in `changed_pages`).
+    pub changed_images: Vec<ImageDelta>,
+}
+
+impl DocumentDelta {
+    /// True when the revisions are identical — nothing to reprocess.
+    pub fn is_empty(&self) -> bool {
+        self.changed_pages.is_empty() && self.removed_pages.is_empty()
+    }
+}
+
+/// Diff two document revisions at asset granularity (HLD §45).
+///
+/// Pages are matched by `PageModel.page_number` (extractors number pages
+/// contiguously, so page identity is stable). A page changes when its text
+/// or any embedded image hash changes. Image deltas are matched by
+/// page + slot index: a different hash in the same slot is `Changed`,
+/// extras are `Added`, missing ones `Removed`.
+/// ponytail: slot matching assumes stable per-page image order (true for
+/// our extractors); bbox matching if a source ever reorders images.
+pub fn diff_document_models(prev: &DocumentModel, next: &DocumentModel) -> DocumentDelta {
+    let mut delta = DocumentDelta::default();
+    let prev_pages: BTreeMap<u32, &PageModel> =
+        prev.pages.iter().map(|p| (p.page_number, p)).collect();
+    let next_pages: BTreeMap<u32, &PageModel> =
+        next.pages.iter().map(|p| (p.page_number, p)).collect();
+
+    for pn in prev_pages.keys() {
+        if !next_pages.contains_key(pn) {
+            delta.removed_pages.push(*pn);
+        }
+    }
+
+    for (pn, next_page) in &next_pages {
+        let prev_page = match prev_pages.get(pn) {
+            Some(p) => p,
+            None => {
+                delta.changed_pages.push(*pn); // page added
+                continue;
+            }
+        };
+        let text_changed = prev_page.text != next_page.text;
+        let prev_hashes: Vec<&str> = prev_page
+            .images
+            .iter()
+            .map(|i| i.asset.content_hash.as_str())
+            .collect();
+        let next_hashes: Vec<&str> = next_page
+            .images
+            .iter()
+            .map(|i| i.asset.content_hash.as_str())
+            .collect();
+        let mut image_changed = false;
+        let shared = prev_hashes.len().min(next_hashes.len());
+        for i in 0..shared {
+            if prev_hashes[i] != next_hashes[i] {
+                delta.changed_images.push(ImageDelta {
+                    page: *pn,
+                    content_hash: next_hashes[i].to_string(),
+                    change: AssetChange::Changed,
+                });
+                image_changed = true;
+            }
+        }
+        for h in &next_hashes[shared..] {
+            delta.changed_images.push(ImageDelta {
+                page: *pn,
+                content_hash: (*h).to_string(),
+                change: AssetChange::Added,
+            });
+            image_changed = true;
+        }
+        for h in &prev_hashes[shared..] {
+            delta.changed_images.push(ImageDelta {
+                page: *pn,
+                content_hash: (*h).to_string(),
+                change: AssetChange::Removed,
+            });
+            image_changed = true;
+        }
+        if text_changed || image_changed {
+            delta.changed_pages.push(*pn);
+        }
+    }
+
+    delta
+}
+
+/// Compile `doc` against a previous compilation of `prev_doc` (HLD §45).
+///
+/// - identical revisions → the previous result is returned untouched (skip);
+/// - every page changed → full `compile_document`;
+/// - otherwise → page splice: only changed pages are re-parsed, classified
+///   and OCR'd; unchanged pages keep their fragments, IR candidates and
+///   embedded chunks from the previous run. D5–D8 re-run over the merged IR.
+///
+/// Unchanged pages are replaced with empty placeholders in the spliced
+/// model so the AST's index-based page numbering stays identical to the
+/// full document.
+/// ponytail: heading context for a changed page comes only from that page
+/// (boundary detection clears heading paths at page boundaries) — a heading
+/// living on an unchanged page is lost for the splice. Asset-level splicing
+/// is the upgrade path. The spliced compile also inherits position-based
+/// fragment ids; when DocumentAst.document_id is wired to extraction the
+/// spliced AST must carry the same id.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_document_incremental(
+    doc: &DocumentModel,
+    prev_doc: &DocumentModel,
+    prev: &CompilationResult,
+    analyzer: &dyn SemanticAnalyzer,
+    resolver: &dyn EntityResolver,
+    reconciler: &dyn KnowledgeReconciler,
+    projector: &dyn RetrievalProjector,
+    embedder: &dyn EmbeddingProvider,
+    existing_kos: &[KnowledgeBaseEntry],
+    asset_dir: Option<&str>,
+) -> CompilationResult {
+    let t0 = time_now();
+    let delta = diff_document_models(prev_doc, doc);
+    let t_diff = time_now() - t0;
+
+    // Document unchanged → skip (the previous compilation is the answer).
+    if delta.is_empty() {
+        return prev.clone();
+    }
+
+    // Every page changed → nothing worth splicing.
+    if delta.changed_pages.len() == doc.pages.len() {
+        return compile_document(
+            doc,
+            analyzer,
+            resolver,
+            reconciler,
+            projector,
+            embedder,
+            existing_kos,
+            asset_dir,
+        );
+    }
+
+    let changed: HashSet<u32> = delta.changed_pages.iter().copied().collect();
+    let removed: HashSet<u32> = delta.removed_pages.iter().copied().collect();
+    let dropped: HashSet<u32> = changed.union(&removed).copied().collect();
+    let kept: HashSet<u32> = prev_doc
+        .pages
+        .iter()
+        .map(|p| p.page_number)
+        .filter(|p| !dropped.contains(p))
+        .collect();
+
+    // Spliced model: changed pages carry content, unchanged pages are empty
+    // placeholders so page numbering (index + 1) matches the full document.
+    let spliced_pages: Vec<PageModel> = doc
+        .pages
+        .iter()
+        .map(|p| {
+            if changed.contains(&p.page_number) {
+                p.clone()
+            } else {
+                PageModel {
+                    page_number: p.page_number,
+                    text: String::new(),
+                    char_count: 0,
+                    source: "native".into(),
+                    ocr_confidence: None,
+                    images: vec![],
+                }
+            }
+        })
+        .collect();
+    let spliced = DocumentModel {
+        page_count: doc.page_count,
+        total_chars: spliced_pages.iter().map(|p| p.char_count).sum(),
+        pages: spliced_pages,
+        ocr_stats: None,
+    };
+
+    let fresh = compile_document(
+        &spliced,
+        analyzer,
+        resolver,
+        reconciler,
+        projector,
+        embedder,
+        existing_kos,
+        asset_dir,
+    );
+
+    // Fragments: kept pages from prev, changed pages fresh, interleaved in
+    // document order; neighbor links re-stamped across the splice boundary.
+    let fresh_by_page: BTreeMap<u32, Vec<KnowledgeFragment>> = fresh
+        .fragments
+        .iter()
+        .cloned()
+        .fold(BTreeMap::new(), |mut m, f| {
+            if let Some(p) = f.context.page {
+                m.entry(p).or_default().push(f);
+            }
+            m
+        });
+    let prev_by_page: BTreeMap<u32, Vec<KnowledgeFragment>> = prev
+        .fragments
+        .iter()
+        .cloned()
+        .filter(|f| f.context.page.map_or(true, |p| kept.contains(&p)))
+        .fold(BTreeMap::new(), |mut m, f| {
+            if let Some(p) = f.context.page {
+                m.entry(p).or_default().push(f);
+            }
+            m
+        });
+    let mut fragments: Vec<KnowledgeFragment> = Vec::new();
+    for page in 1..=doc.pages.len() as u32 {
+        let src = if changed.contains(&page) {
+            &fresh_by_page
+        } else {
+            &prev_by_page
+        };
+        if let Some(fs) = src.get(&page) {
+            fragments.extend(fs.iter().cloned());
+        }
+    }
+    let ids: Vec<String> = fragments.iter().map(|f| f.fragment_id.clone()).collect();
+    for (i, frag) in fragments.iter_mut().enumerate() {
+        let mut neighbors = Vec::with_capacity(2);
+        if i > 0 {
+            neighbors.push(ids[i - 1].clone());
+        }
+        if i + 1 < ids.len() {
+            neighbors.push(ids[i + 1].clone());
+        }
+        frag.context.neighboring_fragments = neighbors;
+    }
+
+    // IR: kept pages from prev + fresh changed-page candidates, merged
+    // (entity/fact/triple dedup collapses re-derived candidates).
+    let mut kept_ir = prev.ir.clone();
+    kept_ir.retain_pages(&kept);
+    let merged_ir = merge_knowledge_ir(&[kept_ir, fresh.ir.clone()]);
+
+    // D5–D8 over the merged IR.
+    let t_onto = time_now();
+    let ontology = discover_ontology_from_ir(&merged_ir);
+    let dt_onto = time_now() - t_onto;
+    let t_res = time_now();
+    let resolution = resolve_entities(&merged_ir, resolver, existing_kos);
+    let dt_res = time_now() - t_res;
+    let t_rec = time_now();
+    let commit_plan =
+        reconcile_and_plan(&merged_ir, &ontology, &resolution, existing_kos, reconciler);
+    let dt_rec = time_now() - t_rec;
+
+    // D8: kept pages reuse their embedded chunks (their projection inputs
+    // are unchanged); changed pages take fresh chunks, ordered by page.
+    let t_chk = time_now();
+    let mut embedded_chunks: Vec<EmbeddedChunk> = prev
+        .embedded_chunks
+        .iter()
+        .cloned()
+        .filter(|c| {
+            kept.contains(&c.chunk.position.start_page) && kept.contains(&c.chunk.position.end_page)
+        })
+        .chain(fresh.embedded_chunks.iter().cloned())
+        .collect();
+    embedded_chunks.sort_by_key(|c| (c.chunk.position.start_page, c.chunk.position.chunk_index));
+    let dt_chk = time_now() - t_chk;
+
+    // Secrets: fail-closed — kept findings stay reported even if their page
+    // was not re-scanned; fresh findings append (deduped).
+    let mut secret_findings = prev.secret_findings.clone();
+    for s in fresh.secret_findings {
+        let dup = secret_findings
+            .iter()
+            .any(|e| e.kind == s.kind && e.location == s.location && e.redacted == s.redacted);
+        if !dup {
+            secret_findings.push(s);
+        }
+    }
+
+    let evidence_trail = EvidenceTrail::from_pipeline(
+        merged_ir.document_id.as_deref(),
+        &merged_ir,
+        &ontology,
+        &resolution,
+        &commit_plan,
+    );
+
+    let mut stats = PipelineStats::default();
+    stats.add("D9-diff", t_diff, delta.changed_pages.len());
+    stats.add("D4-ir", t_diff, merged_ir.total_candidates());
+    stats.add(
+        "D5-ontology",
+        dt_onto,
+        ontology.classes.len() + ontology.properties.len() + ontology.relationships.len(),
+    );
+    stats.add("D6-resolution", dt_res, resolution.stats.total_entities);
+    stats.add("D7-reconcile", dt_rec, commit_plan.stats.total_actions);
+    stats.add("D8-projection", dt_chk, embedded_chunks.len());
+    stats.finish(time_now() - t0);
+
+    CompilationResult {
+        ir: merged_ir,
+        ontology,
+        resolution,
+        commit_plan,
+        embedded_chunks,
+        fragments,
+        evidence_trail,
+        stats,
+        secret_findings,
+    }
+}
+
+/// HLD §45: semantic model changed → re-run the semantic projection only.
+///
+/// Fragments and IR stay as compiled; chunks are re-projected and embedded
+/// with the (new) provider. The caller decides when the model changed
+/// (e.g. by comparing `Evidence.model` stamps against its deployed model
+/// versions).
+pub fn reproject_document(
+    prev: &CompilationResult,
+    projector: &dyn RetrievalProjector,
+    embedder: &dyn EmbeddingProvider,
+) -> CompilationResult {
+    let t0 = time_now();
+    let embedded_chunks = project_and_embed(&prev.fragments, Some(&prev.ir), projector, embedder);
+    let dt = time_now() - t0;
+    let mut result = prev.clone();
+    result.embedded_chunks = embedded_chunks;
+    result
+        .stats
+        .add("D8-reproject", dt, result.embedded_chunks.len());
+    result.stats.finish(result.stats.total_us + dt);
+    result
+}
+
 /// Monotonic timer in microseconds (not wall-clock — never goes backward).
 /// ponytail: uses std Instant, sufficient for pipeline profiling.
 fn time_now() -> u64 {
@@ -798,5 +1168,276 @@ mod tests {
         let stats = PipelineStats::default();
         assert!(stats.phases.is_empty());
         assert_eq!(stats.total_us, 0);
+    }
+
+    // ── HLD §45: incremental compilation ──
+
+    fn page(num: u32, text: &str) -> PageModel {
+        PageModel {
+            page_number: num,
+            text: text.into(),
+            char_count: text.len(),
+            source: "native".into(),
+            ocr_confidence: None,
+            images: vec![],
+        }
+    }
+
+    fn image_on_page(page: u32, hash: &str) -> crate::DocumentImage {
+        crate::DocumentImage {
+            asset: crate::source::VisualAssetRef {
+                asset_id: format!("a-{}", hash),
+                mime_type: "image/png".into(),
+                content_hash: hash.into(),
+                source: crate::source::SourceSpan {
+                    document_id: None,
+                    page,
+                    start_offset: None,
+                    end_offset: None,
+                    bbox: None,
+                    node_id: None,
+                },
+            },
+            bbox: None,
+        }
+    }
+
+    fn three_page_doc() -> DocumentModel {
+        let pages = vec![
+            page(
+                1,
+                "1. Overview\n\nAlpha Systems publishes quarterly reports.",
+            ),
+            page(2, "1. Financials\n\nRevenue figures from Beta Group."),
+            page(3, "1. Outlook\n\nOld Page Three Corp has plans."),
+        ];
+        DocumentModel {
+            page_count: 3,
+            total_chars: pages.iter().map(|p| p.char_count).sum(),
+            pages,
+            ocr_stats: None,
+        }
+    }
+
+    fn compile_incremental_mock(
+        doc: &DocumentModel,
+        prev_doc: &DocumentModel,
+        prev: &CompilationResult,
+    ) -> CompilationResult {
+        compile_document_incremental(
+            doc,
+            prev_doc,
+            prev,
+            &crate::MockSemanticAnalyzer::new(),
+            &MockEntityResolver::new(),
+            &MockKnowledgeReconciler::new(),
+            &HeadingProjector::new(),
+            &MockEmbeddingProvider::new(),
+            &[],
+            None,
+        )
+    }
+
+    #[test]
+    fn diff_document_models_detects_page_and_image_changes() {
+        let prev = three_page_doc();
+        let mut next = prev.clone();
+
+        assert!(
+            diff_document_models(&prev, &next).is_empty(),
+            "identical revisions produce an empty delta"
+        );
+
+        next.pages[1]
+            .text
+            .push_str("\nExtra paragraph on page two.");
+        let d = diff_document_models(&prev, &next);
+        assert_eq!(d.changed_pages, vec![2]);
+        assert!(d.changed_images.is_empty());
+
+        // Image appended on page 1 → Added, page 1 changed.
+        let mut with_image = next.clone();
+        with_image.pages[0]
+            .images
+            .push(image_on_page(1, "hash-aaa"));
+        let d = diff_document_models(&prev, &with_image);
+        assert!(d.changed_pages.contains(&1));
+        assert!(d
+            .changed_images
+            .iter()
+            .any(|i| i.content_hash == "hash-aaa" && i.change == AssetChange::Added));
+
+        // Same-slot hash swap → Changed; dropping one → Removed.
+        let mut swapped = with_image.clone();
+        swapped.pages[0].images[0].asset.content_hash = "hash-bbb".into();
+        let d = diff_document_models(&with_image, &swapped);
+        assert!(d
+            .changed_images
+            .iter()
+            .any(|i| i.content_hash == "hash-bbb" && i.change == AssetChange::Changed));
+        assert!(d.changed_pages.contains(&1));
+        let d = diff_document_models(&swapped, &next);
+        assert!(d
+            .changed_images
+            .iter()
+            .any(|i| i.content_hash == "hash-bbb" && i.change == AssetChange::Removed));
+
+        // Page removed from next.
+        let mut shorter = next.clone();
+        shorter.pages.pop();
+        shorter.page_count = 2;
+        shorter.total_chars = shorter.pages.iter().map(|p| p.char_count).sum();
+        let d = diff_document_models(&next, &shorter);
+        assert_eq!(d.removed_pages, vec![3]);
+        assert!(d.changed_pages.is_empty());
+    }
+
+    #[test]
+    fn incremental_unchanged_document_returns_previous_result() {
+        let doc = three_page_doc();
+        let prev = compile_document_mock(&doc, &[]);
+        let again = compile_incremental_mock(&doc, &doc, &prev);
+
+        let ids: Vec<&str> = again
+            .fragments
+            .iter()
+            .map(|f| f.fragment_id.as_str())
+            .collect();
+        let prev_ids: Vec<&str> = prev
+            .fragments
+            .iter()
+            .map(|f| f.fragment_id.as_str())
+            .collect();
+        assert_eq!(ids, prev_ids);
+        assert_eq!(again.ir.entities.len(), prev.ir.entities.len());
+        assert_eq!(again.embedded_chunks.len(), prev.embedded_chunks.len());
+    }
+
+    #[test]
+    fn incremental_single_page_change_splices_fragments_and_ir() {
+        let prev_doc = three_page_doc();
+        let prev = compile_document_mock(&prev_doc, &[]);
+
+        let mut next_doc = prev_doc.clone();
+        next_doc.pages[2] = page(
+            3,
+            "1. Gamma Outlook\n\nGamma Corp expects growth in Q3 2026.",
+        );
+        next_doc.total_chars = next_doc.pages.iter().map(|p| p.char_count).sum();
+
+        let result = compile_incremental_mock(&next_doc, &prev_doc, &prev);
+
+        // Kept pages (1, 2) carry their previous fragments unchanged.
+        let kept_ids: Vec<&str> = result
+            .fragments
+            .iter()
+            .filter(|f| f.context.page != Some(3))
+            .map(|f| f.fragment_id.as_str())
+            .collect();
+        let prev_kept: Vec<&str> = prev
+            .fragments
+            .iter()
+            .filter(|f| f.context.page != Some(3))
+            .map(|f| f.fragment_id.as_str())
+            .collect();
+        assert_eq!(kept_ids, prev_kept);
+
+        // Fresh entity present, stale changed-page entity gone, kept intact.
+        let names: Vec<&str> = result.ir.entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"Gamma Corp"), "fresh entity: {:?}", names);
+        assert!(names.contains(&"Alpha Systems"));
+        assert!(names.contains(&"Beta Group"));
+        assert!(!names.contains(&"Old Page Three Corp"));
+
+        // Chunks for kept pages reused, changed page re-projected.
+        assert!(result
+            .embedded_chunks
+            .iter()
+            .any(|c| c.chunk.position.start_page == 3));
+
+        // Neighbor links span the splice boundary and stay internally valid.
+        let ids: std::collections::HashSet<&str> = result
+            .fragments
+            .iter()
+            .map(|f| f.fragment_id.as_str())
+            .collect();
+        for f in &result.fragments {
+            for n in &f.context.neighboring_fragments {
+                assert!(ids.contains(n.as_str()), "dangling neighbor {}", n);
+            }
+        }
+    }
+
+    #[test]
+    fn incremental_removed_page_drops_its_candidates() {
+        let prev_doc = three_page_doc();
+        let prev = compile_document_mock(&prev_doc, &[]);
+
+        let mut next_doc = prev_doc.clone();
+        next_doc.pages.pop();
+        next_doc.page_count = 2;
+        next_doc.total_chars = next_doc.pages.iter().map(|p| p.char_count).sum();
+
+        let result = compile_incremental_mock(&next_doc, &prev_doc, &prev);
+
+        let names: Vec<&str> = result.ir.entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&"Old Page Three Corp"));
+        assert!(names.contains(&"Alpha Systems"));
+        assert!(result.fragments.iter().all(|f| f.context.page != Some(3)));
+        assert!(result
+            .embedded_chunks
+            .iter()
+            .all(|c| c.chunk.position.start_page != 3));
+    }
+
+    #[test]
+    fn incremental_all_pages_changed_falls_back_to_full_compile() {
+        let prev_doc = three_page_doc();
+        let prev = compile_document_mock(&prev_doc, &[]);
+
+        let next_doc = DocumentModel {
+            page_count: 3,
+            pages: vec![
+                page(1, "1. New One\n\nGamma Systems here."),
+                page(2, "1. New Two\n\nDelta Group here."),
+                page(3, "1. New Three\n\nEpsilon Corp here."),
+            ],
+            total_chars: 0,
+            ocr_stats: None,
+        };
+        let next_doc = DocumentModel {
+            total_chars: next_doc.pages.iter().map(|p| p.char_count).sum(),
+            ..next_doc
+        };
+
+        let result = compile_incremental_mock(&next_doc, &prev_doc, &prev);
+        let full = compile_document_mock(&next_doc, &[]);
+
+        // Full path: all seven D3–D8 phases, same entity set as a fresh run.
+        assert_eq!(result.stats.phases.len(), 7);
+        let names: Vec<&str> = result.ir.entities.iter().map(|e| e.name.as_str()).collect();
+        let full_names: Vec<&str> = full.ir.entities.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, full_names);
+        assert!(!names.contains(&"Alpha Systems"));
+    }
+
+    #[test]
+    fn reproject_document_reuses_ir_with_new_embedder() {
+        let doc = test_doc();
+        let prev = compile_document_mock(&doc, &[]);
+        let embedder = MockEmbeddingProvider::with_dimensions(32);
+
+        let result = reproject_document(&prev, &HeadingProjector::new(), &embedder);
+
+        assert_eq!(result.ir.entities.len(), prev.ir.entities.len());
+        assert_eq!(result.fragments.len(), prev.fragments.len());
+        for c in &result.embedded_chunks {
+            assert_eq!(c.embedding.len(), 32);
+        }
+        assert!(result
+            .stats
+            .phases
+            .iter()
+            .any(|p| p.phase == "D8-reproject"));
     }
 }
