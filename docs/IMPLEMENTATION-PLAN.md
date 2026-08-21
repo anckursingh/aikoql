@@ -3251,6 +3251,7 @@ The HLD's core architectural position (doc §59): the **DocumentAst is the canon
 | Retrieval as projection (`DocumentChunker` → `RetrievalProjector`) (§41/§60) | `chunking.rs` chunks the AST itself | **Present but misplaced → PR-E** |
 | Visual classification (chart/diagram/image analyzers) (§17–20) | Block-level Figure marker heuristic only (`detect_figures`) | **Delivered → PR-F** (mock keyword classifier; VLM seam open) |
 | Transformer/embedding boundary detectors (§16) | None | **Delivered** — PR-G pinned the rule baseline (0.867); PR-H `EmbeddingBoundaryDetector` (mock parity); PR-I `HybridBoundaryDetector` (all five §16 layers); PR-J `TransformerBoundaryDetector` + feature-gated `TransformScorer` (all four §16 detectors measured in the §60 matrix); PR-K visual index (R@5=1.000) + PR-L hybrid RRF ranker (recall@5=0.933) — every §60/§53 cell measured; a real model provider remains §60-gated on measured improvement |
+| Modality-aware embeddings — text/image/fused (`MultimodalEmbeddingProvider`) (§23) | Text-only `EmbeddingProvider` | **Delivered → PR-M** (trait + `MultimodalEmbeddingInput` + deterministic `MockMultimodalEmbeddingProvider`; `build_visual_index_with_mm` fuses asset bytes into visual records with a text-channel fallback; base build stays text-only per §23; a real provider remains §60-gated on measured improvement) |
 | No mandatory heavyweight AI (§56) | Clean — pdf-extract/tesseract only | **Conforms** |
 
 Decisions taken this round (with rationale):
@@ -3349,7 +3350,7 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 14 | No mandatory heavyweight AI | ✅ Still lopdf/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 403 lib (+404 with `--features transform`) + 10 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 4×3 §60 matrix + 2 visual queries × 4 corpora; visual R@1/3/5 = 1.000, hybrid recall@5 = 0.933) + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 411 lib (+412 with `--features transform`) + 10 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 4×3 §60 matrix + 2 visual queries × 4 corpora; visual R@1/3/5 = 1.000, hybrid recall@5 = 0.933) + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
 | 19 | CI measures extraction + semantic regression | ✅ DoD 19 — 10 golden PDF fixtures + `multimodal_golden` gate (byte-stable snapshots + entity-recall assertions + per-stage metrics) runs in both CI OSes; dedicated `--nocapture` step publishes §53 metrics to CI logs |
 
@@ -3553,7 +3554,22 @@ HLD §53 "hybrid retrieval recall" — the last N/A cell of the §60 instrument 
 
 **Measured (2026-08-21)** — hybrid cells, all four corpora identical: recall@1=0.867 recall@3=0.867 **recall@5=0.933** MRR=0.890 NDCG@5=0.895. The fusion dominates both single rankers: it keeps the lexical ranker's top-1 precision (0.867 vs embedding's 0.800) and gains the embedding ranker's recall@5 (0.933 vs lexical's 0.867) — the lexical-miss paraphrase queries are recovered into the top-5 while nothing regresses (parity gate green; +0.023 MRR over baseline). §53 cell: **hybrid retrieval recall (R@5) = 0.933** on the rule baseline, floors 0.75 green.
 
-### Next implementation — PR-M: multimodal embeddings (§23)
+### Implemented now — PR-M: multimodal embeddings (§23, 2026-08-21, commit on `feature/mvp-launch`)
 
-The §60 matrix is now fully measured (4 boundaries × 3 rankers + visual + hybrid recall cells). Next per the HLD: the `MultimodalEmbeddingProvider` seam (§23 — `embed_text`/`embed_image`/`embed_multimodal`, optional in the base build), which is the foundation for real (non-mock) visual embeddings behind the `visual_index` access path and the §60 real-model-provider decision. Candidates also queued: OCR/VLM provider wiring behind the existing seams (PR-F), `DiagramPayload.asset` for a visual diagram ranker (visual_index.rs ponytail note), PDF chart-drawing asset extraction (the chart visual-query ceiling noted in PR-K).
+HLD §23 seam, exactly as specced — the last architect-assessment gap row is now delivered:
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/multimodal_embedding.rs` | **New.** `MultimodalEmbeddingInput { Text, Image, TextImage }` and `MultimodalEmbeddingProvider` (`name`/`dimensions`/`embed_text`/`embed_image`/`embed_multimodal`) per §23. The default `embed_multimodal` dispatches per channel (TextImage text-dominant) so a text+image provider writes two methods and overrides only when its model truly fuses. `MockMultimodalEmbeddingProvider`: text channel = char-ngram (identical to `MockEmbeddingProvider`), image channel = hex-ngram over the first 4 KiB of bytes (content-derived, not semantic — ponytail ceiling noted), fused input = channel sum L2-normalized. No new dependencies. |
+| `crates/ingestion/src/visual_index.rs` | `build_visual_index_with_mm(fragments, mm, load_asset)` — when the loader returns asset bytes the record embeds a fused `TextImage` input; otherwise the text channel (records identical to the base builder). `build`/`collect` now take an `embed_visual` closure, so the text-only path is unchanged — the architecture works without a multimodal model, per §23. |
+| `crates/ingestion/src/embedding.rs` | `char_ngram_embed` → `pub(crate)` (shared text channel). |
+| `crates/ingestion/src/lib.rs` | Module + re-exports (`MultimodalEmbeddingProvider`, `MultimodalEmbeddingInput`, `MockMultimodalEmbeddingProvider`, `build_visual_index_with_mm`). |
+
+**Deliberate scope**: no HTTP adapter and no real provider — §23 describes no remote service (unlike the vlm/transform precedents), and the base build must not require a multimodal model; a real provider lands behind the §60 real-model decision. The §60 instrument is unchanged (a mock image channel is content-derived, not semantic — it has no retrieval semantics to measure honestly).
+
+**Tests — PR-M (all green 2026-08-21)**: 411 lib tests (+8: 6 multimodal_embedding + 2 visual_index mm-builder) + 412 with `--features transform`; 10/10 acceptance; golden suite 1/1; retrieval-quality 1/1 (12-cell matrix + visual lines unchanged); `cargo fmt` + `cargo clippy -p aikoql-ingestion --all-targets [--features transform] -- -D warnings` clean on both feature sets; `cargo test --workspace` green.
+
+### Next implementation — PR-N: PDF chart-drawing asset extraction (§24 chart ceiling)
+
+The last visual-retrieval ceiling from PR-K: PDF chart *drawings* (vector content streams) carry no raster asset, so asset-backed-chart records never exist for PDFs and the chart query was dropped from the §60 visual instrument. PR-N: extract each detected chart drawing's path operators (lopdf content-stream ops within the chart bbox) into a minimal SVG asset — content-addressed into the asset store (`image/svg+xml`), so `ChartPayload.asset` gets populated, chart records enter the visual index, and the chart query returns to `VISUAL_QUERIES`. Candidates after that: OCR/VLM provider wiring behind the PR-F seams, `DiagramPayload.asset` for a visual diagram ranker (reuses the same extraction machinery), then the §60 real-model-provider decision (mm seam is now the foundation).
 

@@ -145,6 +145,10 @@ pub use ontology::{
 
 mod embedding;
 pub use embedding::{cosine_similarity, EmbeddingProvider, MockEmbeddingProvider};
+mod multimodal_embedding;
+pub use multimodal_embedding::{
+    MockMultimodalEmbeddingProvider, MultimodalEmbeddingInput, MultimodalEmbeddingProvider,
+};
 
 mod resolution;
 pub use resolution::{
@@ -185,7 +189,7 @@ pub use visual::{
 // PR-K (HLD §24): visual retrieval index — an access path, not the source
 // of truth.
 mod visual_index;
-pub use visual_index::{build_visual_index, VisualIndexRecord};
+pub use visual_index::{build_visual_index, build_visual_index_with_mm, VisualIndexRecord};
 
 mod pipeline;
 pub use pipeline::{

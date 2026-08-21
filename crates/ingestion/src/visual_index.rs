@@ -8,6 +8,7 @@
 use crate::ast::BoundingBox;
 use crate::embedding::EmbeddingProvider;
 use crate::fragment::{FragmentContent, KnowledgeFragment};
+use crate::multimodal_embedding::{MultimodalEmbeddingInput, MultimodalEmbeddingProvider};
 
 /// HLD §24: one retrievable visual object. `bbox` is optional here where
 /// the HLD sketch assumes extractors always produce geometry — fragments
@@ -34,16 +35,52 @@ pub fn build_visual_index(
     fragments: &[KnowledgeFragment],
     provider: &dyn EmbeddingProvider,
 ) -> Vec<VisualIndexRecord> {
+    build(fragments, &|asset, caption| {
+        // Caption/title when present; the asset id otherwise — an embedding
+        // of the empty string would retrieve nothing.
+        let text = caption.unwrap_or(&asset.asset_id);
+        provider.embed(text)
+    })
+}
+
+/// Build the visual index with a multimodal provider (HLD §23 + §24):
+/// when `load_asset` returns the visual object's bytes, the record embeds a
+/// fused `TextImage` input; otherwise the text channel. The base build never
+/// needs a multimodal model — `build_visual_index` above stays text-only.
+pub fn build_visual_index_with_mm(
+    fragments: &[KnowledgeFragment],
+    mm: &dyn MultimodalEmbeddingProvider,
+    load_asset: &mut dyn FnMut(&crate::source::VisualAssetRef) -> Option<Vec<u8>>,
+) -> Vec<VisualIndexRecord> {
+    // The embed closure is `Fn`, so the `FnMut` loader needs interior
+    // mutability — one RefCell instead of threading mutability through build.
+    let loader = std::cell::RefCell::new(load_asset);
+    build(fragments, &|asset, caption| {
+        let text = caption.unwrap_or(&asset.asset_id);
+        match loader.borrow_mut()(asset) {
+            Some(bytes) => mm.embed_multimodal(&MultimodalEmbeddingInput::TextImage {
+                text,
+                image: &bytes,
+            }),
+            None => mm.embed_text(text),
+        }
+    })
+}
+
+fn build(
+    fragments: &[KnowledgeFragment],
+    embed_visual: &dyn Fn(&crate::source::VisualAssetRef, Option<&str>) -> Vec<f32>,
+) -> Vec<VisualIndexRecord> {
     let mut out = Vec::new();
     for frag in fragments {
-        collect(frag, provider, &mut out);
+        collect(frag, embed_visual, &mut out);
     }
     out
 }
 
 fn collect(
     frag: &KnowledgeFragment,
-    provider: &dyn EmbeddingProvider,
+    embed_visual: &dyn Fn(&crate::source::VisualAssetRef, Option<&str>) -> Vec<f32>,
     out: &mut Vec<VisualIndexRecord>,
 ) {
     let (asset, caption) = match &frag.content {
@@ -59,22 +96,21 @@ fn collect(
         FragmentContent::Chart(chart) => (chart.asset.clone(), chart.title.clone()),
         FragmentContent::Mixed(children) => {
             for child in children {
-                collect(child, provider, out);
+                collect(child, embed_visual, out);
             }
             return;
         }
         _ => (None, None),
     };
     let Some(asset) = asset else { return };
-    // Caption/title when present; the asset id otherwise — an embedding of
-    // the empty string would retrieve nothing.
-    let embed_text = caption.clone().unwrap_or_else(|| asset.asset_id.clone());
+    // Embed before moving asset_id into the record (partial-move order).
+    let embedding = embed_visual(&asset, caption.as_deref());
     out.push(VisualIndexRecord {
         asset_id: asset.asset_id,
         document_id: frag.context.document_id.clone().unwrap_or_default(),
         page: frag.context.page.unwrap_or(0),
         bbox: frag.source.as_ref().and_then(|s| s.bbox.clone()),
-        embedding: provider.embed(&embed_text),
+        embedding,
         semantic_caption: caption,
         fragment_ids: vec![frag.fragment_id.clone()],
     });
@@ -275,5 +311,48 @@ mod tests {
         let first = build_visual_index(&fs, &provider);
         let second = build_visual_index(&fs, &provider);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn mm_builder_fuses_image_bytes_when_loadable() {
+        // HLD §23 consumption proof: when asset bytes load, the record
+        // embeds the fused TextImage input — the image channel contributes
+        // (mock fusion ≠ text-only), unlike the base text-only builder.
+        let fs = fragments(&ast(vec![image_node(), text_node("Some body text.")]));
+        let mm = crate::multimodal_embedding::MockMultimodalEmbeddingProvider::new();
+        let bytes = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let mut loader = |a: &VisualAssetRef| {
+            assert_eq!(a.asset_id, "asset-1");
+            Some(bytes.clone())
+        };
+        let index = build_visual_index_with_mm(&fs, &mm, &mut loader);
+        assert_eq!(index.len(), 1);
+        let expected = mm.embed_multimodal(&MultimodalEmbeddingInput::TextImage {
+            text: "Figure 1: payment flow",
+            image: &bytes,
+        });
+        assert_eq!(index[0].embedding, expected);
+        assert_ne!(
+            index[0].embedding,
+            mm.embed_text("Figure 1: payment flow"),
+            "image channel must contribute when bytes load"
+        );
+        assert_eq!(
+            index[0].semantic_caption.as_deref(),
+            Some("Figure 1: payment flow")
+        );
+    }
+
+    #[test]
+    fn mm_builder_falls_back_to_text_without_bytes() {
+        // HLD §23: the architecture works without a multimodal model —
+        // no asset bytes → text channel → records identical to the base
+        // text-only builder.
+        let fs = fragments(&ast(vec![image_node(), text_node("Some body text.")]));
+        let mm = crate::multimodal_embedding::MockMultimodalEmbeddingProvider::new();
+        let mut loader = |_a: &VisualAssetRef| None;
+        let mm_index = build_visual_index_with_mm(&fs, &mm, &mut loader);
+        let text_index = build_visual_index(&fs, &MockEmbeddingProvider::new());
+        assert_eq!(mm_index, text_index);
     }
 }
