@@ -102,8 +102,9 @@ pub const MODEL_IMAGE: &str = "mock-image-v1";
 pub const MODEL_FORMULA: &str = "mock-formula-v1";
 
 /// Chart analyzer: structured interpretation of a chart node (HLD §10).
-/// Mock: chart type and title from caption keywords; series extraction needs
-/// a specialist chart-data parser (future seam).
+/// Mock: chart type and title from caption keywords; axes/series come from
+/// the specialist chart-data pass (`fill_chart_data`) over an adjacent
+/// table (HLD §33 staged processing — no VLM per image).
 pub trait ChartAnalyzer: Send + Sync {
     fn name(&self) -> &str;
     fn analyze(&self, node: &AstNode) -> Option<ChartPayload>;
@@ -147,6 +148,102 @@ fn chart_type_from_text(text: &str) -> ChartType {
     } else {
         ChartType::Unknown
     }
+}
+
+/// HLD §33 staged processing: chart → specialist parser (cheapest stage —
+/// no VLM per image). Fills x/y axes, series, and `extracted_data` from a
+/// sibling table node: first column = x categories, remaining columns =
+/// series (header = series name, "(unit)" suffix = axis unit).
+fn fill_chart_data(chart: &mut ChartPayload, table_node: &AstNode) {
+    if chart.extracted_data.is_some() {
+        return;
+    }
+    let Some(table) = crate::ast::table_payload_from_node(table_node) else {
+        return;
+    };
+    if table.headers.len() < 2 || table.rows.is_empty() {
+        return;
+    }
+    let header_text = |i: usize| {
+        table
+            .headers
+            .get(i)
+            .map(|h| h.text.trim().to_string())
+            .unwrap_or_default()
+    };
+    let (x_label, x_unit) = split_unit(header_text(0));
+    chart.x_axis = Some(crate::ast::Axis {
+        label: Some(x_label),
+        unit: x_unit,
+        min: None,
+        max: None,
+    });
+    let (y_label, y_unit) = split_unit(header_text(1));
+    chart.y_axis = Some(crate::ast::Axis {
+        label: Some(y_label),
+        unit: y_unit,
+        min: None,
+        max: None,
+    });
+
+    let mut series: Vec<crate::ast::ChartSeries> = Vec::new();
+    for col in 1..table.headers.len() {
+        let (name, _) = split_unit(header_text(col));
+        let name = if name.is_empty() {
+            format!("col{}", col)
+        } else {
+            name
+        };
+        let mut values = Vec::new();
+        for row in &table.rows {
+            let x = table
+                .cells
+                .iter()
+                .find(|c| c.row_id == row.id && c.column_id == table.headers[0].id)
+                .map(|c| c.text.trim().to_string())
+                .unwrap_or_default();
+            let Some(cell) = table
+                .cells
+                .iter()
+                .find(|c| c.row_id == row.id && c.column_id == table.headers[col].id)
+            else {
+                continue;
+            };
+            let y = match &cell.value {
+                Some(crate::ast::ScalarValue::Float(f)) => *f,
+                Some(crate::ast::ScalarValue::Integer(i)) => *i as f64,
+                _ => cell.text.trim().parse::<f64>().unwrap_or(f64::NAN),
+            };
+            if x.is_empty() || y.is_nan() {
+                continue;
+            }
+            values.push(crate::ast::ChartPoint {
+                x,
+                y,
+                confidence: cell.confidence,
+                bbox: cell.bbox.clone(),
+            });
+        }
+        if !values.is_empty() {
+            series.push(crate::ast::ChartSeries { name, values });
+        }
+    }
+    chart.series = series;
+    chart.extracted_data = Some(table);
+}
+
+/// "Revenue (USD)" → ("Revenue", Some("USD")).
+fn split_unit(header: String) -> (String, Option<String>) {
+    if let Some(rest) = header.strip_suffix(')') {
+        if let Some(pos) = rest.rfind('(') {
+            let unit = rest[pos + 1..].trim().to_string();
+            let label = rest[..pos].trim().to_string();
+            if !unit.is_empty() && !label.is_empty() {
+                return (label, Some(unit));
+            }
+        }
+    }
+    (header, None)
 }
 
 /// Diagram analyzer: nodes/edges from the diagram spec (HLD §11).
@@ -357,6 +454,33 @@ fn classify_visuals_in_children(nodes: &mut [AstNode]) {
             classify_visuals_in_children(&mut nodes[i].children);
         }
         analyze_node(&mut nodes[i], next.as_deref());
+    }
+
+    // HLD §33 staged processing: charts get structured data from an
+    // adjacent table (cheap specialist parse — no VLM per image).
+    for i in 0..nodes.len() {
+        if nodes[i].block_type != BlockType::Chart {
+            continue;
+        }
+        let Some(AstPayload::Chart(mut chart)) = nodes[i].payload.take() else {
+            continue;
+        };
+        if chart.extracted_data.is_none() {
+            // Data tables sit right after the caption (i+2) or before the
+            // figure (i-1) — order varies in the wild.
+            for j in [i.checked_add(1), i.checked_add(2), i.checked_sub(1)]
+                .into_iter()
+                .flatten()
+            {
+                if let Some(sibling) = nodes.get(j) {
+                    fill_chart_data(&mut chart, sibling);
+                    if chart.extracted_data.is_some() {
+                        break;
+                    }
+                }
+            }
+        }
+        nodes[i].payload = Some(AstPayload::Chart(chart));
     }
 }
 
@@ -633,6 +757,114 @@ mod tests {
         }
         assert!(matches!(nodes[2].payload, Some(AstPayload::Diagram(_))));
         assert!(matches!(nodes[3].payload, Some(AstPayload::Formula(_))));
+    }
+
+    fn table_node(rows: &[&[&str]]) -> AstNode {
+        AstNode {
+            block_type: BlockType::Table,
+            text: None,
+            children: rows
+                .iter()
+                .map(|row| AstNode {
+                    block_type: BlockType::TableRow,
+                    text: None,
+                    children: row
+                        .iter()
+                        .map(|cell| AstNode {
+                            block_type: BlockType::TableCell {
+                                row_span: 1,
+                                col_span: 1,
+                            },
+                            text: Some(cell.to_string()),
+                            children: vec![],
+                            bbox: None,
+                            confidence: None,
+                            ..Default::default()
+                        })
+                        .collect(),
+                    bbox: None,
+                    confidence: None,
+                    ..Default::default()
+                })
+                .collect(),
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn chart_specialist_fills_axes_series_from_adjacent_table() {
+        let mut ast = ast_with(vec![
+            visual_node(BlockType::Image, Some("fees"), vec![]),
+            visual_node(BlockType::Paragraph, Some("Chart 1: Fee structure"), vec![]),
+            table_node(&[
+                &["Quarter", "Revenue (USD)", "Cost (USD)"],
+                &["Q1", "100", "60"],
+                &["Q2", "120", "70"],
+            ]),
+        ]);
+        classify_visuals(&mut ast);
+
+        let nodes = &ast.pages[0].children;
+        assert_eq!(nodes[0].block_type, BlockType::Chart);
+        match &nodes[0].payload {
+            Some(AstPayload::Chart(c)) => {
+                assert_eq!(
+                    c.x_axis.as_ref().and_then(|a| a.label.clone()).as_deref(),
+                    Some("Quarter")
+                );
+                assert_eq!(
+                    c.y_axis.as_ref().and_then(|a| a.label.clone()).as_deref(),
+                    Some("Revenue")
+                );
+                assert_eq!(
+                    c.y_axis.as_ref().and_then(|a| a.unit.clone()).as_deref(),
+                    Some("USD")
+                );
+                assert_eq!(c.series.len(), 2);
+                assert_eq!(c.series[0].name, "Revenue");
+                assert_eq!(c.series[0].values.len(), 2);
+                assert_eq!(c.series[0].values[0].x, "Q1");
+                assert_eq!(c.series[0].values[0].y, 100.0);
+                assert_eq!(c.series[1].name, "Cost");
+                assert_eq!(c.series[1].values[1].x, "Q2");
+                assert_eq!(c.series[1].values[1].y, 70.0);
+                let table = c.extracted_data.as_ref().expect("extracted table");
+                assert_eq!(table.headers.len(), 3);
+                assert_eq!(table.rows.len(), 2);
+            }
+            other => panic!("expected chart payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn chart_specialist_leaves_chart_without_adjacent_table_unfilled() {
+        let mut ast = ast_with(vec![
+            visual_node(BlockType::Image, Some("fees"), vec![]),
+            visual_node(BlockType::Paragraph, Some("Chart 1: Fee structure"), vec![]),
+            visual_node(BlockType::Paragraph, Some("no data table here"), vec![]),
+        ]);
+        classify_visuals(&mut ast);
+        match &ast.pages[0].children[0].payload {
+            Some(AstPayload::Chart(c)) => {
+                assert!(c.extracted_data.is_none());
+                assert!(c.series.is_empty());
+                assert!(c.x_axis.is_none());
+            }
+            other => panic!("expected chart payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn split_unit_parses_label_and_unit() {
+        assert_eq!(
+            split_unit("Revenue (USD)".into()),
+            ("Revenue".into(), Some("USD".into()))
+        );
+        assert_eq!(split_unit("Revenue".into()), ("Revenue".into(), None));
+        assert_eq!(split_unit("bad (paren".into()), ("bad (paren".into(), None));
+        assert_eq!(split_unit("()".into()), ("()".into(), None));
     }
 
     #[test]
