@@ -3250,7 +3250,7 @@ The HLD's core architectural position (doc §59): the **DocumentAst is the canon
 | Semantic segmentation between AST and IR (`KnowledgeFragment` + boundary detection) (§22/§37) | D4 goes straight AST → IR; chunking operates directly on the AST | **Missing → PR-C** |
 | Retrieval as projection (`DocumentChunker` → `RetrievalProjector`) (§41/§60) | `chunking.rs` chunks the AST itself | **Present but misplaced → PR-E** |
 | Visual classification (chart/diagram/image analyzers) (§17–20) | Block-level Figure marker heuristic only (`detect_figures`) | **Delivered → PR-F** (mock keyword classifier; VLM seam open) |
-| Transformer/embedding boundary detectors (§16) | None | **Deferred → PR-G**, gated on rule-baseline benchmarks (§60) |
+| Transformer/embedding boundary detectors (§16) | None | **Baseline pinned → PR-H** — PR-G measured the rule pipeline (Recall@K = MRR = NDCG@5 = 0.867); embedding/transformer variants are measured against it |
 | No mandatory heavyweight AI (§56) | Clean — pdf-extract/tesseract only | **Conforms** |
 
 Decisions taken this round (with rationale):
@@ -3349,7 +3349,7 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 14 | No mandatory heavyweight AI | ✅ Still lopdf/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 377 lib + 10 acceptance + 10-fixture golden suite + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 377 lib + 10 acceptance + 10-fixture golden suite + PR-G retrieval-quality gate (15 queries, baseline 0.867) + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
 | 19 | CI measures extraction + semantic regression | ✅ DoD 19 — 10 golden PDF fixtures + `multimodal_golden` gate (byte-stable snapshots + entity-recall assertions + per-stage metrics) runs in both CI OSes; dedicated `--nocapture` step publishes §53 metrics to CI logs |
 
@@ -3457,6 +3457,18 @@ HLD §52/§53: ten hand-built PDF fixtures run through the real extraction + com
 
 **Tests — DoD 19 (all green 2026-08-21)**: 377 lib tests (+2: diagram caption arrows, figure re-type payload); golden suite 1/1 across all 10 fixtures (write mode + compare mode, standalone and workspace builds); 10/10 multimodal acceptance; e2e green; `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets` clean; `cargo test --workspace` green (60 suites, 0 failures). DoD checklist complete: **all 19 rows ✅**.
 
-### Next implementation — PR-G
+### Implemented now — PR-G: rule-baseline retrieval-quality benchmarks (2026-08-21)
 
-PR-G — rule-baseline retrieval-quality benchmarks (HLD §60): the Recall@K/MRR/NDCG matrix over the golden fixture queries, pinning the rule-based pipeline's retrieval numbers as the baseline for future transformer/VLM analyzer comparison.
+HLD §60/§53: the rule pipeline's retrieval numbers are now pinned as the baseline every future analyzer variant (embedding / transformer / hybrid boundary) is compared against. All nine chunk-projecting golden fixtures compile through the real mock pipeline into ONE corpus; 15 hand-authored queries carry (fixture, chunk) qrels; a deterministic lexical ranker — the rule-baseline instrument — ranks the corpus per query, and the §53 matrix is macro-averaged: **Recall@1 = Recall@3 = Recall@5 = 0.867, MRR = 0.867, NDCG@5 = NDCG@10 = 0.867** (13/15 queries at 1.0; the two deliberate paraphrase probes score zero — that is the measured headroom a semantic variant must close). Floors assert Recall@5/MRR/NDCG@5 ≥ 0.75: an embedding/transformer variant passes trivially, a regression (chunk text loss, projection breakage) fails CI.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/tests/retrieval_quality.rs` | **New.** `rule_baseline_retrieval_quality`: compiles the fixtures once into a global corpus (`compile_document_mock` → `EmbeddedChunk`s; distractor chunks from other fixtures compete), ranks per query with the bare token-overlap ranker (zero-overlap chunks are not retrieved — an honest lexical ceiling; ties break by score desc, fixture asc, chunk-index asc), computes Recall@1/3/5, MRR, NDCG@5/10 (binary gains, macro-averaged) — `[RETRIEVAL-Q …]` per query + `[RETRIEVAL-BASELINE]` summary printed every run. 15 queries, 2 paraphrase probes; hybrid + visual retrieval recall printed N/A (they need an embedding/VLM boundary — later PRs). `scanned.pdf` excluded (mock compile runs without OCR → zero chunks, unjudgeable). |
+| `.github/workflows/ci.yml` | Windows check job gains `cargo test -p aikoql-ingestion --test retrieval_quality -- --nocapture` (baseline visible in CI logs); the test also runs inside `cargo test --workspace` on both OSes. |
+| `crates/ingestion/tests/multimodal_golden.rs` | Header pointer updated: the Recall@K/MRR/NDCG matrix lives in `retrieval_quality.rs` (PR-G), the golden gate covers pipeline regression. |
+
+**Tests — PR-G (all green 2026-08-21)**: 377 lib tests; 10/10 acceptance; golden suite 1/1; retrieval-quality 1/1 (baseline 0.867 pinned above); `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets` clean; `cargo test --workspace` green (61 suites, 0 failures).
+
+### Next implementation — PR-H
+
+PR-H — embedding boundary variant (HLD §16/§60): `EmbeddingBoundaryDetector` (semantic segmentation through the `EmbeddingProvider` seam) + embedding-ranked retrieval, measured against the PR-G rule baseline (Recall@K = MRR = NDCG@5 = 0.867 on the 15-query set) — the §60 "Rule vs Embedding" first comparison. The two paraphrase probes are the headroom the embedding variant must close.
