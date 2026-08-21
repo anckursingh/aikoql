@@ -714,8 +714,8 @@ pub fn compile_document_incremental(
     let prev_by_page: BTreeMap<u32, Vec<KnowledgeFragment>> = prev
         .fragments
         .iter()
+        .filter(|f| f.context.page.is_none_or(|p| kept.contains(&p)))
         .cloned()
-        .filter(|f| f.context.page.map_or(true, |p| kept.contains(&p)))
         .fold(BTreeMap::new(), |mut m, f| {
             if let Some(p) = f.context.page {
                 m.entry(p).or_default().push(f);
@@ -769,10 +769,10 @@ pub fn compile_document_incremental(
     let mut embedded_chunks: Vec<EmbeddedChunk> = prev
         .embedded_chunks
         .iter()
-        .cloned()
         .filter(|c| {
             kept.contains(&c.chunk.position.start_page) && kept.contains(&c.chunk.position.end_page)
         })
+        .cloned()
         .chain(fresh.embedded_chunks.iter().cloned())
         .collect();
     embedded_chunks.sort_by_key(|c| (c.chunk.position.start_page, c.chunk.position.chunk_index));

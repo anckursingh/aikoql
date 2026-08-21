@@ -407,7 +407,8 @@ fn rasterize_with(
 
 /// Process a PDF that may have scanned pages.
 ///
-/// 1. Uses existing native text extraction (via `native_pages` from pdf_extract).
+/// 1. Uses existing native text extraction (via `native_pages` from lopdf's
+///    per-page `extract_text_chunks`).
 /// 2. For pages with insufficient native text, rasterizes + OCRs via the provider.
 /// 3. Returns a merged page list with source tags and confidence scores.
 /// 4. Returns OCR statistics for status derivation.

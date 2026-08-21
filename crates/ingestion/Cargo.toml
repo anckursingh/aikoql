@@ -8,9 +8,9 @@ repository.workspace = true
 
 [dependencies]
 aikoql-kernel = { path = "../kernel" }
-pdf-extract = "0.9"
-# PR-F: embedded-image extraction. Already in the lockfile through pdf-extract
-# (0.36.0) — this only promotes it to a direct dependency, no graph change.
+# PDF text (per-page extract_text_chunks) + embedded-image extraction.
+# pdf-extract (0.9) was dropped in the DoD 19 root-cause fix: it joins pages
+# without a separator, silently merging multi-page PDFs into one page.
 lopdf = "0.36"
 zip = "0.6"
 sha2 = "0.10"

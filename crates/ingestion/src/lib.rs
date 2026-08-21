@@ -318,31 +318,57 @@ pub fn extract_document(
 
 fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, String> {
     // Text extraction is best-effort: an image-only (scanned) PDF produces no
-    // text, and pdf-extract can reject unusual encodings — neither should
-    // prevent asset extraction. Failure degrades to empty native pages.
-    // pdf-extract also panics (not Err) on unsupported font objects, so the
-    // whole call is panic-contained: ingestion never hard-fails on a PDF.
-    let text = match std::panic::catch_unwind(|| pdf_extract::extract_text(path)) {
-        Ok(Ok(t)) => t,
+    // text, and unusual encodings can fail — neither should prevent asset
+    // extraction. Failure degrades to empty native pages, and the whole call
+    // is panic-contained: ingestion never hard-fails on a PDF.
+    //
+    // Per-page extraction via lopdf::extract_text_chunks. (pdf-extract wraps
+    // lopdf but joins pages without a separator — the old formfeed split here
+    // was dead code and every multi-page PDF merged into one page. The DoD 19
+    // golden fixtures exposed it; root-cause fix is per-page extraction.)
+    let mut text_pages: Vec<String> = match std::panic::catch_unwind(|| {
+        let doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
+        let page_count = doc.get_pages().len();
+        let mut pages = Vec::with_capacity(page_count);
+        // extract_text_chunks returns one chunk per font run (Tf), not per
+        // page — join each page's chunks ourselves.
+        for page_number in 1..=page_count as u32 {
+            let mut text = String::new();
+            for r in doc.extract_text_chunks(&[page_number]) {
+                match r {
+                    Ok(t) => text.push_str(&t),
+                    Err(e) => {
+                        eprintln!(
+                            "pdf page text extraction failed: {e} — continuing without native text for that page"
+                        );
+                    }
+                }
+            }
+            pages.push(text);
+        }
+        Ok::<_, String>(pages)
+    }) {
+        Ok(Ok(pages)) => pages,
         Ok(Err(e)) => {
-            eprintln!(
-                "pdf text extraction failed: {} — continuing without native text",
-                e
-            );
-            String::new()
+            eprintln!("pdf load failed: {e} — continuing without native text");
+            Vec::new()
         }
         Err(_) => {
             eprintln!(
                 "pdf text extraction panicked (unsupported font/encoding) — continuing without native text"
             );
-            String::new()
+            Vec::new()
         }
     };
 
-    // pdf-extract joins pages with formfeed (\u{c}) — split on it.
     // Keep ALL pages (including empty ones) — empty pages may need OCR.
-    let mut native_pages: Vec<PageModel> = text
-        .split('\u{c}')
+    // A load failure still yields one empty page so image extraction can
+    // attach (parity with the old single-string path).
+    if text_pages.is_empty() {
+        text_pages.push(String::new());
+    }
+    let mut native_pages: Vec<PageModel> = text_pages
+        .into_iter()
         .enumerate()
         .map(|(i, page_text)| {
             let trimmed = page_text.trim().to_string();
@@ -357,8 +383,7 @@ fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, Str
         })
         .collect();
 
-    // HLD §29: embedded-image extraction via lopdf (already in the graph
-    // through pdf-extract — no new dependency). Raster streams (JPEG/JPX/
+    // HLD §29: embedded-image extraction via lopdf. Raster streams (JPEG/JPX/
     // CCITT/Flate) and vector-only content streams all become persisted,
     // content-addressed assets.
     let images_by_page = extract_pdf_images(path, asset_dir);

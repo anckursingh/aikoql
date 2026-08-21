@@ -263,7 +263,24 @@ impl DiagramAnalyzer for MockDiagramAnalyzer {
     }
 
     fn analyze(&self, node: &AstNode) -> Option<DiagramPayload> {
-        let text = node.text.as_deref()?;
+        // Arrow text lives in the caption child for figure-marker diagrams
+        // ("Figure 2: Architecture diagram" + arrow paragraph), and in
+        // node.text for fenced (mermaid) diagrams. Gather both line-wise
+        // (node_text would join them with spaces, corrupting the first
+        // label) — non-arrow lines are skipped below, so the figure marker
+        // itself is harmless.
+        let mut text = node.text.clone().unwrap_or_default();
+        if let Some(caption) = node
+            .children
+            .iter()
+            .find(|c| c.block_type == BlockType::Caption)
+            .and_then(|c| c.text.clone())
+        {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&caption);
+        }
         let mut nodes: Vec<crate::ast::DiagramNode> = Vec::new();
         let mut edges: Vec<crate::ast::DiagramEdge> = Vec::new();
         let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -646,10 +663,13 @@ fn analyze_node(node: &mut AstNode, next_caption: Option<&str>) {
                 }
                 VisualClassification::Diagram => {
                     node.block_type = BlockType::Diagram;
-                    // No diagram spec in an image caption — the analyzer
-                    // needs arrow text, so images re-typed as diagrams keep
-                    // the ImagePayload representation.
-                    node.payload = MockImageAnalyzer.analyze(&probe).map(AstPayload::Image);
+                    // Arrow text in the caption (figure-marker diagrams) can
+                    // populate the diagram spec directly; an image whose
+                    // caption has no arrows keeps the ImagePayload.
+                    node.payload = MockDiagramAnalyzer
+                        .analyze(&probe)
+                        .map(AstPayload::Diagram)
+                        .or_else(|| MockImageAnalyzer.analyze(&probe).map(AstPayload::Image));
                 }
                 VisualClassification::Formula => {
                     node.block_type = BlockType::Formula;
@@ -804,6 +824,55 @@ mod tests {
     fn diagram_analyzer_rejects_non_arrow_text() {
         let node = visual_node(BlockType::Diagram, Some("just some words"), vec![]);
         assert!(MockDiagramAnalyzer.analyze(&node).is_none());
+    }
+
+    #[test]
+    fn diagram_analyzer_reads_arrows_from_caption_child() {
+        // Figure-marker diagrams: arrows live in the caption child
+        // (detect_figures consumes the paragraph after "Figure N:").
+        let node = visual_node(
+            BlockType::Figure,
+            Some("Figure 2: Architecture diagram"),
+            vec![visual_node(
+                BlockType::Caption,
+                Some("Client -> Gateway -> Database"),
+                vec![],
+            )],
+        );
+        let payload = MockDiagramAnalyzer.analyze(&node).expect("payload");
+        assert_eq!(payload.nodes.len(), 3);
+        assert_eq!(payload.edges.len(), 2);
+        assert_eq!(payload.edges[0].source, "client");
+        assert_eq!(payload.edges[0].target, "gateway");
+        assert_eq!(payload.edges[1].target, "database");
+    }
+
+    #[test]
+    fn figure_diagram_retype_attaches_diagram_payload_when_arrows_exist() {
+        // Figure marker + arrows in node.text + caption child: the re-type
+        // path must attach a DiagramPayload (not ImagePayload) so the
+        // fragment leg emits a Diagram fragment. Regression for the golden
+        // architecture-diagram fixture, which first produced a Text fragment.
+        let mut ast = ast_with(vec![visual_node(
+            BlockType::Figure,
+            Some("Figure 2: Architecture diagram\nClient -> Gateway -> Database"),
+            vec![visual_node(
+                BlockType::Caption,
+                Some("Gateway -> Cache"),
+                vec![],
+            )],
+        )]);
+        classify_visuals(&mut ast);
+
+        let node = &ast.pages[0].children[0];
+        assert_eq!(node.block_type, BlockType::Diagram);
+        match &node.payload {
+            Some(AstPayload::Diagram(d)) => {
+                assert_eq!(d.nodes.len(), 4, "all four arrow labels become nodes");
+                assert_eq!(d.edges.len(), 3);
+            }
+            other => panic!("expected diagram payload, got {:?}", other),
+        }
     }
 
     #[test]

@@ -3346,12 +3346,12 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 11 | Model versions persisted | ✅ PR-F — `MODEL_VISUAL/CHART/DIAGRAM/IMAGE/FORMULA` consts stamped on every visual-derived candidate |
 | 12 | Asset processing content-addressed | ✅ PR-F — persistence wired end to end: `extract_document`/`compile_markdown_file` take an asset dir; identical bytes dedupe in the store |
 | 13 | Incremental ingestion at asset/page level | ✅ PR — `diff_document_models` (asset-granularity detection) + `compile_document_incremental` (page-splice) + `reproject_document` (model change) |
-| 14 | No mandatory heavyweight AI | ✅ Still pdf-extract/tesseract only |
+| 14 | No mandatory heavyweight AI | ✅ Still lopdf/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 375 lib + 10 acceptance + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 377 lib + 10 acceptance + 10-fixture golden suite + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
-| 19 | CI measures extraction + semantic regression | ⏳ Future |
+| 19 | CI measures extraction + semantic regression | ✅ DoD 19 — 10 golden PDF fixtures + `multimodal_golden` gate (byte-stable snapshots + entity-recall assertions + per-stage metrics) runs in both CI OSes; dedicated `--nocapture` step publishes §53 metrics to CI logs |
 
 ### Implemented now — PR-B: Extraction preservation (2026-08-21, commit on `feature/mvp-launch`)
 
@@ -3440,6 +3440,23 @@ Known ceilings (documented as `ponytail:` comments in code): image deltas matche
 
 **Tests — DoD 13 (all green 2026-08-21)**: 375 lib tests (+7); 10/10 multimodal acceptance; e2e pipeline green; `cargo clippy -p aikoql-ingestion --all-targets` clean; `cargo test --workspace` green (58 suites, 0 failures).
 
-### Next implementation — DoD 19
+### Implemented now — DoD 19: golden PDF suite + CI regression gate (2026-08-21)
 
-DoD 19 — golden PDF suite (10 fixtures per HLD §52) + CI extraction/semantic regression gate (§53). PR-G stays gated on the rule-baseline benchmarks (§60).
+HLD §52/§53: ten hand-built PDF fixtures run through the real extraction + compilation pipeline; full output snapshotted to JSON goldens; a CI gate compares snapshots, asserts entity recall against hand annotations, and publishes per-stage metrics. **The suite found a real extraction bug on its first run: multi-page PDFs silently merged into one page** — `pdf-extract` 0.9 joins pages without a separator, so the `\u{c}` split in `extract_pdf` was dead code and every multi-page PDF collapsed. Fixed at the root: per-page extraction via lopdf's `extract_text_chunks` (one chunk per font run — joined per page), and the now-dead `pdf-extract` dependency was dropped. Real-invoice parity confirmed by the existing `real_invoices_extract_native_text` test.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/lib.rs` | `extract_pdf` rewritten: `lopdf::Document::load` + per-page `extract_text_chunks(&[page])` joined per page (empty pages retained, load failure still yields one empty page so image extraction attaches, panic-contained, per-page errors degrade to empty text). |
+| `crates/ingestion/Cargo.toml` | `pdf-extract = "0.9"` **removed** (dead after the per-page fix — its only consumer was the buggy path). |
+| `crates/ingestion/src/visual.rs` | Golden fixtures exposed two diagram-classification gaps, both root-caused: (1) `MockDiagramAnalyzer` read only `node.text`, missing arrows in figure-marker captions → now gathers node text + caption child line-wise (space-joining would corrupt the first label); (2) the `Figure → Diagram` re-type path always attached `ImagePayload` → now tries `MockDiagramAnalyzer` first and falls back to `ImagePayload` only when no arrow spec exists, so figure-marker diagrams emit typed `Diagram` fragments (entities + relations) instead of falling through to `Text`. +2 tests (caption-arrow parsing regression, figure re-type payload). |
+| `crates/ingestion/tests/generate_multimodal_fixtures.rs` | **New.** `#[ignore]` generator: minimal lopdf PDF builder (Type1 Helvetica + WinAnsi, one Tj per line, empty-Tj blank lines, DCTDecode image XObjects) producing the ten §52 fixtures (plain-text, scanned, tables, complex-table, charts, architecture-diagram, mixed-report, formulas, images, annual-report) + a stage-summary printout per fixture (used to keep the recall lists honest). |
+| `crates/ingestion/tests/multimodal_golden.rs` | **New.** `multimodal_golden_suite`: extract + `compile_document_mock` per fixture → snapshot `{ast, compilation, document}` JSON (stats durations zeroed). `AIKOQL_UPDATE_GOLDENS=1` writes goldens; otherwise byte-compare with semantic fallback (JSON object key order differs when the workspace build unifies serde_json's `preserve_order` feature, and f32 fields round-trip the file with ≤2⁻²⁸ relative noise — order-insensitive + epsilon-tolerant `values_equal`, real content drift still panics with first-diff diagnostics). §53 per fixture: `[METRIC …]` extraction/fragmentation/semantic/provenance/retrieval/end-to-end counts printed every run + entity-recall assertions against hand-annotated lists. |
+| `crates/ingestion/tests/fixtures/multimodal/` | **New.** The 10 checked-in PDFs + `golden/*.json` snapshots (fixture page counts verified: 2/1/2/2/1/1/1/1/1/3 — the pre-fix extractor reported 10/2/6/8/6/4/13/5/2/16). |
+| `.github/workflows/ci.yml` | Windows check job gains `cargo test -p aikoql-ingestion --test multimodal_golden -- --nocapture` (metrics visible in CI logs); the gate itself also runs inside `cargo test --workspace` on both OSes. |
+| `crates/ingestion/src/ir.rs`, `pipeline.rs` | clippy 1.97 lint fixes on the DoD-13 code (`is_none_or`, filter-before-clone) — no behavior change. |
+
+**Tests — DoD 19 (all green 2026-08-21)**: 377 lib tests (+2: diagram caption arrows, figure re-type payload); golden suite 1/1 across all 10 fixtures (write mode + compare mode, standalone and workspace builds); 10/10 multimodal acceptance; e2e green; `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets` clean; `cargo test --workspace` green (60 suites, 0 failures). DoD checklist complete: **all 19 rows ✅**.
+
+### Next implementation — PR-G
+
+PR-G — rule-baseline retrieval-quality benchmarks (HLD §60): the Recall@K/MRR/NDCG matrix over the golden fixture queries, pinning the rule-based pipeline's retrieval numbers as the baseline for future transformer/VLM analyzer comparison.

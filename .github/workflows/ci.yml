@@ -28,6 +28,9 @@ jobs:
       - run: cargo check --workspace
       - run: cargo test --workspace -- --skip load_encryption_overhead
         timeout-minutes: 15
+      # DoD 19 (HLD §52/§53): golden PDF suite with visible per-stage
+      # metrics — extraction/fragmentation/semantic/provenance/retrieval.
+      - run: cargo test -p aikoql-ingestion --test multimodal_golden -- --nocapture
 
   test-linux:
     name: Test (Linux)

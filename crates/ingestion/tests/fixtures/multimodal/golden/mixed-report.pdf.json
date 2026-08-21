@@ -1,0 +1,1878 @@
+{
+  "ast": {
+    "document_id": null,
+    "page_count": 1,
+    "pages": [
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": {
+              "Heading": {
+                "level": 1
+              }
+            },
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "1. Billing Pipeline"
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Paragraph",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Acme Corporation processes payments nightly."
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Image",
+            "children": [
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "Caption",
+                "children": [],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              }
+            ],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Figure 4: Flow diagram of billing\nPayment -> Ledger"
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Table",
+            "children": [
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Step"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Owner"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Validate"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Billing Team"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Commit"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Ledger Team"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              }
+            ],
+            "confidence": null,
+            "node_id": null,
+            "payload": {
+              "Table": {
+                "cells": [
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r1-0",
+                    "row_id": "r1",
+                    "text": "Validate",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r1-1",
+                    "row_id": "r1",
+                    "text": "Billing Team",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r2-0",
+                    "row_id": "r2",
+                    "text": "Commit",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r2-1",
+                    "row_id": "r2",
+                    "text": "Ledger Team",
+                    "value": null
+                  }
+                ],
+                "footnotes": [],
+                "headers": [
+                  {
+                    "id": "h0",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Step"
+                  },
+                  {
+                    "id": "h1",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Owner"
+                  }
+                ],
+                "rows": [
+                  {
+                    "id": "r1",
+                    "index": 1
+                  },
+                  {
+                    "id": "r2",
+                    "index": 2
+                  }
+                ]
+              }
+            },
+            "text": null
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Code",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "let total = 100;\n    assert!(total > 0);"
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      }
+    ],
+    "source_type": "native"
+  },
+  "compilation": {
+    "commit_plan": {
+      "actions": [
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Billing Pipeline",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "1._billing_pipeline",
+                "1. Billing Pipeline"
+              ],
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Organization",
+            "entity_name": "Acme Corporation",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Organization"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Owner Validate",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Billing Team",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Team Commit",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Thing",
+            "entity_name": "Billing Team Commit",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Thing"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Ledger Team",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "DiagramNode",
+            "entity_name": "Payment",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-diagram-v1",
+                "page": 1,
+                "source": {
+                  "DiagramNode": {
+                    "diagram_id": "frag-p1-b2",
+                    "node_id": "payment"
+                  }
+                }
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "DiagramNode"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "DiagramNode",
+            "entity_name": "Ledger",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-diagram-v1",
+                "page": 1,
+                "source": {
+                  "DiagramNode": {
+                    "diagram_id": "frag-p1-b2",
+                    "node_id": "ledger"
+                  }
+                }
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "DiagramNode"
+              ]
+            ]
+          }
+        }
+      ],
+      "document_id": null,
+      "stats": {
+        "creates": 9,
+        "needs_review": 0,
+        "skips": 0,
+        "total_actions": 9,
+        "total_conflicts": 0,
+        "updates": 0
+      }
+    },
+    "embedded_chunks": [
+      {
+        "chunk": {
+          "char_count": 178,
+          "chunk_id": "unknown/chunk-0000",
+          "entity_mentions": [
+            "Acme Corporation",
+            "Billing Pipeline",
+            "Billing Team",
+            "Ledger",
+            "Ledger Team",
+            "Payment"
+          ],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 0,
+            "chunk_index": 0,
+            "end_page": 1,
+            "start_page": 1
+          },
+          "structure": {
+            "heading_path": [
+              "1. Billing Pipeline"
+            ],
+            "section_chunk_index": 0,
+            "section_title": "1. Billing Pipeline",
+            "source_type": "mixed"
+          },
+          "text": "1. Billing Pipeline\nAcme Corporation processes payments nightly.\nPayment\nLedger\nStep | Owner\nValidate | Billing Team\nCommit | Ledger Team\nlet total = 100;\n    assert!(total > 0);"
+        },
+        "embedding": [
+          0.08998425304889679,
+          0.0,
+          0.044992126524448395,
+          0.08998425304889679,
+          0.044992126524448395,
+          0.08998425304889679,
+          0.13497638702392578,
+          0.0,
+          0.044992126524448395,
+          0.08998425304889679,
+          0.0,
+          0.0,
+          0.08998425304889679,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.13497638702392578,
+          0.22496064007282257,
+          0.0,
+          0.08998425304889679,
+          0.0,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.08998425304889679,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.0,
+          0.17996850609779358,
+          0.08998425304889679,
+          0.044992126524448395,
+          0.0,
+          0.08998425304889679,
+          0.22496064007282257,
+          0.044992126524448395,
+          0.13497638702392578,
+          0.0,
+          0.0,
+          0.17996850609779358,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.0,
+          0.0,
+          0.0,
+          0.08998425304889679,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.13497638702392578,
+          0.044992126524448395,
+          0.0,
+          0.0,
+          0.044992126524448395,
+          0.0,
+          0.044992126524448395,
+          0.22496064007282257,
+          0.08998425304889679,
+          0.0,
+          0.0,
+          0.26995277404785156,
+          0.0,
+          0.13497638702392578,
+          0.044992126524448395,
+          0.13497638702392578,
+          0.13497638702392578,
+          0.13497638702392578,
+          0.0,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.08998425304889679,
+          0.22496064007282257,
+          0.0,
+          0.22496064007282257,
+          0.044992126524448395,
+          0.13497638702392578,
+          0.08998425304889679,
+          0.13497638702392578,
+          0.044992126524448395,
+          0.08998425304889679,
+          0.08998425304889679,
+          0.13497638702392578,
+          0.08998425304889679,
+          0.0,
+          0.08998425304889679,
+          0.0,
+          0.08998425304889679,
+          0.13497638702392578,
+          0.0,
+          0.0,
+          0.044992126524448395,
+          0.0,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.0,
+          0.17996850609779358,
+          0.08998425304889679,
+          0.0,
+          0.0,
+          0.13497638702392578,
+          0.17996850609779358,
+          0.044992126524448395,
+          0.0,
+          0.08998425304889679,
+          0.044992126524448395,
+          0.08998425304889679,
+          0.08998425304889679,
+          0.0,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.08998425304889679,
+          0.0,
+          0.0,
+          0.08998425304889679,
+          0.08998425304889679,
+          0.0,
+          0.044992126524448395,
+          0.0,
+          0.13497638702392578,
+          0.044992126524448395,
+          0.0,
+          0.08998425304889679,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.0,
+          0.0,
+          0.044992126524448395,
+          0.044992126524448395,
+          0.0
+        ],
+        "embedding_provider": "mock-char-ngram"
+      }
+    ],
+    "evidence_trail": {
+      "document_id": null,
+      "nodes": [
+        {
+          "entities": [
+            "Billing Pipeline",
+            "Acme Corporation",
+            "Owner Validate",
+            "Billing Team",
+            "Team Commit",
+            "Billing Team Commit",
+            "Ledger Team",
+            "Payment",
+            "Ledger"
+          ],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b2",
+                  "node_id": "payment"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b2",
+                  "node_id": "ledger"
+                }
+              }
+            }
+          ],
+          "step": "Extracted 9 entities from document text"
+        },
+        {
+          "entities": [],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h0",
+                  "table_id": "frag-p1-b3"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p1-b3"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h0",
+                  "table_id": "frag-p1-b3"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p1-b3"
+                }
+              }
+            }
+          ],
+          "step": "Extracted 5 facts from document structure"
+        },
+        {
+          "entities": [],
+          "phase": "D5-ontology",
+          "source": [],
+          "step": "Discovered 4 classes, 2 properties, 1 relationship"
+        },
+        {
+          "entities": [
+            "Billing Pipeline",
+            "Acme Corporation",
+            "Owner Validate",
+            "Billing Team",
+            "Team Commit",
+            "Billing Team Commit",
+            "Ledger Team",
+            "Payment",
+            "Ledger"
+          ],
+          "phase": "D6-resolution",
+          "source": [],
+          "step": "Resolved 9 entities: 0 matched, 0 ambiguous, 9 unmatched"
+        },
+        {
+          "entities": [
+            "Billing Pipeline",
+            "Acme Corporation",
+            "Owner Validate",
+            "Billing Team",
+            "Team Commit",
+            "Billing Team Commit",
+            "Ledger Team",
+            "Payment",
+            "Ledger"
+          ],
+          "phase": "D7-reconcile",
+          "source": [],
+          "step": "Reconciled: 9 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+        }
+      ]
+    },
+    "fragments": [
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Acme Corporation processes payments nightly."
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Billing Pipeline"
+          ],
+          "neighboring_fragments": [
+            "frag-p1-b2"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b1",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Diagram": {
+            "edges": [
+              {
+                "bbox": null,
+                "confidence": 1.0,
+                "label": null,
+                "source": "payment",
+                "target": "ledger"
+              }
+            ],
+            "nodes": [
+              {
+                "bbox": null,
+                "confidence": 1.0,
+                "id": "payment",
+                "label": "Payment",
+                "node_type": null
+              },
+              {
+                "bbox": null,
+                "confidence": 1.0,
+                "id": "ledger",
+                "label": "Ledger",
+                "node_type": null
+              }
+            ]
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Billing Pipeline"
+          ],
+          "neighboring_fragments": [
+            "frag-p1-b1",
+            "frag-p1-b3"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b2",
+        "modality": "Diagram",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Table": {
+            "cells": [
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r1-0",
+                "row_id": "r1",
+                "text": "Validate",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r1-1",
+                "row_id": "r1",
+                "text": "Billing Team",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r2-0",
+                "row_id": "r2",
+                "text": "Commit",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r2-1",
+                "row_id": "r2",
+                "text": "Ledger Team",
+                "value": null
+              }
+            ],
+            "footnotes": [],
+            "headers": [
+              {
+                "id": "h0",
+                "level": 1,
+                "parent_id": null,
+                "text": "Step"
+              },
+              {
+                "id": "h1",
+                "level": 1,
+                "parent_id": null,
+                "text": "Owner"
+              }
+            ],
+            "rows": [
+              {
+                "id": "r1",
+                "index": 1
+              },
+              {
+                "id": "r2",
+                "index": 2
+              }
+            ]
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Billing Pipeline"
+          ],
+          "neighboring_fragments": [
+            "frag-p1-b2",
+            "frag-p1-b4"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b3",
+        "modality": "Table",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Code": "let total = 100;\n    assert!(total > 0);"
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Billing Pipeline"
+          ],
+          "neighboring_fragments": [
+            "frag-p1-b3"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b4",
+        "modality": "Code",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      }
+    ],
+    "ir": {
+      "content_trust": null,
+      "document_id": null,
+      "entities": [
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Billing Pipeline"
+          ],
+          "name": "Billing Pipeline",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Acme Corporation processes payments nightly."
+          ],
+          "name": "Acme Corporation",
+          "type_hint": "Organization"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Owner Validate"
+          ],
+          "name": "Owner Validate",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Step | Owner\nValidate | Billing Team\nCommit | Ledger Team"
+          ],
+          "name": "Billing Team",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Team Commit"
+          ],
+          "name": "Team Commit",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Billing Team Commit"
+          ],
+          "name": "Billing Team Commit",
+          "type_hint": "Thing"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Step | Owner\nValidate | Billing Team\nCommit | Ledger Team"
+          ],
+          "name": "Ledger Team",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-diagram-v1",
+            "page": 1,
+            "source": {
+              "DiagramNode": {
+                "diagram_id": "frag-p1-b2",
+                "node_id": "payment"
+              }
+            }
+          },
+          "mentions": [
+            "Payment"
+          ],
+          "name": "Payment",
+          "type_hint": "DiagramNode"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-diagram-v1",
+            "page": 1,
+            "source": {
+              "DiagramNode": {
+                "diagram_id": "frag-p1-b2",
+                "node_id": "ledger"
+              }
+            }
+          },
+          "mentions": [
+            "Ledger"
+          ],
+          "name": "Ledger",
+          "type_hint": "DiagramNode"
+        }
+      ],
+      "events": [],
+      "extractor": "mock",
+      "facts": [
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [
+            "Billing Pipeline"
+          ],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "statement": "1. Billing Pipeline"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h0",
+                "table_id": "frag-p1-b3"
+              }
+            }
+          },
+          "statement": "Step: Validate"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h1",
+                "table_id": "frag-p1-b3"
+              }
+            }
+          },
+          "statement": "Owner: Billing Team"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h0",
+                "table_id": "frag-p1-b3"
+              }
+            }
+          },
+          "statement": "Step: Commit"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h1",
+                "table_id": "frag-p1-b3"
+              }
+            }
+          },
+          "statement": "Owner: Ledger Team"
+        }
+      ],
+      "page_count": 1,
+      "relations": [
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-diagram-v1",
+            "page": 1,
+            "source": {
+              "DiagramEdge": {
+                "diagram_id": "frag-p1-b2",
+                "edge_id": "payment->ledger"
+              }
+            }
+          },
+          "object": "ledger",
+          "predicate": "related_to",
+          "subject": "payment"
+        }
+      ],
+      "temporal": []
+    },
+    "ontology": {
+      "classes": [
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Billing Pipeline'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "Person",
+          "parent": "Person",
+          "signal_count": 5
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Acme Corporation'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "Organization",
+          "parent": "Organization",
+          "signal_count": 1
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Billing Team Commit'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "Thing",
+          "parent": null,
+          "signal_count": 1
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Payment'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b2",
+                  "node_id": "payment"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b2",
+                  "node_id": "ledger"
+                }
+              }
+            }
+          ],
+          "name": "DiagramNode",
+          "parent": null,
+          "signal_count": 2
+        }
+      ],
+      "document_id": null,
+      "method": "ir-discovery-mock",
+      "properties": [
+        {
+          "class_name": "Person",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "numeric_value",
+          "required": false,
+          "value_type": "Float"
+        },
+        {
+          "class_name": "Document",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h0",
+                  "table_id": "frag-p1-b3"
+                }
+              }
+            }
+          ],
+          "name": "date",
+          "required": false,
+          "value_type": "DateTime"
+        }
+      ],
+      "relationships": [
+        {
+          "cardinality": null,
+          "confidence": 0.8500000238418579,
+          "domain": "Payment",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramEdge": {
+                  "diagram_id": "frag-p1-b2",
+                  "edge_id": "payment->ledger"
+                }
+              }
+            }
+          ],
+          "name": "related_to",
+          "range": "Ledger"
+        }
+      ]
+    },
+    "resolution": {
+      "ambiguous": [],
+      "matched": [],
+      "stats": {
+        "ambiguous_count": 0,
+        "average_confidence": 0.0,
+        "matched_count": 0,
+        "total_entities": 9,
+        "unmatched_count": 9
+      },
+      "unmatched": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Billing Pipeline",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Acme Corporation",
+          "entity_type": "Organization",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Owner Validate",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Billing Team",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Team Commit",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Billing Team Commit",
+          "entity_type": "Thing",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Ledger Team",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Payment",
+          "entity_type": "DiagramNode",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b2",
+                  "node_id": "payment"
+                }
+              }
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Ledger",
+          "entity_type": "DiagramNode",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b2",
+                  "node_id": "ledger"
+                }
+              }
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        }
+      ]
+    },
+    "secret_findings": [],
+    "stats": {
+      "phases": [
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D3-ast"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 4,
+          "phase": "D4-fragments"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 15,
+          "phase": "D4-ir"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 7,
+          "phase": "D5-ontology"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 9,
+          "phase": "D6-resolution"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 9,
+          "phase": "D7-reconcile"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D8-projection"
+        }
+      ],
+      "total_us": 0
+    }
+  },
+  "document": {
+    "ocr_stats": {
+      "average_confidence": 0.0,
+      "pages_ocr_attempted": 0,
+      "pages_ocr_failed": 0,
+      "pages_ocr_succeeded": 0
+    },
+    "page_count": 1,
+    "pages": [
+      {
+        "char_count": 235,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 1,
+        "source": "native",
+        "text": "1. Billing Pipeline\n\nAcme Corporation processes payments nightly.\n\nFigure 4: Flow diagram of billing\nPayment -> Ledger\n\n| Step | Owner |\n| Validate | Billing Team |\n| Commit | Ledger Team |\n\n    let total = 100;\n    assert!(total > 0);"
+      }
+    ],
+    "total_chars": 235
+  }
+}

@@ -200,7 +200,7 @@ impl KnowledgeIr {
     /// changed/removed pages drop theirs). Candidates without a page
     /// (document-level provenance) always survive.
     pub fn retain_pages(&mut self, kept: &std::collections::HashSet<u32>) {
-        let keep = |e: &Evidence| e.page.map_or(true, |p| kept.contains(&p));
+        let keep = |e: &Evidence| e.page.is_none_or(|p| kept.contains(&p));
         self.entities.retain(|c| keep(&c.evidence));
         self.relations.retain(|c| keep(&c.evidence));
         self.facts.retain(|c| keep(&c.evidence));
