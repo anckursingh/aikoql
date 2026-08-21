@@ -26,6 +26,7 @@ use crate::resolution::{
     resolve_entities, EntityResolver, KnowledgeBaseEntry, MockEntityResolver, ResolutionResult,
 };
 use crate::secret_filter::{filter_secrets, SecretFinding};
+use crate::visual_index::{build_visual_index, VisualIndexRecord};
 use crate::{DocumentModel, PageModel};
 use std::collections::{BTreeMap, HashSet};
 
@@ -89,6 +90,10 @@ pub struct CompilationResult {
     /// their replacement (HLD §59).
     #[serde(default)]
     pub fragments: Vec<KnowledgeFragment>,
+    /// PR-K (HLD §24): visual retrieval index — an access path into the
+    /// fragments, never the source of truth.
+    #[serde(default)]
+    pub visual_index: Vec<VisualIndexRecord>,
     /// Full evidence trail for explainability.
     pub evidence_trail: EvidenceTrail,
     /// Phase-level statistics.
@@ -438,6 +443,12 @@ pub fn compile_document_with_detector(
     let embedded_chunks = project_and_embed(&fragments, Some(&ir), projector, embedder);
     let dt_chk = time_now() - t_chk;
 
+    // PR-K: visual retrieval index (HLD §24) — records derive from the
+    // fragments, so the index is always consistent with the segmentation.
+    let t_vi = time_now();
+    let visual_index = build_visual_index(&fragments, embedder);
+    let dt_vi = time_now() - t_vi;
+
     // Evidence trail
     let evidence_trail = EvidenceTrail::from_pipeline(
         ir.document_id.as_deref(),
@@ -461,6 +472,7 @@ pub fn compile_document_with_detector(
     stats.add("D6-resolution", dt_res, resolution.stats.total_entities);
     stats.add("D7-reconcile", dt_rec, commit_plan.stats.total_actions);
     stats.add("D8-projection", dt_chk, embedded_chunks.len());
+    stats.add("D8-visual-index", dt_vi, visual_index.len());
     stats.finish(total);
 
     CompilationResult {
@@ -470,6 +482,7 @@ pub fn compile_document_with_detector(
         commit_plan,
         embedded_chunks,
         fragments,
+        visual_index,
         evidence_trail,
         stats,
         secret_findings,
@@ -819,6 +832,11 @@ pub fn compile_document_incremental(
     embedded_chunks.sort_by_key(|c| (c.chunk.position.start_page, c.chunk.position.chunk_index));
     let dt_chk = time_now() - t_chk;
 
+    // PR-K: rebuild the visual index from the spliced fragment stream.
+    let t_vi = time_now();
+    let visual_index = build_visual_index(&fragments, embedder);
+    let dt_vi = time_now() - t_vi;
+
     // Secrets: fail-closed — kept findings stay reported even if their page
     // was not re-scanned; fresh findings append (deduped).
     let mut secret_findings = prev.secret_findings.clone();
@@ -850,6 +868,7 @@ pub fn compile_document_incremental(
     stats.add("D6-resolution", dt_res, resolution.stats.total_entities);
     stats.add("D7-reconcile", dt_rec, commit_plan.stats.total_actions);
     stats.add("D8-projection", dt_chk, embedded_chunks.len());
+    stats.add("D8-visual-index", dt_vi, visual_index.len());
     stats.finish(time_now() - t0);
 
     CompilationResult {
@@ -859,6 +878,7 @@ pub fn compile_document_incremental(
         commit_plan,
         embedded_chunks,
         fragments,
+        visual_index,
         evidence_trail,
         stats,
         secret_findings,
@@ -881,6 +901,8 @@ pub fn reproject_document(
     let dt = time_now() - t0;
     let mut result = prev.clone();
     result.embedded_chunks = embedded_chunks;
+    // PR-K: a new embedding provider means new visual embeddings too.
+    result.visual_index = build_visual_index(&prev.fragments, embedder);
     result
         .stats
         .add("D8-reproject", dt, result.embedded_chunks.len());
@@ -945,7 +967,8 @@ mod tests {
 
         assert!(!result.ir.is_empty());
         assert!(!result.embedded_chunks.is_empty());
-        assert_eq!(result.stats.phases.len(), 7);
+        // 7 extract/compile phases + D8-visual-index (PR-K).
+        assert_eq!(result.stats.phases.len(), 8);
     }
 
     #[test]
@@ -1454,8 +1477,9 @@ mod tests {
         let result = compile_incremental_mock(&next_doc, &prev_doc, &prev);
         let full = compile_document_mock(&next_doc, &[]);
 
-        // Full path: all seven D3–D8 phases, same entity set as a fresh run.
-        assert_eq!(result.stats.phases.len(), 7);
+        // Full path: all seven D3–D8 phases + D8-visual-index (PR-K),
+        // same entity set as a fresh run.
+        assert_eq!(result.stats.phases.len(), 8);
         let names: Vec<&str> = result.ir.entities.iter().map(|e| e.name.as_str()).collect();
         let full_names: Vec<&str> = full.ir.entities.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, full_names);

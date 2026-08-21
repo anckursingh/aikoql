@@ -50,16 +50,21 @@
 //! baseline) and the measured gain must come from a real model provider,
 //! not the mock.
 //!
-//! Not covered here (both N/A for a mock-embedding pipeline, printed as
-//! such): hybrid retrieval recall and visual retrieval recall (§53) — they
-//! need a hybrid ranker and a visual ranker, which later PRs add.
+//! PR-K (HLD §24) adds the visual ranker: each corpus also builds a visual
+//! index (`VisualIndexRecord`s derived from visual fragments), and a small
+//! set of visual queries is ranked by query-vs-record embedding cosine,
+//! judged against the same qrel text via caption containment — visual
+//! retrieval recall (§53), printed as `[RETRIEVAL-VISUAL]`. Hybrid
+//! retrieval recall (a hybrid ranker) remains N/A, printed as such.
 //! `scanned.pdf` is also excluded: the mock compile runs without OCR, so it
 //! projects zero chunks and cannot be judged.
 //!
 //! ponytail: no stopword/IDF/position weights in the lexical ranker — replace
 //! with BM25 in the PR that adds a real model provider.
 
-use aikoql_ingestion::{BoundaryScore, BoundaryScorer, EmbeddingProvider, KnowledgeFragment};
+use aikoql_ingestion::{
+    BoundaryScore, BoundaryScorer, EmbeddingProvider, KnowledgeFragment, VisualIndexRecord,
+};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -154,13 +159,35 @@ const QUERIES: &[Query] = &[
     },
 ];
 
+/// Visual queries (§53 visual retrieval recall, PR-K): qrels resolved from
+/// the rule corpus (containment) and judged against visual index records'
+/// captions. Both probe the same visual object — an exact-phrase query and
+/// a paraphrase — because images.pdf carries the only asset-backed visuals
+/// in the fixture set: PDF chart drawings are not extracted as assets, so
+/// no chart records exist to judge (ponytail ceiling, visual_index.rs).
+const VISUAL_QUERIES: &[Query] = &[
+    Query {
+        text: "What logo is shown in figure 3?",
+        relevant: &[("images.pdf", 0)],
+    },
+    Query {
+        text: "What does the company logo depict?",
+        relevant: &[("images.pdf", 0)],
+    },
+];
+
 /// A corpus chunk: (fixture, chunk-index) + text.
 type CorpusChunk<'a> = (&'a str, usize, String);
 
 /// Compile each fixture once into a corpus, in FIXTURES order, with the
-/// given boundary detector (PR-H: the §60 variant seam).
-fn corpus(detector: &dyn aikoql_ingestion::KnowledgeBoundaryDetector) -> Vec<CorpusChunk<'static>> {
+/// given boundary detector (PR-H: the §60 variant seam). Returns the text
+/// chunks plus the visual index records (PR-K, HLD §24) for the visual
+/// ranker.
+fn corpus(
+    detector: &dyn aikoql_ingestion::KnowledgeBoundaryDetector,
+) -> (Vec<CorpusChunk<'static>>, Vec<VisualIndexRecord>) {
     let mut corpus: Vec<CorpusChunk> = Vec::new();
+    let mut visual: Vec<VisualIndexRecord> = Vec::new();
     for name in FIXTURES {
         let path = Path::new(FIXTURE_DIR).join(name);
         let dm =
@@ -171,12 +198,13 @@ fn corpus(detector: &dyn aikoql_ingestion::KnowledgeBoundaryDetector) -> Vec<Cor
         for chunk in result.embedded_chunks {
             corpus.push((*name, chunk.chunk.position.chunk_index, chunk.chunk.text));
         }
+        visual.extend(result.visual_index);
     }
     assert!(
         !corpus.is_empty(),
         "corpus projects zero chunks — cannot judge retrieval"
     );
-    corpus
+    (corpus, visual)
 }
 
 fn chunk_text<'a>(corpus: &'a [CorpusChunk<'a>], fixture: &str, index: usize) -> &'a str {
@@ -202,6 +230,57 @@ fn tokens(text: &str) -> HashSet<String> {
         .filter(|t| !t.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+/// Visual ranker (PR-K, HLD §24): query embedding vs record embedding
+/// cosine over the same mock provider; records with zero/negative
+/// similarity are not retrieved. Ties break by (score desc, document_id
+/// asc, page asc).
+fn rank_visual(records: &[VisualIndexRecord], query: &str) -> Vec<usize> {
+    let provider = aikoql_ingestion::MockEmbeddingProvider::new();
+    let q = provider.embed(query);
+    let mut scored: Vec<(f32, usize, String, u32)> = records
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            (
+                aikoql_ingestion::cosine_similarity(&q, &r.embedding),
+                i,
+                r.document_id.clone(),
+                r.page,
+            )
+        })
+        .filter(|(s, _, _, _)| *s > 0.0)
+        .collect();
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap()
+            .then_with(|| a.2.cmp(&b.2))
+            .then(a.3.cmp(&b.3))
+    });
+    scored.into_iter().map(|(_, i, _, _)| i).collect()
+}
+
+/// Fraction of visual queries whose relevant record appears in the top-K
+/// (binary relevance; caption containment against the qrel text).
+fn visual_recall_at_k(
+    ranked: &[usize],
+    records: &[VisualIndexRecord],
+    qrels: &[String],
+    k: usize,
+) -> f32 {
+    if qrels.is_empty() {
+        return 1.0;
+    }
+    let found = ranked.iter().take(k).any(|&i| {
+        let caption = records[i].semantic_caption.as_deref().unwrap_or("");
+        qrels.iter().any(|q| is_relevant(caption, q))
+    });
+    if found {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// §60 rankers — both deterministic over the corpus:
@@ -388,21 +467,25 @@ fn measure(run: &Run, qrels: &[Vec<String>]) -> [f32; 5] {
 fn rule_baseline_retrieval_quality() {
     // Four corpora: the rule boundary detector (baseline) and the
     // embedding / transformer / hybrid variants (PR-H/PR-I/PR-J, HLD §16).
-    let rule_corpus = corpus(&aikoql_ingestion::RuleBoundaryDetector);
+    // Each corpus also carries the visual index records for the visual
+    // ranker (PR-K, HLD §24).
+    let (rule_corpus, rule_visual) = corpus(&aikoql_ingestion::RuleBoundaryDetector);
     let emb_provider = aikoql_ingestion::MockEmbeddingProvider::new();
     let emb_detector = aikoql_ingestion::EmbeddingBoundaryDetector::new(&emb_provider);
-    let emb_corpus = corpus(&emb_detector);
+    let (emb_corpus, emb_visual) = corpus(&emb_detector);
     let tfm_detector = aikoql_ingestion::TransformerBoundaryDetector::new(&MockTransformerScorer);
-    let tfm_corpus = corpus(&tfm_detector);
+    let (tfm_corpus, tfm_visual) = corpus(&tfm_detector);
     let hyb_provider = aikoql_ingestion::MockEmbeddingProvider::new();
     let hyb_detector = aikoql_ingestion::HybridBoundaryDetector::new(&hyb_provider);
-    let hyb_corpus = corpus(&hyb_detector);
+    let (hyb_corpus, hyb_visual) = corpus(&hyb_detector);
     eprintln!(
-        "[RETRIEVAL-STRUCTURE] rule_boundary_chunks={} embedding_boundary_chunks={} transformer_boundary_chunks={} hybrid_boundary_chunks={}",
+        "[RETRIEVAL-STRUCTURE] rule_boundary_chunks={} embedding_boundary_chunks={} transformer_boundary_chunks={} hybrid_boundary_chunks={} \
+         visual_records={}",
         rule_corpus.len(),
         emb_corpus.len(),
         tfm_corpus.len(),
-        hyb_corpus.len()
+        hyb_corpus.len(),
+        rule_visual.len(),
     );
 
     // Qrel text resolved from the rule corpus; variant corpora are judged
@@ -425,7 +508,9 @@ fn rule_baseline_retrieval_quality() {
         },
         Run {
             boundary: "rule-embedding",
-            corpus: rule_corpus,
+            // Cloned: the visual-recall loop below resolves qrel text from
+            // the rule corpus after the runs consume theirs.
+            corpus: rule_corpus.clone(),
             embedding_ranker: true,
         },
         Run {
@@ -463,7 +548,7 @@ fn rule_baseline_retrieval_quality() {
     let base = measure(&runs[0], &qrels);
     eprintln!(
         "[RETRIEVAL-BASELINE] {} queries={} recall@1={:.3} recall@3={:.3} recall@5={:.3} \
-         mrr={:.3} ndcg@5={:.3} hybrid=N/A visual=N/A",
+         mrr={:.3} ndcg@5={:.3} hybrid=N/A visual=measured below",
         runs[0].boundary,
         QUERIES.len(),
         base[0],
@@ -526,5 +611,56 @@ fn rule_baseline_retrieval_quality() {
                 b
             );
         }
+    }
+
+    // PR-K (HLD §24/§53): visual retrieval recall — rank each corpus's
+    // visual index records by query-vs-caption embedding cosine and judge
+    // by caption containment against the same qrel text.
+    for (label, records) in [
+        ("rule", rule_visual.as_slice()),
+        ("embedding", emb_visual.as_slice()),
+        ("transformer", tfm_visual.as_slice()),
+        ("hybrid", hyb_visual.as_slice()),
+    ] {
+        assert!(
+            !records.is_empty(),
+            "{label}: visual index is empty — cannot judge visual retrieval"
+        );
+        let (mut r1, mut r3, mut r5) = (0.0f32, 0.0f32, 0.0f32);
+        for q in VISUAL_QUERIES {
+            let qrel: Vec<String> = q
+                .relevant
+                .iter()
+                .map(|(f, i)| chunk_text(&rule_corpus, f, *i).to_string())
+                .collect();
+            let ranked = rank_visual(records, q.text);
+            let (a, b, c) = (
+                visual_recall_at_k(&ranked, records, &qrel, 1),
+                visual_recall_at_k(&ranked, records, &qrel, 3),
+                visual_recall_at_k(&ranked, records, &qrel, 5),
+            );
+            r1 += a;
+            r3 += b;
+            r5 += c;
+            eprintln!(
+                "[RETRIEVAL-VISUAL-Q {label}] query={:?} records={} ranked={ranked:?} R@1={a} R@3={b} R@5={c}",
+                q.text,
+                records.len()
+            );
+        }
+        let n = VISUAL_QUERIES.len() as f32;
+        eprintln!(
+            "[RETRIEVAL-VISUAL] {label} queries={} recall@1={:.3} recall@3={:.3} recall@5={:.3}",
+            VISUAL_QUERIES.len(),
+            r1 / n,
+            r3 / n,
+            r5 / n
+        );
+        // §24 floor: the visual index must retrieve its visual objects.
+        assert!(
+            r5 / n >= 0.5,
+            "{label}: visual retrieval materially regressed (Recall@5 = {:.3} < 0.5)",
+            r5 / n
+        );
     }
 }

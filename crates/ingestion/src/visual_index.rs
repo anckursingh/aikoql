@@ -1,0 +1,279 @@
+//! PR-K (HLD §24): visual retrieval index.
+//!
+//! The visual index is an access path — query → visual similarity → visual
+//! object → KnowledgeFragment → Knowledge Object → evidence — never the
+//! source of truth. Records derive from the fragment stream, so the index
+//! can always be rebuilt from the canonical segmentation.
+
+use crate::ast::BoundingBox;
+use crate::embedding::EmbeddingProvider;
+use crate::fragment::{FragmentContent, KnowledgeFragment};
+
+/// HLD §24: one retrievable visual object. `bbox` is optional here where
+/// the HLD sketch assumes extractors always produce geometry — fragments
+/// without a source region still index (an honest `None` over a fake box).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VisualIndexRecord {
+    pub asset_id: String,
+    pub document_id: String,
+    pub page: u32,
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+    pub embedding: Vec<f32>,
+    pub semantic_caption: Option<String>,
+    pub fragment_ids: Vec<String>,
+}
+
+/// Build the visual index over the final fragment stream. Mixed composites
+/// recurse (PR-I hybrid merges nest visuals inside them). Images and
+/// asset-backed charts are visual objects; diagrams/formulas carry no asset
+/// reference — their structural knowledge lives in the IR — ponytail: add
+/// an `asset` field to `DiagramPayload` when a visual diagram ranker is
+/// needed.
+pub fn build_visual_index(
+    fragments: &[KnowledgeFragment],
+    provider: &dyn EmbeddingProvider,
+) -> Vec<VisualIndexRecord> {
+    let mut out = Vec::new();
+    for frag in fragments {
+        collect(frag, provider, &mut out);
+    }
+    out
+}
+
+fn collect(
+    frag: &KnowledgeFragment,
+    provider: &dyn EmbeddingProvider,
+    out: &mut Vec<VisualIndexRecord>,
+) {
+    let (asset, caption) = match &frag.content {
+        FragmentContent::Image(image) => (
+            Some(image.asset.clone()),
+            image.caption.clone().or_else(|| {
+                image
+                    .ocr_text
+                    .as_ref()
+                    .map(|t| t.chars().take(200).collect())
+            }),
+        ),
+        FragmentContent::Chart(chart) => (chart.asset.clone(), chart.title.clone()),
+        FragmentContent::Mixed(children) => {
+            for child in children {
+                collect(child, provider, out);
+            }
+            return;
+        }
+        _ => (None, None),
+    };
+    let Some(asset) = asset else { return };
+    // Caption/title when present; the asset id otherwise — an embedding of
+    // the empty string would retrieve nothing.
+    let embed_text = caption.clone().unwrap_or_else(|| asset.asset_id.clone());
+    out.push(VisualIndexRecord {
+        asset_id: asset.asset_id,
+        document_id: frag.context.document_id.clone().unwrap_or_default(),
+        page: frag.context.page.unwrap_or(0),
+        bbox: frag.source.as_ref().and_then(|s| s.bbox.clone()),
+        embedding: provider.embed(&embed_text),
+        semantic_caption: caption,
+        fragment_ids: vec![frag.fragment_id.clone()],
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::{AstNode, BlockType, ChartPayload, ChartType, DocumentAst, ImagePayload};
+    use crate::boundary::{KnowledgeBoundaryDetector, RuleBoundaryDetector};
+    use crate::embedding::MockEmbeddingProvider;
+    use crate::fragment::{FragmentContext, FragmentModality};
+    use crate::source::{SourceSpan, VisualAssetRef};
+
+    fn asset() -> VisualAssetRef {
+        VisualAssetRef {
+            asset_id: "asset-1".into(),
+            mime_type: "image/png".into(),
+            content_hash: "deadbeef".into(),
+            source: SourceSpan {
+                document_id: None,
+                page: 1,
+                start_offset: None,
+                end_offset: None,
+                bbox: None,
+                node_id: None,
+            },
+        }
+    }
+
+    fn image_node() -> AstNode {
+        AstNode {
+            block_type: BlockType::Image,
+            text: Some("Figure 1: payment flow".into()),
+            children: vec![],
+            bbox: None,
+            confidence: None,
+            payload: Some(crate::ast::AstPayload::Image(ImagePayload {
+                asset: asset(),
+                ocr_text: None,
+                ocr_model: None,
+                caption: Some("Figure 1: payment flow".into()),
+                detected_objects: vec![],
+                visual_embedding: None,
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn text_node(text: &str) -> AstNode {
+        AstNode {
+            block_type: BlockType::Unknown,
+            text: Some(text.to_string()),
+            children: vec![],
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        }
+    }
+
+    fn ast(nodes: Vec<AstNode>) -> DocumentAst {
+        let page_node = AstNode {
+            block_type: BlockType::Unknown,
+            text: None,
+            children: nodes,
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        };
+        DocumentAst {
+            page_count: 1,
+            pages: vec![page_node],
+            source_type: "test".into(),
+            document_id: None,
+        }
+    }
+
+    fn fragments(ast: &DocumentAst) -> Vec<KnowledgeFragment> {
+        RuleBoundaryDetector.detect(ast).unwrap()
+    }
+
+    #[test]
+    fn image_fragment_indexes_with_asset_and_caption() {
+        let fs = fragments(&ast(vec![image_node(), text_node("Some body text.")]));
+        let provider = MockEmbeddingProvider::new();
+        let index = build_visual_index(&fs, &provider);
+        assert_eq!(index.len(), 1, "one visual object");
+        let rec = &index[0];
+        assert_eq!(rec.asset_id, "asset-1");
+        assert_eq!(rec.page, 1);
+        assert_eq!(rec.fragment_ids, vec!["frag-p1-b0".to_string()]);
+        assert_eq!(
+            rec.semantic_caption.as_deref(),
+            Some("Figure 1: payment flow")
+        );
+        assert!(rec.bbox.is_none(), "no geometry on this fragment");
+        assert!(!rec.embedding.is_empty());
+        assert_eq!(rec.document_id, "", "no document id on the test AST");
+    }
+
+    #[test]
+    fn text_only_document_produces_no_records() {
+        let fs = fragments(&ast(vec![text_node("Just prose, no visuals.")]));
+        let provider = MockEmbeddingProvider::new();
+        assert!(build_visual_index(&fs, &provider).is_empty());
+    }
+
+    #[test]
+    fn mixed_fragment_walks_to_nested_visual() {
+        // PR-I hybrid merges nest visuals inside Mixed composites; the index
+        // must still find them (record cites the child's fragment id).
+        let child = KnowledgeFragment {
+            fragment_id: "frag-p1-b0".into(),
+            modality: FragmentModality::Image,
+            context: FragmentContext {
+                page: Some(1),
+                ..Default::default()
+            },
+            content: FragmentContent::Image(ImagePayload {
+                asset: asset(),
+                ocr_text: None,
+                ocr_model: None,
+                caption: Some("Figure 2: nested".into()),
+                detected_objects: vec![],
+                visual_embedding: None,
+            }),
+            source: None,
+            evidence: Vec::new(),
+            confidence: 1.0,
+        };
+        let composite = KnowledgeFragment {
+            fragment_id: "frag-p1-b0-mixed".into(),
+            modality: FragmentModality::Mixed,
+            context: FragmentContext {
+                page: Some(1),
+                ..Default::default()
+            },
+            content: FragmentContent::Mixed(vec![Box::new(child)]),
+            source: None,
+            evidence: Vec::new(),
+            confidence: 1.0,
+        };
+        let provider = MockEmbeddingProvider::new();
+        let index = build_visual_index(&[composite], &provider);
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[0].fragment_ids, vec!["frag-p1-b0".to_string()]);
+        assert_eq!(
+            index[0].semantic_caption.as_deref(),
+            Some("Figure 2: nested")
+        );
+    }
+
+    #[test]
+    fn chart_records_require_an_asset() {
+        let make = |title: Option<String>, asset: Option<VisualAssetRef>| KnowledgeFragment {
+            fragment_id: "frag-p1-b0".into(),
+            modality: FragmentModality::Chart,
+            context: FragmentContext {
+                page: Some(1),
+                ..Default::default()
+            },
+            content: FragmentContent::Chart(ChartPayload {
+                chart_type: ChartType::Bar,
+                title,
+                asset,
+                x_axis: None,
+                y_axis: None,
+                series: Vec::new(),
+                extracted_data: None,
+            }),
+            source: None,
+            evidence: Vec::new(),
+            confidence: 1.0,
+        };
+        let provider = MockEmbeddingProvider::new();
+        // Title without an asset: not a visual object (nothing to retrieve
+        // visually); the IR carries the chart knowledge.
+        assert!(
+            build_visual_index(&[make(Some("Quarterly revenue".into()), None)], &provider)
+                .is_empty()
+        );
+        // Asset-backed chart: indexed, title as the semantic caption.
+        let index = build_visual_index(
+            &[make(Some("Quarterly revenue".into()), Some(asset()))],
+            &provider,
+        );
+        assert_eq!(index.len(), 1);
+        assert_eq!(
+            index[0].semantic_caption.as_deref(),
+            Some("Quarterly revenue")
+        );
+    }
+
+    #[test]
+    fn visual_index_is_deterministic() {
+        let fs = fragments(&ast(vec![image_node(), text_node("Some body text.")]));
+        let provider = MockEmbeddingProvider::new();
+        let first = build_visual_index(&fs, &provider);
+        let second = build_visual_index(&fs, &provider);
+        assert_eq!(first, second);
+    }
+}

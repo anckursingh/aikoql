@@ -182,6 +182,11 @@ pub use visual::{
     VisualClassifier, MODEL_CHART, MODEL_DIAGRAM, MODEL_FORMULA, MODEL_IMAGE, MODEL_VISUAL,
 };
 
+// PR-K (HLD §24): visual retrieval index — an access path, not the source
+// of truth.
+mod visual_index;
+pub use visual_index::{build_visual_index, VisualIndexRecord};
+
 mod pipeline;
 pub use pipeline::{
     compile_document, compile_document_incremental, compile_document_mock,

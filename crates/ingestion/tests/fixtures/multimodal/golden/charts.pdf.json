@@ -1337,10 +1337,16 @@
           "duration_us": 0,
           "item_count": 1,
           "phase": "D8-projection"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D8-visual-index"
         }
       ],
       "total_us": 0
-    }
+    },
+    "visual_index": []
   },
   "document": {
     "ocr_stats": {

@@ -98,10 +98,26 @@
     "embedded_chunks": [
       {
         "chunk": {
-          "char_count": 22,
+          "char_count": 68,
           "chunk_id": "unknown/chunk-0000",
           "entity_mentions": [],
           "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            },
             {
               "confidence": 1.0,
               "document_id": null,
@@ -121,10 +137,469 @@
             "heading_path": [],
             "section_chunk_index": 0,
             "section_title": null,
-            "source_type": "text"
+            "source_type": "mixed"
           },
-          "text": "Figure 3: Company logo"
+          "text": "Figure 3: Company logo\nFigure 3: Company logo\nFigure 3: Company logo"
         },
+        "embedding": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.0,
+          0.0,
+          0.0625,
+          0.1875,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.1875,
+          0.0625,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.5,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.375,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.0625,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.125,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1875,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0625,
+          0.1875,
+          0.0,
+          0.125,
+          0.0
+        ],
+        "embedding_provider": "mock-char-ngram"
+      }
+    ],
+    "evidence_trail": {
+      "document_id": null,
+      "nodes": [
+        {
+          "entities": [],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-image-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-image-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "step": "Extracted 2 facts from document structure"
+        },
+        {
+          "entities": [],
+          "phase": "D5-ontology",
+          "source": [],
+          "step": "Discovered 0 classes, 1 property, 0 relationships"
+        },
+        {
+          "entities": [],
+          "phase": "D6-resolution",
+          "source": [],
+          "step": "Resolved 0 entities: 0 matched, 0 ambiguous, 0 unmatched"
+        },
+        {
+          "entities": [],
+          "phase": "D7-reconcile",
+          "source": [],
+          "step": "Reconciled: 0 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+        }
+      ]
+    },
+    "fragments": [
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Figure 3: Company logo"
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [],
+          "neighboring_fragments": [
+            "frag-p1-b1"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b0",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Image": {
+            "asset": {
+              "asset_id": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
+              "content_hash": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
+              "mime_type": "image/jpeg",
+              "source": {
+                "bbox": null,
+                "document_id": null,
+                "end_offset": null,
+                "node_id": null,
+                "page": 1,
+                "start_offset": null
+              }
+            },
+            "caption": "Figure 3: Company logo",
+            "detected_objects": [],
+            "ocr_model": null,
+            "ocr_text": null,
+            "visual_embedding": null
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [],
+          "neighboring_fragments": [
+            "frag-p1-b0",
+            "frag-p1-b2"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b1",
+        "modality": "Image",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Image": {
+            "asset": {
+              "asset_id": "ebb970f864c6903bb93773dd53be044a9a1128b49989a14b5b81408d1b6ea39c",
+              "content_hash": "ebb970f864c6903bb93773dd53be044a9a1128b49989a14b5b81408d1b6ea39c",
+              "mime_type": "image/jpeg",
+              "source": {
+                "bbox": null,
+                "document_id": null,
+                "end_offset": null,
+                "node_id": null,
+                "page": 1,
+                "start_offset": null
+              }
+            },
+            "caption": "Figure 3: Company logo",
+            "detected_objects": [],
+            "ocr_model": null,
+            "ocr_text": null,
+            "visual_embedding": null
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [],
+          "neighboring_fragments": [
+            "frag-p1-b1"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b2",
+        "modality": "Image",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      }
+    ],
+    "ir": {
+      "content_trust": null,
+      "document_id": null,
+      "entities": [],
+      "events": [],
+      "extractor": "mock",
+      "facts": [
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-image-v1",
+            "page": 1,
+            "source": null
+          },
+          "statement": "Image: Figure 3: Company logo"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-image-v1",
+            "page": 1,
+            "source": null
+          },
+          "statement": "Image: Figure 3: Company logo"
+        }
+      ],
+      "page_count": 1,
+      "relations": [],
+      "temporal": []
+    },
+    "ontology": {
+      "classes": [],
+      "document_id": null,
+      "method": "ir-discovery-mock",
+      "properties": [
+        {
+          "class_name": "Document",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-image-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-image-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "numeric_value",
+          "required": false,
+          "value_type": "Float"
+        }
+      ],
+      "relationships": []
+    },
+    "resolution": {
+      "ambiguous": [],
+      "matched": [],
+      "stats": {
+        "ambiguous_count": 0,
+        "average_confidence": 0.0,
+        "matched_count": 0,
+        "total_entities": 0,
+        "unmatched_count": 0
+      },
+      "unmatched": []
+    },
+    "secret_findings": [],
+    "stats": {
+      "phases": [
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D3-ast"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 3,
+          "phase": "D4-fragments"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D4-ir"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D5-ontology"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D6-resolution"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D7-reconcile"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D8-projection"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D8-visual-index"
+        }
+      ],
+      "total_us": 0
+    },
+    "visual_index": [
+      {
+        "asset_id": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
+        "bbox": null,
+        "document_id": "",
         "embedding": [
           0.0,
           0.0,
@@ -255,299 +730,153 @@
           0.0,
           0.0
         ],
-        "embedding_provider": "mock-char-ngram"
+        "fragment_ids": [
+          "frag-p1-b1"
+        ],
+        "page": 1,
+        "semantic_caption": "Figure 3: Company logo"
+      },
+      {
+        "asset_id": "ebb970f864c6903bb93773dd53be044a9a1128b49989a14b5b81408d1b6ea39c",
+        "bbox": null,
+        "document_id": "",
+        "embedding": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.18898224830627441,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.37796449661254883,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.37796449661254883,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.18898224830627441,
+          0.18898224830627441,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "fragment_ids": [
+          "frag-p1-b2"
+        ],
+        "page": 1,
+        "semantic_caption": "Figure 3: Company logo"
       }
-    ],
-    "evidence_trail": {
-      "document_id": null,
-      "nodes": [
-        {
-          "entities": [],
-          "phase": "D4-semantic-ir",
-          "source": [
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-image-v1",
-              "page": 1,
-              "source": null
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-image-v1",
-              "page": 1,
-              "source": null
-            }
-          ],
-          "step": "Extracted 2 facts from document structure"
-        },
-        {
-          "entities": [],
-          "phase": "D5-ontology",
-          "source": [],
-          "step": "Discovered 0 classes, 0 properties, 0 relationships"
-        },
-        {
-          "entities": [],
-          "phase": "D6-resolution",
-          "source": [],
-          "step": "Resolved 0 entities: 0 matched, 0 ambiguous, 0 unmatched"
-        },
-        {
-          "entities": [],
-          "phase": "D7-reconcile",
-          "source": [],
-          "step": "Reconciled: 0 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
-        }
-      ]
-    },
-    "fragments": [
-      {
-        "confidence": 1.0,
-        "content": {
-          "Text": "Figure 3: Company logo"
-        },
-        "context": {
-          "document_id": null,
-          "heading_path": [],
-          "neighboring_fragments": [
-            "frag-p1-b1"
-          ],
-          "page": 1,
-          "parent_fragment": null
-        },
-        "evidence": [
-          {
-            "confidence": 1.0,
-            "document_id": null,
-            "extractor": "rule_boundary",
-            "model": null,
-            "page": 1,
-            "source": null
-          }
-        ],
-        "fragment_id": "frag-p1-b0",
-        "modality": "Text",
-        "source": {
-          "bbox": null,
-          "document_id": null,
-          "end_offset": null,
-          "node_id": null,
-          "page": 1,
-          "start_offset": null
-        }
-      },
-      {
-        "confidence": 1.0,
-        "content": {
-          "Image": {
-            "asset": {
-              "asset_id": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
-              "content_hash": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
-              "mime_type": "image/jpeg",
-              "source": {
-                "bbox": null,
-                "document_id": null,
-                "end_offset": null,
-                "node_id": null,
-                "page": 1,
-                "start_offset": null
-              }
-            },
-            "caption": null,
-            "detected_objects": [],
-            "ocr_model": null,
-            "ocr_text": null,
-            "visual_embedding": null
-          }
-        },
-        "context": {
-          "document_id": null,
-          "heading_path": [],
-          "neighboring_fragments": [
-            "frag-p1-b0",
-            "frag-p1-b2"
-          ],
-          "page": 1,
-          "parent_fragment": null
-        },
-        "evidence": [
-          {
-            "confidence": 1.0,
-            "document_id": null,
-            "extractor": "rule_boundary",
-            "model": null,
-            "page": 1,
-            "source": null
-          }
-        ],
-        "fragment_id": "frag-p1-b1",
-        "modality": "Image",
-        "source": {
-          "bbox": null,
-          "document_id": null,
-          "end_offset": null,
-          "node_id": null,
-          "page": 1,
-          "start_offset": null
-        }
-      },
-      {
-        "confidence": 1.0,
-        "content": {
-          "Image": {
-            "asset": {
-              "asset_id": "ebb970f864c6903bb93773dd53be044a9a1128b49989a14b5b81408d1b6ea39c",
-              "content_hash": "ebb970f864c6903bb93773dd53be044a9a1128b49989a14b5b81408d1b6ea39c",
-              "mime_type": "image/jpeg",
-              "source": {
-                "bbox": null,
-                "document_id": null,
-                "end_offset": null,
-                "node_id": null,
-                "page": 1,
-                "start_offset": null
-              }
-            },
-            "caption": null,
-            "detected_objects": [],
-            "ocr_model": null,
-            "ocr_text": null,
-            "visual_embedding": null
-          }
-        },
-        "context": {
-          "document_id": null,
-          "heading_path": [],
-          "neighboring_fragments": [
-            "frag-p1-b1"
-          ],
-          "page": 1,
-          "parent_fragment": null
-        },
-        "evidence": [
-          {
-            "confidence": 1.0,
-            "document_id": null,
-            "extractor": "rule_boundary",
-            "model": null,
-            "page": 1,
-            "source": null
-          }
-        ],
-        "fragment_id": "frag-p1-b2",
-        "modality": "Image",
-        "source": {
-          "bbox": null,
-          "document_id": null,
-          "end_offset": null,
-          "node_id": null,
-          "page": 1,
-          "start_offset": null
-        }
-      }
-    ],
-    "ir": {
-      "content_trust": null,
-      "document_id": null,
-      "entities": [],
-      "events": [],
-      "extractor": "mock",
-      "facts": [
-        {
-          "confidence": 0.8500000238418579,
-          "entities": [],
-          "evidence": {
-            "confidence": 0.8500000238418579,
-            "document_id": null,
-            "extractor": "mock",
-            "model": "mock-image-v1",
-            "page": 1,
-            "source": null
-          },
-          "statement": "Image: asset c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1"
-        },
-        {
-          "confidence": 0.8500000238418579,
-          "entities": [],
-          "evidence": {
-            "confidence": 0.8500000238418579,
-            "document_id": null,
-            "extractor": "mock",
-            "model": "mock-image-v1",
-            "page": 1,
-            "source": null
-          },
-          "statement": "Image: asset ebb970f864c6903bb93773dd53be044a9a1128b49989a14b5b81408d1b6ea39c"
-        }
-      ],
-      "page_count": 1,
-      "relations": [],
-      "temporal": []
-    },
-    "ontology": {
-      "classes": [],
-      "document_id": null,
-      "method": "ir-discovery-mock",
-      "properties": [],
-      "relationships": []
-    },
-    "resolution": {
-      "ambiguous": [],
-      "matched": [],
-      "stats": {
-        "ambiguous_count": 0,
-        "average_confidence": 0.0,
-        "matched_count": 0,
-        "total_entities": 0,
-        "unmatched_count": 0
-      },
-      "unmatched": []
-    },
-    "secret_findings": [],
-    "stats": {
-      "phases": [
-        {
-          "duration_us": 0,
-          "item_count": 1,
-          "phase": "D3-ast"
-        },
-        {
-          "duration_us": 0,
-          "item_count": 3,
-          "phase": "D4-fragments"
-        },
-        {
-          "duration_us": 0,
-          "item_count": 2,
-          "phase": "D4-ir"
-        },
-        {
-          "duration_us": 0,
-          "item_count": 0,
-          "phase": "D5-ontology"
-        },
-        {
-          "duration_us": 0,
-          "item_count": 0,
-          "phase": "D6-resolution"
-        },
-        {
-          "duration_us": 0,
-          "item_count": 0,
-          "phase": "D7-reconcile"
-        },
-        {
-          "duration_us": 0,
-          "item_count": 1,
-          "phase": "D8-projection"
-        }
-      ],
-      "total_us": 0
-    }
+    ]
   },
   "document": {
     "ocr_stats": {

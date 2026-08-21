@@ -3349,7 +3349,7 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 14 | No mandatory heavyweight AI | ✅ Still lopdf/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 396 lib + 10 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 4×2 §60 matrix) + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 403 lib (+404 with `--features transform`) + 10 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 4×2 §60 matrix + 2 visual queries × 4 corpora, visual R@1/3/5 = 1.000) + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
 | 19 | CI measures extraction + semantic regression | ✅ DoD 19 — 10 golden PDF fixtures + `multimodal_golden` gate (byte-stable snapshots + entity-recall assertions + per-stage metrics) runs in both CI OSes; dedicated `--nocapture` step publishes §53 metrics to CI logs |
 
@@ -3526,6 +3526,23 @@ HLD §16 Phase 3 — the fourth detector and §60's final matrix column. Rule st
 
 **Tests — PR-J (all green 2026-08-21)**: 396 lib tests (368 + 28 boundary) + 397 with `--features transform`; 10/10 acceptance; golden suite 1/1; retrieval-quality 1/1 (4×2 matrix printed every run); `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets [--features transform] -- -D warnings` clean on both feature sets; `cargo test --workspace` green (61 suites, 0 failures).
 
-### Next implementation — PR-K: Visual retrieval (HLD §24, HLD PR-H)
+### Implemented now — PR-K: Visual retrieval (2026-08-21, commit on `feature/mvp-launch`)
 
-`VisualIndexRecord { asset_id, document_id, page, bbox, embedding, semantic_caption, fragment_ids }` — visual embeddings + a visual index as an access path (query → visual similarity → visual object → KnowledgeFragment → KO → evidence), never the source of truth. This is what fills the `visual=N/A` cell of the §60 instrument (a visual ranker over image embeddings) and the `ImagePayload.visual_embedding: Option<Vec<f32>>` field PR-F left empty.
+HLD §24/§53 — visual retrieval recall measured. Files:
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/visual_index.rs` (new) | `VisualIndexRecord { asset_id, document_id, page, bbox, embedding, semantic_caption, fragment_ids }` + `build_visual_index(fragments, provider)` — an access path (query → visual similarity → visual object → KnowledgeFragment → KO → evidence), never the source of truth. Walks the fragment stream; Mixed composites recurse (PR-I hybrid merges nest visuals). Images (caption → OCR fallback → asset id as embed text) and asset-backed charts are visual objects; diagrams/formulas carry no asset reference — ponytail: add `asset` to `DiagramPayload` when a visual diagram ranker is needed. 5 tests. |
+| `crates/ingestion/src/pipeline.rs` | `CompilationResult.visual_index` (`#[serde(default)]`) built in all three compile paths (full, incremental splice, reproject) + `D8-visual-index` stat phase (phase count now 8). |
+| `crates/ingestion/src/visual.rs` | Root-cause fix: PDF text runs precede drawn images, so caption context now also comes from a preceding sibling — walk back past caption-less visual siblings (bounded 3) so a figure group shares its leading caption; a caption paragraph already claimed as the following sibling of an earlier visual (markdown shape) is never reused. 2 tests. |
+| `crates/ingestion/tests/retrieval_quality.rs` | §60 instrument fills the `visual=N/A` cell: `VISUAL_QUERIES` (exact-phrase + paraphrase probe on the images.pdf logo), `rank_visual` (query-vs-record embedding cosine over the mock provider), `visual_recall_at_k` (caption containment vs the rule-corpus qrel text), `[RETRIEVAL-VISUAL*]` lines + floor assert per corpus. Chart visual queries are un-judgeable until PDF chart drawings are extracted as assets (documented ceiling). |
+| `crates/ingestion/tests/fixtures/multimodal/golden/*.json` | Regenerated: every file gains the `visual_index` field + `D8-visual-index` stat; `images.pdf` fragments now carry caption `"Figure 3: Company logo"` (both image assets) and the `scanned.pdf` screenshot indexes with `semantic_caption: null` (honest — no caption-paragraph precedes it). |
+| `crates/services/api/mcp/tests/mcp_stdio.rs` | End-to-end phase-count assert 7 → 8 (D8-visual-index). |
+
+**Measured (§60, 2026-08-21)**: visual retrieval recall **1.000 / 1.000 / 1.000** (R@1/3/5) on all four corpora (rule/embedding/transformer/hybrid) — floor assert 0.5 with headroom. Text matrix: baseline unchanged (0.867/0.867/0.867); embedding ranker top-1 shifted 0.933 → 0.800 on one query because the images.pdf chunk now merges the caption three times (caption text + both image captions — a chunker-coarseness effect; the variant's R@3/R@5 rose to 0.933); parity gate green. **Design decision**: embeddings live in the §24 index record, not `ImagePayload.visual_embedding` — the payload field stays a specialist seam for a real visual model provider; the index always embeds the retrievable text (caption/title/OCR/asset id) via the `EmbeddingProvider` seam, so it is rebuildable from the canonical segmentation.
+
+**Tests — PR-K (all green 2026-08-21)**: 403 lib tests (368 + 28 boundary + 5 visual_index + 2 visual caption-association) + 404 with `--features transform`; 10/10 acceptance; golden suite 1/1 (regenerated); retrieval-quality 1/1 (4×2 matrix + 4 visual-recall lines printed every run); `cargo fmt --check` + `cargo clippy -p aikoql-ingestion --all-targets [--features transform] -- -D warnings` clean on both feature sets; `cargo test --workspace` green (61 suites, 0 failures).
+
+### Next implementation — PR-L: Hybrid retrieval surface (HLD §53 "hybrid retrieval recall")
+
+PR-K filled the last measured cell of the §60 instrument (`visual=1.000`); the remaining `hybrid retrieval recall` cell waits on a retrieval layer that fuses the lexical + embedding + visual rankers (the §60 instrument already measures each variant's corpus, so the fusion layer is a rank-combination step over existing measurements). Candidates also queued: OCR/VLM provider wiring behind the existing seams (PR-F), `DiagramPayload.asset` for a visual diagram ranker (visual_index.rs ponytail note), and the §60 real-model-provider decision (now fully instrumented on all four detectors).

@@ -1099,11 +1099,15 @@ fn m15_document_compile_pipeline() {
     assert!(phases.contains("D6-resolution"));
     assert!(phases.contains("D7-reconcile"));
 
-    // Verify stats: 7 phases (D3-ast .. D8-projection; D4 splits into the
-    // boundary stream and the semantic leg).
+    // Verify stats: 8 phases (D3-ast .. D8-projection + D8-visual-index;
+    // D4 splits into the boundary stream and the semantic leg).
     let stats = &result["stats"];
     let phases_arr = stats["phases"].as_array().unwrap();
-    assert_eq!(phases_arr.len(), 7, "pipeline must have 7 phases (D3-D8)");
+    assert_eq!(
+        phases_arr.len(),
+        8,
+        "pipeline must have 8 phases (D3-D8 + visual index)"
+    );
     assert!(
         phases_arr
             .iter()

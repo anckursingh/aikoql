@@ -547,17 +547,50 @@ fn ocr_asset(
 }
 
 fn classify_visuals_in_children(nodes: &mut [AstNode]) {
+    let mut claimed = vec![false; nodes.len()];
     for i in 0..nodes.len() {
-        // Following-sibling text used as caption context for visual nodes.
+        // Caption context: a following sibling (markdown convention — the
+        // caption sits under the figure) or a preceding sibling (PDF text
+        // runs precede the drawn images). Walk back past caption-less visual
+        // siblings so a figure group shares its leading caption; a caption
+        // paragraph already claimed as a following sibling of an earlier
+        // visual (markdown shape) belongs to that figure, not this one.
+        // ponytail: bounded 3-sibling walk; a real reading-order model if
+        // captions drift further from their figures.
+        let is_visual = matches!(
+            nodes[i].block_type,
+            BlockType::Image | BlockType::Figure | BlockType::Chart | BlockType::Diagram
+        );
         let next = nodes
             .get(i + 1)
             .and_then(|n| n.text.as_deref())
             .filter(|t| is_caption_paragraph(t))
             .map(|t| t.to_string());
+        if is_visual && next.is_some() {
+            claimed[i + 1] = true;
+        }
+        let prev = (0..3.min(i)).find_map(|back| {
+            let idx = i - back - 1;
+            if claimed[idx] {
+                return None; // caption already belongs to an earlier figure
+            }
+            let n = nodes.get(idx)?;
+            if matches!(
+                n.block_type,
+                BlockType::Image | BlockType::Figure | BlockType::Chart | BlockType::Diagram
+            ) && n.text.as_deref().is_none()
+            {
+                return None; // caption-less visual sibling — keep walking
+            }
+            n.text
+                .as_deref()
+                .filter(|t| is_caption_paragraph(t))
+                .map(|t| t.to_string())
+        });
         if !nodes[i].children.is_empty() {
             classify_visuals_in_children(&mut nodes[i].children);
         }
-        analyze_node(&mut nodes[i], next.as_deref());
+        analyze_node(&mut nodes[i], next.or(prev).as_deref());
     }
 
     // HLD §33 staged processing: charts get structured data from an
@@ -890,6 +923,66 @@ mod tests {
         let payload = MockImageAnalyzer.analyze(&node).expect("payload");
         assert_eq!(payload.asset.content_hash, "h");
         assert_eq!(payload.caption.as_deref(), Some("Figure 1: logo"));
+    }
+
+    #[test]
+    fn preceding_caption_paragraph_becomes_image_caption() {
+        // PDF text runs precede the drawn images: [caption text, Im1, Im2] —
+        // the walk-back must caption both asset images (PR-K fix; images.pdf
+        // fixture shape).
+        let mut img1 = visual_node(BlockType::Image, None, vec![]);
+        img1.asset = Some(asset());
+        let mut img2 = visual_node(BlockType::Image, None, vec![]);
+        img2.asset = Some(asset());
+        let mut ast = ast_with(vec![
+            visual_node(
+                BlockType::Paragraph,
+                Some("Figure 7: Group caption"),
+                vec![],
+            ),
+            img1,
+            img2,
+        ]);
+        classify_visuals(&mut ast);
+
+        for node in &ast.pages[0].children[1..] {
+            match &node.payload {
+                Some(AstPayload::Image(i)) => {
+                    assert_eq!(i.caption.as_deref(), Some("Figure 7: Group caption"))
+                }
+                other => panic!("expected image payload, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn caption_claimed_by_earlier_figure_is_not_reused() {
+        // Markdown shape: [image, caption, image]. The caption belongs to
+        // the first image; the walk-back must not re-type the second image
+        // (regression: the logo after "Chart 1: …" became a Chart).
+        let mut fees = visual_node(BlockType::Image, Some("fees"), vec![]);
+        fees.asset = Some(asset());
+        let mut logo = visual_node(BlockType::Image, Some("Logo"), vec![]);
+        logo.asset = Some(asset());
+        let mut ast = ast_with(vec![
+            fees,
+            visual_node(
+                BlockType::Paragraph,
+                Some("Chart 1: Fee structure by plan"),
+                vec![],
+            ),
+            logo,
+        ]);
+        classify_visuals(&mut ast);
+
+        let nodes = &ast.pages[0].children;
+        assert!(matches!(nodes[0].payload, Some(AstPayload::Chart(_))));
+        match &nodes[2].payload {
+            Some(AstPayload::Image(i)) => {
+                assert_eq!(i.caption.as_deref(), Some("Logo"), "logo stays an image")
+            }
+            other => panic!("expected image payload, got {:?}", other),
+        }
     }
 
     #[test]
