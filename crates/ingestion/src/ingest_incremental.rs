@@ -220,7 +220,7 @@ pub fn incremental_diff_ingest(
             evidence: Evidence {
                 document_id: merged.document_id.clone(),
                 page: None,
-                bbox_text: None,
+                source: None,
                 extractor: "ingest-dir-incremental".into(),
                 model: None,
                 confidence: 0.3,

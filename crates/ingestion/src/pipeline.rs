@@ -19,7 +19,7 @@ use crate::commit::{
 };
 use crate::embedding::{EmbeddingProvider, MockEmbeddingProvider};
 use crate::fragment::KnowledgeFragment;
-use crate::ir::{document_model_to_ir, Evidence, KnowledgeIr, SemanticAnalyzer};
+use crate::ir::{Evidence, KnowledgeIr, SemanticAnalyzer};
 use crate::ontology::{discover_ontology_from_ir, OntologyProposal};
 use crate::resolution::{
     resolve_entities, EntityResolver, KnowledgeBaseEntry, MockEntityResolver, ResolutionResult,
@@ -363,9 +363,11 @@ pub fn compile_document(
     };
     let dt_frag = time_now() - t_frag;
 
-    // D4: DocumentAst → KnowledgeIr
+    // D4: DocumentAst → KnowledgeIr — the semantic leg consumes the
+    // fragment stream (HLD §57). Analyzers fall back to the AST when the
+    // boundary stream is empty (degraded detection).
     let t_ir = time_now();
-    let raw_ir = document_model_to_ir(doc, analyzer);
+    let raw_ir = analyzer.analyze(&ast, &fragments);
     let dt_ir = time_now() - t_ir;
 
     // R8: scan and redact secrets/PII before IR flows into commit planning

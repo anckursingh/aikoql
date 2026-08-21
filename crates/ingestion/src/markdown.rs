@@ -17,6 +17,7 @@
 //! and require explicit validation before execution.
 
 use crate::ast::{AstNode, BlockType, DocumentAst};
+use crate::fragment::KnowledgeFragment;
 use crate::ir::{
     EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate, SemanticAnalyzer,
 };
@@ -397,7 +398,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
         "markdown-compiler"
     }
 
-    fn analyze(&self, ast: &DocumentAst) -> KnowledgeIr {
+    fn analyze(&self, ast: &DocumentAst, _fragments: &[KnowledgeFragment]) -> KnowledgeIr {
         let extractor = self.name().to_string();
         let sections = parse_sections(ast);
         let mut ir = KnowledgeIr {
@@ -424,7 +425,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                         evidence: Evidence {
                             document_id: self.document_id.clone(),
                             page: Some(1),
-                            bbox_text: Some(section.heading.clone()),
+                            source: None,
                             extractor: extractor.clone(),
                             model: Some("markdown-v1".into()),
                             confidence: self.confidence,
@@ -447,7 +448,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                                 evidence: Evidence {
                                     document_id: self.document_id.clone(),
                                     page: Some(1),
-                                    bbox_text: Some(section.heading.clone()),
+                                    source: None,
                                     extractor: extractor.clone(),
                                     model: Some("markdown-v1".into()),
                                     confidence: fact_confidence,
@@ -466,7 +467,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                             evidence: Evidence {
                                 document_id: self.document_id.clone(),
                                 page: Some(1),
-                                bbox_text: Some(section.heading.clone()),
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("markdown-v1".into()),
                                 confidence: self.confidence,
@@ -483,7 +484,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                                 evidence: Evidence {
                                     document_id: self.document_id.clone(),
                                     page: Some(1),
-                                    bbox_text: Some(section.heading.clone()),
+                                    source: None,
                                     extractor: extractor.clone(),
                                     model: Some("markdown-v1".into()),
                                     confidence: self.confidence,
@@ -507,7 +508,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                             evidence: Evidence {
                                 document_id: self.document_id.clone(),
                                 page: Some(1),
-                                bbox_text: Some(section.heading.clone()),
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("markdown-v1".into()),
                                 confidence: conf,
@@ -526,7 +527,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                         evidence: Evidence {
                             document_id: self.document_id.clone(),
                             page: Some(1),
-                            bbox_text: Some(section.heading.clone()),
+                            source: None,
                             extractor: extractor.clone(),
                             model: Some("markdown-v1".into()),
                             confidence: self.confidence,
@@ -540,7 +541,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                         evidence: Evidence {
                             document_id: self.document_id.clone(),
                             page: Some(1),
-                            bbox_text: Some(section.heading.clone()),
+                            source: None,
                             extractor: extractor.clone(),
                             model: Some("markdown-v1".into()),
                             confidence: self.confidence,
@@ -570,7 +571,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                             evidence: Evidence {
                                 document_id: self.document_id.clone(),
                                 page: Some(1),
-                                bbox_text: Some(section.heading.clone()),
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("markdown-v1".into()),
                                 confidence: self.confidence,
@@ -580,7 +581,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                 }
 
                 SectionKind::Artifact { language } => {
-                    for (lang, code) in &section.code_blocks {
+                    for (lang, _code) in &section.code_blocks {
                         let actual_lang = if lang.is_empty() { &language } else { lang };
                         ir.facts.push(FactCandidate {
                             statement: format!(
@@ -592,7 +593,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                             evidence: Evidence {
                                 document_id: self.document_id.clone(),
                                 page: Some(1),
-                                bbox_text: Some(code.lines().next().unwrap_or("").to_string()),
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("markdown-v1".into()),
                                 confidence: self.confidence,
@@ -612,7 +613,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                                 evidence: Evidence {
                                     document_id: self.document_id.clone(),
                                     page: Some(1),
-                                    bbox_text: Some(section.heading.clone()),
+                                    source: None,
                                     extractor: extractor.clone(),
                                     model: Some("markdown-v1".into()),
                                     confidence: self.confidence,
@@ -645,7 +646,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                             evidence: Evidence {
                                 document_id: self.document_id.clone(),
                                 page: Some(1),
-                                bbox_text: Some(para.clone()),
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("markdown-v1".into()),
                                 confidence: self.confidence * 0.8,
@@ -1048,7 +1049,7 @@ pub fn compile_markdown_string(
 ) -> Result<KnowledgeIr, String> {
     let ast = markdown_text_to_ast(content);
     let analyzer = MarkdownSemanticAnalyzer::new(document_id);
-    Ok(analyzer.analyze(&ast))
+    Ok(analyzer.analyze(&ast, &[]))
 }
 
 #[cfg(test)]

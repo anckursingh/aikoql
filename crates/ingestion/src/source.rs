@@ -1,10 +1,7 @@
 //! D3.0: Typed source geometry — provenance from physical document layout.
 //!
-//! `SourceSpan` replaces ad-hoc string provenance for new multimodal paths.
-//! `Evidence.bbox_text` (ir.rs) remains for backward compatibility until the
-//! semantic-pipeline migration (PR-D) swaps candidates onto typed sources in
-//! one sweep — touching ~20 construction sites per field change is churn
-//! with zero behavior gain until candidates carry `source_fragments`.
+//! `SourceSpan` carries typed geometry; `EvidenceSource` (PR-D) replaced the
+//! legacy `Evidence.bbox_text` string field across all construction sites.
 
 use crate::ast::BoundingBox;
 

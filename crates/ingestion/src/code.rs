@@ -408,22 +408,22 @@ fn doc_lines(attrs: &[syn::Attribute]) -> Vec<String> {
     attrs.iter().filter_map(extract_doc_comment).collect()
 }
 
-fn span_evidence(extractor: &str, name: &str, kind: &str) -> Evidence {
+fn span_evidence(extractor: &str, _name: &str, _kind: &str) -> Evidence {
     Evidence {
         document_id: None,
         page: None,
-        bbox_text: Some(format!("{}: {} {}", kind, extractor, name)),
+        source: None,
         extractor: extractor.to_string(),
         model: Some("syn-v2".into()),
         confidence: 0.85,
     }
 }
 
-fn module_evidence(_file: &syn::File, kind: &str) -> Evidence {
+fn module_evidence(_file: &syn::File, _kind: &str) -> Evidence {
     Evidence {
         document_id: None,
         page: None,
-        bbox_text: Some(kind.to_string()),
+        source: None,
         extractor: "rust-code-parser".into(),
         model: Some("syn-v2".into()),
         confidence: 0.85,

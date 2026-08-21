@@ -235,7 +235,7 @@ fn finalize_ingest_result(
         evidence: Evidence {
             document_id: merged.document_id.clone(),
             page: None,
-            bbox_text: None,
+            source: None,
             extractor: "ingest-dir".into(),
             model: None,
             confidence: 1.0,
@@ -549,7 +549,7 @@ fn file_evidence(name: &str) -> Evidence {
     Evidence {
         document_id: Some(name.to_string()),
         page: None,
-        bbox_text: None,
+        source: None,
         extractor: "ingest-dir".into(),
         model: None,
         confidence: 1.0,

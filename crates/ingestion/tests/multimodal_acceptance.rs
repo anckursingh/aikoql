@@ -6,8 +6,8 @@
 //! context, and backward-compatible result serialization.
 
 use aikoql_ingestion::{
-    compile_document_mock, extract_document, CompilationResult, FragmentContent, FragmentModality,
-    KnowledgeFragment,
+    compile_document_mock, extract_document, CompilationResult, EvidenceSource, FactCandidate,
+    FragmentContent, FragmentModality, KnowledgeFragment,
 };
 
 fn invoice_doc() -> aikoql_ingestion::DocumentModel {
@@ -213,6 +213,36 @@ fn acceptance_deterministic_fragment_ids() {
         .collect();
     assert_eq!(ids1, ids2, "fragment ids deterministic across compiles");
     assert_eq!(first.fragments.len(), second.fragments.len());
+}
+
+#[test]
+fn acceptance_semantic_ir_cites_typed_sources() {
+    // PR-D: the semantic leg consumes the fragment stream — table cells
+    // become facts cited at cell granularity, entities keep flowing.
+    let doc = invoice_doc();
+    let result = compile_document_mock(&doc, &[]);
+
+    assert!(
+        result.ir.entities.iter().any(|e| e.name == "Payment Terms"),
+        "heading entities still extracted through the fragment leg"
+    );
+
+    let cell_facts: Vec<&FactCandidate> = result
+        .ir
+        .facts
+        .iter()
+        .filter(|f| matches!(&f.evidence.source, Some(EvidenceSource::TableCell { .. })))
+        .collect();
+    assert!(
+        !cell_facts.is_empty(),
+        "table facts carry TableCell evidence"
+    );
+    assert!(
+        cell_facts
+            .iter()
+            .any(|f| f.statement == "Unit Price: $12.00"),
+        "cell fact pairs header with value"
+    );
 }
 
 #[test]

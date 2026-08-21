@@ -563,7 +563,7 @@ What was built matches v2's D1 exactly: artifact store, document KO type, binary
 
 | Task | Detail |
 |---|---|
-| `Evidence` struct | Per-candidate provenance: document_id, page, bbox_text, extractor, model, confidence |
+| `Evidence` struct | Per-candidate provenance: document_id, page, typed `source: Option<EvidenceSource>` (PR-D), extractor, model, confidence |
 | `EntityCandidate` | name, type_hint, mentions[], confidence, evidence |
 | `RelationCandidate` | subject, predicate, object, confidence, evidence |
 | `FactCandidate` | statement, entities[], confidence, evidence |
@@ -3246,7 +3246,7 @@ The HLD's core architectural position (doc §59): the **DocumentAst is the canon
 | HLD requirement | Existing code | Verdict |
 |---|---|---|
 | Canonical AST with typed payloads (§9–13) | `ast.rs` D3 exists, but text-only — tables classified as blocks, no typed cells, no chart/diagram/formula payloads | **Missing → PR-A** |
-| Typed provenance (`SourceSpan`, `EvidenceSource`) (§14) | `Evidence.bbox_text` is a string; no typed geometry anywhere | **Missing → PR-A** |
+| Typed provenance (`SourceSpan`, `EvidenceSource`) (§14) | `Evidence.bbox_text` is a string; no typed geometry anywhere | **Delivered → PR-A (types) + PR-D (wired into candidates)** |
 | Semantic segmentation between AST and IR (`KnowledgeFragment` + boundary detection) (§22/§37) | D4 goes straight AST → IR; chunking operates directly on the AST | **Missing → PR-C** |
 | Retrieval as projection (`DocumentChunker` → `RetrievalProjector`) (§41/§60) | `chunking.rs` chunks the AST itself | **Present but misplaced → PR-E** |
 | Visual classification (chart/diagram/image analyzers) (§17–20) | Block-level Figure marker heuristic only (`detect_figures`) | **Deferred → PR-F** (mock-first) |
@@ -3256,8 +3256,8 @@ The HLD's core architectural position (doc §59): the **DocumentAst is the canon
 Decisions taken this round (with rationale):
 
 - **PR-A + PR-C primitives only** — exactly the §60 first milestone: `SourceSpan`, `VisualAssetRef`, `AstPayload`, `KnowledgeFragment`, `KnowledgeBoundaryDetector`. No model changes, no chunker refactor yet.
-- **`Evidence` struct untouched** — the typed `EvidenceSource` enum is defined and exported, but swapping `bbox_text` onto typed sources touches ~20 construction sites. That migration lands as one sweep with PR-D (AST → Fragment → IR), when candidates actually carry `source_fragments` — churn with zero behavior gain until then.
-- **`AstNode.text` stays `String`** — the HLD's `Option<String>` migration also lands with PR-D, so every `.text` consumer switches together.
+- **`Evidence` struct** — the typed `EvidenceSource` swap was one sweep in PR-D (~24 construction sites across 9 files): done, `bbox_text` is gone from the wire format (legacy JSON deserializes; the key is dropped).
+- **`AstNode.text` stays `String` for now** — the HLD's `Option<String>` migration moved to PR-F, where text-less visual nodes actually appear. Doing it in PR-D would be ~90 mechanical `.text`-consumer edits with zero behavior gain.
 - **Headings are `FragmentContext.heading_path`, not fragments** — heading text reaches consumers through context; emitting it as its own fragment duplicates the content.
 - **`AstPayload`/`FragmentContent` per-modality, not one blob** — a table fragment keeps `TablePayload` (headers/rows/typed `ScalarValue` cells); interpretation is derived from the source representation, never substituted for it (§59).
 - **`RuleBoundaryDetector` in one `boundary.rs`** — the doc's directory-per-detector layout is premature; one file per future detector was *not* created (ponytail: do not create all directories immediately).
@@ -3292,6 +3292,30 @@ DocumentModel → Multimodal DocumentAst → KnowledgeFragment[] → KnowledgeIr
                                                   └→ RetrievalProjection → DocumentChunk → Embedding
 ```
 
+### Implemented now — PR-D: Semantic pipeline (HLD §57, completes the §60 diagram)
+
+The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer::analyze(ast, fragments)`. The mock analyzer extracts modality-aware candidates from fragments (table cells become facts cited at cell granularity) and falls back to its AST heuristics when the boundary stream is empty (degraded detector → ingestion never hard-fails on segmentation). The typed `EvidenceSource` replaced `Evidence.bbox_text` at all ~24 construction sites in one sweep.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/ir.rs` | `Evidence.bbox_text: Option<String>` → `source: Option<EvidenceSource>` (`#[serde(default)]`; legacy JSON with `bbox_text` still deserializes — the key is dropped). `SemanticAnalyzer::analyze` now takes `(ast, fragments)`. `MockSemanticAnalyzer` dispatches: empty stream → AST fallback (pre-existing heuristics, unchanged); otherwise the fragment leg — entities/temporal from rendered fragment texts + heading context, heading facts deduped across fragments, **table cells → facts cited at cell granularity** (`TableCell { table_id = fragment_id, cell_id = "row-column" }`), relations within text fragments. `document_model_to_ir` detects fragments (fail-soft) and passes both. |
+| `crates/ingestion/src/pipeline.rs` | D4-ir calls `analyzer.analyze(&ast, &fragments)` directly — reuses D3's AST + D4-fragments' stream instead of re-deriving both. |
+| `crates/ingestion/src/chunking.rs` | `fragment_text` → `pub(crate)`: the semantic leg reuses the projection's per-modality renderers (retrieval and semantic text views cannot disagree). |
+| `crates/ingestion/src/boundary.rs` | Fragment evidence carries typed `Region { bbox }` instead of the `"(x,y,w,h)"` string. |
+| `crates/ingestion/src/markdown.rs` | 12 evidence sites swept (heading strings were redundant — candidates already carry the section); signature takes `_fragments` (section classification needs the AST structure). |
+| `crates/ingestion/src/{merge,code,commit,ingest_dir,ingest_incremental,ontology,resolution}.rs` | Remaining construction sites swept: non-spatial provenance (merge labels, code-index kinds) → `source: None` with provenance in `document_id`/`extractor`; geometry test fixtures → typed `Region`. |
+| `crates/services/api/mcp/src/ingest.rs` | Kernel KO location strings render the typed source via `evidence_source_label` (`"table frag-p1-b2 cell 0-h1"`, `"bbox (…)"`, …). |
+| `crates/ingestion/tests/multimodal_acceptance.rs` | +1 acceptance: `acceptance_semantic_ir_cites_typed_sources` — cell facts carry `TableCell` evidence through the full pipeline. |
+
+**Deferred from the PR-D plan:** `AstNode.text → Option<String>` moved to PR-F (first text-less visual nodes) — ~90 mechanical consumer edits with zero behavior gain here, same rationale as the earlier `bbox_text` deferral.
+
+### Tests — PR-D (all green 2026-08-21)
+
+- **Unit**: 327 lib tests (+3): `fragment_stream_yields_cell_cited_table_facts` (cell-level `TableCell` evidence), `fragment_and_ast_paths_agree_on_entities` (fragment entities ⊆ AST-fallback entities; the fallback's cross-block capitalized runs — "Terms Acme" — are a quirk the fragment leg doesn't inherit), `legacy_bbox_text_evidence_deserializes_to_typed_source` (wire-format back-compat).
+- **Acceptance**: 8/8 — the new test above plus the existing 7.
+- **Ripple fixed**: `mcp_stdio.rs` `m15_document_compile_pipeline` asserted 6 pipeline phases; PR-E's D4-fragments makes 7 — stale assertion updated (was latent since the PR-E commits were unpushed, so no CI caught it).
+- **Gates**: `cargo fmt --check` clean, `cargo clippy --workspace --all-targets` clean, `cargo check --workspace` clean, `cargo test --workspace` green (all crates, incl. 236 kernel + 65 mcp).
+
 ### Tests (unit + e2e + acceptance) — all green 2026-08-21
 
 - **Unit**: 321 lib tests pass, including 6 new `boundary::tests` (structural boundaries, headings-as-context, table structure preserved, provenance + deterministic ids, empty doc, serde roundtrip) and 3 `source::tests`.
@@ -3315,8 +3339,8 @@ DocumentModel → Multimodal DocumentAst → KnowledgeFragment[] → KnowledgeIr
 | 4 | Diagram nodes/edges representable | ✅ `DiagramPayload` types exist; extraction deferred to PR-F |
 | 5 | Images retain original assets | ⏳ `VisualAssetRef` + `AstNode.asset` exist; asset population deferred to PR-B/PR-F |
 | 6 | Formulas retain mathematical representation | ✅ `FormulaPayload` types exist; extraction deferred to PR-F |
-| 7 | Every semantic candidate has typed provenance | ⏳ Types exist (`SourceSpan`/`EvidenceSource`); candidate wiring is PR-D |
-| 8 | Every visual-derived fact resolves to page/region | ⏳ With PR-D/PR-F |
+| 7 | Every semantic candidate has typed provenance | ✅ PR-D done — `Evidence.source: Option<EvidenceSource>` on every candidate; geometry sites carry `Region`, table facts carry `TableCell` |
+| 8 | Every visual-derived fact resolves to page/region | ⏳ Table-cell facts resolve to cell-level evidence (PR-D); visual analyzers are PR-F |
 | 9 | Retrieval chunks are derived projections | ✅ PR-E done — `HeadingProjector` projects whole fragments, never splits one |
 | 10 | Transformer boundary detection optional | ✅ No transformer dependency; `KnowledgeBoundaryDetector` trait is the seam |
 | 11 | Model versions persisted | ⏳ Future (PR-F onward) |
@@ -3329,6 +3353,6 @@ DocumentModel → Multimodal DocumentAst → KnowledgeFragment[] → KnowledgeIr
 | 18 | Multimodal golden fixtures exist | ⏳ Future (PR-E/PR-F benchmarks) |
 | 19 | CI measures extraction + semantic regression | ⏳ Future |
 
-### Next implementation — PR-D: Semantic pipeline (HLD §57, completes the §60 diagram)
+### Next implementation — PR-B: Extraction preservation (HLD §57)
 
-PR-D changes the semantic leg from `AST → IR` to **`AST → Fragment → IR`**: `document_model_to_ir` starts consuming the fragment stream (modality-aware candidate extraction), the typed `EvidenceSource` replaces `Evidence.bbox_text` at the ~20 construction sites in one sweep, and `AstNode.text` migrates `String → Option<String>` with all `.text` consumers switching together. After that: PR-B (extraction preservation — PDF/DOCX/HTML keep multimodal structure) and PR-F (visual analyzers, mock-first). PR-G (transformer/embedding boundary detectors) stays gated on the rule-baseline benchmarks, which are now measurable against the PR-E projection.
+PR-B makes PDF/DOCX/HTML extraction keep the multimodal structure the canonical AST can already represent: real extractors emit `Figure`/`Chart`/`Diagram`/`Formula` blocks with payloads + `VisualAssetRef`s instead of text-only blocks (asset population, content-addressed storage — DoD rows 5, 12), `DocumentAst` gains a `document_id` (needed for the document-hash fragment-id prefix deferred in PR-C). Also lands the `AstNode.text → Option<String>` migration deferred from PR-D, with all `.text` consumers switching together. After that: PR-F (visual analyzers, mock-first). PR-G (transformer/embedding boundary detectors) stays gated on the rule-baseline benchmarks, which are now measurable against the PR-E projection and the PR-D semantic leg.

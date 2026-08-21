@@ -13,7 +13,7 @@
 use crate::ast::{table_payload_from_node, AstNode, BlockType, DocumentAst};
 use crate::fragment::{FragmentContent, FragmentContext, FragmentModality, KnowledgeFragment};
 use crate::ir::Evidence;
-use crate::source::SourceSpan;
+use crate::source::{EvidenceSource, SourceSpan};
 
 /// Splits a DocumentAst into coherent knowledge units.
 ///
@@ -253,10 +253,10 @@ fn evidence(node: &AstNode, page: u32, confidence: f32) -> Evidence {
     Evidence {
         document_id: None,
         page: Some(page),
-        bbox_text: node
+        source: node
             .bbox
             .as_ref()
-            .map(|b| format!("({},{},{},{})", b.x, b.y, b.width, b.height)),
+            .map(|b| EvidenceSource::Region { bbox: b.clone() }),
         extractor: "rule_boundary".into(),
         model: None,
         confidence,

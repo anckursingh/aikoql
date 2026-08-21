@@ -63,6 +63,45 @@ pub(crate) fn content_trust_extension(ct: ContentTrust) -> ExtensionMap {
     );
     ext
 }
+
+/// Human-readable label for a typed evidence source (kernel KO locations).
+fn evidence_source_label(src: &aikoql_ingestion::EvidenceSource) -> String {
+    match src {
+        aikoql_ingestion::EvidenceSource::TextSpan {
+            start_offset,
+            end_offset,
+        } => format!("chars {}-{}", start_offset, end_offset),
+        aikoql_ingestion::EvidenceSource::Region { bbox } => {
+            format!(
+                "bbox ({},{},{},{})",
+                bbox.x, bbox.y, bbox.width, bbox.height
+            )
+        }
+        aikoql_ingestion::EvidenceSource::TableCell { table_id, cell_id } => {
+            format!("table {} cell {}", table_id, cell_id)
+        }
+        aikoql_ingestion::EvidenceSource::ChartPoint {
+            chart_id,
+            series,
+            point_index,
+        } => format!("chart {} series {} point {}", chart_id, series, point_index),
+        aikoql_ingestion::EvidenceSource::DiagramNode {
+            diagram_id,
+            node_id,
+        } => {
+            format!("diagram {} node {}", diagram_id, node_id)
+        }
+        aikoql_ingestion::EvidenceSource::DiagramEdge {
+            diagram_id,
+            edge_id,
+        } => {
+            format!("diagram {} edge {}", diagram_id, edge_id)
+        }
+        aikoql_ingestion::EvidenceSource::Asset { asset_id } => {
+            format!("asset {}", asset_id)
+        }
+    }
+}
 pub(crate) fn run_ingest_dir(
     path: &str,
     db_path: &str,
@@ -244,8 +283,9 @@ pub(crate) fn run_ingest_dir(
                 Value::List(facts.iter().cloned().map(Value::Text).collect()),
             );
         }
-        // v0.3 K1: canonical evidence trail — page/bbox survive into the KO
-        // (they used to be flattened into properties and partially dropped).
+        // v0.3 K1: canonical evidence trail — page/typed source survive into
+        // the KO (they used to be flattened into properties and partially
+        // dropped).
         let ev_method = if ent.evidence.extractor.contains("rust") {
             EvidenceMethod::AstExtraction
         } else {
@@ -262,8 +302,8 @@ pub(crate) fn run_ingest_dir(
         if let Some(p) = ent.evidence.page {
             loc_parts.push(format!("page {}", p));
         }
-        if let Some(b) = &ent.evidence.bbox_text {
-            loc_parts.push(format!("bbox {:?}", b));
+        if let Some(src) = &ent.evidence.source {
+            loc_parts.push(format!("source {}", evidence_source_label(src)));
         }
         if !loc_parts.is_empty() {
             kernel_ev = kernel_ev.with_location(loc_parts.join(", "));

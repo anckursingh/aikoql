@@ -13,9 +13,12 @@
 //! - `EventCandidate` — temporal event with participants
 //! - `TemporalAssertion` — time-bound claim
 //! - `KnowledgeIr` — container for all candidate types
-//! - `SemanticAnalyzer` — trait: `analyze(ast) → KnowledgeIr`
+//! - `SemanticAnalyzer` — trait: `analyze(ast, fragments) → KnowledgeIr`
 
 use crate::ast::{BlockType, DocumentAst};
+use crate::boundary::{KnowledgeBoundaryDetector, RuleBoundaryDetector};
+use crate::fragment::{FragmentContent, FragmentModality, KnowledgeFragment};
+use crate::source::EvidenceSource;
 use aikoql_kernel::ContentTrust;
 
 /// serde adapter for `ContentTrust` — the kernel crate is std-only (no
@@ -54,8 +57,12 @@ pub struct Evidence {
     pub document_id: Option<String>,
     /// Page number where the evidence was found (1-based).
     pub page: Option<u32>,
-    /// Bounding box on the page, if available.
-    pub bbox_text: Option<String>,
+    /// Typed evidence source (HLD §14): paragraph span, table cell, chart
+    /// point, region, or asset. `None` when the candidate derives from a
+    /// non-spatial source (merge, code index) — provenance then lives in
+    /// `document_id`/`extractor`.
+    #[serde(default)]
+    pub source: Option<EvidenceSource>,
     /// Name of the extractor that produced this candidate.
     pub extractor: String,
     /// Model or version identifier (e.g. "mock-v1", "gpt-4o").
@@ -69,7 +76,7 @@ impl Default for Evidence {
         Evidence {
             document_id: None,
             page: None,
-            bbox_text: None,
+            source: None,
             extractor: "unknown".into(),
             model: None,
             confidence: 0.0,
@@ -220,7 +227,13 @@ pub trait SemanticAnalyzer: Send + Sync {
     fn name(&self) -> &str;
 
     /// Analyze a document AST and produce structured knowledge candidates.
-    fn analyze(&self, ast: &DocumentAst) -> KnowledgeIr;
+    ///
+    /// `fragments` is the boundary stream for the same AST (HLD §57: the
+    /// semantic leg consumes fragments). Analyzers that need full node
+    /// structure (the markdown section classifier) may ignore it; when it
+    /// is empty — degraded boundary detection — analyzers should fall back
+    /// to the AST so semantic extraction never hard-fails.
+    fn analyze(&self, ast: &DocumentAst, fragments: &[KnowledgeFragment]) -> KnowledgeIr;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +274,19 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
         "mock"
     }
 
-    fn analyze(&self, ast: &DocumentAst) -> KnowledgeIr {
+    fn analyze(&self, ast: &DocumentAst, fragments: &[KnowledgeFragment]) -> KnowledgeIr {
+        if fragments.is_empty() {
+            // Degraded boundary detection: keep the AST fallback so a
+            // detector failure never empties the semantic IR.
+            return self.analyze_ast(ast);
+        }
+        self.analyze_fragments(ast, fragments)
+    }
+}
+
+impl MockSemanticAnalyzer {
+    /// AST fallback (pre-fragment behavior, kept for fail-soft parity).
+    fn analyze_ast(&self, ast: &DocumentAst) -> KnowledgeIr {
         let mut ir = KnowledgeIr {
             document_id: None,
             page_count: ast.page_count,
@@ -296,7 +321,7 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
                         evidence: Evidence {
                             document_id: None,
                             page: Some(page_num),
-                            bbox_text: None,
+                            source: None,
                             extractor: extractor.clone(),
                             model: Some("mock-v1".into()),
                             confidence: self.confidence,
@@ -319,7 +344,7 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
                             evidence: Evidence {
                                 document_id: None,
                                 page: Some(page_num),
-                                bbox_text: None,
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("mock-v1".into()),
                                 confidence: self.confidence,
@@ -340,7 +365,7 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
                     evidence: Evidence {
                         document_id: None,
                         page: Some(page_num),
-                        bbox_text: None,
+                        source: None,
                         extractor: extractor.clone(),
                         model: Some("mock-v1".into()),
                         confidence: self.confidence,
@@ -381,7 +406,7 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
                                 evidence: Evidence {
                                     document_id: None,
                                     page: None,
-                                    bbox_text: None,
+                                    source: None,
                                     extractor: extractor.clone(),
                                     model: Some("mock-v1".into()),
                                     confidence: self.confidence * 0.7,
@@ -395,11 +420,180 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
 
         ir
     }
+
+    /// Fragment-stream semantic interpretation (HLD §57): modality-aware
+    /// extraction — table cells become facts with cell-level provenance.
+    fn analyze_fragments(&self, ast: &DocumentAst, fragments: &[KnowledgeFragment]) -> KnowledgeIr {
+        let extractor: String = "mock".into();
+        let mut ir = KnowledgeIr {
+            document_id: None,
+            page_count: ast.page_count,
+            extractor: extractor.clone(),
+            ..Default::default()
+        };
+
+        // Entities + temporal: the same heuristics as the AST fallback,
+        // applied to each fragment's rendered text. Headings reach the
+        // semantic leg as fragment context, so both paths scan them.
+        for frag in fragments {
+            let mut texts: Vec<String> = frag.context.heading_path.clone();
+            texts.push(crate::chunking::fragment_text(frag));
+            for text in &texts {
+                for entity_name in extract_capitalized_phrases(text) {
+                    if !ir.entities.iter().any(|e| e.name == entity_name) {
+                        let mentions: Vec<String> = fragments
+                            .iter()
+                            .map(crate::chunking::fragment_text)
+                            .filter(|t| t.contains(&entity_name))
+                            .collect();
+                        ir.entities.push(EntityCandidate {
+                            name: entity_name.clone(),
+                            type_hint: guess_type(&entity_name),
+                            mentions: if mentions.is_empty() {
+                                vec![entity_name.clone()]
+                            } else {
+                                mentions
+                            },
+                            confidence: self.confidence,
+                            evidence: fragment_evidence(frag, &extractor, self.confidence),
+                        });
+                    }
+                }
+                for date_match in extract_date_patterns(text) {
+                    let (start, end) = parse_iso_date(&date_match);
+                    ir.temporal.push(TemporalAssertion {
+                        text: date_match.clone(),
+                        start_time: start,
+                        end_time: end,
+                        confidence: self.confidence,
+                        evidence: fragment_evidence(frag, &extractor, self.confidence),
+                    });
+                }
+            }
+        }
+
+        // Heading facts: headings are context, not fragments — one fact per
+        // unique heading, matching the AST fallback's per-node behavior.
+        let mut seen_headings: Vec<&String> = Vec::new();
+        for frag in fragments {
+            for heading in &frag.context.heading_path {
+                let entities = extract_capitalized_phrases(heading);
+                if !heading.trim().is_empty()
+                    && !entities.is_empty()
+                    && !seen_headings.contains(&heading)
+                {
+                    seen_headings.push(heading);
+                    ir.facts.push(FactCandidate {
+                        statement: heading.clone(),
+                        entities,
+                        confidence: self.confidence,
+                        evidence: fragment_evidence(frag, &extractor, self.confidence),
+                    });
+                }
+            }
+        }
+
+        // Modality-aware: table cells are knowledge with cell-level
+        // provenance (HLD §14 differentiator).
+        for frag in fragments {
+            let FragmentContent::Table(table) = &frag.content else {
+                continue;
+            };
+            for cell in &table.cells {
+                if cell.text.trim().is_empty() {
+                    continue;
+                }
+                let header = table
+                    .headers
+                    .iter()
+                    .find(|h| h.id == cell.column_id)
+                    .map(|h| h.text.as_str())
+                    .unwrap_or("");
+                ir.facts.push(FactCandidate {
+                    statement: if header.is_empty() {
+                        cell.text.clone()
+                    } else {
+                        format!("{}: {}", header, cell.text)
+                    },
+                    entities: Vec::new(),
+                    confidence: self.confidence * cell.confidence,
+                    evidence: Evidence {
+                        document_id: None,
+                        page: frag.context.page,
+                        source: Some(EvidenceSource::TableCell {
+                            table_id: frag.fragment_id.clone(),
+                            cell_id: format!("{}-{}", cell.row_id, cell.column_id),
+                        }),
+                        extractor: extractor.clone(),
+                        model: Some("mock-v1".into()),
+                        confidence: self.confidence,
+                    },
+                });
+            }
+        }
+
+        // Relations: co-occurring entity pairs within a text fragment.
+        if ir.entities.len() >= 2 {
+            for frag in fragments {
+                if frag.modality != FragmentModality::Text {
+                    continue;
+                }
+                let FragmentContent::Text(text) = &frag.content else {
+                    continue;
+                };
+                let entities_in: Vec<&String> = ir
+                    .entities
+                    .iter()
+                    .filter(|e| text.contains(&e.name))
+                    .map(|e| &e.name)
+                    .collect();
+                for i in 0..entities_in.len() {
+                    for j in (i + 1)..entities_in.len() {
+                        let subj = entities_in[i].clone();
+                        let obj = entities_in[j].clone();
+                        if ir
+                            .relations
+                            .iter()
+                            .any(|r| r.subject == subj && r.object == obj)
+                        {
+                            continue;
+                        }
+                        ir.relations.push(RelationCandidate {
+                            subject: subj,
+                            predicate: "related_to".into(),
+                            object: obj,
+                            confidence: self.confidence * 0.7,
+                            evidence: fragment_evidence(frag, &extractor, self.confidence * 0.7),
+                        });
+                    }
+                }
+            }
+        }
+
+        ir
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Mock helpers — heuristic extraction
 // ---------------------------------------------------------------------------
+
+/// Evidence for a candidate derived from a fragment: page from fragment
+/// context, region from the fragment's bbox when one exists.
+fn fragment_evidence(frag: &KnowledgeFragment, extractor: &str, confidence: f32) -> Evidence {
+    Evidence {
+        document_id: None,
+        page: frag.context.page,
+        source: frag
+            .source
+            .as_ref()
+            .and_then(|s| s.bbox.clone())
+            .map(|b| EvidenceSource::Region { bbox: b }),
+        extractor: extractor.to_string(),
+        model: Some("mock-v1".into()),
+        confidence,
+    }
+}
 
 /// Walk all AST nodes and collect their text, one line per node.
 fn collect_text(nodes: &[crate::AstNode]) -> String {
@@ -725,7 +919,10 @@ pub fn document_model_to_ir(
     analyzer: &dyn SemanticAnalyzer,
 ) -> KnowledgeIr {
     let ast = crate::document_model_to_ast(doc);
-    analyzer.analyze(&ast)
+    // Semantic leg (HLD §57): AST → fragments → IR. Fails soft — a degraded
+    // detector leaves the analyzer its AST fallback.
+    let fragments = RuleBoundaryDetector.detect(&ast).unwrap_or_default();
+    analyzer.analyze(&ast, &fragments)
 }
 
 // ---------------------------------------------------------------------------
@@ -790,6 +987,58 @@ mod tests {
         }
     }
 
+    fn table_node() -> AstNode {
+        AstNode {
+            block_type: BlockType::Table,
+            text: String::new(),
+            children: vec![],
+            bbox: None,
+            confidence: None,
+            payload: Some(crate::ast::AstPayload::Table(crate::ast::TablePayload {
+                headers: vec![
+                    crate::ast::TableHeader {
+                        id: "h0".into(),
+                        text: "Item".into(),
+                        level: 0,
+                        parent_id: None,
+                    },
+                    crate::ast::TableHeader {
+                        id: "h1".into(),
+                        text: "Qty".into(),
+                        level: 0,
+                        parent_id: None,
+                    },
+                ],
+                rows: vec![crate::ast::TableRow {
+                    id: "0".into(),
+                    index: 0,
+                }],
+                cells: vec![
+                    crate::ast::TableCell {
+                        id: "c0".into(),
+                        row_id: "0".into(),
+                        column_id: "h0".into(),
+                        text: "Widget".into(),
+                        value: None,
+                        bbox: None,
+                        confidence: 1.0,
+                    },
+                    crate::ast::TableCell {
+                        id: "c1".into(),
+                        row_id: "0".into(),
+                        column_id: "h1".into(),
+                        text: "10".into(),
+                        value: None,
+                        bbox: None,
+                        confidence: 1.0,
+                    },
+                ],
+                footnotes: vec![],
+            })),
+            ..Default::default()
+        }
+    }
+
     // ── Entity extraction ──
 
     #[test]
@@ -799,7 +1048,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"Acme Corporation"));
@@ -815,7 +1064,7 @@ mod tests {
         ]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let count = ir
             .entities
@@ -830,7 +1079,7 @@ mod tests {
         let ast = make_ast(vec![vec![paragraph("Widgets are great.")]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!(ir.entities.is_empty());
     }
@@ -842,7 +1091,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let org = ir.entities.iter().find(|e| e.name == "Acme Corp").unwrap();
         assert_eq!(org.type_hint.as_deref(), Some("Organization"));
@@ -861,7 +1110,7 @@ mod tests {
         ]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!(!ir.facts.is_empty());
         let fact = &ir.facts[0];
@@ -879,7 +1128,7 @@ mod tests {
         ]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let fact = ir
             .facts
@@ -897,7 +1146,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!(!ir.relations.is_empty());
         // All three entities should have relations between them.
@@ -919,7 +1168,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!(ir.relations.is_empty());
     }
@@ -933,7 +1182,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let texts: Vec<&str> = ir.temporal.iter().map(|t| t.text.as_str()).collect();
         assert!(
@@ -953,7 +1202,7 @@ mod tests {
         let ast = make_ast(vec![vec![paragraph("Effective date: 2024-06-15.")]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let iso = ir.temporal.iter().find(|t| t.text == "2024-06-15").unwrap();
         assert_eq!(iso.start_time.as_deref(), Some("2024-06-15T00:00:00Z"));
@@ -966,7 +1215,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let q3 = ir.temporal.iter().find(|t| t.text == "Q3 2025").unwrap();
         assert!(q3.start_time.as_deref().unwrap().starts_with("2025-07"));
@@ -978,7 +1227,7 @@ mod tests {
         let ast = make_ast(vec![vec![paragraph("Signed January 2024.")]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let t = &ir.temporal[0];
         assert_eq!(t.evidence.page, Some(1));
@@ -996,7 +1245,7 @@ mod tests {
         ]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let acme = ir
             .entities
@@ -1020,7 +1269,7 @@ mod tests {
         let ast = make_ast(vec![]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!(ir.is_empty());
         assert_eq!(ir.total_candidates(), 0);
@@ -1034,7 +1283,7 @@ mod tests {
         ]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!(ir.total_candidates() > 0);
         // Should have at least: 1 entity (Acme Corporation), 1 fact (heading), 1 temporal (January 2024)
@@ -1048,7 +1297,7 @@ mod tests {
         let ast = make_ast(vec![vec![paragraph("Test.")]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert_eq!(ir.extractor, "mock");
     }
@@ -1104,7 +1353,7 @@ mod tests {
         let ast = make_ast(vec![vec![paragraph("Acme Corporation is great.")]]);
 
         let analyzer = MockSemanticAnalyzer::with_confidence(0.42);
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!((ir.entities[0].confidence - 0.42).abs() < 0.001);
         assert!((ir.entities[0].evidence.confidence - 0.42).abs() < 0.001);
@@ -1120,7 +1369,7 @@ mod tests {
         let analyzer: &dyn SemanticAnalyzer = &MockSemanticAnalyzer::new();
         assert_eq!(analyzer.name(), "mock");
 
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
         assert!(!ir.entities.is_empty());
     }
 
@@ -1130,7 +1379,7 @@ mod tests {
     fn empty_document_produces_empty_ir() {
         let ast = make_ast(vec![vec![]]);
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
         assert!(ir.is_empty());
     }
 
@@ -1141,7 +1390,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         // "The", "Fox" — single words should not be entities.
         // No capitalized multi-word phrases in this sentence.
@@ -1180,7 +1429,7 @@ mod tests {
         ]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"Acme Corporation"));
@@ -1232,7 +1481,7 @@ mod tests {
         ]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"Acme Corporation"));
@@ -1277,5 +1526,100 @@ mod tests {
         json.as_object_mut().unwrap().remove("content_trust");
         let old: KnowledgeIr = serde_json::from_value(json).unwrap();
         assert_eq!(old.content_trust, None);
+    }
+
+    #[test]
+    fn fragment_stream_yields_cell_cited_table_facts() {
+        // PR-D: the semantic leg consumes fragments — a table fragment yields
+        // one fact per non-empty cell, each citing TableCell evidence.
+        let ast = make_ast(vec![vec![
+            paragraph("Acme Corporation ships widgets."),
+            table_node(),
+        ]]);
+        let fragments = RuleBoundaryDetector.detect(&ast).unwrap();
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast, &fragments);
+
+        let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"Acme Corporation"));
+
+        let cell_facts: Vec<&FactCandidate> = ir
+            .facts
+            .iter()
+            .filter(|f| matches!(&f.evidence.source, Some(EvidenceSource::TableCell { .. })))
+            .collect();
+        assert_eq!(cell_facts.len(), 2, "one fact per non-empty cell");
+        assert!(cell_facts.iter().any(|f| f.statement == "Item: Widget"));
+        assert!(cell_facts.iter().any(|f| f.statement == "Qty: 10"));
+        match &cell_facts[0].evidence.source {
+            Some(EvidenceSource::TableCell { table_id, cell_id }) => {
+                assert!(
+                    table_id.starts_with("frag-p1-b"),
+                    "table_id is the fragment id"
+                );
+                assert!(cell_id.contains('-'), "cell_id names row and column");
+            }
+            other => panic!("expected TableCell evidence, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fragment_and_ast_paths_agree_on_entities() {
+        // Fail-soft parity: with a healthy detector both paths extract the
+        // same entities, so a degraded detector is invisible to callers.
+        let page_text = "1. Payment Terms\n\nAcme Corporation ships widgets.";
+        let dm = crate::DocumentModel {
+            page_count: 1,
+            pages: vec![crate::PageModel {
+                page_number: 1,
+                text: page_text.into(),
+                char_count: page_text.len(),
+                source: "native".into(),
+                ocr_confidence: None,
+            }],
+            total_chars: page_text.len(),
+            ocr_stats: None,
+        };
+        let ast = crate::document_model_to_ast(&dm);
+        let fragments = RuleBoundaryDetector.detect(&ast).unwrap();
+        let analyzer = MockSemanticAnalyzer::new();
+
+        let from_ast = analyzer.analyze(&ast, &[]);
+        let from_fragments = analyzer.analyze(&ast, &fragments);
+
+        // The AST fallback concatenates blocks, so capitalized runs can span
+        // block boundaries ("Terms Acme" from heading + paragraph). The
+        // fragment path keeps blocks separate — cleaner, and never invents
+        // entities the AST path wouldn't find.
+        let ast_names: std::collections::BTreeSet<&str> =
+            from_ast.entities.iter().map(|e| e.name.as_str()).collect();
+        let frag_names: std::collections::BTreeSet<&str> = from_fragments
+            .entities
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert!(frag_names.contains("Acme Corporation"));
+        assert!(frag_names.contains("Payment Terms"));
+        assert!(!from_ast.facts.is_empty());
+        assert!(!from_fragments.facts.is_empty());
+        assert!(
+            frag_names.is_subset(&ast_names),
+            "fragment path must not invent entities: {:?} not subset of {:?}",
+            frag_names,
+            ast_names
+        );
+    }
+
+    #[test]
+    fn legacy_bbox_text_evidence_deserializes_to_typed_source() {
+        // PR-D: bbox_text is gone from the wire format; old payloads must
+        // still deserialize, dropping the legacy string key.
+        let legacy = r#"{"document_id":null,"page":1,"bbox_text":"(1,2,3,4)","extractor":"mock","model":null,"confidence":0.9}"#;
+        let ev: Evidence = serde_json::from_str(legacy).expect("legacy evidence deserializes");
+        assert_eq!(
+            ev.source, None,
+            "legacy bbox_text is dropped, not resurrected"
+        );
+        assert_eq!(ev.page, Some(1));
     }
 }
