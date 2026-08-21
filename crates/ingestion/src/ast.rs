@@ -224,6 +224,16 @@ pub struct DiagramPayload {
     pub nodes: Vec<DiagramNode>,
     #[serde(default)]
     pub edges: Vec<DiagramEdge>,
+    /// Content-addressed asset backing the diagram (PR-O): lets the visual
+    /// index rank diagrams like images/charts. `None` for text-sourced
+    /// diagrams (mermaid fences — the source is already text).
+    #[serde(default)]
+    pub asset: Option<crate::source::VisualAssetRef>,
+    /// Analyzer that produced this payload (DoD row 11: model versions
+    /// persisted). `None` = the mock specialist; a VLM-backed analyzer
+    /// stamps its own model id.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -276,6 +286,11 @@ pub struct ImagePayload {
     pub detected_objects: Vec<DetectedObject>,
     #[serde(default)]
     pub visual_embedding: Option<Vec<f32>>,
+    /// Analyzer that produced this payload (DoD row 11: model versions
+    /// persisted). `None` = the mock specialist; a VLM-backed analyzer
+    /// stamps its own model id.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// Object detected inside a visual asset (PR-F visual analysis).

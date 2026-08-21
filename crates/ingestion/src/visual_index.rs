@@ -26,11 +26,10 @@ pub struct VisualIndexRecord {
 }
 
 /// Build the visual index over the final fragment stream. Mixed composites
-/// recurse (PR-I hybrid merges nest visuals inside them). Images and
-/// asset-backed charts are visual objects; diagrams/formulas carry no asset
-/// reference — their structural knowledge lives in the IR — ponytail: add
-/// an `asset` field to `DiagramPayload` when a visual diagram ranker is
-/// needed.
+/// recurse (PR-I hybrid merges nest visuals inside them). Images, charts,
+/// and (PR-O) diagrams with an asset reference are visual objects;
+/// formulas and text-sourced diagrams (mermaid fences) carry no asset —
+/// their knowledge lives in the IR.
 pub fn build_visual_index(
     fragments: &[KnowledgeFragment],
     provider: &dyn EmbeddingProvider,
@@ -94,6 +93,10 @@ fn collect(
             }),
         ),
         FragmentContent::Chart(chart) => (chart.asset.clone(), chart.title.clone()),
+        // PR-O: asset-backed diagrams are visual objects too. The caption is
+        // honest None — DiagramPayload carries structure, not a title; text
+        // ranking for diagrams stays in the IR.
+        FragmentContent::Diagram(diagram) => (diagram.asset.clone(), None),
         FragmentContent::Mixed(children) => {
             for child in children {
                 collect(child, embed_visual, out);
@@ -155,6 +158,7 @@ mod tests {
                 caption: Some("Figure 1: payment flow".into()),
                 detected_objects: vec![],
                 visual_embedding: None,
+                model: None,
             })),
             ..Default::default()
         }
@@ -236,6 +240,7 @@ mod tests {
                 caption: Some("Figure 2: nested".into()),
                 detected_objects: vec![],
                 visual_embedding: None,
+                model: None,
             }),
             source: None,
             evidence: Vec::new(),
@@ -302,6 +307,44 @@ mod tests {
             index[0].semantic_caption.as_deref(),
             Some("Quarterly revenue")
         );
+    }
+
+    #[test]
+    fn diagram_records_require_an_asset() {
+        // PR-O: asset-backed diagrams index (visual diagram ranking);
+        // text-sourced diagrams (mermaid fences) stay IR-only.
+        let make = |asset: Option<VisualAssetRef>| KnowledgeFragment {
+            fragment_id: "frag-p1-b0".into(),
+            modality: FragmentModality::Diagram,
+            context: FragmentContext {
+                page: Some(1),
+                ..Default::default()
+            },
+            content: FragmentContent::Diagram(crate::ast::DiagramPayload {
+                nodes: vec![crate::ast::DiagramNode {
+                    id: "a".into(),
+                    label: "Client".into(),
+                    node_type: None,
+                    bbox: None,
+                    confidence: 1.0,
+                }],
+                edges: Vec::new(),
+                asset,
+                model: None,
+            }),
+            source: None,
+            evidence: Vec::new(),
+            confidence: 1.0,
+        };
+        let provider = MockEmbeddingProvider::new();
+        assert!(
+            build_visual_index(&[make(None)], &provider).is_empty(),
+            "text-sourced diagram is not a visual object"
+        );
+        let index = build_visual_index(&[make(Some(asset()))], &provider);
+        assert_eq!(index.len(), 1);
+        assert_eq!(index[0].asset_id, "asset-1");
+        assert_eq!(index[0].semantic_caption, None, "honest: no diagram title");
     }
 
     #[test]

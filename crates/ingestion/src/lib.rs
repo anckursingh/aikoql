@@ -181,9 +181,11 @@ pub use boundary::{
 
 mod visual;
 pub use visual::{
-    classify_visuals, ChartAnalyzer, DiagramAnalyzer, ImageAnalyzer, MockChartAnalyzer,
-    MockDiagramAnalyzer, MockImageAnalyzer, MockVisualClassifier, VisualClassification,
-    VisualClassifier, MODEL_CHART, MODEL_DIAGRAM, MODEL_FORMULA, MODEL_IMAGE, MODEL_VISUAL,
+    classify_visuals, classify_visuals_with_analyzers, classify_visuals_with_assets,
+    pipeline_analyzers, Analyzers, ChartAnalyzer, DiagramAnalyzer, ImageAnalyzer,
+    MockChartAnalyzer, MockDiagramAnalyzer, MockImageAnalyzer, MockVisualClassifier,
+    VisualClassification, VisualClassifier, MODEL_CHART, MODEL_DIAGRAM, MODEL_FORMULA, MODEL_IMAGE,
+    MODEL_VISUAL,
 };
 
 // PR-K (HLD §24): visual retrieval index — an access path, not the source

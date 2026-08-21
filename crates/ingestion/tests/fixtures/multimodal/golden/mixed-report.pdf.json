@@ -965,6 +965,7 @@
         "confidence": 1.0,
         "content": {
           "Diagram": {
+            "asset": null,
             "edges": [
               {
                 "bbox": null,
@@ -974,6 +975,7 @@
                 "target": "ledger"
               }
             ],
+            "model": null,
             "nodes": [
               {
                 "bbox": null,

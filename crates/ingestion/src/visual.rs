@@ -101,6 +101,45 @@ pub const MODEL_DIAGRAM: &str = "mock-diagram-v1";
 pub const MODEL_IMAGE: &str = "mock-image-v1";
 pub const MODEL_FORMULA: &str = "mock-formula-v1";
 
+/// The four visual analyzer slots (HLD §32/§33: pluggable classifier +
+/// staged specialists). Owned boxes so feature-gated builders (vlm) can
+/// construct a set that owns its clients.
+pub struct Analyzers {
+    pub classifier: Box<dyn VisualClassifier>,
+    pub chart: Box<dyn ChartAnalyzer>,
+    pub diagram: Box<dyn DiagramAnalyzer>,
+    pub image: Box<dyn ImageAnalyzer>,
+}
+
+impl Default for Analyzers {
+    /// The mock set — deterministic, no model calls, the default pipeline.
+    fn default() -> Self {
+        Self {
+            classifier: Box::new(MockVisualClassifier),
+            chart: Box::new(MockChartAnalyzer),
+            diagram: Box::new(MockDiagramAnalyzer),
+            image: Box::new(MockImageAnalyzer),
+        }
+    }
+}
+
+/// Pipeline analyzer selection (HLD §33 staged): the VLM-backed set when
+/// the `vlm` feature is on, the endpoint env is configured, and an asset
+/// dir exists (the VLM needs asset bytes); the mock set otherwise — the
+/// default build never requires a VLM (DoD row 14).
+pub fn pipeline_analyzers(asset_dir: Option<&str>) -> Analyzers {
+    #[cfg(feature = "vlm")]
+    if let Some(dir) = asset_dir {
+        if let Some(a) = crate::vlm::analyzers_from_env(dir) {
+            return a;
+        }
+    }
+    // Base build: mocks need no assets — the param exists for the vlm build.
+    #[cfg(not(feature = "vlm"))]
+    let _ = asset_dir;
+    Analyzers::default()
+}
+
 /// Chart analyzer: structured interpretation of a chart node (HLD §10).
 /// Mock: chart type and title from caption keywords; axes/series come from
 /// the specialist chart-data pass (`fill_chart_data`) over an adjacent
@@ -317,7 +356,12 @@ impl DiagramAnalyzer for MockDiagramAnalyzer {
         if nodes.is_empty() {
             return None;
         }
-        Some(DiagramPayload { nodes, edges })
+        Some(DiagramPayload {
+            nodes,
+            edges,
+            asset: node.asset.clone(),
+            model: None,
+        })
     }
 }
 
@@ -412,6 +456,7 @@ impl ImageAnalyzer for MockImageAnalyzer {
             caption: caption_text(node),
             detected_objects: Vec::new(),
             visual_embedding: None,
+            model: None,
         })
     }
 }
@@ -455,29 +500,41 @@ fn node_text(node: &AstNode) -> String {
 /// payloads stay as-is — boundary detection falls back to text fragments,
 /// so a degraded analyzer never loses content.
 pub fn classify_visuals(ast: &mut crate::ast::DocumentAst) {
-    classify_visuals_inner(ast, None, None);
+    classify_visuals_inner(ast, None, None, &Analyzers::default());
 }
 
 /// Classification + OCR fill for Screenshot/ScannedText images (HLD §33:
 /// "OCR only if needed"). `asset_dir` locates persisted `{hash}.bin`
 /// assets; `ocr` is the provider (tesseract CLI in production, mocks in
 /// tests). Both degrade silently: no provider → no OCR, no asset file →
-/// no OCR.
+/// no OCR. Uses the mock analyzer set.
 pub fn classify_visuals_with_assets(
     ast: &mut crate::ast::DocumentAst,
     asset_dir: Option<&str>,
     ocr: &dyn crate::ocr::OcrProvider,
 ) {
-    classify_visuals_inner(ast, asset_dir, Some(ocr));
+    classify_visuals_inner(ast, asset_dir, Some(ocr), &Analyzers::default());
+}
+
+/// Full seam (PR-O, HLD §32): the classification pass runs the supplied
+/// analyzer set (mock or VLM-backed — see `pipeline_analyzers`).
+pub fn classify_visuals_with_analyzers(
+    ast: &mut crate::ast::DocumentAst,
+    asset_dir: Option<&str>,
+    ocr: Option<&dyn crate::ocr::OcrProvider>,
+    analyzers: &Analyzers,
+) {
+    classify_visuals_inner(ast, asset_dir, ocr, analyzers);
 }
 
 fn classify_visuals_inner(
     ast: &mut crate::ast::DocumentAst,
     asset_dir: Option<&str>,
     ocr: Option<&dyn crate::ocr::OcrProvider>,
+    analyzers: &Analyzers,
 ) {
     for page in &mut ast.pages {
-        classify_visuals_in_children(&mut page.children);
+        classify_visuals_in_children(&mut page.children, analyzers);
         if let (Some(dir), Some(provider)) = (asset_dir, ocr) {
             if provider.available() {
                 fill_ocr_in_children(&mut page.children, dir, provider);
@@ -496,6 +553,11 @@ fn fill_ocr_in_children(nodes: &mut [AstNode], asset_dir: &str, ocr: &dyn crate:
         if !matches!(node.block_type, BlockType::Image | BlockType::Figure) {
             continue;
         }
+        // The OCR gate re-classifies with the cheap text classifier even
+        // when a VLM classifier is wired — §33 forbids a model call per
+        // image here. ponytail: a VLM-classified scanned image without text
+        // cues keeps its caption but skips the OCR fill until the gate
+        // carries the main-pass classification.
         if !matches!(
             MockVisualClassifier.classify(node),
             VisualClassification::Screenshot | VisualClassification::ScannedText
@@ -546,7 +608,7 @@ fn ocr_asset(
     Some((text, ocr.name().to_string()))
 }
 
-fn classify_visuals_in_children(nodes: &mut Vec<AstNode>) {
+fn classify_visuals_in_children(nodes: &mut Vec<AstNode>, analyzers: &Analyzers) {
     let mut claimed = vec![false; nodes.len()];
     for i in 0..nodes.len() {
         // Caption context: a following sibling (markdown convention — the
@@ -588,9 +650,9 @@ fn classify_visuals_in_children(nodes: &mut Vec<AstNode>) {
                 .map(|t| t.to_string())
         });
         if !nodes[i].children.is_empty() {
-            classify_visuals_in_children(&mut nodes[i].children);
+            classify_visuals_in_children(&mut nodes[i].children, analyzers);
         }
-        analyze_node(&mut nodes[i], next.or(prev).as_deref());
+        analyze_node(&mut nodes[i], next.or(prev).as_deref(), analyzers);
     }
 
     // HLD §33 staged processing: charts get structured data from an
@@ -681,7 +743,7 @@ fn is_caption_paragraph(text: &str) -> bool {
     false
 }
 
-fn analyze_node(node: &mut AstNode, next_caption: Option<&str>) {
+fn analyze_node(node: &mut AstNode, next_caption: Option<&str>, analyzers: &Analyzers) {
     match node.block_type {
         BlockType::Formula => {
             if node.payload.is_none() {
@@ -701,12 +763,12 @@ fn analyze_node(node: &mut AstNode, next_caption: Option<&str>) {
         }
         BlockType::Diagram => {
             if node.payload.is_none() {
-                node.payload = MockDiagramAnalyzer.analyze(node).map(AstPayload::Diagram);
+                node.payload = analyzers.diagram.analyze(node).map(AstPayload::Diagram);
             }
         }
         BlockType::Chart => {
             if node.payload.is_none() {
-                node.payload = MockChartAnalyzer.analyze(node).map(AstPayload::Chart);
+                node.payload = analyzers.chart.analyze(node).map(AstPayload::Chart);
             }
         }
         BlockType::Image | BlockType::Figure => {
@@ -728,26 +790,27 @@ fn analyze_node(node: &mut AstNode, next_caption: Option<&str>) {
                     });
                 }
             }
-            match MockVisualClassifier.classify(&probe) {
+            match analyzers.classifier.classify(&probe) {
                 VisualClassification::Chart => {
                     node.block_type = BlockType::Chart;
-                    node.payload = MockChartAnalyzer.analyze(&probe).map(AstPayload::Chart);
+                    node.payload = analyzers.chart.analyze(&probe).map(AstPayload::Chart);
                 }
                 VisualClassification::Diagram => {
                     node.block_type = BlockType::Diagram;
                     // Arrow text in the caption (figure-marker diagrams) can
                     // populate the diagram spec directly; an image whose
                     // caption has no arrows keeps the ImagePayload.
-                    node.payload = MockDiagramAnalyzer
+                    node.payload = analyzers
+                        .diagram
                         .analyze(&probe)
                         .map(AstPayload::Diagram)
-                        .or_else(|| MockImageAnalyzer.analyze(&probe).map(AstPayload::Image));
+                        .or_else(|| analyzers.image.analyze(&probe).map(AstPayload::Image));
                 }
                 VisualClassification::Formula => {
                     node.block_type = BlockType::Formula;
                 }
                 _ => {
-                    node.payload = MockImageAnalyzer.analyze(&probe).map(AstPayload::Image);
+                    node.payload = analyzers.image.analyze(&probe).map(AstPayload::Image);
                 }
             }
         }

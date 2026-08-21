@@ -1307,6 +1307,7 @@ mod tests {
                 caption: Some("Figure 1: payment flow".into()),
                 detected_objects: vec![],
                 visual_embedding: None,
+                model: None,
             })),
             ..Default::default()
         };

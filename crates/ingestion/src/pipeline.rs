@@ -386,14 +386,15 @@ pub fn compile_document_with_detector(
     // PR-F: extracted images get payloads, captioned figures re-typed.
     // With an asset dir, Screenshot/ScannedText images also get an OCR
     // fill (HLD §33: OCR only if needed — provider gates itself).
-    match asset_dir {
-        Some(dir) => crate::visual::classify_visuals_with_assets(
-            &mut ast,
-            Some(dir),
-            &crate::ocr::TesseractCli::new(),
-        ),
-        None => crate::visual::classify_visuals(&mut ast),
-    };
+    // PR-O: the analyzer set is VLM-backed when the vlm feature + env are
+    // present, mock otherwise (visual::pipeline_analyzers).
+    let analyzers = crate::visual::pipeline_analyzers(asset_dir);
+    crate::visual::classify_visuals_with_analyzers(
+        &mut ast,
+        asset_dir,
+        Some(&crate::ocr::TesseractCli::new()),
+        &analyzers,
+    );
     let dt_ast = time_now() - t_ast;
 
     // D4-fragments: DocumentAst → KnowledgeFragment[] (semantic segmentation).

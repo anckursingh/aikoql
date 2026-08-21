@@ -1029,18 +1029,17 @@ fn markdown_text_to_ast(
     };
     // PR-F: classification pass — visual nodes gain payloads, captioned
     // images are re-typed (chart/diagram/formula). With persisted assets,
-    // Screenshot/ScannedText images also get an OCR fill (§33).
-    match asset_dir {
-        Some(dir) => {
-            let dir_str = dir.to_string_lossy();
-            crate::visual::classify_visuals_with_assets(
-                &mut ast,
-                Some(&dir_str),
-                &crate::ocr::TesseractCli::new(),
-            );
-        }
-        None => crate::visual::classify_visuals(&mut ast),
-    }
+    // Screenshot/ScannedText images also get an OCR fill (§33). PR-O: the
+    // analyzer set is VLM-backed when the vlm feature + env are present,
+    // mock otherwise.
+    let dir_str = asset_dir.map(|d| d.to_string_lossy());
+    let analyzers = crate::visual::pipeline_analyzers(dir_str.as_deref());
+    crate::visual::classify_visuals_with_analyzers(
+        &mut ast,
+        dir_str.as_deref(),
+        Some(&crate::ocr::TesseractCli::new()),
+        &analyzers,
+    );
     ast
 }
 

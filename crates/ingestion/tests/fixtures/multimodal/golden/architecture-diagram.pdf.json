@@ -400,6 +400,7 @@
         "confidence": 1.0,
         "content": {
           "Diagram": {
+            "asset": null,
             "edges": [
               {
                 "bbox": null,
@@ -416,6 +417,7 @@
                 "target": "database"
               }
             ],
+            "model": null,
             "nodes": [
               {
                 "bbox": null,

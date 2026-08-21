@@ -125,6 +125,7 @@
             },
             "caption": null,
             "detected_objects": [],
+            "model": null,
             "ocr_model": null,
             "ocr_text": null,
             "visual_embedding": null

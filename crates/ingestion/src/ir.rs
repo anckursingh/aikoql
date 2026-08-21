@@ -595,7 +595,12 @@ impl MockSemanticAnalyzer {
                                         node_id: node.id.clone(),
                                     }),
                                     extractor: extractor.clone(),
-                                    model: Some(MODEL_DIAGRAM.into()),
+                                    model: Some(
+                                        diagram
+                                            .model
+                                            .clone()
+                                            .unwrap_or_else(|| MODEL_DIAGRAM.into()),
+                                    ),
                                     confidence: self.confidence * node.confidence,
                                 },
                             });
@@ -623,7 +628,12 @@ impl MockSemanticAnalyzer {
                                         edge_id: format!("{}->{}", edge.source, edge.target),
                                     }),
                                     extractor: extractor.clone(),
-                                    model: Some(MODEL_DIAGRAM.into()),
+                                    model: Some(
+                                        diagram
+                                            .model
+                                            .clone()
+                                            .unwrap_or_else(|| MODEL_DIAGRAM.into()),
+                                    ),
                                     confidence: self.confidence * edge.confidence,
                                 },
                             });
@@ -689,7 +699,9 @@ impl MockSemanticAnalyzer {
                                     .and_then(|s| s.bbox.as_ref())
                                     .map(|b| EvidenceSource::Region { bbox: b.clone() }),
                                 extractor: extractor.clone(),
-                                model: Some(MODEL_IMAGE.into()),
+                                model: Some(
+                                    image.model.clone().unwrap_or_else(|| MODEL_IMAGE.into()),
+                                ),
                                 confidence: self.confidence,
                             },
                         });

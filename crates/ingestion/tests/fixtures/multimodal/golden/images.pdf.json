@@ -375,6 +375,7 @@
             },
             "caption": "Figure 3: Company logo",
             "detected_objects": [],
+            "model": null,
             "ocr_model": null,
             "ocr_text": null,
             "visual_embedding": null
@@ -430,6 +431,7 @@
             },
             "caption": "Figure 3: Company logo",
             "detected_objects": [],
+            "model": null,
             "ocr_model": null,
             "ocr_text": null,
             "visual_embedding": null
