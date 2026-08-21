@@ -111,6 +111,7 @@ version = "0.1.18"
 dependencies = [
  "aikoql-kernel",
  "criterion",
+ "flate2",
  "lopdf",
  "pdf-extract",
  "proc-macro2",

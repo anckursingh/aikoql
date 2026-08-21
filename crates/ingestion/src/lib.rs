@@ -316,12 +316,20 @@ fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, Str
     // Text extraction is best-effort: an image-only (scanned) PDF produces no
     // text, and pdf-extract can reject unusual encodings — neither should
     // prevent asset extraction. Failure degrades to empty native pages.
-    let text = match pdf_extract::extract_text(path) {
-        Ok(t) => t,
-        Err(e) => {
+    // pdf-extract also panics (not Err) on unsupported font objects, so the
+    // whole call is panic-contained: ingestion never hard-fails on a PDF.
+    let text = match std::panic::catch_unwind(|| pdf_extract::extract_text(path)) {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
             eprintln!(
                 "pdf text extraction failed: {} — continuing without native text",
                 e
+            );
+            String::new()
+        }
+        Err(_) => {
+            eprintln!(
+                "pdf text extraction panicked (unsupported font/encoding) — continuing without native text"
             );
             String::new()
         }
@@ -345,10 +353,10 @@ fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, Str
         })
         .collect();
 
-    // PR-F: embedded-image extraction via lopdf (already in the graph through
-    // pdf-extract — no new dependency). DCTDecode streams are raw JPEG bytes,
-    // the dominant case for photos/charts in real PDFs. FlateDecode raw-pixel
-    // images and vector graphics stay deferred (see IMPLEMENTATION-PLAN.md).
+    // HLD §29: embedded-image extraction via lopdf (already in the graph
+    // through pdf-extract — no new dependency). Raster streams (JPEG/JPX/
+    // CCITT/Flate) and vector-only content streams all become persisted,
+    // content-addressed assets.
     let images_by_page = extract_pdf_images(path, asset_dir);
     for (page_idx, images) in images_by_page.into_iter().enumerate() {
         if let Some(page) = native_pages.get_mut(page_idx) {
@@ -402,43 +410,440 @@ fn extract_docx(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, St
         .by_name("word/document.xml")
         .map_err(|e| format!("docx document.xml: {}", e))?;
     let xml = std::io::read_to_string(doc).map_err(|e| format!("read xml: {}", e))?;
-    let text = strip_xml_tags(&xml);
+    let styles = archive
+        .by_name("word/styles.xml")
+        .ok()
+        .and_then(|s| std::io::read_to_string(s).ok());
 
-    // PR-F: images from word/media/*, in document order via the rId → target
-    // relationships of word/_rels/document.xml.rels (HLD §30 relationships +
-    // media). Images never referenced by document.xml (headers, leftovers)
-    // are not attached.
-    let images = extract_docx_images(&mut archive, &xml, asset_dir);
+    // HLD §30: structured walk of document.xml — paragraphs, runs, headings
+    // (pStyle + styles.xml), tables, hyperlinks, drawings, page breaks.
+    let (page_texts, image_refs) = parse_docx_structure(&xml, styles.as_deref());
 
-    let trimmed = text.trim().to_string();
-    let char_count = trimmed.len();
-    Ok(DocumentModel {
-        page_count: if trimmed.is_empty() { 0 } else { 1 },
-        pages: vec![PageModel {
-            page_number: 1,
-            char_count,
+    // Images resolve through the rId → media target relationships, mapped to
+    // the page where the drawing appears (page breaks renumber).
+    let images_by_page = resolve_docx_images(&mut archive, &image_refs, asset_dir);
+
+    let mut pages: Vec<PageModel> = Vec::new();
+    let mut total_chars = 0usize;
+    for (idx, text) in page_texts.iter().enumerate() {
+        let trimmed = text.trim().to_string();
+        total_chars += trimmed.len();
+        pages.push(PageModel {
+            page_number: idx as u32 + 1,
+            char_count: trimmed.len(),
             text: trimmed,
             source: "native".into(),
             ocr_confidence: None,
-            images,
-        }],
-        total_chars: char_count,
+            images: images_by_page.get(idx).cloned().unwrap_or_default(),
+        });
+    }
+    // Fallback (HLD §30 allows): structured walk produced nothing but the
+    // document has content — degrade to the minimal tag strip, one page.
+    // Not when images were found: an image-only document has empty text by
+    // design, not because parsing failed.
+    if total_chars == 0 && !xml.trim().is_empty() && images_by_page.is_empty() {
+        let text = strip_xml_tags(&xml);
+        let trimmed = text.trim().to_string();
+        let char_count = trimmed.len();
+        return Ok(DocumentModel {
+            page_count: if trimmed.is_empty() { 0 } else { 1 },
+            pages: vec![PageModel {
+                page_number: 1,
+                char_count,
+                text: trimmed,
+                source: "native".into(),
+                ocr_confidence: None,
+                images: images_by_page.first().cloned().unwrap_or_default(),
+            }],
+            total_chars: char_count,
+            ocr_stats: None,
+        });
+    }
+    // Drop trailing empty pages (a final page break with nothing after it).
+    while pages.len() > 1 && pages.last().map(|p| p.text.is_empty()).unwrap_or(false) {
+        pages.pop();
+    }
+    let page_count = pages.len() as u32;
+    Ok(DocumentModel {
+        page_count,
+        pages,
+        total_chars,
         ocr_stats: None,
     })
 }
 
-/// Ordered embedded images of a DOCX, per document.xml drawing references.
+/// One drawing reference: relationship id + the page it appears on.
+#[derive(Clone)]
+struct DocxImageRef {
+    rid: String,
+    page: u32,
+}
+
+/// HLD §30 structured DOCX walk: page texts + ordered image references.
 ///
-/// The rels file maps relationship ids to media targets; document.xml embeds
-/// images as `<a:blip r:embed="rIdN"/>`. Order = order of `r:embed`
-/// appearances (deduplicated). Fail-soft: missing rels/media entries are
-/// skipped, never fatal.
-fn extract_docx_images(
-    archive: &mut zip::ZipArchive<std::fs::File>,
+/// Output dialect matches `classify_blocks` in ast.rs: paragraphs separated
+/// by blank lines, headings prefixed "# " * level, tables as pipe rows,
+/// hyperlinks as "[text](url)". Page breaks (w:br type=page,
+/// w:lastRenderedPageBreak) split pages; each page is one text.
+fn parse_docx_structure(
     document_xml: &str,
+    styles_xml: Option<&str>,
+) -> (Vec<String>, Vec<DocxImageRef>) {
+    let style_map = styles_xml.map(parse_docx_styles).unwrap_or_default();
+    let mut pages: Vec<String> = vec![String::new()];
+    let mut images: Vec<DocxImageRef> = Vec::new();
+
+    let body_start = document_xml.find("<w:body").unwrap_or(0);
+    let mut rest = &document_xml[body_start..];
+
+    while let Some((kind, offset)) = next_docx_block(rest) {
+        rest = &rest[offset..];
+        let end = docx_block_end(rest, kind);
+        let (segment, remainder) = rest.split_at(end);
+        match kind {
+            DocxBlock::Paragraph => {
+                docx_paragraph(segment, &style_map, &mut pages, &mut images);
+            }
+            DocxBlock::Table => {
+                docx_table(segment, &mut pages);
+            }
+            DocxBlock::BodyEnd => break,
+        }
+        rest = remainder;
+    }
+    (pages, images)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum DocxBlock {
+    Paragraph,
+    Table,
+    BodyEnd,
+}
+
+/// Find the next top-level block start: <w:p>, <w:tbl>, or the body end.
+fn next_docx_block(xml: &str) -> Option<(DocxBlock, usize)> {
+    let mut best: Option<(DocxBlock, usize)> = None;
+    for (needle, kind) in [
+        ("<w:p>", DocxBlock::Paragraph),
+        ("<w:p ", DocxBlock::Paragraph),
+        ("<w:tbl>", DocxBlock::Table),
+        ("<w:tbl ", DocxBlock::Table),
+        ("</w:body>", DocxBlock::BodyEnd),
+    ] {
+        if let Some(pos) = xml.find(needle) {
+            if best.map(|(_, b)| pos < b).unwrap_or(true) {
+                best = Some((kind, pos));
+            }
+        }
+    }
+    best
+}
+
+/// End offset of the block starting at xml[0]: next block start for
+/// paragraphs (they never nest), matching </w:tbl> (depth-counted — tables
+/// can nest inside cells) for tables.
+fn docx_block_end(xml: &str, kind: DocxBlock) -> usize {
+    match kind {
+        DocxBlock::Paragraph => next_docx_block(&xml[1..])
+            .map(|(_, off)| off + 1)
+            .unwrap_or(xml.len()),
+        DocxBlock::Table => {
+            let mut depth = 0usize;
+            let mut rest = xml;
+            loop {
+                let (open, close) = (
+                    rest.find("<w:tbl").unwrap_or(usize::MAX),
+                    rest.find("</w:tbl>").unwrap_or(usize::MAX),
+                );
+                if close == usize::MAX {
+                    return xml.len();
+                }
+                if open < close {
+                    depth += 1;
+                    rest = &rest[open + 6..];
+                } else {
+                    depth -= 1;
+                    if depth == 0 {
+                        return rest.as_ptr() as usize - xml.as_ptr() as usize
+                            + close
+                            + "</w:tbl>".len();
+                    }
+                    rest = &rest[close + 8..];
+                }
+            }
+        }
+        DocxBlock::BodyEnd => xml.len(),
+    }
+}
+
+/// Paragraph → one block: heading prefix, run text, hyperlinks, images,
+/// page breaks. Appends to the current page text with a blank-line
+/// separator so `classify_blocks` sees clean paragraph boundaries.
+fn docx_paragraph(
+    p_xml: &str,
+    style_map: &std::collections::HashMap<String, String>,
+    pages: &mut Vec<String>,
+    images: &mut Vec<DocxImageRef>,
+) {
+    // A trailing body-level <w:sectPr> lands inside the last paragraph
+    // segment; it is metadata, not content.
+    let p_xml = match p_xml.find("<w:sectPr") {
+        Some(pos) => &p_xml[..pos],
+        None => p_xml,
+    };
+    let pstyle = attr_value_in_tag(p_xml, "w:pStyle");
+    let heading = pstyle
+        .as_deref()
+        .and_then(|s| docx_heading_level(s, style_map));
+    let mut buf = String::new();
+
+    let mut rest = p_xml;
+    while let Some(tag_pos) = rest.find('<') {
+        rest = &rest[tag_pos..];
+        if let Some(after) = rest.strip_prefix("<w:t") {
+            if after.starts_with('>') || after.starts_with(' ') {
+                let content_start = after.find('>').map(|e| e + 1).unwrap_or(0);
+                let end = after[content_start..]
+                    .find("</w:t>")
+                    .map(|e| content_start + e)
+                    .unwrap_or(after.len());
+                buf.push_str(&xml_unescape(&after[content_start..end]));
+                rest = &after[end + "</w:t>".len()..];
+                continue;
+            }
+        }
+        if let Some(after) = rest.strip_prefix("<w:hyperlink") {
+            let end = after.find("</w:hyperlink>").unwrap_or(after.len());
+            let body = &after[..end];
+            let url = attr_value(body, "w:anchor").or_else(|| attr_value(body, "w:history"));
+            let label = docx_runs_text(body);
+            match url {
+                Some(u) if !label.trim().is_empty() => {
+                    buf.push_str(&format!("[{}]({})", label.trim(), u))
+                }
+                _ => buf.push_str(&label),
+            }
+            rest = &after[end + "</w:hyperlink>".len()..];
+            continue;
+        }
+        if let Some(after) = rest.strip_prefix("<w:br") {
+            let tag_end = after.find('>').map(|e| e + 1).unwrap_or(after.len());
+            let tag = &after[..tag_end];
+            if attr_value(tag, "w:type").as_deref() == Some("page") {
+                flush_docx_buf(&mut buf, pages);
+                pages.push(String::new());
+            } else {
+                buf.push('\n');
+            }
+            rest = &after[tag_end..];
+            continue;
+        }
+        if let Some(after) = rest.strip_prefix("<w:lastRenderedPageBreak") {
+            let tag_end = after.find('>').map(|e| e + 1).unwrap_or(after.len());
+            flush_docx_buf(&mut buf, pages);
+            pages.push(String::new());
+            rest = &after[tag_end..];
+            continue;
+        }
+        if let Some(after) = rest.strip_prefix("<w:drawing") {
+            let end = after.find("</w:drawing>").unwrap_or(after.len());
+            if let Some(rid) = attr_value(&after[..end], "r:embed") {
+                images.push(DocxImageRef {
+                    rid,
+                    page: pages.len() as u32,
+                });
+            }
+            rest = &after[end + "</w:drawing>".len()..];
+            continue;
+        }
+        if let Some(after) = rest.strip_prefix("<w:tab") {
+            let tag_end = after.find('>').map(|e| e + 1).unwrap_or(after.len());
+            buf.push('\t');
+            rest = &after[tag_end..];
+            continue;
+        }
+        // Any other tag (w:r, w:pPr, w:proofErr, …): skip to its close.
+        if let Some(close) = rest.find('>') {
+            rest = &rest[close + 1..];
+        } else {
+            break;
+        }
+    }
+
+    if let Some(level) = heading {
+        let text = buf.trim().to_string();
+        buf.clear();
+        if !text.is_empty() {
+            let current = pages.last_mut().expect("at least one page");
+            if !current.is_empty() && !current.ends_with("\n\n") {
+                current.push('\n');
+            }
+            current.push_str(&"#".repeat(level as usize));
+            current.push(' ');
+            current.push_str(&text);
+            current.push_str("\n\n");
+        }
+    } else {
+        flush_docx_buf(&mut buf, pages);
+    }
+}
+
+/// Concatenate w:t run text within a segment (hyperlink bodies, cells).
+fn docx_runs_text(segment: &str) -> String {
+    let mut out = String::new();
+    let mut rest = segment;
+    while let Some(pos) = rest.find("<w:t") {
+        let after = &rest[pos..];
+        if after.starts_with("<w:t>") || after.starts_with("<w:t ") {
+            let start = after.find('>').map(|e| e + 1).unwrap_or(0);
+            let end = after[start..]
+                .find("</w:t>")
+                .map(|e| start + e)
+                .unwrap_or(after.len());
+            out.push_str(&xml_unescape(&after[start..end]));
+            rest = &after[end + "</w:t>".len()..];
+        } else {
+            rest = &after[4..];
+        }
+    }
+    out
+}
+
+/// Append paragraph text to the current page (blank-line separated).
+fn flush_docx_buf(buf: &mut String, pages: &mut [String]) {
+    let text = buf.trim().to_string();
+    if !text.is_empty() {
+        let current = pages.last_mut().expect("at least one page");
+        if !current.is_empty() && !current.ends_with("\n\n") {
+            current.push('\n');
+        }
+        current.push_str(&text);
+        current.push_str("\n\n");
+    }
+    buf.clear();
+}
+
+/// Heading level from pStyle: "HeadingN" convention first, then styles.xml
+/// name lookup ("heading N", "title").
+fn docx_heading_level(
+    pstyle: &str,
+    style_map: &std::collections::HashMap<String, String>,
+) -> Option<u8> {
+    if let Some(rest) = pstyle.strip_prefix("Heading") {
+        if let Some(n) = rest.chars().next().and_then(|c| c.to_digit(10)) {
+            return Some(n.clamp(1, 9) as u8);
+        }
+    }
+    if pstyle.eq_ignore_ascii_case("Title") {
+        return Some(1);
+    }
+    let name = style_map.get(pstyle)?.to_lowercase();
+    if name == "title" {
+        return Some(1);
+    }
+    if let Some(rest) = name.strip_prefix("heading ") {
+        if let Some(n) = rest.chars().next().and_then(|c| c.to_digit(10)) {
+            return Some(n.clamp(1, 9) as u8);
+        }
+    }
+    None
+}
+
+/// styles.xml → styleId → style name (paragraph styles only need apply —
+/// the caller checks heading names). `w:styleId`/`w:type` are attributes
+/// on the `<w:style>` opening tag; `w:name` is a child tag.
+fn parse_docx_styles(xml: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let mut rest = xml;
+    while let Some(pos) = rest.find("<w:style ") {
+        rest = &rest[pos..];
+        let tag_end = rest.find('>').map(|e| e + 1).unwrap_or(rest.len());
+        let opening = &rest[..tag_end];
+        if attr_value(opening, "w:type").as_deref() != Some("paragraph") {
+            rest = &rest[tag_end..];
+            continue;
+        }
+        let end = rest.find("</w:style>").unwrap_or(rest.len());
+        let segment = &rest[..end];
+        if let (Some(id), Some(name)) = (
+            attr_value(opening, "w:styleId"),
+            attr_value_in_tag(segment, "w:name"),
+        ) {
+            map.insert(id, name);
+        }
+        rest = &rest[end + "</w:style>".len()..];
+    }
+    map
+}
+
+/// Table → pipe-markdown rows (the classify_blocks dialect). Header row
+/// first; w:gridSpan repeats a cell value to keep column alignment.
+fn docx_table(tbl_xml: &str, pages: &mut [String]) {
+    let mut lines: Vec<String> = Vec::new();
+    let mut rest = tbl_xml;
+    while let Some(pos) = rest.find("<w:tr") {
+        let after = &rest[pos..];
+        if !(after.starts_with("<w:tr>") || after.starts_with("<w:tr ")) {
+            rest = &after[5..];
+            continue;
+        }
+        let end = after.find("</w:tr>").unwrap_or(after.len());
+        let row = &after[..end];
+        let mut cells: Vec<String> = Vec::new();
+        let mut cell_rest = row;
+        while let Some(cpos) = cell_rest.find("<w:tc") {
+            let c_after = &cell_rest[cpos..];
+            if !(c_after.starts_with("<w:tc>") || c_after.starts_with("<w:tc ")) {
+                cell_rest = &c_after[5..];
+                continue;
+            }
+            let c_end = c_after.find("</w:tc>").unwrap_or(c_after.len());
+            let cell = &c_after[..c_end];
+            let text = docx_runs_text(cell).trim().to_string();
+            let span = attr_value_in_tag(cell, "w:gridSpan")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(1);
+            cells.push(text);
+            for _ in 1..span {
+                cells.push(String::new());
+            }
+            cell_rest = &c_after[c_end + "</w:tc>".len()..];
+        }
+        if !cells.is_empty() {
+            lines.push(format!("| {} |", cells.join(" | ")));
+        }
+        rest = &after[end + "</w:tr>".len()..];
+    }
+    if !lines.is_empty() {
+        let current = pages.last_mut().expect("at least one page");
+        if !current.is_empty() && !current.ends_with("\n\n") {
+            current.push('\n');
+        }
+        current.push_str(&lines.join("\n"));
+        current.push_str("\n\n");
+    }
+}
+
+/// `w:val="…"` on the named tag (e.g. `<w:pStyle w:val="Heading1"/>`).
+fn attr_value_in_tag(segment: &str, tag: &str) -> Option<String> {
+    let needle = format!("<{} ", tag);
+    let pos = segment.find(&needle)?;
+    let after = &segment[pos + needle.len()..];
+    let end = after.find('>').unwrap_or(after.len());
+    attr_value(&after[..end], "w:val")
+}
+
+/// Ordered embedded images of a DOCX: rIds resolved through the rels file
+/// (rId → media target) with the page each drawing appeared on.
+///
+/// Fail-soft: missing rels/media entries are skipped, never fatal.
+fn resolve_docx_images(
+    archive: &mut zip::ZipArchive<std::fs::File>,
+    refs: &[DocxImageRef],
     asset_dir: Option<&str>,
-) -> Vec<DocumentImage> {
-    let mut out = Vec::new();
+) -> Vec<Vec<DocumentImage>> {
+    let mut out: Vec<Vec<DocumentImage>> = Vec::new();
     let rels = match archive.by_name("word/_rels/document.xml.rels") {
         Ok(r) => std::io::read_to_string(r).unwrap_or_default(),
         Err(_) => return out,
@@ -460,23 +865,10 @@ fn extract_docx_images(
         rest = &rest[end..];
     }
 
-    // r:embed appearances in document order.
-    let mut seen: Vec<&str> = Vec::new();
-    let mut scan = document_xml;
-    while let Some(pos) = scan.find("r:embed=\"") {
-        let after = &scan[pos + "r:embed=\"".len()..];
-        let end = after.find('"').unwrap_or(after.len());
-        let rid = &after[..end];
-        if !seen.contains(&rid) {
-            seen.push(rid);
-        }
-        scan = &after[end..];
-    }
-
-    for rid in seen {
+    for docx_ref in refs {
         let target = targets
             .iter()
-            .find(|(id, _)| id == rid)
+            .find(|(id, _)| id == &docx_ref.rid)
             .map(|(_, t)| t.clone());
         let Some(target) = target else { continue };
         let mut entry = match archive.by_name(&target) {
@@ -493,14 +885,18 @@ fn extract_docx_images(
                 eprintln!("asset store failed for {}: {}", target, e);
             }
         }
-        out.push(DocumentImage {
+        let page_idx = (docx_ref.page - 1) as usize;
+        while out.len() <= page_idx {
+            out.push(Vec::new());
+        }
+        out[page_idx].push(DocumentImage {
             asset: VisualAssetRef {
                 asset_id: hash.clone(),
                 mime_type: crate::asset_store::mime_from_extension(&target),
                 content_hash: hash,
                 source: SourceSpan {
                     document_id: None,
-                    page: 1,
+                    page: docx_ref.page,
                     start_offset: None,
                     end_offset: None,
                     bbox: None,
@@ -523,6 +919,15 @@ fn attr_value(tag: &str, attr: &str) -> Option<String> {
     Some(after[..end].to_string())
 }
 
+/// Basic XML entity unescape for run text (WordXML escapes these five).
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
 /// Normalize a zip-internal path: drop a leading "/", resolve ".." segments.
 fn normalize_zip_path(path: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
@@ -538,9 +943,17 @@ fn normalize_zip_path(path: &str) -> String {
     parts.join("/")
 }
 
-/// Embedded images per PDF page: DCTDecode XObjects are raw JPEG bytes.
-/// FlateDecode/JPX2000/vector graphics are not decoded here (see
-/// IMPLEMENTATION-PLAN.md — pixel encoding needs an image codec).
+/// Embedded images per PDF page (HLD §29 image + vector-graphics extraction).
+///
+/// Raster XObjects by last filter: DCTDecode = raw JPEG, JPXDecode = raw
+/// JPX2000, CCITTFaxDecode = raw G3/G4 bitstream, FlateDecode/LZW (or no
+/// filter) = decompressed pixels — wrapped as PPM/PGM when DeviceRGB/Gray at
+/// 8 bpc so the asset stays viewable, raw otherwise. Unknown filters keep the
+/// raw stream (asset retention over decoding).
+///
+/// Vector graphics: content streams containing path-drawing operators but no
+/// text operators are persisted as vector assets. Streams with text (or that
+/// only invoke XObjects) are not vector-only and are skipped.
 fn extract_pdf_images(path: &str, asset_dir: Option<&str>) -> Vec<Vec<DocumentImage>> {
     let mut pages: Vec<Vec<DocumentImage>> = Vec::new();
     let doc = match lopdf::Document::load(path) {
@@ -556,87 +969,231 @@ fn extract_pdf_images(path: &str, asset_dir: Option<&str>) -> Vec<Vec<DocumentIm
             Ok(lopdf::Object::Dictionary(d)) => d.clone(),
             _ => continue,
         };
-        let resources = match page
+        let mut images = Vec::new();
+        if let Some(resources) = page
             .get(b"Resources")
             .ok()
             .and_then(|o| o.as_dict().ok())
             .cloned()
         {
-            Some(d) => d,
-            None => continue,
-        };
-        let xobjects = match resources
-            .get(b"XObject")
-            .ok()
-            .and_then(|o| o.as_dict().ok())
-            .cloned()
-        {
-            Some(d) => d,
-            None => continue,
-        };
-        let mut images = Vec::new();
-        for (_name, obj) in xobjects.iter() {
-            let stream = match obj {
-                lopdf::Object::Reference(id) => match doc.get_object(*id) {
-                    Ok(lopdf::Object::Stream(s)) => s.clone(),
-                    _ => continue,
-                },
-                lopdf::Object::Stream(s) => s.clone(),
-                _ => continue,
-            };
-            let dict = stream.dict;
-            let is_image = dict
-                .get(b"Subtype")
+            if let Some(xobjects) = resources
+                .get(b"XObject")
                 .ok()
-                .and_then(|o| o.as_name().ok())
-                .map(|n| n == b"Image")
-                .unwrap_or(false);
-            if !is_image {
-                continue;
-            }
-            // DCTDecode streams are complete JPEG bytes — store as-is.
-            let is_jpeg = dict
-                .get(b"Filter")
-                .ok()
-                .map(|f| match f {
-                    lopdf::Object::Name(n) => n == b"DCTDecode",
-                    lopdf::Object::Array(arr) => arr.iter().any(|e| match e {
-                        lopdf::Object::Name(n) => n == b"DCTDecode",
-                        _ => false,
-                    }),
-                    _ => false,
-                })
-                .unwrap_or(false);
-            if !is_jpeg {
-                continue;
-            }
-            let bytes = stream.content.clone();
-            let hash = crate::asset_store::content_hash(&bytes);
-            if let Some(dir) = asset_dir {
-                if let Err(e) = crate::asset_store::store_asset(dir, &bytes) {
-                    eprintln!("asset store failed for pdf image: {}", e);
+                .and_then(|o| o.as_dict().ok())
+                .cloned()
+            {
+                for (_name, obj) in xobjects.iter() {
+                    let stream = match obj {
+                        lopdf::Object::Reference(id) => match doc.get_object(*id) {
+                            Ok(lopdf::Object::Stream(s)) => s.clone(),
+                            _ => continue,
+                        },
+                        lopdf::Object::Stream(s) => s.clone(),
+                        _ => continue,
+                    };
+                    let is_image = stream
+                        .dict
+                        .get(b"Subtype")
+                        .ok()
+                        .and_then(|o| o.as_name().ok())
+                        .map(|n| n == b"Image")
+                        .unwrap_or(false);
+                    if !is_image {
+                        continue;
+                    }
+                    let (mime, bytes) = pdf_image_asset(&stream);
+                    images.push(pdf_asset_image(
+                        &bytes,
+                        mime,
+                        page_num,
+                        asset_dir,
+                        "pdf image",
+                    ));
                 }
             }
-            images.push(DocumentImage {
-                asset: VisualAssetRef {
-                    asset_id: hash.clone(),
-                    mime_type: "image/jpeg".into(),
-                    content_hash: hash,
-                    source: SourceSpan {
-                        document_id: None,
-                        page: page_num,
-                        start_offset: None,
-                        end_offset: None,
-                        bbox: None,
-                        node_id: None,
-                    },
+        }
+        // Vector graphics: vector-only content streams (drawing operators,
+        // no text operators, no XObject invocations).
+        if let Some(contents) = page.get(b"Contents").ok().cloned() {
+            let streams: Vec<lopdf::Stream> = match contents {
+                lopdf::Object::Reference(id) => match doc.get_object(id) {
+                    Ok(lopdf::Object::Stream(s)) => vec![s.clone()],
+                    _ => vec![],
                 },
-                bbox: None,
-            });
+                lopdf::Object::Stream(s) => vec![s.clone()],
+                lopdf::Object::Array(arr) => arr
+                    .iter()
+                    .filter_map(|e| match e {
+                        lopdf::Object::Reference(id) => doc.get_object(*id).ok(),
+                        _ => None,
+                    })
+                    .filter_map(|o| match o {
+                        lopdf::Object::Stream(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => vec![],
+            };
+            for stream in streams {
+                let bytes = stream
+                    .get_plain_content()
+                    .unwrap_or_else(|_| stream.content.clone());
+                if is_vector_only_content(&bytes) {
+                    images.push(pdf_asset_image(
+                        &bytes,
+                        "application/x-pdf-vector",
+                        page_num,
+                        asset_dir,
+                        "pdf vector graphics",
+                    ));
+                }
+            }
         }
         pages.push(images);
     }
     pages
+}
+
+/// Decode one image XObject into (mime, bytes) without adding an image-codec
+/// dependency. Encoded streams (JPEG/JPX/CCITT) are stored as-is — they are
+/// the original asset; pixel streams are wrapped in a PPM/PGM header so the
+/// stored asset is a standard format.
+fn pdf_image_asset(stream: &lopdf::Stream) -> (&'static str, Vec<u8>) {
+    let last_filter = stream.dict.get(b"Filter").ok().and_then(|f| match f {
+        lopdf::Object::Name(n) => Some(n.clone()),
+        lopdf::Object::Array(arr) => arr.iter().rev().find_map(|e| match e {
+            lopdf::Object::Name(n) => Some(n.clone()),
+            _ => None,
+        }),
+        _ => None,
+    });
+    match last_filter.as_deref() {
+        Some(b"DCTDecode") => ("image/jpeg", stream.content.clone()),
+        Some(b"JPXDecode") => ("image/jp2", stream.content.clone()),
+        Some(b"CCITTFaxDecode") => ("image/x-ccitt", stream.content.clone()),
+        Some(b"FlateDecode" | b"LZWDecode" | b"ASCII85Decode") | None => {
+            let pixels = stream
+                .get_plain_content()
+                .unwrap_or_else(|_| stream.content.clone());
+            let dict = &stream.dict;
+            let rgb = dict
+                .get(b"ColorSpace")
+                .ok()
+                .map(|c| match c {
+                    lopdf::Object::Name(n) => n == b"DeviceRGB",
+                    lopdf::Object::Array(a) => a
+                        .first()
+                        .map(|e| match e {
+                            lopdf::Object::Name(n) => n == b"DeviceRGB",
+                            _ => false,
+                        })
+                        .unwrap_or(false),
+                    _ => false,
+                })
+                .unwrap_or(false);
+            let gray = !rgb
+                && dict
+                    .get(b"ColorSpace")
+                    .ok()
+                    .map(|c| match c {
+                        lopdf::Object::Name(n) => n == b"DeviceGray",
+                        lopdf::Object::Array(a) => a
+                            .first()
+                            .map(|e| match e {
+                                lopdf::Object::Name(n) => n == b"DeviceGray",
+                                _ => false,
+                            })
+                            .unwrap_or(false),
+                        _ => false,
+                    })
+                    .unwrap_or(false);
+            let bpc = dict
+                .get(b"BitsPerComponent")
+                .ok()
+                .and_then(|o| o.as_i64().ok())
+                .unwrap_or(8);
+            let (width, height) = (
+                dict.get(b"Width")
+                    .ok()
+                    .and_then(|o| o.as_i64().ok())
+                    .unwrap_or(0),
+                dict.get(b"Height")
+                    .ok()
+                    .and_then(|o| o.as_i64().ok())
+                    .unwrap_or(0),
+            );
+            match (rgb, gray, bpc, width, height) {
+                (true, _, 8, w, h) if w > 0 && h > 0 => (
+                    "image/x-portable-pixmap",
+                    wrap_pnm(&pixels, w as u32, h as u32, true),
+                ),
+                (_, true, 8, w, h) if w > 0 && h > 0 => (
+                    "image/x-portable-graymap",
+                    wrap_pnm(&pixels, w as u32, h as u32, false),
+                ),
+                _ => ("application/octet-stream", pixels),
+            }
+        }
+        _ => ("application/octet-stream", stream.content.clone()),
+    }
+}
+
+/// Wrap raw 8-bpc pixels in a PPM (P6) or PGM (P5) header — the minimal
+/// standard format, no image codec involved.
+fn wrap_pnm(pixels: &[u8], width: u32, height: u32, rgb: bool) -> Vec<u8> {
+    let magic = if rgb { b"P6\n" } else { b"P5\n" };
+    let mut out = Vec::with_capacity(pixels.len() + 32);
+    out.extend_from_slice(magic);
+    out.extend_from_slice(format!("{} {}\n255\n", width, height).as_bytes());
+    out.extend_from_slice(pixels);
+    out
+}
+
+/// A content stream is vector-only when it draws paths (m/l/c/re) and
+/// contains no text operators (BT/Tj/TJ) and no XObject invocations (Do) —
+/// otherwise the drawing is decoration on a text page, not an asset.
+fn is_vector_only_content(content: &[u8]) -> bool {
+    let path_ops: [&[u8]; 4] = [b" m", b" l", b" re", b" c"];
+    let has_path_ops = path_ops
+        .iter()
+        .any(|op| content.windows(op.len()).any(|w| w == *op));
+    let has_text = content.windows(2).any(|w| w == b"BT")
+        || content.windows(2).any(|w| w == b"Tj")
+        || content.windows(2).any(|w| w == b"TJ");
+    let has_xobjects = content.windows(3).any(|w| w == b" Do");
+    has_path_ops && !has_text && !has_xobjects
+}
+
+/// Hash + persist bytes and build the page-level image entry.
+fn pdf_asset_image(
+    bytes: &[u8],
+    mime: &str,
+    page_num: u32,
+    asset_dir: Option<&str>,
+    store_label: &str,
+) -> DocumentImage {
+    let hash = crate::asset_store::content_hash(bytes);
+    if let Some(dir) = asset_dir {
+        if let Err(e) = crate::asset_store::store_asset(dir, bytes) {
+            eprintln!("asset store failed for {}: {}", store_label, e);
+        }
+    }
+    DocumentImage {
+        asset: VisualAssetRef {
+            asset_id: hash.clone(),
+            mime_type: mime.into(),
+            content_hash: hash,
+            source: SourceSpan {
+                document_id: None,
+                page: page_num,
+                start_offset: None,
+                end_offset: None,
+                bbox: None,
+                node_id: None,
+            },
+        },
+        bbox: None,
+    }
 }
 
 fn extract_html(path: &str) -> Result<DocumentModel, String> {
@@ -837,6 +1394,132 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// PR-F: structured DOCX fixture — Heading1/Heading2 via pStyle +
+    /// styles.xml, gridSpan-merged table cell, hyperlink, caption, page
+    /// break, image on page 2 (HLD §30).
+    fn write_structured_docx(path: &std::path::Path) {
+        use std::io::Write;
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("[Content_Types].xml", options).unwrap();
+        zip.write_all(
+            b"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+        )
+        .unwrap();
+        zip.start_file("word/document.xml", options).unwrap();
+        zip.write_all(
+            b"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><w:body>\
+<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>Report Title</w:t></w:r></w:p>\
+<w:p><w:r><w:t>Intro &amp; scope paragraph.</w:t></w:r></w:p>\
+<w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:t>Metrics</w:t></w:r></w:p>\
+<w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr><w:p><w:r><w:t>Merged header</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>\
+<w:p><w:r><w:t>See the </w:t></w:r><w:hyperlink w:anchor=\"https://example.com\"><w:r><w:t>guide</w:t></w:r></w:hyperlink><w:r><w:t>.</w:t></w:r></w:p>\
+<w:p><w:pPr><w:pStyle w:val=\"Caption\"/></w:pPr><w:r><w:t>Figure 1: overview</w:t></w:r></w:p>\
+<w:p><w:r><w:br w:type=\"page\"/></w:r><w:r><w:t>Page two text.</w:t></w:r></w:p>\
+<w:p><w:r><w:drawing><wp:inline><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed=\"rId5\"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>\
+</w:body></w:document>",
+        )
+        .unwrap();
+        zip.start_file("word/styles.xml", options).unwrap();
+        zip.write_all(
+            b"<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\
+<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/></w:style>\
+<w:style w:type=\"paragraph\" w:styleId=\"Heading2\"><w:name w:val=\"heading 2\"/></w:style>\
+<w:style w:type=\"paragraph\" w:styleId=\"Caption\"><w:name w:val=\"caption\"/></w:style>\
+</w:styles>",
+        )
+        .unwrap();
+        zip.start_file("word/_rels/document.xml.rels", options)
+            .unwrap();
+        zip.write_all(
+            b"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId5\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/image1.png\"/></Relationships>",
+        )
+        .unwrap();
+        zip.start_file("word/media/image1.png", options).unwrap();
+        zip.write_all(DOCX_IMAGE_BYTES).unwrap();
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn extract_docx_preserves_structure_headings_tables_links() {
+        let dir = std::env::temp_dir().join("aikoql-d1-docx-struct");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("struct.docx");
+        write_structured_docx(&path);
+        let doc = extract_document(
+            &path.to_string_lossy(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            None,
+        )
+        .unwrap();
+        assert_eq!(doc.page_count, 2, "page break splits pages");
+        let p1 = &doc.pages[0].text;
+        assert!(
+            p1.contains("# Report Title"),
+            "Heading1 → ATX level 1: {}",
+            p1
+        );
+        assert!(p1.contains("## Metrics"), "Heading2 → ATX level 2");
+        assert!(
+            p1.contains("Intro & scope paragraph."),
+            "XML entities unescaped"
+        );
+        assert!(
+            p1.contains("| Merged header |  |"),
+            "gridSpan cell padded: {}",
+            p1
+        );
+        assert!(p1.contains("| A | B |"), "table rows: {}", p1);
+        assert!(
+            p1.contains("[guide](https://example.com)"),
+            "hyperlink: {}",
+            p1
+        );
+        assert!(p1.contains("Figure 1: overview"), "caption paragraph");
+        assert!(doc.pages[0].images.is_empty(), "no image on page 1");
+        assert!(doc.pages[1].text.contains("Page two text."));
+        assert_eq!(doc.pages[1].images.len(), 1, "image lands on page 2");
+        assert_eq!(doc.pages[1].images[0].asset.mime_type, "image/png");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn extract_docx_falls_back_to_strip_xml_tags() {
+        // No w:p/w:tbl structure (altChunk content): the structured walk
+        // yields nothing and the minimal tag strip takes over (HLD §30
+        // fallback).
+        let dir = std::env::temp_dir().join("aikoql-d1-docx-fallback");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fallback.docx");
+        use std::io::Write;
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("[Content_Types].xml", options).unwrap();
+        zip.write_all(
+            b"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+        )
+        .unwrap();
+        zip.start_file("word/document.xml", options).unwrap();
+        zip.write_all(
+            b"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:altChunk><raw>Raw text content</raw></w:altChunk></w:body></w:document>",
+        )
+        .unwrap();
+        zip.finish().unwrap();
+        let doc = extract_document(
+            &path.to_string_lossy(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            None,
+        )
+        .unwrap();
+        assert_eq!(doc.page_count, 1);
+        assert!(doc.pages[0].text.contains("Raw text content"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn extract_pdf_extracts_dctdecode_images_and_persists() {
         // Minimal hand-built PDF: one page with one DCTDecode image XObject.
@@ -916,6 +1599,217 @@ mod tests {
         assert!(assets
             .join(format!("{}.bin", img.asset.content_hash))
             .exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Minimal one-page PDF: given image XObjects (name, dict, content) +
+    /// content stream bytes. All objects live in the one document.
+    fn build_minimal_pdf(
+        dir: &std::path::Path,
+        name: &str,
+        images: Vec<(&str, lopdf::Dictionary, Vec<u8>)>,
+        content_streams: Vec<Vec<u8>>,
+    ) -> std::path::PathBuf {
+        let mut doc = lopdf::Document::with_version("1.4");
+        let xobjects: Vec<(&str, lopdf::Object)> = images
+            .iter()
+            .map(|(name, dict, content)| {
+                let id = doc.add_object(lopdf::Object::Stream(lopdf::Stream::new(
+                    dict.clone(),
+                    content.clone(),
+                )));
+                (*name, lopdf::Object::Reference(id))
+            })
+            .collect();
+        let xobj_dict = lopdf::Dictionary::from_iter(xobjects);
+        let resources =
+            lopdf::Dictionary::from_iter([("XObject", lopdf::Object::Dictionary(xobj_dict))]);
+        let contents: Vec<lopdf::Object> = content_streams
+            .iter()
+            .map(|c| {
+                let id = doc.add_object(lopdf::Object::Stream(lopdf::Stream::new(
+                    lopdf::Dictionary::new(),
+                    c.clone(),
+                )));
+                lopdf::Object::Reference(id)
+            })
+            .collect();
+        let contents_obj = if contents.len() == 1 {
+            contents[0].clone()
+        } else {
+            lopdf::Object::Array(contents)
+        };
+        let page_dict = lopdf::Dictionary::from_iter([
+            ("Type", lopdf::Object::Name(b"Page".to_vec())),
+            (
+                "MediaBox",
+                lopdf::Object::Array(vec![
+                    lopdf::Object::Integer(0),
+                    lopdf::Object::Integer(0),
+                    lopdf::Object::Integer(100),
+                    lopdf::Object::Integer(100),
+                ]),
+            ),
+            ("Resources", lopdf::Object::Dictionary(resources)),
+            ("Contents", contents_obj),
+        ]);
+        let page_id = doc.add_object(lopdf::Object::Dictionary(page_dict));
+        let pages_dict = lopdf::Dictionary::from_iter([
+            ("Type", lopdf::Object::Name(b"Pages".to_vec())),
+            (
+                "Kids",
+                lopdf::Object::Array(vec![lopdf::Object::Reference(page_id)]),
+            ),
+            ("Count", lopdf::Object::Integer(1)),
+        ]);
+        let pages_id = doc.add_object(lopdf::Object::Dictionary(pages_dict));
+        let catalog = lopdf::Dictionary::from_iter([
+            ("Type", lopdf::Object::Name(b"Catalog".to_vec())),
+            ("Pages", lopdf::Object::Reference(pages_id)),
+        ]);
+        let catalog_id = doc.add_object(lopdf::Object::Dictionary(catalog));
+        doc.trailer
+            .set("Root", lopdf::Object::Reference(catalog_id));
+        let path = dir.join(name);
+        doc.save(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn extract_pdf_flate_image_wraps_pixels_as_pgm() {
+        use flate2::write::ZlibEncoder;
+        use std::io::Write;
+
+        // FlateDecode 1x2 grayscale pixels — decompressed and wrapped as PGM.
+        let gray: Vec<u8> = vec![0x00, 0xFF];
+        let mut enc = ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        enc.write_all(&gray).unwrap();
+        let compressed = enc.finish().unwrap();
+
+        let img_dict = lopdf::Dictionary::from_iter([
+            ("Type", lopdf::Object::Name(b"XObject".to_vec())),
+            ("Subtype", lopdf::Object::Name(b"Image".to_vec())),
+            ("Width", lopdf::Object::Integer(1)),
+            ("Height", lopdf::Object::Integer(2)),
+            ("ColorSpace", lopdf::Object::Name(b"DeviceGray".to_vec())),
+            ("BitsPerComponent", lopdf::Object::Integer(8)),
+            ("Filter", lopdf::Object::Name(b"FlateDecode".to_vec())),
+        ]);
+        let dir = std::env::temp_dir().join("aikoql-d1-pdf-flate");
+        let assets = dir.join("assets");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = build_minimal_pdf(
+            &dir,
+            "flate.pdf",
+            vec![("Im1", img_dict, compressed.clone())],
+            vec![],
+        );
+
+        let doc = extract_document(
+            &path.to_string_lossy(),
+            "application/pdf",
+            Some(&assets.to_string_lossy()),
+        )
+        .expect("extract succeeds");
+        assert_eq!(doc.pages[0].images.len(), 1, "one flate image");
+        let img = &doc.pages[0].images[0];
+        assert_eq!(img.asset.mime_type, "image/x-portable-graymap");
+        // P5 header + the two gray pixels.
+        let expected = "P5\n1 2\n255\n".to_string().into_bytes();
+        let expected: Vec<u8> = expected.into_iter().chain(gray).collect();
+        assert_eq!(img.asset.content_hash, asset_store_hash(&expected));
+        assert!(assets
+            .join(format!("{}.bin", img.asset.content_hash))
+            .exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn extract_pdf_jpx_and_ccitt_stored_raw() {
+        let jpx = b"\x00\x00\x00\x0c\x6a\x50\x20\x20fake-jpx";
+        let jpx_dict = lopdf::Dictionary::from_iter([
+            ("Type", lopdf::Object::Name(b"XObject".to_vec())),
+            ("Subtype", lopdf::Object::Name(b"Image".to_vec())),
+            ("Width", lopdf::Object::Integer(1)),
+            ("Height", lopdf::Object::Integer(1)),
+            ("Filter", lopdf::Object::Name(b"JPXDecode".to_vec())),
+        ]);
+        let ccitt = b"\x00\x10\xfa\x00fake-g4";
+        let ccitt_dict = lopdf::Dictionary::from_iter([
+            ("Type", lopdf::Object::Name(b"XObject".to_vec())),
+            ("Subtype", lopdf::Object::Name(b"Image".to_vec())),
+            ("Width", lopdf::Object::Integer(1)),
+            ("Height", lopdf::Object::Integer(1)),
+            ("Filter", lopdf::Object::Name(b"CCITTFaxDecode".to_vec())),
+        ]);
+        let dir = std::env::temp_dir().join("aikoql-d1-pdf-jpx");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = build_minimal_pdf(
+            &dir,
+            "jpx-ccitt.pdf",
+            vec![
+                ("Im1", jpx_dict, jpx.to_vec()),
+                ("Im2", ccitt_dict, ccitt.to_vec()),
+            ],
+            vec![],
+        );
+
+        let doc = extract_document(&path.to_string_lossy(), "application/pdf", None)
+            .expect("extract succeeds");
+        let by_mime: Vec<(&str, &str)> = doc.pages[0]
+            .images
+            .iter()
+            .map(|i| (i.asset.mime_type.as_str(), i.asset.content_hash.as_str()))
+            .collect();
+        assert_eq!(by_mime.len(), 2);
+        assert!(by_mime.contains(&("image/jp2", asset_store_hash(jpx).as_str())));
+        assert!(by_mime.contains(&("image/x-ccitt", asset_store_hash(ccitt).as_str())));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn extract_pdf_vector_only_content_streams_become_assets() {
+        let vector = b"0 0 m\n100 100 l\nS\n".to_vec();
+        let text = b"BT /F1 12 Tf (hello) Tj ET\n".to_vec();
+        let dir = std::env::temp_dir().join("aikoql-d1-pdf-vector");
+        let assets = dir.join("assets");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = build_minimal_pdf(&dir, "vector.pdf", vec![], vec![vector.clone(), text]);
+
+        let doc = extract_document(
+            &path.to_string_lossy(),
+            "application/pdf",
+            Some(&assets.to_string_lossy()),
+        )
+        .expect("extract succeeds");
+        let vectors: Vec<&DocumentImage> = doc.pages[0]
+            .images
+            .iter()
+            .filter(|i| i.asset.mime_type == "application/x-pdf-vector")
+            .collect();
+        assert_eq!(vectors.len(), 1, "only the vector-only stream qualifies");
+        assert_eq!(vectors[0].asset.content_hash, asset_store_hash(&vector));
+        assert!(assets
+            .join(format!("{}.bin", vectors[0].asset.content_hash))
+            .exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn extract_pdf_text_mixed_content_is_not_vector_only() {
+        // A page that draws shapes AND writes text: the content stream is not
+        // vector-only, so it must not become a vector asset.
+        let mixed = b"BT /F1 12 Tf (x) Tj ET\n0 0 m 100 100 l S\n".to_vec();
+        let dir = std::env::temp_dir().join("aikoql-d1-pdf-mixed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = build_minimal_pdf(&dir, "mixed.pdf", vec![], vec![mixed]);
+
+        let doc = extract_document(&path.to_string_lossy(), "application/pdf", None)
+            .expect("extract succeeds");
+        assert!(
+            doc.pages[0].images.is_empty(),
+            "text+vector content stream is decoration, not an asset"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

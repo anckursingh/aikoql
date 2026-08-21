@@ -631,6 +631,29 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
         return None;
     }
 
+    // ATX markdown headings "# ".."###### " — emitted by the DOCX/HTML
+    // structural parsers (HLD §30/§31 dialect). The marker stays in the
+    // stored text, matching the numeric-prefix headings below.
+    if first.starts_with('#') {
+        let hashes = first.chars().take_while(|c| *c == '#').count();
+        if (1..=6).contains(&hashes)
+            && first[hashes..].starts_with(' ')
+            && !first[hashes..].trim().is_empty()
+            && first.len() < 150
+        {
+            return Some(AstNode {
+                block_type: BlockType::Heading {
+                    level: hashes as u8,
+                },
+                text: Some(text.to_string()),
+                children: vec![],
+                bbox: None,
+                confidence: None,
+                ..Default::default()
+            });
+        }
+    }
+
     // Numeric prefix: "1.", "1.1", "1.1.1", "Section 1", "Chapter 2"
     let numeric_prefix: String = first
         .chars()
@@ -1412,6 +1435,33 @@ mod tests {
         assert_eq!(ast.page_count, 1);
         assert_eq!(ast.pages.len(), 1);
         assert_eq!(ast.source_type, "native");
+    }
+
+    #[test]
+    fn atx_markdown_headings_classify_with_levels() {
+        // DOCX/HTML structural parsers emit ATX headings (HLD §30/§31).
+        // The plain paragraph is two lines — single short lines are
+        // headings under the title-case heuristic, so one line would not
+        // prove paragraph fall-through.
+        let dm = doc(vec![page(
+            "# Overview\n\n## Details\n\n### Deep\n\nPlain paragraph.\nWith a second line.",
+        )]);
+        let ast = document_model_to_ast(&dm);
+        let blocks = &ast.pages[0].children;
+        let headings: Vec<u8> = blocks
+            .iter()
+            .filter_map(|n| match &n.block_type {
+                BlockType::Heading { level } => Some(*level),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(headings, vec![1, 2, 3], "ATX levels map to heading levels");
+        assert!(
+            blocks
+                .iter()
+                .any(|n| matches!(n.block_type, BlockType::Paragraph)),
+            "plain paragraph stays a paragraph"
+        );
     }
 
     #[test]

@@ -3391,14 +3391,24 @@ PR-F completes the multimodal pipeline: docx/pdf embedded images are extracted a
 | `crates/ingestion/tests/multimodal_acceptance.rs` + `tests/fixtures/` | **New golden fixture** (DoD row 18): `multimodal-golden.md` (mermaid fence, math fence, chart-captioned image, standalone logo) + `golden-chart.png`/`golden-logo.png`. Acceptance test 10 asserts: diagram entities/relations carry `mock-diagram-v1` + `DiagramNode`/`DiagramEdge` evidence, formula fact `mock-formula-v1`, chart fact cites title + persisted content-addressed asset, standalone image fact + persisted asset. |
 | External callers | `mcp/tools/ingestion.rs`, `mcp/agent_knowledge.rs` pass `Some(&format!("{path}.assets"))` as asset dir; `mcp_stdio.rs`, `ingest_dir.rs` pass `None`/3rd arg. |
 
-**Ponytail boundaries (documented ceilings):** classification is keyword-heuristic — the `VisualClassifier`/`*Analyzer` traits are the VLM seams (HLD §32); no model is called today. PDF image extraction covers DCTDecode only — FlateDecode/vector graphics deferred (rare in practice; `ponytail:` upgrade path is the same XObject scan). Formula payloads keep the LaTeX verbatim (no TeX AST). Screenshot/ScannedText classify but degrade to Image facts (no OCR-of-screenshot). Docx images land on page 1 (no layout mapping). Inline images mid-paragraph stay raw text (PR-B deferral).
+**Ponytail boundaries (documented ceilings):** classification is keyword-heuristic — the `VisualClassifier`/`*Analyzer` traits are the VLM seams (HLD §32); no model is called today. Formula payloads keep the LaTeX verbatim (no TeX AST). Screenshot/ScannedText classify but degrade to Image facts (no OCR-of-screenshot). Inline images mid-paragraph stay raw text (PR-B deferral). HTML extraction is still `strip_xml_tags` (HLD §31 parser pending).
 
-### Tests — PR-F (all green 2026-08-21)
+### Implemented now — PR-F completion: full extraction coverage (do-not-skip round)
 
-- **Unit**: 353 lib tests (+18): 8 `visual::tests` (classifier rules, caption re-typing, arrow-chain parsing incl. em-dash arrows, node dedup, image-caption) + 2 `lib::tests` (docx embedded image extraction, pdf DCTDecode extraction — both asserting persisted content-addressed files) + 1 `ast::tests` + 4 `markdown::tests` + 2 `boundary::tests` + 1 `ir::tests` (diagram → entities/relations with typed evidence).
-- **Acceptance**: 10/10 (+1 golden-fixture test above).
+Per the "do not skip anything" directive, the PR-F extraction deferrals are closed:
+
+| Item | Change |
+|---|---|
+| PDF raster filters (HLD §29) | `extract_pdf_images` covers all filters: DCTDecode/JPXDecode/CCITTFaxDecode stored raw with their mime types; FlateDecode/LZWDecode/ASCII85Decode pixels wrapped in PPM/PGM headers when DeviceRGB/Gray @ 8 bpc. pdf-extract 0.9 panics on PDFs referencing undefined fonts — `extract_pdf` wraps it in `catch_unwind` and continues without native text (production crash-path fix). |
+| PDF vector graphics (HLD §29) | Content streams with path ops (`m`/`l`/`re`/`c`), no text ops (`BT`/`Tj`/`TJ`), no XObject invocations become `application/x-pdf-vector` assets — diagram drawings, not text pages. |
+| DOCX structure (HLD §30) | `parse_docx_structure`: top-level `w:p`/`w:tbl` walk with pStyle + styles.xml heading detection (HeadingN / Title / "heading N" names → `# `-prefixed ATX headings), run concatenation with XML entity unescape, `w:hyperlink` → `[text](url)`, `w:br type=page`/`w:lastRenderedPageBreak` → page splits, `w:tbl` → pipe-markdown rows with `w:gridSpan` merged-cell padding, drawings → per-page image refs resolved through rels. `strip_xml_tags` is fallback-only (and skipped when images were found — an image-only document has empty text by design). `try_heading` in ast.rs gained ATX `# `…`###### ` support so the emitted dialect classifies back into Heading nodes with correct levels. |
+
+### Tests — PR-F completion round (all green 2026-08-21)
+
+- **Unit**: 360 lib tests (+7): 4 PDF (`flate→PGM wrap`, `jpx+ccitt raw`, `vector-only positive`, `text-mixed negative`) + 2 docx (`structure walk` incl. gridSpan/hyperlink/caption/page-2 image, `tag-strip fallback`) + 1 `ast::tests` (`ATX headings classify with levels`). Existing docx text/image tests re-verified against the structured parser.
+- **Acceptance**: 10/10.
 - **Gates**: `cargo fmt --all` clean, `cargo clippy --workspace --all-targets` clean (0 warnings), `cargo test --workspace` green (all crates, exit 0).
 
-### Next implementation — PR-C: Document-hash fragment-id prefix
+### Next implementation — PR-F completion continues, then PR-C
 
-PR-F was the last extraction-side prerequisite. PR-C consumes `DocumentAst.document_id` (landed in PR-B): prefix deterministic fragment ids with the document hash so identical layouts in different documents never collide. PR-G (transformer/embedding boundary detectors) stays gated on the rule-baseline benchmarks (§60), now measurable against the PR-E projection and the PR-D/PR-F semantic legs.
+Remaining "do not skip anything" items, in order: HTML parser → canonical AST (HLD §31, h1–h6/tables/img/links/lists — replaces `strip_xml_tags`); chart specialist parser filling `ChartPayload` axes/series/`extracted_data` from adjacent tables (HLD §33); OCR fill for Screenshot/ScannedText + inline markdown images + the VLM analyzer set behind the traits (§13/§32, env-configured, not default). Then PR-C: document-hash fragment-id prefix (consumes `DocumentAst.document_id`, landed in PR-B). PR-G stays gated on the rule-baseline benchmarks (§60).
