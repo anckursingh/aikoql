@@ -41,6 +41,9 @@ pub enum FragmentModality {
     Mixed,
 }
 
+// ponytail: fragments are transient per-document, like AstPayload in ast.rs.
+// Box the payload variants if fragments ever get cached long-term.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum FragmentContent {
     Text(String),

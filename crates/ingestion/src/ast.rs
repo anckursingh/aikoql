@@ -103,6 +103,7 @@ pub enum AstPayload {
     Chart(ChartPayload),
     Diagram(DiagramPayload),
     Formula(FormulaPayload),
+    Image(ImagePayload),
 }
 
 /// Typed scalar for table cells. The original cell text stays available.
@@ -160,6 +161,10 @@ pub struct ChartPayload {
     pub chart_type: ChartType,
     #[serde(default)]
     pub title: Option<String>,
+    /// Content-addressed asset backing the chart (PR-F): survives image →
+    /// chart re-typing so chart facts can cite their visual source.
+    #[serde(default)]
+    pub asset: Option<crate::source::VisualAssetRef>,
     #[serde(default)]
     pub x_axis: Option<Axis>,
     #[serde(default)]
@@ -412,7 +417,10 @@ pub fn document_model_to_ast(doc: &DocumentModel) -> DocumentAst {
     let mut pages = Vec::with_capacity(doc.pages.len());
 
     for page in &doc.pages {
-        let blocks = classify_blocks(&page.text, page.page_number);
+        let mut blocks = classify_blocks(&page.text, page.page_number);
+        // PR-F: extracted visual assets enter the canonical AST as Image
+        // nodes (HLD §29/§30) — classification runs later in the pipeline.
+        blocks.extend(image_nodes(&page.images));
         pages.push(AstNode {
             block_type: BlockType::Unknown, // page container
             text: None,
@@ -431,6 +439,24 @@ pub fn document_model_to_ast(doc: &DocumentModel) -> DocumentAst {
         source_type,
         document_id: None,
     }
+}
+
+/// PR-F: `DocumentImage`s become asset-backed `Image` nodes. Caption
+/// association for extracted assets (text-side "Figure 1: …" markers) is a
+/// future seam — position matching, not available in the mock tier.
+fn image_nodes(images: &[crate::DocumentImage]) -> Vec<AstNode> {
+    images
+        .iter()
+        .map(|img| AstNode {
+            block_type: BlockType::Image,
+            text: None,
+            children: vec![],
+            bbox: img.bbox.clone(),
+            confidence: None,
+            asset: Some(img.asset.clone()),
+            ..Default::default()
+        })
+        .collect()
 }
 
 fn determine_source_type(doc: &DocumentModel) -> String {
@@ -1323,7 +1349,8 @@ pub fn document_model_to_ast_enriched(
             .get(i)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-        let blocks = classify_blocks_enriched(&page.text, page.page_number, page_bboxes);
+        let mut blocks = classify_blocks_enriched(&page.text, page.page_number, page_bboxes);
+        blocks.extend(image_nodes(&page.images));
 
         pages.push(AstNode {
             block_type: BlockType::Unknown,
@@ -1361,6 +1388,7 @@ mod tests {
             text: text.to_string(),
             source: "native".into(),
             ocr_confidence: None,
+            images: vec![],
         }
     }
 
@@ -1394,6 +1422,7 @@ mod tests {
             text: "OCR text".into(),
             source: "ocr".into(),
             ocr_confidence: Some(88.0),
+            images: vec![],
         }]);
         dm.ocr_stats = Some(crate::OcrStats {
             pages_ocr_attempted: 1,
@@ -1414,6 +1443,7 @@ mod tests {
                 text: "Native text".into(),
                 source: "native".into(),
                 ocr_confidence: None,
+                images: vec![],
             },
             PageModel {
                 page_number: 2,
@@ -1421,6 +1451,7 @@ mod tests {
                 text: "OCR text".into(),
                 source: "ocr".into(),
                 ocr_confidence: Some(85.0),
+                images: vec![],
             },
         ]);
         dm.ocr_stats = Some(crate::OcrStats {
@@ -1861,6 +1892,39 @@ mod tests {
         assert_eq!(blocks[2].block_type, BlockType::Paragraph);
     }
 
+    #[test]
+    fn adapter_emits_image_nodes_from_page_images() {
+        // PR-F: extracted visual assets (pdf/docx) become asset-backed
+        // Image nodes appended after the text blocks.
+        let mut p = page("Body text.");
+        p.images = vec![crate::DocumentImage {
+            asset: crate::VisualAssetRef {
+                asset_id: "h".into(),
+                mime_type: "image/png".into(),
+                content_hash: "h".into(),
+                source: crate::SourceSpan {
+                    document_id: None,
+                    page: 1,
+                    start_offset: None,
+                    end_offset: None,
+                    bbox: None,
+                    node_id: None,
+                },
+            },
+            bbox: None,
+        }];
+        let dm = doc(vec![p]);
+        let ast = document_model_to_ast(&dm);
+
+        let image = ast.pages[0]
+            .children
+            .iter()
+            .find(|n| n.block_type == BlockType::Image)
+            .expect("image node from page.images");
+        assert_eq!(image.asset.as_ref().unwrap().content_hash, "h");
+        assert_eq!(image.text, None, "extracted assets carry no text yet");
+    }
+
     // ── Enriched adapter end-to-end ──
 
     #[test]
@@ -1871,6 +1935,7 @@ mod tests {
             text: "INVOICE\n\nPayment terms here.\n\nFigure 1: Diagram\n\nDiagram description.\n\nTotal: $100.00".into(),
             source: "ocr".into(),
             ocr_confidence: Some(88.0),
+            images: vec![],
         }]);
 
         // Provide bboxes: title-sized first block, smaller rest.

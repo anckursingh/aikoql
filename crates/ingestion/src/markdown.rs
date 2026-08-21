@@ -17,6 +17,7 @@
 //! and require explicit validation before execution.
 
 use crate::ast::{AstNode, BlockType, DocumentAst};
+use crate::boundary::{KnowledgeBoundaryDetector, RuleBoundaryDetector};
 use crate::fragment::KnowledgeFragment;
 use crate::ir::{
     EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate, SemanticAnalyzer,
@@ -213,6 +214,10 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                         s.code_blocks
                             .push((lang.to_string(), node.text.clone().unwrap_or_default()));
                     }
+                }
+                BlockType::Diagram | BlockType::Chart | BlockType::Formula | BlockType::Image => {
+                    // Visual content flows through the fragment leg (PR-F),
+                    // not section text — keep it out of paragraph facts.
                 }
                 _ => {
                     // Other block types — collect text into current section
@@ -731,8 +736,15 @@ fn extract_markdown_links(text: &str) -> Vec<String> {
 /// Parse Markdown text directly into a `DocumentAst` with proper
 /// `# Heading`, `- list`, `` ``` `` code-fence, and standalone `![alt](src)`
 /// image recognition. Image paths resolve against `base_dir`; `None` leaves
-/// images asset-less (the alt text still lands in the node).
-fn markdown_text_to_ast(content: &str, base_dir: Option<&std::path::Path>) -> DocumentAst {
+/// images asset-less (the alt text still lands in the node). When `asset_dir`
+/// is given, extracted assets are persisted content-addressed (PR-F wiring).
+/// PR-F: visual fences (mermaid/diagram/math) emit typed nodes, and a
+/// classification pass attaches payloads + re-types captioned images.
+fn markdown_text_to_ast(
+    content: &str,
+    base_dir: Option<&std::path::Path>,
+    asset_dir: Option<&std::path::Path>,
+) -> DocumentAst {
     let lines: Vec<&str> = content.lines().collect();
     let mut nodes: Vec<AstNode> = Vec::new();
     let mut i = 0;
@@ -757,7 +769,7 @@ fn markdown_text_to_ast(content: &str, base_dir: Option<&std::path::Path>) -> Do
                 children: vec![],
                 bbox: None,
                 confidence: None,
-                asset: image_asset(&src, base_dir),
+                asset: image_asset(&src, base_dir, asset_dir),
                 ..Default::default()
             });
             i += 1;
@@ -786,16 +798,27 @@ fn markdown_text_to_ast(content: &str, base_dir: Option<&std::path::Path>) -> Do
                 code_lines.push(lines[i]);
                 i += 1;
             }
-            // First line is language hint; rest is code
-            let header = if lang.is_empty() {
-                String::new()
-            } else {
-                format!("{}\n", lang)
+            // PR-F (HLD §11/§13): visual fences are typed content, not code.
+            // Mermaid/diagram specs become Diagram nodes (arrow chains → graph),
+            // math fences become Formula nodes; everything else stays Code.
+            let (block_type, text) = match lang.to_lowercase().as_str() {
+                "mermaid" | "diagram" | "flowchart" | "graphviz" => {
+                    (BlockType::Diagram, code_lines.join("\n"))
+                }
+                "math" | "latex" | "tex" => (BlockType::Formula, code_lines.join("\n")),
+                _ => {
+                    // First line is language hint; rest is code
+                    let header = if lang.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}\n", lang)
+                    };
+                    (BlockType::Code, header + &code_lines.join("\n"))
+                }
             };
-            let code_text = header + &code_lines.join("\n");
             nodes.push(AstNode {
-                block_type: BlockType::Code,
-                text: Some(code_text),
+                block_type,
+                text: Some(text),
                 children: vec![],
                 bbox: None,
                 confidence: None,
@@ -961,7 +984,7 @@ fn markdown_text_to_ast(content: &str, base_dir: Option<&std::path::Path>) -> Do
         });
     }
 
-    DocumentAst {
+    let mut ast = DocumentAst {
         page_count: 1,
         pages: vec![AstNode {
             block_type: BlockType::Unknown,
@@ -973,7 +996,11 @@ fn markdown_text_to_ast(content: &str, base_dir: Option<&std::path::Path>) -> Do
         }],
         source_type: "markdown-native".into(),
         document_id: None,
-    }
+    };
+    // PR-F: classification pass — visual nodes gain payloads, captioned
+    // images are re-typed (chart/diagram/formula).
+    crate::visual::classify_visuals(&mut ast);
+    ast
 }
 
 /// `![alt](path)` → (alt, path). Whole-line images only — inline images in
@@ -991,13 +1018,21 @@ fn parse_image_syntax(line: &str) -> Option<(String, String)> {
 
 /// Populate a `VisualAssetRef` for an image path resolved against `base_dir`.
 /// Fail-soft: missing/unreadable files leave the node asset-less — the AST
-/// never hard-fails on asset extraction.
-fn image_asset(src: &str, base_dir: Option<&std::path::Path>) -> Option<VisualAssetRef> {
+/// never hard-fails on asset extraction. A store failure only skips
+/// persistence; the in-memory reference still carries the hash.
+fn image_asset(
+    src: &str,
+    base_dir: Option<&std::path::Path>,
+    asset_dir: Option<&std::path::Path>,
+) -> Option<VisualAssetRef> {
     let path = base_dir
         .unwrap_or_else(|| std::path::Path::new("."))
         .join(src);
     let bytes = std::fs::read(&path).ok()?;
     let hash = crate::asset_store::content_hash(&bytes);
+    if let Some(dir) = asset_dir {
+        let _ = crate::asset_store::store_asset(&dir.to_string_lossy(), &bytes);
+    }
     Some(VisualAssetRef {
         asset_id: hash.clone(),
         mime_type: crate::asset_store::mime_from_extension(src),
@@ -1098,15 +1133,20 @@ fn is_horizontal_rule(line: &str) -> bool {
 pub fn compile_markdown_file(
     path: &str,
     document_id: Option<String>,
+    asset_dir: Option<&str>,
 ) -> Result<KnowledgeIr, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("read markdown '{}': {}", path, e))?;
     // Images resolve relative to the document's directory (PR-B asset
     // preservation); the string variant has no base dir and stays asset-less.
-    let mut ast = markdown_text_to_ast(&content, std::path::Path::new(path).parent());
+    // `asset_dir` persists extracted assets content-addressed (PR-F).
+    let mut ast = markdown_text_to_ast(
+        &content,
+        std::path::Path::new(path).parent(),
+        asset_dir.map(std::path::Path::new),
+    );
     ast.document_id = document_id.clone();
-    let analyzer = MarkdownSemanticAnalyzer::new(document_id);
-    Ok(analyzer.analyze(&ast, &[]))
+    Ok(compile_markdown_ast(&ast, document_id))
 }
 
 /// Compile a Markdown string into KnowledgeIr using native Markdown parsing.
@@ -1114,15 +1154,131 @@ pub fn compile_markdown_string(
     content: &str,
     document_id: Option<String>,
 ) -> Result<KnowledgeIr, String> {
-    let mut ast = markdown_text_to_ast(content, None);
+    let mut ast = markdown_text_to_ast(content, None, None);
     ast.document_id = document_id.clone();
-    let analyzer = MarkdownSemanticAnalyzer::new(document_id);
-    Ok(analyzer.analyze(&ast, &[]))
+    Ok(compile_markdown_ast(&ast, document_id))
+}
+
+/// PR-F (HLD §57): the section leg classifies ADRs/rules/entities; the
+/// fragment leg carries visual knowledge (diagram nodes/edges, chart/formula/
+/// image facts) that section parsing skips. Merged with statement/triple
+/// dedup.
+fn compile_markdown_ast(ast: &DocumentAst, document_id: Option<String>) -> KnowledgeIr {
+    let section_ir = MarkdownSemanticAnalyzer::new(document_id.clone()).analyze(ast, &[]);
+    let fragments = RuleBoundaryDetector.detect(ast).unwrap_or_default();
+    let mut fragment_ir = crate::ir::MockSemanticAnalyzer::new().analyze(ast, &fragments);
+    if let Some(id) = &document_id {
+        stamp_document_id(&mut fragment_ir, id);
+    }
+    crate::merge::merge_knowledge_ir(&[section_ir, fragment_ir])
+}
+
+/// The fragment leg builds candidates with `document_id: None`; stamp it so
+/// the merge dedupes by (document, name) instead of splitting shared names.
+fn stamp_document_id(ir: &mut KnowledgeIr, id: &str) {
+    ir.document_id = Some(id.to_string());
+    for e in &mut ir.entities {
+        e.evidence.document_id = Some(id.to_string());
+    }
+    for f in &mut ir.facts {
+        f.evidence.document_id = Some(id.to_string());
+    }
+    for r in &mut ir.relations {
+        r.evidence.document_id = Some(id.to_string());
+    }
+    for t in &mut ir.temporal {
+        t.evidence.document_id = Some(id.to_string());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::AstPayload;
+
+    // ── PR-F: visual fences, classification, asset persistence ──
+
+    #[test]
+    fn diagram_fence_becomes_diagram_with_graph_payload() {
+        let md = "```mermaid\nClient -> Gateway --> Ledger\n```";
+        let ast = markdown_text_to_ast(md, None, None);
+        let node = &ast.pages[0].children[0];
+        assert_eq!(node.block_type, BlockType::Diagram);
+        assert!(
+            !node.text.as_deref().unwrap_or_default().contains("mermaid"),
+            "lang header must not leak into the diagram text"
+        );
+        match &node.payload {
+            Some(AstPayload::Diagram(d)) => {
+                assert_eq!(d.nodes.len(), 3);
+                assert_eq!(d.edges.len(), 2);
+                assert_eq!(d.edges[0].source, "client");
+                assert_eq!(d.edges[1].target, "ledger");
+            }
+            other => panic!("expected diagram payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn math_fence_becomes_formula_with_plain_text() {
+        let md = "```math\nF = B * R\n```";
+        let ast = markdown_text_to_ast(md, None, None);
+        let node = &ast.pages[0].children[0];
+        assert_eq!(node.block_type, BlockType::Formula);
+        match &node.payload {
+            Some(AstPayload::Formula(f)) => {
+                assert_eq!(f.plain_text.as_deref(), Some("F = B * R"));
+                assert!(f.latex.is_none(), "no latex markers → latex stays empty");
+            }
+            other => panic!("expected formula payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn code_fence_stays_code_with_language_header() {
+        let md = "```rust\nfn main() {}\n```";
+        let ast = markdown_text_to_ast(md, None, None);
+        let node = &ast.pages[0].children[0];
+        assert_eq!(node.block_type, BlockType::Code);
+        assert!(node
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("rust\n"));
+    }
+
+    #[test]
+    fn image_with_chart_caption_retypes_and_persists_asset() {
+        let dir = std::env::temp_dir().join("aikoql-md-chart-caption-test");
+        let assets = dir.join("assets");
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("fees.png");
+        std::fs::write(&img, b"\x89PNG chart bytes").unwrap();
+
+        let md = "![fees](fees.png)\n\nChart 1: Fee structure";
+        let ast = markdown_text_to_ast(md, Some(&dir), Some(&assets));
+
+        let chart = &ast.pages[0].children[0];
+        assert_eq!(chart.block_type, BlockType::Chart);
+        match &chart.payload {
+            Some(AstPayload::Chart(c)) => {
+                assert_eq!(c.title.as_deref(), Some("Chart 1: Fee structure"));
+            }
+            other => panic!("expected chart payload, got {:?}", other),
+        }
+
+        // The asset reference survives re-typing and was persisted by hash.
+        let hash = crate::asset_store::content_hash(b"\x89PNG chart bytes");
+        let asset = chart.asset.as_ref().expect("asset survives re-typing");
+        assert_eq!(asset.content_hash, hash);
+        assert_eq!(
+            std::fs::read(assets.join(format!("{}.bin", hash))).unwrap(),
+            b"\x89PNG chart bytes",
+            "asset persisted content-addressed"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn classifier_detects_rules_from_deontic_markers() {
@@ -1216,14 +1372,14 @@ mod tests {
         let img = dir.join("logo.png");
         std::fs::write(&img, b"\x89PNG fake bytes").unwrap();
 
-        let md = "# Doc\n\n![Architecture diagram](logo.png)\n\nBody text.";
-        let ast = markdown_text_to_ast(md, Some(&dir));
+        let md = "# Doc\n\n![Logo](logo.png)\n\nBody text.";
+        let ast = markdown_text_to_ast(md, Some(&dir), None);
         let image = ast.pages[0]
             .children
             .iter()
             .find(|n| n.block_type == BlockType::Image)
             .expect("image node");
-        assert_eq!(image.text.as_deref(), Some("Architecture diagram"));
+        assert_eq!(image.text.as_deref(), Some("Logo"));
         let asset = image.asset.as_ref().expect("populated asset");
         assert_eq!(asset.mime_type, "image/png");
         assert_eq!(
@@ -1237,21 +1393,21 @@ mod tests {
 
     #[test]
     fn missing_image_fails_soft() {
-        let md = "![Diagram](does-not-exist.png)";
-        let ast = markdown_text_to_ast(md, None);
+        let md = "![Missing](does-not-exist.png)";
+        let ast = markdown_text_to_ast(md, None, None);
         let image = ast.pages[0]
             .children
             .iter()
             .find(|n| n.block_type == BlockType::Image)
             .expect("image node");
         assert!(image.asset.is_none(), "missing file → asset-less node");
-        assert_eq!(image.text.as_deref(), Some("Diagram"));
+        assert_eq!(image.text.as_deref(), Some("Missing"));
     }
 
     #[test]
     fn inline_image_stays_in_paragraph_text() {
         let md = "See ![x](y.png) for details.";
-        let ast = markdown_text_to_ast(md, None);
+        let ast = markdown_text_to_ast(md, None, None);
         assert_eq!(ast.pages[0].children.len(), 1);
         assert_eq!(ast.pages[0].children[0].block_type, BlockType::Paragraph);
         assert!(ast.pages[0].children[0]

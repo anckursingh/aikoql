@@ -313,8 +313,10 @@ pub(crate) fn get_ir_for_koid(
             aikoql_ingestion::compile_rust_file(&artifact_path)
                 .map_err(|e| format!("rust compile: {}", e))?
         } else {
-            let doc = aikoql_ingestion::extract_document(&artifact_path, &mime_type)
-                .map_err(|e| format!("extract: {}", e))?;
+            let asset_dir = format!("{}.assets", artifact_path);
+            let doc =
+                aikoql_ingestion::extract_document(&artifact_path, &mime_type, Some(&asset_dir))
+                    .map_err(|e| format!("extract: {}", e))?;
             let cr = aikoql_ingestion::compile_document_mock(&doc, &[]);
             let cr_v = serde_json::to_value(&cr).map_err(|e| format!("serialize facts: {}", e))?;
             aikoql_ingestion::KnowledgeIr {

@@ -25,6 +25,7 @@ fn invoice_doc() -> aikoql_ingestion::DocumentModel {
             char_count: 220,
             source: "native".into(),
             ocr_confidence: None,
+            images: vec![],
         }],
         total_chars: 220,
         ocr_stats: None,
@@ -262,11 +263,9 @@ fn acceptance_markdown_images_fail_soft_and_legacy_text_deserializes() {
     )
     .unwrap();
 
-    let ir = aikoql_ingestion::compile_markdown_file(
-        &md.to_string_lossy(),
-        Some("doc.md".into()),
-    )
-    .expect("markdown with present and missing images compiles");
+    let ir =
+        aikoql_ingestion::compile_markdown_file(&md.to_string_lossy(), Some("doc.md".into()), None)
+            .expect("markdown with present and missing images compiles");
 
     assert!(
         ir.entities.iter().any(|e| e.name == "Asset Doc"),
@@ -288,6 +287,85 @@ fn acceptance_markdown_images_fail_soft_and_legacy_text_deserializes() {
 }
 
 #[test]
+fn acceptance_visual_golden_fixture_flows_to_typed_knowledge() {
+    // PR-F golden fixture (DoD rows 3-6, 8, 11, 12, 18): mermaid fence →
+    // diagram entities/relations with model versions, math fence → formula
+    // fact, image + chart caption → chart fact citing its persisted asset.
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/multimodal-golden.md");
+    let assets = std::env::temp_dir().join("aikoql-multimodal-golden-assets");
+    std::fs::create_dir_all(&assets).unwrap();
+
+    let ir = aikoql_ingestion::compile_markdown_file(
+        &fixture.to_string_lossy(),
+        Some("multimodal-golden.md".into()),
+        Some(&assets.to_string_lossy()),
+    )
+    .expect("golden fixture compiles");
+
+    // Diagram: nodes → entities, edges → relations, model versions persisted.
+    for name in ["Client", "Gateway", "Payment Service", "Ledger"] {
+        let entity = ir
+            .entities
+            .iter()
+            .find(|e| e.name == name)
+            .unwrap_or_else(|| panic!("diagram node entity '{}'", name));
+        assert_eq!(entity.evidence.model.as_deref(), Some("mock-diagram-v1"));
+        assert!(
+            matches!(
+                &entity.evidence.source,
+                Some(EvidenceSource::DiagramNode { .. })
+            ),
+            "'{}' carries DiagramNode evidence",
+            name
+        );
+    }
+    let edge = ir
+        .relations
+        .iter()
+        .find(|r| r.subject == "client" && r.object == "gateway")
+        .expect("diagram edge relation");
+    assert_eq!(edge.predicate, "related_to");
+    assert_eq!(edge.evidence.model.as_deref(), Some("mock-diagram-v1"));
+
+    // Formula fact with model.
+    assert!(ir.facts.iter().any(|f| {
+        f.statement.contains("F = B * R") && f.evidence.model.as_deref() == Some("mock-formula-v1")
+    }));
+
+    // Chart fact cites its title + model; the backing asset was persisted.
+    let chart = ir
+        .facts
+        .iter()
+        .find(|f| f.statement.starts_with("Chart:"))
+        .expect("chart fact");
+    assert!(chart.statement.contains("Fee structure by plan"));
+    assert_eq!(chart.evidence.model.as_deref(), Some("mock-chart-v1"));
+    let chart_bytes = std::fs::read(fixture.parent().unwrap().join("golden-chart.png")).unwrap();
+    let chart_hash = aikoql_ingestion::content_hash(&chart_bytes);
+    assert!(
+        assets.join(format!("{}.bin", chart_hash)).exists(),
+        "chart asset persisted content-addressed"
+    );
+
+    // Standalone image fact with model + persisted asset.
+    let image = ir
+        .facts
+        .iter()
+        .find(|f| f.evidence.model.as_deref() == Some("mock-image-v1"))
+        .expect("image fact");
+    assert!(image.statement.contains("Logo"));
+    let logo_bytes = std::fs::read(fixture.parent().unwrap().join("golden-logo.png")).unwrap();
+    let logo_hash = aikoql_ingestion::content_hash(&logo_bytes);
+    assert!(
+        assets.join(format!("{}.bin", logo_hash)).exists(),
+        "logo asset persisted content-addressed"
+    );
+
+    std::fs::remove_dir_all(&assets).ok();
+}
+
+#[test]
 fn acceptance_end_to_end_text_file_ingestion() {
     // Full journey from a real file on disk through extraction to fragments.
     let dir = std::env::temp_dir().join("aikoql-multimodal-acceptance");
@@ -295,7 +373,7 @@ fn acceptance_end_to_end_text_file_ingestion() {
     let path = dir.join("spec.txt");
     std::fs::write(&path, invoice_doc().pages[0].text.clone()).unwrap();
 
-    let extracted = extract_document(&path.to_string_lossy(), "text/plain").expect("extract");
+    let extracted = extract_document(&path.to_string_lossy(), "text/plain", None).expect("extract");
     let result = compile_document_mock(&extracted, &[]);
 
     assert!(result

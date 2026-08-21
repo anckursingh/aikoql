@@ -165,6 +165,13 @@ pub use fragment::{FragmentContent, FragmentContext, FragmentModality, Knowledge
 mod boundary;
 pub use boundary::{BoundaryError, KnowledgeBoundaryDetector, RuleBoundaryDetector};
 
+mod visual;
+pub use visual::{
+    classify_visuals, ChartAnalyzer, DiagramAnalyzer, ImageAnalyzer, MockChartAnalyzer,
+    MockDiagramAnalyzer, MockImageAnalyzer, MockVisualClassifier, VisualClassification,
+    VisualClassifier, MODEL_CHART, MODEL_DIAGRAM, MODEL_FORMULA, MODEL_IMAGE, MODEL_VISUAL,
+};
+
 mod pipeline;
 pub use pipeline::{
     compile_document, compile_document_mock, CompilationResult, EvidenceNode, EvidenceTrail,
@@ -237,6 +244,19 @@ pub use aikoql_ops::{
     StaleDocumentationReport, StaleEntityInfo,
 };
 
+/// An original visual asset (embedded image) attached to a page of the
+/// extracted document. The bytes are content-addressed: `asset.content_hash`
+/// is the identity; persistence happens in the extractor when an asset
+/// directory is provided.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DocumentImage {
+    pub asset: VisualAssetRef,
+    /// Page region, where the source format exposes geometry (PDF content
+    /// streams are not parsed yet — images carry page placement only).
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+}
+
 /// A single page of extracted text.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PageModel {
@@ -249,6 +269,9 @@ pub struct PageModel {
     /// Average word-level OCR confidence (0.0–100.0), if OCR was used.
     #[serde(default)]
     pub ocr_confidence: Option<f32>,
+    /// Embedded images on this page (PR-F image extraction).
+    #[serde(default)]
+    pub images: Vec<DocumentImage>,
 }
 
 fn default_source() -> String {
@@ -266,13 +289,22 @@ pub struct DocumentModel {
     pub ocr_stats: Option<OcrStats>,
 }
 
-/// Extract text from a document file on disk.
+/// Extract content from a document file on disk.
 /// Returns page-level text for PDFs, single-page for everything else.
-pub fn extract_document(file_path: &str, mime_type: &str) -> Result<DocumentModel, String> {
+///
+/// `asset_dir` enables asset persistence: embedded images (PDF DCTDecode,
+/// DOCX media) are content-addressed and stored under `{asset_dir}/{hash}.bin`
+/// when provided. Extraction never hard-fails on asset problems — the
+/// `VisualAssetRef` still carries the content hash either way.
+pub fn extract_document(
+    file_path: &str,
+    mime_type: &str,
+    asset_dir: Option<&str>,
+) -> Result<DocumentModel, String> {
     match mime_type {
-        "application/pdf" => extract_pdf(file_path),
+        "application/pdf" => extract_pdf(file_path, asset_dir),
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => {
-            extract_docx(file_path)
+            extract_docx(file_path, asset_dir)
         }
         "text/html" => extract_html(file_path),
         t if t.starts_with("text/") => extract_text(file_path),
@@ -280,12 +312,24 @@ pub fn extract_document(file_path: &str, mime_type: &str) -> Result<DocumentMode
     }
 }
 
-fn extract_pdf(path: &str) -> Result<DocumentModel, String> {
-    let text = pdf_extract::extract_text(path).map_err(|e| format!("pdf extract: {}", e))?;
+fn extract_pdf(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, String> {
+    // Text extraction is best-effort: an image-only (scanned) PDF produces no
+    // text, and pdf-extract can reject unusual encodings — neither should
+    // prevent asset extraction. Failure degrades to empty native pages.
+    let text = match pdf_extract::extract_text(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "pdf text extraction failed: {} — continuing without native text",
+                e
+            );
+            String::new()
+        }
+    };
 
     // pdf-extract joins pages with formfeed (\u{c}) — split on it.
     // Keep ALL pages (including empty ones) — empty pages may need OCR.
-    let native_pages: Vec<PageModel> = text
+    let mut native_pages: Vec<PageModel> = text
         .split('\u{c}')
         .enumerate()
         .map(|(i, page_text)| {
@@ -296,9 +340,21 @@ fn extract_pdf(path: &str) -> Result<DocumentModel, String> {
                 text: trimmed,
                 source: "native".into(),
                 ocr_confidence: None,
+                images: Vec::new(),
             }
         })
         .collect();
+
+    // PR-F: embedded-image extraction via lopdf (already in the graph through
+    // pdf-extract — no new dependency). DCTDecode streams are raw JPEG bytes,
+    // the dominant case for photos/charts in real PDFs. FlateDecode raw-pixel
+    // images and vector graphics stay deferred (see IMPLEMENTATION-PLAN.md).
+    let images_by_page = extract_pdf_images(path, asset_dir);
+    for (page_idx, images) in images_by_page.into_iter().enumerate() {
+        if let Some(page) = native_pages.get_mut(page_idx) {
+            page.images = images;
+        }
+    }
 
     // D2: For pages with insufficient native text, attempt OCR.
     let work_dir = std::env::temp_dir().join(format!(
@@ -339,7 +395,7 @@ fn extract_pdf(path: &str) -> Result<DocumentModel, String> {
     }
 }
 
-fn extract_docx(path: &str) -> Result<DocumentModel, String> {
+fn extract_docx(path: &str, asset_dir: Option<&str>) -> Result<DocumentModel, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("open docx: {}", e))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("zip: {}", e))?;
     let doc = archive
@@ -347,6 +403,12 @@ fn extract_docx(path: &str) -> Result<DocumentModel, String> {
         .map_err(|e| format!("docx document.xml: {}", e))?;
     let xml = std::io::read_to_string(doc).map_err(|e| format!("read xml: {}", e))?;
     let text = strip_xml_tags(&xml);
+
+    // PR-F: images from word/media/*, in document order via the rId → target
+    // relationships of word/_rels/document.xml.rels (HLD §30 relationships +
+    // media). Images never referenced by document.xml (headers, leftovers)
+    // are not attached.
+    let images = extract_docx_images(&mut archive, &xml, asset_dir);
 
     let trimmed = text.trim().to_string();
     let char_count = trimmed.len();
@@ -358,10 +420,223 @@ fn extract_docx(path: &str) -> Result<DocumentModel, String> {
             text: trimmed,
             source: "native".into(),
             ocr_confidence: None,
+            images,
         }],
         total_chars: char_count,
         ocr_stats: None,
     })
+}
+
+/// Ordered embedded images of a DOCX, per document.xml drawing references.
+///
+/// The rels file maps relationship ids to media targets; document.xml embeds
+/// images as `<a:blip r:embed="rIdN"/>`. Order = order of `r:embed`
+/// appearances (deduplicated). Fail-soft: missing rels/media entries are
+/// skipped, never fatal.
+fn extract_docx_images(
+    archive: &mut zip::ZipArchive<std::fs::File>,
+    document_xml: &str,
+    asset_dir: Option<&str>,
+) -> Vec<DocumentImage> {
+    let mut out = Vec::new();
+    let rels = match archive.by_name("word/_rels/document.xml.rels") {
+        Ok(r) => std::io::read_to_string(r).unwrap_or_default(),
+        Err(_) => return out,
+    };
+
+    // rId → media target (e.g. "media/image1.png"); values are relative to
+    // word/. Targets may be absolute ("/word/media/…") or escape with "..".
+    let mut targets: Vec<(String, String)> = Vec::new();
+    let mut rest = rels.as_str();
+    while let Some(start) = rest.find("<Relationship ") {
+        rest = &rest[start..];
+        let end = rest.find("/>").map(|e| e + 2).unwrap_or(rest.len());
+        let tag = &rest[..end];
+        let id = attr_value(tag, "Id");
+        let target = attr_value(tag, "Target");
+        if let (Some(id), Some(target)) = (id, target) {
+            targets.push((id, normalize_zip_path(&format!("word/{}", target))));
+        }
+        rest = &rest[end..];
+    }
+
+    // r:embed appearances in document order.
+    let mut seen: Vec<&str> = Vec::new();
+    let mut scan = document_xml;
+    while let Some(pos) = scan.find("r:embed=\"") {
+        let after = &scan[pos + "r:embed=\"".len()..];
+        let end = after.find('"').unwrap_or(after.len());
+        let rid = &after[..end];
+        if !seen.contains(&rid) {
+            seen.push(rid);
+        }
+        scan = &after[end..];
+    }
+
+    for rid in seen {
+        let target = targets
+            .iter()
+            .find(|(id, _)| id == rid)
+            .map(|(_, t)| t.clone());
+        let Some(target) = target else { continue };
+        let mut entry = match archive.by_name(&target) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let mut bytes = Vec::new();
+        if std::io::Read::read_to_end(&mut entry, &mut bytes).is_err() {
+            continue;
+        }
+        let hash = crate::asset_store::content_hash(&bytes);
+        if let Some(dir) = asset_dir {
+            if let Err(e) = crate::asset_store::store_asset(dir, &bytes) {
+                eprintln!("asset store failed for {}: {}", target, e);
+            }
+        }
+        out.push(DocumentImage {
+            asset: VisualAssetRef {
+                asset_id: hash.clone(),
+                mime_type: crate::asset_store::mime_from_extension(&target),
+                content_hash: hash,
+                source: SourceSpan {
+                    document_id: None,
+                    page: 1,
+                    start_offset: None,
+                    end_offset: None,
+                    bbox: None,
+                    node_id: None,
+                },
+            },
+            bbox: None,
+        });
+    }
+    out
+}
+
+/// Extract `attr="value"` from an XML open tag by string scan (the docx
+/// rels format is simple; no XML parser dependency).
+fn attr_value(tag: &str, attr: &str) -> Option<String> {
+    let needle = format!("{}=\"", attr);
+    let pos = tag.find(&needle)?;
+    let after = &tag[pos + needle.len()..];
+    let end = after.find('"')?;
+    Some(after[..end].to_string())
+}
+
+/// Normalize a zip-internal path: drop a leading "/", resolve ".." segments.
+fn normalize_zip_path(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    parts.join("/")
+}
+
+/// Embedded images per PDF page: DCTDecode XObjects are raw JPEG bytes.
+/// FlateDecode/JPX2000/vector graphics are not decoded here (see
+/// IMPLEMENTATION-PLAN.md — pixel encoding needs an image codec).
+fn extract_pdf_images(path: &str, asset_dir: Option<&str>) -> Vec<Vec<DocumentImage>> {
+    let mut pages: Vec<Vec<DocumentImage>> = Vec::new();
+    let doc = match lopdf::Document::load(path) {
+        Ok(d) => d,
+        Err(_) => return pages,
+    };
+
+    // get_pages() is a BTreeMap keyed by page number — iteration order is
+    // page order. Images are attached by index to the native pages above.
+    for (page_idx, page_id) in doc.get_pages().values().enumerate() {
+        let page_num = page_idx as u32 + 1;
+        let page = match doc.get_object(*page_id) {
+            Ok(lopdf::Object::Dictionary(d)) => d.clone(),
+            _ => continue,
+        };
+        let resources = match page
+            .get(b"Resources")
+            .ok()
+            .and_then(|o| o.as_dict().ok())
+            .cloned()
+        {
+            Some(d) => d,
+            None => continue,
+        };
+        let xobjects = match resources
+            .get(b"XObject")
+            .ok()
+            .and_then(|o| o.as_dict().ok())
+            .cloned()
+        {
+            Some(d) => d,
+            None => continue,
+        };
+        let mut images = Vec::new();
+        for (_name, obj) in xobjects.iter() {
+            let stream = match obj {
+                lopdf::Object::Reference(id) => match doc.get_object(*id) {
+                    Ok(lopdf::Object::Stream(s)) => s.clone(),
+                    _ => continue,
+                },
+                lopdf::Object::Stream(s) => s.clone(),
+                _ => continue,
+            };
+            let dict = stream.dict;
+            let is_image = dict
+                .get(b"Subtype")
+                .ok()
+                .and_then(|o| o.as_name().ok())
+                .map(|n| n == b"Image")
+                .unwrap_or(false);
+            if !is_image {
+                continue;
+            }
+            // DCTDecode streams are complete JPEG bytes — store as-is.
+            let is_jpeg = dict
+                .get(b"Filter")
+                .ok()
+                .map(|f| match f {
+                    lopdf::Object::Name(n) => n == b"DCTDecode",
+                    lopdf::Object::Array(arr) => arr.iter().any(|e| match e {
+                        lopdf::Object::Name(n) => n == b"DCTDecode",
+                        _ => false,
+                    }),
+                    _ => false,
+                })
+                .unwrap_or(false);
+            if !is_jpeg {
+                continue;
+            }
+            let bytes = stream.content.clone();
+            let hash = crate::asset_store::content_hash(&bytes);
+            if let Some(dir) = asset_dir {
+                if let Err(e) = crate::asset_store::store_asset(dir, &bytes) {
+                    eprintln!("asset store failed for pdf image: {}", e);
+                }
+            }
+            images.push(DocumentImage {
+                asset: VisualAssetRef {
+                    asset_id: hash.clone(),
+                    mime_type: "image/jpeg".into(),
+                    content_hash: hash,
+                    source: SourceSpan {
+                        document_id: None,
+                        page: page_num,
+                        start_offset: None,
+                        end_offset: None,
+                        bbox: None,
+                        node_id: None,
+                    },
+                },
+                bbox: None,
+            });
+        }
+        pages.push(images);
+    }
+    pages
 }
 
 fn extract_html(path: &str) -> Result<DocumentModel, String> {
@@ -377,6 +652,7 @@ fn extract_html(path: &str) -> Result<DocumentModel, String> {
             text: trimmed,
             source: "native".into(),
             ocr_confidence: None,
+            images: Vec::new(),
         }],
         total_chars: char_count,
         ocr_stats: None,
@@ -395,6 +671,7 @@ fn extract_text(path: &str) -> Result<DocumentModel, String> {
             text: trimmed,
             source: "native".into(),
             ocr_confidence: None,
+            images: Vec::new(),
         }],
         total_chars: char_count,
         ocr_stats: None,
@@ -436,7 +713,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.txt");
         std::fs::write(&path, "Hello world\n\nThis is a test.\n").unwrap();
-        let doc = extract_document(&path.to_string_lossy(), "text/plain").unwrap();
+        let doc = extract_document(&path.to_string_lossy(), "text/plain", None).unwrap();
         assert_eq!(doc.page_count, 1);
         assert_eq!(doc.pages[0].text, "Hello world\n\nThis is a test.");
         assert!(doc.total_chars > 0);
@@ -453,7 +730,7 @@ mod tests {
             "<html><body><h1>Title</h1><p>Content here.</p></body></html>",
         )
         .unwrap();
-        let doc = extract_document(&path.to_string_lossy(), "text/html").unwrap();
+        let doc = extract_document(&path.to_string_lossy(), "text/html", None).unwrap();
         assert_eq!(doc.page_count, 1);
         assert!(doc.pages[0].text.contains("Title"));
         assert!(doc.pages[0].text.contains("Content here"));
@@ -462,7 +739,7 @@ mod tests {
 
     #[test]
     fn extract_unsupported_mime() {
-        let result = extract_document("nonexistent.bin", "application/octet-stream");
+        let result = extract_document("nonexistent.bin", "application/octet-stream", None);
         assert!(result.is_err());
     }
 
@@ -485,6 +762,37 @@ mod tests {
         zip.finish().unwrap();
     }
 
+    /// PR-F: docx with one embedded PNG — document.xml draws it via
+    /// `r:embed="rId5"`, the rels map rId5 → media/image1.png (HLD §30).
+    const DOCX_IMAGE_BYTES: &[u8] = b"\x89PNG\r\n\x1a\n embedded test image";
+
+    fn write_docx_with_image(path: &std::path::Path) {
+        use std::io::Write;
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("[Content_Types].xml", options).unwrap();
+        zip.write_all(
+            b"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+        )
+        .unwrap();
+        zip.start_file("word/document.xml", options).unwrap();
+        zip.write_all(
+            b"<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><w:body><w:p><w:r><w:t>Hello DOCX</w:t></w:r></w:p><w:p><w:r><w:drawing><wp:inline><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed=\"rId5\"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>",
+        )
+        .unwrap();
+        zip.start_file("word/_rels/document.xml.rels", options)
+            .unwrap();
+        zip.write_all(
+            b"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId5\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/image1.png\"/></Relationships>",
+        )
+        .unwrap();
+        zip.start_file("word/media/image1.png", options).unwrap();
+        zip.write_all(DOCX_IMAGE_BYTES).unwrap();
+        zip.finish().unwrap();
+    }
+
     #[test]
     fn extract_docx_text() {
         let dir = std::env::temp_dir().join("aikoql-d1-docx");
@@ -494,12 +802,125 @@ mod tests {
         let doc = extract_document(
             &path.to_string_lossy(),
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            None,
         )
         .unwrap();
         assert_eq!(doc.page_count, 1);
         assert!(doc.pages[0].text.contains("Hello DOCX"));
         assert!(doc.total_chars > 0);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn extract_docx_extracts_embedded_images_and_persists() {
+        let dir = std::env::temp_dir().join("aikoql-d1-docx-image");
+        let assets = dir.join("assets");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("img.docx");
+        write_docx_with_image(&path);
+        let doc = extract_document(
+            &path.to_string_lossy(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            Some(&assets.to_string_lossy()),
+        )
+        .unwrap();
+        assert_eq!(doc.pages[0].images.len(), 1, "one embedded image");
+        let img = &doc.pages[0].images[0];
+        assert_eq!(img.asset.mime_type, "image/png");
+        assert_eq!(img.asset.content_hash, asset_store_hash(DOCX_IMAGE_BYTES));
+        assert!(
+            assets
+                .join(format!("{}.bin", img.asset.content_hash))
+                .exists(),
+            "asset persisted content-addressed"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn extract_pdf_extracts_dctdecode_images_and_persists() {
+        // Minimal hand-built PDF: one page with one DCTDecode image XObject.
+        // pdf-extract fails soft on it (no fonts) — text stays empty, the
+        // image extraction still runs.
+        let jpeg = b"\xff\xd8\xff\xe0fakejpeg\xff\xd9";
+        let mut doc = lopdf::Document::with_version("1.4");
+        let img_dict = lopdf::Dictionary::from_iter([
+            ("Type", lopdf::Object::Name(b"XObject".to_vec())),
+            ("Subtype", lopdf::Object::Name(b"Image".to_vec())),
+            ("Width", lopdf::Object::Integer(1)),
+            ("Height", lopdf::Object::Integer(1)),
+            ("ColorSpace", lopdf::Object::Name(b"DeviceRGB".to_vec())),
+            ("BitsPerComponent", lopdf::Object::Integer(8)),
+            ("Filter", lopdf::Object::Name(b"DCTDecode".to_vec())),
+        ]);
+        let img_id = doc.add_object(lopdf::Object::Stream(lopdf::Stream::new(
+            img_dict,
+            jpeg.to_vec(),
+        )));
+        let xobj = lopdf::Dictionary::from_iter([("Im1", lopdf::Object::Reference(img_id))]);
+        let resources =
+            lopdf::Dictionary::from_iter([("XObject", lopdf::Object::Dictionary(xobj))]);
+        let contents_id = doc.add_object(lopdf::Object::Stream(lopdf::Stream::new(
+            lopdf::Dictionary::new(),
+            Vec::new(),
+        )));
+        let page_dict = lopdf::Dictionary::from_iter([
+            ("Type", lopdf::Object::Name(b"Page".to_vec())),
+            (
+                "MediaBox",
+                lopdf::Object::Array(vec![
+                    lopdf::Object::Integer(0),
+                    lopdf::Object::Integer(0),
+                    lopdf::Object::Integer(100),
+                    lopdf::Object::Integer(100),
+                ]),
+            ),
+            ("Resources", lopdf::Object::Dictionary(resources)),
+            ("Contents", lopdf::Object::Reference(contents_id)),
+        ]);
+        let page_id = doc.add_object(lopdf::Object::Dictionary(page_dict));
+        let pages_dict = lopdf::Dictionary::from_iter([
+            ("Type", lopdf::Object::Name(b"Pages".to_vec())),
+            (
+                "Kids",
+                lopdf::Object::Array(vec![lopdf::Object::Reference(page_id)]),
+            ),
+            ("Count", lopdf::Object::Integer(1)),
+        ]);
+        let pages_id = doc.add_object(lopdf::Object::Dictionary(pages_dict));
+        let catalog = lopdf::Dictionary::from_iter([
+            ("Type", lopdf::Object::Name(b"Catalog".to_vec())),
+            ("Pages", lopdf::Object::Reference(pages_id)),
+        ]);
+        let catalog_id = doc.add_object(lopdf::Object::Dictionary(catalog));
+        doc.trailer
+            .set("Root", lopdf::Object::Reference(catalog_id));
+
+        let dir = std::env::temp_dir().join("aikoql-d1-pdf-image");
+        let assets = dir.join("assets");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("one-image.pdf");
+        doc.save(&path).unwrap();
+
+        let doc = extract_document(
+            &path.to_string_lossy(),
+            "application/pdf",
+            Some(&assets.to_string_lossy()),
+        )
+        .expect("extract succeeds (text leg fails soft)");
+        assert_eq!(doc.page_count, 1);
+        assert_eq!(doc.pages[0].images.len(), 1, "one DCTDecode image");
+        let img = &doc.pages[0].images[0];
+        assert_eq!(img.asset.mime_type, "image/jpeg");
+        assert_eq!(img.asset.content_hash, asset_store_hash(jpeg));
+        assert!(assets
+            .join(format!("{}.bin", img.asset.content_hash))
+            .exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn asset_store_hash(bytes: &[u8]) -> String {
+        crate::asset_store::content_hash(bytes)
     }
 
     // -- Real-world invoice tests (requires files at known path) --
@@ -520,7 +941,8 @@ mod tests {
             let path = entry.unwrap().path();
             if path.extension().is_some_and(|e| e == "pdf") {
                 found = true;
-                let doc = extract_document(&path.to_string_lossy(), "application/pdf").unwrap();
+                let doc =
+                    extract_document(&path.to_string_lossy(), "application/pdf", None).unwrap();
                 let fname = path.file_name().unwrap().to_string_lossy();
 
                 // All invoices should have native text (they're text-based PDFs).

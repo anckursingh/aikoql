@@ -3249,7 +3249,7 @@ The HLD's core architectural position (doc §59): the **DocumentAst is the canon
 | Typed provenance (`SourceSpan`, `EvidenceSource`) (§14) | `Evidence.bbox_text` is a string; no typed geometry anywhere | **Delivered → PR-A (types) + PR-D (wired into candidates)** |
 | Semantic segmentation between AST and IR (`KnowledgeFragment` + boundary detection) (§22/§37) | D4 goes straight AST → IR; chunking operates directly on the AST | **Missing → PR-C** |
 | Retrieval as projection (`DocumentChunker` → `RetrievalProjector`) (§41/§60) | `chunking.rs` chunks the AST itself | **Present but misplaced → PR-E** |
-| Visual classification (chart/diagram/image analyzers) (§17–20) | Block-level Figure marker heuristic only (`detect_figures`) | **Deferred → PR-F** (mock-first) |
+| Visual classification (chart/diagram/image analyzers) (§17–20) | Block-level Figure marker heuristic only (`detect_figures`) | **Delivered → PR-F** (mock keyword classifier; VLM seam open) |
 | Transformer/embedding boundary detectors (§16) | None | **Deferred → PR-G**, gated on rule-baseline benchmarks (§60) |
 | No mandatory heavyweight AI (§56) | Clean — pdf-extract/tesseract only | **Conforms** |
 
@@ -3335,22 +3335,22 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 |---|---|---|
 | 1 | Text documents work as well as current implementation | ✅ Existing tests green; fragments added without altering D4–D8 behavior |
 | 2 | Tables remain structured | ✅ Typed `TablePayload` in canonical AST + table fragments (this round) |
-| 3 | Chart data representable structurally | ✅ `ChartPayload` types exist; extraction deferred to PR-F |
-| 4 | Diagram nodes/edges representable | ✅ `DiagramPayload` types exist; extraction deferred to PR-F |
-| 5 | Images retain original assets | ✅ Markdown standalone images → content-addressed `Image` nodes (PR-B); docx/pdf embedded-image extraction still PR-F |
-| 6 | Formulas retain mathematical representation | ✅ `FormulaPayload` types exist; extraction deferred to PR-F |
+| 3 | Chart data representable structurally | ✅ PR-F — `ChartPayload` populated (title/chart type/asset) by the mock analyzer; structural parsing of axis/series deferred to the VLM seam |
+| 4 | Diagram nodes/edges representable | ✅ PR-F — `DiagramAnalyzer` parses arrow chains into `DiagramPayload` nodes/edges |
+| 5 | Images retain original assets | ✅ PR-F — markdown, docx (rels + media zip entries), pdf (DCTDecode XObjects) all extract to content-addressed persisted assets |
+| 6 | Formulas retain mathematical representation | ✅ PR-F — `FormulaPayload` carries the LaTeX/plain text verbatim (no TeX AST — ponytail) |
 | 7 | Every semantic candidate has typed provenance | ✅ PR-D done — `Evidence.source: Option<EvidenceSource>` on every candidate; geometry sites carry `Region`, table facts carry `TableCell` |
-| 8 | Every visual-derived fact resolves to page/region | ⏳ Table-cell facts resolve to cell-level evidence (PR-D); visual analyzers are PR-F |
+| 8 | Every visual-derived fact resolves to page/region | ✅ PR-F — diagram candidates carry `DiagramNode`/`DiagramEdge`, chart/formula/image facts carry `Region` evidence with page |
 | 9 | Retrieval chunks are derived projections | ✅ PR-E done — `HeadingProjector` projects whole fragments, never splits one |
 | 10 | Transformer boundary detection optional | ✅ No transformer dependency; `KnowledgeBoundaryDetector` trait is the seam |
-| 11 | Model versions persisted | ⏳ Future (PR-F onward) |
-| 12 | Asset processing content-addressed | ✅ sha256 content-addressed store (`asset_store.rs`) + hash population on markdown images (PR-B); persistence wiring lands when PR-F consumes assets |
+| 11 | Model versions persisted | ✅ PR-F — `MODEL_VISUAL/CHART/DIAGRAM/IMAGE/FORMULA` consts stamped on every visual-derived candidate |
+| 12 | Asset processing content-addressed | ✅ PR-F — persistence wired end to end: `extract_document`/`compile_markdown_file` take an asset dir; identical bytes dedupe in the store |
 | 13 | Incremental ingestion at asset/page level | ⏳ Future |
 | 14 | No mandatory heavyweight AI | ✅ Still pdf-extract/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 335 lib + 9 acceptance + e2e + doc-tests |
-| 18 | Multimodal golden fixtures exist | ⏳ Future (PR-E/PR-F benchmarks) |
+| 17 | Existing ingestion tests green | ✅ 353 lib + 10 acceptance + e2e + doc-tests |
+| 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
 | 19 | CI measures extraction + semantic regression | ⏳ Future |
 
 ### Implemented now — PR-B: Extraction preservation (2026-08-21, commit on `feature/mvp-launch`)
@@ -3375,6 +3375,30 @@ Extraction now preserves assets where a real extractor can populate them today: 
 - **Acceptance**: 9/9 (+1, above).
 - **Gates**: `cargo fmt --all` clean, `cargo clippy --workspace --all-targets` clean (0 warnings), `cargo test --workspace` green (all crates, exit 0).
 
-### Next implementation — PR-F: Visual analyzers (mock-first, HLD §17–20)
+### Implemented now — PR-F: Visual analyzers (mock-first, HLD §17–20/§29/§30/§32/§33)
 
-PR-F lands chart/diagram/formula block emission + docx/pdf embedded-image extraction (populating the `asset`/`payload` types PR-A/B built), mock-first analyzers for `Figure`/`Chart`/`Diagram`/`Formula` classification, and the asset-store persistence wiring (an asset directory parameter on `compile_document`) so hashed assets are actually stored — completing DoD rows 3, 4, 5 (docx/pdf), 6, 8, 11. PR-C (document-hash fragment-id prefix) can consume `DocumentAst.document_id` at any point after this. PR-G (transformer/embedding boundary detectors) stays gated on the rule-baseline benchmarks (§60), now measurable against the PR-E projection and the PR-D semantic leg.
+PR-F completes the multimodal pipeline: docx/pdf embedded images are extracted and persisted, markdown fences become typed Diagram/Formula nodes, and a mock-first visual classifier turns image/Figure blocks into typed knowledge (diagram entities+relations, chart/formula/image facts) with model versions — DoD rows 3, 4, 5, 6, 8, 11, 12, 18.
+
+| File | Change |
+|---|---|
+| `crates/ingestion/src/visual.rs` | **New.** `VisualClassification` (Image/Chart/Diagram/Formula/Screenshot/ScannedText/Unknown), `trait VisualClassifier` (`classify(&AstNode)`) + `MockVisualClassifier` (keyword rules over node text — HLD §33 cheap-first: no VLM per image), `trait ChartAnalyzer`/`DiagramAnalyzer`/`ImageAnalyzer` + mocks, `MODEL_VISUAL/CHART/DIAGRAM/IMAGE/FORMULA` consts, `classify_visuals(ast)` — walks every page, resolves the next-sibling caption (`Figure/Chart/Diagram/Table N:` pattern) and re-types the node (e.g. `![fees]` + "Chart 1: …" → Chart node with `ChartPayload`). `MockDiagramAnalyzer` parses arrow chains (`->`, `-->`, `→`, `—>`, `–>`) into `DiagramPayload` nodes/edges with stable slug ids. 8 unit tests. |
+| `crates/ingestion/src/lib.rs` | `PageModel.images: Vec<DocumentImage>` (`#[serde(default)]`, last field). `extract_document(file, mime, asset_dir)` (3-arg). `extract_docx_images` (HLD §30): scans `word/_rels/document.xml.rels` for rId→target, `document.xml` for `<a:blip r:embed>` in document order, reads the zip entries, content-hashes and persists each (page 1). `extract_pdf_images` (HLD §29): lopdf 0.36 direct dep — DCTDecode XObjects are raw JPEG bytes, persisted per page. 2 tests (real docx zip + program-built pdf). |
+| `crates/ingestion/src/ast.rs` | `AstPayload::Image(ImagePayload)` variant; `ChartPayload.asset`; `document_model_to_ast(_enriched)` appends asset-backed `Image` nodes from `page.images`. 1 test. |
+| `crates/ingestion/src/markdown.rs` | `markdown_text_to_ast(content, base_dir, asset_dir)`; fenced blocks dispatch by lang: `mermaid/diagram/flowchart/graphviz` → Diagram node (raw content), `math/latex/tex` → Formula, else Code with lang header; `classify_visuals` runs at the end. `compile_markdown_file/_string` merge the section leg (`MarkdownSemanticAnalyzer`) with the fragment leg (`MockSemanticAnalyzer` over `RuleBoundaryDetector` fragments) via `merge_knowledge_ir` — fact dedup by statement keeps the injection-demotion behavior. 4 tests (fence dispatch ×3 + caption re-typing persists the asset). |
+| `crates/ingestion/src/boundary.rs` | `emit_block` gains a Chart/Diagram/Formula/Image arm: payload present → typed fragment with matching `FragmentModality`; payload absent → Text fallback. 2 tests. |
+| `crates/ingestion/src/pipeline.rs` | `compile_document` D3 runs `classify_visuals` after `document_model_to_ast`. |
+| `crates/ingestion/src/ir.rs` | Visual loop in `analyze_fragments`: Diagram → entities (`DiagramNode` evidence) + relations (`DiagramEdge` evidence, edge label or `related_to`), Chart → fact `"Chart: {title} ({type})"`, Formula → fact `"Formula: …"`, Image → fact `"Image: {caption|asset hash}"` — each with its `MODEL_*`. The generic capitalized-phrase entity scan now skips visual modalities so diagram entities keep typed (not `mock-v1`) evidence. 1 test. |
+| `crates/ingestion/tests/multimodal_acceptance.rs` + `tests/fixtures/` | **New golden fixture** (DoD row 18): `multimodal-golden.md` (mermaid fence, math fence, chart-captioned image, standalone logo) + `golden-chart.png`/`golden-logo.png`. Acceptance test 10 asserts: diagram entities/relations carry `mock-diagram-v1` + `DiagramNode`/`DiagramEdge` evidence, formula fact `mock-formula-v1`, chart fact cites title + persisted content-addressed asset, standalone image fact + persisted asset. |
+| External callers | `mcp/tools/ingestion.rs`, `mcp/agent_knowledge.rs` pass `Some(&format!("{path}.assets"))` as asset dir; `mcp_stdio.rs`, `ingest_dir.rs` pass `None`/3rd arg. |
+
+**Ponytail boundaries (documented ceilings):** classification is keyword-heuristic — the `VisualClassifier`/`*Analyzer` traits are the VLM seams (HLD §32); no model is called today. PDF image extraction covers DCTDecode only — FlateDecode/vector graphics deferred (rare in practice; `ponytail:` upgrade path is the same XObject scan). Formula payloads keep the LaTeX verbatim (no TeX AST). Screenshot/ScannedText classify but degrade to Image facts (no OCR-of-screenshot). Docx images land on page 1 (no layout mapping). Inline images mid-paragraph stay raw text (PR-B deferral).
+
+### Tests — PR-F (all green 2026-08-21)
+
+- **Unit**: 353 lib tests (+18): 8 `visual::tests` (classifier rules, caption re-typing, arrow-chain parsing incl. em-dash arrows, node dedup, image-caption) + 2 `lib::tests` (docx embedded image extraction, pdf DCTDecode extraction — both asserting persisted content-addressed files) + 1 `ast::tests` + 4 `markdown::tests` + 2 `boundary::tests` + 1 `ir::tests` (diagram → entities/relations with typed evidence).
+- **Acceptance**: 10/10 (+1 golden-fixture test above).
+- **Gates**: `cargo fmt --all` clean, `cargo clippy --workspace --all-targets` clean (0 warnings), `cargo test --workspace` green (all crates, exit 0).
+
+### Next implementation — PR-C: Document-hash fragment-id prefix
+
+PR-F was the last extraction-side prerequisite. PR-C consumes `DocumentAst.document_id` (landed in PR-B): prefix deterministic fragment ids with the document hash so identical layouts in different documents never collide. PR-G (transformer/embedding boundary detectors) stays gated on the rule-baseline benchmarks (§60), now measurable against the PR-E projection and the PR-D/PR-F semantic legs.

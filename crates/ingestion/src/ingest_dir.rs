@@ -391,6 +391,7 @@ pub fn compile_file(path: &Path) -> Option<KnowledgeIr> {
         crate::markdown::compile_markdown_file(
             &path.to_string_lossy(),
             Some(path.to_string_lossy().to_string()),
+            None,
         )
         .ok()
         .filter(|ir| !ir.entities.is_empty())

@@ -343,9 +343,11 @@ pub fn compile_document(
 ) -> CompilationResult {
     let t0 = time_now();
 
-    // D3: DocumentModel → DocumentAst
+    // D3: DocumentModel → DocumentAst (+ PR-F visual classification:
+    // extracted images get payloads, captioned figures re-typed).
     let t_ast = time_now();
-    let ast = document_model_to_ast(doc);
+    let mut ast = document_model_to_ast(doc);
+    crate::visual::classify_visuals(&mut ast);
     let dt_ast = time_now() - t_ast;
 
     // D4-fragments: DocumentAst → KnowledgeFragment[] (semantic segmentation).
@@ -484,6 +486,7 @@ mod tests {
                 char_count: 230,
                 source: "native".into(),
                 ocr_confidence: None,
+                images: vec![],
             }],
             total_chars: 230,
             ocr_stats: None,
@@ -606,6 +609,7 @@ mod tests {
                 char_count: 20,
                 source: "native".into(),
                 ocr_confidence: None,
+                images: vec![],
             }],
             total_chars: 20,
             ocr_stats: None,
@@ -692,6 +696,7 @@ mod tests {
                 char_count: 7,
                 source: "native".into(),
                 ocr_confidence: None,
+                images: vec![],
             }],
             total_chars: 7,
             ocr_stats: None,
@@ -733,6 +738,7 @@ mod tests {
                 char_count: 50,
                 source: "native".into(),
                 ocr_confidence: None,
+                images: vec![],
             }],
             total_chars: 50,
             ocr_stats: None,

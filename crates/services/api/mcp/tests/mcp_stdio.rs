@@ -956,8 +956,8 @@ fn m14_document_ocr_detection_and_source_tagging() {
     // Write a text file and verify source tagging.
     let txt_path = dir.join("source-test.txt");
     std::fs::write(&txt_path, "Hello from D2 test.\nThis has two lines.\n").unwrap();
-    let doc =
-        aikoql_ingestion::extract_document(&txt_path.to_string_lossy(), "text/plain").unwrap();
+    let doc = aikoql_ingestion::extract_document(&txt_path.to_string_lossy(), "text/plain", None)
+        .unwrap();
     assert_eq!(doc.page_count, 1);
     assert_eq!(doc.pages[0].source, "native");
     assert!(doc.pages[0].text.contains("Hello from D2 test"));

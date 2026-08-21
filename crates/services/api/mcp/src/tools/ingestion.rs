@@ -56,8 +56,9 @@ pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Resul
     }
 
     // D1/D2: Extract text from the stored artifact.
+    let asset_dir = format!("{}.assets", artifact_path);
     let (page_count, char_count, status, ocr_stats) =
-        match aikoql_ingestion::extract_document(&artifact_path, mime_type) {
+        match aikoql_ingestion::extract_document(&artifact_path, mime_type, Some(&asset_dir)) {
             Ok(doc) => {
                 // Store extracted text alongside the original artifact.
                 let extracted_path = format!("{}/{}.extracted.txt", artifact_dir, hash);
@@ -239,7 +240,8 @@ pub(crate) fn tool_document_compile(k: &Kernel, args: &J, db_path: &str) -> Resu
             "total_candidates": ir.total_candidates()
         })
     } else {
-        let doc = aikoql_ingestion::extract_document(&artifact_path, &mime_type)
+        let asset_dir = format!("{}.assets", artifact_path);
+        let doc = aikoql_ingestion::extract_document(&artifact_path, &mime_type, Some(&asset_dir))
             .map_err(|e| format!("extract for compile: {}", e))?;
         let cr = aikoql_ingestion::compile_document_mock(&doc, &[]);
         serde_json::to_value(&cr).map_err(|e| format!("serialize: {}", e))?

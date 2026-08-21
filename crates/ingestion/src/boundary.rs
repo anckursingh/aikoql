@@ -177,12 +177,57 @@ fn emit_block(
                     heading_path,
                     node,
                     FragmentContent::Text(text),
+                    FragmentModality::Text,
                 ));
             }
         }
-        // Visual modalities (Figure/Chart/Diagram/Formula) emit Text
-        // fragments until PR-F classification attaches real assets —
-        // the text content is the figure marker + caption.
+        // PR-F: visual modalities emit typed fragments when classification
+        // attached a payload; without one (degraded analyzer) they fall back
+        // to Text so the figure marker + caption are never lost.
+        BlockType::Chart | BlockType::Diagram | BlockType::Formula | BlockType::Image => {
+            let content = node.payload.clone().and_then(|p| match p {
+                crate::ast::AstPayload::Chart(c) => Some(FragmentContent::Chart(c)),
+                crate::ast::AstPayload::Diagram(d) => Some(FragmentContent::Diagram(d)),
+                crate::ast::AstPayload::Formula(f) => Some(FragmentContent::Formula(f)),
+                crate::ast::AstPayload::Image(i) => Some(FragmentContent::Image(i)),
+                _ => None,
+            });
+            match content {
+                Some(FragmentContent::Chart(c)) => out.push(text_fragment_with(
+                    page,
+                    block_idx,
+                    heading_path,
+                    node,
+                    FragmentContent::Chart(c),
+                    FragmentModality::Chart,
+                )),
+                Some(FragmentContent::Diagram(d)) => out.push(text_fragment_with(
+                    page,
+                    block_idx,
+                    heading_path,
+                    node,
+                    FragmentContent::Diagram(d),
+                    FragmentModality::Diagram,
+                )),
+                Some(FragmentContent::Formula(f)) => out.push(text_fragment_with(
+                    page,
+                    block_idx,
+                    heading_path,
+                    node,
+                    FragmentContent::Formula(f),
+                    FragmentModality::Formula,
+                )),
+                Some(FragmentContent::Image(i)) => out.push(text_fragment_with(
+                    page,
+                    block_idx,
+                    heading_path,
+                    node,
+                    FragmentContent::Image(i),
+                    FragmentModality::Image,
+                )),
+                _ => out.push(text_fragment(node, page, block_idx, heading_path)),
+            }
+        }
         _ => {
             // Empty container (Unknown/Section wrappers): recurse so wrapped
             // content is never silently dropped.
@@ -211,6 +256,7 @@ fn text_fragment(
         heading_path,
         node,
         FragmentContent::Text(node.text.clone().unwrap_or_default()),
+        FragmentModality::Text,
     )
 }
 
@@ -220,11 +266,12 @@ fn text_fragment_with(
     heading_path: &[String],
     node: &AstNode,
     content: FragmentContent,
+    modality: FragmentModality,
 ) -> KnowledgeFragment {
     let confidence = node.confidence.unwrap_or(1.0);
     KnowledgeFragment {
         fragment_id: fragment_id(page, block_idx),
-        modality: FragmentModality::Text,
+        modality,
         content,
         context: FragmentContext {
             heading_path: heading_path.to_vec(),
@@ -272,6 +319,7 @@ fn evidence(node: &AstNode, page: u32, confidence: f32) -> Evidence {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::visual::DiagramAnalyzer;
     use crate::{document_model_to_ast, DocumentModel, PageModel};
 
     fn doc(pages: Vec<&str>) -> DocumentModel {
@@ -283,6 +331,7 @@ mod tests {
                 char_count: t.len(),
                 source: "native".into(),
                 ocr_confidence: None,
+                images: vec![],
             })
             .collect();
         DocumentModel {
@@ -378,6 +427,77 @@ mod tests {
         let ast = document_model_to_ast(&dm);
         let fragments = RuleBoundaryDetector.detect(&ast).unwrap();
         assert!(fragments.is_empty());
+    }
+
+    #[test]
+    fn visual_node_with_payload_emits_typed_fragment() {
+        // PR-F: a Diagram node carrying a payload emits a Diagram fragment
+        // (HLD §11: visual structure reaches the semantic leg typed).
+        let mut node = AstNode {
+            block_type: BlockType::Diagram,
+            text: Some("Client -> Gateway".into()),
+            children: vec![],
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        };
+        node.payload = crate::visual::MockDiagramAnalyzer
+            .analyze(&node)
+            .map(crate::ast::AstPayload::Diagram);
+        let page_node = AstNode {
+            block_type: BlockType::Unknown,
+            text: None,
+            children: vec![node],
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        };
+        let ast = DocumentAst {
+            page_count: 1,
+            pages: vec![page_node],
+            source_type: "test".into(),
+            document_id: None,
+        };
+
+        let fragments = RuleBoundaryDetector.detect(&ast).unwrap();
+        assert_eq!(fragments.len(), 1);
+        assert_eq!(fragments[0].modality, FragmentModality::Diagram);
+        assert!(matches!(fragments[0].content, FragmentContent::Diagram(_)));
+    }
+
+    #[test]
+    fn visual_node_without_payload_falls_back_to_text() {
+        // Degraded analyzer (no payload) must never lose content: the
+        // figure marker + caption stay as a text fragment.
+        let page_node = AstNode {
+            block_type: BlockType::Unknown,
+            text: None,
+            children: vec![AstNode {
+                block_type: BlockType::Figure,
+                text: Some("Figure 1: fees".into()),
+                children: vec![],
+                bbox: None,
+                confidence: None,
+                ..Default::default()
+            }],
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        };
+        let ast = DocumentAst {
+            page_count: 1,
+            pages: vec![page_node],
+            source_type: "test".into(),
+            document_id: None,
+        };
+
+        let fragments = RuleBoundaryDetector.detect(&ast).unwrap();
+        assert_eq!(fragments.len(), 1);
+        assert_eq!(fragments[0].modality, FragmentModality::Text);
+        match &fragments[0].content {
+            FragmentContent::Text(t) => assert!(t.contains("Figure 1: fees")),
+            other => panic!("expected text fallback, got {:?}", other),
+        }
     }
 
     #[test]

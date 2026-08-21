@@ -19,6 +19,7 @@ use crate::ast::{BlockType, DocumentAst};
 use crate::boundary::{KnowledgeBoundaryDetector, RuleBoundaryDetector};
 use crate::fragment::{FragmentContent, FragmentModality, KnowledgeFragment};
 use crate::source::EvidenceSource;
+use crate::visual::{MODEL_CHART, MODEL_DIAGRAM, MODEL_FORMULA, MODEL_IMAGE};
 use aikoql_kernel::ContentTrust;
 
 /// serde adapter for `ContentTrust` — the kernel crate is std-only (no
@@ -437,9 +438,20 @@ impl MockSemanticAnalyzer {
         // Entities + temporal: the same heuristics as the AST fallback,
         // applied to each fragment's rendered text. Headings reach the
         // semantic leg as fragment context, so both paths scan them.
+        // Visual fragments (PR-F) are skipped here: their rendered text is
+        // the visual payload, and the visual loop below owns those entities
+        // with typed (DiagramNode) evidence instead of generic mock-v1.
         for frag in fragments {
             let mut texts: Vec<String> = frag.context.heading_path.clone();
-            texts.push(crate::chunking::fragment_text(frag));
+            if !matches!(
+                frag.modality,
+                FragmentModality::Image
+                    | FragmentModality::Chart
+                    | FragmentModality::Diagram
+                    | FragmentModality::Formula
+            ) {
+                texts.push(crate::chunking::fragment_text(frag));
+            }
             for text in &texts {
                 for entity_name in extract_capitalized_phrases(text) {
                     if !ir.entities.iter().any(|e| e.name == entity_name) {
@@ -531,6 +543,131 @@ impl MockSemanticAnalyzer {
                         confidence: self.confidence,
                     },
                 });
+            }
+        }
+
+        // PR-F: visual fragments → typed knowledge (HLD §10–§13). Diagram
+        // nodes/edges become entities/relations with diagram-level evidence;
+        // charts/formulas/images contribute facts carrying their model
+        // version (DoD row 11).
+        for frag in fragments {
+            match &frag.content {
+                FragmentContent::Diagram(diagram) => {
+                    for node in &diagram.nodes {
+                        if ir.entities.iter().any(|e| e.name == node.label) {
+                            continue;
+                        }
+                        ir.entities.push(EntityCandidate {
+                            name: node.label.clone(),
+                            type_hint: Some("DiagramNode".into()),
+                            mentions: vec![node.label.clone()],
+                            confidence: self.confidence * node.confidence,
+                            evidence: Evidence {
+                                document_id: None,
+                                page: frag.context.page,
+                                source: Some(EvidenceSource::DiagramNode {
+                                    diagram_id: frag.fragment_id.clone(),
+                                    node_id: node.id.clone(),
+                                }),
+                                extractor: extractor.clone(),
+                                model: Some(MODEL_DIAGRAM.into()),
+                                confidence: self.confidence * node.confidence,
+                            },
+                        });
+                    }
+                    for edge in &diagram.edges {
+                        let predicate = edge.label.clone().unwrap_or_else(|| "related_to".into());
+                        if ir.relations.iter().any(|r| {
+                            r.subject == edge.source
+                                && r.object == edge.target
+                                && r.predicate == predicate
+                        }) {
+                            continue;
+                        }
+                        ir.relations.push(RelationCandidate {
+                            subject: edge.source.clone(),
+                            object: edge.target.clone(),
+                            predicate,
+                            confidence: self.confidence * edge.confidence,
+                            evidence: Evidence {
+                                document_id: None,
+                                page: frag.context.page,
+                                source: Some(EvidenceSource::DiagramEdge {
+                                    diagram_id: frag.fragment_id.clone(),
+                                    edge_id: format!("{}->{}", edge.source, edge.target),
+                                }),
+                                extractor: extractor.clone(),
+                                model: Some(MODEL_DIAGRAM.into()),
+                                confidence: self.confidence * edge.confidence,
+                            },
+                        });
+                    }
+                }
+                FragmentContent::Chart(chart) => {
+                    let title = chart
+                        .title
+                        .clone()
+                        .unwrap_or_else(|| "Untitled chart".into());
+                    ir.facts.push(FactCandidate {
+                        statement: format!("Chart: {} ({:?})", title, chart.chart_type),
+                        entities: Vec::new(),
+                        confidence: self.confidence,
+                        evidence: Evidence {
+                            document_id: None,
+                            page: frag.context.page,
+                            source: frag
+                                .source
+                                .as_ref()
+                                .and_then(|s| s.bbox.as_ref())
+                                .map(|b| EvidenceSource::Region { bbox: b.clone() }),
+                            extractor: extractor.clone(),
+                            model: Some(MODEL_CHART.into()),
+                            confidence: self.confidence,
+                        },
+                    });
+                }
+                FragmentContent::Formula(formula) => {
+                    if let Some(text) = formula.plain_text.clone().or_else(|| formula.latex.clone())
+                    {
+                        ir.facts.push(FactCandidate {
+                            statement: format!("Formula: {}", text),
+                            entities: Vec::new(),
+                            confidence: self.confidence,
+                            evidence: Evidence {
+                                document_id: None,
+                                page: frag.context.page,
+                                source: None,
+                                extractor: extractor.clone(),
+                                model: Some(MODEL_FORMULA.into()),
+                                confidence: self.confidence,
+                            },
+                        });
+                    }
+                }
+                FragmentContent::Image(image) => {
+                    let caption = image
+                        .caption
+                        .clone()
+                        .unwrap_or_else(|| format!("asset {}", image.asset.content_hash));
+                    ir.facts.push(FactCandidate {
+                        statement: format!("Image: {}", caption),
+                        entities: Vec::new(),
+                        confidence: self.confidence,
+                        evidence: Evidence {
+                            document_id: None,
+                            page: frag.context.page,
+                            source: frag
+                                .source
+                                .as_ref()
+                                .and_then(|s| s.bbox.as_ref())
+                                .map(|b| EvidenceSource::Region { bbox: b.clone() }),
+                            extractor: extractor.clone(),
+                            model: Some(MODEL_IMAGE.into()),
+                            confidence: self.confidence,
+                        },
+                    });
+                }
+                _ => {}
             }
         }
 
@@ -937,6 +1074,7 @@ pub fn document_model_to_ir(
 mod tests {
     use super::*;
     use crate::ast::{AstNode, BlockType, DocumentAst};
+    use crate::visual::DiagramAnalyzer;
 
     fn make_ast(pages: Vec<Vec<AstNode>>) -> DocumentAst {
         let page_count = pages.len() as u32;
@@ -1321,6 +1459,7 @@ mod tests {
                 char_count: 90,
                 source: "native".into(),
                 ocr_confidence: None,
+                images: vec![],
             }],
             total_chars: 90,
             ocr_stats: None,
@@ -1569,6 +1708,60 @@ mod tests {
     }
 
     #[test]
+    fn diagram_fragment_yields_graph_entities_and_relations() {
+        // PR-F: a diagram fragment's nodes/edges become entities/relations
+        // with DiagramNode/DiagramEdge evidence and the model version
+        // persisted (DoD row 11).
+        let mut diagram = AstNode {
+            block_type: BlockType::Diagram,
+            text: Some("Client -> Gateway --> Ledger".into()),
+            children: vec![],
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        };
+        diagram.payload = crate::visual::MockDiagramAnalyzer
+            .analyze(&diagram)
+            .map(crate::ast::AstPayload::Diagram);
+        let ast = make_ast(vec![vec![diagram]]);
+        let fragments = RuleBoundaryDetector.detect(&ast).unwrap();
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast, &fragments);
+
+        let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
+        for expected in ["Client", "Gateway", "Ledger"] {
+            assert!(names.contains(&expected), "diagram node '{}'", expected);
+        }
+        let client = ir
+            .entities
+            .iter()
+            .find(|e| e.name == "Client")
+            .expect("Client entity");
+        match &client.evidence.source {
+            Some(EvidenceSource::DiagramNode {
+                diagram_id,
+                node_id,
+            }) => {
+                assert!(diagram_id.starts_with("frag-p1-b"));
+                assert_eq!(*node_id, "client");
+            }
+            other => panic!("expected DiagramNode evidence, got {:?}", other),
+        }
+        assert_eq!(client.evidence.model.as_deref(), Some("mock-diagram-v1"));
+
+        assert_eq!(ir.relations.len(), 2, "one relation per diagram edge");
+        let first = &ir.relations[0];
+        assert_eq!(first.subject, "client");
+        assert_eq!(first.object, "gateway");
+        assert_eq!(first.predicate, "related_to");
+        assert_eq!(
+            first.evidence.model.as_deref(),
+            Some("mock-diagram-v1"),
+            "model version persisted on relations"
+        );
+    }
+
+    #[test]
     fn fragment_and_ast_paths_agree_on_entities() {
         // Fail-soft parity: with a healthy detector both paths extract the
         // same entities, so a degraded detector is invisible to callers.
@@ -1581,6 +1774,7 @@ mod tests {
                 char_count: page_text.len(),
                 source: "native".into(),
                 ocr_confidence: None,
+                images: vec![],
             }],
             total_chars: page_text.len(),
             ocr_stats: None,
