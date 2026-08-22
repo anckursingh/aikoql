@@ -508,6 +508,8 @@ These are the most important end-to-end tests.
 
 Compare baseline repository-only agent vs AIKOQL-enabled agent.
 
+Covered: `agent_efficacy_bench.rs` (G10 §31 v1) — 5 "where" tasks, A/B/C/D treatments.
+
 Score:
 
 - correct component
@@ -516,6 +518,8 @@ Score:
 - evidence quality
 
 ## AGENT-002 — Change impact
+
+Covered: `agent_efficacy_bench.rs` (G10 §31 v1) — 9 "impact" tasks, A/B/C/D treatments.
 
 Ask:
 
@@ -537,11 +541,17 @@ code
 
 Ask the agent to implement a feature while preserving architectural decisions and constraints.
 
+Not yet measured — needs agent loops with edit/execute; deferred in G10 v1 (§31).
+
 ## AGENT-004 — Historical explanation
 
 Ask why a component works in its current form. Answer must cite source/ADR/history evidence where available.
 
+Covered: `agent_efficacy_bench.rs` (G10 §31 v1) — 6 "why" tasks, A/B/C/D treatments.
+
 ## AGENT-005 — Safe procedural execution
+
+Not yet measured — needs agent loops with program execution; deferred in G10 v1 (§31).
 
 ```text
 discover program
@@ -808,6 +818,32 @@ hallucinated facts
 The most valuable claim is empirical:
 
 > **Agents solve engineering tasks more reliably with AIKOQL knowledge while consuming less context/tool budget.**
+
+### v1 measurement (2026-08-23) — `crates/ingestion/tests/agent_efficacy_bench.rs`
+
+First empirical slice: 20 engineering tasks (AGENT-001 where-to-implement, AGENT-002 change-impact, AGENT-004 historical-explanation shapes), corpus = the real `docs/*.md` tree through the production Markdown pipeline (20 docs → 1546 chunks → merged graph 7302 entities / 2778 facts / 5340 relations), mechanical token-containment judge, live local model (llama3.1 on GPU-offloaded Ollama, temperature 0). Scores are printed, not enforced — a model's answers are not CI-pinnable; structural gates (budget, corpus integrity) are asserted.
+
+| metric | A: repo-only | B: LLM + RAG | C: LLM + code graph | D: AIKOQL |
+|---|---|---|---|---|
+| Success rate | 0.200\* | 0.750 | 0.500 | 0.150 |
+| Input tokens/query | 28 | 1237 | 1273 | 320 |
+| LLM calls | 20 | 20 | 20 | **0** |
+| Tool calls | 0 | 0 | 0 | 20 |
+| Latency s/query | 23.5 | 27.7 | 13.0 | **8.5** |
+| Cost USD/query | 0.0013 | 0.0049 | 0.0050 | **0.0010** |
+| Failed generations | 2 | 0 | 0 | 0 |
+
+\*All four A passes are token-overlap guess passes (e.g. "mcp-tool crate" for the `aikoql-mcp` golden) — under a strict judge A is 0/20; the repo-only agent hallucinates confidently ("British National Corpus").
+
+Findings:
+
+- **B wins accuracy, D wins budget** — the empirical claim splits: AIKOQL is the cheapest and the only deterministic path (0 LLM calls, 8.5 s/query, $0.001) but 3/20 on this corpus; the RAG pack leads accuracy at 0.750. Not yet the §31 claim — the blockers below are extraction, not compilation.
+- **D's misses trace to extraction**: `markdown.rs` has no table handling, and 17/20 golden answers live in the docs' tables. The three D hits are prose-extracted phrases. Closing this is the P1 extraction item, not a compiler gate.
+- **Graph expansion is corpus-dependent**: C dilutes the evidence budget here (0.500 < B's 0.750) — the opposite of the Track-B comparative where expansion won. Both measured, both pinned in their harnesses.
+- **Epistemic behavior measured implicitly**: B/C answer with `[n]` citations and refuse with exactly "Not in sources" when evidence is insufficient — the §34–36 boundary behavior, live.
+- Judge caveat: the ≤1-missing-token rule is lenient on 2-token goldens; hardening (longer goldens or strict match for short ones) is a follow-up.
+
+Deferred (v2): AGENT-003 (implement a feature) and AGENT-005 (safe procedural execution) need agent loops with program execution; the 50–100 task scale is a corpus extension over the same harness.
 
 ---
 
