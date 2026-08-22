@@ -344,3 +344,161 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
     m2.shutdown();
     let _ = std::fs::remove_dir_all(&checkpoint_dir);
 }
+
+#[test]
+fn i09_rebuild_same_logical_results_after_index_deletion() {
+    // IDX-001: the canonical journal is the source of truth — deleting the
+    // derived index and rebuilding it must reproduce identical results.
+    let (k, _c) = mk();
+    let _a = create_vec(&k, "cats", vec![1.0, 0.0]);
+    let _b = create_vec(&k, "cats and dogs", vec![0.9, 0.1]);
+    let _c = create_vec(&k, "unrelated fish", vec![0.0, 1.0]);
+
+    let m1 = IndexMaintainer::start(
+        &k,
+        Arc::new(BruteForceVectorIndex::new()),
+        Arc::new(TokenTextIndex::new()),
+    )
+    .unwrap();
+    k.attach_indexes(m1.clone());
+    m1.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+    let before: Vec<(KOID, f32)> = query(&k)
+        .into_iter()
+        .map(|s| (s.ko.koid, s.score))
+        .collect();
+    assert_eq!(before.len(), 3);
+
+    // "delete" the derived index (drop the maintainer), rebuild from journal
+    m1.shutdown();
+    let m2 = IndexMaintainer::start(
+        &k,
+        Arc::new(BruteForceVectorIndex::new()),
+        Arc::new(TokenTextIndex::new()),
+    )
+    .unwrap();
+    k.attach_indexes(m2.clone());
+    m2.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+
+    let after: Vec<(KOID, f32)> = query(&k)
+        .into_iter()
+        .map(|s| (s.ko.koid, s.score))
+        .collect();
+    assert_eq!(
+        after.len(),
+        before.len(),
+        "rebuild must restore all entries"
+    );
+    for (got, want) in after.iter().zip(before.iter()) {
+        assert_eq!(got.0, want.0, "rebuild must preserve ordering");
+        assert!(
+            (got.1 - want.1).abs() < 1e-6,
+            "rebuild must preserve scores: {} vs {}",
+            got.1,
+            want.1
+        );
+    }
+    m2.shutdown();
+}
+
+#[test]
+fn i10_rebuild_sweeps_tombstones_committed_while_index_down() {
+    // IDX-003: a forget committed while no derived index exists must not
+    // resurface on rebuild — no index reference to a forgotten KO.
+    let (k, _c) = mk();
+    let _a = create_vec(&k, "cats", vec![1.0, 0.0]);
+    let b = create_vec(&k, "cats and dogs", vec![0.9, 0.1]);
+    let _c = create_vec(&k, "unrelated fish", vec![0.0, 1.0]);
+
+    {
+        let m = IndexMaintainer::start(
+            &k,
+            Arc::new(BruteForceVectorIndex::new()),
+            Arc::new(TokenTextIndex::new()),
+        )
+        .unwrap();
+        k.attach_indexes(m.clone());
+        m.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+        m.shutdown();
+    }
+
+    // canonical KO forgotten while the derived index is down
+    k.forget(alice(), &b, ForgetMode::Tombstone, None, None)
+        .unwrap();
+
+    let m2 = IndexMaintainer::start(
+        &k,
+        Arc::new(BruteForceVectorIndex::new()),
+        Arc::new(TokenTextIndex::new()),
+    )
+    .unwrap();
+    k.attach_indexes(m2.clone());
+    m2.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+
+    assert_eq!(
+        m2.vectors().len(),
+        2,
+        "tombstoned KO must not be re-indexed"
+    );
+    assert_eq!(m2.text().len(), 2);
+    let hits = query(&k);
+    assert_eq!(hits.len(), 2);
+    assert!(
+        hits.iter().all(|s| s.ko.koid != b),
+        "no index reference to the forgotten KO (orphan)"
+    );
+    m2.shutdown();
+}
+
+#[test]
+fn i11_canonical_update_is_reflected_in_index_deterministically() {
+    // IDX-002: an update to the canonical KO must propagate to the derived
+    // index deterministically — catch-up to zero lag, new embedding live.
+    let (k, _c) = mk();
+    let a = create_vec(&k, "cats", vec![1.0, 0.0]);
+    let b = create_vec(&k, "cats and dogs", vec![0.9, 0.1]);
+    let _c = create_vec(&k, "unrelated fish", vec![0.3, 0.0]);
+
+    let m = IndexMaintainer::start(
+        &k,
+        Arc::new(BruteForceVectorIndex::new()),
+        Arc::new(TokenTextIndex::new()),
+    )
+    .unwrap();
+    k.attach_indexes(m.clone());
+    m.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+
+    // canonical update: b's embedding and text change
+    let mut up = RememberRequest::update(alice(), b, meta("fact"));
+    up.properties
+        .insert("body".into(), Value::Text("dogs rule".into()));
+    up.semantic = Some(SemanticBlock {
+        embedding_model: Some("m".into()),
+        embedding: Some(vec![0.0, 1.0]),
+        confidence: None,
+        source: None,
+        summary: None,
+    });
+    k.remember(up).unwrap();
+    m.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+    assert_eq!(m.lag(&k).unwrap(), 0, "no stale window after catch-up");
+
+    // the index holds b's NEW embedding: only the updated entry can score
+    // ~1.0 against [0,1] (the old [0.9,0.1] would score ~0.1).
+    let top = m.vectors().search(&[0.0, 1.0], 3, None);
+    assert_eq!(top[0].0, b, "updated KO must own the new embedding");
+    assert!(
+        top[0].1 > 0.99,
+        "stored embedding must be the updated one, got {}",
+        top[0].1
+    );
+
+    // b stays in recall (still has a semantic block), a still ranks first
+    let res = query(&k);
+    assert_eq!(res[0].ko.koid, a);
+    let b_hit = res
+        .iter()
+        .find(|s| s.ko.koid == b)
+        .expect("updated KO must remain indexed");
+    assert!(b_hit.score < res[0].score);
+    m.shutdown();
+}

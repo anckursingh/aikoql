@@ -113,7 +113,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | DB-003 Concurrent writers | P0 | ✅ | `transactions.rs` |
 | DB-004 Concurrent readers/writers | P1 | 🟡 | isolation semantics documented; stress test absent |
 | DOC-001..007 PDF/OCR/tables/images/versioning | P1 | ✅ | `multimodal_golden.rs` (19 DoD rows), `multimodal_acceptance.rs`; DOC-002 OCR is feature-gated (`vlm`) 🟡 |
-| IDX-001..003 Derived index rebuild/orphans | — | 🟡 | `indexes.rs`; delete-and-rebuild + orphan sweep untested |
+| IDX-001..003 Derived index rebuild/orphans | P0 | ✅ | `indexes.rs` i09 (delete + rebuild = identical results), i10 (tombstone-while-down swept on rebuild), i11 (canonical update propagates deterministically) |
 | EVO-001..005 Evolution | P0/P1 | ✅ | derivation (001), stale-on-source-delete (002), extraction version in evidence (005); schema/ontology migration (003/004) 🟡 |
 | Negative/adversarial (§28) | P0 | ✅ | `fuzz_codec.rs`, `fuzz_parser.rs`, `proptest_kom.rs`, adversarial secret tests (Slack/Stripe/OAuth/mongodb+srv, disk-/sha256 false positives) |
 
@@ -162,7 +162,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | Memory isolation (§30) / multi-agent shared knowledge (§31) | 🟡 | R9 tenant isolation ✅ | agent A/B scenario absent |
 | Memory explainability (§33) | 🟡 | provenance machinery answers what/why/where/when | packaged explainability test absent |
 | Hallucination / boundary / retrieval-failure (§34–36) | 🟡 | epistemic boundary P0-1, lexical degrade fallback | unknown-vs-failed-retrieval distinction test absent |
-| Index independence (§37) | 🟡 | `indexes.rs` | rebuild-and-compare absent |
+| Index independence (§37) | ✅ | `indexes.rs` | i09–i11: rebuild parity, tombstone sweep, update propagation |
 | Summarization + provenance (§38–39) | ❌ | markdown/doc compilers exist; conversation→summary not implemented | — |
 | Memory compression (§40) | ❌ | measurement target only | — |
 | Cache correctness (§42), races (§43–44) | 🟡 | `transactions.rs` concurrency ✅ | chatbot-level determinism scenarios absent |
@@ -181,7 +181,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | --- | --- | --- | --- | --- |
 | G1 | **Traceability + certification runner** — map every suite ID to its test, mark P0–P3, wire to CI tiers | all | ~1 week | This document is the draft; add a machine-readable matrix + a `certs` test that fails on known-GAP P0s |
 | G2 | **DB-002 kill-during-write harness** | DB-002 | ✅ done | `crash_kill.rs` d05 + `crash_writer` loop mode: taskkill/SIGKILL mid-write, reopen → journal head ≥ observed progress, all KOs + audit chain intact |
-| G3 | **IDX-001/003 rebuild consistency + orphan sweep** | IDX-001..003 | ~2 days | delete derived index → rebuild → identical logical results; no orphans |
+| G3 | **IDX-001/003 rebuild consistency + orphan sweep** | IDX-001..003 | ✅ done | `indexes.rs` i09–i11: rebuild = identical results; tombstone-while-down swept; canonical update propagates (zero lag) |
 | G4 | **Schema/ontology migration tests** | EVO-003/004, CONT-003, ONT-004 | ~3 days | define v1→v2 migration semantics, test history stays interpretable |
 
 ### Tier 2 — Acceptance scenarios (substrate exists; script the story)

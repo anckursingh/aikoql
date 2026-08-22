@@ -200,6 +200,10 @@ const MATRIX: &[Row] = &[
     row("EVO-003", "EVO", "P0", "partial", None, Some("schema migration semantics undefined (TP-2c)")),
     row("EVO-004", "EVO", "P1", "partial", None, Some("ontology migration untested (TP-2c)")),
     row("EVO-005", "EVO", "P1", "covered", Some("crates/kernel/tests/evidence_wiring.rs"), None),
+    // IDX — derived index consistency (suite §23)
+    row("IDX-001", "IDX", "P0", "covered", Some("crates/kernel/tests/indexes.rs"), None),
+    row("IDX-002", "IDX", "P0", "covered", Some("crates/kernel/tests/indexes.rs"), None),
+    row("IDX-003", "IDX", "P0", "covered", Some("crates/kernel/tests/indexes.rs"), None),
 
     // ── Chatbot suite §53 release claims (tier R — release only) ──────────
     // Chatbot Memory Ready
@@ -257,6 +261,7 @@ const CATALOG: &[(&str, &[&str])] = &[
     ("DB",  &["DB-001","DB-002","DB-003","DB-004"]),
     ("PRG", &["PRG-001","PRG-002","PRG-003","PRG-004","PRG-005","PRG-006","PRG-007","PRG-008"]),
     ("EVO", &["EVO-001","EVO-002","EVO-003","EVO-004","EVO-005"]),
+    ("IDX", &["IDX-001","IDX-002","IDX-003"]),
     ("CMEM",&["CMEM-001","CMEM-002","CMEM-003","CMEM-004","CMEM-005","CMEM-006","CMEM-007","CMEM-008","CMEM-009"]),
     ("CKG", &["CKG-001","CKG-002","CKG-003","CKG-004","CKG-005","CKG-006","CKG-007","CKG-008"]),
     ("CAG", &["CAG-001","CAG-002","CAG-003","CAG-004","CAG-005","CAG-006","CAG-007","CAG-008","CAG-009"]),
