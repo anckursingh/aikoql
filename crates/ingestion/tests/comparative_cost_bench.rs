@@ -10,22 +10,38 @@
 //!   rank order until the budget runs out (token estimate len/4, the same
 //!   convention the compiler uses).
 //!
-//! Per query both treatments report tokens packed, KO coverage (fraction
-//! of the dataset's expected KOs present in the packed context), whether
-//! the packed context carries the golden answer's key tokens, and wall
-//! time.
+//! Per query both treatments report the payload the agent actually
+//! receives and what it costs:
+//! - **AikoQL**: `render_context_markdown` of the package — the exact
+//!   text handed to the LLM, entity mention text included (an earlier
+//!   version judged only the stripped triple text, under-measuring what
+//!   the agent gets). Both the rendered len/4 and the compiler's own
+//!   `estimated_tokens` bill (which counts justification lines the render
+//!   omits, so it over-bills) are printed.
+//! - **RAG**: the packed chunk text itself.
 //!
-//! **Measured verdict (mock corpus, 2026-08-22): the chunk baseline
-//! currently wins both axes** — 74.8 vs 207.9 mean tokens and 0.867 vs
-//! 0.467 answer-hit, at equal KO coverage. Root causes, visible in the
-//! per-query rows: (1) fact scoring matches statement keywords corpus-wide
-//! — any "revenue" question hoovers every revenue fact from every fixture
-//! (q-00 packs 439 tokens with zero relevant KOs); (2) the mock IR carries
-//! no facts at all for pure-text fixtures (plain-text, formulas) and
-//! facts not attached to a scored entity cannot rank, so those answers
-//! only exist in raw chunks. The instrument is the yardstick for the
-//! real-extraction/real-model runs — the §45–48 efficiency claim is
-//! measured, not assumed, exactly like the §60 PR-P verdict.
+//! Per query: tokens packed, KO coverage (fraction of the dataset's
+//! expected KOs present in the delivered text), precision (relevant
+//! units / delivered units — KOs for AikoQL, chunks for RAG; the context
+//! efficiency number), golden-answer token hit, and wall time.
+//!
+//! **Measured verdict (mock corpus, fairness-corrected 2026-08-22): the
+//! chunk baseline still wins, but by much less than the pre-fix
+//! measurement claimed** — 74.8 vs 136.1 mean delivered tokens (the
+//! compiler's own bill is 208.0: it charges justification lines the
+//! render omits), 0.867 vs 0.600 answer-hit, 0.867 vs 0.778 KO coverage,
+//! and precision is a tie (0.405 vs 0.402 relevant units per delivered
+//! unit). Root causes, visible in the per-query rows: (1) fact scoring
+//! matches statement keywords corpus-wide — any "revenue" question
+//! hoovers every revenue fact from every fixture (q-00 delivers 273
+//! tokens with zero relevant KOs); (2) the mock IR carries no facts at
+//! all for pure-text fixtures (plain-text, formulas) and facts not
+//! attached to a scored entity cannot rank, so those answers only exist
+//! in raw chunks (q-13 E = mc²: the compiler delivers nothing). Both
+//! causes have fixes in flight — the entity-gate on fact scoring, then
+//! real extraction. The instrument is the yardstick for those runs — the
+//! §45–48 efficiency claim is measured, not assumed, exactly like the
+//! §60 PR-P verdict.
 //!
 //! The gates pin the measured baselines with headroom (the PR-G
 //! convention): a regression — token bloat, ranking loss, latency
@@ -86,7 +102,9 @@ fn comparative_cost_benchmark() {
     assert_eq!(qs.len(), goldens.len(), "projections out of alignment");
 
     let mut sum_tokens = [0usize; 2]; // [aikoql, rag]
+    let mut sum_est = 0usize; // aikoql's own bill (rendered + justification over-bill)
     let mut sum_ko = [0.0f32; 2];
+    let mut sum_prec = [0.0f32; 2];
     let mut sum_answer = [0usize; 2];
     let mut sum_lat = [0u128; 2]; // µs
 
@@ -101,29 +119,22 @@ fn comparative_cost_benchmark() {
             g.id,
             pkg.estimated_tokens
         );
-        let pkg_names: Vec<String> = pkg.entities.iter().map(|e| normalize(&e.name)).collect();
-        let mut pkg_text = String::new();
-        for e in &pkg.entities {
-            pkg_text.push_str(&e.name);
-            pkg_text.push(' ');
-        }
-        for f in &pkg.facts {
-            pkg_text.push_str(&f.statement);
-            pkg_text.push(' ');
-        }
-        for r in &pkg.relations {
-            pkg_text.push_str(&r.subject);
-            pkg_text.push(' ');
-            pkg_text.push_str(&r.object);
-            pkg_text.push(' ');
-        }
-        let a_ko = ko_coverage(&pkg_names, g);
-        let a_answer = answer_hit(&pkg_text, g);
+        // Fairness fix: judge the payload the agent actually receives —
+        // the rendered markdown (entity mention text included), not the
+        // stripped triple text. estimated_tokens also bills justification
+        // lines the render omits, so both numbers are printed; the cost
+        // and gate axes use the rendered payload.
+        let aikoql_delivered = aikoql_ingestion::render_context_markdown(&pkg);
+        let a_tokens = aikoql_delivered.len() / 4;
+        let a_ko = delivered_ko_coverage(&aikoql_delivered, g);
+        let a_prec = ko_precision(&pkg, g);
+        let a_answer = answer_hit(&aikoql_delivered, g);
 
         // ── RAG baseline treatment ──────────────────────────────────────
         let t0 = Instant::now();
         let ranked = rank(&corpus, q.text, &provider, false);
         let mut packed_text = String::new();
+        let mut packed: Vec<(&str, usize)> = Vec::new();
         for (f, i) in &ranked {
             let text = chunk_text(&corpus, f, *i);
             // +1 for the joining space; stop before the budget overflows.
@@ -132,6 +143,7 @@ fn comparative_cost_benchmark() {
             }
             packed_text.push_str(text);
             packed_text.push(' ');
+            packed.push((*f, *i));
         }
         let r_lat = t0.elapsed().as_micros();
         let r_tokens = packed_text.len() / 4;
@@ -140,22 +152,26 @@ fn comparative_cost_benchmark() {
             "{}: rag pack exceeded the budget: {r_tokens} > {BUDGET}",
             g.id
         );
-        let r_ko = chunk_ko_coverage(&packed_text, g);
+        let r_ko = delivered_ko_coverage(&packed_text, g);
+        let r_prec = chunk_precision(&packed, g);
         let r_answer = answer_hit(&packed_text, g);
 
-        sum_tokens[0] += pkg.estimated_tokens;
+        sum_tokens[0] += a_tokens;
         sum_tokens[1] += r_tokens;
+        sum_est += pkg.estimated_tokens;
         sum_ko[0] += a_ko;
         sum_ko[1] += r_ko;
+        sum_prec[0] += a_prec;
+        sum_prec[1] += r_prec;
         sum_answer[0] += usize::from(a_answer);
         sum_answer[1] += usize::from(r_answer);
         sum_lat[0] += a_lat;
         sum_lat[1] += r_lat;
 
         eprintln!(
-            "[COST-Q {qi} {:?}] aikoql_tokens={} rag_tokens={r_tokens} aikoql_ko={a_ko:.2} \
-             rag_ko={r_ko:.2} aikoql_answer={a_answer} rag_answer={r_answer} \
-             aikoql_us={a_lat} rag_us={r_lat}",
+            "[COST-Q {qi} {:?}] aikoql_tokens={a_tokens} aikoql_est={} rag_tokens={r_tokens} \
+             aikoql_ko={a_ko:.2} rag_ko={r_ko:.2} aikoql_prec={a_prec:.2} rag_prec={r_prec:.2} \
+             aikoql_answer={a_answer} rag_answer={r_answer} aikoql_us={a_lat} rag_us={r_lat}",
             q.text, pkg.estimated_tokens,
         );
     }
@@ -163,8 +179,11 @@ fn comparative_cost_benchmark() {
     let n = qs.len() as f32;
     let aikoql_tokens = sum_tokens[0] as f32 / n;
     let rag_tokens = sum_tokens[1] as f32 / n;
+    let aikoql_est = sum_est as f32 / n;
     let aikoql_ko = sum_ko[0] / n;
     let rag_ko = sum_ko[1] / n;
+    let aikoql_prec = sum_prec[0] / n;
+    let rag_prec = sum_prec[1] / n;
     let aikoql_answer = sum_answer[0] as f32 / n;
     let rag_answer = sum_answer[1] as f32 / n;
     let aikoql_lat = sum_lat[0] as f32 / n;
@@ -174,23 +193,27 @@ fn comparative_cost_benchmark() {
     let rag_cost =
         rag_tokens / 1e6 * INPUT_PRICE_PER_M + ANSWER_TOKENS as f32 / 1e6 * OUTPUT_PRICE_PER_M;
     eprintln!(
-        "[COMPARATIVE-SUMMARY] queries={n} aikoql_tokens={aikoql_tokens:.1} rag_tokens={rag_tokens:.1} \
-         aikoql_ko={aikoql_ko:.3} rag_ko={rag_ko:.3} aikoql_answer={aikoql_answer:.3} \
+        "[COMPARATIVE-SUMMARY] queries={n} aikoql_tokens={aikoql_tokens:.1} \
+         aikoql_est={aikoql_est:.1} rag_tokens={rag_tokens:.1} \
+         aikoql_ko={aikoql_ko:.3} rag_ko={rag_ko:.3} aikoql_prec={aikoql_prec:.3} \
+         rag_prec={rag_prec:.3} aikoql_answer={aikoql_answer:.3} \
          rag_answer={rag_answer:.3} aikoql_us={aikoql_lat:.1} rag_us={rag_lat:.1} \
          aikoql_cost={aikoql_cost:.4} rag_cost={rag_cost:.4}"
     );
 
     // ── Gates ───────────────────────────────────────────────────────────
-    // Pinned baselines + headroom, measured 2026-08-22 on the deterministic
-    // mock corpus (aikoql 207.9 tokens/query, rag 74.8; answer-hit 0.467 vs
-    // 0.867; KO coverage 0.778 vs 0.867; latency 2.8ms vs 0.4ms/query). A
-    // regression fails, an improvement passes trivially — the PR-G
-    // convention. The comparative verdict is printed, not enforced: with
-    // the mock extraction IR the chunk baseline wins both axes (module
-    // docs), and only a real-extraction/real-model run may flip it.
+    // Pinned baselines + headroom, fairness-corrected and re-measured
+    // 2026-08-22 on the deterministic mock corpus (delivered payload:
+    // aikoql 136.1 rendered tokens [own bill 208.0], rag 74.8; answer-hit
+    // 0.600 vs 0.867; KO coverage 0.778 vs 0.867; precision 0.402 vs
+    // 0.405; latency 2.0ms vs 0.4ms/query). A regression fails, an
+    // improvement passes trivially — the PR-G convention. The comparative
+    // verdict is printed, not enforced: with the mock extraction IR the
+    // chunk baseline wins the token and answer-hit axes (module docs),
+    // and only the entity-gate fix + a real-extraction run may flip it.
     assert!(
-        aikoql_tokens < 300.0,
-        "aikoql token cost regressed: {aikoql_tokens:.1} tokens/query (baseline 207.9)"
+        aikoql_tokens < 250.0,
+        "aikoql token cost regressed: {aikoql_tokens:.1} tokens/query (baseline 136.1)"
     );
     assert!(
         rag_tokens < 150.0,
@@ -205,8 +228,16 @@ fn comparative_cost_benchmark() {
         "rag KO coverage regressed: {rag_ko:.3} (baseline 0.867)"
     );
     assert!(
-        aikoql_answer > 0.35,
-        "aikoql answer-hit regressed: {aikoql_answer:.3} (baseline 0.467)"
+        aikoql_prec > 0.30,
+        "aikoql KO precision regressed: {aikoql_prec:.3} (baseline 0.402)"
+    );
+    assert!(
+        rag_prec > 0.30,
+        "rag chunk precision regressed: {rag_prec:.3} (baseline 0.405)"
+    );
+    assert!(
+        aikoql_answer > 0.40,
+        "aikoql answer-hit regressed: {aikoql_answer:.3} (baseline 0.600)"
     );
     assert!(
         rag_answer > 0.75,
@@ -224,34 +255,61 @@ fn comparative_cost_benchmark() {
     );
 }
 
-/// Fraction of the dataset's expected KOs whose normalized names appear in
-/// the package's entity list (exact normalized match — entities are what
-/// the compiler packs as KOs).
-fn ko_coverage(pkg_names: &[String], g: &common::golden_dataset::GoldenQuestion) -> f32 {
-    if g.expected_entities.is_empty() {
-        return 1.0;
-    }
-    let hit = g
-        .expected_entities
-        .iter()
-        .filter(|e| pkg_names.contains(&normalize(e)))
-        .count();
-    hit as f32 / g.expected_entities.len() as f32
-}
-
 /// Fraction of the dataset's expected KOs whose normalized names occur in
-/// the packed chunk text (containment — chunks carry the raw text).
-fn chunk_ko_coverage(packed: &str, g: &common::golden_dataset::GoldenQuestion) -> f32 {
+/// the delivered context text (containment — delivered text carries them,
+/// whether as a structured name or a mention span). Applied to both
+/// treatments so the comparison judges the same payload definition.
+fn delivered_ko_coverage(delivered: &str, g: &common::golden_dataset::GoldenQuestion) -> f32 {
     if g.expected_entities.is_empty() {
         return 1.0;
     }
-    let lower = packed.to_lowercase();
+    let lower = delivered.to_lowercase();
     let hit = g
         .expected_entities
         .iter()
         .filter(|e| lower.contains(&normalize(e)))
         .count();
     hit as f32 / g.expected_entities.len() as f32
+}
+
+/// KO precision (context efficiency): relevant KOs delivered / KOs
+/// delivered. An empty package delivers nothing, so precision is 0.
+fn ko_precision(
+    pkg: &aikoql_ingestion::ContextPackage,
+    g: &common::golden_dataset::GoldenQuestion,
+) -> f32 {
+    if g.expected_entities.is_empty() {
+        return 1.0;
+    }
+    if pkg.entities.is_empty() {
+        return 0.0;
+    }
+    let hit = pkg
+        .entities
+        .iter()
+        .filter(|e| {
+            g.expected_entities
+                .iter()
+                .any(|x| normalize(x) == normalize(&e.name))
+        })
+        .count();
+    hit as f32 / pkg.entities.len() as f32
+}
+
+/// Chunk precision (context efficiency): relevant chunks packed / chunks
+/// packed — the RAG baseline's analogue of KO precision.
+fn chunk_precision(packed: &[(&str, usize)], g: &common::golden_dataset::GoldenQuestion) -> f32 {
+    if g.relevant.is_empty() {
+        return 1.0;
+    }
+    if packed.is_empty() {
+        return 0.0;
+    }
+    let hit = packed
+        .iter()
+        .filter(|(f, i)| g.relevant.iter().any(|(rf, ri)| rf == f && ri == i))
+        .count();
+    hit as f32 / packed.len() as f32
 }
 
 /// Whether the packed context carries every golden answer key token.
