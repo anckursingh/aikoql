@@ -207,13 +207,13 @@ const MATRIX: &[Row] = &[
 
     // ── Chatbot suite §53 release claims (tier R — release only) ──────────
     // Chatbot Memory Ready
-    row("CMEM-001", "CMEM", "R", "partial", None, Some("substrate ops exist; conversation-level scenario absent (TP-3)")),
+    row("CMEM-001", "CMEM", "R", "covered", Some("crates/services/api/mcp/tests/mcp_real_world.rs"), None),
     row("CMEM-002", "CMEM", "R", "covered", Some("scripts/e2e-restart.js"), None),
-    row("CMEM-003", "CMEM", "R", "partial", None, Some("KO types exist; classification scenario absent (TP-3)")),
+    row("CMEM-003", "CMEM", "R", "covered", Some("crates/services/api/mcp/tests/mcp_real_world.rs"), None),
     row("CMEM-004", "CMEM", "R", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     row("CMEM-005", "CMEM", "R", "covered", Some("crates/kernel/tests/epistemic.rs"), None),
-    row("CMEM-006", "CMEM", "R", "partial", None, Some("user-preference scenario absent (TP-3)")),
-    row("CMEM-007", "CMEM", "R", "partial", None, Some("scope types + R9 confinement; widening scenario absent (TP-3)")),
+    row("CMEM-006", "CMEM", "R", "covered", Some("crates/services/api/mcp/tests/mcp_real_world.rs"), None),
+    row("CMEM-007", "CMEM", "R", "covered", Some("crates/services/api/mcp/tests/mcp_real_world.rs"), None),
     row("CMEM-008", "CMEM", "R", "partial", None, Some("deterministic deletion exists; retention/expiry policy absent")),
     row("CMEM-009", "CMEM", "R", "covered", Some("crates/kernel/tests/evidence_wiring.rs"), None),
     // Knowledge-Grounded Chatbot Ready

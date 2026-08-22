@@ -2692,7 +2692,14 @@ impl Kernel {
             .authorize(&ctx.subject, &ko, Action::Read)?;
         let (source, confidence) = match &ko.semantic {
             Some(s) => (s.source.clone(), s.confidence),
-            None => (None, None),
+            // Semantic ops (assert/observe/supersede/verify) stamp evidence
+            // into the kernel-managed EXT_EVIDENCE extension, not `semantic`
+            // (P0-1). Surface its first record so provenance still answers
+            // "why is this known?" for asserted claims.
+            None => match ko.evidence().first() {
+                Some(e) => (Some(e.source_artifact.clone()), Some(e.confidence)),
+                None => (None, None),
+            },
         };
         Ok(Explanation {
             koid: *koid,
