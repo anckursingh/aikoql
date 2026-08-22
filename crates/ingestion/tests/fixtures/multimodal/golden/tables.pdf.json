@@ -455,6 +455,14 @@
             ],
             "properties": [
               [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "revenue",
+                "Float"
+              ],
+              [
                 "type",
                 "Person"
               ]
@@ -477,6 +485,14 @@
             ],
             "properties": [
               [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "revenue",
+                "Float"
+              ],
+              [
                 "type",
                 "Person"
               ]
@@ -498,6 +514,22 @@
               }
             ],
             "properties": [
+              [
+                "employee_name:_alice",
+                "Employee Name: Alice Smith"
+              ],
+              [
+                "age:_30",
+                "Age: 30"
+              ],
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "revenue",
+                "Float"
+              ],
               [
                 "type",
                 "Person"
@@ -543,6 +575,22 @@
             ],
             "properties": [
               [
+                "employee_name:_bob",
+                "Employee Name: Bob Johnson"
+              ],
+              [
+                "age:_45",
+                "Age: 45"
+              ],
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "revenue",
+                "Float"
+              ],
+              [
                 "type",
                 "Person"
               ]
@@ -564,6 +612,14 @@
               }
             ],
             "properties": [
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "revenue",
+                "Float"
+              ],
               [
                 "type",
                 "Person"
@@ -587,6 +643,14 @@
             ],
             "properties": [
               [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "revenue",
+                "Float"
+              ],
+              [
                 "type",
                 "Person"
               ]
@@ -608,6 +672,22 @@
               }
             ],
             "properties": [
+              [
+                "region:_north_america",
+                "Region: North America"
+              ],
+              [
+                "revenue_(usd):_1200",
+                "Revenue (USD): 1200"
+              ],
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "revenue",
+                "Float"
+              ],
               [
                 "type",
                 "Person"
@@ -674,6 +754,22 @@
               }
             ],
             "properties": [
+              [
+                "region:_south_america",
+                "Region: South America"
+              ],
+              [
+                "revenue_(usd):_800",
+                "Revenue (USD): 800"
+              ],
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "revenue",
+                "Float"
+              ],
               [
                 "type",
                 "Person"
@@ -1682,7 +1778,9 @@
       "facts": [
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Alice Smith"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1700,7 +1798,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Alice Smith"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1718,7 +1818,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Bob Johnson"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1736,7 +1838,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Bob Johnson"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1754,7 +1858,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "North America"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1772,7 +1878,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "North America"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1790,7 +1898,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "South America"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1808,7 +1918,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "South America"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1942,7 +2054,7 @@
       "method": "ir-discovery-mock",
       "properties": [
         {
-          "class_name": "Document",
+          "class_name": "Person",
           "confidence": 0.8500000238418579,
           "evidence": [
             {
@@ -1977,7 +2089,7 @@
           "value_type": "Float"
         },
         {
-          "class_name": "Document",
+          "class_name": "Person",
           "confidence": 0.8500000238418579,
           "evidence": [
             {

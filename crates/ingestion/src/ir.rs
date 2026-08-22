@@ -531,6 +531,23 @@ impl MockSemanticAnalyzer {
                 let FragmentContent::Table(table) = content else {
                     continue;
                 };
+                // Anchor cell facts to the row's label phrases (HLD §14:
+                // cell-level knowledge must be retrievable via its owning
+                // entity). The context compiler's entity gate requires a
+                // ranked entity for anchored facts — unanchored, every
+                // "Revenue:" cell fact from every fixture matches any
+                // revenue question corpus-wide (the G12 q-00 finding).
+                // ponytail: any capitalized phrase anywhere in the row is
+                // the anchor — a first-column convention is
+                // extractor-specific and breaks on rotated tables.
+                let mut row_phrases: std::collections::HashMap<&str, Vec<String>> =
+                    std::collections::HashMap::new();
+                for cell in &table.cells {
+                    row_phrases
+                        .entry(cell.row_id.as_str())
+                        .or_default()
+                        .extend(extract_capitalized_phrases(&cell.text));
+                }
                 for cell in &table.cells {
                     if cell.text.trim().is_empty() {
                         continue;
@@ -547,7 +564,10 @@ impl MockSemanticAnalyzer {
                         } else {
                             format!("{}: {}", header, cell.text)
                         },
-                        entities: Vec::new(),
+                        entities: row_phrases
+                            .get(cell.row_id.as_str())
+                            .cloned()
+                            .unwrap_or_default(),
                         confidence: self.confidence * cell.confidence,
                         evidence: Evidence {
                             document_id: None,
@@ -646,7 +666,11 @@ impl MockSemanticAnalyzer {
                             .unwrap_or_else(|| "Untitled chart".into());
                         ir.facts.push(FactCandidate {
                             statement: format!("Chart: {} ({:?})", title, chart.chart_type),
-                            entities: Vec::new(),
+                            // Anchor chart facts to the title's phrases so
+                            // they join the entity gate like cell facts —
+                            // unanchored, any title keyword hoovers corpus-
+                            // wide (G12 finding).
+                            entities: extract_capitalized_phrases(&title),
                             confidence: self.confidence,
                             evidence: Evidence {
                                 document_id: None,
@@ -1181,7 +1205,7 @@ pub fn document_model_to_ir(
 mod tests {
     use super::*;
     use crate::ast::{AstNode, BlockType, DocumentAst};
-    use crate::visual::DiagramAnalyzer;
+    use crate::visual::{ChartAnalyzer, DiagramAnalyzer};
 
     #[test]
     fn retain_pages_keeps_kept_and_document_level_candidates() {
@@ -1319,7 +1343,7 @@ mod tests {
                         id: "c0".into(),
                         row_id: "0".into(),
                         column_id: "h0".into(),
-                        text: "Widget".into(),
+                        text: "Acme Widget".into(),
                         value: None,
                         bbox: None,
                         confidence: 1.0,
@@ -1851,8 +1875,15 @@ mod tests {
             .filter(|f| matches!(&f.evidence.source, Some(EvidenceSource::TableCell { .. })))
             .collect();
         assert_eq!(cell_facts.len(), 2, "one fact per non-empty cell");
-        assert!(cell_facts.iter().any(|f| f.statement == "Item: Widget"));
+        assert!(cell_facts
+            .iter()
+            .any(|f| f.statement == "Item: Acme Widget"));
         assert!(cell_facts.iter().any(|f| f.statement == "Qty: 10"));
+        // Anchoring: both cells share row "0", whose capitalized phrase is
+        // "Acme Widget" — the entity gate must apply to cell facts.
+        assert!(cell_facts
+            .iter()
+            .all(|f| f.entities == vec!["Acme Widget".to_string()]));
         match &cell_facts[0].evidence.source {
             Some(EvidenceSource::TableCell { table_id, cell_id }) => {
                 assert!(
@@ -1863,6 +1894,45 @@ mod tests {
             }
             other => panic!("expected TableCell evidence, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn chart_fragment_fact_anchors_to_title_phrases() {
+        // Anchoring: chart facts carry the title's capitalized phrases so
+        // the entity gate applies — unanchored, chart statements hoover
+        // corpus-wide on shared keywords (the G12 finding).
+        let mut chart = AstNode {
+            block_type: BlockType::Chart,
+            text: Some("Bar chart: Acme Corp Sales".into()),
+            children: vec![],
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        };
+        chart.payload = crate::visual::MockChartAnalyzer
+            .analyze(&chart)
+            .map(crate::ast::AstPayload::Chart);
+        let ast = make_ast(vec![vec![chart]]);
+        let fragments = RuleBoundaryDetector.detect(&ast).unwrap();
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast, &fragments);
+
+        let chart_facts: Vec<&FactCandidate> = ir
+            .facts
+            .iter()
+            .filter(|f| f.statement.starts_with("Chart: "))
+            .collect();
+        assert_eq!(chart_facts.len(), 1);
+        // extract_capitalized_phrases emits 2–3 word sliding windows.
+        assert_eq!(
+            chart_facts[0].entities,
+            vec![
+                "Acme Corp".to_string(),
+                "Corp Sales".to_string(),
+                "Acme Corp Sales".to_string(),
+            ],
+            "chart fact anchors to the title's phrases"
+        );
     }
 
     #[test]

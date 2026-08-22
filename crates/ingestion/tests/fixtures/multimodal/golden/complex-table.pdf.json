@@ -546,6 +546,10 @@
                 "Q1 2025"
               ],
               [
+                "numeric_value",
+                "Float"
+              ],
+              [
                 "fiscal_quarter",
                 "DateTime"
               ],
@@ -571,6 +575,10 @@
               }
             ],
             "properties": [
+              [
+                "numeric_value",
+                "Float"
+              ],
               [
                 "fiscal_quarter",
                 "DateTime"
@@ -598,6 +606,18 @@
             ],
             "properties": [
               [
+                "product_line:_industrial",
+                "Product Line: Industrial Sensors"
+              ],
+              [
+                "warranty_(months):_36",
+                "Warranty (months): 36"
+              ],
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
                 "fiscal_quarter",
                 "DateTime"
               ],
@@ -623,6 +643,18 @@
               }
             ],
             "properties": [
+              [
+                "product_line:_home",
+                "Product Line: Home Automation"
+              ],
+              [
+                "warranty_(months):_24",
+                "Warranty (months): 24"
+              ],
+              [
+                "numeric_value",
+                "Float"
+              ],
               [
                 "fiscal_quarter",
                 "DateTime"
@@ -1188,7 +1220,7 @@
           "entities": [],
           "phase": "D5-ontology",
           "source": [],
-          "step": "Discovered 1 class, 4 properties, 0 relationships"
+          "step": "Discovered 1 class, 5 properties, 0 relationships"
         },
         {
           "entities": [
@@ -1634,7 +1666,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Industrial Sensors"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1652,7 +1686,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Industrial Sensors"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1670,7 +1706,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Home Automation"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1688,7 +1726,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Home Automation"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1901,32 +1941,6 @@
                   "table_id": "frag-p1-b1"
                 }
               }
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 2,
-              "source": {
-                "TableCell": {
-                  "cell_id": "r1-h1",
-                  "table_id": "frag-p2-b0"
-                }
-              }
-            },
-            {
-              "confidence": 0.8500000238418579,
-              "document_id": null,
-              "extractor": "mock",
-              "model": "mock-v1",
-              "page": 2,
-              "source": {
-                "TableCell": {
-                  "cell_id": "r2-h1",
-                  "table_id": "frag-p2-b0"
-                }
-              }
             }
           ],
           "name": "numeric_value",
@@ -1967,6 +1981,41 @@
           "name": "date",
           "required": false,
           "value_type": "DateTime"
+        },
+        {
+          "class_name": "Person",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            }
+          ],
+          "name": "numeric_value",
+          "required": false,
+          "value_type": "Float"
         },
         {
           "class_name": "Person",
@@ -2101,7 +2150,7 @@
         },
         {
           "duration_us": 0,
-          "item_count": 5,
+          "item_count": 6,
           "phase": "D5-ontology"
         },
         {

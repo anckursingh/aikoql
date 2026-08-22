@@ -299,6 +299,10 @@
                 "Float"
               ],
               [
+                "date",
+                "DateTime"
+              ],
+              [
                 "type",
                 "Person"
               ]
@@ -347,6 +351,10 @@
                 "Float"
               ],
               [
+                "date",
+                "DateTime"
+              ],
+              [
                 "type",
                 "Person"
               ]
@@ -369,8 +377,20 @@
             ],
             "properties": [
               [
+                "step:_validate",
+                "Step: Validate"
+              ],
+              [
+                "owner:_billing_team",
+                "Owner: Billing Team"
+              ],
+              [
                 "numeric_value",
                 "Float"
+              ],
+              [
+                "date",
+                "DateTime"
               ],
               [
                 "type",
@@ -397,6 +417,10 @@
               [
                 "numeric_value",
                 "Float"
+              ],
+              [
+                "date",
+                "DateTime"
               ],
               [
                 "type",
@@ -443,8 +467,20 @@
             ],
             "properties": [
               [
+                "step:_commit",
+                "Step: Commit"
+              ],
+              [
+                "owner:_ledger_team",
+                "Owner: Ledger Team"
+              ],
+              [
                 "numeric_value",
                 "Float"
+              ],
+              [
+                "date",
+                "DateTime"
               ],
               [
                 "type",
@@ -1346,7 +1382,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Billing Team"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1364,7 +1402,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Billing Team"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1382,7 +1422,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Ledger Team"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1400,7 +1442,9 @@
         },
         {
           "confidence": 0.8500000238418579,
-          "entities": [],
+          "entities": [
+            "Ledger Team"
+          ],
           "evidence": {
             "confidence": 0.8500000238418579,
             "document_id": null,
@@ -1583,7 +1627,7 @@
           "value_type": "Float"
         },
         {
-          "class_name": "Document",
+          "class_name": "Person",
           "confidence": 0.8500000238418579,
           "evidence": [
             {

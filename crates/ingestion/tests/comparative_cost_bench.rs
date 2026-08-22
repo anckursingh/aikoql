@@ -39,18 +39,22 @@
 //! only exist in raw chunks (q-13 E = mc²: the compiler delivers
 //! nothing).
 //!
-//! Post-gate measurement: the P0 entity gate landed in the compiler
-//! (anchored facts require a ranked entity) but moved the mock-corpus
-//! numbers by only 136.1 → 134.6 tokens — the mock pipeline's hoovering
-//! facts are UNANCHORED table cell facts (`entities: Vec::new()` at the
-//! mock table-cell extraction), which the gate deliberately does not
-//! fence because entity-less domain rules must keep statement scoring.
-//! Heading facts anchor to capitalized phrases from the heading itself,
-//! so shared names collide corpus-wide. Anchoring facts to their owning
-//! entity at extraction time is the next fix; the gate is the compiler
-//! half of the guarantee and applies to every anchored IR. The
-//! instrument is the yardstick for those runs — the §45–48 efficiency
-//! claim is measured, not assumed, exactly like the §60 PR-P verdict.
+//! Post-anchoring measurement (2026-08-22): the P0 entity gate landed in
+//! the compiler (anchored facts require a ranked entity) and extraction-
+//! side anchoring followed — table cell facts now carry their row's
+//! capitalized phrases, chart facts their title's phrases (mock
+//! pipeline, ir.rs). Result: answer-hit 0.600 → 0.733 (facts now surface
+//! only through entities that ranked for the task), KO coverage 0.778
+//! and precision 0.402 unchanged, delivered tokens 134.6 → 139.4
+//! (noise). The token collapse did not materialize because the corpus's
+//! remaining hoover is ENTITY-LESS facts — formula/image/code statements
+//! and table rows whose labels are single words (charts.pdf quarters) —
+//! which the gate deliberately exempts so domain rules keep statement
+//! scoring. Closing the token axis means anchoring those facts to their
+//! section/caption/row entity in real extraction, not more compiler
+//! gate. The instrument is the yardstick for those runs — the §45–48
+//! efficiency claim is measured, not assumed, exactly like the §60 PR-P
+//! verdict.
 //!
 //! The gates pin the measured baselines with headroom (the PR-G
 //! convention): a regression — token bloat, ranking loss, latency
@@ -211,18 +215,19 @@ fn comparative_cost_benchmark() {
     );
 
     // ── Gates ───────────────────────────────────────────────────────────
-    // Pinned baselines + headroom, fairness-corrected and re-measured
-    // 2026-08-22 on the deterministic mock corpus (delivered payload:
-    // aikoql 136.1 rendered tokens [own bill 208.0], rag 74.8; answer-hit
-    // 0.600 vs 0.867; KO coverage 0.778 vs 0.867; precision 0.402 vs
-    // 0.405; latency 2.0ms vs 0.4ms/query). A regression fails, an
-    // improvement passes trivially — the PR-G convention. The comparative
-    // verdict is printed, not enforced: with the mock extraction IR the
-    // chunk baseline wins the token and answer-hit axes (module docs),
-    // and only the entity-gate fix + a real-extraction run may flip it.
+    // Pinned baselines + headroom, re-measured 2026-08-22 after the
+    // entity gate + extraction-side anchoring (delivered payload: aikoql
+    // 139.4 rendered tokens [own bill 216.5], rag 74.8; answer-hit 0.733
+    // vs 0.867; KO coverage 0.778 vs 0.867; precision 0.402 vs 0.405;
+    // latency 2.0ms vs 0.4ms/query). A regression fails, an improvement
+    // passes trivially — the PR-G convention. The comparative verdict is
+    // printed, not enforced: with the mock extraction IR the chunk
+    // baseline wins the token axis (module docs); answer-hit moved from
+    // 0.600 to 0.733 with the fixes, and the residual gap is entity-less
+    // mock facts, not compiler behavior.
     assert!(
         aikoql_tokens < 250.0,
-        "aikoql token cost regressed: {aikoql_tokens:.1} tokens/query (baseline 136.1)"
+        "aikoql token cost regressed: {aikoql_tokens:.1} tokens/query (baseline 139.4)"
     );
     assert!(
         rag_tokens < 150.0,
@@ -245,8 +250,8 @@ fn comparative_cost_benchmark() {
         "rag chunk precision regressed: {rag_prec:.3} (baseline 0.405)"
     );
     assert!(
-        aikoql_answer > 0.40,
-        "aikoql answer-hit regressed: {aikoql_answer:.3} (baseline 0.600)"
+        aikoql_answer > 0.55,
+        "aikoql answer-hit regressed: {aikoql_answer:.3} (baseline 0.733)"
     );
     assert!(
         rag_answer > 0.75,
