@@ -248,10 +248,11 @@ fn comparative_cost_benchmark() {
 
     // ── Gates ───────────────────────────────────────────────────────────
     // Pinned baselines + headroom, re-measured 2026-08-22 after the
-    // determinism fix + evidence snippets (delivered payload: aikoql
-    // 175.7 rendered tokens [own bill 217.1], rag 74.8; answer-hit 0.600
-    // vs 0.867; KO coverage 0.778 vs 0.867; precision 0.402 vs 0.405;
-    // latency 2.3ms vs 0.4ms/query). A regression fails, an improvement
+    // determinism fix + evidence snippets + keyword hygiene (stopword
+    // filter, token-boundary matches — delivered payload: aikoql 171.8
+    // rendered tokens [own bill 214.1], rag 74.8; answer-hit 0.600 vs
+    // 0.867; KO coverage 0.778 vs 0.867; precision 0.404 vs 0.405;
+    // latency 4.9ms vs 0.4ms/query). A regression fails, an improvement
     // passes trivially — the PR-G convention. The comparative verdict is
     // printed, not enforced: with the mock extraction IR the chunk
     // baseline wins the token axis (module docs); the 0.733 of the
