@@ -76,6 +76,7 @@
 #![allow(dead_code)]
 
 pub mod golden_dataset;
+pub mod trackb;
 
 use aikoql_ingestion::{EmbeddingProvider, KnowledgeBoundaryDetector, VisualIndexRecord};
 use std::collections::{HashMap, HashSet};

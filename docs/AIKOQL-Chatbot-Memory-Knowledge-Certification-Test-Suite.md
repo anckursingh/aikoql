@@ -1815,20 +1815,50 @@ Measure:
 
 | Metric | LLM | RAG | Graph-RAG | AIKOQL |
 |---|---:|---:|---:|---:|
-| Accuracy | | | | |
-| Groundedness | | | | |
-| Hallucination rate | | | | |
-| Provenance accuracy | | | | |
-| Temporal accuracy | | | | |
-| Multi-hop accuracy | | | | |
-| Memory continuity | | | | |
-| Input tokens | | | | |
-| LLM calls | | | | |
-| Latency | | | | |
-| Cost | | | | |
-| Action safety | | | | |
+| Accuracy | 0.000 | 0.625 | 0.812 | 0.938 |
+| Groundedness | 0.000 | 0.000 | 0.000 | 1.000 |
+| Hallucination rate | 0.0 | 0.0 | 0.0 | 0.0 |
+| Provenance accuracy | 0.000 | 0.500 | 0.500 | 1.000 |
+| Temporal accuracy | 0.000 | 0.000 | 0.000 | 0.000 |
+| Multi-hop accuracy | 0.000 | 0.375 | 0.750 | 0.875 |
+| Memory continuity | — | — | — | — |
+| Input tokens | 10.1 | 77.1 | 82.1 | 179.9 |
+| LLM calls | 1 | 1 | 1 | 0 |
+| Latency | 41 µs | 570 µs | 284 µs | 3 905 µs |
+| Cost | $0.000062 | $0.000072 | $0.000072 | $0.000087 |
+| Action safety | — | — | — | — |
 
-This table should contain **measured results only**.
+This table contains **measured results only**.
+
+Measured 2026-08-22 by `crates/ingestion/tests/comparative_chatbot_bench.rs`
+(G11, mechanical run — CI-reproducible, no live model): the four treatments
+receive the same corpus (15-doc Track-B corpus + one COMP-005 provenance
+question, 8 questions × 2 evidence units), the same 300-token budget, and
+the same token-containment judge, over the payload the LLM would receive.
+The mechanical slice measures the retrieval/context tier; the rows that
+need a generated answer are honest about their proxy:
+
+- **Accuracy / Multi-hop accuracy / Provenance accuracy** — evidence units
+  delivered by the payload; AIKOQL's only miss is the depth-2 leaf fact
+  (single-round relation boost ceiling). Graph-RAG = lexical rank seed +
+  transitive entity-mention chunk expansion.
+- **Groundedness** — delivered units whose payload cites its source
+  document (AIKOQL renders [`doc`] per entity; raw chunks carry no doc id).
+- **Hallucination rate** — 0.0 for all four *by construction*: every
+  treatment copies corpus text verbatim, there is no generative step. The
+  real-model pass for this row is the `e2e_answer_quality` harness
+  (answer_gen seam).
+- **Temporal accuracy** — current claim present AND stale claim absent:
+  0.0 for every treatment; none suppresses the stale claim (the open
+  temporal-policy item).
+- **LLM calls** — the SEM-003 proxy: A/B/C need one LLM turn to answer;
+  AIKOQL resolves via the deterministic compile path, no call.
+- **Memory continuity / Action safety** ("—") — need the live chatbot
+  stack; measured by the §51 MCP scenarios (`mcp_real_world.rs`, TP-3b)
+  instead of this harness.
+- **Input tokens / Latency / Cost** — measured per treatment; cost uses
+  the G12 reference rates ($0.15/1M input, $0.60/1M output × 100 assumed
+  answer tokens) so the column stays comparable across runs.
 
 ---
 
