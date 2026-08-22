@@ -12,6 +12,8 @@ use serde_json::{json, Value as J};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 
+use aikoql_ingestion::{EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate};
+
 struct McpClient {
     child: Child,
     stdin: std::process::ChildStdin,
@@ -1008,6 +1010,198 @@ fn chatbot_memory_certification_scenarios() {
     assert!(
         foreign["result"]["isError"] == true && foreign_text.contains("ACCESS_DENIED"),
         "PERS-004: another user's point read must be denied: {foreign}"
+    );
+
+    let _ = std::fs::remove_file(&db);
+}
+
+/// G7 — CTX differential scenarios (TP-3c): the same context-compilation
+/// question over the real MCP surface under different permissions (CTX-001),
+/// different temporal states (CTX-002), and post-update knowledge (CTX-003).
+/// CTX-MIN-001..003 (1000-KO minimization, no irrelevant forwarding, dedup)
+/// are pure-compiler tests in aikoql-ingestion's context::tests.
+#[test]
+fn ctx_differential_scenarios() {
+    let db = std::env::temp_dir().join(format!("mcp-ctx-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&db);
+    let mut c = McpClient::start(db.to_str().unwrap());
+    c.session_init("alice", "acme");
+
+    // Knowledge snapshot v1 — the same ir_json shape ingest-dir produces.
+    let v1 = KnowledgeIr {
+        entities: vec![
+            EntityCandidate {
+                name: "PaymentService".into(),
+                type_hint: Some("Struct".into()),
+                mentions: vec!["processes payments".into()],
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            },
+            EntityCandidate {
+                name: "Ledger".into(),
+                type_hint: Some("Struct".into()),
+                mentions: vec!["payment ledger".into()],
+                confidence: 0.8,
+                evidence: Evidence::default(),
+            },
+        ],
+        facts: vec![FactCandidate {
+            statement: "payments flow through Stripe".into(),
+            entities: vec![],
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        }],
+        ..Default::default()
+    };
+    let doc = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {"ir_json": serde_json::to_string(&v1).unwrap()},
+            "origin": "system"
+        }),
+    );
+    let doc_koid = doc["koid"].as_str().unwrap().to_string();
+
+    // ── CTX-001: same question, two users, different permissions ──────────
+    // Alice (owner) compiles the payments context…
+    let alice_ctx = c.call(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments"}),
+    );
+    let alice_names: Vec<&str> = alice_ctx["package"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert!(
+        alice_names.contains(&"PaymentService"),
+        "the owner must get the payment context: {alice_ctx}"
+    );
+
+    // …Bob (same tenant, no grant) gets no context at all — the context
+    // compilation layer is permission-differential, not just content-differential.
+    c.session_init("bob", "acme");
+    let bob_ctx = c.call_raw(
+        "compile_context",
+        &json!({"koid": &doc_koid, "task": "process payments"}),
+    );
+    let bob_text = bob_ctx["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        bob_ctx["result"]["isError"] == true && bob_text.contains("ACCESS_DENIED"),
+        "CTX-001: a user without permission must get no context: {bob_ctx}"
+    );
+
+    // ── CTX-002: same question at two times — temporal state ──────────────
+    // A fresh run experience (1s TTL) enters the context for the refund task…
+    c.session_init("alice", "acme");
+    c.call(
+        "record_experience",
+        &json!({
+            "subject": "alice",
+            "goal": "process payments refund",
+            "action": "refund via payment service",
+            "outcome": "success",
+            "preconditions": [],
+            "ttl_seconds": 1,
+            "evidence": [{"source_artifact": "exec-run-2", "method": "runtime_observation"}]
+        }),
+    );
+    let ctx_t0 = c.call(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments refund"}),
+    );
+    assert!(
+        !ctx_t0["experiences"].as_array().unwrap().is_empty(),
+        "t0: the fresh experience must be in the context: {ctx_t0}"
+    );
+    // …and drops out once its temporal window closes. Same question, same
+    // knowledge — only time has passed, so only the temporal state differs.
+    std::thread::sleep(std::time::Duration::from_millis(2200));
+    let ctx_t1 = c.call(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments refund"}),
+    );
+    assert!(
+        ctx_t1["experiences"].as_array().unwrap().is_empty(),
+        "CTX-002: the expired experience must drop out of the context: {ctx_t1}"
+    );
+
+    // ── CTX-003: same question after a knowledge update ───────────────────
+    // The snapshot moves to v2: internal ledger replaces Stripe.
+    let v2 = KnowledgeIr {
+        entities: vec![
+            EntityCandidate {
+                name: "PaymentService".into(),
+                type_hint: Some("Struct".into()),
+                mentions: vec!["processes payments".into()],
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            },
+            EntityCandidate {
+                name: "InternalLedger".into(),
+                type_hint: Some("Struct".into()),
+                mentions: vec!["internal payment ledger".into()],
+                confidence: 0.8,
+                evidence: Evidence::default(),
+            },
+        ],
+        facts: vec![FactCandidate {
+            statement: "payments flow through the internal ledger".into(),
+            entities: vec![],
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        }],
+        relations: vec![RelationCandidate {
+            subject: "PaymentService".into(),
+            predicate: "depends_on".into(),
+            object: "InternalLedger".into(),
+            confidence: 0.8,
+            evidence: Evidence::default(),
+        }],
+        ..Default::default()
+    };
+    let upd = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "koid": &doc_koid, "expected_version": 1,
+            "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {"ir_json": serde_json::to_string(&v2).unwrap()},
+            "origin": "system"
+        }),
+    );
+    assert_eq!(upd["version"], 2);
+
+    let after = c.call(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments"}),
+    );
+    let fact_strs: Vec<&str> = after["package"]["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["statement"].as_str())
+        .collect();
+    assert!(
+        fact_strs.iter().any(|s| s.contains("internal ledger")),
+        "CTX-003: the updated context must carry the new fact: {after}"
+    );
+    assert!(
+        !fact_strs.iter().any(|s| s.contains("Stripe")),
+        "CTX-003: the replaced fact must not linger in the context: {fact_strs:?}"
+    );
+    let after_names: Vec<&str> = after["package"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert!(
+        after_names.contains(&"InternalLedger"),
+        "CTX-003: the new entity must enter the context: {after_names:?}"
     );
 
     let _ = std::fs::remove_file(&db);

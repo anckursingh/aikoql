@@ -147,8 +147,8 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | COMP-001..005 RAG/Graph-RAG comparisons | ❌ | retrieval baselines measured internally | system-level baselines not built |
 | LLM-001 deterministic path | ✅ | MCP tools resolve without LLM | — |
 | LLM-002..004 context reduction, no re-derivation, no doc dump | 🟡 | context compiler (A5: ranking, budget, dedup) | token-reduction benchmark absent |
-| CTX-001..003 permission/time/update-sensitive context | 🟡 | compiler respects temporal + authorization | two-user differential test absent |
-| CTX-MIN-001..003 20/1000 relevance, no irrelevant history, dedup | 🟡 | budget + ranking + dedup machinery | 1000-KO acceptance scenario absent |
+| CTX-001..003 permission/time/update-sensitive context | ✅ | compiler respects temporal + authorization | `mcp_real_world.rs::ctx_differential_scenarios` — same question, two users: owner gets the context, no-grant user gets ACCESS_DENIED; same question at two times: TTL'd experience present then dropped; same question after knowledge update: new facts/entities in, replaced ones out |
+| CTX-MIN-001..003 20/1000 relevance, no irrelevant history, dedup | ✅ | budget + ranking + dedup machinery | `context.rs::ctx_min_*` — 1000-KO IR: only the 20 relevant entities pack (irrelevant score-0 → cut), budget trims the fold by rank; duplicate entities/facts/relations packed once (dedup added at pack time) |
 | AUTH-CHAT-001..004 | ✅ | R9 tenant isolation + authorize() confinement | — |
 | Sensitive memory (PII/financial/credentials) | ✅ | A7 PII filter (11 secret types), encryption policy | — |
 | RET-CHAT-001 auto-expiry | ❌ | no retention/expiry policy yet | — |
@@ -190,7 +190,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | --- | --- | --- | --- | --- |
 | G5 | **§51 critical e2e scenario as scripted test** (memory → temporal → authority → program → episode) | §51, CHAT-MEM-*, EVO-CHAT-* | ✅ done | `critical_e2e_scenario_51_chatbot_memory` in `mcp_real_world.rs`; mechanical judges; surfaced 2 boundary bugs (parse_origin `human` unreachable → Origin::Agent; evidence only via assert_knowledge, not remember) |
 | G6 | **Chatbot memory scenarios** (classification, preferences, consolidation, isolation, explainability) | CLASS-*, PERS-*, §30–33 | ✅ done | `chatbot_memory_certification_scenarios` in `mcp_real_world.rs` (§8 CHAT-MEM-001..005 incl. real restart, §9 CLASS-001..005, §11 PERS-001..004); CMEM-001/003/006/007 → covered; surfaced + fixed explain() provenance gap (asserted evidence reported as "Source: unknown" — explain now falls back to the kernel-managed EXT_EVIDENCE) |
-| G7 | **CTX differential tests** (two users, two times, post-update) + 1000-KO minimization | CTX-001..003, CTX-MIN-* | ~3 days | pure context-compiler tests, no LLM |
+| G7 | **CTX differential tests** (two users, two times, post-update) + 1000-KO minimization | CTX-001..003, CTX-MIN-* | ✅ done | `ctx_differential_scenarios` over MCP (permission differential via ACL-gated IR fetch, temporal differential via experience TTL, post-update via versioned ir_json snapshot) + pure-compiler `ctx_min_*` tests; surfaced + fixed missing pack-time dedup (duplicate entities/facts/relations were packed twice) |
 | G8 | **Connector contract matrix** (postgres/mongo/neo4j positive/negative/timeout/auth/schema-change/incremental) | MM-001..004, §22 | ~2 weeks | fixtures exist; needs per-connector harness |
 | G9 | **Unified golden dataset** (expected KOs/relations/evidence/temporal/authorization per question) | §50 | ~1 week | unify existing per-instrument goldens; all regressions run against it |
 
@@ -243,7 +243,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | --- | --- | --- | --- |
 | **TP-1 — Traceability & gates** | suite-ID → test matrix (machine-readable), P0 registry test that fails on known gaps, wire PR/nightly tiers | — | ✅ implemented (2026-08-22): `crates/kernel/tests/certification.rs` — 121 gate IDs (94 agent P0/P1 + 27 chatbot release claims) as the registry; `certification_matrix_integrity` runs in every PR (fails on unregistered ID, missing test path, note-less gap); `certification_p0_closure` is `#[ignore]` and runs in the weekly `cargo test --workspace -- --ignored` sweep (benchmark-nightly.yml) — currently red on 2 P0s by design (DB-002, EVO-003) |
 | **TP-2 — P0 gap closure** | G2 (kill harness), G3 (index rebuild), G4 (migration) | TP-1 | before next release tag |
-| **TP-3 — Acceptance scenarios** | G5 (§51 script) ✅, G6 (chatbot memory) ✅, G7 (CTX differential), G9 (unified golden dataset) | TP-1 | post-MVP, ~3–4 weeks |
+| **TP-3 — Acceptance scenarios** | G5 (§51 script) ✅, G6 (chatbot memory) ✅, G7 (CTX differential) ✅, G9 (unified golden dataset) | TP-1 | post-MVP, ~3–4 weeks |
 | **TP-4 — Flagship benchmarks** | G10 agent efficacy, G11 comparative experiment, G12 token/latency/cost | TP-3 corpus | post-MVP, ~6–8 weeks |
 | **TP-5 — Connector matrix** | G8 per-connector contract tests | connector workstream in IMPLEMENTATION-PLAN | post-MVP, ~2 weeks once connectors land |
 | **TP-6 — Product features** | G13 retention/summarization → then their certification | IMPLEMENTATION-PLAN roadmap | post-MVP |

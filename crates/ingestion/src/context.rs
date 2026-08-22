@@ -358,14 +358,22 @@ pub fn compile_context_semantic_with(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Pack and trim to token budget
+    // Pack and trim to token budget. Duplicates (same entity extracted from
+    // two sections, repeated statement, repeated edge) are dropped at pack
+    // time — the agent must not pay tokens for the same knowledge twice.
     let unlimited = token_budget == 0;
     let mut pkg = ContextPackage::default();
     let mut tokens = 0usize;
+    let mut seen_entities: HashSet<&str> = HashSet::new();
+    let mut seen_facts: HashSet<&str> = HashSet::new();
+    let mut seen_relations: HashSet<(&str, &str, &str)> = HashSet::new();
 
     for e in &entities {
         if e.score <= 0.0 {
             break;
+        }
+        if !seen_entities.insert(e.name.as_str()) {
+            continue;
         }
         // Cap mentions at pack time: the first one is the primary doc
         // comment, the second is corroboration; giant section bodies (a
@@ -389,6 +397,9 @@ pub fn compile_context_semantic_with(
         if f.score <= 0.0 {
             break;
         }
+        if !seen_facts.insert(f.statement.as_str()) {
+            continue;
+        }
         let est =
             est_tokens(&f.statement) + f.entities.iter().map(|e| est_tokens(e)).sum::<usize>();
         if !unlimited && tokens + est > token_budget {
@@ -402,6 +413,9 @@ pub fn compile_context_semantic_with(
     for r in &relations {
         if r.score <= 0.0 {
             break;
+        }
+        if !seen_relations.insert((r.subject.as_str(), r.predicate.as_str(), r.object.as_str())) {
+            continue;
         }
         let est = est_tokens(&r.subject) + est_tokens(&r.predicate) + est_tokens(&r.object);
         if !unlimited && tokens + est > token_budget {
@@ -725,7 +739,7 @@ pub fn expand_source(source_hint: &str, ir: &KnowledgeIr) -> (Vec<RankedEntity>,
 // Context Cache
 // ---------------------------------------------------------------------------
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -1458,5 +1472,141 @@ mod tests {
         };
         let pkg = compile_context("delete files", &ir, 0);
         assert_eq!(pkg.facts.len(), 1);
+    }
+
+    /// CTX-MIN-001 + CTX-MIN-002: 1000 KOs, 20 relevant — the compiler
+    /// returns only the relevant knowledge (irrelevant entities and facts
+    /// score 0 and are cut), and a real token budget trims the fold.
+    fn thousand_entity_ir() -> KnowledgeIr {
+        let relevant: Vec<EntityCandidate> = (0..20)
+            .map(|i| {
+                ent(
+                    &format!("Relevant{i}"),
+                    "Function",
+                    vec!["invoice payment processing"],
+                )
+            })
+            .collect();
+        let irrelevant: Vec<EntityCandidate> = (0..980)
+            .map(|i| {
+                ent(
+                    &format!("Irrelevant{i}"),
+                    "Struct",
+                    vec!["miscellaneous data"],
+                )
+            })
+            .collect();
+        let mut entities = relevant;
+        entities.extend(irrelevant);
+        let facts: Vec<FactCandidate> = (0..980)
+            .map(|i| FactCandidate {
+                statement: format!("noise statement {i}"),
+                entities: vec![],
+                confidence: 0.5,
+                evidence: Evidence::default(),
+            })
+            .chain([FactCandidate {
+                statement: "invoice payment requires approval".into(),
+                entities: vec![],
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            }])
+            .collect();
+        KnowledgeIr {
+            entities,
+            facts,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ctx_min_returns_only_relevant_over_1000_kos() {
+        let ir = thousand_entity_ir();
+        let pkg = compile_context("invoice payment", &ir, 0);
+        assert_eq!(
+            pkg.entities.len(),
+            20,
+            "only the 20 relevant entities may enter the package"
+        );
+        assert!(
+            pkg.entities.iter().all(|e| e.name.starts_with("Relevant")),
+            "irrelevant history must not be forwarded: {:?}",
+            pkg.entities.iter().map(|e| &e.name).collect::<Vec<_>>()
+        );
+        assert!(
+            pkg.facts.iter().all(|f| f.statement.starts_with("invoice")),
+            "irrelevant facts must not be forwarded: {:?}",
+            pkg.facts.iter().map(|f| &f.statement).collect::<Vec<_>>()
+        );
+        // A real token budget trims the fold instead of spilling.
+        let tight = compile_context("invoice payment", &ir, 100);
+        assert!(tight.trimmed, "100-token budget over 20 entities must trim");
+        assert!(tight.entities.len() < 20);
+        assert!(
+            tight
+                .entities
+                .iter()
+                .all(|e| e.name.starts_with("Relevant")),
+            "trimming must drop by rank, never admit irrelevant knowledge"
+        );
+    }
+
+    #[test]
+    fn ctx_min_deduplicates_duplicate_knowledge() {
+        // The same entity extracted twice (two sections), the same statement
+        // and edge repeated — the package must contain each once. The agent
+        // never pays tokens for the same knowledge twice.
+        let dup = ent("PaymentService", "Struct", vec!["processes payments"]);
+        let ir = KnowledgeIr {
+            entities: vec![
+                dup.clone(),
+                dup,
+                ent("Ledger", "Struct", vec!["payment ledger reconciliation"]),
+            ],
+            facts: vec![
+                FactCandidate {
+                    statement: "payments require idempotency keys".into(),
+                    entities: vec![],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+                FactCandidate {
+                    statement: "payments require idempotency keys".into(),
+                    entities: vec![],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+            ],
+            relations: vec![
+                rel("PaymentService", "depends_on", "Ledger"),
+                rel("PaymentService", "depends_on", "Ledger"),
+            ],
+            ..Default::default()
+        };
+        let pkg = compile_context("payments", &ir, 0);
+        assert_eq!(
+            pkg.entities
+                .iter()
+                .filter(|e| e.name == "PaymentService")
+                .count(),
+            1,
+            "duplicate entity must be packed once"
+        );
+        assert_eq!(
+            pkg.facts
+                .iter()
+                .filter(|f| f.statement.contains("idempotency"))
+                .count(),
+            1,
+            "duplicate fact must be packed once"
+        );
+        assert_eq!(
+            pkg.relations
+                .iter()
+                .filter(|r| r.subject == "PaymentService" && r.object == "Ledger")
+                .count(),
+            1,
+            "duplicate relation must be packed once"
+        );
     }
 }
