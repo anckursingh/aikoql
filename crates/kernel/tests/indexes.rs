@@ -160,7 +160,7 @@ fn i04_forget_removes_from_indexed_recall() {
     m.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
     assert_eq!(m.vectors().len(), 1);
 
-    k.forget(&alice(), &a, ForgetMode::Tombstone, None, None)
+    k.forget(alice(), &a, ForgetMode::Tombstone, None, None)
         .unwrap();
     m.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
     assert_eq!(m.vectors().len(), 0);

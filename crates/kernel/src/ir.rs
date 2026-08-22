@@ -89,6 +89,21 @@ pub enum FuseMode {
 }
 
 // ---------------------------------------------------------------------------
+// Temporal operators (v0.3 K2)
+// ---------------------------------------------------------------------------
+
+/// Temporal query operator. `AsOf`/`Historical` are transaction time —
+/// MVCC reconstruction of the versions the kernel had committed. `Between`
+/// is valid time — rows whose [valid_from, valid_to) interval overlaps the
+/// half-open [from, to) window (timeless facts overlap any window).
+#[derive(Clone, Debug, PartialEq)]
+pub enum TemporalOp {
+    AsOf(u64),
+    Between { from: u64, to: u64 },
+    Historical,
+}
+
+// ---------------------------------------------------------------------------
 // IR operators
 // ---------------------------------------------------------------------------
 
@@ -134,6 +149,11 @@ pub enum IrOp {
     },
     /// Fuse two ranked result sets into one (RRF or weighted).
     Fuse { mode: FuseMode },
+    /// v0.3 K2: temporal query operator (AS_OF / BETWEEN / HISTORICAL).
+    Temporal { op: TemporalOp },
+    /// v0.3 K1 leftover: protocol-level epistemic filter — keep rows whose
+    /// epistemic status (an extension-backed field) is in `allowed`.
+    EpistemicFilter { allowed: Vec<String> },
     /// Project specific fields from the result set.
     Project { fields: Vec<String> },
 }
@@ -197,6 +217,12 @@ impl IrPlan {
                     return Err(KError::InvalidQuery(format!(
                         "Filter at position {}: requires Scan",
                         i
+                    )))
+                }
+                IrOp::Temporal { .. } | IrOp::EpistemicFilter { .. } if !seen_scan => {
+                    return Err(KError::InvalidQuery(format!(
+                        "{:?} at position {}: requires Scan",
+                        op, i
                     )))
                 }
                 IrOp::AnnSearch { .. } | IrOp::TextSearch { .. } => {
@@ -328,6 +354,45 @@ mod tests {
                 tenant: None,
             },
         ])
+        .validate()
+        .is_err());
+    }
+
+    fn scan() -> IrOp {
+        IrOp::Scan {
+            type_name: "fact".into(),
+            subject: "a".into(),
+            roles: vec![],
+            tenant: None,
+        }
+    }
+
+    #[test]
+    fn validate_accepts_temporal_and_epistemic_ops() {
+        assert!(IrPlan::new(vec![
+            scan(),
+            IrOp::Temporal {
+                op: TemporalOp::AsOf(1_000),
+            },
+            IrOp::EpistemicFilter {
+                allowed: vec!["verified".into(), "asserted".into()],
+            },
+            IrOp::Filter { predicates: vec![] },
+        ])
+        .validate()
+        .is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_temporal_without_scan() {
+        assert!(IrPlan::new(vec![IrOp::Temporal {
+            op: TemporalOp::Historical,
+        }])
+        .validate()
+        .is_err());
+        assert!(IrPlan::new(vec![IrOp::EpistemicFilter {
+            allowed: vec!["verified".into()],
+        }])
         .validate()
         .is_err());
     }

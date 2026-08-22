@@ -371,8 +371,8 @@ mod tests {
     fn json_scalars_to_value() {
         assert_eq!(neo4j_json_to_value(&serde_json::json!(42)), Value::Int(42));
         assert_eq!(
-            neo4j_json_to_value(&serde_json::json!(3.14)),
-            Value::Float(3.14)
+            neo4j_json_to_value(&serde_json::json!(std::f64::consts::PI)),
+            Value::Float(std::f64::consts::PI)
         );
         assert_eq!(
             neo4j_json_to_value(&serde_json::json!("hi")),

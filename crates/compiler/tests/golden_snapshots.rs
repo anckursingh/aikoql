@@ -28,6 +28,8 @@ Match(
         predicates: [],
         similarity: None,
         traverse: None,
+        temporal: None,
+        epistemic: None,
         projection: Star,
     },
 )";

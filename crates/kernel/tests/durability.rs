@@ -65,11 +65,11 @@ fn d01_committed_mutations_survive_restart() {
     } // kernel + engine dropped (clean close)
 
     let k2 = kernel_at(&path, 1);
-    let ko = k2.get(&alice(), &id).unwrap();
+    let ko = k2.get(alice(), &id).unwrap();
     assert_eq!(ko.version, 2);
     assert_eq!(ko.properties.get("n"), Some(&Value::Int(42)));
     assert_eq!(k2.journal().unwrap().len(), 2);
-    assert!(k2.prove(&alice(), &id).unwrap().chain_valid);
+    assert!(k2.prove(alice(), &id).unwrap().chain_valid);
     let _ = std::fs::remove_file(&path);
 }
 
@@ -100,7 +100,7 @@ fn d02_journal_seq_and_hlc_continue_after_reopen() {
         j[1].commit_ts > j[0].commit_ts,
         "commit_ts must be monotone across restarts"
     );
-    assert!(k2.prove(&alice(), &id).unwrap().chain_valid);
+    assert!(k2.prove(alice(), &id).unwrap().chain_valid);
     let _ = std::fs::remove_file(&path);
 }
 
@@ -249,7 +249,7 @@ fn d05_syscall_surface_behaves_identically_on_durable_engine() {
         .unwrap()
         .koid;
     k.evolve(
-        &alice(),
+        alice(),
         &a,
         LifecycleState::Active,
         Origin::Human,
@@ -283,11 +283,11 @@ fn d05_syscall_surface_behaves_identically_on_durable_engine() {
     assert_eq!(res.len(), 1);
     assert_eq!(res[0].ko.koid, a);
 
-    let lin = k.trace(&alice(), &a).unwrap();
+    let lin = k.trace(alice(), &a).unwrap();
     assert_eq!(lin.versions.len(), 3);
-    k.forget(&alice(), &a, ForgetMode::Tombstone, None, None)
+    k.forget(alice(), &a, ForgetMode::Tombstone, None, None)
         .unwrap();
-    assert!(k.prove(&alice(), &a).unwrap().chain_valid);
+    assert!(k.prove(alice(), &a).unwrap().chain_valid);
     let _ = std::fs::remove_file(&path);
 }
 
@@ -336,7 +336,7 @@ fn d07_point_read_p99_gate() {
     let mut lat = Vec::with_capacity(ids.len());
     for id in &ids {
         let t = Instant::now();
-        k.get(&alice(), id).unwrap();
+        k.get(alice(), id).unwrap();
         lat.push(t.elapsed());
     }
     lat.sort();

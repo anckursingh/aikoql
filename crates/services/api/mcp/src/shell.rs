@@ -3,13 +3,14 @@
 //! Like `sqlite3` or `psql`, but for the aikoql knowledge query language.
 //! Opens a database file, accepts queries and dot-commands, prints results.
 
+use crate::engine;
 use aikoql_compiler::parser;
 use aikoql_graph::*;
 use aikoql_kernel::ir::IrPlan;
 use aikoql_kernel::knowledge::kom::*;
 use aikoql_kernel::knowledge::scoring::ko_text;
 use aikoql_kernel::transaction::kernel::{Kernel, RememberRequest, Subject};
-use aikoql_kernel::{MemoryEngine, Origin, RedbEngine, ReferentialPolicy, SystemClock};
+use aikoql_kernel::{MemoryEngine, Origin, ReferentialPolicy, SystemClock};
 use aikoql_runtime::Interpreter;
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
@@ -18,8 +19,15 @@ use std::sync::Arc;
 
 pub fn run_shell(db_path: &str, tenant: Option<&str>) {
     let tenant_opt: Option<String> = tenant.map(String::from);
-    let engine: Arc<dyn aikoql_kernel::StorageEngine> = if db_path == ":memory:" {
-        Arc::new(MemoryEngine::new())
+    let kernel = Arc::new(if db_path == ":memory:" {
+        let engine: Arc<dyn aikoql_kernel::StorageEngine> = Arc::new(MemoryEngine::new());
+        match Kernel::open(engine, Arc::new(SystemClock), 0xCAFE) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("open kernel: {}", e);
+                std::process::exit(1);
+            }
+        }
     } else {
         let path = Path::new(db_path);
         if let Some(parent) = path.parent() {
@@ -27,20 +35,12 @@ pub fn run_shell(db_path: &str, tenant: Option<&str>) {
                 let _ = std::fs::create_dir_all(parent);
             }
         }
-        Arc::new(match RedbEngine::open(db_path) {
+        match engine::open_kernel_auto(db_path) {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("open database: {}", e);
+                eprintln!("open kernel: {}", e);
                 std::process::exit(1);
             }
-        })
-    };
-
-    let kernel = Arc::new(match Kernel::open(engine, Arc::new(SystemClock), 0xCAFE) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("open kernel: {}", e);
-            std::process::exit(1);
         }
     });
 

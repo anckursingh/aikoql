@@ -39,7 +39,46 @@ pub(crate) fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Resul
         300,
         semantic.as_ref(),
     );
-    let md = aikoql_ingestion::render_context_markdown(&pkg);
+    let mut md = aikoql_ingestion::render_context_markdown(&pkg);
+
+    // v0.3 K5: append matched agent experiences — prior runs the caller is
+    // allowed to read, gated by reuse conditions and ranked by confidence.
+    // Bounded by `limit`; the IR budget governs the core package.
+    let experiences = k
+        .match_experiences(subject_of(args), task, 5)
+        .map_err(|e| e.to_string())?;
+    let mut experience_json = Vec::new();
+    if !experiences.is_empty() {
+        let mut section = String::from("\n## Previous Agent Experience\n\n");
+        for (ko, score) in &experiences {
+            let txt = |key: &str| match ko.properties.get(key) {
+                Some(Value::Text(s)) => s.clone(),
+                _ => String::new(),
+            };
+            let confidence = ko.confidence_context().map(|c| c.score).unwrap_or(0.0);
+            section.push_str(&format!(
+                "- **{}** (confidence {:.2}, reuse score {:.2})\n  - Goal: {}\n  - Action: {}\n  - Outcome: {}\n  - Lesson: {}\n",
+                txt("actor"),
+                confidence,
+                score,
+                txt("goal"),
+                txt("action"),
+                txt("outcome"),
+                txt("lesson"),
+            ));
+            experience_json.push(json!({
+                "koid": ko.koid.to_hex(),
+                "score": score,
+                "actor": txt("actor"),
+                "goal": txt("goal"),
+                "action": txt("action"),
+                "outcome": txt("outcome"),
+                "lesson": txt("lesson"),
+                "confidence": confidence
+            }));
+        }
+        md.push_str(&section);
+    }
 
     let pkg_json = serde_json::to_value(&pkg).map_err(|e| format!("serialize package: {}", e))?;
     Ok(serde_json::json!({
@@ -48,6 +87,7 @@ pub(crate) fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Resul
         "koid": hex,
         "task": task,
         "token_budget": token_budget,
+        "experiences": experience_json,
     }))
 }
 
@@ -273,9 +313,12 @@ pub(crate) fn get_ir_for_koid(
             aikoql_ingestion::compile_rust_file(&artifact_path)
                 .map_err(|e| format!("rust compile: {}", e))?
         } else {
-            let doc = aikoql_ingestion::extract_document(&artifact_path, &mime_type)
-                .map_err(|e| format!("extract: {}", e))?;
-            let cr = aikoql_ingestion::compile_document_mock(&doc, &[]);
+            let asset_dir = format!("{}.assets", artifact_path);
+            let doc =
+                aikoql_ingestion::extract_document(&artifact_path, &mime_type, Some(&asset_dir))
+                    .map_err(|e| format!("extract: {}", e))?;
+            let cr =
+                aikoql_ingestion::compile_document_mock_with_assets(&doc, &[], Some(&asset_dir));
             let cr_v = serde_json::to_value(&cr).map_err(|e| format!("serialize facts: {}", e))?;
             aikoql_ingestion::KnowledgeIr {
                 facts: serde_json::from_value(cr_v).map_err(|e| format!("decode facts: {}", e))?,

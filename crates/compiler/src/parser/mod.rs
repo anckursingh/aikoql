@@ -200,18 +200,48 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
     // Scan.
     ops.push(scan_op(&m.entity, subject));
 
+    // v0.3 K2: temporal + epistemic operators run right after Scan, before
+    // Filter — AS_OF/HISTORICAL reconstruct versions, and the property
+    // predicates must apply to the reconstructed rows, not the heads.
+    match &m.temporal {
+        Some(ast::TemporalClause::AsOf(at)) => ops.push(IrOp::Temporal {
+            op: TemporalOp::AsOf(*at),
+        }),
+        Some(ast::TemporalClause::Between { from, to }) => ops.push(IrOp::Temporal {
+            op: TemporalOp::Between {
+                from: *from,
+                to: *to,
+            },
+        }),
+        Some(ast::TemporalClause::Historical) => ops.push(IrOp::Temporal {
+            op: TemporalOp::Historical,
+        }),
+        None => {}
+    }
+    if let Some(ref ep) = m.epistemic {
+        ops.push(IrOp::EpistemicFilter {
+            allowed: ep.allowed.clone(),
+        });
+    }
+
     // Predicates → Filter.
     let flat = flatten_predicates(&m.predicates);
     if !flat.is_empty() {
         ops.push(IrOp::Filter { predicates: flat });
     }
 
+    // H2 strategy choice: temporal/epistemic queries are answered
+    // relationally — no vector search, no fusion. SIMILAR text still
+    // applies as TextSearch (BM25 when requested).
+    let relational_first = m.temporal.is_some() || m.epistemic.is_some();
+
     // SIMILAR → TextSearch (default Jaccard), optionally with BM25 scoring.
     // USING EMBEDDING → AnnSearch (vector ANN).
     // Both → TextSearch + AnnSearch + Fuse (hybrid retrieval).
     if let Some(ref sim) = m.similarity {
         let use_bm25 = matches!(sim.score, Some(ast::ScoringMethod::Bm25));
-        let use_embedding = matches!(sim.using, Some(ast::UsingMethod::Embedding));
+        let use_embedding =
+            matches!(sim.using, Some(ast::UsingMethod::Embedding)) && !relational_first;
 
         if use_embedding {
             ops.push(IrOp::AnnSearch {
@@ -264,7 +294,14 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
         }
     }
 
-    let plan = IrPlan::new(ops).with_description(format!("MATCH {}", m.entity));
+    let plan = IrPlan::new(ops).with_description(if relational_first {
+        format!(
+            "MATCH {} — strategy: relational (vector search skipped)",
+            m.entity
+        )
+    } else {
+        format!("MATCH {}", m.entity)
+    });
     plan.validate()
         .map_err(|e| format!("AIKOQL1014: conflicting clauses — {}", e))?;
     Ok(plan)
@@ -368,6 +405,82 @@ mod tests {
             }
             _ => panic!("expected Traverse as second op"),
         }
+    }
+
+    #[test]
+    fn compile_match_as_of_lowers_to_temporal_op() {
+        let plan = compile("MATCH Person AS_OF 1735689600000 RETURN *").unwrap();
+        // Scan + Temporal(AsOf)
+        assert_eq!(plan.operators.len(), 2);
+        match &plan.operators[1] {
+            IrOp::Temporal { op } => assert_eq!(*op, TemporalOp::AsOf(1_735_689_600_000)),
+            _ => panic!("expected Temporal op"),
+        }
+    }
+
+    #[test]
+    fn compile_match_between_with_iso_strings() {
+        let plan =
+            compile(r#"MATCH Person BETWEEN "2026-01-01" AND "2026-02-01" RETURN *"#).unwrap();
+        match &plan.operators[1] {
+            IrOp::Temporal { op } => assert_eq!(
+                *op,
+                TemporalOp::Between {
+                    from: 1_767_225_600_000, // 2026-01-01T00:00:00Z
+                    to: 1_769_904_000_000,   // 2026-02-01T00:00:00Z
+                }
+            ),
+            _ => panic!("expected Temporal op"),
+        }
+    }
+
+    #[test]
+    fn compile_match_historical_and_epistemic() {
+        let plan = compile("MATCH Fact HISTORICAL EPISTEMIC verified, asserted RETURN *").unwrap();
+        // Scan + Temporal(Historical) + EpistemicFilter
+        assert_eq!(plan.operators.len(), 3);
+        assert!(matches!(
+            &plan.operators[1],
+            IrOp::Temporal {
+                op: TemporalOp::Historical
+            }
+        ));
+        assert!(matches!(&plan.operators[2], IrOp::EpistemicFilter { .. }));
+        assert!(plan.description.as_deref().unwrap().contains("relational"));
+    }
+
+    #[test]
+    fn temporal_query_skips_vector_search_h2() {
+        // H2: temporal queries are relational — USING EMBEDDING degrades to
+        // text search; no AnnSearch, no Fuse.
+        let plan =
+            compile("MATCH Fact SIMILAR TO \"messaging\" USING EMBEDDING AS_OF 1000 RETURN *")
+                .unwrap();
+        for op in &plan.operators {
+            assert!(
+                !matches!(op, IrOp::AnnSearch { .. } | IrOp::Fuse { .. }),
+                "temporal query must not plan vector search: {:?}",
+                op
+            );
+        }
+        assert!(plan
+            .operators
+            .iter()
+            .any(|op| matches!(op, IrOp::TextSearch { .. })));
+        assert!(plan
+            .description
+            .as_deref()
+            .unwrap()
+            .contains("vector search skipped"));
+    }
+
+    #[test]
+    fn temporal_clause_placed_before_filter() {
+        // WHERE must apply to reconstructed versions, not heads — the
+        // temporal op lands before Filter in the operator pipeline.
+        let plan = compile("MATCH Fact WHERE severity == \"high\" AS_OF 1000 RETURN *").unwrap();
+        assert!(matches!(plan.operators[1], IrOp::Temporal { .. }));
+        assert!(matches!(plan.operators[2], IrOp::Filter { .. }));
     }
 
     #[test]

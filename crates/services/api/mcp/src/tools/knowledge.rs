@@ -95,6 +95,9 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     };
     req.properties = parse_properties(args)?;
     req.semantic = parse_semantic(args)?;
+    // v0.3 K1: extensions may be declared at the protocol boundary
+    // (epistemic status, authority, scope, canonical evidence).
+    req.extensions = parse_extensions(args)?;
     // Parse optional relationships array.
     if let Some(rels) = args.get("relationships").and_then(|r| r.as_array()) {
         for rel in rels {
@@ -177,10 +180,341 @@ pub(crate) fn tool_evolve(k: &Kernel, args: &J) -> Result<J, String> {
     }))
 }
 
+pub(crate) fn tool_derive(k: &Kernel, args: &J) -> Result<J, String> {
+    // v0.3 K3: first-class derivation through the protocol — premises are
+    // validated, the derivation record + DERIVED_FROM edges are stamped by
+    // the kernel (anti-CRUD-cosplay: this is not a bare remember()).
+    let subject = subject_of(args);
+    let type_name = args
+        .get("type_name")
+        .and_then(|t| t.as_str())
+        .ok_or("missing argument: type_name")?;
+    let mut req = DeriveRequest::new(subject.clone(), type_name);
+    req.properties = parse_properties(args)?;
+    if let Some(srcs) = args.get("sources").and_then(|s| s.as_array()) {
+        for s in srcs {
+            let hex = s.as_str().ok_or("sources must be KOID hex strings")?;
+            req.sources
+                .push(KOID::from_hex(hex).map_err(|e| e.to_string())?);
+        }
+    }
+    req.operation = args
+        .get("operation")
+        .and_then(|o| o.as_str())
+        .unwrap_or("derivation")
+        .into();
+    // Review P1-9: the provenance actor is the authenticated session
+    // identity — args arrive session-injected (dispatcher), so `subject` IS
+    // who performed the derivation. A caller-supplied "actor" arg cannot
+    // spoof provenance.
+    req.actor = subject.name;
+    req.model = args.get("model").and_then(|m| m.as_str()).map(String::from);
+    req.reason = args
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .map(String::from);
+    req.evidence = parse_evidence(args)?;
+    // Review P1-7: the protocol boundary validates the confidence object —
+    // out-of-range scores are rejected here, not trusted to the kernel.
+    if let Some(c) = args.get("confidence").and_then(|c| c.as_object()) {
+        req.confidence = Some(
+            ConfidenceContext::new(
+                c.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0) as f32,
+                c.get("confirmations").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
+                c.get("last_verified").and_then(|v| v.as_u64()),
+            )
+            .map_err(|e| e.to_string())?,
+        );
+    }
+    let r = k.derive(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts
+    }))
+}
+
 pub(crate) fn tool_verify(k: &Kernel, args: &J) -> Result<J, String> {
     k.verify(subject_of(args), &koid_of(args)?, parse_action(args)?)
         .map_err(|e| e.to_string())?;
     Ok(json!({"allowed": true}))
+}
+
+// ---------------------------------------------------------------------------
+// v0.3 K4 — knowledge transactions over MCP. Each tool is a first-class
+// kernel op (anti-CRUD-cosplay): evidence is mandatory, provenance is
+// stamped, conflict resolution never silently picks a side.
+// ---------------------------------------------------------------------------
+
+pub(crate) fn tool_observe(k: &Kernel, args: &J) -> Result<J, String> {
+    let type_name = args
+        .get("type_name")
+        .and_then(|t| t.as_str())
+        .ok_or("missing argument: type_name")?;
+    let mut req = ObservationRequest::new(subject_of(args), type_name);
+    req.properties = parse_properties(args)?;
+    req.evidence = parse_evidence(args)?;
+    req.valid_from = args.get("valid_from").and_then(|v| v.as_u64());
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.observe(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts
+    }))
+}
+
+pub(crate) fn tool_assert_knowledge(k: &Kernel, args: &J) -> Result<J, String> {
+    let type_name = args
+        .get("type_name")
+        .and_then(|t| t.as_str())
+        .ok_or("missing argument: type_name")?;
+    let mut req = AssertionRequest::new(subject_of(args), type_name);
+    req.properties = parse_properties(args)?;
+    req.authority = args
+        .get("authority")
+        .and_then(|a| a.as_str())
+        .map(String::from);
+    req.evidence = parse_evidence(args)?;
+    req.valid_from = args.get("valid_from").and_then(|v| v.as_u64());
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.assert_knowledge(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts
+    }))
+}
+
+pub(crate) fn tool_verify_knowledge(k: &Kernel, args: &J) -> Result<J, String> {
+    let mut req = VerificationRequest::new(subject_of(args), koid_of(args)?);
+    req.evidence = parse_evidence(args)?;
+    req.confidence = args
+        .get("confidence")
+        .and_then(|c| c.as_f64())
+        .map(|c| c as f32);
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.verify_knowledge(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts,
+        "status": r.status.as_str(),
+        "confirmations": r.confirmations,
+        "last_verified": r.last_verified
+    }))
+}
+
+pub(crate) fn tool_contradict(k: &Kernel, args: &J) -> Result<J, String> {
+    let claim_hex = args
+        .get("claim")
+        .and_then(|c| c.as_str())
+        .ok_or("missing argument: claim")?;
+    let mut req = ContradictionRequest::new(
+        subject_of(args),
+        KOID::from_hex(claim_hex).map_err(|e| e.to_string())?,
+    );
+    if let Some(t) = args.get("counter_type").and_then(|t| t.as_str()) {
+        req.counter_type = t.into();
+    }
+    req.counter_props = parse_properties(args)?;
+    req.authority = args
+        .get("authority")
+        .and_then(|a| a.as_str())
+        .map(String::from);
+    req.evidence = parse_evidence(args)?;
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.contradict(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "counter": r.counter.to_hex(),
+        "conflict": r.conflict.to_hex()
+    }))
+}
+
+pub(crate) fn tool_supersede(k: &Kernel, args: &J) -> Result<J, String> {
+    let old_hex = args
+        .get("old")
+        .and_then(|o| o.as_str())
+        .ok_or("missing argument: old")?;
+    // An existing successor (superseded_by) supersedes without creating a new
+    // generation; type_name/properties are only needed for the create path.
+    let superseded_by = match args.get("superseded_by").and_then(|s| s.as_str()) {
+        Some(hex) => Some(KOID::from_hex(hex).map_err(|e| e.to_string())?),
+        None => None,
+    };
+    let type_name = match (
+        superseded_by,
+        args.get("type_name").and_then(|t| t.as_str()),
+    ) {
+        (None, Some(t)) => t,
+        (None, None) => return Err("missing argument: type_name".into()),
+        (Some(_), t) => t.unwrap_or("Claim"),
+    };
+    let mut req = SupersedeRequest::new(
+        subject_of(args),
+        KOID::from_hex(old_hex).map_err(|e| e.to_string())?,
+        type_name,
+    );
+    req.superseded_by = superseded_by;
+    req.properties = parse_properties(args)?;
+    req.evidence = parse_evidence(args)?;
+    req.reason = args
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .map(String::from);
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.supersede(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "old": r.old.to_hex(),
+        "new": r.new.to_hex(),
+        "invalidated_dependents": r
+            .invalidated_dependents
+            .iter()
+            .map(|d| d.to_hex())
+            .collect::<Vec<_>>(),
+        // Review P1-5: the sweep outcome is surfaced — a partial sweep is
+        // visible, never silent.
+        "completed": r.completed,
+        "failed": r
+            .failed
+            .iter()
+            .map(|f| json!({"koid": f.koid.to_hex(), "error": f.error}))
+            .collect::<Vec<_>>()
+    }))
+}
+
+pub(crate) fn tool_merge(k: &Kernel, args: &J) -> Result<J, String> {
+    let type_name = args
+        .get("type_name")
+        .and_then(|t| t.as_str())
+        .ok_or("missing argument: type_name")?;
+    let sources = args
+        .get("sources")
+        .and_then(|s| s.as_array())
+        .ok_or("missing argument: sources")?
+        .iter()
+        .map(|s| {
+            let hex = s.as_str().ok_or("sources must be KOID hex strings")?;
+            KOID::from_hex(hex).map_err(|e| e.to_string())
+        })
+        .collect::<Result<Vec<KOID>, String>>()?;
+    let mut req = MergeRequest::new(subject_of(args), type_name, sources);
+    req.properties = match args.get("properties").and_then(|p| p.as_object()) {
+        Some(_) => Some(parse_properties(args)?),
+        None => None,
+    };
+    req.strategy = match args
+        .get("strategy")
+        .and_then(|s| s.as_str())
+        .unwrap_or("manual")
+    {
+        "manual" => MergeStrategy::Manual,
+        "newest_wins" => MergeStrategy::NewestWins,
+        "authority_wins" => MergeStrategy::AuthorityWins,
+        other => return Err(format!("invalid merge strategy: {}", other)),
+    };
+    req.evidence = parse_evidence(args)?;
+    req.reason = args
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .map(String::from);
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.merge(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts
+    }))
+}
+
+pub(crate) fn tool_invalidate(k: &Kernel, args: &J) -> Result<J, String> {
+    let mut req = InvalidationRequest::new(subject_of(args), koid_of(args)?);
+    req.evidence = parse_evidence(args)?;
+    req.reason = args
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .map(String::from);
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.invalidate(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "invalidated": r.invalidated.iter().map(|k| k.to_hex()).collect::<Vec<_>>(),
+        // Review P1-5: the sweep outcome is surfaced — a partial sweep is
+        // visible, never silent.
+        "completed": r.completed,
+        "failed": r
+            .failed
+            .iter()
+            .map(|f| json!({"koid": f.koid.to_hex(), "error": f.error}))
+            .collect::<Vec<_>>()
+    }))
+}
+
+pub(crate) fn tool_resolve_conflict(k: &Kernel, args: &J) -> Result<J, String> {
+    let decision = args
+        .get("decision")
+        .and_then(|d| d.as_str())
+        .ok_or("missing argument: decision")?;
+    let decision = ConflictResolution::from_str(decision)
+        .ok_or_else(|| format!("unknown resolution decision: {}", decision))?;
+    let rationale = args
+        .get("rationale")
+        .and_then(|r| r.as_str())
+        .ok_or("missing argument: rationale")?;
+    let replacement = match args.get("replacement").and_then(|r| r.as_str()) {
+        Some(hex) => Some(KOID::from_hex(hex).map_err(|e| e.to_string())?),
+        None => None,
+    };
+    let out = k
+        .resolve_conflict(ConflictResolutionRequest {
+            context: subject_of(args).into(),
+            conflict: koid_of(args)?,
+            decision,
+            rationale: rationale.into(),
+            replacement,
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "conflict": out.conflict.to_hex(),
+        "decision": out.decision.as_str(),
+        "effects": out
+            .effects
+            .iter()
+            .map(|(k, st)| json!({"koid": k.to_hex(), "status": st.as_str()}))
+            .collect::<Vec<_>>(),
+        // Review P1-5: the replacement sweep outcome is surfaced.
+        "completed": out.completed,
+        "failed": out
+            .failed
+            .iter()
+            .map(|f| json!({"koid": f.koid.to_hex(), "error": f.error}))
+            .collect::<Vec<_>>()
+    }))
+}
+
+pub(crate) fn tool_resolve_conflict_by_authority(k: &Kernel, args: &J) -> Result<J, String> {
+    let rationale = args
+        .get("rationale")
+        .and_then(|r| r.as_str())
+        .ok_or("missing argument: rationale")?;
+    let out = k
+        .resolve_conflict_by_authority(subject_of(args), koid_of(args)?, rationale.into())
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "conflict": out.conflict.to_hex(),
+        "decision": out.decision.as_str(),
+        "effects": out
+            .effects
+            .iter()
+            .map(|(k, st)| json!({"koid": k.to_hex(), "status": st.as_str()}))
+            .collect::<Vec<_>>(),
+        // Review P1-5: the replacement sweep outcome is surfaced.
+        "completed": out.completed,
+        "failed": out
+            .failed
+            .iter()
+            .map(|f| json!({"koid": f.koid.to_hex(), "error": f.error}))
+            .collect::<Vec<_>>()
+    }))
 }
 
 pub(crate) fn tool_get(k: &Kernel, args: &J) -> Result<J, String> {
@@ -188,4 +522,96 @@ pub(crate) fn tool_get(k: &Kernel, args: &J) -> Result<J, String> {
         .get(subject_of(args), &koid_of(args)?)
         .map_err(|e| e.to_string())?;
     Ok(ko_json(&ko))
+}
+
+// ---------------------------------------------------------------------------
+// v0.3 K5 — Agent Experience
+// ---------------------------------------------------------------------------
+
+fn string_array(args: &J, key: &str) -> Vec<String> {
+    args.get(key)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn tool_record_experience(k: &Kernel, args: &J) -> Result<J, String> {
+    let goal = args
+        .get("goal")
+        .and_then(|g| g.as_str())
+        .ok_or("missing argument: goal")?;
+    let action = args
+        .get("action")
+        .and_then(|a| a.as_str())
+        .ok_or("missing argument: action")?;
+    let outcome = args
+        .get("outcome")
+        .and_then(|o| o.as_str())
+        .ok_or("missing argument: outcome")?;
+    let subject = subject_of(args);
+    let mut req = ExperienceRequest::new(subject.clone(), goal, action, outcome);
+    // Review P1-9: the provenance actor is the authenticated session
+    // identity (args arrive session-injected); a caller-supplied "actor"
+    // arg cannot spoof who performed the run.
+    req.actor = subject.name;
+    req.preconditions = string_array(args, "preconditions");
+    req.causal_explanation = args
+        .get("causal_explanation")
+        .and_then(|c| c.as_str())
+        .map(String::from);
+    req.lesson = args
+        .get("lesson")
+        .and_then(|l| l.as_str())
+        .map(String::from);
+    req.reuse_conditions = string_array(args, "reuse_conditions");
+    req.evidence = parse_evidence(args)?;
+    req.confidence = args
+        .get("confidence")
+        .and_then(|c| c.as_f64())
+        .map(|c| c as f32);
+    req.ttl_seconds = args.get("ttl_seconds").and_then(|t| t.as_u64());
+    req.shared_with = string_array(args, "shared_with");
+    req.note = args.get("note").and_then(|n| n.as_str()).map(String::from);
+    let r = k.record_experience(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "commit_ts": r.commit_ts
+    }))
+}
+
+pub(crate) fn tool_find_experiences(k: &Kernel, args: &J) -> Result<J, String> {
+    let task = args
+        .get("task")
+        .and_then(|t| t.as_str())
+        .ok_or("missing argument: task")?;
+    let limit = args
+        .get("limit")
+        .and_then(|l| l.as_u64())
+        .unwrap_or(5)
+        .min(50) as usize;
+    let matches = k
+        .match_experiences(subject_of(args), task, limit)
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "task": task,
+        "matches": matches
+            .iter()
+            .map(|(ko, score)| json!({
+                "koid": ko.koid.to_hex(),
+                "score": score,
+                "actor": ko.properties.get("actor").map(value_to_json),
+                "goal": ko.properties.get("goal").map(value_to_json),
+                "action": ko.properties.get("action").map(value_to_json),
+                "outcome": ko.properties.get("outcome").map(value_to_json),
+                "lesson": ko.properties.get("lesson").map(value_to_json),
+                "confidence": ko.confidence_context().map(|c| c.score)
+            }))
+            .collect::<Vec<_>>()
+    }))
 }

@@ -1,0 +1,2304 @@
+{
+  "ast": {
+    "document_id": null,
+    "page_count": 2,
+    "pages": [
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Table",
+            "children": [
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Employee Name"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Age"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Alice Smith"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "30"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Bob Johnson"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "45"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              }
+            ],
+            "confidence": null,
+            "node_id": null,
+            "payload": {
+              "Table": {
+                "cells": [
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r1-0",
+                    "row_id": "r1",
+                    "text": "Alice Smith",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r1-1",
+                    "row_id": "r1",
+                    "text": "30",
+                    "value": {
+                      "Integer": 30
+                    }
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r2-0",
+                    "row_id": "r2",
+                    "text": "Bob Johnson",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r2-1",
+                    "row_id": "r2",
+                    "text": "45",
+                    "value": {
+                      "Integer": 45
+                    }
+                  }
+                ],
+                "footnotes": [],
+                "headers": [
+                  {
+                    "id": "h0",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Employee Name"
+                  },
+                  {
+                    "id": "h1",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Age"
+                  }
+                ],
+                "rows": [
+                  {
+                    "id": "r1",
+                    "index": 1
+                  },
+                  {
+                    "id": "r2",
+                    "index": 2
+                  }
+                ]
+              }
+            },
+            "text": null
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      },
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Table",
+            "children": [
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Region"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Revenue (USD)"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "North America"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "1200"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "South America"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "800"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              }
+            ],
+            "confidence": null,
+            "node_id": null,
+            "payload": {
+              "Table": {
+                "cells": [
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r1-0",
+                    "row_id": "r1",
+                    "text": "North America",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r1-1",
+                    "row_id": "r1",
+                    "text": "1200",
+                    "value": {
+                      "Integer": 1200
+                    }
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r2-0",
+                    "row_id": "r2",
+                    "text": "South America",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r2-1",
+                    "row_id": "r2",
+                    "text": "800",
+                    "value": {
+                      "Integer": 800
+                    }
+                  }
+                ],
+                "footnotes": [],
+                "headers": [
+                  {
+                    "id": "h0",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Region"
+                  },
+                  {
+                    "id": "h1",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Revenue (USD)"
+                  }
+                ],
+                "rows": [
+                  {
+                    "id": "r1",
+                    "index": 1
+                  },
+                  {
+                    "id": "r2",
+                    "index": 2
+                  }
+                ]
+              }
+            },
+            "text": null
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      }
+    ],
+    "source_type": "native"
+  },
+  "compilation": {
+    "commit_plan": {
+      "actions": [
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Employee Name",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Age Alice",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Alice Smith",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Thing",
+            "entity_name": "Age Alice Smith",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Thing"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Bob Johnson",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Revenue USD",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 2,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "USD North",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 2,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "North America",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 2,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Thing",
+            "entity_name": "Revenue USD North",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 2,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Thing"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Thing",
+            "entity_name": "USD North America",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 2,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Thing"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "South America",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 2,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        }
+      ],
+      "document_id": null,
+      "stats": {
+        "creates": 11,
+        "needs_review": 0,
+        "skips": 0,
+        "total_actions": 11,
+        "total_conflicts": 0,
+        "updates": 0
+      }
+    },
+    "embedded_chunks": [
+      {
+        "chunk": {
+          "char_count": 53,
+          "chunk_id": "unknown/chunk-0000",
+          "entity_mentions": [
+            "Alice Smith",
+            "Bob Johnson",
+            "Employee Name"
+          ],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 0,
+            "chunk_index": 0,
+            "end_page": 1,
+            "start_page": 1
+          },
+          "structure": {
+            "heading_path": [],
+            "section_chunk_index": 0,
+            "section_title": null,
+            "source_type": "table"
+          },
+          "text": "Employee Name | Age\nAlice Smith | 30\nBob Johnson | 45"
+        },
+        "embedding": [
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.1111111119389534,
+          0.1111111119389534,
+          0.0,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.0,
+          0.2222222238779068,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.2222222238779068,
+          0.0,
+          0.1111111119389534,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.1111111119389534,
+          0.1111111119389534,
+          0.1111111119389534,
+          0.0,
+          0.1111111119389534,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.3333333432674408,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.0,
+          0.1111111119389534,
+          0.1111111119389534,
+          0.0,
+          0.1111111119389534,
+          0.0,
+          0.1111111119389534,
+          0.2222222238779068,
+          0.1111111119389534,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.0,
+          0.2222222238779068,
+          0.0,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.2222222238779068,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.2222222238779068,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.3333333432674408,
+          0.1111111119389534,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1111111119389534,
+          0.2222222238779068,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "embedding_provider": "mock-char-ngram"
+      },
+      {
+        "chunk": {
+          "char_count": 63,
+          "chunk_id": "unknown/chunk-0001",
+          "entity_mentions": [
+            "North America",
+            "South America"
+          ],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 2,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 53,
+            "chunk_index": 1,
+            "end_page": 2,
+            "start_page": 2
+          },
+          "structure": {
+            "heading_path": [],
+            "section_chunk_index": 0,
+            "section_title": null,
+            "source_type": "table"
+          },
+          "text": "Region | Revenue (USD)\nNorth America | 1200\nSouth America | 800"
+        },
+        "embedding": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.08481889218091965,
+          0.1696377843618393,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.08481889218091965,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.25445666909217834,
+          0.08481889218091965,
+          0.0,
+          0.0,
+          0.0,
+          0.25445666909217834,
+          0.25445666909217834,
+          0.0,
+          0.0,
+          0.3392755687236786,
+          0.0,
+          0.0,
+          0.0,
+          0.1696377843618393,
+          0.0,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.25445666909217834,
+          0.08481889218091965,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.1696377843618393,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.0,
+          0.0,
+          0.25445666909217834,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.08481889218091965,
+          0.25445666909217834,
+          0.08481889218091965,
+          0.0,
+          0.08481889218091965,
+          0.25445666909217834,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1696377843618393,
+          0.08481889218091965,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.0,
+          0.0,
+          0.25445666909217834,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.08481889218091965,
+          0.25445666909217834,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08481889218091965,
+          0.0,
+          0.0
+        ],
+        "embedding_provider": "mock-char-ngram"
+      }
+    ],
+    "evidence_trail": {
+      "document_id": null,
+      "nodes": [
+        {
+          "entities": [
+            "Employee Name",
+            "Age Alice",
+            "Alice Smith",
+            "Age Alice Smith",
+            "Bob Johnson",
+            "Revenue USD",
+            "USD North",
+            "North America",
+            "Revenue USD North",
+            "USD North America",
+            "South America"
+          ],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "step": "Extracted 11 entities from document text"
+        },
+        {
+          "entities": [],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h0",
+                  "table_id": "frag-p1-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p1-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h0",
+                  "table_id": "frag-p1-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p1-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h0",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h0",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            }
+          ],
+          "step": "Extracted 8 facts from document structure"
+        },
+        {
+          "entities": [],
+          "phase": "D5-ontology",
+          "source": [],
+          "step": "Discovered 2 classes, 2 properties, 0 relationships"
+        },
+        {
+          "entities": [
+            "Employee Name",
+            "Age Alice",
+            "Alice Smith",
+            "Age Alice Smith",
+            "Bob Johnson",
+            "Revenue USD",
+            "USD North",
+            "North America",
+            "Revenue USD North",
+            "USD North America",
+            "South America"
+          ],
+          "phase": "D6-resolution",
+          "source": [],
+          "step": "Resolved 11 entities: 0 matched, 0 ambiguous, 11 unmatched"
+        },
+        {
+          "entities": [
+            "Employee Name",
+            "Age Alice",
+            "Alice Smith",
+            "Age Alice Smith",
+            "Bob Johnson",
+            "Revenue USD",
+            "USD North",
+            "North America",
+            "Revenue USD North",
+            "USD North America",
+            "South America"
+          ],
+          "phase": "D7-reconcile",
+          "source": [],
+          "step": "Reconciled: 11 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+        }
+      ]
+    },
+    "fragments": [
+      {
+        "confidence": 1.0,
+        "content": {
+          "Table": {
+            "cells": [
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r1-0",
+                "row_id": "r1",
+                "text": "Alice Smith",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r1-1",
+                "row_id": "r1",
+                "text": "30",
+                "value": {
+                  "Integer": 30
+                }
+              },
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r2-0",
+                "row_id": "r2",
+                "text": "Bob Johnson",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r2-1",
+                "row_id": "r2",
+                "text": "45",
+                "value": {
+                  "Integer": 45
+                }
+              }
+            ],
+            "footnotes": [],
+            "headers": [
+              {
+                "id": "h0",
+                "level": 1,
+                "parent_id": null,
+                "text": "Employee Name"
+              },
+              {
+                "id": "h1",
+                "level": 1,
+                "parent_id": null,
+                "text": "Age"
+              }
+            ],
+            "rows": [
+              {
+                "id": "r1",
+                "index": 1
+              },
+              {
+                "id": "r2",
+                "index": 2
+              }
+            ]
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [],
+          "neighboring_fragments": [
+            "frag-p2-b0"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b0",
+        "modality": "Table",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Table": {
+            "cells": [
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r1-0",
+                "row_id": "r1",
+                "text": "North America",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r1-1",
+                "row_id": "r1",
+                "text": "1200",
+                "value": {
+                  "Integer": 1200
+                }
+              },
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r2-0",
+                "row_id": "r2",
+                "text": "South America",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r2-1",
+                "row_id": "r2",
+                "text": "800",
+                "value": {
+                  "Integer": 800
+                }
+              }
+            ],
+            "footnotes": [],
+            "headers": [
+              {
+                "id": "h0",
+                "level": 1,
+                "parent_id": null,
+                "text": "Region"
+              },
+              {
+                "id": "h1",
+                "level": 1,
+                "parent_id": null,
+                "text": "Revenue (USD)"
+              }
+            ],
+            "rows": [
+              {
+                "id": "r1",
+                "index": 1
+              },
+              {
+                "id": "r2",
+                "index": 2
+              }
+            ]
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [],
+          "neighboring_fragments": [
+            "frag-p1-b0"
+          ],
+          "page": 2,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 2,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p2-b0",
+        "modality": "Table",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 2,
+          "start_offset": null
+        }
+      }
+    ],
+    "ir": {
+      "content_trust": null,
+      "document_id": null,
+      "entities": [
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Employee Name | Age\nAlice Smith | 30\nBob Johnson | 45"
+          ],
+          "name": "Employee Name",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Age Alice"
+          ],
+          "name": "Age Alice",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Employee Name | Age\nAlice Smith | 30\nBob Johnson | 45"
+          ],
+          "name": "Alice Smith",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Age Alice Smith"
+          ],
+          "name": "Age Alice Smith",
+          "type_hint": "Thing"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Employee Name | Age\nAlice Smith | 30\nBob Johnson | 45"
+          ],
+          "name": "Bob Johnson",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "mentions": [
+            "Revenue USD"
+          ],
+          "name": "Revenue USD",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "mentions": [
+            "USD North"
+          ],
+          "name": "USD North",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "mentions": [
+            "Region | Revenue (USD)\nNorth America | 1200\nSouth America | 800"
+          ],
+          "name": "North America",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "mentions": [
+            "Revenue USD North"
+          ],
+          "name": "Revenue USD North",
+          "type_hint": "Thing"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "mentions": [
+            "USD North America"
+          ],
+          "name": "USD North America",
+          "type_hint": "Thing"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "mentions": [
+            "Region | Revenue (USD)\nNorth America | 1200\nSouth America | 800"
+          ],
+          "name": "South America",
+          "type_hint": "Person"
+        }
+      ],
+      "events": [],
+      "extractor": "mock",
+      "facts": [
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h0",
+                "table_id": "frag-p1-b0"
+              }
+            }
+          },
+          "statement": "Employee Name: Alice Smith"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h1",
+                "table_id": "frag-p1-b0"
+              }
+            }
+          },
+          "statement": "Age: 30"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h0",
+                "table_id": "frag-p1-b0"
+              }
+            }
+          },
+          "statement": "Employee Name: Bob Johnson"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h1",
+                "table_id": "frag-p1-b0"
+              }
+            }
+          },
+          "statement": "Age: 45"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h0",
+                "table_id": "frag-p2-b0"
+              }
+            }
+          },
+          "statement": "Region: North America"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h1",
+                "table_id": "frag-p2-b0"
+              }
+            }
+          },
+          "statement": "Revenue (USD): 1200"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h0",
+                "table_id": "frag-p2-b0"
+              }
+            }
+          },
+          "statement": "Region: South America"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h1",
+                "table_id": "frag-p2-b0"
+              }
+            }
+          },
+          "statement": "Revenue (USD): 800"
+        }
+      ],
+      "page_count": 2,
+      "relations": [],
+      "temporal": []
+    },
+    "ontology": {
+      "classes": [
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Employee Name'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "name": "Person",
+          "parent": "Person",
+          "signal_count": 8
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Age Alice Smith'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "name": "Thing",
+          "parent": null,
+          "signal_count": 3
+        }
+      ],
+      "document_id": null,
+      "method": "ir-discovery-mock",
+      "properties": [
+        {
+          "class_name": "Document",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p1-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p1-b0"
+                }
+              }
+            }
+          ],
+          "name": "numeric_value",
+          "required": false,
+          "value_type": "Float"
+        },
+        {
+          "class_name": "Document",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            }
+          ],
+          "name": "revenue",
+          "required": false,
+          "value_type": "Float"
+        }
+      ],
+      "relationships": []
+    },
+    "resolution": {
+      "ambiguous": [],
+      "matched": [],
+      "stats": {
+        "ambiguous_count": 0,
+        "average_confidence": 0.0,
+        "matched_count": 0,
+        "total_entities": 11,
+        "unmatched_count": 11
+      },
+      "unmatched": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Employee Name",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Age Alice",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Alice Smith",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Age Alice Smith",
+          "entity_type": "Thing",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Bob Johnson",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Revenue USD",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "USD North",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "North America",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Revenue USD North",
+          "entity_type": "Thing",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "USD North America",
+          "entity_type": "Thing",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "South America",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        }
+      ]
+    },
+    "secret_findings": [],
+    "stats": {
+      "phases": [
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D3-ast"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D4-fragments"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 19,
+          "phase": "D4-ir"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 4,
+          "phase": "D5-ontology"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 11,
+          "phase": "D6-resolution"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 11,
+          "phase": "D7-reconcile"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D8-projection"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D8-visual-index"
+        }
+      ],
+      "total_us": 0
+    },
+    "visual_index": []
+  },
+  "document": {
+    "ocr_stats": {
+      "average_confidence": 0.0,
+      "pages_ocr_attempted": 0,
+      "pages_ocr_failed": 0,
+      "pages_ocr_succeeded": 0
+    },
+    "page_count": 2,
+    "pages": [
+      {
+        "char_count": 65,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 1,
+        "source": "native",
+        "text": "| Employee Name | Age |\n| Alice Smith | 30 |\n| Bob Johnson | 45 |"
+      },
+      {
+        "char_count": 75,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 2,
+        "source": "native",
+        "text": "| Region | Revenue (USD) |\n| North America | 1200 |\n| South America | 800 |"
+      }
+    ],
+    "total_chars": 140
+  }
+}

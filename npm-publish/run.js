@@ -102,17 +102,22 @@ function download() {
   }
 }
 
-if (!fs.existsSync(binPath)) {
+// R7 (review round 3): AIKOQL_BINARY=<path> skips the release download and
+// runs a local binary instead — the CI tarball smoke uses it because a PR's
+// version has no GitHub Release yet.
+const binary = process.env.AIKOQL_BINARY || binPath;
+
+if (binary === binPath && !fs.existsSync(binPath)) {
   download();
 }
 
-if (!fs.existsSync(binPath)) {
-  fail('binary not found after download.');
+if (!fs.existsSync(binary)) {
+  fail(`binary not found: ${binary}`);
 }
 
 // Forward all args to the binary via long-lived spawn (MCP needs persistent stdio)
 const args = process.argv.slice(2);
-const child = spawn(binPath, args, { stdio: 'inherit' });
+const child = spawn(binary, args, { stdio: 'inherit' });
 
 child.on('exit', (code, signal) => {
   if (signal) {

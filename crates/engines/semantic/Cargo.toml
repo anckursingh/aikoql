@@ -16,6 +16,8 @@ candle-nn = { version = "0.9", optional = true }
 candle-transformers = { version = "0.9", optional = true }
 tokenizers = { version = "0.20", optional = true }
 tokio = { version = "1", features = ["rt"], optional = true }
+# R6 (review round 3): install-time integrity records (manifest.json sha256s).
+sha2 = { version = "0.10", optional = true }
 # rustls-only: hf-hub's default features pull native-tls -> openssl-sys, which
 # has no musl build in the cross image. tokio+rustls-tls is pure Rust (ring).
 hf-hub = { version = "0.4.3", optional = true, default-features = false, features = ["tokio", "rustls-tls"] }
@@ -23,5 +25,5 @@ hf-hub = { version = "0.4.3", optional = true, default-features = false, feature
 [features]
 default = ["embedding-candle"]
 embedding-openai = ["dep:ureq"]
-embedding-candle = ["dep:candle-core", "dep:candle-nn", "dep:tokio",
+embedding-candle = ["dep:candle-core", "dep:candle-nn", "dep:tokio", "dep:sha2",
                     "dep:candle-transformers", "dep:tokenizers", "dep:hf-hub"]

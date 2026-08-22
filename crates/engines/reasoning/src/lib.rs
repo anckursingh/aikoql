@@ -9,7 +9,7 @@
 //! writes back versioned claims — never silent mutation.
 
 use aikoql_kernel::knowledge::kom::*;
-use aikoql_kernel::transaction::kernel::{Kernel, RememberRequest, Subject};
+use aikoql_kernel::transaction::kernel::{DeriveRequest, Kernel, Subject};
 use aikoql_scheduler::SchedulerJob;
 use std::sync::RwLock;
 
@@ -91,7 +91,9 @@ impl ReasoningEngine {
     }
 
     /// Evaluate all registered rules against a KO. For each rule where all
-    /// conditions match, assert the conclusion as a new KO with origin=Reason.
+    /// conditions match, derive the conclusion as a new KO — a first-class
+    /// derivation (K3): premises (matched KO + rule) wired as DERIVED_FROM
+    /// edges, operation/actor/reason recorded, origin=Reason.
     fn evaluate(&self, kernel: &Kernel, ko: &KnowledgeObject) -> KResult<()> {
         // justified: RwLock poison is unrecoverable
         let rules = self.rules.read().unwrap();
@@ -103,21 +105,18 @@ impl ReasoningEngine {
             if !all_match {
                 continue;
             }
-            // Assert conclusion.
-            let mut req = RememberRequest::create(
+            // Derive the conclusion (anti-CRUD-cosplay: not a bare write).
+            let mut req = DeriveRequest::new(
                 aikoql_kernel::Subject::new("reasoning-engine"),
-                Metadata {
-                    type_name: rule.conclusion_type.clone(),
-                    tenant: None,
-                    schema_version: 1,
-                    tags: vec![],
-                },
+                rule.conclusion_type.clone(),
             );
             req.properties = rule.conclusion_props.clone();
-            req.origin = Origin::Reason;
-            req.note = Some(format!("rule {} fired on {}", rule.koid, ko.koid));
-            // Fire-and-forget: don't fail the evaluation if one assertion fails.
-            let _ = kernel.remember(req);
+            req.sources = vec![ko.koid, rule.koid];
+            req.operation = "rule_fired".into();
+            req.actor = "reasoning-engine".into();
+            req.reason = Some(format!("rule {} fired on {}", rule.koid, ko.koid));
+            // Fire-and-forget: don't fail the evaluation if one derivation fails.
+            let _ = kernel.derive(req);
         }
         Ok(())
     }
@@ -225,7 +224,7 @@ mod tests {
             note: None,
             referential_policy: ReferentialPolicy::default(),
         };
-        k.remember(rule_req).unwrap();
+        let rule_koid = k.remember(rule_req).unwrap().koid;
 
         // Create a fact that matches the rule.
         let mut fact_props = PropertyMap::new();
@@ -250,7 +249,7 @@ mod tests {
             note: None,
             referential_policy: ReferentialPolicy::default(),
         };
-        k.remember(fact_req).unwrap();
+        let fact_koid = k.remember(fact_req).unwrap().koid;
 
         // Start the reasoning engine via the scheduler.
         let engine = Arc::new(ReasoningEngine::new());
@@ -267,6 +266,19 @@ mod tests {
         );
         // Provenance must be tagged.
         assert_eq!(warnings[0].lifecycle.origin, Origin::Reason);
+        // K3: the conclusion is a first-class derivation — premises wired as
+        // DERIVED_FROM edges, operation/actor/reason stamped, Inferred status.
+        let d = warnings[0]
+            .derivation()
+            .expect("derivation record must be stamped");
+        assert_eq!(d.operation, "rule_fired");
+        assert_eq!(d.actor, "reasoning-engine");
+        assert_eq!(d.sources, vec![fact_koid, rule_koid]);
+        assert_eq!(warnings[0].epistemic_status(), EpistemicStatus::Inferred);
+        assert_eq!(
+            k.outbound_edges(&fact_koid, Some(DERIVED_FROM)).unwrap(),
+            vec![("derived_from".to_string(), warnings[0].koid)]
+        );
     }
 
     #[test]

@@ -20,7 +20,7 @@ fn evidence(source: &str, confidence: f32) -> Evidence {
     Evidence {
         document_id: Some(source.into()),
         page: None,
-        bbox_text: Some(format!("discovered in {}", source)),
+        source: None,
         extractor: format!("{}-introspect", source),
         model: Some("mock-v1".into()),
         confidence,

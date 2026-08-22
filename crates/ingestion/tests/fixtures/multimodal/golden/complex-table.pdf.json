@@ -1,0 +1,2160 @@
+{
+  "ast": {
+    "document_id": null,
+    "page_count": 2,
+    "pages": [
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": {
+              "Heading": {
+                "level": 2
+              }
+            },
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Table 2: Quarterly margins"
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Table",
+            "children": [
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Quarter"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Units Sold"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Margin (%)"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Q1 2025"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "4000"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "12.5"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Q2 2025"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "5100"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "13.0"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              }
+            ],
+            "confidence": null,
+            "node_id": null,
+            "payload": {
+              "Table": {
+                "cells": [
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r1-0",
+                    "row_id": "r1",
+                    "text": "Q1 2025",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r1-1",
+                    "row_id": "r1",
+                    "text": "4000",
+                    "value": {
+                      "Integer": 4000
+                    }
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h2",
+                    "confidence": 1.0,
+                    "id": "r1-2",
+                    "row_id": "r1",
+                    "text": "12.5",
+                    "value": {
+                      "Float": 12.5
+                    }
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r2-0",
+                    "row_id": "r2",
+                    "text": "Q2 2025",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r2-1",
+                    "row_id": "r2",
+                    "text": "5100",
+                    "value": {
+                      "Integer": 5100
+                    }
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h2",
+                    "confidence": 1.0,
+                    "id": "r2-2",
+                    "row_id": "r2",
+                    "text": "13.0",
+                    "value": {
+                      "Float": 13.0
+                    }
+                  }
+                ],
+                "footnotes": [],
+                "headers": [
+                  {
+                    "id": "h0",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Quarter"
+                  },
+                  {
+                    "id": "h1",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Units Sold"
+                  },
+                  {
+                    "id": "h2",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Margin (%)"
+                  }
+                ],
+                "rows": [
+                  {
+                    "id": "r1",
+                    "index": 1
+                  },
+                  {
+                    "id": "r2",
+                    "index": 2
+                  }
+                ]
+              }
+            },
+            "text": null
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      },
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Table",
+            "children": [
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Product Line"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Warranty (months)"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Industrial Sensors"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "36"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Home Automation"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "24"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              }
+            ],
+            "confidence": null,
+            "node_id": null,
+            "payload": {
+              "Table": {
+                "cells": [
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r1-0",
+                    "row_id": "r1",
+                    "text": "Industrial Sensors",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r1-1",
+                    "row_id": "r1",
+                    "text": "36",
+                    "value": {
+                      "Integer": 36
+                    }
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r2-0",
+                    "row_id": "r2",
+                    "text": "Home Automation",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r2-1",
+                    "row_id": "r2",
+                    "text": "24",
+                    "value": {
+                      "Integer": 24
+                    }
+                  }
+                ],
+                "footnotes": [],
+                "headers": [
+                  {
+                    "id": "h0",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Product Line"
+                  },
+                  {
+                    "id": "h1",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Warranty (months)"
+                  }
+                ],
+                "rows": [
+                  {
+                    "id": "r1",
+                    "index": 1
+                  },
+                  {
+                    "id": "r2",
+                    "index": 2
+                  }
+                ]
+              }
+            },
+            "text": null
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      }
+    ],
+    "source_type": "native"
+  },
+  "compilation": {
+    "commit_plan": {
+      "actions": [
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Units Sold",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "date",
+                "Q1 2025"
+              ],
+              [
+                "fiscal_quarter",
+                "DateTime"
+              ],
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Product Line",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 2,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "fiscal_quarter",
+                "DateTime"
+              ],
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Industrial Sensors",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 2,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "fiscal_quarter",
+                "DateTime"
+              ],
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Home Automation",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 2,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "fiscal_quarter",
+                "DateTime"
+              ],
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        }
+      ],
+      "document_id": null,
+      "stats": {
+        "creates": 4,
+        "needs_review": 0,
+        "skips": 0,
+        "total_actions": 4,
+        "total_conflicts": 0,
+        "updates": 0
+      }
+    },
+    "embedded_chunks": [
+      {
+        "chunk": {
+          "char_count": 104,
+          "chunk_id": "unknown/chunk-0000",
+          "entity_mentions": [
+            "Units Sold"
+          ],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 0,
+            "chunk_index": 0,
+            "end_page": 1,
+            "start_page": 1
+          },
+          "structure": {
+            "heading_path": [
+              "Table 2: Quarterly margins"
+            ],
+            "section_chunk_index": 0,
+            "section_title": "Table 2: Quarterly margins",
+            "source_type": "table"
+          },
+          "text": "Table 2: Quarterly margins\nQuarter | Units Sold | Margin (%)\nQ1 2025 | 4000 | 12.5\nQ2 2025 | 5100 | 13.0"
+        },
+        "embedding": [
+          0.0,
+          0.0,
+          0.0,
+          0.11286652833223343,
+          0.0,
+          0.11286652833223343,
+          0.0,
+          0.16929979622364044,
+          0.11286652833223343,
+          0.11286652833223343,
+          0.056433264166116714,
+          0.11286652833223343,
+          0.22573305666446686,
+          0.11286652833223343,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.056433264166116714,
+          0.056433264166116714,
+          0.0,
+          0.056433264166116714,
+          0.056433264166116714,
+          0.056433264166116714,
+          0.0,
+          0.056433264166116714,
+          0.0,
+          0.056433264166116714,
+          0.0,
+          0.11286652833223343,
+          0.0,
+          0.3385995924472809,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.11286652833223343,
+          0.16929979622364044,
+          0.0,
+          0.0,
+          0.11286652833223343,
+          0.11286652833223343,
+          0.0,
+          0.0,
+          0.056433264166116714,
+          0.22573305666446686,
+          0.3385995924472809,
+          0.16929979622364044,
+          0.0,
+          0.0,
+          0.056433264166116714,
+          0.11286652833223343,
+          0.0,
+          0.0,
+          0.0,
+          0.056433264166116714,
+          0.0,
+          0.22573305666446686,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.056433264166116714,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.056433264166116714,
+          0.0,
+          0.0,
+          0.0,
+          0.16929979622364044,
+          0.0,
+          0.056433264166116714,
+          0.11286652833223343,
+          0.0,
+          0.11286652833223343,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.056433264166116714,
+          0.056433264166116714,
+          0.16929979622364044,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.056433264166116714,
+          0.056433264166116714,
+          0.16929979622364044,
+          0.0,
+          0.0,
+          0.0,
+          0.11286652833223343,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.056433264166116714,
+          0.0,
+          0.0,
+          0.0,
+          0.056433264166116714,
+          0.16929979622364044,
+          0.0,
+          0.16929979622364044,
+          0.3385995924472809,
+          0.0,
+          0.0,
+          0.16929979622364044,
+          0.0,
+          0.056433264166116714,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "embedding_provider": "mock-char-ngram"
+      },
+      {
+        "chunk": {
+          "char_count": 77,
+          "chunk_id": "unknown/chunk-0001",
+          "entity_mentions": [
+            "Home Automation",
+            "Industrial Sensors",
+            "Product Line"
+          ],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 2,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 104,
+            "chunk_index": 1,
+            "end_page": 2,
+            "start_page": 2
+          },
+          "structure": {
+            "heading_path": [],
+            "section_chunk_index": 0,
+            "section_title": null,
+            "source_type": "table"
+          },
+          "text": "Product Line | Warranty (months)\nIndustrial Sensors | 36\nHome Automation | 24"
+        },
+        "embedding": [
+          0.0,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.0,
+          0.0,
+          0.0,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.0,
+          0.17213259637355804,
+          0.08606629818677902,
+          0.17213259637355804,
+          0.0,
+          0.0,
+          0.0,
+          0.17213259637355804,
+          0.0,
+          0.0,
+          0.17213259637355804,
+          0.0,
+          0.0,
+          0.25819888710975647,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08606629818677902,
+          0.0,
+          0.08606629818677902,
+          0.0,
+          0.0,
+          0.0,
+          0.08606629818677902,
+          0.3442651927471161,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08606629818677902,
+          0.0,
+          0.08606629818677902,
+          0.0,
+          0.08606629818677902,
+          0.17213259637355804,
+          0.08606629818677902,
+          0.0,
+          0.0,
+          0.08606629818677902,
+          0.0,
+          0.0,
+          0.0,
+          0.08606629818677902,
+          0.25819888710975647,
+          0.0,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.0,
+          0.08606629818677902,
+          0.0,
+          0.0,
+          0.0,
+          0.17213259637355804,
+          0.0,
+          0.0,
+          0.08606629818677902,
+          0.17213259637355804,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.17213259637355804,
+          0.0,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.0,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.0,
+          0.25819888710975647,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08606629818677902,
+          0.17213259637355804,
+          0.08606629818677902,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.17213259637355804,
+          0.08606629818677902,
+          0.0,
+          0.0,
+          0.08606629818677902,
+          0.17213259637355804,
+          0.0,
+          0.08606629818677902,
+          0.0,
+          0.08606629818677902,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08606629818677902,
+          0.0,
+          0.08606629818677902,
+          0.0,
+          0.17213259637355804,
+          0.0,
+          0.0,
+          0.17213259637355804,
+          0.0,
+          0.08606629818677902,
+          0.08606629818677902,
+          0.0
+        ],
+        "embedding_provider": "mock-char-ngram"
+      }
+    ],
+    "evidence_trail": {
+      "document_id": null,
+      "nodes": [
+        {
+          "entities": [
+            "Units Sold",
+            "Product Line",
+            "Industrial Sensors",
+            "Home Automation"
+          ],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "step": "Extracted 4 entities from document text"
+        },
+        {
+          "entities": [],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h0",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h2",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h0",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h2",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h0",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h0",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            }
+          ],
+          "step": "Extracted 10 facts from document structure"
+        },
+        {
+          "entities": [],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "step": "Found 2 temporal assertions"
+        },
+        {
+          "entities": [],
+          "phase": "D5-ontology",
+          "source": [],
+          "step": "Discovered 1 class, 4 properties, 0 relationships"
+        },
+        {
+          "entities": [
+            "Units Sold",
+            "Product Line",
+            "Industrial Sensors",
+            "Home Automation"
+          ],
+          "phase": "D6-resolution",
+          "source": [],
+          "step": "Resolved 4 entities: 0 matched, 0 ambiguous, 4 unmatched"
+        },
+        {
+          "entities": [
+            "Units Sold",
+            "Product Line",
+            "Industrial Sensors",
+            "Home Automation"
+          ],
+          "phase": "D7-reconcile",
+          "source": [],
+          "step": "Reconciled: 4 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+        }
+      ]
+    },
+    "fragments": [
+      {
+        "confidence": 1.0,
+        "content": {
+          "Table": {
+            "cells": [
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r1-0",
+                "row_id": "r1",
+                "text": "Q1 2025",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r1-1",
+                "row_id": "r1",
+                "text": "4000",
+                "value": {
+                  "Integer": 4000
+                }
+              },
+              {
+                "bbox": null,
+                "column_id": "h2",
+                "confidence": 1.0,
+                "id": "r1-2",
+                "row_id": "r1",
+                "text": "12.5",
+                "value": {
+                  "Float": 12.5
+                }
+              },
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r2-0",
+                "row_id": "r2",
+                "text": "Q2 2025",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r2-1",
+                "row_id": "r2",
+                "text": "5100",
+                "value": {
+                  "Integer": 5100
+                }
+              },
+              {
+                "bbox": null,
+                "column_id": "h2",
+                "confidence": 1.0,
+                "id": "r2-2",
+                "row_id": "r2",
+                "text": "13.0",
+                "value": {
+                  "Float": 13.0
+                }
+              }
+            ],
+            "footnotes": [],
+            "headers": [
+              {
+                "id": "h0",
+                "level": 1,
+                "parent_id": null,
+                "text": "Quarter"
+              },
+              {
+                "id": "h1",
+                "level": 1,
+                "parent_id": null,
+                "text": "Units Sold"
+              },
+              {
+                "id": "h2",
+                "level": 1,
+                "parent_id": null,
+                "text": "Margin (%)"
+              }
+            ],
+            "rows": [
+              {
+                "id": "r1",
+                "index": 1
+              },
+              {
+                "id": "r2",
+                "index": 2
+              }
+            ]
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "Table 2: Quarterly margins"
+          ],
+          "neighboring_fragments": [
+            "frag-p2-b0"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b1",
+        "modality": "Table",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Table": {
+            "cells": [
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r1-0",
+                "row_id": "r1",
+                "text": "Industrial Sensors",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r1-1",
+                "row_id": "r1",
+                "text": "36",
+                "value": {
+                  "Integer": 36
+                }
+              },
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r2-0",
+                "row_id": "r2",
+                "text": "Home Automation",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r2-1",
+                "row_id": "r2",
+                "text": "24",
+                "value": {
+                  "Integer": 24
+                }
+              }
+            ],
+            "footnotes": [],
+            "headers": [
+              {
+                "id": "h0",
+                "level": 1,
+                "parent_id": null,
+                "text": "Product Line"
+              },
+              {
+                "id": "h1",
+                "level": 1,
+                "parent_id": null,
+                "text": "Warranty (months)"
+              }
+            ],
+            "rows": [
+              {
+                "id": "r1",
+                "index": 1
+              },
+              {
+                "id": "r2",
+                "index": 2
+              }
+            ]
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [],
+          "neighboring_fragments": [
+            "frag-p1-b1"
+          ],
+          "page": 2,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 2,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p2-b0",
+        "modality": "Table",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 2,
+          "start_offset": null
+        }
+      }
+    ],
+    "ir": {
+      "content_trust": null,
+      "document_id": null,
+      "entities": [
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Quarter | Units Sold | Margin (%)\nQ1 2025 | 4000 | 12.5\nQ2 2025 | 5100 | 13.0"
+          ],
+          "name": "Units Sold",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "mentions": [
+            "Product Line | Warranty (months)\nIndustrial Sensors | 36\nHome Automation | 24"
+          ],
+          "name": "Product Line",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "mentions": [
+            "Product Line | Warranty (months)\nIndustrial Sensors | 36\nHome Automation | 24"
+          ],
+          "name": "Industrial Sensors",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "mentions": [
+            "Product Line | Warranty (months)\nIndustrial Sensors | 36\nHome Automation | 24"
+          ],
+          "name": "Home Automation",
+          "type_hint": "Person"
+        }
+      ],
+      "events": [],
+      "extractor": "mock",
+      "facts": [
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h0",
+                "table_id": "frag-p1-b1"
+              }
+            }
+          },
+          "statement": "Quarter: Q1 2025"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h1",
+                "table_id": "frag-p1-b1"
+              }
+            }
+          },
+          "statement": "Units Sold: 4000"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h2",
+                "table_id": "frag-p1-b1"
+              }
+            }
+          },
+          "statement": "Margin (%): 12.5"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h0",
+                "table_id": "frag-p1-b1"
+              }
+            }
+          },
+          "statement": "Quarter: Q2 2025"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h1",
+                "table_id": "frag-p1-b1"
+              }
+            }
+          },
+          "statement": "Units Sold: 5100"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h2",
+                "table_id": "frag-p1-b1"
+              }
+            }
+          },
+          "statement": "Margin (%): 13.0"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h0",
+                "table_id": "frag-p2-b0"
+              }
+            }
+          },
+          "statement": "Product Line: Industrial Sensors"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h1",
+                "table_id": "frag-p2-b0"
+              }
+            }
+          },
+          "statement": "Warranty (months): 36"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h0",
+                "table_id": "frag-p2-b0"
+              }
+            }
+          },
+          "statement": "Product Line: Home Automation"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h1",
+                "table_id": "frag-p2-b0"
+              }
+            }
+          },
+          "statement": "Warranty (months): 24"
+        }
+      ],
+      "page_count": 2,
+      "relations": [],
+      "temporal": [
+        {
+          "confidence": 0.8500000238418579,
+          "end_time": "2025-03-31T23:59:59Z",
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "start_time": "2025-01-01T00:00:00Z",
+          "text": "Q1 2025"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "end_time": "2025-06-30T23:59:59Z",
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "start_time": "2025-04-01T00:00:00Z",
+          "text": "Q2 2025"
+        }
+      ]
+    },
+    "ontology": {
+      "classes": [
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Units Sold'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "name": "Person",
+          "parent": "Person",
+          "signal_count": 4
+        }
+      ],
+      "document_id": null,
+      "method": "ir-discovery-mock",
+      "properties": [
+        {
+          "class_name": "Document",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h0",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h0",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            }
+          ],
+          "name": "fiscal_quarter",
+          "required": false,
+          "value_type": "DateTime"
+        },
+        {
+          "class_name": "Document",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h0",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h2",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h0",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h2",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p2-b0"
+                }
+              }
+            }
+          ],
+          "name": "numeric_value",
+          "required": false,
+          "value_type": "Float"
+        },
+        {
+          "class_name": "Document",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h2",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h2",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            }
+          ],
+          "name": "date",
+          "required": false,
+          "value_type": "DateTime"
+        },
+        {
+          "class_name": "Person",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "fiscal_quarter",
+          "required": false,
+          "value_type": "DateTime"
+        }
+      ],
+      "relationships": []
+    },
+    "resolution": {
+      "ambiguous": [],
+      "matched": [],
+      "stats": {
+        "ambiguous_count": 0,
+        "average_confidence": 0.0,
+        "matched_count": 0,
+        "total_entities": 4,
+        "unmatched_count": 4
+      },
+      "unmatched": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Units Sold",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Product Line",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Industrial Sensors",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Home Automation",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        }
+      ]
+    },
+    "secret_findings": [],
+    "stats": {
+      "phases": [
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D3-ast"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D4-fragments"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 16,
+          "phase": "D4-ir"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 5,
+          "phase": "D5-ontology"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 4,
+          "phase": "D6-resolution"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 4,
+          "phase": "D7-reconcile"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D8-projection"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D8-visual-index"
+        }
+      ],
+      "total_us": 0
+    },
+    "visual_index": []
+  },
+  "document": {
+    "ocr_stats": {
+      "average_confidence": 0.0,
+      "pages_ocr_attempted": 0,
+      "pages_ocr_failed": 0,
+      "pages_ocr_succeeded": 0
+    },
+    "page_count": 2,
+    "pages": [
+      {
+        "char_count": 117,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 1,
+        "source": "native",
+        "text": "Table 2: Quarterly margins\n\n| Quarter | Units Sold | Margin (%) |\n| Q1 2025 | 4000 | 12.5 |\n| Q2 2025 | 5100 | 13.0 |"
+      },
+      {
+        "char_count": 89,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 2,
+        "source": "native",
+        "text": "| Product Line | Warranty (months) |\n| Industrial Sensors | 36 |\n| Home Automation | 24 |"
+      }
+    ],
+    "total_chars": 206
+  }
+}

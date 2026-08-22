@@ -56,11 +56,8 @@ proptest! {
     fn lifecycle_validation_never_panics(from_tag in any::<u8>(), to_tag in any::<u8>()) {
         let from = LifecycleState::from_tag(from_tag);
         let to = LifecycleState::from_tag(to_tag);
-        match (from, to) {
-            (Some(f), Some(t)) => {
-                let _ = f.can_transition(t);
-            }
-            _ => {}
+        if let (Some(f), Some(t)) = (from, to) {
+            let _ = f.can_transition(t);
         }
     }
 

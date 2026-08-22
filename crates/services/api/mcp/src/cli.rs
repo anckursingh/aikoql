@@ -26,6 +26,8 @@ pub(crate) fn print_usage() {
         "Server options (serve mode):\n",
         "  --listen ADDR          TCP listen address (e.g., 127.0.0.1:9090; empty host = loopback)\n",
         "  --tcp-token SPEC       TCP auth: TOKEN[:TENANT[:ROLE1,ROLE2]] (repeatable, required with --listen)\n",
+        "                         (dev-only: tokens hit the process list — set AIKOQL_TCP_TOKEN or\n",
+        "                         AIKOQL_TCP_TOKEN_FILE in production instead; env replaces flags)\n",
         "  --metrics-addr ADDR    HTTP metrics + health endpoint (e.g., 127.0.0.1:9091)\n",
         "  --embedding-provider P  Embedding provider: \"candle\" (default), \"http\", or \"ollama\"\n",
         "  --embedding-base-url U  OpenAI-compatible base URL (default: http://localhost:11434)\n",

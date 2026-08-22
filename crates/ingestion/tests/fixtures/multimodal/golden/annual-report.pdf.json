@@ -1,0 +1,1858 @@
+{
+  "ast": {
+    "document_id": null,
+    "page_count": 3,
+    "pages": [
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": {
+              "Heading": {
+                "level": 2
+              }
+            },
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Annual Report 2025"
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Paragraph",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Prepared for the Board of Directors in January 2025."
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Paragraph",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Acme Corporation overview follows."
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      },
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": {
+              "Heading": {
+                "level": 1
+              }
+            },
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "1. Financials"
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Paragraph",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Globex Industries revenue reached $10M."
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Paragraph",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Approved on 2025-02-15."
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      },
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": {
+              "Heading": {
+                "level": 1
+              }
+            },
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "1. Outlook"
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Table",
+            "children": [
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Metric"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Value"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Growth"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "8 percent"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              }
+            ],
+            "confidence": null,
+            "node_id": null,
+            "payload": {
+              "Table": {
+                "cells": [
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r1-0",
+                    "row_id": "r1",
+                    "text": "Growth",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r1-1",
+                    "row_id": "r1",
+                    "text": "8 percent",
+                    "value": null
+                  }
+                ],
+                "footnotes": [],
+                "headers": [
+                  {
+                    "id": "h0",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Metric"
+                  },
+                  {
+                    "id": "h1",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Value"
+                  }
+                ],
+                "rows": [
+                  {
+                    "id": "r1",
+                    "index": 1
+                  }
+                ]
+              }
+            },
+            "text": null
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Paragraph",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Gamma Partners expect continued growth."
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      }
+    ],
+    "source_type": "native"
+  },
+  "compilation": {
+    "commit_plan": {
+      "actions": [
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Annual Report",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "annual_report_2025",
+                "Annual Report 2025"
+              ],
+              [
+                "date",
+                "January 2025"
+              ],
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Organization",
+            "entity_name": "Acme Corporation",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "date",
+                "January 2025"
+              ],
+              [
+                "type",
+                "Organization"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Organization",
+            "entity_name": "Globex Industries",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 2,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "date",
+                "2025-02-15"
+              ],
+              [
+                "type",
+                "Organization"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Value Growth",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 3,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "numeric_value",
+                "Float"
+              ],
+              [
+                "date",
+                "DateTime"
+              ],
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Organization",
+            "entity_name": "Gamma Partners",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 3,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Organization"
+              ]
+            ]
+          }
+        }
+      ],
+      "document_id": null,
+      "stats": {
+        "creates": 5,
+        "needs_review": 0,
+        "skips": 0,
+        "total_actions": 5,
+        "total_conflicts": 0,
+        "updates": 0
+      }
+    },
+    "embedded_chunks": [
+      {
+        "chunk": {
+          "char_count": 106,
+          "chunk_id": "unknown/chunk-0000",
+          "entity_mentions": [
+            "Acme Corporation",
+            "Annual Report"
+          ],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 0,
+            "chunk_index": 0,
+            "end_page": 1,
+            "start_page": 1
+          },
+          "structure": {
+            "heading_path": [
+              "Annual Report 2025"
+            ],
+            "section_chunk_index": 0,
+            "section_title": "Annual Report 2025",
+            "source_type": "text"
+          },
+          "text": "Annual Report 2025\nPrepared for the Board of Directors in January 2025.\nAcme Corporation overview follows."
+        },
+        "embedding": [
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1354570984840393,
+          0.1354570984840393,
+          0.0,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.1354570984840393,
+          0.1354570984840393,
+          0.06772854924201965,
+          0.0,
+          0.1354570984840393,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.20318563282489777,
+          0.06772854924201965,
+          0.0,
+          0.0,
+          0.2709141969680786,
+          0.0,
+          0.1354570984840393,
+          0.1354570984840393,
+          0.0,
+          0.0,
+          0.0,
+          0.06772854924201965,
+          0.1354570984840393,
+          0.0,
+          0.0,
+          0.06772854924201965,
+          0.1354570984840393,
+          0.20318563282489777,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.06772854924201965,
+          0.06772854924201965,
+          0.0,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.06772854924201965,
+          0.06772854924201965,
+          0.0,
+          0.0,
+          0.0,
+          0.20318563282489777,
+          0.1354570984840393,
+          0.0,
+          0.06772854924201965,
+          0.1354570984840393,
+          0.0,
+          0.1354570984840393,
+          0.0,
+          0.1354570984840393,
+          0.06772854924201965,
+          0.06772854924201965,
+          0.06772854924201965,
+          0.0,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.0,
+          0.0,
+          0.06772854924201965,
+          0.2709141969680786,
+          0.1354570984840393,
+          0.06772854924201965,
+          0.20318563282489777,
+          0.0,
+          0.0,
+          0.1354570984840393,
+          0.0,
+          0.1354570984840393,
+          0.20318563282489777,
+          0.1354570984840393,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.06772854924201965,
+          0.1354570984840393,
+          0.06772854924201965,
+          0.06772854924201965,
+          0.06772854924201965,
+          0.0,
+          0.0,
+          0.06772854924201965,
+          0.1354570984840393,
+          0.1354570984840393,
+          0.0,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.20318563282489777,
+          0.1354570984840393,
+          0.0,
+          0.0,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.20318563282489777,
+          0.06772854924201965,
+          0.0,
+          0.1354570984840393,
+          0.06772854924201965,
+          0.0,
+          0.06772854924201965,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "embedding_provider": "mock-char-ngram"
+      },
+      {
+        "chunk": {
+          "char_count": 77,
+          "chunk_id": "unknown/chunk-0001",
+          "entity_mentions": [
+            "Globex Industries"
+          ],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 2,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 106,
+            "chunk_index": 1,
+            "end_page": 2,
+            "start_page": 2
+          },
+          "structure": {
+            "heading_path": [
+              "1. Financials"
+            ],
+            "section_chunk_index": 0,
+            "section_title": "1. Financials",
+            "source_type": "text"
+          },
+          "text": "1. Financials\nGlobex Industries revenue reached $10M.\nApproved on 2025-02-15."
+        },
+        "embedding": [
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.0,
+          0.18650096654891968,
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.18650096654891968,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.18650096654891968,
+          0.0,
+          0.09325048327445984,
+          0.37300193309783936,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.18650096654891968,
+          0.0,
+          0.0,
+          0.18650096654891968,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.18650096654891968,
+          0.0,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.2797514498233795,
+          0.0,
+          0.18650096654891968,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.0,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.0,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.18650096654891968,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.0,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.18650096654891968,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.0,
+          0.09325048327445984,
+          0.0,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984,
+          0.09325048327445984
+        ],
+        "embedding_provider": "mock-char-ngram"
+      },
+      {
+        "chunk": {
+          "char_count": 84,
+          "chunk_id": "unknown/chunk-0002",
+          "entity_mentions": [
+            "Gamma Partners"
+          ],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 3,
+              "source": null
+            },
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 3,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 183,
+            "chunk_index": 2,
+            "end_page": 3,
+            "start_page": 3
+          },
+          "structure": {
+            "heading_path": [
+              "1. Outlook"
+            ],
+            "section_chunk_index": 0,
+            "section_title": "1. Outlook",
+            "source_type": "mixed"
+          },
+          "text": "1. Outlook\nMetric | Value\nGrowth | 8 percent\nGamma Partners expect continued growth."
+        },
+        "embedding": [
+          0.17407765984535217,
+          0.0,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.17407765984535217,
+          0.34815531969070435,
+          0.0,
+          0.08703882992267609,
+          0.0,
+          0.17407765984535217,
+          0.08703882992267609,
+          0.0,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.0,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.17407765984535217,
+          0.26111647486686707,
+          0.0,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.0,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.0,
+          0.17407765984535217,
+          0.0,
+          0.08703882992267609,
+          0.0,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.08703882992267609,
+          0.0,
+          0.08703882992267609,
+          0.0,
+          0.08703882992267609,
+          0.0,
+          0.08703882992267609,
+          0.17407765984535217,
+          0.08703882992267609,
+          0.17407765984535217,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.0,
+          0.17407765984535217,
+          0.08703882992267609,
+          0.0,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.17407765984535217,
+          0.0,
+          0.0,
+          0.0,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.0,
+          0.17407765984535217,
+          0.0,
+          0.17407765984535217,
+          0.0,
+          0.0,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.08703882992267609,
+          0.0,
+          0.17407765984535217,
+          0.0,
+          0.0,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.08703882992267609,
+          0.0,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.08703882992267609,
+          0.17407765984535217,
+          0.0,
+          0.17407765984535217,
+          0.08703882992267609,
+          0.0,
+          0.0,
+          0.0,
+          0.08703882992267609
+        ],
+        "embedding_provider": "mock-char-ngram"
+      }
+    ],
+    "evidence_trail": {
+      "document_id": null,
+      "nodes": [
+        {
+          "entities": [
+            "Annual Report",
+            "Acme Corporation",
+            "Globex Industries",
+            "Value Growth",
+            "Gamma Partners"
+          ],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 3,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 3,
+              "source": null
+            }
+          ],
+          "step": "Extracted 5 entities from document text"
+        },
+        {
+          "entities": [],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 3,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h0",
+                  "table_id": "frag-p3-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 3,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p3-b1"
+                }
+              }
+            }
+          ],
+          "step": "Extracted 3 facts from document structure"
+        },
+        {
+          "entities": [],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "step": "Found 2 temporal assertions"
+        },
+        {
+          "entities": [],
+          "phase": "D5-ontology",
+          "source": [],
+          "step": "Discovered 2 classes, 3 properties, 0 relationships"
+        },
+        {
+          "entities": [
+            "Annual Report",
+            "Acme Corporation",
+            "Globex Industries",
+            "Value Growth",
+            "Gamma Partners"
+          ],
+          "phase": "D6-resolution",
+          "source": [],
+          "step": "Resolved 5 entities: 0 matched, 0 ambiguous, 5 unmatched"
+        },
+        {
+          "entities": [
+            "Annual Report",
+            "Acme Corporation",
+            "Globex Industries",
+            "Value Growth",
+            "Gamma Partners"
+          ],
+          "phase": "D7-reconcile",
+          "source": [],
+          "step": "Reconciled: 5 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+        }
+      ]
+    },
+    "fragments": [
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Prepared for the Board of Directors in January 2025."
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "Annual Report 2025"
+          ],
+          "neighboring_fragments": [
+            "frag-p1-b2"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b1",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Acme Corporation overview follows."
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "Annual Report 2025"
+          ],
+          "neighboring_fragments": [
+            "frag-p1-b1",
+            "frag-p2-b1"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b2",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Globex Industries revenue reached $10M."
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Financials"
+          ],
+          "neighboring_fragments": [
+            "frag-p1-b2",
+            "frag-p2-b2"
+          ],
+          "page": 2,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 2,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p2-b1",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 2,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Approved on 2025-02-15."
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Financials"
+          ],
+          "neighboring_fragments": [
+            "frag-p2-b1",
+            "frag-p3-b1"
+          ],
+          "page": 2,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 2,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p2-b2",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 2,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Table": {
+            "cells": [
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r1-0",
+                "row_id": "r1",
+                "text": "Growth",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r1-1",
+                "row_id": "r1",
+                "text": "8 percent",
+                "value": null
+              }
+            ],
+            "footnotes": [],
+            "headers": [
+              {
+                "id": "h0",
+                "level": 1,
+                "parent_id": null,
+                "text": "Metric"
+              },
+              {
+                "id": "h1",
+                "level": 1,
+                "parent_id": null,
+                "text": "Value"
+              }
+            ],
+            "rows": [
+              {
+                "id": "r1",
+                "index": 1
+              }
+            ]
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Outlook"
+          ],
+          "neighboring_fragments": [
+            "frag-p2-b2",
+            "frag-p3-b2"
+          ],
+          "page": 3,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 3,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p3-b1",
+        "modality": "Table",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 3,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Gamma Partners expect continued growth."
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Outlook"
+          ],
+          "neighboring_fragments": [
+            "frag-p3-b1"
+          ],
+          "page": 3,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 3,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p3-b2",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 3,
+          "start_offset": null
+        }
+      }
+    ],
+    "ir": {
+      "content_trust": null,
+      "document_id": null,
+      "entities": [
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Annual Report"
+          ],
+          "name": "Annual Report",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Acme Corporation overview follows."
+          ],
+          "name": "Acme Corporation",
+          "type_hint": "Organization"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "mentions": [
+            "Globex Industries revenue reached $10M."
+          ],
+          "name": "Globex Industries",
+          "type_hint": "Organization"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 3,
+            "source": null
+          },
+          "mentions": [
+            "Value Growth"
+          ],
+          "name": "Value Growth",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 3,
+            "source": null
+          },
+          "mentions": [
+            "Gamma Partners expect continued growth."
+          ],
+          "name": "Gamma Partners",
+          "type_hint": "Organization"
+        }
+      ],
+      "events": [],
+      "extractor": "mock",
+      "facts": [
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [
+            "Annual Report"
+          ],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "statement": "Annual Report 2025"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 3,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h0",
+                "table_id": "frag-p3-b1"
+              }
+            }
+          },
+          "statement": "Metric: Growth"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 3,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h1",
+                "table_id": "frag-p3-b1"
+              }
+            }
+          },
+          "statement": "Value: 8 percent"
+        }
+      ],
+      "page_count": 3,
+      "relations": [],
+      "temporal": [
+        {
+          "confidence": 0.8500000238418579,
+          "end_time": "2025-01-31T23:59:59Z",
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "start_time": "2025-01-01T00:00:00Z",
+          "text": "January 2025"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "end_time": "2025-02-15T23:59:59Z",
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "start_time": "2025-02-15T00:00:00Z",
+          "text": "2025-02-15"
+        }
+      ]
+    },
+    "ontology": {
+      "classes": [
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Annual Report'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 3,
+              "source": null
+            }
+          ],
+          "name": "Person",
+          "parent": "Person",
+          "signal_count": 2
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Acme Corporation'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 3,
+              "source": null
+            }
+          ],
+          "name": "Organization",
+          "parent": "Organization",
+          "signal_count": 3
+        }
+      ],
+      "document_id": null,
+      "method": "ir-discovery-mock",
+      "properties": [
+        {
+          "class_name": "Person",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "numeric_value",
+          "required": false,
+          "value_type": "Float"
+        },
+        {
+          "class_name": "Document",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 3,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p3-b1"
+                }
+              }
+            }
+          ],
+          "name": "numeric_value",
+          "required": false,
+          "value_type": "Float"
+        },
+        {
+          "class_name": "Person",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "name": "date",
+          "required": false,
+          "value_type": "DateTime"
+        }
+      ],
+      "relationships": []
+    },
+    "resolution": {
+      "ambiguous": [],
+      "matched": [],
+      "stats": {
+        "ambiguous_count": 0,
+        "average_confidence": 0.0,
+        "matched_count": 0,
+        "total_entities": 5,
+        "unmatched_count": 5
+      },
+      "unmatched": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Annual Report",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Acme Corporation",
+          "entity_type": "Organization",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Globex Industries",
+          "entity_type": "Organization",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Value Growth",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 3,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Gamma Partners",
+          "entity_type": "Organization",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 3,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        }
+      ]
+    },
+    "secret_findings": [],
+    "stats": {
+      "phases": [
+        {
+          "duration_us": 0,
+          "item_count": 3,
+          "phase": "D3-ast"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 6,
+          "phase": "D4-fragments"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 10,
+          "phase": "D4-ir"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 5,
+          "phase": "D5-ontology"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 5,
+          "phase": "D6-resolution"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 5,
+          "phase": "D7-reconcile"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 3,
+          "phase": "D8-projection"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D8-visual-index"
+        }
+      ],
+      "total_us": 0
+    },
+    "visual_index": []
+  },
+  "document": {
+    "ocr_stats": {
+      "average_confidence": 0.0,
+      "pages_ocr_attempted": 0,
+      "pages_ocr_failed": 0,
+      "pages_ocr_succeeded": 0
+    },
+    "page_count": 3,
+    "pages": [
+      {
+        "char_count": 108,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 1,
+        "source": "native",
+        "text": "Annual Report 2025\n\nPrepared for the Board of Directors in January 2025.\n\nAcme Corporation overview follows."
+      },
+      {
+        "char_count": 79,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 2,
+        "source": "native",
+        "text": "1. Financials\n\nGlobex Industries revenue reached $10M.\n\nApproved on 2025-02-15."
+      },
+      {
+        "char_count": 94,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 3,
+        "source": "native",
+        "text": "1. Outlook\n\n| Metric | Value |\n| Growth | 8 percent |\n\nGamma Partners expect continued growth."
+      }
+    ],
+    "total_chars": 281
+  }
+}

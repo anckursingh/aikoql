@@ -227,20 +227,28 @@ result, _ := client.Remember(map[string]interface{}{"type_name": "Note"})
 
 ## Encryption (Optional)
 
-Enable encryption at rest:
+Enable encryption at rest (v0.2 — wired end-to-end into `serve`):
 
 ```bash
-# Generate a master key
-aikoql keygen ./master.key
-
-# Set environment variable
+# Generate a master key (v2 envelope; passphrase from env, or generated + printed once)
 export AIKOQL_PASSPHRASE="your-secure-passphrase"
+aikoql keygen ./aikoql.key
 
-# Start with encryption
+# Configure encryption + field-level policies
+cat > aikoql.toml <<'EOF'
+[encryption]
+enabled = true
+key_path = "./aikoql.key"
+
+[encryption.policies]
+employee = ["salary", "ssn"]
+EOF
+
+# Start — wrong/missing passphrase fails closed, never silent plaintext
 aikoql serve --listen :9090 --tcp-token mytoken:acme:admin --metrics-addr :9091 ./encrypted-kb.redb
 ```
 
-See [Encryption Guide](/docs/guides/encryption) for details on key rotation, field-level encryption, and compliance.
+See [Encryption Guide](/docs/guides/encryption) for details on key hierarchy, field-level encryption, restart behavior, and compliance.
 
 ## Next Steps
 

@@ -1,0 +1,840 @@
+{
+  "ast": {
+    "document_id": null,
+    "page_count": 1,
+    "pages": [
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Image",
+            "children": [
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "Caption",
+                "children": [],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              }
+            ],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Figure 2: Architecture diagram\nClient -> Gateway -> Database"
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": {
+              "Heading": {
+                "level": 2
+              }
+            },
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Gateway -> Cache"
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      }
+    ],
+    "source_type": "native"
+  },
+  "compilation": {
+    "commit_plan": {
+      "actions": [
+        {
+          "CreateKO": {
+            "class_name": "DiagramNode",
+            "entity_name": "Client",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-diagram-v1",
+                "page": 1,
+                "source": {
+                  "DiagramNode": {
+                    "diagram_id": "frag-p1-b0",
+                    "node_id": "client"
+                  }
+                }
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "DiagramNode"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "DiagramNode",
+            "entity_name": "Gateway",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-diagram-v1",
+                "page": 1,
+                "source": {
+                  "DiagramNode": {
+                    "diagram_id": "frag-p1-b0",
+                    "node_id": "gateway"
+                  }
+                }
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "DiagramNode"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "DiagramNode",
+            "entity_name": "Database",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-diagram-v1",
+                "page": 1,
+                "source": {
+                  "DiagramNode": {
+                    "diagram_id": "frag-p1-b0",
+                    "node_id": "database"
+                  }
+                }
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "DiagramNode"
+              ]
+            ]
+          }
+        }
+      ],
+      "document_id": null,
+      "stats": {
+        "creates": 3,
+        "needs_review": 0,
+        "skips": 0,
+        "total_actions": 3,
+        "total_conflicts": 0,
+        "updates": 0
+      }
+    },
+    "embedded_chunks": [
+      {
+        "chunk": {
+          "char_count": 23,
+          "chunk_id": "unknown/chunk-0000",
+          "entity_mentions": [
+            "Client",
+            "Database",
+            "Gateway"
+          ],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 0,
+            "chunk_index": 0,
+            "end_page": 1,
+            "start_page": 1
+          },
+          "structure": {
+            "heading_path": [],
+            "section_chunk_index": 0,
+            "section_title": null,
+            "source_type": "diagram"
+          },
+          "text": "Client\nGateway\nDatabase"
+        },
+        "embedding": [
+          0.0,
+          0.3592106103897095,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.17960530519485474,
+          0.17960530519485474,
+          0.17960530519485474,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.17960530519485474,
+          0.17960530519485474,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.17960530519485474,
+          0.0,
+          0.0,
+          0.17960530519485474,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.3592106103897095,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.17960530519485474,
+          0.17960530519485474,
+          0.17960530519485474,
+          0.3592106103897095,
+          0.17960530519485474,
+          0.0,
+          0.0,
+          0.17960530519485474,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.17960530519485474,
+          0.0,
+          0.17960530519485474,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.17960530519485474,
+          0.0,
+          0.0,
+          0.0,
+          0.17960530519485474,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.17960530519485474,
+          0.0,
+          0.17960530519485474,
+          0.0,
+          0.17960530519485474,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "embedding_provider": "mock-char-ngram"
+      }
+    ],
+    "evidence_trail": {
+      "document_id": null,
+      "nodes": [
+        {
+          "entities": [
+            "Client",
+            "Gateway",
+            "Database"
+          ],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b0",
+                  "node_id": "client"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b0",
+                  "node_id": "gateway"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b0",
+                  "node_id": "database"
+                }
+              }
+            }
+          ],
+          "step": "Extracted 3 entities from document text"
+        },
+        {
+          "entities": [],
+          "phase": "D5-ontology",
+          "source": [],
+          "step": "Discovered 1 class, 0 properties, 2 relationships"
+        },
+        {
+          "entities": [
+            "Client",
+            "Gateway",
+            "Database"
+          ],
+          "phase": "D6-resolution",
+          "source": [],
+          "step": "Resolved 3 entities: 0 matched, 0 ambiguous, 3 unmatched"
+        },
+        {
+          "entities": [
+            "Client",
+            "Gateway",
+            "Database"
+          ],
+          "phase": "D7-reconcile",
+          "source": [],
+          "step": "Reconciled: 3 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+        }
+      ]
+    },
+    "fragments": [
+      {
+        "confidence": 1.0,
+        "content": {
+          "Diagram": {
+            "asset": null,
+            "edges": [
+              {
+                "bbox": null,
+                "confidence": 1.0,
+                "label": null,
+                "source": "client",
+                "target": "gateway"
+              },
+              {
+                "bbox": null,
+                "confidence": 1.0,
+                "label": null,
+                "source": "gateway",
+                "target": "database"
+              }
+            ],
+            "model": null,
+            "nodes": [
+              {
+                "bbox": null,
+                "confidence": 1.0,
+                "id": "client",
+                "label": "Client",
+                "node_type": null
+              },
+              {
+                "bbox": null,
+                "confidence": 1.0,
+                "id": "gateway",
+                "label": "Gateway",
+                "node_type": null
+              },
+              {
+                "bbox": null,
+                "confidence": 1.0,
+                "id": "database",
+                "label": "Database",
+                "node_type": null
+              }
+            ]
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [],
+          "neighboring_fragments": [],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b0",
+        "modality": "Diagram",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      }
+    ],
+    "ir": {
+      "content_trust": null,
+      "document_id": null,
+      "entities": [
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-diagram-v1",
+            "page": 1,
+            "source": {
+              "DiagramNode": {
+                "diagram_id": "frag-p1-b0",
+                "node_id": "client"
+              }
+            }
+          },
+          "mentions": [
+            "Client"
+          ],
+          "name": "Client",
+          "type_hint": "DiagramNode"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-diagram-v1",
+            "page": 1,
+            "source": {
+              "DiagramNode": {
+                "diagram_id": "frag-p1-b0",
+                "node_id": "gateway"
+              }
+            }
+          },
+          "mentions": [
+            "Gateway"
+          ],
+          "name": "Gateway",
+          "type_hint": "DiagramNode"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-diagram-v1",
+            "page": 1,
+            "source": {
+              "DiagramNode": {
+                "diagram_id": "frag-p1-b0",
+                "node_id": "database"
+              }
+            }
+          },
+          "mentions": [
+            "Database"
+          ],
+          "name": "Database",
+          "type_hint": "DiagramNode"
+        }
+      ],
+      "events": [],
+      "extractor": "mock",
+      "facts": [],
+      "page_count": 1,
+      "relations": [
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-diagram-v1",
+            "page": 1,
+            "source": {
+              "DiagramEdge": {
+                "diagram_id": "frag-p1-b0",
+                "edge_id": "client->gateway"
+              }
+            }
+          },
+          "object": "gateway",
+          "predicate": "related_to",
+          "subject": "client"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-diagram-v1",
+            "page": 1,
+            "source": {
+              "DiagramEdge": {
+                "diagram_id": "frag-p1-b0",
+                "edge_id": "gateway->database"
+              }
+            }
+          },
+          "object": "database",
+          "predicate": "related_to",
+          "subject": "gateway"
+        }
+      ],
+      "temporal": []
+    },
+    "ontology": {
+      "classes": [
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Client'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b0",
+                  "node_id": "client"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b0",
+                  "node_id": "gateway"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b0",
+                  "node_id": "database"
+                }
+              }
+            }
+          ],
+          "name": "DiagramNode",
+          "parent": null,
+          "signal_count": 3
+        }
+      ],
+      "document_id": null,
+      "method": "ir-discovery-mock",
+      "properties": [],
+      "relationships": [
+        {
+          "cardinality": null,
+          "confidence": 0.8500000238418579,
+          "domain": "Client",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramEdge": {
+                  "diagram_id": "frag-p1-b0",
+                  "edge_id": "client->gateway"
+                }
+              }
+            }
+          ],
+          "name": "related_to",
+          "range": "Gateway"
+        },
+        {
+          "cardinality": null,
+          "confidence": 0.8500000238418579,
+          "domain": "Gateway",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramEdge": {
+                  "diagram_id": "frag-p1-b0",
+                  "edge_id": "gateway->database"
+                }
+              }
+            }
+          ],
+          "name": "related_to",
+          "range": "Database"
+        }
+      ]
+    },
+    "resolution": {
+      "ambiguous": [],
+      "matched": [],
+      "stats": {
+        "ambiguous_count": 0,
+        "average_confidence": 0.0,
+        "matched_count": 0,
+        "total_entities": 3,
+        "unmatched_count": 3
+      },
+      "unmatched": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Client",
+          "entity_type": "DiagramNode",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b0",
+                  "node_id": "client"
+                }
+              }
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Gateway",
+          "entity_type": "DiagramNode",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b0",
+                  "node_id": "gateway"
+                }
+              }
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Database",
+          "entity_type": "DiagramNode",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-diagram-v1",
+              "page": 1,
+              "source": {
+                "DiagramNode": {
+                  "diagram_id": "frag-p1-b0",
+                  "node_id": "database"
+                }
+              }
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        }
+      ]
+    },
+    "secret_findings": [],
+    "stats": {
+      "phases": [
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D3-ast"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D4-fragments"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 5,
+          "phase": "D4-ir"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 3,
+          "phase": "D5-ontology"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 3,
+          "phase": "D6-resolution"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 3,
+          "phase": "D7-reconcile"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D8-projection"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D8-visual-index"
+        }
+      ],
+      "total_us": 0
+    },
+    "visual_index": []
+  },
+  "document": {
+    "ocr_stats": {
+      "average_confidence": 0.0,
+      "pages_ocr_attempted": 0,
+      "pages_ocr_failed": 0,
+      "pages_ocr_succeeded": 0
+    },
+    "page_count": 1,
+    "pages": [
+      {
+        "char_count": 78,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 1,
+        "source": "native",
+        "text": "Figure 2: Architecture diagram\nClient -> Gateway -> Database\n\nGateway -> Cache"
+      }
+    ],
+    "total_chars": 78
+  }
+}

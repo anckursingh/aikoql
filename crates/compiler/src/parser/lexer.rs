@@ -29,6 +29,11 @@ pub enum Token {
     Relationships,
     Commit,
     Explain,
+    // v0.3 K2: temporal + epistemic query operators
+    AsOf,
+    Between,
+    Historical,
+    Epistemic,
     // Symbols
     Eq,     // ==
     Neq,    // !=
@@ -153,6 +158,10 @@ impl Lexer {
             "RELATIONSHIPS" => Token::Relationships,
             "COMMIT" => Token::Commit,
             "EXPLAIN" => Token::Explain,
+            "AS_OF" => Token::AsOf,
+            "BETWEEN" => Token::Between,
+            "HISTORICAL" => Token::Historical,
+            "EPISTEMIC" => Token::Epistemic,
             _ => Token::Ident(s),
         }
     }

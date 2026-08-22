@@ -68,6 +68,18 @@ pub(crate) fn parse_properties(args: &J) -> Result<PropertyMap, String> {
     Ok(out)
 }
 
+/// v0.3 K1: `extensions` argument — epistemic state, authority, scope, and
+/// canonical evidence can be declared at the protocol boundary.
+pub(crate) fn parse_extensions(args: &J) -> Result<ExtensionMap, String> {
+    let mut out = ExtensionMap::new();
+    if let Some(J::Object(m)) = args.get("extensions") {
+        for (k, v) in m {
+            out.insert(k.clone(), json_to_value(v)?);
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn parse_semantic(args: &J) -> Result<Option<SemanticBlock>, String> {
     let Some(s) = args.get("semantic") else {
         return Ok(None);
@@ -131,6 +143,38 @@ pub(crate) fn parse_action(args: &J) -> Result<Action, String> {
     }
 }
 
+/// Parse the canonical evidence array (K1/K3/K4 tools share this shape):
+/// [{source_artifact, method, location?, revision?, confidence?}]
+pub(crate) fn parse_evidence(args: &J) -> Result<Vec<Evidence>, String> {
+    let mut out = Vec::new();
+    if let Some(evs) = args.get("evidence").and_then(|e| e.as_array()) {
+        for ev in evs {
+            let source_artifact = ev
+                .get("source_artifact")
+                .and_then(|s| s.as_str())
+                .ok_or("evidence entries need source_artifact")?;
+            let method = ev
+                .get("method")
+                .and_then(|m| m.as_str())
+                .ok_or("evidence entries need method")?;
+            let method = EvidenceMethod::from_str(method)
+                .ok_or_else(|| format!("unknown evidence method: {}", method))?;
+            let mut e = Evidence::new(source_artifact, method);
+            if let Some(l) = ev.get("location").and_then(|l| l.as_str()) {
+                e = e.with_location(l);
+            }
+            if let Some(r) = ev.get("revision").and_then(|r| r.as_str()) {
+                e = e.with_revision(r);
+            }
+            if let Some(c) = ev.get("confidence").and_then(|c| c.as_f64()) {
+                e = e.with_confidence(c as f32);
+            }
+            out.push(e);
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn parse_fusion(args: &J) -> Fusion {
     match args.get("fusion").and_then(|f| f.as_str()).unwrap_or("rrf") {
         "vector" => Fusion::VectorOnly,
@@ -160,6 +204,13 @@ pub(crate) fn ko_json(ko: &KnowledgeObject) -> J {
     for (k, v) in &ko.properties {
         props.insert(k.clone(), value_to_json(v));
     }
+    // v0.3 K1: extensions (epistemic state, history, evidence, authority,
+    // scope, trust) must survive to the query boundary — dropping them here
+    // is a silent epistemic metadata drop.
+    let mut ext = serde_json::Map::new();
+    for (k, v) in &ko.extensions {
+        ext.insert(k.clone(), value_to_json(v));
+    }
     json!({
         "koid": ko.koid.to_hex(),
         "version": ko.version,
@@ -167,6 +218,7 @@ pub(crate) fn ko_json(ko: &KnowledgeObject) -> J {
         "type_name": ko.metadata.type_name,
         "state": ko.lifecycle.state.to_string(),
         "properties": J::Object(props),
+        "extensions": J::Object(ext),
         "semantic": ko.semantic.as_ref().map(|s| json!({
             "embedding_model": s.embedding_model,
             "confidence": s.confidence,

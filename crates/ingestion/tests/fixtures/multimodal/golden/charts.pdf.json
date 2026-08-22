@@ -1,0 +1,1563 @@
+{
+  "ast": {
+    "document_id": null,
+    "page_count": 1,
+    "pages": [
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Image",
+            "children": [
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "Caption",
+                "children": [],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              }
+            ],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Figure 1: Revenue bar chart by quarter\nRevenue in USD millions"
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Table",
+            "children": [
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Fiscal Quarter"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Total Revenue"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Q1"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "1200"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              },
+              {
+                "asset": null,
+                "bbox": null,
+                "block_type": "TableRow",
+                "children": [
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "Q2"
+                  },
+                  {
+                    "asset": null,
+                    "bbox": null,
+                    "block_type": {
+                      "TableCell": {
+                        "col_span": 1,
+                        "row_span": 1
+                      }
+                    },
+                    "children": [],
+                    "confidence": null,
+                    "node_id": null,
+                    "payload": null,
+                    "text": "1500"
+                  }
+                ],
+                "confidence": null,
+                "node_id": null,
+                "payload": null,
+                "text": null
+              }
+            ],
+            "confidence": null,
+            "node_id": null,
+            "payload": {
+              "Table": {
+                "cells": [
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r1-0",
+                    "row_id": "r1",
+                    "text": "Q1",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r1-1",
+                    "row_id": "r1",
+                    "text": "1200",
+                    "value": {
+                      "Integer": 1200
+                    }
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h0",
+                    "confidence": 1.0,
+                    "id": "r2-0",
+                    "row_id": "r2",
+                    "text": "Q2",
+                    "value": null
+                  },
+                  {
+                    "bbox": null,
+                    "column_id": "h1",
+                    "confidence": 1.0,
+                    "id": "r2-1",
+                    "row_id": "r2",
+                    "text": "1500",
+                    "value": {
+                      "Integer": 1500
+                    }
+                  }
+                ],
+                "footnotes": [],
+                "headers": [
+                  {
+                    "id": "h0",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Fiscal Quarter"
+                  },
+                  {
+                    "id": "h1",
+                    "level": 1,
+                    "parent_id": null,
+                    "text": "Total Revenue"
+                  }
+                ],
+                "rows": [
+                  {
+                    "id": "r1",
+                    "index": 1
+                  },
+                  {
+                    "id": "r2",
+                    "index": 2
+                  }
+                ]
+              }
+            },
+            "text": null
+          },
+          {
+            "asset": {
+              "asset_id": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "content_hash": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "mime_type": "image/svg+xml",
+              "source": {
+                "bbox": null,
+                "document_id": null,
+                "end_offset": null,
+                "node_id": null,
+                "page": 1,
+                "start_offset": null
+              }
+            },
+            "bbox": null,
+            "block_type": "Image",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": null
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      }
+    ],
+    "source_type": "native"
+  },
+  "compilation": {
+    "commit_plan": {
+      "actions": [
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Fiscal Quarter",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Total Revenue",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Person",
+            "entity_name": "Revenue Q1",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Person"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Thing",
+            "entity_name": "Total Revenue Q1",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "type",
+                "Thing"
+              ]
+            ]
+          }
+        }
+      ],
+      "document_id": null,
+      "stats": {
+        "creates": 4,
+        "needs_review": 0,
+        "skips": 0,
+        "total_actions": 4,
+        "total_conflicts": 0,
+        "updates": 0
+      }
+    },
+    "embedded_chunks": [
+      {
+        "chunk": {
+          "char_count": 156,
+          "chunk_id": "unknown/chunk-0000",
+          "entity_mentions": [
+            "Fiscal Quarter",
+            "Total Revenue"
+          ],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 0,
+            "chunk_index": 0,
+            "end_page": 1,
+            "start_page": 1
+          },
+          "structure": {
+            "heading_path": [],
+            "section_chunk_index": 0,
+            "section_title": null,
+            "source_type": "mixed"
+          },
+          "text": "Figure 1: Revenue bar chart by quarter\nRevenue in USD millions\nFiscal Quarter\nTotal Revenue\nTotal Revenue\nFiscal Quarter | Total Revenue\nQ1 | 1200\nQ2 | 1500"
+        },
+        "embedding": [
+          0.04264014586806297,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.04264014586806297,
+          0.08528029173612595,
+          0.08528029173612595,
+          0.0,
+          0.0,
+          0.21320071816444397,
+          0.1705605834722519,
+          0.1705605834722519,
+          0.0,
+          0.0,
+          0.04264014586806297,
+          0.0,
+          0.21320071816444397,
+          0.12792043387889862,
+          0.04264014586806297,
+          0.04264014586806297,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.3411211669445038,
+          0.0,
+          0.0,
+          0.0,
+          0.04264014586806297,
+          0.12792043387889862,
+          0.0,
+          0.0,
+          0.0,
+          0.21320071816444397,
+          0.04264014586806297,
+          0.0,
+          0.04264014586806297,
+          0.12792043387889862,
+          0.0,
+          0.0,
+          0.1705605834722519,
+          0.21320071816444397,
+          0.0,
+          0.04264014586806297,
+          0.21320071816444397,
+          0.12792043387889862,
+          0.12792043387889862,
+          0.04264014586806297,
+          0.0,
+          0.04264014586806297,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.12792043387889862,
+          0.04264014586806297,
+          0.08528029173612595,
+          0.0,
+          0.0,
+          0.08528029173612595,
+          0.04264014586806297,
+          0.0,
+          0.0,
+          0.0,
+          0.08528029173612595,
+          0.04264014586806297,
+          0.21320071816444397,
+          0.08528029173612595,
+          0.08528029173612595,
+          0.04264014586806297,
+          0.04264014586806297,
+          0.04264014586806297,
+          0.0,
+          0.21320071816444397,
+          0.21320071816444397,
+          0.04264014586806297,
+          0.1705605834722519,
+          0.08528029173612595,
+          0.2984810173511505,
+          0.0,
+          0.0,
+          0.04264014586806297,
+          0.04264014586806297,
+          0.0,
+          0.04264014586806297,
+          0.0,
+          0.04264014586806297,
+          0.12792043387889862,
+          0.08528029173612595,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08528029173612595,
+          0.12792043387889862,
+          0.0,
+          0.04264014586806297,
+          0.04264014586806297,
+          0.0,
+          0.08528029173612595,
+          0.12792043387889862,
+          0.0,
+          0.04264014586806297,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.04264014586806297,
+          0.0,
+          0.04264014586806297,
+          0.04264014586806297,
+          0.0,
+          0.12792043387889862,
+          0.0,
+          0.04264014586806297,
+          0.04264014586806297,
+          0.0,
+          0.0,
+          0.04264014586806297,
+          0.08528029173612595,
+          0.0,
+          0.08528029173612595,
+          0.0
+        ],
+        "embedding_provider": "mock-char-ngram"
+      }
+    ],
+    "evidence_trail": {
+      "document_id": null,
+      "nodes": [
+        {
+          "entities": [
+            "Fiscal Quarter",
+            "Total Revenue",
+            "Revenue Q1",
+            "Total Revenue Q1"
+          ],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "step": "Extracted 4 entities from document text"
+        },
+        {
+          "entities": [],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h0",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h0",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-chart-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "step": "Extracted 5 facts from document structure"
+        },
+        {
+          "entities": [],
+          "phase": "D5-ontology",
+          "source": [],
+          "step": "Discovered 2 classes, 2 properties, 0 relationships"
+        },
+        {
+          "entities": [
+            "Fiscal Quarter",
+            "Total Revenue",
+            "Revenue Q1",
+            "Total Revenue Q1"
+          ],
+          "phase": "D6-resolution",
+          "source": [],
+          "step": "Resolved 4 entities: 0 matched, 0 ambiguous, 4 unmatched"
+        },
+        {
+          "entities": [
+            "Fiscal Quarter",
+            "Total Revenue",
+            "Revenue Q1",
+            "Total Revenue Q1"
+          ],
+          "phase": "D7-reconcile",
+          "source": [],
+          "step": "Reconciled: 4 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+        }
+      ]
+    },
+    "fragments": [
+      {
+        "confidence": 1.0,
+        "content": {
+          "Chart": {
+            "asset": {
+              "asset_id": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "content_hash": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "mime_type": "image/svg+xml",
+              "source": {
+                "bbox": null,
+                "document_id": null,
+                "end_offset": null,
+                "node_id": null,
+                "page": 1,
+                "start_offset": null
+              }
+            },
+            "chart_type": "Bar",
+            "extracted_data": {
+              "cells": [
+                {
+                  "bbox": null,
+                  "column_id": "h0",
+                  "confidence": 1.0,
+                  "id": "r1-0",
+                  "row_id": "r1",
+                  "text": "Q1",
+                  "value": null
+                },
+                {
+                  "bbox": null,
+                  "column_id": "h1",
+                  "confidence": 1.0,
+                  "id": "r1-1",
+                  "row_id": "r1",
+                  "text": "1200",
+                  "value": {
+                    "Integer": 1200
+                  }
+                },
+                {
+                  "bbox": null,
+                  "column_id": "h0",
+                  "confidence": 1.0,
+                  "id": "r2-0",
+                  "row_id": "r2",
+                  "text": "Q2",
+                  "value": null
+                },
+                {
+                  "bbox": null,
+                  "column_id": "h1",
+                  "confidence": 1.0,
+                  "id": "r2-1",
+                  "row_id": "r2",
+                  "text": "1500",
+                  "value": {
+                    "Integer": 1500
+                  }
+                }
+              ],
+              "footnotes": [],
+              "headers": [
+                {
+                  "id": "h0",
+                  "level": 1,
+                  "parent_id": null,
+                  "text": "Fiscal Quarter"
+                },
+                {
+                  "id": "h1",
+                  "level": 1,
+                  "parent_id": null,
+                  "text": "Total Revenue"
+                }
+              ],
+              "rows": [
+                {
+                  "id": "r1",
+                  "index": 1
+                },
+                {
+                  "id": "r2",
+                  "index": 2
+                }
+              ]
+            },
+            "series": [
+              {
+                "name": "Total Revenue",
+                "values": [
+                  {
+                    "bbox": null,
+                    "confidence": 1.0,
+                    "x": "Q1",
+                    "y": 1200.0
+                  },
+                  {
+                    "bbox": null,
+                    "confidence": 1.0,
+                    "x": "Q2",
+                    "y": 1500.0
+                  }
+                ]
+              }
+            ],
+            "title": "Figure 1: Revenue bar chart by quarter\nRevenue in USD millions",
+            "x_axis": {
+              "label": "Fiscal Quarter",
+              "max": null,
+              "min": null,
+              "unit": null
+            },
+            "y_axis": {
+              "label": "Total Revenue",
+              "max": null,
+              "min": null,
+              "unit": null
+            }
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [],
+          "neighboring_fragments": [
+            "frag-p1-b1"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b0",
+        "modality": "Chart",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Table": {
+            "cells": [
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r1-0",
+                "row_id": "r1",
+                "text": "Q1",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r1-1",
+                "row_id": "r1",
+                "text": "1200",
+                "value": {
+                  "Integer": 1200
+                }
+              },
+              {
+                "bbox": null,
+                "column_id": "h0",
+                "confidence": 1.0,
+                "id": "r2-0",
+                "row_id": "r2",
+                "text": "Q2",
+                "value": null
+              },
+              {
+                "bbox": null,
+                "column_id": "h1",
+                "confidence": 1.0,
+                "id": "r2-1",
+                "row_id": "r2",
+                "text": "1500",
+                "value": {
+                  "Integer": 1500
+                }
+              }
+            ],
+            "footnotes": [],
+            "headers": [
+              {
+                "id": "h0",
+                "level": 1,
+                "parent_id": null,
+                "text": "Fiscal Quarter"
+              },
+              {
+                "id": "h1",
+                "level": 1,
+                "parent_id": null,
+                "text": "Total Revenue"
+              }
+            ],
+            "rows": [
+              {
+                "id": "r1",
+                "index": 1
+              },
+              {
+                "id": "r2",
+                "index": 2
+              }
+            ]
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [],
+          "neighboring_fragments": [
+            "frag-p1-b0"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b1",
+        "modality": "Table",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      }
+    ],
+    "ir": {
+      "content_trust": null,
+      "document_id": null,
+      "entities": [
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Figure 1: Revenue bar chart by quarter\nRevenue in USD millions\nFiscal Quarter\nTotal Revenue\nTotal Revenue",
+            "Fiscal Quarter | Total Revenue\nQ1 | 1200\nQ2 | 1500"
+          ],
+          "name": "Fiscal Quarter",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Figure 1: Revenue bar chart by quarter\nRevenue in USD millions\nFiscal Quarter\nTotal Revenue\nTotal Revenue",
+            "Fiscal Quarter | Total Revenue\nQ1 | 1200\nQ2 | 1500"
+          ],
+          "name": "Total Revenue",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Revenue Q1"
+          ],
+          "name": "Revenue Q1",
+          "type_hint": "Person"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Total Revenue Q1"
+          ],
+          "name": "Total Revenue Q1",
+          "type_hint": "Thing"
+        }
+      ],
+      "events": [],
+      "extractor": "mock",
+      "facts": [
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h0",
+                "table_id": "frag-p1-b1"
+              }
+            }
+          },
+          "statement": "Fiscal Quarter: Q1"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r1-h1",
+                "table_id": "frag-p1-b1"
+              }
+            }
+          },
+          "statement": "Total Revenue: 1200"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h0",
+                "table_id": "frag-p1-b1"
+              }
+            }
+          },
+          "statement": "Fiscal Quarter: Q2"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": {
+              "TableCell": {
+                "cell_id": "r2-h1",
+                "table_id": "frag-p1-b1"
+              }
+            }
+          },
+          "statement": "Total Revenue: 1500"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-chart-v1",
+            "page": 1,
+            "source": null
+          },
+          "statement": "Chart: Figure 1: Revenue bar chart by quarter\nRevenue in USD millions (Bar)"
+        }
+      ],
+      "page_count": 1,
+      "relations": [],
+      "temporal": []
+    },
+    "ontology": {
+      "classes": [
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Fiscal Quarter'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "Person",
+          "parent": "Person",
+          "signal_count": 3
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Total Revenue Q1'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "Thing",
+          "parent": null,
+          "signal_count": 1
+        }
+      ],
+      "document_id": null,
+      "method": "ir-discovery-mock",
+      "properties": [
+        {
+          "class_name": "Document",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h0",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h0",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-chart-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "fiscal_quarter",
+          "required": false,
+          "value_type": "DateTime"
+        },
+        {
+          "class_name": "Document",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r1-h1",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": {
+                "TableCell": {
+                  "cell_id": "r2-h1",
+                  "table_id": "frag-p1-b1"
+                }
+              }
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-chart-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "revenue",
+          "required": false,
+          "value_type": "Float"
+        }
+      ],
+      "relationships": []
+    },
+    "resolution": {
+      "ambiguous": [],
+      "matched": [],
+      "stats": {
+        "ambiguous_count": 0,
+        "average_confidence": 0.0,
+        "matched_count": 0,
+        "total_entities": 4,
+        "unmatched_count": 4
+      },
+      "unmatched": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Fiscal Quarter",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Total Revenue",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Revenue Q1",
+          "entity_type": "Person",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Total Revenue Q1",
+          "entity_type": "Thing",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        }
+      ]
+    },
+    "secret_findings": [],
+    "stats": {
+      "phases": [
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D3-ast"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D4-fragments"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 9,
+          "phase": "D4-ir"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 4,
+          "phase": "D5-ontology"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 4,
+          "phase": "D6-resolution"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 4,
+          "phase": "D7-reconcile"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D8-projection"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D8-visual-index"
+        }
+      ],
+      "total_us": 0
+    },
+    "visual_index": [
+      {
+        "asset_id": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+        "bbox": null,
+        "document_id": "",
+        "embedding": [
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.09712858498096466,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.2913857400417328,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.0,
+          0.09712858498096466,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.09712858498096466,
+          0.09712858498096466,
+          0.0,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.0,
+          0.09712858498096466,
+          0.19425716996192932,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.19425716996192932,
+          0.0,
+          0.09712858498096466,
+          0.19425716996192932,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09712858498096466,
+          0.19425716996192932,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "fragment_ids": [
+          "frag-p1-b0"
+        ],
+        "page": 1,
+        "semantic_caption": "Figure 1: Revenue bar chart by quarter\nRevenue in USD millions"
+      }
+    ]
+  },
+  "document": {
+    "ocr_stats": {
+      "average_confidence": 0.0,
+      "pages_ocr_attempted": 0,
+      "pages_ocr_failed": 0,
+      "pages_ocr_succeeded": 0
+    },
+    "page_count": 1,
+    "pages": [
+      {
+        "char_count": 126,
+        "images": [
+          {
+            "asset": {
+              "asset_id": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "content_hash": "8aed4fb55dcbe79d8594d0aa7f0d5c2ed74d4a50e423c4b83e30d6b52891f0e5",
+              "mime_type": "image/svg+xml",
+              "source": {
+                "bbox": null,
+                "document_id": null,
+                "end_offset": null,
+                "node_id": null,
+                "page": 1,
+                "start_offset": null
+              }
+            },
+            "bbox": null
+          }
+        ],
+        "ocr_confidence": null,
+        "page_number": 1,
+        "source": "native",
+        "text": "Figure 1: Revenue bar chart by quarter\nRevenue in USD millions\n\n| Fiscal Quarter | Total Revenue |\n| Q1 | 1200 |\n| Q2 | 1500 |"
+      }
+    ],
+    "total_chars": 126
+  }
+}

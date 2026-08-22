@@ -62,6 +62,7 @@ section .lead { color: var(--muted); font-size: 15px; margin-bottom: 32px; }
 .feature { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 24px; }
 .feature .icon { font-size: 24px; margin-bottom: 10px; }
 .feature h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.feature h3 .ver { font-size: 10px; color: var(--accent2); background: rgba(184,154,224,0.12); border: 1px solid rgba(184,154,224,0.3); padding: 1px 6px; border-radius: 999px; vertical-align: 1px; margin-left: 4px; }
 .feature p { color: var(--muted); font-size: 13px; }
 
 .comparison { overflow-x: auto; }
@@ -123,7 +124,7 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
 
 <section class="hero">
   <h1>The <em>Agent-First</em><br>Knowledge Database</h1>
-  <p class="sub">A SQL-style query language and embedded database for knowledge objects — code, docs, policies, programs. Native MCP interface. Graph, vector, and text search in one statement.</p>
+  <p class="sub">A SQL-style query language and embedded database for knowledge objects — code, docs, policies, programs — every fact versioned, evidence-backed, and traceable. Native MCP interface. Graph, vector, and text search in one statement.</p>
   <div class="cta">
     <a href="#install" class="cta-primary">Install aikoql</a>
     <a href="/docs/" class="cta-secondary">Read the Docs</a>
@@ -137,7 +138,7 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
 <div class="stats">
   <div class="stat"><div class="n">370K+</div><div class="l">Reads/sec</div></div>
   <div class="stat"><div class="n">120K+</div><div class="l">Writes/sec</div></div>
-  <div class="stat"><div class="n">59</div><div class="l">MCP Tools</div></div>
+  <div class="stat"><div class="n">88</div><div class="l">MCP Tools</div></div>
   <div class="stat"><div class="n">4</div><div class="l">Language SDKs</div></div>
   <div class="stat"><div class="n">4</div><div class="l">DB Connectors</div></div>
   <div class="stat"><div class="n">0</div><div class="l">Runtime Deps</div></div>
@@ -157,8 +158,8 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
     </div>
     <div class="feature">
       <div class="icon">🔐</div>
-      <h3>Encryption at Rest</h3>
-      <p>AES-256-GCM + ChaCha20-Poly1305. Envelope encryption (KEK→DEK→Data). Per-tenant key isolation. Field-level encryption policies. Online key rotation.</p>
+      <h3>Encryption at Rest <span class="ver">v0.2</span></h3>
+      <p>AES-256-GCM + ChaCha20-Poly1305. Envelope encryption (KEK→DEK→Data) wired end-to-end in <code>serve</code>: <code>[encryption]</code> TOML config, <code>AIKOQL_PASSPHRASE</code> env, keygen v2 key envelope, field-level policies per type. Wrong passphrase fails closed — never silent plaintext.</p>
     </div>
     <div class="feature">
       <div class="icon">📝</div>
@@ -209,6 +210,31 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
       <div class="icon">🏗</div>
       <h3>Agent Knowledge Interface</h3>
       <p>Knowledge primitives with authority, scope, evidence, and lifecycle. Markdown and Rust compilers. Conflict detection, staleness detection, change reconciliation — knowledge that stays current with your repo.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🧬</div>
+      <h3>Epistemic Status Model <span class="ver">v0.3</span></h3>
+      <p>Every fact carries <em>how we know it's true</em>: observed → asserted → verified → contradicted → superseded, over a constrained 7-state transition table. Append-only epistemic history. Agents can't silently flip truth states.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">⏱️</div>
+      <h3>Bitemporal Knowledge <span class="ver">v0.3</span></h3>
+      <p>Valid-time (<code>valid_from</code>/<code>valid_to</code>) plus MVCC commit-time. Ask what was true at any moment: <code>AS_OF</code>, <code>BETWEEN</code>, <code>HISTORICAL</code>, and <code>EPISTEMIC</code> filters in aikoql. Supersession stamps when a fact stopped being true.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🧾</div>
+      <h3>Evidence &amp; Derivation Lineage <span class="ver">v0.3</span></h3>
+      <p>Evidence is mandatory on observation, assertion, and verification. <code>derive()</code> records WHY / FROM WHAT / HOW / BY WHOM / WHEN / WITH WHICH EVIDENCE. <code>trace()</code> answers all six with one call — provenance, not vibes.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">⚔️</div>
+      <h3>Knowledge Transactions <span class="ver">v0.3</span></h3>
+      <p>Contradict (with authority snapshots), supersede (valid_to + SUPERSEDES edge), merge, invalidate — with a DERIVED_FROM sweep that stamps every dependent stale. Conflict resolution never silently picks a side.</p>
+    </div>
+    <div class="feature">
+      <div class="icon">🎓</div>
+      <h3>Agent Experience Reuse <span class="ver">v0.3</span></h3>
+      <p><code>record_experience</code> captures outcomes as TTL-bounded, evidence-backed KOs. <code>find_experiences</code> matches them to new tasks under reuse conditions — and <code>compile_context</code> injects the lesson into the next agent's context package.</p>
     </div>
   </div>
 </section>
@@ -267,6 +293,7 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
 ├──────────────────────────────────────────────────────────────┤
 │  <span class="l3">KNOWLEDGE KERNEL</span>                                              │
 │  <span class="l3">MVCC · OCC · HLC · RBAC · Audit · CDC</span>                         │
+│  <span class="l3">Epistemic Model · Valid-Time · Evidence · Derivation</span>          │
 │  <span class="l3">Schema Registry · Ontology Registry · Constraint Engine</span>       │
 ├──────────────────────────────────────────────────────────────┤
 │  <span class="l4">STORAGE KERNEL</span>                                                 │
@@ -314,6 +341,11 @@ aikoql&gt; MATCH Doc SIMILAR TO "refund window"
           SCORE BM25 USING EMBEDDING RETURN *</code></pre>
   <pre><code># Graph traversal — walk relationships from a set of objects
 aikoql&gt; MATCH Person TRAVERSE knows RETURN *</code></pre>
+  <pre><code># Temporal — what was true, and when did it change (valid-time + MVCC)
+aikoql&gt; MATCH Employee AS_OF 1724025600000 RETURN *
+aikoql&gt; MATCH Employee BETWEEN 1724025600000 AND 1724630400000 RETURN *
+aikoql&gt; MATCH Employee HISTORICAL RETURN *            # every committed version
+aikoql&gt; MATCH Employee EPISTEMIC verified RETURN *    # only verified knowledge</code></pre>
   <p style="margin-top:16px;color:var(--muted);font-size:14px">Full reference: <a href="/docs/api-reference">API Reference</a> · <a href="/docs/getting-started">Getting Started</a></p>
 </section>
 
@@ -321,7 +353,7 @@ aikoql&gt; MATCH Person TRAVERSE knows RETURN *</code></pre>
 
 <section id="install">
   <h2>Get Started in 5 Seconds</h2>
-  <p class="lead">Single binary. Zero dependencies. No installers.</p>
+  <p class="lead">Single binary. Zero dependencies. No installers. Latest release: v0.1.18 — v0.2 (encryption) and v0.3 (knowledge lifecycle) are in the release pipeline.</p>
   <div class="install-section">
     <h3>Install</h3>
     <div class="tabs">
@@ -413,6 +445,11 @@ result, _ := client.Remember(map[string]interface{}{"type_name": "Note"})</code>
       <tr><td>Constraint engine</td><td class="yes">Node keys</td><td class="yes">Full</td><td class="yes">Schema val</td><td class="no">—</td><td class="yes">✅ C1-C9</td></tr>
       <tr><td>DB connectors built-in</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ 4 connectors</td></tr>
       <tr><td>Envelope encryption</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ KEK→DEK</td></tr>
+      <tr><td>Epistemic status model</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ 7 states</td></tr>
+      <tr><td>Temporal queries (AS_OF/BETWEEN/HISTORICAL)</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ valid-time + MVCC</td></tr>
+      <tr><td>Evidence-backed lineage (trace)</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ WHY/FROM WHAT/HOW</td></tr>
+      <tr><td>Knowledge transactions (contradict/supersede/invalidate)</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ conflict KOs + sweep</td></tr>
+      <tr><td>Agent experience reuse</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✅ record + match</td></tr>
     </table>
   </div>
 </section>

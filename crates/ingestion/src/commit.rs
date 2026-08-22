@@ -665,7 +665,7 @@ mod tests {
         Evidence {
             document_id: Some("doc-001".into()),
             page: Some(1),
-            bbox_text: None,
+            source: None,
             extractor: "mock".into(),
             model: Some("mock-v1".into()),
             confidence: 0.85,

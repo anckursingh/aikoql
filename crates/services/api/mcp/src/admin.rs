@@ -16,14 +16,7 @@ pub(crate) fn run_backup(db_path: &str) {
 
     // Gather metadata, then drop kernel to release file lock before copy.
     let (seq, object_count) = {
-        let engine = match RedbEngine::open(db_path) {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("open source db: {}", e);
-                std::process::exit(1);
-            }
-        };
-        let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+        let kernel = match engine::open_kernel_auto(db_path) {
             Ok(k) => k,
             Err(e) => {
                 eprintln!("open kernel: {}", e);
@@ -107,14 +100,7 @@ pub(crate) fn run_restore(backup_dir: &str, target_path: &str) {
     println!("Restored to: {}", target_path);
 }
 pub(crate) fn run_audit(db_path: &str) {
-    let engine = match RedbEngine::open(db_path) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("open db: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let kernel = match Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xCAFE) {
+    let kernel = match engine::open_kernel_auto(db_path) {
         Ok(k) => k,
         Err(e) => {
             eprintln!("open kernel: {}", e);
@@ -160,28 +146,43 @@ pub(crate) fn run_report(path: &str) {
 }
 pub(crate) fn run_keygen(path: &str) {
     use aikoql_kernel::security::crypto::{Aes256Gcm, CryptoProvider};
-    let key = Aes256Gcm::new().generate_key();
-    let hex: String = key.iter().map(|b| format!("{:02x}", b)).collect();
+    use aikoql_kernel::security::kms::LocalKms;
+    use aikoql_kernel::security::KeyManager;
+    // Passphrase: AIKOQL_PASSPHRASE env, else generate one and print it once —
+    // the key file is useless without it, so keep a copy.
+    let passphrase = std::env::var("AIKOQL_PASSPHRASE")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| {
+            let p = Aes256Gcm::new()
+                .generate_key()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect();
+            println!("generated passphrase (save it): {p}");
+            p
+        });
     if path == "-" {
-        println!("{}", hex);
-    } else {
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            if !parent.as_os_str().is_empty() {
-                if let Err(e) = std::fs::create_dir_all(parent) {
-                    eprintln!("create key dir: {}", e);
-                    std::process::exit(1);
-                }
+        println!("{}", passphrase);
+        return;
+    }
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("create key dir: {}", e);
+                std::process::exit(1);
             }
         }
-        if let Err(e) = std::fs::write(path, &hex) {
-            eprintln!("write key file: {}", e);
-            std::process::exit(1);
-        }
-        println!("Key written to: {}", path);
-        println!("Set encryption.key_path in aikoql.toml to this path.");
-        println!(
-            "Restrict file permissions: chmod 600 {} (Linux) or equivalent.",
-            path
-        );
     }
+    // Writes the v2 key envelope (88 bytes) — the format serve reads.
+    if let Err(e) = LocalKms::new(path).master_key(&passphrase) {
+        eprintln!("write key file: {}", e);
+        std::process::exit(1);
+    }
+    println!("Key written to: {}", path);
+    println!("Set encryption.key_path in aikoql.toml to this path.");
+    println!(
+        "Restrict file permissions: chmod 600 {} (Linux) or equivalent.",
+        path
+    );
 }

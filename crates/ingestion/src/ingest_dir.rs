@@ -235,7 +235,7 @@ fn finalize_ingest_result(
         evidence: Evidence {
             document_id: merged.document_id.clone(),
             page: None,
-            bbox_text: None,
+            source: None,
             extractor: "ingest-dir".into(),
             model: None,
             confidence: 1.0,
@@ -391,6 +391,7 @@ pub fn compile_file(path: &Path) -> Option<KnowledgeIr> {
         crate::markdown::compile_markdown_file(
             &path.to_string_lossy(),
             Some(path.to_string_lossy().to_string()),
+            None,
         )
         .ok()
         .filter(|ir| !ir.entities.is_empty())
@@ -549,7 +550,7 @@ fn file_evidence(name: &str) -> Evidence {
     Evidence {
         document_id: Some(name.to_string()),
         page: None,
-        bbox_text: None,
+        source: None,
         extractor: "ingest-dir".into(),
         model: None,
         confidence: 1.0,
@@ -933,7 +934,7 @@ mod tests {
         fs::write(tmp.join("hello.txt"), "hello world").unwrap();
         assert!(!is_binary_file(&tmp.join("hello.txt")));
         // binary file
-        fs::write(tmp.join("data.bin"), &[0u8, 1, 2, 3]).unwrap();
+        fs::write(tmp.join("data.bin"), [0u8, 1, 2, 3]).unwrap();
         assert!(is_binary_file(&tmp.join("data.bin")));
         let _ = fs::remove_dir_all(&tmp);
     }

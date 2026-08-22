@@ -36,7 +36,27 @@ pub struct MatchStatement {
     pub predicates: Vec<Predicate>,
     pub similarity: Option<SimilarityClause>,
     pub traverse: Option<TraverseClause>,
+    /// v0.3 K2: temporal clause (AS_OF / BETWEEN / HISTORICAL).
+    pub temporal: Option<TemporalClause>,
+    /// v0.3 K1 leftover: epistemic filter clause (EPISTEMIC <status>, ...).
+    pub epistemic: Option<EpistemicClause>,
     pub projection: Projection,
+}
+
+/// v0.3 K2: temporal query clause. `AsOf`/`Historical` are transaction time
+/// (millis since epoch); `Between` is a valid-time interval [from, to).
+#[derive(Clone, Debug, PartialEq)]
+pub enum TemporalClause {
+    AsOf(u64),
+    Between { from: u64, to: u64 },
+    Historical,
+}
+
+/// v0.3 K1 leftover: protocol-level epistemic filter — keep rows whose
+/// epistemic status is one of `allowed` (status names, e.g. "verified").
+#[derive(Clone, Debug, PartialEq)]
+pub struct EpistemicClause {
+    pub allowed: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -1402,7 +1402,8 @@ mod tests {
                 classification: None,
             },
         );
-        ko3.properties.insert("c".into(), Value::Float(3.14));
+        ko3.properties
+            .insert("c".into(), Value::Float(std::f64::consts::PI));
         kos.push(ko3);
 
         let def = discover_ontology(&kos);
@@ -1446,7 +1447,7 @@ mod tests {
         ko.properties.insert("bool_prop".into(), Value::Bool(true));
         ko.properties.insert("int_prop".into(), Value::Int(42));
         ko.properties
-            .insert("float_prop".into(), Value::Float(3.14));
+            .insert("float_prop".into(), Value::Float(std::f64::consts::PI));
         ko.properties
             .insert("text_prop".into(), Value::Text("hello".into()));
         ko.properties.insert("null_prop".into(), Value::Null);

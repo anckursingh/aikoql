@@ -227,11 +227,11 @@ fn real_world_agent_workflow() {
             "subject": "admin", "type_name": "Employee", "text": "engineering lead", "k": 5
         }),
     );
-    assert!(found["results"].as_array().unwrap().len() >= 1);
+    assert!(!found["results"].as_array().unwrap().is_empty());
 
     // ── Phase 5: Aikoql Query ────────────────────────────────────────────
 
-    let query = format!("MATCH Employee WHERE dept == \"Engineering\" RETURN *");
+    let query = "MATCH Employee WHERE dept == \"Engineering\" RETURN *".to_string();
     let results = c.call("aikoql", &json!({"query": query, "subject": "admin"}));
     assert!(results["results"].as_array().unwrap().len() >= 2);
 
@@ -257,7 +257,7 @@ fn real_world_agent_workflow() {
 
     // List programs.
     let programs = c.call("list_programs", &json!({"subject": "admin"}));
-    assert!(programs["programs"].as_array().unwrap().len() >= 1);
+    assert!(!programs["programs"].as_array().unwrap().is_empty());
 
     // ── Phase 7: Policy-as-KO ────────────────────────────────────────────
 
@@ -310,7 +310,7 @@ fn real_world_agent_workflow() {
 
     let audit = c.call("audit_report", &json!({}));
     assert!(audit["total_objects"].as_u64().unwrap() >= 4);
-    assert!(audit["audit_chain"].as_str().unwrap().len() > 0);
+    assert!(!audit["audit_chain"].as_str().unwrap().is_empty());
 
     // ── Phase 10: ABI Version ────────────────────────────────────────────
 

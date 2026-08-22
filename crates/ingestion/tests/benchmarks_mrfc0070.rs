@@ -169,7 +169,7 @@ use crate::auth::{AuthProvider, Identity};
         let code_ir = compile_rust_source(RUST_CODE, Some("lib.rs"));
         let merged = merge_knowledge_ir(&[md_ir, code_ir]);
 
-        let raw_tokens = (MARKDOWN_DOC.len() + RUST_CODE.len() + 3) / 4;
+        let raw_tokens = (MARKDOWN_DOC.len() + RUST_CODE.len()).div_ceil(4);
 
         let pkg = compile_context("add a constraint validation rule", &merged, 0);
         let ctx_tokens = pkg.estimated_tokens;
@@ -366,7 +366,7 @@ use crate::auth::{AuthProvider, Identity};
         let code_ir = compile_rust_source(RUST_CODE, Some("lib.rs"));
         let merged = merge_knowledge_ir(&[md_ir, code_ir]);
 
-        let raw_tokens = (MARKDOWN_DOC.len() + RUST_CODE.len() + 3) / 4;
+        let raw_tokens = (MARKDOWN_DOC.len() + RUST_CODE.len()).div_ceil(4);
 
         // Define simulated agent tasks with expected answers.
         #[derive(Debug)]

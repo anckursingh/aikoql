@@ -511,7 +511,7 @@ mod tests {
         Evidence {
             document_id: Some("test-doc.pdf".into()),
             page: Some(page),
-            bbox_text: None,
+            source: None,
             extractor: "mock".into(),
             model: Some("mock-v1".into()),
             confidence: 0.85,
@@ -1011,7 +1011,15 @@ mod tests {
         let ev = Evidence {
             document_id: Some("doc.pdf".into()),
             page: Some(3),
-            bbox_text: Some("(100,200,300,40)".into()),
+            source: Some(crate::source::EvidenceSource::Region {
+                bbox: crate::ast::BoundingBox {
+                    page: 3,
+                    x: 100.0,
+                    y: 200.0,
+                    width: 300.0,
+                    height: 40.0,
+                },
+            }),
             extractor: "mock".into(),
             model: Some("mock-v1".into()),
             confidence: 0.85,
@@ -1028,6 +1036,17 @@ mod tests {
         let proposal = discover_ontology_from_ir(&ir);
         let class_ev = &proposal.classes[0].evidence[0];
         assert_eq!(class_ev.page, Some(3));
-        assert_eq!(class_ev.bbox_text.as_deref(), Some("(100,200,300,40)"));
+        assert_eq!(
+            class_ev.source,
+            Some(crate::source::EvidenceSource::Region {
+                bbox: crate::ast::BoundingBox {
+                    page: 3,
+                    x: 100.0,
+                    y: 200.0,
+                    width: 300.0,
+                    height: 40.0,
+                },
+            })
+        );
     }
 }

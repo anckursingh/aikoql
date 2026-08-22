@@ -8,17 +8,45 @@ repository.workspace = true
 
 [dependencies]
 aikoql-kernel = { path = "../kernel" }
-pdf-extract = "0.9"
+# PDF text (per-page extract_text_chunks) + embedded-image extraction.
+# pdf-extract (0.9) was dropped in the DoD 19 root-cause fix: it joins pages
+# without a separator, silently merging multi-page PDFs into one page.
+lopdf = "0.36"
 zip = "0.6"
+sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rayon = "1"
 syn = { version = "2", features = ["full", "parsing", "extra-traits", "printing"] }
 quote = "1"
 proc-macro2 = "1"
+# PR-F feature "vlm": OpenAI-compatible vision calls. Optional — never in the
+# default build (HLD §33: no mandatory VLM).
+ureq = { version = "3", features = ["json"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+# FlateDecode PDF fixtures in tests. Already in the lockfile via lopdf.
+flate2 = "1"
+
+[features]
+# PR-F DoD row 14: optional VLM analyzer set (ureq, env-configured).
+# NOT in the default build — self-hosted AIKOQL must not require a VLM
+# (HLD §33: "Do not invoke a VLM for every image").
+vlm = ["dep:ureq"]
+# PR-J HLD §16 Phase 3: optional transformer boundary scorer (ureq,
+# env-configured). NOT in the default build — HLD §56/DoD row 10:
+# no mandatory heavyweight AI.
+transform = ["dep:ureq"]
+# PR-P HLD §60: optional remote embedding provider (ureq, env-configured) —
+# the §60 real-model experiment harness. NOT in the default build: the mock
+# provider stays until the measured gate verdict is GO (rollback = unset env).
+remote_emb = ["dep:ureq"]
+# PR-R HLD §53 "End-to-end": optional answer generator (ureq, env-configured)
+# for the e2e answer-quality measurement. Never in the default build —
+# AIKOQL is a knowledge store, not an answer engine (HLD §56/§59); the
+# generator exists only to run the §53 instrument.
+answer_gen = ["dep:ureq"]
 
 [[bench]]
 name = "ingest_benchmark"

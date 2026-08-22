@@ -42,7 +42,9 @@ def mcp_server():
     port = sock.getsockname()[1]
     sock.close()
 
-    db = tempfile.mktemp(suffix=".redb")
+    # CodeQL py/insecure-temporary-file: mkstemp → non-guessable name, 0600.
+    fd, db = tempfile.mkstemp(suffix=".redb")
+    os.close(fd)
     proc = subprocess.Popen(
         [binary, "--listen", f"127.0.0.1:{port}", db],
         stdout=subprocess.PIPE,
