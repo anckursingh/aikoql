@@ -176,7 +176,9 @@ jobs:
           # crates/ yields the Struct entities the gate asserts, without
           # pulling build artifacts into the corpus. No model is installed
           # here — ingestion degrades to lexical (PRR-3, no downloads).
-          KOID=$(bin/aikoql-mcp ingest-dir crates "$DB" | grep '  KOID: ' | head -1 | awk '{print $3}')
+          # ingest-dir prints "  KOID: <hex>" on stdout; awk '{print $3}' is
+          # empty on that line ($1="KOID:", $2=<hex>) — extract by pattern.
+          KOID=$(bin/aikoql-mcp ingest-dir crates "$DB" | sed -n 's/^ *KOID: *//p' | head -1)
           [ -n "$KOID" ] || { echo "ingest-dir printed no KOID"; exit 1; }
           node scripts/e2e-dogfood.js bin/aikoql-mcp "$DB" "$KOID"
           node scripts/e2e-restart.js bin/aikoql-mcp "$DB"
