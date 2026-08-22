@@ -72,6 +72,9 @@
 //! arrives in the PR that re-pins the baseline (the pinned 0.867 stays
 //! stable while the real-model experiment runs).
 
+// Shared test helper: each test binary uses a subset of this module.
+#![allow(dead_code)]
+
 use aikoql_ingestion::{EmbeddingProvider, KnowledgeBoundaryDetector, VisualIndexRecord};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

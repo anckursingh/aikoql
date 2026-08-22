@@ -35,6 +35,11 @@ jobs:
       # (Recall@K/MRR/NDCG) — the pinned baseline future analyzer variants
       # are compared against.
       - run: cargo test -p aikoql-ingestion --test retrieval_quality -- --nocapture
+      # PR-Q (HLD §53/§60): semantic-extraction quality — entity/relation
+      # precision/recall + fact accuracy over the golden suite, judged
+      # against hand-authored ground truth. The last two §60 decision
+      # metrics (fact + relation extraction quality) now have instruments.
+      - run: cargo test -p aikoql-ingestion --test semantic_extraction_quality -- --nocapture
 
   test-linux:
     name: Test (Linux)

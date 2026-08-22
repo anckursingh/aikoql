@@ -3713,6 +3713,30 @@ A reviewer rated the branch "80–85% MVP-ready" with five hardening items and a
 
 **Local MVP gate (release build)**: ingest 4138/218/6250 ✓ → dogfood all 10 questions ✓ (Q4 evidence: `crates\cluster\proxy\src\main.rs` via ast_extraction @ 0.85) → restart PASS ✓ → `cargo fmt --all` clean, clippy `-p aikoql-kernel -p aikoql-mcp --all-targets` 0 warnings, kernel+mcp suites all green. **Verdict: MVP-ready per the reviewer's own gate; the six items work reliably, on CI, on the distribution artifact, inside the loopback boundary.**
 
+### Implemented now — PR-Q: §53 semantic-extraction instrument (2026-08-22, commit on `feature/mvp-launch`)
+
+The last two §60 decision metrics without an instrument — **fact extraction and relation extraction quality** — plus the rest of the §53 "Semantic extraction" stage (entity precision/recall, fact accuracy) are now measured over the golden suite. `tests/semantic_extraction_quality.rs` compiles each fixture through the real mock baseline pipeline (rule boundary + mock components, the same stack as the golden suite and the retrieval instrument) and judges the `KnowledgeIr` against hand-authored ground truth per fixture: set-based normalized exact matching (entities by name; relations by (subject, object) — the mock's only predicate is `related_to`; facts by statement), precision = |extracted ∩ gold| / |extracted| (1.0 on empty extraction — recall carries the failure), recall = |extracted ∩ gold| / |gold|, macro-averaged over the fixtures judged in each category (a gold-empty category is skipped, not scored — same convention as scanned.pdf's retrieval exclusion). Extracted duplicates collapse into the set.
+
+**Measured baseline (2026-08-22)**: entity P/R **0.670 / 0.958** (6 fixtures), relation P/R **1.000 / 0.833** (2 fixtures), fact accuracy/recall **0.853 / 1.000** (5 fixtures). The mock's entity noise is exactly the honest headroom — tables.pdf's column-header churn ("Age Alice", "Revenue USD") scores entity precision 0.364, and the missed Cache→Gateway relation shows the diagram-recall ceiling. Event accuracy prints **N/A** honestly: no fixture produces an EventCandidate under the mock rule pipeline (no event rules); the event count still prints so a future event extractor makes the cell real. Floors assert the baseline (entity P/R ≥ 0.5, relation P/R ≥ 0.6, fact acc/recall ≥ 0.7): a real regression fails CI, an improvement passes trivially — the PR-G floor convention. Wired into CI right after `retrieval_quality` (check job). Zero production code — the instrument is pure test-side measurement, like the retrieval instrument. The §60 decision matrix is now complete: boundary quality, retrieval recall (text + visual + hybrid), ingestion cost, latency, and fact/relation extraction quality all measured.
+
+**Gates**: `cargo fmt --all` clean; `cargo clippy -p aikoql-ingestion --all-targets -- -D warnings` clean; `cargo test -p aikoql-ingestion` green (418 lib + golden 1/1 + retrieval-quality 1/1 + semantic-extraction 1/1 + acceptance 11/11 + e2e, 0 failures).
+
+### What is left to implement
+
+Every HLD milestone through §60 is closed; the remaining items, in order of leverage:
+
+| Item | Source | Status / effort |
+| --- | --- | --- |
+| §53 End-to-end stage (answer / citation / evidence correctness) | HLD §53 | Needs an agent/LLM judge harness — the only §53 stage with no instrument; unblocked design decision (judge = mock vs real model, same §60 pattern) |
+| Cloud KMS providers (AWS, Azure, GCP) | Post-MVP roadmap | 🟡 ~1 week, explicitly not launch-blocking |
+| Remote TCP + TLS/mTLS | PR #1 review §17 (reviewer-sanctioned deferral) | Post-MVP; loopback + proxy-TLS contract ships now |
+| Compliance evidence packs (GDPR, HIPAA) | Post-MVP roadmap | 🟢 ~2 weeks |
+| Read replicas + Raft consensus | Post-MVP roadmap | 🟢 ~1 month |
+| Native storage engine | Post-MVP roadmap | 🟢 ~6 months |
+| `use crate::*` prelude cleanup | PR #1 review ("not a merge blocker") | Post-MVP hygiene |
+| HLD §57 PR-I multimodal query surface (`MATCH Visual SIMILAR IMAGE …`) | HLD §36/§57 | Syntax "designed later" per §36; the architecture already preserves the information (visual index + fragment access path, PR-K) |
+| P2-1/P2-2/P2-5/P2-8 kernel refinements | PR #1 review round 1 deferrals | Accepted as documented; tracked in knowledge-invariants.md |
+
 ### Next implementation
 
-The §60 real-model decision is closed (NO-GO for nomic-embed-text — the mock stays; re-running against a different model is one command, nothing to build). Remaining §60 metric gap: **fact/relation extraction quality** — the two HLD §60 metrics with no instrument yet; next code milestone is either that instrument or the next HLD milestone after §60.
+The §60 real-model decision is closed (NO-GO for nomic-embed-text — the mock stays) and every §60/§53 instrumented stage is now measured. Next candidates: the §53 end-to-end judge harness (the only uninstrumented stage), or the post-MVP roadmap's Cloud KMS providers (~1 week, first 🟡 item) — post-launch work, none blocking the MVP gate.
