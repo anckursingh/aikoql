@@ -29,6 +29,36 @@ fn semantic_status_roundtrip() {
     set_semantic_status("ready", "live");
     assert_eq!(semantic_status_snapshot().state, "ready");
 }
+
+// R1 (review round 3): plaintext TCP is loopback-only — a non-loopback bind
+// is rejected fail-closed (the bearer token must not travel unencrypted).
+
+#[test]
+fn listen_remote_without_tls_rejected() {
+    for bad in ["0.0.0.0:9090", "192.168.1.5:9090"] {
+        let err = validate_listen(bad).unwrap_err();
+        assert!(
+            err.contains("non-loopback"),
+            "remote {bad} must be rejected, got: {err}"
+        );
+    }
+}
+
+#[test]
+fn listen_loopback_allowed() {
+    assert_eq!(validate_listen("127.0.0.1:9090").unwrap(), "127.0.0.1:9090");
+    assert_eq!(validate_listen("[::1]:9090").unwrap(), "[::1]:9090");
+}
+
+#[test]
+fn listen_empty_host_maps_to_loopback() {
+    assert_eq!(validate_listen(":9090").unwrap(), "127.0.0.1:9090");
+}
+
+#[test]
+fn listen_invalid_address_rejected() {
+    assert!(validate_listen("not an address").is_err());
+}
 use crate::http::truncate;
 
 #[test]

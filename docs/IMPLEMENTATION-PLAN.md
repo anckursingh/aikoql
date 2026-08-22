@@ -3635,7 +3635,45 @@ The §60 decision ("based on measured improvement, rather than intuition") is no
 
 **Tests — PR-P (all green 2026-08-21)**: 418 lib base (unchanged — the engine move adds no tests) + 419 `--features transform` + 423 `--features remote_emb` (+5: config-from-env, unreachable-degrade, stub-parse+dim-adoption, stub-500-degrade, mm-channel) + 425 `--features vlm` + 431 `--all-features`; `real_model_bench` +4 (gate-verdict suite ×4 cases + SKIP measurement); 11/11 acceptance; golden 1/1; retrieval-quality 1/1 (baseline 0.867 re-verified after the engine move); clippy `-D warnings` clean on base + `--all-features` (both cfg states); `cargo test --workspace` green. One stub-server test race root-caused and fixed (respond-before-request-body-complete raced the client's send under parallel load → the stub now reads the full request before responding; 5 consecutive clean runs).
 
+### PR #1 review round 3 — senior-Rust verdicts (2026-08-22)
+
+The third-party review (`AIKOQL_LATEST_PR1_SENIOR_RUST_REVIEW.md`, head `5309a28`) was analyzed against the actual code. **Verdict per item:**
+
+| ID | Verdict | Grounding |
+|---|---|---|
+| R1 (P0) plaintext TCP tokens | **Legitimate — fix** | `default_loopback()` only *warns* on `0.0.0.0` (main.rs); a bearer token over plaintext TCP on a shared network is sniffable. Fix per the reviewer's own preferred MVP: hard-reject non-loopback binds without TLS. TLS itself is the reviewer's §17 "later" item — deferred with the contract below. |
+| R2 (P0) `tcp_tokens` additive | **Legitimate — fix** | config.rs layers TOML via `extend`, env/CLI via `push` — union, not the documented override. A revoked token must stop working. Fix: replacement semantics per layer. |
+| R3 (P0) Docker 0.0.0.0 | **Legitimate — fix** | Same root as R1, plus the image CMD binds both ports to all interfaces. Fix: loopback binds in the CMD; R1's guard makes a plaintext remote bind fail closed anyway. |
+| R4 (P1) tokens via CLI | **Legitimate — fix (small)** | `ps`/docker-inspect/shell-history leak. Fix: `AIKOQL_TCP_TOKEN_FILE` env (read+trim), `--tcp-token` documented dev-only. No token is ever logged (verified: auth failure logs peer+method only). |
+| R5 (P1) per-connection limiter | **Legitimate — fix** | Reconnect resets the bucket. Fix: one shared `Arc<Mutex<RateLimiter>>` per listener, keyed `agent_id:tenant` after auth; stdio keeps per-connection (single session). |
+| R6 (P1) model integrity | **Legitimate — fix** | `install` copies files with no integrity record; nothing detects a partial/corrupt model. Fix: `manifest.json` (sha256 per file + embedding dimension), install = copy → hash → manifest → rename, runtime verifies before load. |
+| R7 (P1) release gates | **Partially legitimate — gap is narrow** | CI already has docker build+health, release builds + `smoke-mcp.js` MCP round-trips against release binaries, plugin validation. Real gap: the **npm tarball itself** is never pack+install+round-tripped. Fix: add that gate. |
+| R8 (P1) deployment tests | **Covered by R1 + existing tests** | loopback+token PASS and loopback+no-token FAIL already exist (transport tests); remote+no-TLS FAIL arrives with R1's guard tests. remote+TLS PASS is N/A until TLS exists (deferred with R1). |
+| R9 (P2) duplicate limiter | **Legitimate — fix** | `authz.rs` `check_rate`/`RATE_STORE` (hardcoded 120/min, keyed by agent_id) runs *alongside* `rate_limiter.rs` (config-driven) on the same tools/call path. Fix: delete the duplicate; `rate_limiter.rs` is the only implementation, and its TCP keying (R5) subsumes the per-agent intent. |
+| R10 (P2) two encryption config paths | **Legitimate — fix (small)** | `RuntimeEncryption::discover()` re-reads TOML+env independently. Fix: `discover()` delegates to `load(&[], None, None)` — one pipeline (subcommand flags are not server config and must not be parsed as such). |
+
+**Deferred (reviewer-sanctioned)**: remote TCP + TLS/mTLS (the review's own §17 sequence puts TLS after MVP); `use crate::*` prelude cleanup (the review itself marks it "not a merge blocker", post-MVP); the §60 real-model run still awaits a live endpoint.
+
+**Deployment contract (MVP, per the review's §17)**: stdio (primary) + loopback TCP with token auth. Remote clients terminate TLS at a reverse proxy that forwards to a loopback/private listener — the server itself never accepts a plaintext remote connection (R1 fails closed).
+
+### Implemented now — PR #1 review round 3 (2026-08-22, commits on `feature/mvp-launch`)
+
+All 10 items closed in one commit (single coherent review round — the guards, limiter, and config pipeline are one blast radius).
+
+| ID | What landed | Where |
+|---|---|---|
+| R1 | `validate_listen` replaces `default_loopback`: `:port` → loopback; hostnames resolve; ANY non-loopback resolved address is rejected fail-closed (exit 2) with a remediation message (bind loopback + TLS at a proxy, or stdio) | `main.rs` (prelude gains `ToSocketAddrs`), tests in `tests.rs` (`listen_remote_without_tls_rejected`, `listen_loopback_allowed`, `listen_empty_host_maps_to_loopback`, `listen_invalid_address_rejected`) |
+| R2 | `tcp_tokens` replacement precedence: TOML sets, env replaces, repeated `--tcp-token` flags accumulate within the CLI layer then replace every lower layer — a revoked token stops working | `config.rs` + tests `tcp_token_precedence_is_replacement_not_union` (TOML→env, multi-flag CLI) |
+| R3 | Dockerfile CMD binds `127.0.0.1:9090`/`127.0.0.1:9091` (comment explains the sidecar-TLS path); CI docker job adds a fail-closed assertion (non-loopback `--listen` must exit 2 with "non-loopback"); release docker smoke probes health via `docker exec` — the loopback bind breaks `-p` DNAT publishing, so host curl would never reach it | `Dockerfile`, `ci.yml`, `release.yml` |
+| R4 | `AIKOQL_TCP_TOKEN_FILE` env (read + trim, empty/missing = error) wins over inline `AIKOQL_TCP_TOKEN`; `--tcp-token` marked dev-only in `print_usage()` (tokens hit the process list; env/file is the production form) | `config.rs` + tests (`tcp_token_file_env_reads_and_trims`, `tcp_token_file_wins_over_inline_env`, `tcp_token_file_missing_is_error`, `tcp_token_file_empty_is_error`), `cli.rs` |
+| R5+R9 | ONE limiter: `Arc<Mutex<RateLimiter>>` created once in `main()`, shared by `run_tcp_listener`/`run_stdio`, keyed by principal in the dispatcher (`agent_id:tenant` on TCP, `_stdio` on stdio) — parallel connections from one principal share one budget. Deleted `authz.rs::check_rate` + `RATE_STORE` (the hidden hardcoded 120/min duplicate); denied calls stay on the audit trail (`denied:rate`) | `main.rs`, `transport.rs`, `dispatcher.rs`, `authz.rs`, `tool_registry.rs` + test `tcp_rate_limit_is_shared_across_connections` (2 connections, budget 3: 2+1 pass, both then rejected) |
+| R6 | Install-time integrity: `install` stages into `.tmp-{slug}`, writes `manifest.json` (format, model_id, embedding_dimension from `hidden_size`, sha256 per file), then renames old aside → tmp in (atomic swap, crash leaves the previous install intact). `from_local` verifies the manifest + per-file sha256 + dimension before any load; only the three known file names are checked (no manifest-driven path traversal). `sha2` is a new optional dep behind `embedding-candle` | `provider.rs` (`sha256_hex`, `write_manifest`, `verify_install`), `semantic/Cargo.toml` + tests (`verify_install_accepts_untampered_dir`, `verify_install_rejects_tampered_file`, `verify_install_rejects_missing_manifest`, `verify_install_rejects_dimension_change`; `from_local_missing_dir_is_clear_error` updated to the manifest error) |
+| R7 | CI gate `npm-tarball-smoke`: `npm pack` → clean-prefix `npm install` → `--version` → full MCP round-trip via `smoke-mcp.js`. The wrapper gained `AIKOQL_BINARY` (skip the release download, run a local binary) so the gate is hermetic — a PR's version has no GitHub Release yet; `npm pack` + install also guards the tarball contents | `ci.yml` (job `npm-tarball-smoke`, needs `build-release` artifact), `npm-publish/run.js` |
+| R8 | Subsumed by R1's guard tests + the existing transport auth matrix (documented in the verdict table) | — |
+| R10 | `RuntimeEncryption::discover()` delegates to `load(&[], None, None)` — one config pipeline; a broken TOML fails closed instead of silently downgrading an encrypted DB to a plaintext open | `config.rs` + test `discover_uses_the_single_pipeline` (env passphrase reaches subcommand discovery) |
+
+**Gates**: `cargo fmt --all` clean; `cargo clippy -p aikoql-mcp -p aikoql-semantic --all-targets` 0 warnings; `cargo test -p aikoql-mcp` 76 passed (was 69) + `cargo test -p aikoql-semantic` 12 passed. Encryption/secret-filtering behavior untouched (HLD §58 / DoD row 16).
+
 ### Next implementation
 
 The **§60 real-model run itself** — the harness is ready; it needs a live OpenAI-compatible embedding endpoint (any provider; the user's call). The verdict prints GO/NO-GO per cell. Remaining §60 metric gap: **fact/relation extraction quality** — the two HLD §60 metrics with no instrument yet; next code milestone is either that instrument or the next HLD milestone after §60.
-

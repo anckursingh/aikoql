@@ -86,6 +86,19 @@ jobs:
           echo "container never became healthy — last logs:"
           docker logs aikoql-test 2>&1 | tail -30
           exit 1
+      # R1/R3 (review round 3): a non-loopback bind must fail closed — the
+      # image default binds 127.0.0.1; this asserts the guard, not just the
+      # default.
+      - name: R1 fail-closed — non-loopback --listen is rejected
+        run: |
+          set +e
+          out=$(docker run --rm --entrypoint aikoql -e AIKOQL_TCP_TOKEN=ci:ci:admin \
+            aikoql:test serve /data/aikoql.redb --listen 0.0.0.0:9090 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          [ "$rc" -eq 2 ] || { echo "expected exit 2, got $rc"; exit 1; }
+          echo "$out" | grep -q "non-loopback"
 
   build-release:
     name: Build Release (Linux)
@@ -99,6 +112,37 @@ jobs:
         with:
           name: aikoql-linux
           path: target/release/aikoql-mcp
+
+  # R7 (review round 3): the npm tarball was never smoke-tested in CI — pack
+  # it, install it into a clean prefix, and drive a full MCP round-trip
+  # through the wrapper. AIKOQL_BINARY makes the wrapper run the artifact
+  # built by build-release instead of downloading a GitHub Release that does
+  # not exist yet for a PR's version.
+  npm-tarball-smoke:
+    name: npm tarball smoke (Linux)
+    runs-on: ubuntu-latest
+    needs: build-release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: aikoql-linux
+          path: bin
+      - name: Pack, clean install, MCP round-trip
+        run: |
+          set -euo pipefail
+          chmod +x bin/aikoql-mcp
+          export AIKOQL_BINARY="$GITHUB_WORKSPACE/bin/aikoql-mcp"
+          tarball=$(cd npm-publish && npm pack --silent)
+          tmp=$(mktemp -d)
+          cd "$tmp"
+          npm init -y >/dev/null 2>&1
+          npm install "$GITHUB_WORKSPACE/npm-publish/$tarball" --no-audit --no-fund >/dev/null
+          "$tmp/node_modules/.bin/aikoql-mcp" --version
+          node "$GITHUB_WORKSPACE/npm-publish/smoke-mcp.js" "$tmp/node_modules/.bin/aikoql-mcp"
 
   dependency-dag:
     name: Verify Dependency DAG

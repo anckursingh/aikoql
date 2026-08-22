@@ -62,11 +62,11 @@ pub(crate) use aikoql_semantic::{EmbeddingEnricher, SemanticEngine};
 pub(crate) use serde_json::{json, Value as J};
 pub(crate) use std::collections::{HashMap, HashSet};
 pub(crate) use std::io::{BufRead, BufReader, Read, Write};
-pub(crate) use std::net::{TcpListener, TcpStream};
+pub(crate) use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::sync::{Arc, Mutex, OnceLock};
 pub(crate) use std::thread;
-pub(crate) use std::time::{Duration, Instant};
+pub(crate) use std::time::Instant;
 pub(crate) use tracing::{error, info, info_span, warn};
 
 pub(crate) static SERVER_START: OnceLock<Instant> = OnceLock::new();
@@ -181,6 +181,13 @@ fn main() {
     let rate_enabled = cfg.rate_enabled;
     let rate_max_calls_per_minute = cfg.rate_max_calls_per_minute;
     let rest_rate_limit = Arc::new(Mutex::new(crate::rate_limiter::RateLimiter::new(
+        rate_enabled,
+        rate_max_calls_per_minute,
+    )));
+    // R5 (review round 3): ONE MCP limiter shared across all stdio/TCP
+    // sessions — the dispatcher keys it by principal. (R9 deleted the
+    // second, hidden limiter in authz.rs.)
+    let mcp_rate_limit = Arc::new(Mutex::new(crate::rate_limiter::RateLimiter::new(
         rate_enabled,
         rate_max_calls_per_minute,
     )));
@@ -413,9 +420,17 @@ fn main() {
                 std::process::exit(2);
             }
         };
-        // PRR-2: an empty listen host means loopback only; exposing all
-        // interfaces requires an explicit 0.0.0.0 opt-in.
-        let addr = default_loopback(&addr);
+        // R1 (review round 3): loopback-only plaintext TCP — a non-loopback
+        // bind would put the bearer token on the wire unencrypted, so it is
+        // rejected fail-closed. TLS arrives post-MVP (terminate TLS at a
+        // reverse proxy in front of the loopback listener).
+        let addr = match validate_listen(&addr) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        };
         let listener = match TcpListener::bind(&addr) {
             Ok(l) => l,
             Err(e) => {
@@ -423,30 +438,39 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        run_tcp_listener(
-            kernel,
-            listener,
-            auth,
-            db_path,
-            rate_enabled,
-            rate_max_calls_per_minute,
-        );
+        run_tcp_listener(kernel, listener, auth, db_path, mcp_rate_limit);
     } else {
-        run_stdio(&kernel, &db_path, rate_enabled, rate_max_calls_per_minute);
+        run_stdio(&kernel, &db_path, mcp_rate_limit);
     }
 }
 
-/// PRR-2: `--listen :9090` (empty host) binds loopback only; 0.0.0.0 is an
-/// explicit opt-in that warns.
-fn default_loopback(addr: &str) -> String {
-    match addr.rsplit_once(':') {
+/// PRR-2 + R1 (review round 3): `--listen :9090` (empty host) binds
+/// loopback only. A non-loopback bind is REJECTED fail-closed — without TLS
+/// the bearer token would travel in plaintext, so plaintext TCP is
+/// loopback-only in MVP. Hostnames resolve; every resolved address must be
+/// loopback.
+fn validate_listen(addr: &str) -> Result<String, String> {
+    let expanded = match addr.rsplit_once(':') {
         Some(("", port)) => format!("127.0.0.1:{port}"),
-        Some(("0.0.0.0", _)) => {
-            warn!("--listen 0.0.0.0 exposes the MCP server on all interfaces — ensure the network is trusted");
-            addr.to_string()
-        }
         _ => addr.to_string(),
+    };
+    let resolved: Vec<std::net::SocketAddr> = expanded
+        .to_socket_addrs()
+        .map_err(|e| format!("invalid --listen address {expanded}: {e}"))?
+        .collect();
+    if resolved.is_empty() {
+        return Err(format!(
+            "--listen {expanded} did not resolve to any address"
+        ));
     }
+    if !resolved.iter().all(|a| a.ip().is_loopback()) {
+        return Err(format!(
+            "--listen {expanded} would accept plaintext TCP on a non-loopback interface; \
+             bearer tokens must not travel unencrypted — bind 127.0.0.1 (or ::1) and \
+             terminate TLS at a reverse proxy, or use stdio mode"
+        ));
+    }
+    Ok(expanded)
 }
 
 #[cfg(test)]

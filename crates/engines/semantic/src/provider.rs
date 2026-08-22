@@ -194,6 +194,98 @@ fn hf_download(
 }
 
 #[cfg(feature = "embedding-candle")]
+fn sha256_hex(path: &std::path::Path) -> KResult<String> {
+    use sha2::Digest;
+    let bytes =
+        std::fs::read(path).map_err(|e| KError::Store(format!("read {}: {e}", path.display())))?;
+    Ok(format!("{:x}", sha2::Sha256::digest(&bytes)))
+}
+
+/// R6 (review round 3): install-time integrity record — model id, embedding
+/// dimension (from config.json `hidden_size`), and sha256 per model file.
+#[cfg(feature = "embedding-candle")]
+fn write_manifest(dir: &std::path::Path, model_id: &str) -> KResult<()> {
+    let config_raw = std::fs::read_to_string(dir.join("config.json"))
+        .map_err(|e| KError::Store(format!("read config.json: {e}")))?;
+    let config: serde_json::Value = serde_json::from_str(&config_raw)
+        .map_err(|e| KError::Store(format!("parse config.json: {e}")))?;
+    let hidden_size = config
+        .get("hidden_size")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| KError::Store("config.json has no hidden_size".into()))?;
+    let mut files = serde_json::Map::new();
+    for name in ["config.json", "tokenizer.json", "model.safetensors"] {
+        files.insert(
+            name.to_string(),
+            serde_json::json!(sha256_hex(&dir.join(name))?),
+        );
+    }
+    let manifest = serde_json::json!({
+        "format": 1,
+        "model_id": model_id,
+        "embedding_dimension": hidden_size,
+        "files": files,
+    });
+    let pretty = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| KError::Store(format!("serialize manifest: {e}")))?;
+    std::fs::write(dir.join("manifest.json"), pretty)
+        .map_err(|e| KError::Store(format!("write manifest.json: {e}")))
+}
+
+/// R6: verify an installed model against its manifest before loading.
+/// Only the three known file names are ever checked (whitelist, not the
+/// manifest's own keys) — a crafted manifest cannot point the hash check at
+/// arbitrary paths.
+#[cfg(feature = "embedding-candle")]
+fn verify_install(dir: &std::path::Path) -> KResult<()> {
+    let manifest_path = dir.join("manifest.json");
+    let raw = std::fs::read_to_string(&manifest_path).map_err(|e| {
+        KError::Store(format!(
+            "model at {} has no readable manifest.json ({e}) — reinstall with `aikoql model install`",
+            dir.display()
+        ))
+    })?;
+    let m: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| KError::Store(format!("parse {}: {e}", manifest_path.display())))?;
+    let files = m.get("files").and_then(|f| f.as_object()).ok_or_else(|| {
+        KError::Store(format!(
+            "manifest {} is missing the files map — reinstall with `aikoql model install`",
+            manifest_path.display()
+        ))
+    })?;
+    for name in ["config.json", "tokenizer.json", "model.safetensors"] {
+        let expected = files.get(name).and_then(|v| v.as_str()).ok_or_else(|| {
+            KError::Store(format!(
+                "manifest {} is missing {name} — reinstall with `aikoql model install`",
+                manifest_path.display()
+            ))
+        })?;
+        let actual = sha256_hex(&dir.join(name))?;
+        if actual != expected {
+            return Err(KError::Store(format!(
+                "model file {name} checksum mismatch (installed file differs from the install-time record) — reinstall with `aikoql model install`"
+            )));
+        }
+    }
+    let config_raw = std::fs::read_to_string(dir.join("config.json"))
+        .map_err(|e| KError::Store(format!("read config.json: {e}")))?;
+    let config: serde_json::Value = serde_json::from_str(&config_raw)
+        .map_err(|e| KError::Store(format!("parse config.json: {e}")))?;
+    let hidden_size = config
+        .get("hidden_size")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| KError::Store("config.json has no hidden_size".into()))?;
+    let recorded = m.get("embedding_dimension").and_then(|v| v.as_u64());
+    if recorded != Some(hidden_size) {
+        return Err(KError::Store(format!(
+            "model embedding dimension changed ({hidden_size} != {}) — reinstall with `aikoql model install`",
+            recorded.map(|r| r.to_string()).unwrap_or_else(|| "unrecorded".into())
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "embedding-candle")]
 impl CandleEmbedding {
     /// Download `sentence-transformers/all-MiniLM-L6-v2` from HF Hub and load
     /// it. Explicit install/test path only — the runtime must use
@@ -205,7 +297,11 @@ impl CandleEmbedding {
 
     /// Load an installed model from a local directory containing
     /// config.json, tokenizer.json, and model.safetensors. No network.
+    /// R6 (review round 3): the manifest.json written at install time is
+    /// verified first — a tampered or half-written install fails here with a
+    /// remediation message instead of loading silently.
     pub fn from_local(dir: &std::path::Path) -> KResult<Self> {
+        verify_install(dir)?;
         Self::from_files(
             &dir.join("config.json"),
             &dir.join("tokenizer.json"),
@@ -214,20 +310,39 @@ impl CandleEmbedding {
     }
 
     /// Install a model into the local store (`store/<slug>/`). Returns the
-    /// installed directory.
+    /// installed directory. R6: staged + atomic — files land in a `.tmp-`
+    /// sibling first (with a manifest.json recording model id, embedding
+    /// dimension, and per-file sha256), then the swap renames the old install
+    /// aside only for the instant the rename runs; a crash mid-install leaves
+    /// the previous install intact.
     pub fn install(model_id: &str, store: &std::path::Path) -> KResult<std::path::PathBuf> {
         let (config_path, tokenizer_path, weights_path) = hf_download(model_id)?;
-        let dir = store.join(model_slug(model_id));
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| KError::Store(format!("create model dir: {e}")))?;
+        let slug = model_slug(model_id);
+        let dir = store.join(slug);
+        let tmp = store.join(format!(".tmp-{slug}"));
+        let old = store.join(format!(".old-{slug}"));
+        let _ = std::fs::remove_dir_all(&tmp); // stale stage from a crashed install
+        std::fs::create_dir_all(&tmp)
+            .map_err(|e| KError::Store(format!("create model stage dir: {e}")))?;
         for (src, name) in [
             (&config_path, "config.json"),
             (&tokenizer_path, "tokenizer.json"),
             (&weights_path, "model.safetensors"),
         ] {
-            std::fs::copy(src, dir.join(name))
+            std::fs::copy(src, tmp.join(name))
                 .map_err(|e| KError::Store(format!("install {name}: {e}")))?;
         }
+        write_manifest(&tmp, model_id)?;
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&old);
+            std::fs::rename(&dir, &old)
+                .map_err(|e| KError::Store(format!("stage old install: {e}")))?;
+        }
+        std::fs::rename(&tmp, &dir).map_err(|e| KError::Store(format!("commit install: {e}")))?;
+        // ponytail: cleanup is best-effort — a leftover .old-* is inert
+        // (from_local only reads the canonical dir) and the next install
+        // removes it.
+        let _ = std::fs::remove_dir_all(&old);
         Ok(dir)
     }
 
@@ -407,9 +522,98 @@ mod tests {
         };
         let msg = format!("{err}");
         assert!(
-            msg.contains("config") || msg.contains("NotFound"),
-            "error should name the missing file, got: {msg}"
+            msg.contains("manifest") || msg.contains("NotFound"),
+            "error should name the missing manifest, got: {msg}"
         );
+    }
+
+    // R6 (review round 3): install-time integrity — manifest + per-file
+    // sha256, verified before every load. No network: fake files, only the
+    // verification seam is exercised.
+
+    fn write_fake_install(dir: &std::path::Path, hidden_size: u64) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            format!(r#"{{"hidden_size":{hidden_size}}}"#),
+        )
+        .unwrap();
+        std::fs::write(dir.join("tokenizer.json"), "{}").unwrap();
+        std::fs::write(dir.join("model.safetensors"), b"fake-weights").unwrap();
+        write_manifest(dir, "test-model").unwrap();
+    }
+
+    fn temp_install_dir(tag: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("aikoql-semantic-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        p
+    }
+
+    #[test]
+    #[cfg(feature = "embedding-candle")]
+    fn verify_install_accepts_untampered_dir() {
+        let dir = temp_install_dir("verify-ok");
+        write_fake_install(&dir, 384);
+        verify_install(&dir).expect("untampered install must verify");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(feature = "embedding-candle")]
+    fn verify_install_rejects_tampered_file() {
+        let dir = temp_install_dir("verify-tamper");
+        write_fake_install(&dir, 384);
+        // Tamper AFTER the manifest was written.
+        std::fs::write(dir.join("tokenizer.json"), b"tampered").unwrap();
+        let err = verify_install(&dir).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("checksum mismatch"), "got: {msg}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(feature = "embedding-candle")]
+    fn verify_install_rejects_missing_manifest() {
+        let dir = temp_install_dir("verify-nomanifest");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), r#"{"hidden_size":384}"#).unwrap();
+        std::fs::write(dir.join("tokenizer.json"), "{}").unwrap();
+        std::fs::write(dir.join("model.safetensors"), b"fake-weights").unwrap();
+        let err = verify_install(&dir).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("manifest"), "got: {msg}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(feature = "embedding-candle")]
+    fn verify_install_rejects_dimension_change() {
+        let dir = temp_install_dir("verify-dim");
+        write_fake_install(&dir, 384);
+        // Swap in a config with a different hidden_size and rewrite the
+        // manifest so its file hashes still match — the tamper here is the
+        // dimension, which the hash check cannot see (belt+braces: a plain
+        // byte tamper of config.json is already caught by the hash check).
+        std::fs::write(dir.join("config.json"), r#"{"hidden_size":768}"#).unwrap();
+        let manifest = serde_json::json!({
+            "format": 1,
+            "model_id": "test-model",
+            "embedding_dimension": 384,
+            "files": {
+                "config.json": sha256_hex(&dir.join("config.json")).unwrap(),
+                "tokenizer.json": sha256_hex(&dir.join("tokenizer.json")).unwrap(),
+                "model.safetensors": sha256_hex(&dir.join("model.safetensors")).unwrap(),
+            },
+        });
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        let err = verify_install(&dir).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("dimension changed"), "got: {msg}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

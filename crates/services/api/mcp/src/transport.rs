@@ -14,8 +14,7 @@ pub(crate) fn handle_tcp_client(
     stream: TcpStream,
     db_path: Arc<String>,
     auth: &Arc<TcpAuthTable>,
-    rate_enabled: bool,
-    rate_max_per_minute: u64,
+    rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
 ) {
     let peer = stream
         .peer_addr()
@@ -31,8 +30,8 @@ pub(crate) fn handle_tcp_client(
     let reader = BufReader::new(clone);
     let writer = Arc::new(Mutex::new(stream));
     let mut sub_ids: HashSet<String> = HashSet::new();
-    // PRR-4: per-connection limit from the [rate_limit] config section.
-    let mut rate_limit = crate::rate_limiter::RateLimiter::new(rate_enabled, rate_max_per_minute);
+    // R5 (review round 3): the limiter is process-shared and keyed by
+    // principal in the dispatcher — not created per connection here.
     // PRR-2: TCP identity comes exclusively from a verified --tcp-token.
     let mut session = McpSession {
         trust_mode: TrustMode::Tcp,
@@ -106,7 +105,7 @@ pub(crate) fn handle_tcp_client(
             kernel,
             &mut sub_ids,
             &writer,
-            &mut rate_limit,
+            &rate_limit,
             &db_path,
             &mut session,
             msg,
@@ -120,8 +119,7 @@ pub(crate) fn run_tcp_listener(
     listener: TcpListener,
     auth: Arc<TcpAuthTable>,
     db_path: Arc<String>,
-    rate_enabled: bool,
-    rate_max_per_minute: u64,
+    rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
 ) {
     info!(
         addr = %listener.local_addr().map(|a| a.to_string()).unwrap_or_default(),
@@ -134,9 +132,8 @@ pub(crate) fn run_tcp_listener(
                 let k = kernel.clone();
                 let db = db_path.clone();
                 let auth = auth.clone();
-                thread::spawn(move || {
-                    handle_tcp_client(&k, stream, db, &auth, rate_enabled, rate_max_per_minute)
-                });
+                let rl = rate_limit.clone();
+                thread::spawn(move || handle_tcp_client(&k, stream, db, &auth, rl));
             }
             Err(e) => error!("accept error: {}", e),
         }
@@ -145,13 +142,11 @@ pub(crate) fn run_tcp_listener(
 pub(crate) fn run_stdio(
     kernel: &Arc<Kernel>,
     db_path: &Arc<String>,
-    rate_enabled: bool,
-    rate_max_per_minute: u64,
+    rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
 ) {
     info!(db = %db_path, protocol = PROTOCOL_VERSION, "aikoql-mcp ready");
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
     let mut sub_ids: HashSet<String> = HashSet::new();
-    let mut rate_limit = crate::rate_limiter::RateLimiter::new(rate_enabled, rate_max_per_minute);
     let mut session = McpSession::default();
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
@@ -177,7 +172,7 @@ pub(crate) fn run_stdio(
             kernel,
             &mut sub_ids,
             &stdout,
-            &mut rate_limit,
+            &rate_limit,
             db_path,
             &mut session,
             msg,
@@ -216,15 +211,12 @@ mod tcp_auth_tests {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().unwrap();
         let db_path = Arc::new(db.to_str().unwrap().to_string());
+        let rate_limit = Arc::new(Mutex::new(crate::rate_limiter::RateLimiter::new(
+            true,
+            max_per_minute,
+        )));
         thread::spawn(move || {
-            run_tcp_listener(
-                Arc::new(kernel),
-                listener,
-                auth,
-                db_path,
-                true,
-                max_per_minute,
-            )
+            run_tcp_listener(Arc::new(kernel), listener, auth, db_path, rate_limit)
         });
         addr
     }
@@ -299,6 +291,41 @@ mod tcp_auth_tests {
         assert!(msg.contains("rate limit exceeded"), "got {r}");
         // Error frame, not a drop — the next call is also rejected, not EOF.
         assert!(c.call("metrics", json!({})).get("error").is_some());
+    }
+
+    #[test]
+    fn tcp_rate_limit_is_shared_across_connections() {
+        // R5 (review round 3): the budget is per PRINCIPAL (agent_id:tenant),
+        // not per connection — one principal on two sockets still gets one
+        // budget, so a second connection cannot double the allowance.
+        let addr = spawn_server_with_limit(&["user1:acme:viewer"], 3);
+        let mut a = TcpClient::connect(addr);
+        let mut b = TcpClient::connect(addr);
+        for c in [&mut a, &mut b] {
+            let init = c.init("user1");
+            assert!(init.get("error").is_none(), "expected auth ok, got {init}");
+        }
+        for _ in 0..2 {
+            assert!(
+                a.call("metrics", json!({})).get("error").is_none(),
+                "conn A under limit"
+            );
+        }
+        // Conn B shares the same principal budget — one call fills it.
+        assert!(
+            b.call("metrics", json!({})).get("error").is_none(),
+            "conn B shares the remaining budget"
+        );
+        // Budget exhausted: BOTH connections are now rejected.
+        let msg = b
+            .call("metrics", json!({}))
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or_default()
+            .to_string();
+        assert!(msg.contains("rate limit exceeded"), "got {msg}");
+        assert!(a.call("metrics", json!({})).get("error").is_some());
     }
 
     #[test]

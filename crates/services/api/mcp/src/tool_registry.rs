@@ -184,13 +184,11 @@ pub(crate) fn call_tool(
             "TCP session has no roles — configure --tcp-token with at least one role".into(),
         ));
     }
-    // A7: Check capability + rate limit before dispatch
+    // A7: Check capability before dispatch. R9 (review round 3): the rate
+    // limit is enforced ONCE in the dispatcher with the shared,
+    // principal-keyed limiter (R5) — no second gate here.
     if let Err(e) = check_capability(session.trust_mode, &session.roles, name) {
         audit_log(db_path, &session.agent_id, name, "denied:capability", &e.1);
-        return Err(e);
-    }
-    if let Err(e) = check_rate(&session.agent_id, &session.roles, 120) {
-        audit_log(db_path, &session.agent_id, name, "denied:rate", &e.1);
         return Err(e);
     }
 

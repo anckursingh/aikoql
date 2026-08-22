@@ -211,13 +211,15 @@ jobs:
         run: |
           set -euo pipefail
           v="${{ steps.tag.outputs.version }}"
+          # R1/R3 (review round 3): the container binds loopback-only, so
+          # `-p` port publishing would DNAT onto container eth0 and never
+          # reach 127.0.0.1 — probe health from INSIDE the container.
           docker run -d --name aikoql-smoke \
             -e AIKOQL_TCP_TOKEN=smoketoken:acme:admin \
-            -p 19090:9090 -p 19091:9091 \
             ghcr.io/anckursingh/aikoql:${v}-amd64
           ok=""
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:19091/health; then ok=1; break; fi
+            if docker exec aikoql-smoke curl -fsS http://127.0.0.1:9091/health; then ok=1; break; fi
             sleep 2
           done
           [ -n "$ok" ] || { docker logs aikoql-smoke; exit 1; }

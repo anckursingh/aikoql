@@ -257,6 +257,7 @@ dependencies = [
  "candle-transformers",
  "hf-hub",
  "serde_json",
+ "sha2 0.10.9",
  "tokenizers",
  "tokio",
  "ureq 2.12.1",

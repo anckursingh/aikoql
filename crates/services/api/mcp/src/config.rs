@@ -183,27 +183,14 @@ fn apply_toml_encryption(enc: &mut RuntimeEncryption, e: TomlEncryption) {
 }
 
 impl RuntimeEncryption {
-    /// Subcommand discovery: `./aikoql.toml` → `/etc/aikoql/aikoql.toml` + env
-    /// (serve passes its already-merged settings instead — `load()` layered
-    /// `--config`/CLI on top). Fails closed: a broken TOML must not silently
-    /// downgrade an encrypted database to a plaintext open.
+    /// Subcommand discovery — R10 (review round 3): `load()` is the ONLY
+    /// config pipeline. Subcommand flags are not server config, so they are
+    /// not parsed here (no `--config` support for subcommands, same as
+    /// before); TOML + env flow through the single validated path. Fails
+    /// closed: a broken TOML must not silently downgrade an encrypted
+    /// database to a plaintext open.
     pub(crate) fn discover() -> Result<RuntimeEncryption, String> {
-        let mut enc = RuntimeEncryption {
-            key_path: "./aikoql.key".into(),
-            ..Default::default()
-        };
-        if let Some(path) = find_toml(&[])? {
-            let raw =
-                std::fs::read_to_string(&path).map_err(|e| format!("config {path}: read: {e}"))?;
-            let t: TomlConfig = toml::from_str(&raw).map_err(|e| format!("config {path}: {e}"))?;
-            if let Some(e) = t.encryption {
-                apply_toml_encryption(&mut enc, e);
-            }
-        }
-        if let Some(v) = env_opt("AIKOQL_PASSPHRASE") {
-            enc.passphrase = Some(v);
-        }
-        Ok(enc)
+        load(&[], None, None).map(|c| c.encryption)
     }
 }
 
@@ -268,8 +255,11 @@ pub(crate) fn load(
             if let Some(v) = s.metrics_addr {
                 cfg.metrics_addr = Some(v);
             }
+            // R2 (review round 3): replacement, not union — each layer
+            // overrides the one below it, so revoking a token at a higher
+            // layer stops it working.
             if let Some(v) = s.tcp_tokens {
-                cfg.tcp_tokens.extend(v);
+                cfg.tcp_tokens = v;
             }
         }
         if let Some(e) = t.encryption {
@@ -324,10 +314,24 @@ pub(crate) fn load(
     if let Some(v) = env_opt("AIKOQL_METRICS_ADDR") {
         cfg.metrics_addr = Some(v);
     }
-    // One token per env var — role lists use commas, so multi-token env
-    // strings would be ambiguous. Repeatable via TOML array or CLI flags.
-    if let Some(v) = env_opt("AIKOQL_TCP_TOKEN") {
-        cfg.tcp_tokens.push(v);
+    // R2 (review round 3): an env credential REPLACES the TOML list (one
+    // token per env var — role lists use commas, so multi-token env strings
+    // would be ambiguous). R4: AIKOQL_TCP_TOKEN_FILE is the production
+    // form (docker secrets etc. — keeps the token out of `ps`/inspections)
+    // and wins over the inline AIKOQL_TCP_TOKEN var.
+    if let Some(path) = env_opt("AIKOQL_TCP_TOKEN_FILE") {
+        match std::fs::read_to_string(&path) {
+            Ok(v) => {
+                let v = v.trim().to_string();
+                if v.is_empty() {
+                    return Err(format!("AIKOQL_TCP_TOKEN_FILE {path}: file is empty"));
+                }
+                cfg.tcp_tokens = vec![v];
+            }
+            Err(e) => return Err(format!("AIKOQL_TCP_TOKEN_FILE {path}: {e}")),
+        }
+    } else if let Some(v) = env_opt("AIKOQL_TCP_TOKEN") {
+        cfg.tcp_tokens = vec![v];
     }
     if let Some(v) = env_opt("AIKOQL_MEMORY_DIR") {
         cfg.memory_dir = v;
@@ -353,6 +357,9 @@ pub(crate) fn load(
     }
 
     // Layer 4: CLI (highest precedence). Same semantics as the pre-PRR-4 loop.
+    // R2 (review round 3): repeated --tcp-token flags accumulate WITHIN this
+    // layer, then replace every lower layer (replacement, not union).
+    let mut cli_tcp_tokens: Vec<String> = Vec::new();
     let mut i = if subcmd == Some("serve") {
         let Some(idx) = subcmd_idx else {
             return Err("Usage: aikoql-mcp serve [OPTIONS] [DB]".into());
@@ -373,7 +380,7 @@ pub(crate) fn load(
             }
             "--tcp-token" => match args.get(i + 1) {
                 Some(v) => {
-                    cfg.tcp_tokens.push(v.clone());
+                    cli_tcp_tokens.push(v.clone());
                     i += 2;
                 }
                 None => {
@@ -442,6 +449,11 @@ pub(crate) fn load(
                 i += 1;
             }
         }
+    }
+
+    // R2: any CLI token flags replace every lower layer.
+    if !cli_tcp_tokens.is_empty() {
+        cfg.tcp_tokens = cli_tcp_tokens;
     }
 
     Ok(cfg)
@@ -619,7 +631,7 @@ level = "debug"
     }
 
     #[test]
-    fn tcp_token_env_pushes_spec() {
+    fn tcp_token_env_sets_single_token() {
         let cfg = load_with_env(|| {
             std::env::set_var("AIKOQL_TCP_TOKEN", "tok:acme:admin");
             let r = load(&argv(&["aikoql-mcp"]), None, None);
@@ -628,6 +640,117 @@ level = "debug"
         })
         .unwrap();
         assert_eq!(cfg.tcp_tokens, vec!["tok:acme:admin".to_string()]);
+    }
+
+    // R2 (review round 3): tcp_tokens follow REPLACEMENT precedence, not
+    // union — a higher layer must be able to fully retract lower-layer
+    // credentials (union means an operator can never revoke a TOML token).
+
+    #[test]
+    fn tcp_token_precedence_is_replacement_not_union() {
+        let p = tmp_toml("[server]\ntcp_tokens = [\"old:acme:viewer\"]\n");
+        let cfg = load_with_env(|| {
+            std::env::set_var("AIKOQL_TCP_TOKEN", "new:acme:admin");
+            let r = load(&argv(&["aikoql-mcp", "--config", &p]), None, None);
+            std::env::remove_var("AIKOQL_TCP_TOKEN");
+            r
+        })
+        .unwrap();
+        // env REPLACES the TOML list — the TOML token is gone, not appended.
+        assert_eq!(cfg.tcp_tokens, vec!["new:acme:admin".to_string()]);
+
+        // Repeated --tcp-token flags accumulate within the CLI layer, then
+        // replace every lower layer (still not a union).
+        let cfg = load_with_env(|| {
+            std::env::set_var("AIKOQL_TCP_TOKEN", "env:acme:admin");
+            let r = load(
+                &argv(&[
+                    "aikoql-mcp",
+                    "--config",
+                    &p,
+                    "--tcp-token",
+                    "cli1:a:viewer",
+                    "--tcp-token",
+                    "cli2::admin",
+                ]),
+                None,
+                None,
+            );
+            std::env::remove_var("AIKOQL_TCP_TOKEN");
+            r
+        })
+        .unwrap();
+        assert_eq!(
+            cfg.tcp_tokens,
+            vec!["cli1:a:viewer".to_string(), "cli2::admin".to_string()]
+        );
+    }
+
+    fn tmp_token_file(content: &str) -> String {
+        let n = TOML_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p =
+            std::env::temp_dir().join(format!("aikoql-token-test-{}-{n}.txt", std::process::id()));
+        std::fs::write(&p, content).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn tcp_token_file_env_reads_and_trims() {
+        let f = tmp_token_file("  tok:acme:admin \n");
+        let cfg = load_with_env(|| {
+            std::env::set_var("AIKOQL_TCP_TOKEN_FILE", &f);
+            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            std::env::remove_var("AIKOQL_TCP_TOKEN_FILE");
+            r
+        })
+        .unwrap();
+        assert_eq!(cfg.tcp_tokens, vec!["tok:acme:admin".to_string()]);
+        let _ = std::fs::remove_file(&f);
+    }
+
+    #[test]
+    fn tcp_token_file_wins_over_inline_env() {
+        let f = tmp_token_file("file:acme:admin\n");
+        let cfg = load_with_env(|| {
+            std::env::set_var("AIKOQL_TCP_TOKEN_FILE", &f);
+            std::env::set_var("AIKOQL_TCP_TOKEN", "inline:acme:viewer");
+            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            std::env::remove_var("AIKOQL_TCP_TOKEN_FILE");
+            std::env::remove_var("AIKOQL_TCP_TOKEN");
+            r
+        })
+        .unwrap();
+        assert_eq!(cfg.tcp_tokens, vec!["file:acme:admin".to_string()]);
+        let _ = std::fs::remove_file(&f);
+    }
+
+    #[test]
+    fn tcp_token_file_missing_is_error() {
+        let f =
+            std::env::temp_dir().join(format!("aikoql-token-missing-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&f);
+        let err = load_with_env(|| {
+            std::env::set_var("AIKOQL_TCP_TOKEN_FILE", &f);
+            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            std::env::remove_var("AIKOQL_TCP_TOKEN_FILE");
+            r
+        })
+        .unwrap_err();
+        assert!(err.contains("AIKOQL_TCP_TOKEN_FILE"), "got: {err}");
+    }
+
+    #[test]
+    fn tcp_token_file_empty_is_error() {
+        let f = tmp_token_file("   \n");
+        let err = load_with_env(|| {
+            std::env::set_var("AIKOQL_TCP_TOKEN_FILE", &f);
+            let r = load(&argv(&["aikoql-mcp"]), None, None);
+            std::env::remove_var("AIKOQL_TCP_TOKEN_FILE");
+            r
+        })
+        .unwrap_err();
+        assert!(err.contains("empty"), "got: {err}");
+        let _ = std::fs::remove_file(&f);
     }
 
     #[test]
@@ -651,6 +774,18 @@ level = "debug"
         assert_eq!(cfg.encryption.key_path, "./aikoql.key");
         assert!(cfg.encryption.passphrase.is_none());
         assert!(cfg.encryption.policies.is_empty());
+    }
+
+    #[test]
+    fn discover_uses_the_single_pipeline() {
+        // R10 (review round 3): subcommand discovery runs the SAME load()
+        // pipeline as `serve` — env encryption settings must reach it.
+        let _guard = ENV_LOCK.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        std::env::set_var("AIKOQL_PASSPHRASE", "discover-test");
+        let r = RuntimeEncryption::discover();
+        std::env::remove_var("AIKOQL_PASSPHRASE");
+        let enc = r.unwrap();
+        assert_eq!(enc.passphrase.as_deref(), Some("discover-test"));
     }
 
     #[test]

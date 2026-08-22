@@ -1,45 +1,9 @@
-//! RBAC capability checks + rate limiting (A7 Agent Gateway).
-//! Extracted from main.rs (R7 modularization). No behavior changes.
+//! RBAC capability checks (A7 Agent Gateway).
+//! R9 (review round 3): the rate limiter that lived here was a duplicate of
+//! rate_limiter.rs with a hardcoded 120/min — deleted. The dispatcher's
+//! shared, principal-keyed limiter is the single gate (R5).
 
 use crate::session::TrustMode;
-use crate::*;
-/// Simple per-agent rate limiter: max calls per minute.
-/// Uses a sliding window — resets after 60s.
-pub(crate) fn check_rate(
-    agent_id: &str,
-    roles: &[String],
-    max_per_minute: u32,
-) -> Result<(), (i64, String)> {
-    // ponytail: unauthenticated session (no roles) = unrestricted
-    if roles.is_empty() || roles.contains(&"admin".to_string()) {
-        return Ok(());
-    }
-    let mut store = RATE_STORE.lock().unwrap(); // justified: Mutex poison is unrecoverable
-    let now = Instant::now();
-    let window = Duration::from_secs(60);
-
-    let should_reset = match store.get(agent_id) {
-        Some((start, _)) => now.duration_since(*start) > window,
-        None => true,
-    };
-
-    if should_reset {
-        store.insert(agent_id.to_string(), (now, 1));
-    } else {
-        let count = store.get(agent_id).map(|(_, c)| *c).unwrap_or(0);
-        if count >= max_per_minute {
-            return Err((
-                -32002,
-                format!("rate limit exceeded: {} calls/min", max_per_minute),
-            ));
-        }
-        // justified: entry present — should_reset=false only when store.get returned Some above
-        let start = store.get(agent_id).unwrap().0;
-        store.insert(agent_id.to_string(), (start, count + 1));
-    }
-    Ok(())
-}
-
 /// Capability grants: which roles can call which tools.
 /// Review P1-10: the empty-roles passthrough is trust-mode-aware — on stdio
 /// the OS process boundary IS the trust boundary (single-user local mode,
@@ -99,11 +63,6 @@ pub(crate) fn check_capability(
     }
     Ok(())
 }
-
-use std::sync::LazyLock;
-
-pub(crate) static RATE_STORE: LazyLock<Mutex<HashMap<String, (Instant, u32)>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(test)]
 mod tests {
