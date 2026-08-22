@@ -167,7 +167,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | Memory compression (§40) | ❌ | measurement target only | — |
 | Cache correctness (§42), races (§43–44) | 🟡 | `transactions.rs` concurrency ✅ | chatbot-level determinism scenarios absent |
 | Token/latency/cost benchmarks (§45–48) | 🟡 | criterion benches + one-off token numbers | comparative benchmark absent |
-| Agent quality benchmark (§49), golden dataset (§50) | 🟡 | per-instrument goldens (multimodal 10-fixture suite, retrieval qrels, GOLDEN_ANSWERS) | unified golden dataset absent |
+| Agent quality benchmark (§49), golden dataset (§50) | ✅ | unified golden dataset `common/golden_dataset.rs` (17 §50 questions: answer/KOs/relations/evidence, 15 textual + 2 visual-only) consumed by all corpus instruments + `golden_dataset_integrity.rs` cross-check gate (grounding, extraction, annotation-list agreement) | §49 agent benchmark = G10 (TP-4) |
 | §51 Critical e2e scenario | ✅ | `mcp_real_world.rs::critical_e2e_scenario_51_chatbot_memory` — full script: 3 memories → recall (AWS, provenance/scope) → org directive (organization_policy) → supersede (Azure + reason + evidence) → program → policy allow/deny → execute → postconditions → episode; surfaced + fixed 2 boundary bugs (parse_origin human, evidence path via assert_knowledge) | — |
 | §52 Ultimate comparative experiment | ❌ | §60 matrix = internal equivalent | A/B/C/D treatment table absent |
 
@@ -192,7 +192,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | G6 | **Chatbot memory scenarios** (classification, preferences, consolidation, isolation, explainability) | CLASS-*, PERS-*, §30–33 | ✅ done | `chatbot_memory_certification_scenarios` in `mcp_real_world.rs` (§8 CHAT-MEM-001..005 incl. real restart, §9 CLASS-001..005, §11 PERS-001..004); CMEM-001/003/006/007 → covered; surfaced + fixed explain() provenance gap (asserted evidence reported as "Source: unknown" — explain now falls back to the kernel-managed EXT_EVIDENCE) |
 | G7 | **CTX differential tests** (two users, two times, post-update) + 1000-KO minimization | CTX-001..003, CTX-MIN-* | ✅ done | `ctx_differential_scenarios` over MCP (permission differential via ACL-gated IR fetch, temporal differential via experience TTL, post-update via versioned ir_json snapshot) + pure-compiler `ctx_min_*` tests; surfaced + fixed missing pack-time dedup (duplicate entities/facts/relations were packed twice) |
 | G8 | **Connector contract matrix** (postgres/mongo/neo4j positive/negative/timeout/auth/schema-change/incremental) | MM-001..004, §22 | ~2 weeks | fixtures exist; needs per-connector harness |
-| G9 | **Unified golden dataset** (expected KOs/relations/evidence/temporal/authorization per question) | §50 | ~1 week | unify existing per-instrument goldens; all regressions run against it |
+| G9 | **Unified golden dataset** (expected KOs/relations/evidence/temporal/authorization per question) | §50 | ✅ done | `tests/common/golden_dataset.rs`: one `GOLDEN` table (17 questions × §50 fields: expected answer, KOs, relations, evidence qrels — temporal/authorization/action stay scenario-shaped in the §51 scripts), `SEMANTIC_GOLD` (per-fixture complete extraction gold), `multimodal_expected_entities` (human annotation lists); all corpus instruments (retrieval, semantic, multimodal golden, PR-R e2e) now consume it — the index-aligned `GOLDEN_ANSWERS` const is gone. `golden_dataset_integrity.rs` gates the dataset itself: unique ids/questions, answers grounded in qrel chunks, expected KOs/relations actually extracted, per-question KOs ⊆ human annotation lists. Pinned baseline unchanged (0.867/0.867/0.867, queries=15) |
 
 ### Tier 3 — Flagship benchmarks (P2/P3, post-MVP)
 
@@ -243,7 +243,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | --- | --- | --- | --- |
 | **TP-1 — Traceability & gates** | suite-ID → test matrix (machine-readable), P0 registry test that fails on known gaps, wire PR/nightly tiers | — | ✅ implemented (2026-08-22): `crates/kernel/tests/certification.rs` — 121 gate IDs (94 agent P0/P1 + 27 chatbot release claims) as the registry; `certification_matrix_integrity` runs in every PR (fails on unregistered ID, missing test path, note-less gap); `certification_p0_closure` is `#[ignore]` and runs in the weekly `cargo test --workspace -- --ignored` sweep (benchmark-nightly.yml) — currently red on 2 P0s by design (DB-002, EVO-003) |
 | **TP-2 — P0 gap closure** | G2 (kill harness), G3 (index rebuild), G4 (migration) | TP-1 | before next release tag |
-| **TP-3 — Acceptance scenarios** | G5 (§51 script) ✅, G6 (chatbot memory) ✅, G7 (CTX differential) ✅, G9 (unified golden dataset) | TP-1 | post-MVP, ~3–4 weeks |
+| **TP-3 — Acceptance scenarios** | ✅ COMPLETE: G5 (§51 script) ✅, G6 (chatbot memory) ✅, G7 (CTX differential) ✅, G9 (unified golden dataset) ✅ | TP-1 | ✅ done (2026-08-22) |
 | **TP-4 — Flagship benchmarks** | G10 agent efficacy, G11 comparative experiment, G12 token/latency/cost | TP-3 corpus | post-MVP, ~6–8 weeks |
 | **TP-5 — Connector matrix** | G8 per-connector contract tests | connector workstream in IMPLEMENTATION-PLAN | post-MVP, ~2 weeks once connectors land |
 | **TP-6 — Product features** | G13 retention/summarization → then their certification | IMPLEMENTATION-PLAN roadmap | post-MVP |
@@ -254,8 +254,8 @@ Post-MVP sequencing note: TP-1/TP-2 are cheap and buy the "certification-grade" 
 
 ## 8. Immediate next steps
 
-1. **TP-2**: kill-during-write harness (G2) and index-rebuild test (G3) — both small, both P0; then define the smallest honest slice of schema-migration semantics (G4).
-2. **TP-3**: scripted acceptance scenarios (§51 critical e2e over MCP tools, mechanical judges, mock LLM).
+1. **TP-4**: flagship benchmarks — G10 agent efficacy (task corpus + A/B/C/D treatments), G11 chatbot comparative (§52 table), G12 token/latency/cost vs RAG baseline. TP-3 is complete; TP-4 is the largest single workstream and produces the compliance evidence packs.
+2. **TP-5** (once connectors land): G8 per-connector contract matrix.
 3. Keep the two suite docs in `docs/` as the source of truth for ID numbering; the registry (`certification.rs`) is the enforcement layer — add a row there when a gap closes, never remove a gap row without its test.
 
 ---
@@ -264,8 +264,9 @@ Post-MVP sequencing note: TP-1/TP-2 are cheap and buy the "certification-grade" 
 
 | Instrument | What it measures | Serves |
 | --- | --- | --- |
-| `semantic_extraction_quality` | entity/relation P/R, fact/event accuracy vs golden fixtures | §30 Extraction, KB/ONT/MEM-003 |
-| `retrieval_quality` | P@K, R@K, MRR, nDCG vs 15-query qrels | §30 Retrieval, RET-* |
+| `golden_dataset_integrity` | §50 dataset cross-check: unique ids, answers grounded in qrel chunks, expected KOs/relations extracted, annotation lists consistent | all corpus instruments (G9) |
+| `semantic_extraction_quality` | entity/relation P/R, fact/event accuracy vs unified `SEMANTIC_GOLD` | §30 Extraction, KB/ONT/MEM-003 |
+| `retrieval_quality` | P@K, R@K, MRR, nDCG vs the unified dataset's 15-query qrels | §30 Retrieval, RET-* |
 | `e2e_answer_quality` | answer/citation/evidence correctness, gate verdict | §53 of the multimodal HLD (our §53), PROV-CHAT-* |
 | `multimodal_golden` | 19 DoD rows over 10 PDF fixtures | DOC-001..007 |
 | `real_model_bench` | §60 six-metric model-decision harness | P3 §60 decisions |

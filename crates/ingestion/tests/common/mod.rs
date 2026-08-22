@@ -75,9 +75,15 @@
 // Shared test helper: each test binary uses a subset of this module.
 #![allow(dead_code)]
 
+pub mod golden_dataset;
+
 use aikoql_ingestion::{EmbeddingProvider, KnowledgeBoundaryDetector, VisualIndexRecord};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+
+// Each test binary uses a different subset of these re-exports.
+#[allow(unused_imports)]
+pub use golden_dataset::{golden_answers, queries, visual_queries, Query};
 
 pub const FIXTURE_DIR: &str = "tests/fixtures/multimodal";
 
@@ -92,103 +98,6 @@ pub const FIXTURES: &[&str] = &[
     "annual-report.pdf",
     "formulas.pdf",
     "images.pdf",
-];
-
-/// One retrieval query over the corpus, with hand-annotated relevant
-/// chunks as (fixture, 0-based `chunk.position.chunk_index`) pairs in the
-/// RULE corpus; qrel text is resolved from there and matched by containment
-/// on every corpus.
-pub struct Query {
-    pub text: &'static str,
-    pub relevant: &'static [(&'static str, usize)],
-}
-
-pub const QUERIES: &[Query] = &[
-    Query {
-        text: "What was the revenue for Q3 2025?",
-        relevant: &[("plain-text.pdf", 1)],
-    },
-    Query {
-        text: "Who publishes quarterly reports?",
-        relevant: &[("plain-text.pdf", 0)],
-    },
-    Query {
-        text: "How old is Alice Smith?",
-        relevant: &[("tables.pdf", 0)],
-    },
-    Query {
-        text: "What is the revenue in North America?",
-        relevant: &[("tables.pdf", 1)],
-    },
-    Query {
-        text: "How many units were sold in Q1 2025?",
-        relevant: &[("complex-table.pdf", 0)],
-    },
-    Query {
-        text: "What is the warranty on Home Automation?",
-        relevant: &[("complex-table.pdf", 1)],
-    },
-    Query {
-        text: "Which quarter had the highest total revenue?",
-        relevant: &[("charts.pdf", 0)],
-    },
-    // Paraphrase probe: no lexical token overlap with any chunk — the
-    // measured gap a semantic retriever must close.
-    Query {
-        text: "What was their best-performing three-month period?",
-        relevant: &[("charts.pdf", 0)],
-    },
-    Query {
-        text: "How does the client reach the database?",
-        relevant: &[("architecture-diagram.pdf", 0)],
-    },
-    Query {
-        text: "Who validates payments?",
-        relevant: &[("mixed-report.pdf", 0)],
-    },
-    // Paraphrase probe: "in charge of" for Owner, "financial record book"
-    // for Ledger — no token overlap.
-    Query {
-        text: "Who is in charge of the financial record book?",
-        relevant: &[("mixed-report.pdf", 0)],
-    },
-    Query {
-        text: "What was Globex Industries revenue?",
-        relevant: &[("annual-report.pdf", 1)],
-    },
-    Query {
-        text: "What do Gamma Partners expect?",
-        relevant: &[("annual-report.pdf", 2)],
-    },
-    Query {
-        text: "What is the energy mass equation?",
-        relevant: &[("formulas.pdf", 0)],
-    },
-    Query {
-        text: "What logo is shown in figure 3?",
-        relevant: &[("images.pdf", 0)],
-    },
-];
-
-/// Visual queries (§53 visual retrieval recall, PR-K/PR-N): qrels resolved
-/// from the rule corpus (containment) and judged against visual index
-/// records' captions. The logo pair probes the same visual object (exact
-/// phrase + paraphrase); the chart query probes the PR-N chart record —
-/// charts.pdf's vector-drawn bars are extracted as an SVG asset, so the
-/// chart is now retrievable.
-pub const VISUAL_QUERIES: &[Query] = &[
-    Query {
-        text: "What logo is shown in figure 3?",
-        relevant: &[("images.pdf", 0)],
-    },
-    Query {
-        text: "What does the company logo depict?",
-        relevant: &[("images.pdf", 0)],
-    },
-    Query {
-        text: "What does the bar chart in figure 1 show?",
-        relevant: &[("charts.pdf", 0)],
-    },
 ];
 
 /// A corpus chunk: (fixture, chunk-index) + text.
@@ -503,8 +412,9 @@ pub fn measure(run: &Run, qrels: &[Vec<String>], provider: &dyn EmbeddingProvide
     let mut totals = [0.0f32; 3];
     let mut mrr_sum = 0.0f32;
     let mut ndcg5_sum = 0.0f32;
+    let qs = queries();
 
-    for (qi, q) in QUERIES.iter().enumerate() {
+    for (qi, q) in qs.iter().enumerate() {
         let ranked = match run.ranker {
             Ranker::Lexical => rank(&run.corpus, q.text, provider, false),
             Ranker::Embedding => rank(&run.corpus, q.text, provider, true),
@@ -529,7 +439,7 @@ pub fn measure(run: &Run, qrels: &[Vec<String>], provider: &dyn EmbeddingProvide
         );
     }
 
-    let n = QUERIES.len() as f32;
+    let n = qs.len() as f32;
     [
         totals[0] / n,
         totals[1] / n,

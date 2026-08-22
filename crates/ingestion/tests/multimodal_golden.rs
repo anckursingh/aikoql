@@ -20,8 +20,11 @@
 //! `retrieval_quality.rs`, PR-G / HLD §60; this gate covers pipeline
 //! regression.)
 
+use common::golden_dataset::multimodal_expected_entities;
 use std::collections::BTreeMap;
 use std::path::Path;
+
+mod common;
 
 const FIXTURE_DIR: &str = "tests/fixtures/multimodal";
 const GOLDEN_DIR: &str = "tests/fixtures/multimodal/golden";
@@ -39,48 +42,6 @@ const FIXTURES: &[&str] = &[
     "images.pdf",
     "annual-report.pdf",
 ];
-
-/// HLD §53: hand-annotated recall lists — the entities a human reading each
-/// fixture would annotate (a subset of what the mock analyzer may extract;
-/// the golden JSON pins the full set).
-fn expected_entities(name: &str) -> &'static [&'static str] {
-    match name {
-        "plain-text.pdf" => &["Acme Corporation", "Globex Industries"],
-        "scanned.pdf" => &[],
-        "tables.pdf" => &[
-            "Employee Name",
-            "Alice Smith",
-            "Bob Johnson",
-            "North America",
-            "South America",
-        ],
-        "complex-table.pdf" => &[
-            "Units Sold",
-            "Product Line",
-            "Industrial Sensors",
-            "Home Automation",
-        ],
-        "charts.pdf" => &["Fiscal Quarter", "Total Revenue"],
-        "architecture-diagram.pdf" => &["Client", "Gateway", "Database"],
-        "mixed-report.pdf" => &[
-            "Billing Pipeline",
-            "Acme Corporation",
-            "Billing Team",
-            "Ledger Team",
-            "Payment",
-            "Ledger",
-        ],
-        "formulas.pdf" => &[],
-        "images.pdf" => &[],
-        "annual-report.pdf" => &[
-            "Annual Report",
-            "Acme Corporation",
-            "Globex Industries",
-            "Gamma Partners",
-        ],
-        _ => &[],
-    }
-}
 
 fn modality_key(m: &aikoql_ingestion::FragmentModality) -> &'static str {
     match m {
@@ -253,7 +214,7 @@ fn multimodal_golden_suite() {
 
         // §53: entity recall — expected annotations must all be extracted.
         let actual: Vec<&str> = result.ir.entities.iter().map(|e| e.name.as_str()).collect();
-        let missing: Vec<&&str> = expected_entities(name)
+        let missing: Vec<&&str> = multimodal_expected_entities(name)
             .iter()
             .filter(|e| !actual.contains(e))
             .collect();

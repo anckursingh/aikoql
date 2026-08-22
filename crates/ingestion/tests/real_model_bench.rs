@@ -25,8 +25,8 @@ mod common;
 use aikoql_ingestion::remote_emb::{RemoteEmbeddingConfig, RemoteEmbeddingProvider};
 use aikoql_ingestion::EmbeddingProvider;
 use common::{
-    chunk_text, corpus, measure, rank_visual, visual_recall_at_k, Ranker, Run, QUERIES,
-    VISUAL_QUERIES,
+    chunk_text, corpus, measure, queries, rank_visual, visual_queries, visual_recall_at_k, Ranker,
+    Run,
 };
 use std::collections::HashMap;
 
@@ -124,7 +124,7 @@ fn real_model_measurement() {
     let emb_detector = aikoql_ingestion::EmbeddingBoundaryDetector::new(&cache);
     let (emb_corpus, _) = corpus(&emb_detector, &cache);
 
-    let qrels: Vec<Vec<String>> = QUERIES
+    let qrels: Vec<Vec<String>> = queries()
         .iter()
         .map(|q| {
             q.relevant
@@ -186,7 +186,8 @@ fn real_model_measurement() {
             "{label}: visual index is empty — cannot judge visual retrieval"
         );
         let (mut r1, mut r3, mut r5) = (0.0f32, 0.0f32, 0.0f32);
-        for q in VISUAL_QUERIES {
+        let vqs = visual_queries();
+        for q in &vqs {
             let qrel: Vec<String> = q
                 .relevant
                 .iter()
@@ -197,7 +198,7 @@ fn real_model_measurement() {
             r3 += visual_recall_at_k(&ranked, records, &qrel, 3);
             r5 += visual_recall_at_k(&ranked, records, &qrel, 5);
         }
-        let n = VISUAL_QUERIES.len() as f32;
+        let n = vqs.len() as f32;
         eprintln!(
             "[REAL-MODEL] visual {label} recall@1={:.3} recall@3={:.3} recall@5={:.3} (mock pinned 1.000)",
             r1 / n,

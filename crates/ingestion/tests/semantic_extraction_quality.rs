@@ -33,148 +33,11 @@
 //! a real regression (entity loss, fact extraction breakage) fails CI, a
 //! variant improvement passes trivially.
 
-use aikoql_ingestion::KnowledgeIr;
 use std::collections::HashSet;
-use std::path::Path;
-
-use common::FIXTURE_DIR;
 
 mod common;
 
-/// Ground truth per fixture — what the document really contains. Only
-/// categories the document actually expresses are listed; fixtures whose
-/// category set is empty are skipped for that category.
-struct Gold {
-    fixture: &'static str,
-    entities: &'static [&'static str],
-    /// (subject, object) pairs the document really relates.
-    relations: &'static [(&'static str, &'static str)],
-    facts: &'static [&'static str],
-}
-
-const GOLD: &[Gold] = &[
-    Gold {
-        fixture: "plain-text.pdf",
-        entities: &["Acme Corporation", "Globex Industries"],
-        relations: &[],
-        facts: &[],
-    },
-    Gold {
-        fixture: "tables.pdf",
-        entities: &[
-            "Alice Smith",
-            "Bob Johnson",
-            "North America",
-            "South America",
-        ],
-        relations: &[],
-        facts: &[
-            "Employee Name: Alice Smith",
-            "Age: 30",
-            "Employee Name: Bob Johnson",
-            "Age: 45",
-            "Region: North America",
-            "Revenue (USD): 1200",
-            "Region: South America",
-            "Revenue (USD): 800",
-        ],
-    },
-    Gold {
-        fixture: "complex-table.pdf",
-        entities: &["Industrial Sensors", "Home Automation"],
-        relations: &[],
-        facts: &[
-            "Quarter: Q1 2025",
-            "Units Sold: 4000",
-            "Margin (%): 12.5",
-            "Quarter: Q2 2025",
-            "Units Sold: 5100",
-            "Margin (%): 13.0",
-            "Product Line: Industrial Sensors",
-            "Warranty (months): 36",
-            "Product Line: Home Automation",
-            "Warranty (months): 24",
-        ],
-    },
-    Gold {
-        fixture: "charts.pdf",
-        entities: &[],
-        relations: &[],
-        facts: &[
-            "Fiscal Quarter: Q1",
-            "Total Revenue: 1200",
-            "Fiscal Quarter: Q2",
-            "Total Revenue: 1500",
-        ],
-    },
-    Gold {
-        fixture: "architecture-diagram.pdf",
-        entities: &["Client", "Gateway", "Database", "Cache"],
-        relations: &[
-            ("client", "gateway"),
-            ("gateway", "database"),
-            ("gateway", "cache"),
-        ],
-        facts: &[],
-    },
-    Gold {
-        fixture: "mixed-report.pdf",
-        entities: &[
-            "Acme Corporation",
-            "Billing Team",
-            "Ledger Team",
-            "Payment",
-            "Ledger",
-        ],
-        relations: &[("payment", "ledger")],
-        facts: &[
-            "Step: Validate",
-            "Owner: Billing Team",
-            "Step: Commit",
-            "Owner: Ledger Team",
-        ],
-    },
-    Gold {
-        fixture: "annual-report.pdf",
-        entities: &["Acme Corporation", "Globex Industries", "Gamma Partners"],
-        relations: &[],
-        facts: &["Metric: Growth", "Value: 8 percent"],
-    },
-];
-
-/// Case-insensitive, whitespace-collapsed canonical form.
-fn normalize(s: &str) -> String {
-    s.to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Compile each golden fixture once through the real mock pipeline (rule
-/// boundary, mock components — the baseline stack) and keep its IR.
-fn compile_ir() -> Vec<(&'static str, KnowledgeIr)> {
-    let provider = aikoql_ingestion::MockEmbeddingProvider::new();
-    let mut irs = Vec::new();
-    for name in common::FIXTURES {
-        let path = Path::new(FIXTURE_DIR).join(name);
-        let dm =
-            aikoql_ingestion::extract_document(&path.to_string_lossy(), "application/pdf", None)
-                .unwrap_or_else(|e| panic!("{name}: extraction failed: {e}"));
-        let result = aikoql_ingestion::compile_document_with_detector(
-            &dm,
-            &aikoql_ingestion::MockSemanticAnalyzer::new(),
-            &aikoql_ingestion::MockEntityResolver::new(),
-            &aikoql_ingestion::MockKnowledgeReconciler::new(),
-            &aikoql_ingestion::HeadingProjector::new(),
-            &provider,
-            &aikoql_ingestion::RuleBoundaryDetector,
-            &[],
-            None,
-        );
-        irs.push((*name, result.ir));
-    }
-    irs
-}
+use common::golden_dataset::{compile_fixture_irs, normalize, SEMANTIC_GOLD};
 
 /// Set-based precision/recall over normalized strings. Extracted duplicates
 /// collapse into the set; an empty extracted set scores precision 1.0 (no
@@ -218,16 +81,14 @@ where
 /// (fixture, category) cell and one summary; asserts the baseline floors.
 #[test]
 fn semantic_extraction_quality() {
-    let irs = compile_ir();
-    let by_fixture: std::collections::HashMap<&str, &KnowledgeIr> =
-        irs.iter().map(|(f, ir)| (*f, ir)).collect();
+    let irs = compile_fixture_irs();
 
     let mut totals = [0.0f32; 6]; // ent P/R, rel P/R, fact P/R
     let mut judged = [0usize; 3]; // fixtures judged per category
     let mut event_count = 0usize;
 
-    for g in GOLD {
-        let ir = by_fixture[g.fixture];
+    for g in SEMANTIC_GOLD {
+        let ir = &irs[g.fixture];
         event_count += ir.events.len();
 
         if !g.entities.is_empty() {

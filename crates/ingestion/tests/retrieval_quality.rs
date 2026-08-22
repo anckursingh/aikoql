@@ -14,8 +14,8 @@ mod common;
 
 use aikoql_ingestion::EmbeddingProvider;
 use common::{
-    chunk_text, corpus, measure, rank_visual, visual_recall_at_k, Ranker, Run, QUERIES,
-    VISUAL_QUERIES,
+    chunk_text, corpus, measure, queries, rank_visual, visual_queries, visual_recall_at_k, Ranker,
+    Run,
 };
 
 /// PR-J: deterministic mock transformer — a transformer scorer IS a
@@ -69,7 +69,7 @@ fn rule_baseline_retrieval_quality() {
 
     // Qrel text resolved from the rule corpus; variant corpora are judged
     // by containment against the same text.
-    let qrels: Vec<Vec<String>> = QUERIES
+    let qrels: Vec<Vec<String>> = queries()
         .iter()
         .map(|q| {
             q.relevant
@@ -149,7 +149,7 @@ fn rule_baseline_retrieval_quality() {
         "[RETRIEVAL-BASELINE] {} queries={} recall@1={:.3} recall@3={:.3} recall@5={:.3} \
          mrr={:.3} ndcg@5={:.3} hybrid=measured below visual=measured below",
         runs[0].boundary,
-        QUERIES.len(),
+        qrels.len(),
         base[0],
         base[1],
         base[2],
@@ -189,7 +189,7 @@ fn rule_baseline_retrieval_quality() {
             "[RETRIEVAL-VARIANT] {} queries={} recall@1={:.3} recall@3={:.3} recall@5={:.3} \
              mrr={:.3} ndcg@5={:.3}",
             run.boundary,
-            QUERIES.len(),
+            qrels.len(),
             m[0],
             m[1],
             m[2],
@@ -215,6 +215,7 @@ fn rule_baseline_retrieval_quality() {
     // PR-K (HLD §24/§53): visual retrieval recall — rank each corpus's
     // visual index records by query-vs-caption embedding cosine and judge
     // by caption containment against the same qrel text.
+    let vqs = visual_queries();
     for (label, records) in [
         ("rule", rule_visual.as_slice()),
         ("embedding", emb_visual.as_slice()),
@@ -226,7 +227,7 @@ fn rule_baseline_retrieval_quality() {
             "{label}: visual index is empty — cannot judge visual retrieval"
         );
         let (mut r1, mut r3, mut r5) = (0.0f32, 0.0f32, 0.0f32);
-        for q in VISUAL_QUERIES {
+        for q in &vqs {
             let qrel: Vec<String> = q
                 .relevant
                 .iter()
@@ -247,10 +248,10 @@ fn rule_baseline_retrieval_quality() {
                 records.len()
             );
         }
-        let n = VISUAL_QUERIES.len() as f32;
+        let n = vqs.len() as f32;
         eprintln!(
             "[RETRIEVAL-VISUAL] {label} queries={} recall@1={:.3} recall@3={:.3} recall@5={:.3}",
-            VISUAL_QUERIES.len(),
+            vqs.len(),
             r1 / n,
             r3 / n,
             r5 / n

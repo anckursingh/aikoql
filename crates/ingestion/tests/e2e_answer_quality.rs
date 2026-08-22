@@ -45,26 +45,6 @@ mod common;
 
 use std::time::Instant;
 
-/// Golden answer per query (same order as `common::QUERIES`): the key
-/// tokens a correct answer must contain, authored from the fixture content.
-const GOLDEN_ANSWERS: &[&str] = &[
-    "$10M",             // Q3 2025 revenue (plain-text.pdf)
-    "Acme Corporation", // who publishes quarterly reports
-    "30",               // Alice Smith age (tables.pdf)
-    "1200",             // North America revenue
-    "4000",             // Q1 2025 units sold (complex-table.pdf)
-    "24 months",        // Home Automation warranty
-    "Q2",               // highest total revenue (charts.pdf)
-    "Q2",               // best-performing three-month period (paraphrase probe)
-    "Gateway",          // client → database path (architecture-diagram.pdf)
-    "Billing Team",     // who validates payments (mixed-report.pdf)
-    "Ledger Team",      // who owns the financial record book (paraphrase probe)
-    "$10M",             // Globex Industries revenue (annual-report.pdf)
-    "continued growth", // Gamma Partners expectation
-    "E = mc^2",         // energy-mass equation (formulas.pdf)
-    "Company logo",     // figure 3 (images.pdf)
-];
-
 /// Evidence chunks handed to the generator per query (top-3 lexical).
 const EVIDENCE_K: usize = 3;
 
@@ -181,7 +161,10 @@ fn e2e_answer_quality() {
 
     let provider = aikoql_ingestion::MockEmbeddingProvider::new();
     let (corpus, _) = common::corpus(&aikoql_ingestion::RuleBoundaryDetector, &provider);
-    let qrels: Vec<Vec<String>> = common::QUERIES
+    // Golden answers come from the unified §50 dataset (common::golden_dataset),
+    // keyed to the query — not index-aligned to it.
+    let answers = common::golden_answers();
+    let qrels: Vec<Vec<String>> = common::queries()
         .iter()
         .map(|q| {
             q.relevant
@@ -200,7 +183,7 @@ fn e2e_answer_quality() {
     let mut rows: Vec<Row> = Vec::new();
     let mut calls = 0usize;
 
-    for (qi, q) in common::QUERIES.iter().enumerate() {
+    for (qi, q) in common::queries().iter().enumerate() {
         // Baseline retriever: lexical top-3 (the §60 rule-baseline ranker).
         let ranked = common::rank(&corpus, q.text, &provider, false);
         let evidence: Vec<String> = ranked
@@ -223,11 +206,11 @@ fn e2e_answer_quality() {
 
         let with_correct = answer_with
             .as_deref()
-            .map(|a| answer_correct(a, GOLDEN_ANSWERS[qi]))
+            .map(|a| answer_correct(a, answers[qi]))
             .unwrap_or(false);
         let without_correct = answer_without
             .as_deref()
-            .map(|a| answer_correct(a, GOLDEN_ANSWERS[qi]))
+            .map(|a| answer_correct(a, answers[qi]))
             .unwrap_or(false);
         let citation = answer_with
             .as_deref()
