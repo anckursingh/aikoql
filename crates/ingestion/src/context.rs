@@ -116,11 +116,14 @@ pub fn compile_context_semantic_with(
         .entities
         .iter()
         .map(|e| {
-            let name_score = keyword_score(&e.name.to_lowercase(), &task_words);
+            // Raw case preserved: keyword_score matches case-insensitively
+            // but ident_parts needs the camelCase boundaries ("TimeoutPolicy"
+            // → timeout/policy) that to_lowercase() destroys.
+            let name_score = keyword_score(&e.name, &task_words);
             let mut mention_score: f32 = 0.0;
             let mut matched_mentions = Vec::new();
             for mention in &e.mentions {
-                let ms = keyword_score(&mention.to_lowercase(), &task_words) * 0.5;
+                let ms = keyword_score(mention, &task_words) * 0.5;
                 if ms > 0.0 {
                     matched_mentions.push(mention.clone());
                 }
@@ -538,15 +541,60 @@ fn pack_mentions(mentions: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Score a text against task keywords. Each exact word match adds 1.0,
-/// partial (substring) match adds 0.3.
+/// English function words that must never earn lexical credit. The len<3
+/// skip already drops "of"/"on"/"in"/"is"; these 3+-letter ones otherwise
+/// leak — a question's "the"/"what"/"does" full-matches inside almost
+/// every mention, so every entity ranked for every task and the entity
+/// gate became a no-op on natural-language questions.
+const STOPWORDS: &[&str] = &[
+    "the", "and", "for", "are", "was", "were", "who", "what", "when", "where", "which", "how",
+    "does", "did", "that", "this", "with", "from", "into",
+];
+
+/// Split an identifier-style chunk into its word parts on camelCase
+/// boundaries and non-alphanumeric separators: "TimeoutPolicy" →
+/// ["timeout", "policy"], "src/net.rs" → ["src", "net", "rs"]. Entity
+/// names are identifiers while task words are words — matching words
+/// against whole identifiers alone would demote "retry" vs "RetryLoop"
+/// to a prefix guess.
+fn ident_parts(chunk: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize; // byte offset
+    let chars: Vec<(usize, char)> = chunk.char_indices().collect();
+    for i in 0..chars.len() {
+        let (off, c) = chars[i];
+        let prev = if i > 0 { chars[i - 1].1 } else { c };
+        let boundary = !c.is_alphanumeric()
+            || (c.is_uppercase() && i > 0 && (prev.is_lowercase() || prev.is_numeric()));
+        if boundary {
+            if off > start {
+                parts.push(&chunk[start..off]);
+            }
+            start = off + c.len_utf8();
+        }
+    }
+    if start < chunk.len() {
+        parts.push(&chunk[start..]);
+    }
+    parts
+}
+
+/// Score a text against task keywords. Each exact token match adds 1.0,
+/// partial (shared-prefix ≥4 chars) match adds 0.3.
 fn keyword_score(text: &str, task_words: &[&str]) -> f32 {
     let mut score: f32 = 0.0;
     for &word in task_words {
-        if word.len() < 3 {
-            continue; // skip short words
+        if word.len() < 3 || STOPWORDS.contains(&word) {
+            continue; // skip short words and function words
         }
-        if text.contains(word) {
+        // Exact match = word equals a whole text token (or an identifier
+        // part of one), case-insensitively. Not text.contains(word):
+        // substring matching credited "log" for "catalog" and handed
+        // question words credit inside unrelated tokens.
+        if text.split_whitespace().any(|chunk| {
+            chunk.to_lowercase() == word
+                || ident_parts(chunk).iter().any(|p| p.to_lowercase() == word)
+        }) {
             score += 1.0;
         } else {
             // Partial match: shared prefix ≥4 chars ("truncate"/"truncation").
@@ -555,6 +603,7 @@ fn keyword_score(text: &str, task_words: &[&str]) -> f32 {
             // the semantic-only recall path (lexical was never 0).
             for chunk in text.split_whitespace() {
                 let shared = chunk
+                    .to_lowercase()
                     .chars()
                     .zip(word.chars())
                     .take_while(|(a, b)| a == b)
@@ -1160,6 +1209,35 @@ mod tests {
         assert_eq!(keyword_score("the of and", &["galvanize"]), 0.0);
         // Morphological prefix variant still scores.
         assert_eq!(keyword_score("truncation", &["truncates"]), 0.3);
+    }
+
+    #[test]
+    fn keyword_score_filters_question_stopwords() {
+        // "the"/"what"/"does" in a natural-language question must not
+        // hand every mention containing them lexical credit — that made
+        // every entity rank for every task and defeated the entity gate.
+        assert_eq!(
+            keyword_score("the ledger stores records", &["the", "does", "what"]),
+            0.0
+        );
+        assert_eq!(
+            keyword_score("the ledger stores records", &["ledger"]),
+            1.0,
+            "real keywords still score"
+        );
+    }
+
+    #[test]
+    fn keyword_score_matches_whole_tokens_not_substrings() {
+        // Substring containment credited "log" for "catalog" and question
+        // words inside unrelated tokens — exact match is token equality.
+        assert_eq!(keyword_score("the catalog indexes products", &["log"]), 0.0);
+        assert_eq!(keyword_score("the log retains entries", &["log"]), 1.0);
+        // Prefix morphologies still land on the partial path.
+        assert_eq!(
+            keyword_score("the catalog indexes products", &["catalogs"]),
+            0.3
+        );
     }
 
     #[test]
