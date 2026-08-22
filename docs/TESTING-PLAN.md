@@ -241,7 +241,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 
 | Phase | Content | Depends on | Target |
 | --- | --- | --- | --- |
-| **TP-1 — Traceability & gates** | suite-ID → test matrix (machine-readable), P0 registry test that fails on known gaps, wire PR/nightly tiers | — | before next release tag |
+| **TP-1 — Traceability & gates** | suite-ID → test matrix (machine-readable), P0 registry test that fails on known gaps, wire PR/nightly tiers | — | ✅ implemented (2026-08-22): `crates/kernel/tests/certification.rs` — 121 gate IDs (94 agent P0/P1 + 27 chatbot release claims) as the registry; `certification_matrix_integrity` runs in every PR (fails on unregistered ID, missing test path, note-less gap); `certification_p0_closure` is `#[ignore]` and runs in the weekly `cargo test --workspace -- --ignored` sweep (benchmark-nightly.yml) — currently red on 2 P0s by design (DB-002, EVO-003) |
 | **TP-2 — P0 gap closure** | G2 (kill harness), G3 (index rebuild), G4 (migration) | TP-1 | before next release tag |
 | **TP-3 — Acceptance scenarios** | G5 (§51 script), G6 (chatbot memory), G7 (CTX differential), G9 (unified golden dataset) | TP-1 | post-MVP, ~3–4 weeks |
 | **TP-4 — Flagship benchmarks** | G10 agent efficacy, G11 comparative experiment, G12 token/latency/cost | TP-3 corpus | post-MVP, ~6–8 weeks |
@@ -254,9 +254,9 @@ Post-MVP sequencing note: TP-1/TP-2 are cheap and buy the "certification-grade" 
 
 ## 8. Immediate next steps
 
-1. **TP-1**: machine-readable traceability matrix (`docs/certification-matrix.json` or `tests/certification/*.rs`) + a P0 registry test that enumerates suite IDs and fails on any unregistered P0 (never on 🟡/❌ — those are registered *as gaps*).
-2. **TP-2**: kill-during-write harness (G2) and index-rebuild test (G3) — both small, both P0.
-3. Keep the two suite docs in `docs/` as the source of truth for ID numbering; this plan references them, never duplicates their prose.
+1. **TP-2**: kill-during-write harness (G2) and index-rebuild test (G3) — both small, both P0; then define the smallest honest slice of schema-migration semantics (G4).
+2. **TP-3**: scripted acceptance scenarios (§51 critical e2e over MCP tools, mechanical judges, mock LLM).
+3. Keep the two suite docs in `docs/` as the source of truth for ID numbering; the registry (`certification.rs`) is the enforcement layer — add a row there when a gap closes, never remove a gap row without its test.
 
 ---
 
