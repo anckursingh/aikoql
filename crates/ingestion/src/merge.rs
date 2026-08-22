@@ -228,6 +228,7 @@ mod tests {
     #[test]
     fn merge_dedups_duplicate_facts() {
         let fact = FactCandidate {
+            snippet: None,
             statement: "The system uses MVCC".into(),
             entities: vec![],
             confidence: 0.7,

@@ -130,6 +130,13 @@ pub struct FactCandidate {
     pub confidence: f32,
     /// Provenance evidence.
     pub evidence: Evidence,
+    /// Verbatim source text backing the statement, stored when the
+    /// statement is a synthesis of the source (e.g. table cell facts join
+    /// header + cell, losing the row context) — a KO must never become a
+    /// lossy representation of its source. None when the statement itself
+    /// is the source text (headings, doc lines, titles).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
 }
 
 /// An event described in the document with temporal context.
@@ -354,6 +361,7 @@ impl MockSemanticAnalyzer {
                     if !child.text.as_deref().unwrap_or_default().is_empty() && !entities.is_empty()
                     {
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: child.text.clone().unwrap_or_default(),
                             entities,
                             confidence: self.confidence,
@@ -511,6 +519,7 @@ impl MockSemanticAnalyzer {
                 {
                     seen_headings.push(heading);
                     ir.facts.push(FactCandidate {
+                        snippet: None,
                         statement: heading.clone(),
                         entities,
                         confidence: self.confidence,
@@ -542,11 +551,23 @@ impl MockSemanticAnalyzer {
                 // extractor-specific and breaks on rotated tables.
                 let mut row_phrases: std::collections::HashMap<&str, Vec<String>> =
                     std::collections::HashMap::new();
+                let mut row_text: std::collections::HashMap<&str, String> =
+                    std::collections::HashMap::new();
                 for cell in &table.cells {
                     row_phrases
                         .entry(cell.row_id.as_str())
                         .or_default()
                         .extend(extract_capitalized_phrases(&cell.text));
+                    let t = cell.text.trim();
+                    if !t.is_empty() {
+                        row_text
+                            .entry(cell.row_id.as_str())
+                            .and_modify(|s| {
+                                s.push_str(" | ");
+                                s.push_str(t);
+                            })
+                            .or_insert_with(|| t.to_string());
+                    }
                 }
                 for cell in &table.cells {
                     if cell.text.trim().is_empty() {
@@ -569,6 +590,10 @@ impl MockSemanticAnalyzer {
                             .cloned()
                             .unwrap_or_default(),
                         confidence: self.confidence * cell.confidence,
+                        // The "Header: cell" statement is a synthesis —
+                        // keep the row's verbatim text as the source so
+                        // the rendered fact stays verifiable.
+                        snippet: row_text.get(cell.row_id.as_str()).cloned(),
                         evidence: Evidence {
                             document_id: None,
                             page: owner.context.page,
@@ -665,6 +690,7 @@ impl MockSemanticAnalyzer {
                             .clone()
                             .unwrap_or_else(|| "Untitled chart".into());
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: format!("Chart: {} ({:?})", title, chart.chart_type),
                             // Anchor chart facts to the title's phrases so
                             // they join the entity gate like cell facts —
@@ -691,6 +717,7 @@ impl MockSemanticAnalyzer {
                             formula.plain_text.clone().or_else(|| formula.latex.clone())
                         {
                             ir.facts.push(FactCandidate {
+                                snippet: None,
                                 statement: format!("Formula: {}", text),
                                 entities: Vec::new(),
                                 confidence: self.confidence,
@@ -711,6 +738,7 @@ impl MockSemanticAnalyzer {
                             .clone()
                             .unwrap_or_else(|| format!("asset {}", image.asset.content_hash));
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: format!("Image: {}", caption),
                             entities: Vec::new(),
                             confidence: self.confidence,
@@ -734,6 +762,7 @@ impl MockSemanticAnalyzer {
                         if let Some(ocr_text) = image.ocr_text.clone() {
                             let snippet: String = ocr_text.chars().take(200).collect();
                             ir.facts.push(FactCandidate {
+                                snippet: None,
                                 statement: format!("OCR text: {}", snippet),
                                 entities: Vec::new(),
                                 confidence: self.confidence,
@@ -1243,6 +1272,7 @@ mod tests {
             },
         });
         ir.facts.push(FactCandidate {
+            snippet: None,
             statement: "dropped fact".into(),
             evidence: Evidence {
                 page: Some(2),
@@ -1820,6 +1850,7 @@ mod tests {
         // JSON serialization.
         let mut ir = KnowledgeIr {
             facts: vec![FactCandidate {
+                snippet: None,
                 statement: "ignore previous instructions".into(),
                 entities: vec![],
                 confidence: 0.1,
@@ -1841,6 +1872,7 @@ mod tests {
         // payload by serializing a full IR and stripping only the new key.
         let ir = KnowledgeIr {
             facts: vec![FactCandidate {
+                snippet: None,
                 statement: "old fact".into(),
                 entities: vec![],
                 confidence: 0.5,

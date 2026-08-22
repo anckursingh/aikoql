@@ -1046,6 +1046,7 @@ fn ctx_differential_scenarios() {
             },
         ],
         facts: vec![FactCandidate {
+            snippet: None,
             statement: "payments flow through Stripe".into(),
             entities: vec![],
             confidence: 0.9,
@@ -1150,6 +1151,7 @@ fn ctx_differential_scenarios() {
             },
         ],
         facts: vec![FactCandidate {
+            snippet: None,
             statement: "payments flow through the internal ledger".into(),
             entities: vec![],
             confidence: 0.9,

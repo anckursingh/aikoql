@@ -1572,6 +1572,7 @@
               }
             }
           },
+          "snippet": "Q1 2025 | 4000 | 12.5",
           "statement": "Quarter: Q1 2025"
         },
         {
@@ -1590,6 +1591,7 @@
               }
             }
           },
+          "snippet": "Q1 2025 | 4000 | 12.5",
           "statement": "Units Sold: 4000"
         },
         {
@@ -1608,6 +1610,7 @@
               }
             }
           },
+          "snippet": "Q1 2025 | 4000 | 12.5",
           "statement": "Margin (%): 12.5"
         },
         {
@@ -1626,6 +1629,7 @@
               }
             }
           },
+          "snippet": "Q2 2025 | 5100 | 13.0",
           "statement": "Quarter: Q2 2025"
         },
         {
@@ -1644,6 +1648,7 @@
               }
             }
           },
+          "snippet": "Q2 2025 | 5100 | 13.0",
           "statement": "Units Sold: 5100"
         },
         {
@@ -1662,6 +1667,7 @@
               }
             }
           },
+          "snippet": "Q2 2025 | 5100 | 13.0",
           "statement": "Margin (%): 13.0"
         },
         {
@@ -1682,6 +1688,7 @@
               }
             }
           },
+          "snippet": "Industrial Sensors | 36",
           "statement": "Product Line: Industrial Sensors"
         },
         {
@@ -1702,6 +1709,7 @@
               }
             }
           },
+          "snippet": "Industrial Sensors | 36",
           "statement": "Warranty (months): 36"
         },
         {
@@ -1722,6 +1730,7 @@
               }
             }
           },
+          "snippet": "Home Automation | 24",
           "statement": "Product Line: Home Automation"
         },
         {
@@ -1742,6 +1751,7 @@
               }
             }
           },
+          "snippet": "Home Automation | 24",
           "statement": "Warranty (months): 24"
         }
       ],

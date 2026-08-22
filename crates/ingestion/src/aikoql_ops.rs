@@ -752,18 +752,21 @@ mod tests {
             ],
             facts: vec![
                 FactCandidate {
+                    snippet: None,
                     statement: "must use MVCC for all write operations".into(),
                     entities: vec!["TransactionEngine".into()],
                     confidence: 0.9,
                     evidence: Evidence::default(),
                 },
                 FactCandidate {
+                    snippet: None,
                     statement: "must not use row-level locking".into(),
                     entities: vec!["TransactionEngine".into()],
                     confidence: 0.7,
                     evidence: Evidence::default(),
                 },
                 FactCandidate {
+                    snippet: None,
                     statement: "constraints are validated at commit time".into(),
                     entities: vec!["ConstraintEngine".into()],
                     confidence: 0.85,
@@ -827,12 +830,14 @@ mod tests {
         let ir = KnowledgeIr {
             facts: vec![
                 FactCandidate {
+                    snippet: None,
                     statement: "must use synchronous replication".into(),
                     entities: vec!["TransactionEngine".into()],
                     confidence: 0.9,
                     evidence: Evidence::default(),
                 },
                 FactCandidate {
+                    snippet: None,
                     statement: "must not use synchronous replication".into(),
                     entities: vec!["TransactionEngine".into()],
                     confidence: 0.8,

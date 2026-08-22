@@ -256,18 +256,21 @@ mod tests {
             ],
             facts: vec![
                 FactCandidate {
+                    snippet: None,
                     statement: "must use MVCC for all writes".into(),
                     entities: vec!["TransactionEngine".into()],
                     confidence: 0.9,
                     evidence: Evidence::default(),
                 },
                 FactCandidate {
+                    snippet: None,
                     statement: "constraints are validated at commit time".into(),
                     entities: vec!["ConstraintEngine".into()],
                     confidence: 0.85,
                     evidence: Evidence::default(),
                 },
                 FactCandidate {
+                    snippet: None,
                     statement: "AuthService supports OAuth2 and JWT".into(),
                     entities: vec!["AuthService".into()],
                     confidence: 0.7,

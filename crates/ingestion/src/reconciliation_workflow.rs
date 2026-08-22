@@ -153,6 +153,7 @@ pub fn apply_proposal(proposal: &KnowledgeProposal, ir: &KnowledgeIr) -> ApplyRe
             for fact_text in &proposal.new_facts {
                 if !ir.facts.iter().any(|f| f.statement.contains(fact_text)) {
                     ir.facts.push(FactCandidate {
+                        snippet: None,
                         statement: fact_text.clone(),
                         entities: proposal.target_entity.clone().into_iter().collect(),
                         confidence: 0.7,
@@ -325,6 +326,7 @@ mod tests {
                 },
             ],
             facts: vec![FactCandidate {
+                snippet: None,
                 statement: "TransactionEngine uses MVCC".into(),
                 entities: vec!["TransactionEngine".into()],
                 confidence: 0.9,

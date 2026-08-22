@@ -367,6 +367,7 @@ mod tests {
     fn redacts_jwt_in_facts() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8s".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -383,6 +384,7 @@ mod tests {
     fn redacts_connection_string() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "Server=prod-db.example.com;Password=superSecret123;Database=mydb"
                     .into(),
                 entities: vec![],
@@ -417,6 +419,7 @@ mod tests {
     fn redacts_aws_key() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -438,6 +441,7 @@ mod tests {
         assert!(encoded.len() > 50);
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: encoded.into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -454,6 +458,7 @@ mod tests {
     fn short_base64_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "aGVsbG8=".into(), // base64("hello") — only 8 chars
                 entities: vec![],
                 confidence: 0.5,
@@ -470,6 +475,7 @@ mod tests {
     fn multi_line_private_key_is_redacted() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -486,6 +492,7 @@ mod tests {
     fn bearer_in_prose_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "Bearer of good news to the entire team".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -504,6 +511,7 @@ mod tests {
     fn api_key_in_prose_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "the api-key is not a secret here".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -522,6 +530,7 @@ mod tests {
     fn github_pat_is_redacted() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "github_pat_11ABCDEFG1234567890abcdefghijklmnopqrstuv".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -538,6 +547,7 @@ mod tests {
     fn clean_uuid_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "550e8400-e29b-41d4-a716-446655440000".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -554,6 +564,7 @@ mod tests {
     fn credit_card_with_spaces_is_redacted() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "4111 1111 1111 1111".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -572,6 +583,7 @@ mod tests {
     fn assert_redacted_as(statement: &str, kind: SecretKind) {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: statement.into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -676,6 +688,7 @@ mod tests {
     fn sha256_hex_hash_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement:
                     "sha256: a3f5c8d2e1b6490f7a6c5d4e3b2a1908f7e6d5c4b3a29182736455463728190a"
                         .into(),
@@ -697,6 +710,7 @@ mod tests {
     fn disk_word_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "the disk-usage metrics report is ready".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -719,6 +733,7 @@ mod tests {
         // passes through. Document-level filtering is the primary defense.
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "contact admin%40example.com".into(),
                 entities: vec![],
                 confidence: 0.5,

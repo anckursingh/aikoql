@@ -452,6 +452,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                                 self.confidence
                             };
                             ir.facts.push(FactCandidate {
+                                snippet: None,
                                 statement: clean.to_string(),
                                 entities: vec![section.heading.clone()],
                                 confidence: fact_confidence,
@@ -471,6 +472,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                 SectionKind::Rule => {
                     for item in &section.list_items {
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: item.clone(),
                             entities: vec![section.heading.clone()],
                             confidence: self.confidence,
@@ -488,6 +490,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     for para in &section.paragraphs {
                         if para.len() > 10 {
                             ir.facts.push(FactCandidate {
+                                snippet: None,
                                 statement: para.clone(),
                                 entities: vec![section.heading.clone()],
                                 confidence: self.confidence,
@@ -512,6 +515,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                         let injected = detect_instruction_injection(item).is_some();
                         let conf = if injected { 0.1 } else { self.confidence };
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: item.clone(),
                             entities: vec![section.heading.clone()],
                             confidence: conf,
@@ -545,6 +549,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     });
                     // ADR-style: extract context, options, selected, rationale
                     ir.facts.push(FactCandidate {
+                        snippet: None,
                         statement: format!("Decision: {}", section.heading),
                         entities: vec!["ADR".into()],
                         confidence: self.confidence,
@@ -575,6 +580,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                             "ADR Detail"
                         };
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: format!("{}: {}", label, para),
                             entities: vec!["ADR".into(), section.heading.clone()],
                             confidence: self.confidence,
@@ -594,6 +600,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     for (lang, _code) in &section.code_blocks {
                         let actual_lang = if lang.is_empty() { &language } else { lang };
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: format!(
                                 "Code artifact ({}) under '{}'",
                                 actual_lang, section.heading
@@ -617,6 +624,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                         let clean = para.trim();
                         if clean.len() > 5 {
                             ir.facts.push(FactCandidate {
+                                snippet: None,
                                 statement: clean.to_string(),
                                 entities: vec![section.heading.clone()],
                                 confidence: self.confidence,

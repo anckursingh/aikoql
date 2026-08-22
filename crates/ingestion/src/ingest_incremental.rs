@@ -214,6 +214,7 @@ pub fn incremental_diff_ingest(
     let report = reconcile(&changed, &merged);
     for fact in &report.potentially_stale_facts {
         merged.facts.push(FactCandidate {
+            snippet: None,
             statement: format!("[STALE] {}", fact),
             entities: vec![],
             confidence: 0.1,

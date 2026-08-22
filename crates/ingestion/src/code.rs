@@ -46,6 +46,7 @@ fn parse_syn_file(file: &syn::File, document_id: Option<String>, extractor: Stri
     for attr in &file.attrs {
         if let Some(doc) = extract_doc_comment(attr) {
             ir.facts.push(FactCandidate {
+                snippet: None,
                 statement: doc,
                 entities: vec!["crate".into()],
                 confidence: 0.8,
@@ -126,6 +127,7 @@ fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
             });
             for doc in &docs {
                 ir.facts.push(FactCandidate {
+                    snippet: None,
                     statement: doc.clone(),
                     entities: vec![name.clone()],
                     confidence: 0.75,
@@ -146,6 +148,7 @@ fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
             });
             for doc in &docs {
                 ir.facts.push(FactCandidate {
+                    snippet: None,
                     statement: doc.clone(),
                     entities: vec![name.clone()],
                     confidence: 0.75,
@@ -166,6 +169,7 @@ fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
             });
             for doc in &docs {
                 ir.facts.push(FactCandidate {
+                    snippet: None,
                     statement: doc.clone(),
                     entities: vec![name.clone()],
                     confidence: 0.75,
@@ -190,6 +194,7 @@ fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
 
             for doc in &docs {
                 ir.facts.push(FactCandidate {
+                    snippet: None,
                     statement: doc.clone(),
                     entities: vec![name.clone()],
                     confidence: 0.75,
@@ -246,6 +251,7 @@ fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
                     });
                     for doc in &docs {
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: doc.clone(),
                             entities: vec![full.clone()],
                             confidence: 0.75,
@@ -266,6 +272,7 @@ fn process_item(item: &syn::Item, ir: &mut KnowledgeIr, parent: &str) {
                     });
                     for doc in &docs {
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: doc.clone(),
                             entities: vec![full.clone()],
                             confidence: 0.75,

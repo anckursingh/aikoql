@@ -1794,6 +1794,7 @@
               }
             }
           },
+          "snippet": "Alice Smith | 30",
           "statement": "Employee Name: Alice Smith"
         },
         {
@@ -1814,6 +1815,7 @@
               }
             }
           },
+          "snippet": "Alice Smith | 30",
           "statement": "Age: 30"
         },
         {
@@ -1834,6 +1836,7 @@
               }
             }
           },
+          "snippet": "Bob Johnson | 45",
           "statement": "Employee Name: Bob Johnson"
         },
         {
@@ -1854,6 +1857,7 @@
               }
             }
           },
+          "snippet": "Bob Johnson | 45",
           "statement": "Age: 45"
         },
         {
@@ -1874,6 +1878,7 @@
               }
             }
           },
+          "snippet": "North America | 1200",
           "statement": "Region: North America"
         },
         {
@@ -1894,6 +1899,7 @@
               }
             }
           },
+          "snippet": "North America | 1200",
           "statement": "Revenue (USD): 1200"
         },
         {
@@ -1914,6 +1920,7 @@
               }
             }
           },
+          "snippet": "South America | 800",
           "statement": "Region: South America"
         },
         {
@@ -1934,6 +1941,7 @@
               }
             }
           },
+          "snippet": "South America | 800",
           "statement": "Revenue (USD): 800"
         }
       ],

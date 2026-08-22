@@ -1398,6 +1398,7 @@
               }
             }
           },
+          "snippet": "Validate | Billing Team",
           "statement": "Step: Validate"
         },
         {
@@ -1418,6 +1419,7 @@
               }
             }
           },
+          "snippet": "Validate | Billing Team",
           "statement": "Owner: Billing Team"
         },
         {
@@ -1438,6 +1440,7 @@
               }
             }
           },
+          "snippet": "Commit | Ledger Team",
           "statement": "Step: Commit"
         },
         {
@@ -1458,6 +1461,7 @@
               }
             }
           },
+          "snippet": "Commit | Ledger Team",
           "statement": "Owner: Ledger Team"
         }
       ],

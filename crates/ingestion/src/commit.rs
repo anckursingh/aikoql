@@ -684,6 +684,7 @@ mod tests {
 
     fn fact(statement: &str, entities: Vec<&str>) -> FactCandidate {
         FactCandidate {
+            snippet: None,
             statement: statement.into(),
             entities: entities.into_iter().map(|s| s.into()).collect(),
             confidence: 0.85,

@@ -219,6 +219,7 @@ fn finalize_ingest_result(
 
     // Attach summary stats as facts
     merged.facts.push(FactCandidate {
+        snippet: None,
         statement: format!(
             "Directory '{}' contained {} files ({} skipped: {} dirs, {} binary/lockfile). {} entities, {} relations, {} facts extracted.",
             root,
@@ -479,6 +480,7 @@ fn text_file_ir(path: &Path) -> KnowledgeIr {
                 trimmed.to_string()
             };
             facts.push(FactCandidate {
+                snippet: None,
                 statement: format!("File '{}': {}", name, fact_line),
                 entities: vec![name.clone()],
                 confidence: 0.5,

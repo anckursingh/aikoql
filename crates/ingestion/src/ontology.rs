@@ -738,6 +738,7 @@ mod tests {
                 evidence: evidence(1),
             }],
             facts: vec![FactCandidate {
+                snippet: None,
                 statement: "Invoice date is January 2024".into(),
                 entities: vec!["Invoice #1".into()],
                 confidence: 0.8,
@@ -771,6 +772,7 @@ mod tests {
                 evidence: evidence(1),
             }],
             facts: vec![FactCandidate {
+                snippet: None,
                 statement: "Acme Corporation Reports Record Revenue of 50 million".into(),
                 entities: vec!["Acme Corp".into()],
                 confidence: 0.8,
@@ -863,6 +865,7 @@ mod tests {
                 evidence: evidence(1),
             }],
             facts: vec![FactCandidate {
+                snippet: None,
                 statement: "Invoice date January 2024".into(),
                 entities: vec!["Invoice #1".into()],
                 confidence: 0.8,

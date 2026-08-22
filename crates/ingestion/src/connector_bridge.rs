@@ -101,6 +101,7 @@ pub fn connector_metadata_to_ir(meta: &ConnectorMetadata) -> KnowledgeIr {
         for field in &container.fields {
             if field.is_primary_key {
                 facts.push(FactCandidate {
+                    snippet: None,
                     statement: format!(
                         "{}.{}.{} is the primary key (type: {}, nullable: {})",
                         meta.label, container.name, field.name, field.data_type, field.nullable
@@ -112,6 +113,7 @@ pub fn connector_metadata_to_ir(meta: &ConnectorMetadata) -> KnowledgeIr {
             }
             if field.is_unique && !field.is_primary_key {
                 facts.push(FactCandidate {
+                    snippet: None,
                     statement: format!(
                         "{}.{}.{} has a unique constraint (type: {})",
                         meta.label, container.name, field.name, field.data_type
@@ -123,6 +125,7 @@ pub fn connector_metadata_to_ir(meta: &ConnectorMetadata) -> KnowledgeIr {
             }
             // Schema facts: every column
             facts.push(FactCandidate {
+                snippet: None,
                 statement: format!(
                     "{}.{}.{} : {} {} {}",
                     meta.label,

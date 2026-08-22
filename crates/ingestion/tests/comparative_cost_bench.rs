@@ -56,6 +56,29 @@
 //! efficiency claim is measured, not assumed, exactly like the §60 PR-P
 //! verdict.
 //!
+//! Determinism fix (2026-08-22): the 0.733 baseline was a LUCKY DRAW.
+//! Source order was HashMap iteration order (randomized per process), the
+//! budget cut lands on score ties, and pack_mentions caps to the first
+//! two mentions — so the same code delivered answer-hit anywhere in
+//! {0.600, 0.733} run to run (5/6 of one sample landed on 0.733, which
+//! is how the baseline was recorded). Two fixes pin it: the compiler
+//! sorts tie-break on name/statement/triple (context.rs), and this bench
+//! merges sources in canonical FIXTURES order. The deterministic draw is
+//! 0.600: q-00/q-12's $10M answer lives only in plain-text entity
+//! mentions (the mock extracts zero facts from plain-text.pdf), and the
+//! deterministic budget cut leaves those mentions out. That is a mock-
+//! extraction gap, not a compiler regression.
+//!
+//! Evidence snippets (2026-08-22): facts now render their verbatim source
+//! text and provenance — `- {statement} ("{snippet}") [p.{page} {kind}
+//! {conf}%]`. Delivered tokens 139.4 → 175.7 (+26%): the payload now
+//! carries what the agent needs to VERIFY a claim, which is the point of
+//! the P1 "KO never lossy" requirement — verification text is not bloat,
+//! and the RAG chunks carry the same context implicitly. KO/answer/
+//! precision are provably unaffected by the suffix: it only appends
+//! text, never reorders or evicts (snippet/provenance are not billed by
+//! est, so the packed set is identical).
+//!
 //! The gates pin the measured baselines with headroom (the PR-G
 //! convention): a regression — token bloat, ranking loss, latency
 //! pathology — fails CI; an improvement passes trivially. The comparative
@@ -67,7 +90,7 @@
 mod common;
 
 use common::golden_dataset::{compile_fixture_irs, normalize, queries, GOLDEN};
-use common::{chunk_text, corpus, rank, tokens};
+use common::{chunk_text, corpus, rank, tokens, FIXTURES};
 use std::time::Instant;
 
 /// Token budget both treatments must respect (the §20 minimization range).
@@ -95,7 +118,16 @@ fn comparative_cost_benchmark() {
 
     // AikoQL compiles from the merged knowledge graph; the RAG baseline
     // packs raw chunks from the same fixture corpus.
-    let irs: Vec<aikoql_ingestion::KnowledgeIr> = compile_fixture_irs().into_values().collect();
+    // Source order is pinned to the canonical FIXTURES list: HashMap
+    // iteration order is randomized per process, and since merge keeps
+    // first-seen facts and the budget cut lands on score ties, unpinned
+    // order made answer-hit flip between runs (0.600 ↔ 0.733 on the same
+    // code).
+    let by_name = compile_fixture_irs();
+    let irs: Vec<aikoql_ingestion::KnowledgeIr> = FIXTURES
+        .iter()
+        .filter_map(|f| by_name.get(*f).cloned())
+        .collect();
     let merged = aikoql_ingestion::merge_knowledge_ir(&irs);
     eprintln!(
         "[COMPARATIVE-STRUCTURE] corpus_chunks={} merged_entities={} merged_facts={} \
@@ -216,18 +248,19 @@ fn comparative_cost_benchmark() {
 
     // ── Gates ───────────────────────────────────────────────────────────
     // Pinned baselines + headroom, re-measured 2026-08-22 after the
-    // entity gate + extraction-side anchoring (delivered payload: aikoql
-    // 139.4 rendered tokens [own bill 216.5], rag 74.8; answer-hit 0.733
+    // determinism fix + evidence snippets (delivered payload: aikoql
+    // 175.7 rendered tokens [own bill 217.1], rag 74.8; answer-hit 0.600
     // vs 0.867; KO coverage 0.778 vs 0.867; precision 0.402 vs 0.405;
-    // latency 2.0ms vs 0.4ms/query). A regression fails, an improvement
+    // latency 2.3ms vs 0.4ms/query). A regression fails, an improvement
     // passes trivially — the PR-G convention. The comparative verdict is
     // printed, not enforced: with the mock extraction IR the chunk
-    // baseline wins the token axis (module docs); answer-hit moved from
-    // 0.600 to 0.733 with the fixes, and the residual gap is entity-less
-    // mock facts, not compiler behavior.
+    // baseline wins the token axis (module docs); the 0.733 of the
+    // previous pin was a lucky draw of the same-flaky code (see module
+    // docs), and the residual answer gap is mock-extraction coverage,
+    // not compiler behavior.
     assert!(
         aikoql_tokens < 250.0,
-        "aikoql token cost regressed: {aikoql_tokens:.1} tokens/query (baseline 139.4)"
+        "aikoql token cost regressed: {aikoql_tokens:.1} tokens/query (baseline 175.7)"
     );
     assert!(
         rag_tokens < 150.0,
@@ -251,7 +284,7 @@ fn comparative_cost_benchmark() {
     );
     assert!(
         aikoql_answer > 0.55,
-        "aikoql answer-hit regressed: {aikoql_answer:.3} (baseline 0.733)"
+        "aikoql answer-hit regressed: {aikoql_answer:.3} (baseline 0.600)"
     );
     assert!(
         rag_answer > 0.75,
