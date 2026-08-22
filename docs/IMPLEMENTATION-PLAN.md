@@ -3350,7 +3350,7 @@ The semantic leg now consumes the fragment stream end to end: `SemanticAnalyzer:
 | 14 | No mandatory heavyweight AI | ✅ Still lopdf/tesseract only |
 | 15 | K1–K5 kernel semantics intact | ✅ Kernel crate untouched; workspace check clean |
 | 16 | Encryption/security behavior intact | ✅ Secret filter + encryption paths untouched; acceptance test 6 asserts no secrets leak through |
-| 17 | Existing ingestion tests green | ✅ 418 lib (+419 with `--features transform`, +423 with `--features remote_emb`, +425 with `--features vlm`, +431 `--all-features`) + 11 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 4×3 §60 matrix + 3 visual queries × 4 corpora; visual R@1/3/5 = 1.000, hybrid recall@5 = 0.933) + real-model bench (env-gated SKIP without endpoint) + e2e + doc-tests |
+| 17 | Existing ingestion tests green | ✅ 418 lib (+419 with `--features transform`, +423 with `--features remote_emb`, +425 with `--features vlm`, +431 `--all-features`) + 11 acceptance + 10-fixture golden suite + retrieval-quality gate (15 queries × 4×3 §60 matrix + 3 visual queries × 4 corpora; visual R@1/3/5 = 1.000, hybrid recall@5 = 0.933) + real-model bench (env-gated; executed 2026-08-22 vs local Ollama → NO-GO, mock stays) + e2e + doc-tests |
 | 18 | Multimodal golden fixtures exist | ✅ PR-F — `tests/fixtures/multimodal-golden.md` (+ 2 png assets) driven by acceptance test 10 |
 | 19 | CI measures extraction + semantic regression | ✅ DoD 19 — 10 golden PDF fixtures + `multimodal_golden` gate (byte-stable snapshots + entity-recall assertions + per-stage metrics) runs in both CI OSes; dedicated `--nocapture` step publishes §53 metrics to CI logs |
 
@@ -3635,6 +3635,25 @@ The §60 decision ("based on measured improvement, rather than intuition") is no
 
 **Tests — PR-P (all green 2026-08-21)**: 418 lib base (unchanged — the engine move adds no tests) + 419 `--features transform` + 423 `--features remote_emb` (+5: config-from-env, unreachable-degrade, stub-parse+dim-adoption, stub-500-degrade, mm-channel) + 425 `--features vlm` + 431 `--all-features`; `real_model_bench` +4 (gate-verdict suite ×4 cases + SKIP measurement); 11/11 acceptance; golden 1/1; retrieval-quality 1/1 (baseline 0.867 re-verified after the engine move); clippy `-D warnings` clean on base + `--all-features` (both cfg states); `cargo test --workspace` green. One stub-server test race root-caused and fixed (respond-before-request-body-complete raced the client's send under parallel load → the stub now reads the full request before responding; 5 consecutive clean runs).
 
+### §60 real-model RUN — executed (2026-08-22, local Ollama, commit on `feature/mvp-launch`)
+
+The deferred live run happened: local Ollama serving `nomic-embed-text` (768-dim, OpenAI-compatible `/v1/embeddings`; direct endpoint probe verified 768-dim vectors before the bench). This is also the repo's configured default remote model, so it is the most representative first candidate.
+
+```
+[REAL-MODEL] provider=remote-emb model=nomic-embed-text endpoint configured;
+             mock pinned baseline 0.867/0.867/0.867
+cell rule-embedding   recall@1/3/5=0.867/0.867/0.867  mrr=0.887  ndcg@5=0.867  verdict=NO-GO
+cell rule-hybrid      recall@1/3/5=0.867/0.867/0.867  mrr=0.887  ndcg@5=0.867  verdict=NO-GO
+cell embedding-embedding recall@1/3/5=0.867/0.867/0.867 mrr=0.887 ndcg@5=0.867  verdict=NO-GO
+visual rule           recall@1/3/5=1.000/1.000/1.000  (mock pinned 1.000 — parity)
+ingestion cost: embedding_api_calls=41  wall_time=89.0s (cached; corpus+queries embed once)
+test result: ok. 2 passed (89.01s)
+```
+
+**Verdict: NO-GO on all three boundary cells** — exact recall parity (0.867/0.867/0.867) and a +0.02 MRR edge (0.887), but the gate's semantic bar is Recall@5 ≥ baseline + 0.05: the two paraphrase probes stayed at 0.0, i.e. nomic-embed-text resolved none of the queries the rule engine misses. The mock char-ngram baseline stays the default provider (rollback = the env was only ever set for this run; the mock is and remains default).
+
+**Decision recorded**: §60 answered per its own spec — "based on measured improvement, rather than intuition" — and the measured answer for the default-candidate model is NO-GO. The deferred round-3 item is closed. A GO on a future model (different endpoint/model) requires the same one-command run against that model; nothing in the gate or the harness changes.
+
 ### PR #1 review round 3 — senior-Rust verdicts (2026-08-22)
 
 The third-party review (`AIKOQL_LATEST_PR1_SENIOR_RUST_REVIEW.md`, head `5309a28`) was analyzed against the actual code. **Verdict per item:**
@@ -3652,7 +3671,7 @@ The third-party review (`AIKOQL_LATEST_PR1_SENIOR_RUST_REVIEW.md`, head `5309a28
 | R9 (P2) duplicate limiter | **Legitimate — fix** | `authz.rs` `check_rate`/`RATE_STORE` (hardcoded 120/min, keyed by agent_id) runs *alongside* `rate_limiter.rs` (config-driven) on the same tools/call path. Fix: delete the duplicate; `rate_limiter.rs` is the only implementation, and its TCP keying (R5) subsumes the per-agent intent. |
 | R10 (P2) two encryption config paths | **Legitimate — fix (small)** | `RuntimeEncryption::discover()` re-reads TOML+env independently. Fix: `discover()` delegates to `load(&[], None, None)` — one pipeline (subcommand flags are not server config and must not be parsed as such). |
 
-**Deferred (reviewer-sanctioned)**: remote TCP + TLS/mTLS (the review's own §17 sequence puts TLS after MVP); `use crate::*` prelude cleanup (the review itself marks it "not a merge blocker", post-MVP); the §60 real-model run still awaits a live endpoint.
+**Deferred (reviewer-sanctioned)**: remote TCP + TLS/mTLS (the review's own §17 sequence puts TLS after MVP); `use crate::*` prelude cleanup (the review itself marks it "not a merge blocker", post-MVP). The §60 real-model run was the third deferred item — **executed 2026-08-22 against local Ollama (nomic-embed-text): NO-GO, mock stays** (see the §60 run section above).
 
 **Deployment contract (MVP, per the review's §17)**: stdio (primary) + loopback TCP with token auth. Remote clients terminate TLS at a reverse proxy that forwards to a loopback/private listener — the server itself never accepts a plaintext remote connection (R1 fails closed).
 
@@ -3676,4 +3695,4 @@ All 10 items closed in one commit (single coherent review round — the guards, 
 
 ### Next implementation
 
-The **§60 real-model run itself** — the harness is ready; it needs a live OpenAI-compatible embedding endpoint (any provider; the user's call). The verdict prints GO/NO-GO per cell. Remaining §60 metric gap: **fact/relation extraction quality** — the two HLD §60 metrics with no instrument yet; next code milestone is either that instrument or the next HLD milestone after §60.
+The §60 real-model decision is now closed (NO-GO for nomic-embed-text — the mock stays; re-running against a different model is one command, nothing to build). Remaining §60 metric gap: **fact/relation extraction quality** — the two HLD §60 metrics with no instrument yet; next code milestone is either that instrument or the next HLD milestone after §60.
