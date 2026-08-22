@@ -122,7 +122,7 @@ const MATRIX: &[Row] = &[
     row("ONT-001", "ONT", "P0", "covered", Some("crates/kernel/tests/ontology_integration.rs"), None),
     row("ONT-002", "ONT", "P1", "partial", None, Some("candidate ontology exists; confidence gating untested")),
     row("ONT-003", "ONT", "P0", "covered", Some("crates/kernel/tests/conformance.rs"), None),
-    row("ONT-004", "ONT", "P1", "partial", None, Some("ontology migration untested (TP-2c)")),
+    row("ONT-004", "ONT", "P1", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     // PROV — provenance and evidence
     row("PROV-001", "PROV", "P0", "covered", Some("crates/kernel/tests/evidence_wiring.rs"), None),
     row("PROV-002", "PROV", "P0", "covered", Some("crates/kernel/tests/durability.rs"), None),
@@ -197,8 +197,8 @@ const MATRIX: &[Row] = &[
     // EVO — knowledge evolution
     row("EVO-001", "EVO", "P1", "covered", Some("crates/kernel/tests/derivation.rs"), None),
     row("EVO-002", "EVO", "P0", "covered", Some("crates/ingestion/src/ingest_incremental.rs"), None),
-    row("EVO-003", "EVO", "P0", "partial", None, Some("schema migration semantics undefined (TP-2c)")),
-    row("EVO-004", "EVO", "P1", "partial", None, Some("ontology migration untested (TP-2c)")),
+    row("EVO-003", "EVO", "P0", "partial", None, Some("AC-22 pre-migration validation (t06zr/t06zs) + versioned coexistence + deterministic version gate (t06zt) tested; apply/migrate op + codec format versioning are feature work")),
+    row("EVO-004", "EVO", "P1", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     row("EVO-005", "EVO", "P1", "covered", Some("crates/kernel/tests/evidence_wiring.rs"), None),
     // IDX — derived index consistency (suite §23)
     row("IDX-001", "IDX", "P0", "covered", Some("crates/kernel/tests/indexes.rs"), None),

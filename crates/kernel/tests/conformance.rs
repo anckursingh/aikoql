@@ -2430,6 +2430,155 @@ fn t06zs_migration_passes_clean_data() {
     assert!(violations.is_empty());
 }
 
+#[test]
+fn t06zt_schema_bump_preserves_existing_knowledge_and_versions() {
+    // EVO-003 slice: after a v1 -> v2 schema bump, existing knowledge stays
+    // interpretable with its own version stamp, v2 writes coexist, and a
+    // v1-stamped write is rejected deterministically (no silent coercion).
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"));
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties.insert("price".into(), Value::Int(42));
+    let id1 = k.remember(r1).unwrap().koid;
+
+    // migrate: v2 adds a check constraint; existing data is clean
+    let v2 = Schema::new("Item", 2).property("price", "Int").check(
+        "price_non_negative",
+        CheckExpression::Compare {
+            op: CompareOp::Gte,
+            left: Box::new(CheckExpression::Property("price".into())),
+            right: Box::new(CheckExpression::Literal(Value::Int(0))),
+        },
+    );
+    assert!(k
+        .validate_schema_migration(&alice(), &v2)
+        .unwrap()
+        .is_empty());
+    k.register_schema(v2);
+
+    // semantics preserved: the v1 KO is still readable, still stamped v1
+    let ko1 = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko1.metadata.schema_version, 1);
+    assert_eq!(ko1.properties.get("price"), Some(&Value::Int(42)));
+
+    // v2-stamped writes coexist alongside v1 data
+    let mut r2 = RememberRequest::create(alice(), meta("Item"));
+    r2.metadata.schema_version = 2;
+    r2.properties.insert("price".into(), Value::Int(10));
+    let id2 = k.remember(r2).unwrap().koid;
+    assert_eq!(k.get(alice(), &id2).unwrap().metadata.schema_version, 2);
+    assert_eq!(
+        k.get(alice(), &id2).unwrap().properties.get("price"),
+        Some(&Value::Int(10))
+    );
+
+    // a v1-stamped write against the active v2 schema fails deterministically
+    let mut r3 = RememberRequest::create(alice(), meta("Item"));
+    r3.properties.insert("price".into(), Value::Int(10));
+    assert!(matches!(
+        k.remember(r3).unwrap_err(),
+        KError::InvalidSchema(_)
+    ));
+}
+
+#[test]
+fn t06zw_ontology_evolution_keeps_existing_knowledge_interpretable() {
+    // ONT-004 slice: ontology enforcement is write-time only — replacing the
+    // registry with a stricter version never breaks reads of existing KOs,
+    // while new writes get the new rules.
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    let classes = || {
+        let mut c = BTreeMap::new();
+        c.insert(
+            "Person".into(),
+            ClassDef {
+                name: "Person".into(),
+                parent: None,
+                description: None,
+            },
+        );
+        c.insert(
+            "Organization".into(),
+            ClassDef {
+                name: "Organization".into(),
+                parent: None,
+                description: None,
+            },
+        );
+        c
+    };
+    let works_at = |cardinality: Option<Cardinality>| {
+        let mut r = BTreeMap::new();
+        r.insert(
+            "worksAt".into(),
+            RelDef {
+                name: "worksAt".into(),
+                domain: Some("Person".into()),
+                range: Some("Organization".into()),
+                cardinality,
+                max_count: None,
+            },
+        );
+        r
+    };
+    let ontology = |version: &str, rels: BTreeMap<String, RelDef>| OntologyDef {
+        namespace: "test".into(),
+        version: version.into(),
+        classes: classes(),
+        relationships: rels,
+        property_defs: BTreeMap::new(),
+        mappings: vec![],
+    };
+
+    // v1: worksAt unconstrained (many-to-one allowed)
+    k.register_ontology(
+        OntologyRegistry::new(ontology("1", works_at(None))).expect("valid ontology"),
+    );
+    let org = k
+        .remember(RememberRequest::create(alice(), meta("Organization")))
+        .unwrap();
+    let mut p1 = RememberRequest::create(alice(), meta("Person"));
+    p1.referential_policy = ReferentialPolicy::Enforced;
+    p1.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: org.koid,
+        direction: Direction::Outbound,
+    });
+    let pid = k.remember(p1).unwrap().koid;
+
+    // evolve: v2 tightens worksAt to 1:1 (registry replaces v1)
+    k.register_ontology(
+        OntologyRegistry::new(ontology("2", works_at(Some(Cardinality::OneToOne))))
+            .expect("valid ontology"),
+    );
+
+    // existing knowledge remains interpretable: still readable, unchanged
+    let ko = k.get(alice(), &pid).unwrap();
+    assert_eq!(ko.metadata.type_name, "Person");
+    assert!(
+        ko.relationships
+            .iter()
+            .any(|r| r.rel_type == "worksAt" && r.target == org.koid),
+        "relationship written under v1 must survive the ontology bump"
+    );
+
+    // new writes are bound by the v2 rules: second Person -> worksAt -> Org
+    // violates 1:1 cardinality
+    let mut p2 = RememberRequest::create(alice(), meta("Person"));
+    p2.referential_policy = ReferentialPolicy::Enforced;
+    p2.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: org.koid,
+        direction: Direction::Outbound,
+    });
+    assert!(
+        k.remember(p2).is_err(),
+        "v2 cardinality must bind new writes"
+    );
+}
+
 // ── AC-17: provenance-required properties ──
 
 #[test]

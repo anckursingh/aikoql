@@ -114,7 +114,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | DB-004 Concurrent readers/writers | P1 | 🟡 | isolation semantics documented; stress test absent |
 | DOC-001..007 PDF/OCR/tables/images/versioning | P1 | ✅ | `multimodal_golden.rs` (19 DoD rows), `multimodal_acceptance.rs`; DOC-002 OCR is feature-gated (`vlm`) 🟡 |
 | IDX-001..003 Derived index rebuild/orphans | P0 | ✅ | `indexes.rs` i09 (delete + rebuild = identical results), i10 (tombstone-while-down swept on rebuild), i11 (canonical update propagates deterministically) |
-| EVO-001..005 Evolution | P0/P1 | ✅ | derivation (001), stale-on-source-delete (002), extraction version in evidence (005); schema/ontology migration (003/004) 🟡 |
+| EVO-001..005 Evolution | P0/P1 | 🟡 | derivation (001), stale-on-source-delete (002), extraction version in evidence (005), ontology evolution (004, t06zw) ✅; schema migration (003): AC-22 pre-validation + versioned coexistence + version gate tested (t06zr/s/zt) — apply/migrate op is feature work |
 | Negative/adversarial (§28) | P0 | ✅ | `fuzz_codec.rs`, `fuzz_parser.rs`, `proptest_kom.rs`, adversarial secret tests (Slack/Stripe/OAuth/mongodb+srv, disk-/sha256 false positives) |
 
 ### Benchmarks (§29, §31, §32)
@@ -182,7 +182,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | G1 | **Traceability + certification runner** — map every suite ID to its test, mark P0–P3, wire to CI tiers | all | ~1 week | This document is the draft; add a machine-readable matrix + a `certs` test that fails on known-GAP P0s |
 | G2 | **DB-002 kill-during-write harness** | DB-002 | ✅ done | `crash_kill.rs` d05 + `crash_writer` loop mode: taskkill/SIGKILL mid-write, reopen → journal head ≥ observed progress, all KOs + audit chain intact |
 | G3 | **IDX-001/003 rebuild consistency + orphan sweep** | IDX-001..003 | ✅ done | `indexes.rs` i09–i11: rebuild = identical results; tombstone-while-down swept; canonical update propagates (zero lag) |
-| G4 | **Schema/ontology migration tests** | EVO-003/004, CONT-003, ONT-004 | ~3 days | define v1→v2 migration semantics, test history stays interpretable |
+| G4 | **Schema/ontology migration tests** | EVO-003/004, CONT-003, ONT-004 | ✅ done (honest slice) | t06zt (v1→v2 bump: old data + versions preserved, v2 writes coexist, v1 write rejected), t06zw (ontology v1→v2: old knowledge readable, v2 rules bind); CON-003 was already covered; EVO-003 stays open: no apply/migrate op, codec wire format unversioned — feature work |
 
 ### Tier 2 — Acceptance scenarios (substrate exists; script the story)
 
