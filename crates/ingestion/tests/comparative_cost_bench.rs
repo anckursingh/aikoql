@@ -35,13 +35,22 @@
 //! matches statement keywords corpus-wide — any "revenue" question
 //! hoovers every revenue fact from every fixture (q-00 delivers 273
 //! tokens with zero relevant KOs); (2) the mock IR carries no facts at
-//! all for pure-text fixtures (plain-text, formulas) and facts not
-//! attached to a scored entity cannot rank, so those answers only exist
-//! in raw chunks (q-13 E = mc²: the compiler delivers nothing). Both
-//! causes have fixes in flight — the entity-gate on fact scoring, then
-//! real extraction. The instrument is the yardstick for those runs — the
-//! §45–48 efficiency claim is measured, not assumed, exactly like the
-//! §60 PR-P verdict.
+//! all for pure-text fixtures (plain-text, formulas), so those answers
+//! only exist in raw chunks (q-13 E = mc²: the compiler delivers
+//! nothing).
+//!
+//! Post-gate measurement: the P0 entity gate landed in the compiler
+//! (anchored facts require a ranked entity) but moved the mock-corpus
+//! numbers by only 136.1 → 134.6 tokens — the mock pipeline's hoovering
+//! facts are UNANCHORED table cell facts (`entities: Vec::new()` at the
+//! mock table-cell extraction), which the gate deliberately does not
+//! fence because entity-less domain rules must keep statement scoring.
+//! Heading facts anchor to capitalized phrases from the heading itself,
+//! so shared names collide corpus-wide. Anchoring facts to their owning
+//! entity at extraction time is the next fix; the gate is the compiler
+//! half of the guarantee and applies to every anchored IR. The
+//! instrument is the yardstick for those runs — the §45–48 efficiency
+//! claim is measured, not assumed, exactly like the §60 PR-P verdict.
 //!
 //! The gates pin the measured baselines with headroom (the PR-G
 //! convention): a regression — token bloat, ranking loss, latency

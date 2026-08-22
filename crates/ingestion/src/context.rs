@@ -289,9 +289,28 @@ pub fn compile_context_semantic_with(
                         .unwrap_or(0.0)
                 })
                 .sum();
-            let score = stmt_score + entity_boost.min(0.5);
+            // P0 (G12 measurement): entity relevance is a GATE, not a
+            // bonus. A fact attached to entities enters the package only
+            // when at least one of them ranked for this task — statement
+            // keywords alone must not drag it in, they match corpus-wide
+            // (any "revenue" question hoovered every revenue fact from
+            // every fixture, 273 tokens with zero relevant KOs). Facts
+            // with no entity anchor (domain rules) keep statement-only
+            // scoring.
+            let anchored = !f.entities.is_empty();
+            let gated = anchored && entity_boost <= 0.0;
+            let score = if gated {
+                0.0
+            } else {
+                stmt_score + entity_boost.min(0.5)
+            };
 
-            let justification = if stmt_score > 0.0 {
+            let justification = if gated {
+                format!(
+                    "excluded: no entity in '{}' ranked for this task",
+                    f.entities.join(", ")
+                )
+            } else if stmt_score > 0.0 {
                 format!("statement matches task keywords (score: {:.1})", stmt_score)
             } else if entity_boost > 0.0 {
                 format!("connected to relevant entity: {}", f.entities.join(", "))
@@ -1472,6 +1491,55 @@ mod tests {
         };
         let pkg = compile_context("delete files", &ir, 0);
         assert_eq!(pkg.facts.len(), 1);
+    }
+
+    #[test]
+    fn fact_requires_ranked_entity_anchor() {
+        // G12 P0: a fact attached to entities must not enter the package
+        // on statement keywords alone — they match corpus-wide, flooding
+        // the fold with unrelated facts. Unanchored (entity-less) facts
+        // keep statement-only scoring.
+        let ir = KnowledgeIr {
+            entities: vec![
+                ent("AuthService", "Module", vec![]),
+                ent("Globex", "Organization", vec![]),
+            ],
+            facts: vec![
+                FactCandidate {
+                    statement: "AuthService revenue grew 20% in Q2".into(),
+                    entities: vec!["AuthService".into()],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+                FactCandidate {
+                    statement: "Globex revenue grew 20% in Q2".into(),
+                    entities: vec!["Globex".into()],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+                FactCandidate {
+                    statement: "revenue is recognized quarterly".into(),
+                    entities: vec![],
+                    confidence: 0.8,
+                    evidence: Evidence::default(),
+                },
+            ],
+            ..Default::default()
+        };
+        let pkg = compile_context("globex revenue", &ir, 0);
+        let statements: Vec<&str> = pkg.facts.iter().map(|f| f.statement.as_str()).collect();
+        assert!(
+            statements.contains(&"Globex revenue grew 20% in Q2"),
+            "anchored fact must pack"
+        );
+        assert!(
+            !statements.contains(&"AuthService revenue grew 20% in Q2"),
+            "unanchored fact must be gated despite matching statement keywords"
+        );
+        assert!(
+            statements.contains(&"revenue is recognized quarterly"),
+            "entity-less facts keep statement-only scoring"
+        );
     }
 
     /// CTX-MIN-001 + CTX-MIN-002: 1000 KOs, 20 relevant — the compiler
