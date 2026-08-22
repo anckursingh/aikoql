@@ -236,7 +236,7 @@ const MATRIX: &[Row] = &[
     row("CAG-008", "CAG", "R", "covered", Some("crates/kernel/tests/experiences.rs"), None),
     row("CAG-009", "CAG", "R", "covered", Some("crates/kernel/tests/derivation.rs"), None),
     // §51 critical e2e scenario
-    row("C51-001", "C51", "R", "partial", None, Some("every leg covered piecewise; single script absent (TP-3)")),
+    row("C51-001", "C51", "R", "covered", Some("crates/services/api/mcp/tests/mcp_real_world.rs"), None),
 ];
 
 /// The complete gate catalog from the suites, per group. Integrity fails on

@@ -413,6 +413,273 @@ fn real_world_agent_workflow() {
     let _ = std::fs::remove_file(&db);
 }
 
+/// §51 Critical End-to-End Scenario (chatbot suite, certification G5):
+/// deterministic scripted replay over the real MCP surface with mechanical
+/// judges (PR-R pattern — the script is the "LLM", asserts are the judges).
+///
+/// Scenario beats: initial conversation → durable memories with provenance
+/// and scope → later recall ("AWS") → authoritative org update supersedes
+/// the preference ("Azure", with supersession evidence) → "Deploy it." runs
+/// the Program-as-KO pipeline (identity → permissions → policy → execute →
+/// postconditions → episode).
+#[test]
+fn critical_e2e_scenario_51_chatbot_memory() {
+    let db = std::env::temp_dir().join(format!("mcp-s51-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&db);
+    let mut c = McpClient::start(db.to_str().unwrap());
+    c.session_init("chatbot-user", "acme");
+
+    // ── §51.1 Initial conversation → three durable memories ───────────────
+    // Evidence-backed user statements enter as assertions (evidence is
+    // mandatory there and stamped by the kernel); plain identity data uses
+    // remember. Both must survive round-trip with provenance intact.
+    let style = c.call(
+        "assert_knowledge",
+        &json!({
+            "subject": "chatbot-user", "type_name": "UserPreference", "tenant": "acme",
+            "properties": {"topic": "response style", "value": "concise"},
+            "authority": "human_approved",
+            "evidence": [{"source_artifact": "chat-message-1", "method": "human_provided"}]
+        }),
+    );
+    assert_eq!(style["version"], 1);
+
+    let acct = c.call(
+        "remember",
+        &json!({
+            "subject": "chatbot-user", "type_name": "AccountInfo", "tenant": "acme",
+            "properties": {"account": "ACME-123"},
+            "origin": "human"
+        }),
+    );
+    assert_eq!(acct["version"], 1);
+
+    let aws = c.call("assert_knowledge", &json!({
+        "subject": "chatbot-user", "type_name": "DeploymentPreference", "tenant": "acme",
+        "properties": {"account": "ACME-123", "cloud": "AWS"},
+        "authority": "human_approved",
+        "evidence": [{"source_artifact": "chat-message-3", "method": "human_provided", "confidence": 0.95}]
+    }));
+    let aws_koid = aws["koid"].as_str().unwrap().to_string();
+
+    // Memory carries provenance + scope to the query boundary.
+    let aws_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &aws_koid}),
+    );
+    assert_eq!(aws_ko["type_name"], "DeploymentPreference");
+    assert_eq!(aws_ko["properties"]["cloud"], "AWS");
+    assert_eq!(aws_ko["extensions"]["authority"], "human_approved");
+    assert_eq!(
+        aws_ko["extensions"]["scope"], "session",
+        "the kernel stamps an explicit scope for agent-mediated claims: {aws_ko}"
+    );
+    assert_eq!(aws_ko["extensions"]["epistemic_status"], "asserted");
+    assert!(
+        aws_ko["extensions"]["evidence"]
+            .to_string()
+            .contains("chat-message-3"),
+        "provenance evidence must survive to the query boundary: {}",
+        aws_ko["extensions"]["evidence"]
+    );
+
+    // ── §51.2 Later conversation: recall with correct provenance/scope ────
+    // "What do you know about my deployment setup?" → the remembered AWS.
+    let recall = c.call(
+        "aikoql",
+        &json!({
+            "subject": "chatbot-user",
+            "query": "MATCH DeploymentPreference WHERE account == \"ACME-123\" RETURN *"
+        }),
+    );
+    let clouds: Vec<String> = recall["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["properties"]["cloud"].as_str().map(String::from))
+        .collect();
+    assert!(
+        clouds.contains(&"AWS".to_string()),
+        "recall must return the remembered deployment preference: {clouds:?}"
+    );
+
+    // ── §51.3 Authoritative org update supersedes the preference ──────────
+    // Ingest the organization directive as an assertion carrying
+    // organization_policy authority, then supersede the user preference
+    // with it.
+    let directive = c.call("assert_knowledge", &json!({
+        "subject": "chatbot-user", "type_name": "DeploymentDirective", "tenant": "acme",
+        "properties": {"account": "ACME-123", "cloud": "Azure"},
+        "authority": "organization_policy",
+        "evidence": [{"source_artifact": "org-policy-v2", "method": "human_provided", "confidence": 1.0}],
+        "note": "ACME-123 must now deploy on Azure"
+    }));
+    let directive_koid = directive["koid"].as_str().unwrap().to_string();
+    let directive_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &directive_koid}),
+    );
+    assert_eq!(
+        directive_ko["extensions"]["authority"], "organization_policy",
+        "the org directive must carry organization-policy authority: {directive_ko}"
+    );
+
+    let sup = c.call("supersede", &json!({
+        "subject": "chatbot-user",
+        "old": &aws_koid,
+        "superseded_by": &directive_koid,
+        "reason": "Organization policy supersedes the previous preference: ACME-123 must deploy on Azure",
+        "evidence": [{"source_artifact": "org-policy-v2", "method": "human_provided"}]
+    }));
+    assert_eq!(sup["new"], directive_koid);
+
+    // The old preference is temporally closed, still readable, and links to
+    // its successor — the supersession explanation is durable knowledge.
+    let aws_after = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &aws_koid}),
+    );
+    assert_eq!(
+        aws_after["properties"]["cloud"], "AWS",
+        "superseded knowledge stays readable (temporal)"
+    );
+    assert_eq!(aws_after["extensions"]["epistemic_status"], "superseded");
+    assert!(
+        aws_after["relationships"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["target"] == directive_koid),
+        "superseded preference must link to its successor: {}",
+        aws_after["relationships"]
+    );
+    assert!(
+        aws_after["extensions"]["epistemic_history"]
+            .to_string()
+            .contains("Organization policy supersedes"),
+        "supersession reason must be recorded: {}",
+        aws_after["extensions"]["epistemic_history"]
+    );
+    assert!(
+        aws_after["extensions"]["evidence"]
+            .to_string()
+            .contains("org-policy-v2"),
+        "supersession evidence must append to the old claim, never disappear"
+    );
+
+    // "Where should I deploy now?" → the org directive, with org authority.
+    let now = c.call(
+        "aikoql",
+        &json!({
+            "subject": "chatbot-user",
+            "query": "MATCH DeploymentDirective WHERE account == \"ACME-123\" RETURN *"
+        }),
+    );
+    let targets: Vec<String> = now["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["properties"]["cloud"].as_str().map(String::from))
+        .collect();
+    assert!(
+        targets.contains(&"Azure".to_string()),
+        "current deployment target must be Azure: {targets:?}"
+    );
+
+    // ── §51.4 "Deploy it." — the Program-as-KO action pipeline ────────────
+    // Resolve Program-as-KO: the deployment program reads the current
+    // directive from knowledge (no hardcoded target).
+    let prog = c.call(
+        "deploy_program",
+        &json!({
+            "subject": "chatbot-user",
+            "name": "DeployToCloud",
+            "body": "MATCH DeploymentDirective WHERE account == \"ACME-123\" RETURN *",
+            "language": "aikoql"
+        }),
+    );
+    let prog_koid = prog["koid"].as_str().unwrap().to_string();
+    let prog_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &prog_koid}),
+    );
+    assert_eq!(prog_ko["type_name"], "aikoql:program");
+
+    // Check permissions + policy: Allow for the bot principal, deny for
+    // anyone else (the approval gate where a human would be asked).
+    c.call(
+        "deploy_policy",
+        &json!({
+            "subject": "chatbot-user", "name": "BotMayDeploy", "effect": "Allow",
+            "principal": "chatbot-user", "action": "Write", "resource_type": "DeploymentDirective"
+        }),
+    );
+    let allow = c.call(
+        "evaluate_policies",
+        &json!({
+            "subject": "chatbot-user", "principal": "chatbot-user",
+            "action": "Write", "resource_type": "DeploymentDirective"
+        }),
+    );
+    assert_eq!(
+        allow["allowed"], true,
+        "deploy policy must allow the bot: {allow}"
+    );
+    let deny = c.call(
+        "evaluate_policies",
+        &json!({
+            "subject": "chatbot-user", "principal": "other-bot",
+            "action": "Write", "resource_type": "DeploymentDirective"
+        }),
+    );
+    assert_eq!(
+        deny["allowed"], false,
+        "non-authorized principal must be denied: {deny}"
+    );
+
+    // Execute under the caller's identity.
+    let exec = c.call(
+        "execute_program",
+        &json!({
+            "subject": "chatbot-user", "roles": ["chatbot-user"], "koid": &prog_koid
+        }),
+    );
+    assert_eq!(
+        exec["count"], 1,
+        "program must resolve exactly one deployment target: {exec}"
+    );
+    assert_eq!(
+        exec["results"][0]["properties"]["cloud"], "Azure",
+        "postcondition: the executed deployment targets the org-mandated cloud"
+    );
+
+    // Record the episode: goal → action → outcome, with preconditions.
+    let ep = c.call(
+        "record_experience",
+        &json!({
+            "subject": "chatbot-user",
+            "goal": "Deploy ACME-123",
+            "action": "execute DeployToCloud",
+            "outcome": "success",
+            "preconditions": ["policy BotMayDeploy allowed"],
+            "lesson": "deployment target resolved from the org directive",
+            "evidence": [{"source_artifact": "exec-run-1", "method": "runtime_observation"}]
+        }),
+    );
+    let ep_koid = ep["koid"].as_str().unwrap().to_string();
+    let ep_ko = c.call("get", &json!({"subject": "chatbot-user", "koid": &ep_koid}));
+    assert_eq!(ep_ko["type_name"], "aikoql:experience");
+    assert_eq!(ep_ko["properties"]["actor"], "chatbot-user");
+    assert_eq!(ep_ko["properties"]["goal"], "Deploy ACME-123");
+    assert_eq!(ep_ko["properties"]["outcome"], "success");
+    assert_eq!(
+        ep_ko["properties"]["preconditions"][0],
+        "policy BotMayDeploy allowed"
+    );
+
+    let _ = std::fs::remove_file(&db);
+}
+
 #[test]
 fn mcp_ping_and_tools_list() {
     let db = std::env::temp_dir().join(format!("mcp-ping-{}.redb", std::process::id()));

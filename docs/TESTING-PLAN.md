@@ -168,7 +168,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | Cache correctness (§42), races (§43–44) | 🟡 | `transactions.rs` concurrency ✅ | chatbot-level determinism scenarios absent |
 | Token/latency/cost benchmarks (§45–48) | 🟡 | criterion benches + one-off token numbers | comparative benchmark absent |
 | Agent quality benchmark (§49), golden dataset (§50) | 🟡 | per-instrument goldens (multimodal 10-fixture suite, retrieval qrels, GOLDEN_ANSWERS) | unified golden dataset absent |
-| §51 Critical e2e scenario | ❌ | every leg covered piecewise | single-script scenario absent |
+| §51 Critical e2e scenario | ✅ | `mcp_real_world.rs::critical_e2e_scenario_51_chatbot_memory` — full script: 3 memories → recall (AWS, provenance/scope) → org directive (organization_policy) → supersede (Azure + reason + evidence) → program → policy allow/deny → execute → postconditions → episode; surfaced + fixed 2 boundary bugs (parse_origin human, evidence path via assert_knowledge) | — |
 | §52 Ultimate comparative experiment | ❌ | §60 matrix = internal equivalent | A/B/C/D treatment table absent |
 
 ---
@@ -188,7 +188,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 
 | # | Gap | Suite IDs | Effort | Notes |
 | --- | --- | --- | --- | --- |
-| G5 | **§51 critical e2e scenario as scripted test** (memory → temporal → authority → program → episode) | §51, CHAT-MEM-*, EVO-CHAT-* | ~1 week | deterministic script over MCP tools; mock LLM verbalizes (PR-R pattern), mechanical judges |
+| G5 | **§51 critical e2e scenario as scripted test** (memory → temporal → authority → program → episode) | §51, CHAT-MEM-*, EVO-CHAT-* | ✅ done | `critical_e2e_scenario_51_chatbot_memory` in `mcp_real_world.rs`; mechanical judges; surfaced 2 boundary bugs (parse_origin `human` unreachable → Origin::Agent; evidence only via assert_knowledge, not remember) |
 | G6 | **Chatbot memory scenarios** (classification, preferences, consolidation, isolation, explainability) | CLASS-*, PERS-*, §30–33 | ~1 week | same harness as G5 |
 | G7 | **CTX differential tests** (two users, two times, post-update) + 1000-KO minimization | CTX-001..003, CTX-MIN-* | ~3 days | pure context-compiler tests, no LLM |
 | G8 | **Connector contract matrix** (postgres/mongo/neo4j positive/negative/timeout/auth/schema-change/incremental) | MM-001..004, §22 | ~2 weeks | fixtures exist; needs per-connector harness |
@@ -243,7 +243,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | --- | --- | --- | --- |
 | **TP-1 — Traceability & gates** | suite-ID → test matrix (machine-readable), P0 registry test that fails on known gaps, wire PR/nightly tiers | — | ✅ implemented (2026-08-22): `crates/kernel/tests/certification.rs` — 121 gate IDs (94 agent P0/P1 + 27 chatbot release claims) as the registry; `certification_matrix_integrity` runs in every PR (fails on unregistered ID, missing test path, note-less gap); `certification_p0_closure` is `#[ignore]` and runs in the weekly `cargo test --workspace -- --ignored` sweep (benchmark-nightly.yml) — currently red on 2 P0s by design (DB-002, EVO-003) |
 | **TP-2 — P0 gap closure** | G2 (kill harness), G3 (index rebuild), G4 (migration) | TP-1 | before next release tag |
-| **TP-3 — Acceptance scenarios** | G5 (§51 script), G6 (chatbot memory), G7 (CTX differential), G9 (unified golden dataset) | TP-1 | post-MVP, ~3–4 weeks |
+| **TP-3 — Acceptance scenarios** | G5 (§51 script) ✅, G6 (chatbot memory), G7 (CTX differential), G9 (unified golden dataset) | TP-1 | post-MVP, ~3–4 weeks |
 | **TP-4 — Flagship benchmarks** | G10 agent efficacy, G11 comparative experiment, G12 token/latency/cost | TP-3 corpus | post-MVP, ~6–8 weeks |
 | **TP-5 — Connector matrix** | G8 per-connector contract tests | connector workstream in IMPLEMENTATION-PLAN | post-MVP, ~2 weeks once connectors land |
 | **TP-6 — Product features** | G13 retention/summarization → then their certification | IMPLEMENTATION-PLAN roadmap | post-MVP |

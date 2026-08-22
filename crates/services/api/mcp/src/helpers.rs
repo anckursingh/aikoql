@@ -114,6 +114,7 @@ pub(crate) fn parse_semantic(args: &J) -> Result<Option<SemanticBlock>, String> 
 pub(crate) fn parse_origin(args: &J) -> Origin {
     match args.get("origin").and_then(|o| o.as_str()) {
         Some("system") => Origin::System,
+        Some("human") => Origin::Human,
         Some("reason") => Origin::Reason,
         Some("semantic_enrichment") => Origin::SemanticEnrichment,
         Some(other) => Origin::Agent(other.into()),
