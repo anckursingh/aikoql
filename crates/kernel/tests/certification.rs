@@ -182,7 +182,7 @@ const MATRIX: &[Row] = &[
     row("SEC-007", "SEC", "P0", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     // DB — persistence and recovery
     row("DB-001", "DB", "P0", "covered", Some("crates/kernel/tests/durability.rs"), None),
-    row("DB-002", "DB", "P0", "partial", None, Some("fail-safe semantics tested; real kill -9 mid-write harness pending (TP-2a)")),
+    row("DB-002", "DB", "P0", "covered", Some("crates/kernel/tests/crash_kill.rs"), None),
     row("DB-003", "DB", "P0", "covered", Some("crates/kernel/tests/transactions.rs"), None),
     row("DB-004", "DB", "P1", "partial", None, Some("isolation documented; concurrent reader/writer stress absent")),
     // PRG — programs-as-KO

@@ -109,7 +109,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | SEC-001..006 Encryption at rest, keys, fail-closed, crash | P0 | ✅ | `crates/kernel/tests/encryption.rs`, `encryption_load.rs`, `scripts/e2e-enc-smoke.js` (DEK-before-object, wrong/missing key fails closed, no plaintext fallback) |
 | SEC-007 Agent authorization | P0 | ✅ | R9 tenant isolation (authorize() confinement) |
 | DB-001 Restart after large write | P0 | ✅ | `durability.rs` |
-| DB-002 Kill during write | P0 | 🟡 | fail-safe semantics tested; no real `kill -9` harness |
+| DB-002 Kill during write | P0 | ✅ | `crash_kill.rs`: real taskkill/SIGKILL mid-write via `crash_writer` loop mode, reopen → journal head ≥ observed, all KOs + audit chain intact |
 | DB-003 Concurrent writers | P0 | ✅ | `transactions.rs` |
 | DB-004 Concurrent readers/writers | P1 | 🟡 | isolation semantics documented; stress test absent |
 | DOC-001..007 PDF/OCR/tables/images/versioning | P1 | ✅ | `multimodal_golden.rs` (19 DoD rows), `multimodal_acceptance.rs`; DOC-002 OCR is feature-gated (`vlm`) 🟡 |
@@ -180,7 +180,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | # | Gap | Suite IDs | Effort | Notes |
 | --- | --- | --- | --- | --- |
 | G1 | **Traceability + certification runner** — map every suite ID to its test, mark P0–P3, wire to CI tiers | all | ~1 week | This document is the draft; add a machine-readable matrix + a `certs` test that fails on known-GAP P0s |
-| G2 | **DB-002 kill-during-write harness** | DB-002 | ~2 days | spawn server process on test DB, SIGKILL mid-write, reopen → fail-safe or recoverable, no silent loss |
+| G2 | **DB-002 kill-during-write harness** | DB-002 | ✅ done | `crash_kill.rs` d05 + `crash_writer` loop mode: taskkill/SIGKILL mid-write, reopen → journal head ≥ observed progress, all KOs + audit chain intact |
 | G3 | **IDX-001/003 rebuild consistency + orphan sweep** | IDX-001..003 | ~2 days | delete derived index → rebuild → identical logical results; no orphans |
 | G4 | **Schema/ontology migration tests** | EVO-003/004, CONT-003, ONT-004 | ~3 days | define v1→v2 migration semantics, test history stays interpretable |
 
