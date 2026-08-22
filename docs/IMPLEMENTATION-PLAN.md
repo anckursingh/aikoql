@@ -3721,22 +3721,40 @@ The last two §60 decision metrics without an instrument — **fact extraction a
 
 **Gates**: `cargo fmt --all` clean; `cargo clippy -p aikoql-ingestion --all-targets -- -D warnings` clean; `cargo test -p aikoql-ingestion` green (418 lib + golden 1/1 + retrieval-quality 1/1 + semantic-extraction 1/1 + acceptance 11/11 + e2e, 0 failures).
 
-### What is left to implement
+### §53 end-to-end with a local model — architect verdict (2026-08-22)
 
-Every HLD milestone through §60 is closed; the remaining items, in order of leverage:
+The question: *"we already have Ollama running locally — is it not sufficient to complete the §53 end-to-end stage?"* **Verdict: yes, sufficient — with one architectural correction.** The end-to-end stage needs a *generator* and a *judge*:
 
-| Item | Source | Status / effort |
+- **Generator: any local model suffices.** Ollama is exactly what §53's "do not only measure final LLM answer quality" calls for — the instrument must measure what a real generative model does with our evidence. The harness is env-configured (`AIKOQL_ANSWER_MODEL`), so a stronger model later is one env var, not a rebuild.
+- **Judge: should not be an LLM at all.** Answer/citation/evidence correctness are mechanically judgeable against golden answers + the existing qrels — a mechanical judge is deterministic, CI-reproducible, free of self-judging bias (a small local model grading its own answers), and adds zero infra. An LLM judge would be *worse* here, not better.
+- **What Ollama cannot provide is model quality** — which is fine: the deliverable is the instrument + the measured answer to "does our retrieved evidence measurably improve this model's answers?" (the §60 measured-decision pattern; PR-P's NO-GO precedent applies equally here).
+
+Caveat noted for the live run: the local Ollama server was wedged (port listening, HTTP unresponsive) at build time — the instrument SKIPs cleanly without a model and the run is one command once the server is restarted.
+
+### Implemented now — PR-R: §53 end-to-end answer-quality instrument (2026-08-22, commit on `feature/mvp-launch`)
+
+The last uninstrumented §53 stage is now measured. `tests/e2e_answer_quality.rs` (feature `answer_gen` = `dep:ureq`, never in the default build — AIKOQL is a knowledge store, not an answer engine, HLD §56/§59): 15 queries × 2 conditions (top-3 lexical evidence vs closed-book) through an Ollama-compatible `/api/chat` generator (env `AIKOQL_ANSWER_ENDPOINT`, model required via `AIKOQL_ANSWER_MODEL`, 180s timeout, temperature 0), judged by three **mechanical** judges:
+
+- **answer correctness** — the answer contains the golden answer's key tokens (≤1 missing; exact match measures phrasing, not knowledge)
+- **citation correctness** — the answer cites `[n]` and the cited chunk is qrel-relevant (prompt demands numbered citations; a wrong citation or no citation is wrong)
+- **evidence correctness** — the evidence pack contains the qrel chunk: the retrieval instrument's Recall@K, reported per query (evidence quality *is* retrieval quality — no new machinery)
+
+`gate_verdict` (pure fn): GO iff with-evidence ≥ 0.5 and ≥ closed-book + 0.2 — measured improvement over closed-book answers, the §60 rule. Failed generations score 0 and are counted (§58: never a guessed number). SKIPs without the model env (real_model_bench convention); CI never runs a model. 5 pure-judge unit tests pin the judges' semantics. **Status: instrument live; the measured run against the local model is pending an Ollama restart (see verdict note).**
+
+### What is left to implement (feasibility, post-MVP)
+
+| Item | Feasibility | Verdict |
 | --- | --- | --- |
-| §53 End-to-end stage (answer / citation / evidence correctness) | HLD §53 | Needs an agent/LLM judge harness — the only §53 stage with no instrument; unblocked design decision (judge = mock vs real model, same §60 pattern) |
-| Cloud KMS providers (AWS, Azure, GCP) | Post-MVP roadmap | 🟡 ~1 week, explicitly not launch-blocking |
-| Remote TCP + TLS/mTLS | PR #1 review §17 (reviewer-sanctioned deferral) | Post-MVP; loopback + proxy-TLS contract ships now |
-| Compliance evidence packs (GDPR, HIPAA) | Post-MVP roadmap | 🟢 ~2 weeks |
-| Read replicas + Raft consensus | Post-MVP roadmap | 🟢 ~1 month |
-| Native storage engine | Post-MVP roadmap | 🟢 ~6 months |
-| `use crate::*` prelude cleanup | PR #1 review ("not a merge blocker") | Post-MVP hygiene |
-| HLD §57 PR-I multimodal query surface (`MATCH Visual SIMILAR IMAGE …`) | HLD §36/§57 | Syntax "designed later" per §36; the architecture already preserves the information (visual index + fragment access path, PR-K) |
-| P2-1/P2-2/P2-5/P2-8 kernel refinements | PR #1 review round 1 deferrals | Accepted as documented; tracked in knowledge-invariants.md |
+| §53 end-to-end stage | **DONE** | PR-R instrument shipped; live run = one command once Ollama responds |
+| Compliance evidence packs (GDPR, HIPAA) | High — existing audit chain + inventory tool (Phase 5) + PII filtering (A7) assemble into an exportable pack; ~2 weeks | **Next implementation candidate** |
+| Cloud KMS providers (AWS, Azure, GCP) | ~1 week, but user-deferred | Leave for future |
+| Remote TCP + TLS/mTLS | Feasible (~1 week, rustls on the listener) but reviewer-sanctioned post-MVP deferral; loopback + proxy-TLS contract ships now | Keep deferred |
+| Read replicas + Raft consensus | **Not feasible short-term** — blocked on the deferred Storage Kernel Split; a consensus protocol is a multi-PR, ~1 month effort | Future |
+| Native storage engine | ~6 months, replaces redb | Future, largest effort |
+| `use crate::*` prelude cleanup | Feasible now (mechanical), "not a merge blocker" | Hygiene commit any time |
+| HLD §57 PR-I multimodal query surface | Needs AIKOQL syntax design (§36: "designed later") + parser/runtime; 1–2 weeks | Post-launch |
+| P2-1/P2-2/P2-5/P2-8 kernel refinements | Small, any time; tracked in knowledge-invariants.md | Accepted deferrals |
 
 ### Next implementation
 
-The §60 real-model decision is closed (NO-GO for nomic-embed-text — the mock stays) and every §60/§53 instrumented stage is now measured. Next candidates: the §53 end-to-end judge harness (the only uninstrumented stage), or the post-MVP roadmap's Cloud KMS providers (~1 week, first 🟡 item) — post-launch work, none blocking the MVP gate.
+Compliance evidence packs — the highest-leverage feasible post-MVP feature now that every §53/§60 stage is instrumented: bundle the audit chain, object inventory, PII-filtering config, and retention/purge records into exportable GDPR/HIPAA evidence reports (the existing Phase-5 audit tool and A7 audit trail are the substrate). Cloud KMS stays deferred per user decision.

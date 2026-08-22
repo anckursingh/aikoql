@@ -256,7 +256,7 @@ pub fn is_relevant(chunk: &str, qrel: &str) -> bool {
     !a.is_empty() && !b.is_empty() && (a == b || a.contains(b) || b.contains(a))
 }
 
-fn tokens(text: &str) -> HashSet<String> {
+pub fn tokens(text: &str) -> HashSet<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())

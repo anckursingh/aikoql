@@ -42,6 +42,11 @@ transform = ["dep:ureq"]
 # the §60 real-model experiment harness. NOT in the default build: the mock
 # provider stays until the measured gate verdict is GO (rollback = unset env).
 remote_emb = ["dep:ureq"]
+# PR-R HLD §53 "End-to-end": optional answer generator (ureq, env-configured)
+# for the e2e answer-quality measurement. Never in the default build —
+# AIKOQL is a knowledge store, not an answer engine (HLD §56/§59); the
+# generator exists only to run the §53 instrument.
+answer_gen = ["dep:ureq"]
 
 [[bench]]
 name = "ingest_benchmark"
