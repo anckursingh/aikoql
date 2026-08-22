@@ -55,14 +55,6 @@ pub(crate) fn enrich_file_contains(ir: &mut aikoql_ingestion::KnowledgeIr) {
         });
     }
 }
-pub(crate) fn content_trust_extension(ct: ContentTrust) -> ExtensionMap {
-    let mut ext = ExtensionMap::new();
-    ext.insert(
-        KnowledgeObject::EXT_CONTENT_TRUST.into(),
-        Value::Text(ct.as_str().into()),
-    );
-    ext
-}
 
 /// Human-readable label for a typed evidence source (kernel KO locations).
 fn evidence_source_label(src: &aikoql_ingestion::EvidenceSource) -> String {
@@ -309,22 +301,15 @@ pub(crate) fn run_ingest_dir(
             kernel_ev = kernel_ev.with_location(loc_parts.join(", "));
         }
         kernel_ev = kernel_ev.with_confidence(ent.evidence.confidence);
-        let mut extensions = content_trust_extension(ContentTrust::Trusted);
-        extensions.insert(
-            "authority".into(),
-            Value::Text(Authority::for_evidence_method(ev_method).as_str().into()),
-        );
-        extensions.insert(
-            "scope".into(),
-            Value::Text(Scope::Repository.as_str().into()),
-        );
-        extensions.insert(
-            KnowledgeObject::EXT_EVIDENCE.into(),
-            KnowledgeObject::evidence_value(&[kernel_ev]),
-        );
         // Exact-once replay means a re-ingest would silently keep the stale
         // entity content (e.g. mention text from an older parser). Resolve
         // the idempotency key: existing → true update, new → guarded create.
+        // P0-1 (review round 1): remember() rejects caller-set epistemic
+        // state, so the create goes through kernel.ingest_observation, the
+        // sanctioned first-party ingestion op — it stamps evidence/epistemic
+        // status/authority (from the evidence method), trusted content and
+        // Repository scope itself. The update carries NO kernel-managed
+        // extensions: remember() carries them forward from head.
         let idem = format!(
             "ingest-entity:{}:{}:{}",
             path,
@@ -332,33 +317,27 @@ pub(crate) fn run_ingest_dir(
             ent.evidence.document_id.as_deref().unwrap_or_default(),
             ent.name
         );
-        let mut req = RememberRequest {
-            context: (&subj).into(),
-            koid: None,
-            expected_version: None,
-            idempotency_key: None,
-            metadata: Metadata {
-                type_name,
-                tenant: None,
-                schema_version: 1,
-                tags: vec!["ingest-dir".into(), "auto".into()],
-            },
-            properties: ent_props,
-            semantic: None,
-            relationships: vec![],
-            security: Some(SecurityDescriptor {
-                owner: "ingest-dir".into(),
-                acl: vec![],
-                classification: None,
-            }),
-            extensions,
-            origin: Origin::Agent("ingest-dir".into()),
-            note: Some(format!("entity from ingest-dir {}", path)),
-            referential_policy: ReferentialPolicy::Permissive,
+        let security = SecurityDescriptor {
+            owner: "ingest-dir".into(),
+            acl: vec![],
+            classification: None,
         };
-        match kernel.resolve_idempotency(&idem) {
+        let note = format!("entity from ingest-dir {}", path);
+        let stored = match kernel.resolve_idempotency(&idem) {
             Ok(Some((koid, _, _))) => {
-                req.koid = Some(koid);
+                let mut req = RememberRequest::update(
+                    KnowledgeContext::from(&subj),
+                    koid,
+                    Metadata {
+                        type_name,
+                        tenant: None,
+                        schema_version: 1,
+                        tags: vec!["ingest-dir".into(), "auto".into()],
+                    },
+                );
+                req.properties = ent_props;
+                req.security = Some(security);
+                req.note = Some(note);
                 // Carry the semantic block forward when the entity's content
                 // is unchanged — an update with semantic:None resets it, and
                 // serve's startup catch-up then re-embeds every KO (~4-6 min
@@ -369,13 +348,21 @@ pub(crate) fn run_ingest_dir(
                         req.semantic = old.semantic.clone();
                     }
                 }
+                kernel.remember(req)
             }
-            _ => {
-                req.idempotency_key = Some(idem);
-                req.expected_version = Some(0);
-            }
-        }
-        match kernel.remember(req) {
+            _ => kernel.ingest_observation(IngestRequest {
+                context: (&subj).into(),
+                type_name,
+                properties: ent_props,
+                evidence: vec![kernel_ev],
+                idempotency_key: Some(idem),
+                tags: vec!["ingest-dir".into(), "auto".into()],
+                valid_from: None,
+                security: Some(security),
+                note: Some(note),
+            }),
+        };
+        match stored {
             Ok(r) => {
                 ent_kos.push((ent.name.as_str(), r.koid, ent.evidence.document_id.clone()));
             }
@@ -416,29 +403,20 @@ pub(crate) fn run_ingest_dir(
         }
         let mut fprops = PropertyMap::new();
         fprops.insert("name".into(), Value::Text(doc.clone()));
-        match kernel.remember(RememberRequest {
+        match kernel.ingest_observation(IngestRequest {
             context: (&subj).into(),
-            koid: None,
-            expected_version: Some(0),
-            idempotency_key: Some(format!("ingest-file:{}:{}", path, doc)),
-            metadata: Metadata {
-                type_name: "File".into(),
-                tenant: None,
-                schema_version: 1,
-                tags: vec!["ingest-dir".into(), "auto".into()],
-            },
+            type_name: "File".into(),
             properties: fprops,
-            semantic: None,
-            relationships: vec![],
+            evidence: vec![Evidence::new(doc.clone(), EvidenceMethod::DocExtraction)],
+            idempotency_key: Some(format!("ingest-file:{}:{}", path, doc)),
+            tags: vec!["ingest-dir".into(), "auto".into()],
+            valid_from: None,
             security: Some(SecurityDescriptor {
                 owner: "ingest-dir".into(),
                 acl: vec![],
                 classification: None,
             }),
-            extensions: content_trust_extension(ContentTrust::Trusted),
-            origin: Origin::Agent("ingest-dir".into()),
             note: Some(format!("source file from ingest-dir {}", path)),
-            referential_policy: ReferentialPolicy::Permissive,
         }) {
             Ok(r) => {
                 file_koids.insert(doc, r.koid);
@@ -469,29 +447,23 @@ pub(crate) fn run_ingest_dir(
             None => {
                 let mut fprops = PropertyMap::new();
                 fprops.insert("name".into(), Value::Text(doc.to_string()));
-                let k = match kernel.remember(RememberRequest {
+                let k = match kernel.ingest_observation(IngestRequest {
                     context: (&subj).into(),
-                    koid: None,
-                    expected_version: Some(0),
-                    idempotency_key: Some(format!("ingest-file:{}:{}", path, doc)),
-                    metadata: Metadata {
-                        type_name: "File".into(),
-                        tenant: None,
-                        schema_version: 1,
-                        tags: vec!["ingest-dir".into(), "auto".into()],
-                    },
+                    type_name: "File".into(),
                     properties: fprops,
-                    semantic: None,
-                    relationships: vec![],
+                    evidence: vec![Evidence::new(
+                        doc.to_string(),
+                        EvidenceMethod::DocExtraction,
+                    )],
+                    idempotency_key: Some(format!("ingest-file:{}:{}", path, doc)),
+                    tags: vec!["ingest-dir".into(), "auto".into()],
+                    valid_from: None,
                     security: Some(SecurityDescriptor {
                         owner: "ingest-dir".into(),
                         acl: vec![],
                         classification: None,
                     }),
-                    extensions: ExtensionMap::new(),
-                    origin: Origin::Agent("ingest-dir".into()),
                     note: Some(format!("source file from ingest-dir {}", path)),
-                    referential_policy: ReferentialPolicy::Permissive,
                 }) {
                     Ok(r) => r.koid,
                     Err(e) => {
@@ -697,42 +669,51 @@ pub(crate) fn run_ingest_dir(
 
     // Same exact-once-replay trap as entity KOs: without resolving the key,
     // a re-ingest would keep the stale ir_json/entity_embeddings forever.
+    // P0-1: create goes through ingest_observation (sanctioned ingestion
+    // op); the update carries no kernel-managed extensions.
     let idem = format!("ingest-dir-{}", path);
-    let mut req = RememberRequest {
-        context: (&subj).into(),
-        koid: None,
-        expected_version: None,
-        idempotency_key: None,
-        metadata: Metadata {
-            type_name: "aikoql:ingested-directory".into(),
-            tenant: None,
-            schema_version: 1,
-            tags: vec!["ingest-dir".into(), "auto".into()],
-        },
-        properties: props,
-        semantic: None,
-        relationships: vec![],
-        security: Some(SecurityDescriptor {
-            owner: "ingest-dir".into(),
-            acl: vec![],
-            classification: None,
-        }),
-        extensions: content_trust_extension(ContentTrust::Trusted),
-        origin: Origin::Human,
-        note: Some(format!(
-            "Directory ingestion IR snapshot (compile_context source): {}",
-            path
-        )),
-        referential_policy: ReferentialPolicy::Permissive,
+    let note = format!(
+        "Directory ingestion IR snapshot (compile_context source): {}",
+        path
+    );
+    let security = SecurityDescriptor {
+        owner: "ingest-dir".into(),
+        acl: vec![],
+        classification: None,
     };
-    match kernel.resolve_idempotency(&idem) {
-        Ok(Some((koid, _, _))) => req.koid = Some(koid),
-        _ => {
-            req.idempotency_key = Some(idem);
-            req.expected_version = Some(0);
+    let stored = match kernel.resolve_idempotency(&idem) {
+        Ok(Some((koid, _, _))) => {
+            let mut req = RememberRequest::update(
+                KnowledgeContext::from(&subj),
+                koid,
+                Metadata {
+                    type_name: "aikoql:ingested-directory".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec!["ingest-dir".into(), "auto".into()],
+                },
+            );
+            req.properties = props;
+            req.security = Some(security);
+            req.note = Some(note);
+            kernel.remember(req)
         }
-    }
-    match kernel.remember(req) {
+        _ => kernel.ingest_observation(IngestRequest {
+            context: (&subj).into(),
+            type_name: "aikoql:ingested-directory".into(),
+            properties: props,
+            evidence: vec![Evidence::new(
+                path.to_string(),
+                EvidenceMethod::DocExtraction,
+            )],
+            idempotency_key: Some(idem),
+            tags: vec!["ingest-dir".into(), "auto".into()],
+            valid_from: None,
+            security: Some(security),
+            note: Some(note),
+        }),
+    };
+    match stored {
         Ok(r) => {
             // The directory KO is the graph root: it `contains` every File KO
             // and any entity without file provenance. Update (REPLACE) keeps

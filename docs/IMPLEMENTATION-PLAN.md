@@ -3693,6 +3693,26 @@ All 10 items closed in one commit (single coherent review round — the guards, 
 
 **Gates**: `cargo fmt --all` clean; `cargo clippy -p aikoql-mcp -p aikoql-semantic --all-targets` 0 warnings; `cargo test -p aikoql-mcp` 76 passed (was 69) + `cargo test -p aikoql-semantic` 12 passed. Encryption/secret-filtering behavior untouched (HLD §58 / DoD row 16).
 
+### Release-readiness audit — staff verdict + E2E release gate (2026-08-22)
+
+A reviewer rated the branch "80–85% MVP-ready" with five hardening items and an MVP gate: **Install → Start → Ingest → Search → Retrieve → Restart → Data survives**. Audit verdict: **the five items were already shipped** by the time of the review (round 3 landed before the review was analyzed), and the gate — which the reviewer called "more valuable than another 100 unit tests" — was the one genuine gap. Two gaps closed:
+
+**Item-by-item (reviewer → existing code):**
+
+| Reviewer item | Status | Grounding |
+| --- | --- | --- |
+| 1. Lock down network boundary | Shipped | R1 `validate_listen` fail-closed on any non-loopback bind (exit 2) + stdio as primary; R3 Docker CMD binds 127.0.0.1 with a CI fail-closed assertion |
+| 2. Deterministic embedding install | Shipped | R6 `manifest.json` (sha256 + `hidden_size`), staged atomic install, `verify_install` on load, PRR-3 no-download degrade to lexical |
+| 3. Test the actual distribution artifact | Shipped | R7 CI `npm-tarball-smoke` (pack → clean install → `--version` → MCP round-trip) + release `npm-publish` smoke before publish |
+| 4. Docker must be boring | Shipped | Multi-stage Dockerfile, HEALTHCHECK, documented volume contract, no baked credentials |
+| 5. One real end-to-end test | **Was manual only** | `scripts/e2e-dogfood.js` existed (10 continuity questions over the real MCP surface) but ran **outside CI** — and its CI absence hid a real regression (below) |
+
+**Regression the audit caught — P0-1 guard vs `ingest-dir`**: wiring the dogfood into CI surfaced `ingest-dir` storing "0 entity KOs, 0 file KOs and 0 relationships (4134 entities failed)" — every write rejected with "extension 'content_trust' is kernel-managed". Root cause: the P0-1 epistemic guard (38b8b9a, round 1) landed *after* the v0.3 dogfood gate (f12e6cc), and no test covered `ingest.rs`'s `remember()` calls carrying managed extensions (the removed `content_trust_extension()` helper). **Fix — a sanctioned kernel op, not a guard weakening**: new `Kernel::ingest_observation(IngestRequest)` stamps kernel-managed state derived *from evidence* (AstExtraction/DocExtraction → `Extracted` + SourceCode/Documentation authority, `content_trust=Trusted`, scope=repository, valid_from, exact-once idempotency) via `remember_trusted()`; update paths go through plain `remember()` with **no** managed extensions — the kernel carries them forward from head. Tests: `ingest_observation_derives_kernel_state_from_evidence` (kernel), 11 passed. Result: "Stored 4138 entity KOs, 218 file KOs and 6250 relationships (198 out-of-corpus refs skipped)".
+
+**Gate in CI**: new `e2e-dogfood` job (needs `build-release`) runs `ingest-dir crates` → `scripts/e2e-dogfood.js` → new `scripts/e2e-restart.js` (fresh server process on the same db asserts the dogfood claim "(v2)" + Struct entities survive). Every CI now executes the reviewer's six-item gate.
+
+**Local MVP gate (release build)**: ingest 4138/218/6250 ✓ → dogfood all 10 questions ✓ (Q4 evidence: `crates\cluster\proxy\src\main.rs` via ast_extraction @ 0.85) → restart PASS ✓ → `cargo fmt --all` clean, clippy `-p aikoql-kernel -p aikoql-mcp --all-targets` 0 warnings, kernel+mcp suites all green. **Verdict: MVP-ready per the reviewer's own gate; the six items work reliably, on CI, on the distribution artifact, inside the loopback boundary.**
+
 ### Next implementation
 
-The §60 real-model decision is now closed (NO-GO for nomic-embed-text — the mock stays; re-running against a different model is one command, nothing to build). Remaining §60 metric gap: **fact/relation extraction quality** — the two HLD §60 metrics with no instrument yet; next code milestone is either that instrument or the next HLD milestone after §60.
+The §60 real-model decision is closed (NO-GO for nomic-embed-text — the mock stays; re-running against a different model is one command, nothing to build). Remaining §60 metric gap: **fact/relation extraction quality** — the two HLD §60 metrics with no instrument yet; next code milestone is either that instrument or the next HLD milestone after §60.

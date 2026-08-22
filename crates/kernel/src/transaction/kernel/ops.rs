@@ -30,7 +30,8 @@
 //!   confidence-weighted ranking, expired/invalidated experiences filtered.
 
 use super::*;
-use crate::knowledge::evidence::Evidence;
+use crate::knowledge::evidence::{Evidence, EvidenceMethod};
+use crate::knowledge::scope::Scope;
 use std::collections::{HashSet, VecDeque};
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,47 @@ impl ObservationRequest {
             type_name: type_name.into(),
             properties: PropertyMap::new(),
             evidence: Vec::new(),
+            valid_from: None,
+            security: None,
+            note: None,
+        }
+    }
+}
+
+/// First-party trusted ingestion (ingest-dir of a reviewed local tree).
+/// Evidence is mandatory. The kernel-managed extensions are DERIVED from the
+/// evidence method, never taken from the caller: Ast/DocExtraction stamp
+/// epistemic `extracted` + source_code/documentation authority, anything
+/// else stamps `observed` + its method's authority; content_trust is stamped
+/// `trusted` (the reviewed-repo path — uploads go through deploy_document,
+/// which stamps untrusted); scope is Repository. This is the sanctioned
+/// ingestion counterpart to `remember()`: the P0-1 guard rejects caller-set
+/// epistemic state, and like the other semantic ops this op constructs it
+/// itself from non-forgeable inputs.
+pub struct IngestRequest {
+    pub context: KnowledgeContext,
+    pub type_name: String,
+    pub properties: PropertyMap,
+    pub evidence: Vec<Evidence>,
+    /// Exact-once replay key — a re-ingest resolves to the original KO.
+    pub idempotency_key: Option<String>,
+    pub tags: Vec<String>,
+    /// Ingestion instant (epoch millis). Defaults to now.
+    pub valid_from: Option<u64>,
+    /// Optional ACL override. Defaults to owner-only.
+    pub security: Option<SecurityDescriptor>,
+    pub note: Option<String>,
+}
+
+impl IngestRequest {
+    pub fn new(context: impl Into<KnowledgeContext>, type_name: impl Into<String>) -> Self {
+        IngestRequest {
+            context: context.into(),
+            type_name: type_name.into(),
+            properties: PropertyMap::new(),
+            evidence: Vec::new(),
+            idempotency_key: None,
+            tags: Vec::new(),
             valid_from: None,
             security: None,
             note: None,
@@ -505,6 +547,71 @@ impl Kernel {
             origin: Origin::System,
             note: req.note,
             referential_policy: ReferentialPolicy::default(),
+        };
+        self.remember_trusted(rr)
+    }
+
+    /// Trusted first-party ingestion (ingest-dir): stamps the kernel-managed
+    /// extensions from the evidence method, exactly as documented on
+    /// [`IngestRequest`]. External callers keep going through the guarded
+    /// `remember()` — only this op and the other semantic ops may write
+    /// epistemic state, and this op derives it, it never accepts it.
+    pub fn ingest_observation(&self, req: IngestRequest) -> KResult<Remembered> {
+        require_evidence(&req.evidence)?;
+        let at = self.clock_now();
+        // require_evidence guarantees non-empty.
+        let method = req.evidence[0].method;
+        let (status, authority) = match method {
+            EvidenceMethod::AstExtraction | EvidenceMethod::DocExtraction => (
+                EpistemicStatus::Extracted,
+                Authority::for_evidence_method(method),
+            ),
+            _ => (
+                EpistemicStatus::Observed,
+                Authority::for_evidence_method(method),
+            ),
+        };
+        let mut extensions = ExtensionMap::new();
+        extensions.insert(
+            KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
+            Value::Text(status.as_str().into()),
+        );
+        extensions.insert(
+            KnowledgeObject::EXT_EVIDENCE.into(),
+            evidence_value(&req.evidence),
+        );
+        extensions.insert("authority".into(), Value::Text(authority.as_str().into()));
+        extensions.insert(
+            "scope".into(),
+            Value::Text(Scope::Repository.as_str().into()),
+        );
+        extensions.insert(
+            KnowledgeObject::EXT_CONTENT_TRUST.into(),
+            Value::Text(ContentTrust::Trusted.as_str().into()),
+        );
+        extensions.insert(
+            KnowledgeObject::EXT_VALID_FROM.into(),
+            Value::Int(req.valid_from.unwrap_or(at) as i64),
+        );
+        let rr = RememberRequest {
+            context: req.context.clone(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: req.idempotency_key,
+            metadata: Metadata {
+                type_name: req.type_name,
+                tenant: req.context.tenant.clone(),
+                schema_version: 1,
+                tags: req.tags,
+            },
+            properties: req.properties,
+            semantic: None,
+            relationships: vec![],
+            security: req.security,
+            extensions,
+            origin: Origin::System,
+            note: req.note,
+            referential_policy: ReferentialPolicy::Permissive,
         };
         self.remember_trusted(rr)
     }

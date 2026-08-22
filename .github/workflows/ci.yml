@@ -144,6 +144,38 @@ jobs:
           "$tmp/node_modules/.bin/aikoql-mcp" --version
           node "$GITHUB_WORKSPACE/npm-publish/smoke-mcp.js" "$tmp/node_modules/.bin/aikoql-mcp"
 
+  # E2E dogfood gate (reviewer MVP gate): ingest the checked-out repo, answer
+  # the 10 continuity questions over the real MCP surface, then RESTART the
+  # server on the same db and assert the data survives — the six-item gate
+  # (Install → Start → Ingest → Search → Retrieve → Restart → Data survives)
+  # runs on every CI, not just manually before a release.
+  e2e-dogfood:
+    name: E2E dogfood — ingest, query, restart (Linux)
+    runs-on: ubuntu-latest
+    needs: build-release
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: aikoql-linux
+          path: bin
+      - name: Ingest → dogfood → restart
+        run: |
+          set -euo pipefail
+          chmod +x bin/aikoql-mcp
+          DB=dogfood.redb
+          # crates/ yields the Struct entities the gate asserts, without
+          # pulling build artifacts into the corpus. No model is installed
+          # here — ingestion degrades to lexical (PRR-3, no downloads).
+          KOID=$(bin/aikoql-mcp ingest-dir crates "$DB" | grep '  KOID: ' | head -1 | awk '{print $3}')
+          [ -n "$KOID" ] || { echo "ingest-dir printed no KOID"; exit 1; }
+          node scripts/e2e-dogfood.js bin/aikoql-mcp "$DB" "$KOID"
+          node scripts/e2e-restart.js bin/aikoql-mcp "$DB"
+
   dependency-dag:
     name: Verify Dependency DAG
     runs-on: ubuntu-latest

@@ -447,3 +447,59 @@ fn scan_by_type_filtered_selects_by_epistemic_status() {
         .unwrap();
     assert!(none.is_empty());
 }
+
+// ---- trusted first-party ingestion (ingest-dir) ----------------------------
+
+#[test]
+fn ingest_observation_derives_kernel_state_from_evidence() {
+    let k = mk();
+
+    // AstExtraction → extracted + source_code authority + trusted + repo scope.
+    let mut req = IngestRequest::new(alice(), "Struct");
+    req.evidence = vec![ev("src/lib.rs", EvidenceMethod::AstExtraction)];
+    let id = k.ingest_observation(req).unwrap().koid;
+    let ko = k.get(alice(), &id).unwrap();
+    assert_eq!(ko.epistemic_status(), EpistemicStatus::Extracted);
+    assert_eq!(ko.content_trust(), ContentTrust::Trusted);
+    assert!(matches!(ko.extensions.get("authority"), Some(Value::Text(s)) if s == "source_code"));
+    assert!(matches!(ko.extensions.get("scope"), Some(Value::Text(s)) if s == "repository"));
+    assert_eq!(
+        ko.evidence(),
+        vec![ev("src/lib.rs", EvidenceMethod::AstExtraction)]
+    );
+
+    // DocExtraction → documentation authority; non-extraction methods stay
+    // observed and keep their own authority rank.
+    let mut doc = IngestRequest::new(alice(), "Fact");
+    doc.evidence = vec![ev("docs/guide.md", EvidenceMethod::DocExtraction)];
+    let doc_id = k.ingest_observation(doc).unwrap().koid;
+    let doc_ko = k.get(alice(), &doc_id).unwrap();
+    assert_eq!(doc_ko.epistemic_status(), EpistemicStatus::Extracted);
+    assert!(
+        matches!(doc_ko.extensions.get("authority"), Some(Value::Text(s)) if s == "documentation")
+    );
+
+    let mut obs = IngestRequest::new(alice(), "Fact");
+    obs.evidence = vec![ev("prod", EvidenceMethod::RuntimeObservation)];
+    let obs_id = k.ingest_observation(obs).unwrap().koid;
+    let obs_ko = k.get(alice(), &obs_id).unwrap();
+    assert_eq!(obs_ko.epistemic_status(), EpistemicStatus::Observed);
+    assert!(
+        matches!(obs_ko.extensions.get("authority"), Some(Value::Text(s)) if s == "deployment_observed")
+    );
+
+    // Evidence is mandatory — an unbacked ingestion is rejected.
+    let bare = IngestRequest::new(alice(), "Fact");
+    assert!(k.ingest_observation(bare).is_err());
+
+    // Exact-once replay: the idempotency key resolves to the original KO.
+    let mut replay = IngestRequest::new(alice(), "Struct");
+    replay.evidence = vec![ev("src/lib.rs", EvidenceMethod::AstExtraction)];
+    replay.idempotency_key = Some("ingest-entity:src/lib.rs:Struct".into());
+    let first = k.ingest_observation(replay).unwrap().koid;
+    let mut again = IngestRequest::new(alice(), "Struct");
+    again.evidence = vec![ev("src/lib.rs", EvidenceMethod::AstExtraction)];
+    again.idempotency_key = Some("ingest-entity:src/lib.rs:Struct".into());
+    let second = k.ingest_observation(again).unwrap().koid;
+    assert_eq!(first, second);
+}
