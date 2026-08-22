@@ -166,7 +166,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | Summarization + provenance (§38–39) | ❌ | markdown/doc compilers exist; conversation→summary not implemented | — |
 | Memory compression (§40) | ❌ | measurement target only | — |
 | Cache correctness (§42), races (§43–44) | 🟡 | `transactions.rs` concurrency ✅ | chatbot-level determinism scenarios absent |
-| Token/latency/cost benchmarks (§45–48) | 🟡 | criterion benches + one-off token numbers | comparative benchmark absent |
+| Token/latency/cost benchmarks (§45–48) | ✅ | `comparative_cost_bench.rs`: AikoQL context compiler vs flat RAG chunk baseline, same corpus/budget/questions, per-query + summary lines | — |
 | Agent quality benchmark (§49), golden dataset (§50) | ✅ | unified golden dataset `common/golden_dataset.rs` (17 §50 questions: answer/KOs/relations/evidence, 15 textual + 2 visual-only) consumed by all corpus instruments + `golden_dataset_integrity.rs` cross-check gate (grounding, extraction, annotation-list agreement) | §49 agent benchmark = G10 (TP-4) |
 | §51 Critical e2e scenario | ✅ | `mcp_real_world.rs::critical_e2e_scenario_51_chatbot_memory` — full script: 3 memories → recall (AWS, provenance/scope) → org directive (organization_policy) → supersede (Azure + reason + evidence) → program → policy allow/deny → execute → postconditions → episode; surfaced + fixed 2 boundary bugs (parse_origin human, evidence path via assert_knowledge) | — |
 | §52 Ultimate comparative experiment | ❌ | §60 matrix = internal equivalent | A/B/C/D treatment table absent |
@@ -200,7 +200,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | --- | --- | --- | --- | --- |
 | G10 | **Agent efficacy benchmark** — 50–100 engineering tasks, treatments A (repo-only) / B (RAG memory) / C (code graph) / D (AIKOQL), measured success/tokens/tool calls | §31, AGENT-* | ~4–6 weeks | the suite's own flagship; needs task corpus + baseline harnesses |
 | G11 | **Chatbot comparative experiment** — A/B/C/D treatments on the chatbot corpus, §52 table | §52, COMP-* | ~4 weeks | reuse G5 corpus; honest measured-results-only table |
-| G12 | **Token/latency/cost benchmarks** vs RAG baseline | §45–48, LLM-002 | ~2 weeks | extend R14 bench infra |
+| G12 | **Token/latency/cost benchmarks** vs RAG baseline | §45–48, LLM-002 | ✅ done | `comparative_cost_bench.rs` (mechanical, CI-runnable): 15 golden-dataset queries × 2 treatments (AikoQL = merged-IR context compiler, RAG = lexical top-k chunk pack) at budget 500 — per-query tokens/KO-coverage/answer-hit/latency + summary + cost column. **Honest measured verdict (mock corpus): the chunk baseline wins both axes** — 74.8 vs 207.9 tokens/query, 0.867 vs 0.467 answer-hit (root causes: fact keywords match corpus-wide — any "revenue" question hoovers every revenue fact; mock IR has no facts for pure-text fixtures). Gates pin the baselines with headroom (regression fails, improvement passes); the verdict is printed, not enforced — real-extraction/real-model runs may flip it |
 | G13 | **Retention/expiry policy** (RET-CHAT-001) + conversation summarization (§38–39) | RET-CHAT-001, §38–39 | feature work + tests; plan via IMPLEMENTATION-PLAN | product features first, then their certification |
 
 ### Deliberately out of scope for certification claims
@@ -244,7 +244,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | **TP-1 — Traceability & gates** | suite-ID → test matrix (machine-readable), P0 registry test that fails on known gaps, wire PR/nightly tiers | — | ✅ implemented (2026-08-22): `crates/kernel/tests/certification.rs` — 121 gate IDs (94 agent P0/P1 + 27 chatbot release claims) as the registry; `certification_matrix_integrity` runs in every PR (fails on unregistered ID, missing test path, note-less gap); `certification_p0_closure` is `#[ignore]` and runs in the weekly `cargo test --workspace -- --ignored` sweep (benchmark-nightly.yml) — currently red on 2 P0s by design (DB-002, EVO-003) |
 | **TP-2 — P0 gap closure** | G2 (kill harness), G3 (index rebuild), G4 (migration) | TP-1 | before next release tag |
 | **TP-3 — Acceptance scenarios** | ✅ COMPLETE: G5 (§51 script) ✅, G6 (chatbot memory) ✅, G7 (CTX differential) ✅, G9 (unified golden dataset) ✅ | TP-1 | ✅ done (2026-08-22) |
-| **TP-4 — Flagship benchmarks** | G10 agent efficacy, G11 comparative experiment, G12 token/latency/cost | TP-3 corpus | post-MVP, ~6–8 weeks |
+| **TP-4 — Flagship benchmarks** | G12 token/latency/cost ✅ (2026-08-22), G10 agent efficacy, G11 comparative experiment | TP-3 corpus | post-MVP, ~6–8 weeks |
 | **TP-5 — Connector matrix** | G8 per-connector contract tests | connector workstream in IMPLEMENTATION-PLAN | post-MVP, ~2 weeks once connectors land |
 | **TP-6 — Product features** | G13 retention/summarization → then their certification | IMPLEMENTATION-PLAN roadmap | post-MVP |
 
@@ -254,7 +254,7 @@ Post-MVP sequencing note: TP-1/TP-2 are cheap and buy the "certification-grade" 
 
 ## 8. Immediate next steps
 
-1. **TP-4**: flagship benchmarks — G10 agent efficacy (task corpus + A/B/C/D treatments), G11 chatbot comparative (§52 table), G12 token/latency/cost vs RAG baseline. TP-3 is complete; TP-4 is the largest single workstream and produces the compliance evidence packs.
+1. **TP-4**: flagship benchmarks — G10 agent efficacy (task corpus + A/B/C/D treatments), G11 chatbot comparative (§52 table); G12 token/latency/cost ✅. TP-3 is complete; TP-4 is the largest single workstream and produces the compliance evidence packs.
 2. **TP-5** (once connectors land): G8 per-connector contract matrix.
 3. Keep the two suite docs in `docs/` as the source of truth for ID numbering; the registry (`certification.rs`) is the enforcement layer — add a row there when a gap closes, never remove a gap row without its test.
 
@@ -267,6 +267,7 @@ Post-MVP sequencing note: TP-1/TP-2 are cheap and buy the "certification-grade" 
 | `golden_dataset_integrity` | §50 dataset cross-check: unique ids, answers grounded in qrel chunks, expected KOs/relations extracted, annotation lists consistent | all corpus instruments (G9) |
 | `semantic_extraction_quality` | entity/relation P/R, fact/event accuracy vs unified `SEMANTIC_GOLD` | §30 Extraction, KB/ONT/MEM-003 |
 | `retrieval_quality` | P@K, R@K, MRR, nDCG vs the unified dataset's 15-query qrels | §30 Retrieval, RET-* |
+| `comparative_cost_bench` | tokens/KO-coverage/answer-hit/latency/cost: context compiler vs RAG chunk pack | §45–48, LLM-002 (G12) |
 | `e2e_answer_quality` | answer/citation/evidence correctness, gate verdict | §53 of the multimodal HLD (our §53), PROV-CHAT-* |
 | `multimodal_golden` | 19 DoD rows over 10 PDF fixtures | DOC-001..007 |
 | `real_model_bench` | §60 six-metric model-decision harness | P3 §60 decisions |
