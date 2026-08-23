@@ -257,7 +257,7 @@ Post-MVP sequencing note: TP-1/TP-2 are cheap and buy the "certification-grade" 
 ## 8. Immediate next steps
 
 1. **TP-4**: ✅ COMPLETE — all three flagships measured: G10 agent efficacy (`agent_efficacy_bench.rs`), G11 chatbot comparative (§52 table), G12 token/latency/cost. Compliance evidence packs can now be assembled from the three measured tables.
-2. **P1 extraction follow-ups** (from G10 rerun): the remaining D misses are entity-gate/ranking — pure-number cells (goldens "0.15", "6") and rows whose anchor phrases don't share question vocabulary. Candidates: section-heading anchors for cell facts, judge hardening for short goldens, 50–100-task corpus extension.
+2. **P1 extraction follow-ups** (from G10 rerun): the remaining D misses are entity-gate/ranking — pure-number cells (goldens "0.15", "6") and rows whose anchor phrases don't share question vocabulary. Section-heading anchors for cell facts were implemented and **measured negative** (2026-08-23): G10 D 0.350→0.300, C 0.650→0.550 — heading-derived facts outranked the exact cell facts within the token budget (T3's `e2e_answer_quality.rs` cell lost its slot to the section-heading fact), so the change was reverted. Remaining candidates: judge hardening for short goldens, 50–100-task corpus extension, targeted ranking for exact-token cell facts.
 3. **TP-5** (once connectors land): G8 per-connector contract matrix.
 4. Keep the two suite docs in `docs/` as the source of truth for ID numbering; the registry (`certification.rs`) is the enforcement layer — add a row there when a gap closes, never remove a gap row without its test.
 
