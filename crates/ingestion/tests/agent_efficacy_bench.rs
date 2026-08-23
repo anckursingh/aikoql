@@ -30,6 +30,7 @@
 //! Judge (mechanical, the PR-R convention — no LLM judge): the agent
 //! output contains the golden phrase's tokens with at most one missing
 //! (small local models paraphrase; exact match would measure phrasing).
+//! Hardened for short goldens: 1-2 token goldens require every token.
 //! For D the output is the compiled context itself — the deterministic
 //! MCP answer path. Generation failures score 0 and are counted, never
 //! silently guessed (§58).
@@ -192,8 +193,13 @@ const TASKS: &[Task] = &[
 ];
 
 /// The PR-R §53 answer-correctness judge: golden key tokens present with at
-/// most one missing. Copied from `e2e_answer_quality.rs` (its unit tests pin
-/// the semantics); shared-module extraction deferred until a third consumer.
+/// most one missing. Hardened for short goldens (2026-08-23, G10): 1-2
+/// token goldens require every token — the ≤1-missing allowance let
+/// "history evidence" pass on "history" alone and credited A's
+/// token-overlap guess passes. 3+ tokens keep the allowance for paraphrase
+/// tolerance. Copied from `e2e_answer_quality.rs` (its unit tests pin the
+/// original semantics there); shared-module extraction deferred until a
+/// third consumer.
 fn answer_correct(answer: &str, golden: &str) -> bool {
     let golden_tokens = common::tokens(golden);
     let answer_tokens = common::tokens(answer);
@@ -201,7 +207,32 @@ fn answer_correct(answer: &str, golden: &str) -> bool {
         .iter()
         .filter(|t| answer_tokens.contains(*t))
         .count();
-    hits >= golden_tokens.len().saturating_sub(1).max(1)
+    let needed = if golden_tokens.len() < 3 {
+        golden_tokens.len().max(1)
+    } else {
+        golden_tokens.len() - 1
+    };
+    hits >= needed
+}
+
+#[test]
+fn answer_correct_is_strict_on_short_goldens() {
+    // 2-token golden: both tokens required.
+    assert!(answer_correct(
+        "the history evidence row",
+        "history evidence"
+    ));
+    assert!(!answer_correct("the history row", "history evidence"));
+    assert!(!answer_correct("the evidence row", "history evidence"));
+    // 1-token golden: the token is required (empty answers never pass).
+    assert!(!answer_correct("validation only", "preconditions"));
+    assert!(!answer_correct("", "preconditions"));
+    // 3+ tokens: at most one missing (paraphrase tolerance kept).
+    assert!(answer_correct(
+        "2 evidence units required",
+        "2 required evidence units"
+    ));
+    assert!(!answer_correct("2 units", "2 required evidence units"));
 }
 
 /// One generation against an Ollama-compatible `/api/chat` endpoint.
