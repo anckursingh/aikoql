@@ -475,7 +475,13 @@ pub fn compile_context_semantic_with(
             est_tokens(&f.statement) + f.entities.iter().map(|e| est_tokens(e)).sum::<usize>();
         if !unlimited && tokens + est > token_budget {
             pkg.trimmed = true;
-            break;
+            // Skip over, don't stop: facts pack in score order and a fact
+            // that doesn't fit can't be packed regardless of order — but
+            // breaking here starved every smaller fact below it (G10
+            // head-of-line: one 445-816-token top fact left 4 tasks with
+            // 0 packed facts). Relations keep break: they're the cheap
+            // tail, one ~10-token edge never blocks the rest.
+            continue;
         }
         tokens += est;
         pkg.facts.push(f.clone());
@@ -1838,6 +1844,42 @@ mod tests {
                 .any(|f| f.statement == "token budget sizes the package"),
             "facts fold must survive the entity section"
         );
+        assert!(pkg.estimated_tokens <= 400);
+    }
+
+    #[test]
+    fn oversized_fact_is_skipped_not_terminal() {
+        // Head-of-line guard: one huge top-ranked fact must not starve
+        // every smaller fact below it (G10: T9/T13/T16/T18 packed 0 facts
+        // because the first over-budget fact broke the whole fold).
+        let huge = format!("{} token budget trim sizes package", "x".repeat(3000));
+        let ir = KnowledgeIr {
+            facts: vec![
+                FactCandidate {
+                    snippet: None,
+                    statement: huge,
+                    entities: vec![],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+                FactCandidate {
+                    snippet: None,
+                    statement: "token budget sizes the package".into(),
+                    entities: vec![],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+            ],
+            ..Default::default()
+        };
+        let pkg = compile_context("what does token budget trim", &ir, 400);
+        assert!(pkg.trimmed, "over-budget fact must set the trim flag");
+        assert_eq!(
+            pkg.facts.len(),
+            1,
+            "the fitting fact must pack despite the skipped giant"
+        );
+        assert_eq!(pkg.facts[0].statement, "token budget sizes the package");
         assert!(pkg.estimated_tokens <= 400);
     }
 
