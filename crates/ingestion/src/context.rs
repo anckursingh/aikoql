@@ -422,6 +422,17 @@ pub fn compile_context_semantic_with(
     // two sections, repeated statement, repeated edge) are dropped at pack
     // time — the agent must not pay tokens for the same knowledge twice.
     let unlimited = token_budget == 0;
+    // Pack budget rebalance: entities orient, facts answer — the entity
+    // section (name + justification + mentions) must not claim the whole
+    // fold. Measured on the G10 corpus every pack was ~495/500 tokens
+    // with 3-4 entities and 0-2 facts; the facts fold was starved and
+    // score-2.0 answer facts never packed. Entities get 3/5, facts pack
+    // next in score order, relations keep the tail.
+    let entity_cap = if unlimited {
+        usize::MAX
+    } else {
+        token_budget * 3 / 5
+    };
     let mut pkg = ContextPackage::default();
     let mut tokens = 0usize;
     let mut seen_entities: HashSet<&str> = HashSet::new();
@@ -442,7 +453,7 @@ pub fn compile_context_semantic_with(
         let est = est_tokens(&e.name)
             + est_tokens(&e.justification)
             + mentions.iter().map(|m| est_tokens(m)).sum::<usize>();
-        if !unlimited && tokens + est > token_budget {
+        if !unlimited && tokens + est > entity_cap {
             pkg.trimmed = true;
             break;
         }
@@ -1789,6 +1800,45 @@ mod tests {
             !statements.contains(&"AuthService revenue grew 20% in Q2"),
             "one shared token must not bypass the entity gate"
         );
+    }
+
+    #[test]
+    fn entity_section_cannot_starve_the_facts_fold() {
+        // Pack rebalance: entities get 3/5 of the budget, facts answer
+        // with the rest. Five mention-heavy entities would otherwise
+        // consume the whole fold and cut the score-2.0 fact below the
+        // budget line (the G10 starvation: every pack ~495/500 tokens,
+        // 3-4 entities, 0-2 facts).
+        let mention = "x".repeat(200);
+        let entities: Vec<EntityCandidate> = (0..5)
+            .map(|i| {
+                ent(
+                    &format!("TokenBudget{i}"),
+                    "Module",
+                    vec![mention.as_str(); 2],
+                )
+            })
+            .collect();
+        let ir = KnowledgeIr {
+            entities,
+            facts: vec![FactCandidate {
+                snippet: None,
+                statement: "token budget sizes the package".into(),
+                entities: vec![],
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            }],
+            ..Default::default()
+        };
+        let pkg = compile_context("what does token budget trim", &ir, 400);
+        assert!(pkg.trimmed, "entity section must be capped");
+        assert!(
+            pkg.facts
+                .iter()
+                .any(|f| f.statement == "token budget sizes the package"),
+            "facts fold must survive the entity section"
+        );
+        assert!(pkg.estimated_tokens <= 400);
     }
 
     /// CTX-MIN-001 + CTX-MIN-002: 1000 KOs, 20 relevant — the compiler

@@ -420,12 +420,50 @@ fn agent_efficacy_bench() {
                 })
                 .count();
             eprintln!(
-                "[G10 DEBUG T{qi}] golden={:?} hit={hit} ir_facts_with_golden={in_ir} trimmed={}",
-                t.golden, pkg.trimmed
+                "[G10 DEBUG T{qi}] golden={:?} hit={hit} ir_facts_with_golden={in_ir} trimmed={} \
+                 ents={} facts={} rels={} est={}",
+                t.golden,
+                pkg.trimmed,
+                pkg.entities.len(),
+                pkg.facts.len(),
+                pkg.relations.len(),
+                pkg.estimated_tokens
             );
             for rf in pkg.facts.iter().take(4) {
                 let stmt: String = rf.statement.chars().take(90).collect();
                 eprintln!("  {:>4.1} {} [{}]", rf.score, stmt, rf.justification);
+            }
+            // Where does each golden-carrying fact sit? est tokens, entity
+            // boost, and exact question-token overlap (≈ its stmt score).
+            let q_tokens: HashSet<String> = common::tokens(t.question);
+            for f in merged
+                .facts
+                .iter()
+                .filter(|f| {
+                    let fs = common::tokens(&f.statement);
+                    g.iter().all(|tok| fs.contains(tok))
+                })
+                .take(3)
+            {
+                let fs = common::tokens(&f.statement);
+                let overlap = q_tokens
+                    .iter()
+                    .filter(|w| w.len() >= 3 && fs.contains(*w))
+                    .count();
+                let boost: f32 = f
+                    .entities
+                    .iter()
+                    .map(|en| {
+                        pkg.entities
+                            .iter()
+                            .find(|e| e.name == *en)
+                            .map(|e| e.score * 0.3)
+                            .unwrap_or(0.0)
+                    })
+                    .sum();
+                let est =
+                    f.statement.len() / 4 + f.entities.iter().map(|e| e.len() / 4).sum::<usize>();
+                eprintln!("  golden-fact est_tokens≈{est} overlap={overlap} boost={boost:.2}");
             }
             if !hit {
                 for f in merged
