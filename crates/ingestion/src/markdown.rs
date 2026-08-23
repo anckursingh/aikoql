@@ -963,6 +963,73 @@ fn markdown_text_to_ast(
             continue;
         }
 
+        // GFM pipe table: header row + |---|---| delimiter row. The Table
+        // node carries a TablePayload, so the existing fragment leg
+        // (boundary emit_block → FragmentContent::Table → cell-cited facts
+        // with row-phrase anchors, ir.rs) picks it up untouched — the same
+        // pipeline PDF tables already use. The table itself leaves section
+        // paragraphs (parse_sections skips Table nodes), so section-level
+        // classification is unaffected.
+        if trimmed.starts_with('|') {
+            let header_cells = split_table_row(trimmed);
+            if i + 1 < len {
+                let sep_cells = split_table_row(lines[i + 1].trim());
+                if !header_cells.is_empty()
+                    && sep_cells.len() == header_cells.len()
+                    && sep_cells.iter().all(|c| is_table_separator_cell(c))
+                {
+                    let mut rows: Vec<Vec<String>> = vec![header_cells];
+                    i += 2; // header + separator
+                    while i < len && lines[i].trim().starts_with('|') {
+                        let cells = split_table_row(lines[i].trim());
+                        if cells.len() != rows[0].len() {
+                            break;
+                        }
+                        rows.push(cells);
+                        i += 1;
+                    }
+                    let children: Vec<AstNode> = rows
+                        .into_iter()
+                        .map(|cells| AstNode {
+                            block_type: BlockType::TableRow,
+                            text: None,
+                            children: cells
+                                .into_iter()
+                                .map(|c| AstNode {
+                                    block_type: BlockType::TableCell {
+                                        row_span: 1,
+                                        col_span: 1,
+                                    },
+                                    text: Some(c),
+                                    children: vec![],
+                                    bbox: None,
+                                    confidence: Some(1.0),
+                                    ..Default::default()
+                                })
+                                .collect(),
+                            bbox: None,
+                            confidence: None,
+                            ..Default::default()
+                        })
+                        .collect();
+                    let mut table = AstNode {
+                        block_type: BlockType::Table,
+                        text: None,
+                        children,
+                        bbox: None,
+                        confidence: Some(1.0),
+                        ..Default::default()
+                    };
+                    table.payload = crate::ast::table_payload_from_node(&table)
+                        .map(crate::ast::AstPayload::Table);
+                    nodes.push(table);
+                    continue;
+                }
+            }
+            // Not a table — fall through to paragraph (stray pipe lines
+            // keep their current paragraph behavior).
+        }
+
         // Default: paragraph — collect lines until blank line or next block element
         let mut para_lines: Vec<&str> = vec![trimmed];
         i += 1;
@@ -1196,6 +1263,21 @@ fn md_list_prefix_len(line: &str) -> usize {
     }
 }
 
+/// Split a GFM pipe row into trimmed cells: `| a | b |` → ["a", "b"].
+/// ponytail: no `\|` escape handling — docs tables don't use escaped pipes.
+fn split_table_row(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let trimmed = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let trimmed = trimmed.strip_suffix('|').unwrap_or(trimmed);
+    trimmed.split('|').map(|c| c.trim().to_string()).collect()
+}
+
+/// GFM delimiter cell: `---`, `:---`, `---:`, `:---:` (at least one dash).
+fn is_table_separator_cell(cell: &str) -> bool {
+    let inner = cell.trim().trim_matches(':');
+    !inner.is_empty() && inner.chars().all(|c| c == '-')
+}
+
 fn is_horizontal_rule(line: &str) -> bool {
     let clean: String = line.chars().filter(|c| !c.is_whitespace()).collect();
     if clean.len() < 3 {
@@ -1327,6 +1409,80 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .starts_with("rust\n"));
+    }
+
+    // ── P1: GFM pipe tables → Table nodes with payload → cell-cited facts ──
+
+    #[test]
+    fn pipe_table_becomes_table_node_with_payload() {
+        let md = "| Item | Qty |\n|---|---:|\n| Acme Widget | 10 |\n";
+        let ast = markdown_text_to_ast(md, None, None);
+        let node = &ast.pages[0].children[0];
+        assert_eq!(node.block_type, BlockType::Table);
+        match &node.payload {
+            Some(AstPayload::Table(t)) => {
+                assert_eq!(t.headers.len(), 2);
+                assert_eq!(t.headers[0].text, "Item");
+                assert_eq!(t.rows.len(), 1);
+                assert_eq!(t.cells.len(), 2);
+                assert_eq!(t.cells[1].text, "10");
+                assert!(matches!(
+                    t.cells[1].value,
+                    Some(crate::ast::ScalarValue::Integer(10))
+                ));
+            }
+            other => panic!("expected table payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pipe_table_cell_facts_reach_ir_with_row_anchors() {
+        let md = "## Pricing\n\n| Item | Qty |\n|---|---|\n| Acme Widget | 10 |\n";
+        let ir = compile_markdown_string(md, Some("doc.md".into())).unwrap();
+        let cell_facts: Vec<&FactCandidate> = ir
+            .facts
+            .iter()
+            .filter(|f| {
+                matches!(
+                    &f.evidence.source,
+                    Some(crate::source::EvidenceSource::TableCell { .. })
+                )
+            })
+            .collect();
+        assert_eq!(cell_facts.len(), 2, "one fact per non-empty cell");
+        assert!(cell_facts
+            .iter()
+            .any(|f| f.statement == "Item: Acme Widget"));
+        assert!(cell_facts.iter().any(|f| f.statement == "Qty: 10"));
+        // Anchoring: the row's capitalized phrase is an entity and attached
+        // to both facts — the entity gate must apply to cell facts.
+        assert!(ir.entities.iter().any(|e| e.name == "Acme Widget"));
+        assert!(cell_facts
+            .iter()
+            .all(|f| f.entities.iter().any(|e| e == "Acme Widget")));
+        // Row text stays verbatim as the snippet (rendered facts stay verifiable).
+        assert!(cell_facts
+            .iter()
+            .any(|f| f.snippet.as_deref() == Some("Acme Widget | 10")));
+    }
+
+    #[test]
+    fn pipe_line_without_separator_stays_paragraph() {
+        let md = "| not a table\n\nnext";
+        let ast = markdown_text_to_ast(md, None, None);
+        assert!(matches!(
+            ast.pages[0].children[0].block_type,
+            BlockType::Paragraph
+        ));
+    }
+
+    #[test]
+    fn pipe_table_stops_at_blank_line() {
+        let md = "| A |\n|---|\n| 1 |\n\nAfter table.";
+        let ast = markdown_text_to_ast(md, None, None);
+        assert_eq!(ast.pages[0].children.len(), 2);
+        assert_eq!(ast.pages[0].children[0].block_type, BlockType::Table);
+        assert_eq!(ast.pages[0].children[1].block_type, BlockType::Paragraph);
     }
 
     #[test]

@@ -821,25 +821,26 @@ The most valuable claim is empirical:
 
 ### v1 measurement (2026-08-23) — `crates/ingestion/tests/agent_efficacy_bench.rs`
 
-First empirical slice: 20 engineering tasks (AGENT-001 where-to-implement, AGENT-002 change-impact, AGENT-004 historical-explanation shapes), corpus = the real `docs/*.md` tree through the production Markdown pipeline (20 docs → 1546 chunks → merged graph 7302 entities / 2778 facts / 5340 relations), mechanical token-containment judge, live local model (llama3.1 on GPU-offloaded Ollama, temperature 0). Scores are printed, not enforced — a model's answers are not CI-pinnable; structural gates (budget, corpus integrity) are asserted.
+First empirical slice: 20 engineering tasks (AGENT-001 where-to-implement, AGENT-002 change-impact, AGENT-004 historical-explanation shapes), corpus = the real `docs/*.md` tree through the production Markdown pipeline (20 docs → 1550 chunks → merged graph 7505 entities / 4922 facts / 3719 relations), mechanical token-containment judge, live local model (llama3.1 on GPU-offloaded Ollama, temperature 0). Scores are printed, not enforced — a model's answers are not CI-pinnable; structural gates (budget, corpus integrity) are asserted.
 
 | metric | A: repo-only | B: LLM + RAG | C: LLM + code graph | D: AIKOQL |
 |---|---|---|---|---|
-| Success rate | 0.200\* | 0.750 | 0.500 | 0.150 |
-| Input tokens/query | 28 | 1237 | 1273 | 320 |
+| Success rate | 0.200\* | 0.750 | 0.650 | 0.350 |
+| Input tokens/query | 28 | 1338 | 1339 | 354 |
 | LLM calls | 20 | 20 | 20 | **0** |
 | Tool calls | 0 | 0 | 0 | 20 |
-| Latency s/query | 23.5 | 27.7 | 13.0 | **8.5** |
-| Cost USD/query | 0.0013 | 0.0049 | 0.0050 | **0.0010** |
+| Latency s/query | 23.0 | 26.7 | 16.8 | **8.1** |
+| Cost USD/query | 0.0013 | 0.0052 | 0.0052 | **0.0011** |
 | Failed generations | 2 | 0 | 0 | 0 |
 
 \*All four A passes are token-overlap guess passes (e.g. "mcp-tool crate" for the `aikoql-mcp` golden) — under a strict judge A is 0/20; the repo-only agent hallucinates confidently ("British National Corpus").
 
 Findings:
 
-- **B wins accuracy, D wins budget** — the empirical claim splits: AIKOQL is the cheapest and the only deterministic path (0 LLM calls, 8.5 s/query, $0.001) but 3/20 on this corpus; the RAG pack leads accuracy at 0.750. Not yet the §31 claim — the blockers below are extraction, not compilation.
-- **D's misses trace to extraction**: `markdown.rs` has no table handling, and 17/20 golden answers live in the docs' tables. The three D hits are prose-extracted phrases. Closing this is the P1 extraction item, not a compiler gate.
-- **Graph expansion is corpus-dependent**: C dilutes the evidence budget here (0.500 < B's 0.750) — the opposite of the Track-B comparative where expansion won. Both measured, both pinned in their harnesses.
+- **B wins accuracy, D wins budget** — the empirical claim splits: AIKOQL is the cheapest and the only deterministic path (0 LLM calls, 8.1 s/query, $0.0011) at 7/20; the RAG pack leads accuracy at 0.750.
+- **The extraction blocker is closed**: v1 found D table-blind (`markdown.rs` had no table handling; 17/20 goldens live in docs tables — D's 3 hits were prose phrases). P1 landed 2026-08-23 (GFM pipe tables → Table AST nodes with payloads → the fragment leg's cell-cited facts with row-phrase anchors and `TableCell` evidence; +2144 facts, 4 new D hits — knowledge_bench.rs, e2e_answer_quality.rs, the measured-results row, the Track-B corpus cell). D 0.150 → 0.350 and C 0.500 → 0.650 (table facts enrich its packs) — the measurement now separates extraction from ranking.
+- **D's remaining misses are ranking, not extraction**: pure-number cells (goldens "0.15", "6") and rows whose capitalized anchor phrases don't share question vocabulary — the entity gate excludes those cell facts. Candidates: section-heading anchors for cell facts, judge hardening for short goldens.
+- **Graph expansion is corpus-dependent**: C still trails B on this corpus (0.650 < 0.750) — the opposite of the Track-B comparative where expansion won. Both measured, both pinned in their harnesses.
 - **Epistemic behavior measured implicitly**: B/C answer with `[n]` citations and refuse with exactly "Not in sources" when evidence is insufficient — the §34–36 boundary behavior, live.
 - Judge caveat: the ≤1-missing-token rule is lenient on 2-token goldens; hardening (longer goldens or strict match for short ones) is a follow-up.
 
