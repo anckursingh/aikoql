@@ -399,6 +399,52 @@ fn agent_efficacy_bench() {
         );
     }
 
+    // ── AIKOQL_G10_DEBUG=1: D-pack diagnosis (no model needed) ──────────
+    // Per task: does the rendered D pack contain the golden token, which
+    // facts ranked top (score + justification), and how many IR facts
+    // contain the golden at all — separating corpus gaps from
+    // entity-gate/ranking misses. Runs before the model check so it
+    // works without Ollama.
+    if std::env::var("AIKOQL_G10_DEBUG").is_ok() {
+        for (qi, t) in TASKS.iter().enumerate() {
+            let pkg = compile_context(t.question, &merged, BUDGET);
+            let rendered = render_context_markdown(&pkg);
+            let hit = answer_correct(&rendered, t.golden);
+            let g = common::tokens(t.golden);
+            let in_ir = merged
+                .facts
+                .iter()
+                .filter(|f| {
+                    let fs = common::tokens(&f.statement);
+                    g.iter().all(|tok| fs.contains(tok))
+                })
+                .count();
+            eprintln!(
+                "[G10 DEBUG T{qi}] golden={:?} hit={hit} ir_facts_with_golden={in_ir} trimmed={}",
+                t.golden, pkg.trimmed
+            );
+            for rf in pkg.facts.iter().take(4) {
+                let stmt: String = rf.statement.chars().take(90).collect();
+                eprintln!("  {:>4.1} {} [{}]", rf.score, stmt, rf.justification);
+            }
+            if !hit {
+                for f in merged
+                    .facts
+                    .iter()
+                    .filter(|f| {
+                        let fs = common::tokens(&f.statement);
+                        g.iter().all(|tok| fs.contains(tok))
+                    })
+                    .take(4)
+                {
+                    let stmt: String = f.statement.chars().take(90).collect();
+                    eprintln!("  IR-fact '{}' entities={:?}", stmt, f.entities);
+                }
+            }
+        }
+        return;
+    }
+
     // ── Live model required for the answer side ──────────────────────────
     let Some(model) = std::env::var("AIKOQL_ANSWER_MODEL").ok() else {
         eprintln!(

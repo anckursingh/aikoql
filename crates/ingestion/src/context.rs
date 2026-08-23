@@ -296,7 +296,8 @@ pub fn compile_context_semantic_with(
                     snippet: f.snippet.clone(),
                 };
             }
-            let stmt_score = keyword_score(&f.statement.to_lowercase(), &task_words);
+            let stmt_lower = f.statement.to_lowercase();
+            let stmt_score = keyword_score(&stmt_lower, &task_words);
             // Boost facts connected to high-scoring entities
             let entity_boost: f32 = f
                 .entities
@@ -318,7 +319,19 @@ pub fn compile_context_semantic_with(
             // with no entity anchor (domain rules) keep statement-only
             // scoring.
             let anchored = !f.entities.is_empty();
-            let gated = anchored && entity_boost <= 0.0;
+            // Exact-token escape (P1 follow-up): a fact whose statement
+            // shares ≥2 content tokens with the task is content-anchored —
+            // the entity gate must not drop it (cell facts whose row
+            // anchors don't share the question vocabulary, e.g. a
+            // "Cost: $0.15" cell under a "G12 cost" question). One shared
+            // token stays gated: the G12 hoover case ("revenue" questions
+            // must not drag in every entity-anchored revenue fact).
+            let exact_overlap = task_words
+                .iter()
+                .filter(|w| w.len() >= 3 && !STOPWORDS.contains(w))
+                .filter(|w| token_match(&stmt_lower, w))
+                .count();
+            let gated = anchored && entity_boost <= 0.0 && exact_overlap < 2;
             let score = if gated {
                 0.0
             } else {
@@ -579,6 +592,16 @@ fn ident_parts(chunk: &str) -> Vec<&str> {
     parts
 }
 
+/// True when `word` equals a whole text token (or an identifier part of
+/// one), case-insensitively. Not text.contains(word): substring matching
+/// credited "log" for "catalog" and handed question words credit inside
+/// unrelated tokens.
+fn token_match(text: &str, word: &str) -> bool {
+    text.split_whitespace().any(|chunk| {
+        chunk.to_lowercase() == word || ident_parts(chunk).iter().any(|p| p.to_lowercase() == word)
+    })
+}
+
 /// Score a text against task keywords. Each exact token match adds 1.0,
 /// partial (shared-prefix ≥4 chars) match adds 0.3.
 fn keyword_score(text: &str, task_words: &[&str]) -> f32 {
@@ -587,14 +610,7 @@ fn keyword_score(text: &str, task_words: &[&str]) -> f32 {
         if word.len() < 3 || STOPWORDS.contains(&word) {
             continue; // skip short words and function words
         }
-        // Exact match = word equals a whole text token (or an identifier
-        // part of one), case-insensitively. Not text.contains(word):
-        // substring matching credited "log" for "catalog" and handed
-        // question words credit inside unrelated tokens.
-        if text.split_whitespace().any(|chunk| {
-            chunk.to_lowercase() == word
-                || ident_parts(chunk).iter().any(|p| p.to_lowercase() == word)
-        }) {
+        if token_match(text, word) {
             score += 1.0;
         } else {
             // Partial match: shared prefix ≥4 chars ("truncate"/"truncation").
@@ -1707,6 +1723,71 @@ mod tests {
         assert!(
             statements.contains(&"revenue is recognized quarterly"),
             "entity-less facts keep statement-only scoring"
+        );
+    }
+
+    #[test]
+    fn cell_fact_with_two_content_tokens_escapes_entity_gate() {
+        // P1 follow-up (G10 T16 shape): the cell fact's row anchors don't
+        // share the question vocabulary, but the statement itself shares
+        // cost/input/tokens — content-anchored facts must pack.
+        let ir = KnowledgeIr {
+            entities: vec![ent("G10 v1 measurement", "Section", vec![])],
+            facts: vec![FactCandidate {
+                snippet: None,
+                statement: "Cost per 1M input tokens: $0.15".into(),
+                entities: vec!["G10 v1 measurement".into()],
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            }],
+            ..Default::default()
+        };
+        let pkg = compile_context(
+            "What does the G12 cost column charge per million input tokens?",
+            &ir,
+            0,
+        );
+        assert!(
+            pkg.facts.iter().any(|f| f.statement.contains("0.15")),
+            "content-anchored fact must pack despite no ranked entity"
+        );
+    }
+
+    #[test]
+    fn single_shared_content_token_stays_gated() {
+        // The G12 P0 hoover guard survives: with only ONE shared content
+        // token ("revenue"), entity-anchored facts still require a ranked
+        // entity — otherwise any "revenue" question drags in every
+        // revenue fact corpus-wide.
+        let ir = KnowledgeIr {
+            entities: vec![
+                ent("AuthService", "Module", vec![]),
+                ent("Globex", "Organization", vec![]),
+            ],
+            facts: vec![
+                FactCandidate {
+                    snippet: None,
+                    statement: "AuthService revenue grew 20% in Q2".into(),
+                    entities: vec!["AuthService".into()],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+                FactCandidate {
+                    snippet: None,
+                    statement: "Globex revenue grew 20% in Q2".into(),
+                    entities: vec!["Globex".into()],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+            ],
+            ..Default::default()
+        };
+        let pkg = compile_context("globex revenue", &ir, 0);
+        let statements: Vec<&str> = pkg.facts.iter().map(|f| f.statement.as_str()).collect();
+        assert!(statements.contains(&"Globex revenue grew 20% in Q2"));
+        assert!(
+            !statements.contains(&"AuthService revenue grew 20% in Q2"),
+            "one shared token must not bypass the entity gate"
         );
     }
 
