@@ -188,3 +188,31 @@ fn semantic_scores_parses_caches_and_scores() {
     drop(k);
     let _ = std::fs::remove_file(&db);
 }
+
+#[test]
+fn snapshot_manifest_props_carry_source_revision() {
+    use crate::ingest::snapshot_manifest_props;
+    use crate::Value;
+    let with_rev = aikoql_ingestion::KnowledgeIr {
+        source_revision: Some("abc123def".into()),
+        ..Default::default()
+    };
+    let props = snapshot_manifest_props(&with_rev, "E:/repo", "{}".into(), "{}".into());
+    assert_eq!(
+        props.get("source_revision"),
+        Some(&Value::Text("abc123def".into())),
+        "revision must be a first-class snapshot property"
+    );
+    assert_eq!(
+        props.get("source_path"),
+        Some(&Value::Text("E:/repo".into()))
+    );
+    assert_eq!(props.get("entity_count"), Some(&Value::Int(0)));
+
+    let without_rev = aikoql_ingestion::KnowledgeIr::default();
+    let props = snapshot_manifest_props(&without_rev, "E:/repo", "{}".into(), "{}".into());
+    assert!(
+        !props.contains_key("source_revision"),
+        "non-git ingest must omit the revision column"
+    );
+}

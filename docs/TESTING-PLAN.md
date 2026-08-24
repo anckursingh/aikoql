@@ -53,7 +53,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | KB-006 Unsupported/binary file | P1 | ✅ | ingest-dir classifier; scan continues |
 | KB-007 Malformed source | P0 | ✅ | invalid-file handling; valid files still processed |
 | KB-008 Generated code distinguishable | P1 | 🟡 | no marker test yet |
-| KB-009 Repository manifest | P1 | ✅ | `manifest_carries_revision_and_updates` — IR carries git HEAD (`source_revision`) = track-file SHA; advances on new commits; None for non-git |
+| KB-009 Repository manifest | P1 | ✅ | `manifest_carries_revision_and_updates` — IR carries git HEAD (`source_revision`) = track-file SHA; advances on new commits; None for non-git; snapshot KO carries `source_revision` as a first-class property (`snapshot_manifest_props_carry_source_revision`) |
 | INC-001 Rescan idempotent | P0 | ✅ | `ingest_incremental.rs`; stable IDs |
 | INC-002 Modify one file | P0 | ✅ | `ingest_incremental.rs`; affected-KO recompute |
 | INC-003 Rename file | P1 | ✅ | `rename_preserves_entity_identity` — git -M identity transfer: old-path entities dropped, evidence path updates, no ghost dup / no [STALE] on pure rename; edited rename versioned like modify |

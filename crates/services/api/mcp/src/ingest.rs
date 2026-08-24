@@ -646,26 +646,11 @@ pub(crate) fn run_ingest_dir(
         eprintln!("serialize ir: {}", e);
         std::process::exit(1);
     });
-    let mut props = PropertyMap::new();
-    props.insert("source_path".into(), Value::Text(path.to_string()));
-    props.insert(
-        "entity_count".into(),
-        Value::Int(result.ir.entities.len() as i64),
-    );
-    props.insert(
-        "fact_count".into(),
-        Value::Int(result.ir.facts.len() as i64),
-    );
-    props.insert(
-        "relation_count".into(),
-        Value::Int(result.ir.relations.len() as i64),
-    );
     let emb_json = serde_json::to_string(&entity_embeddings).unwrap_or_else(|e| {
         eprintln!("serialize entity_embeddings: {}", e);
         std::process::exit(1);
     });
-    props.insert("ir_json".into(), Value::Text(ir_json));
-    props.insert("entity_embeddings".into(), Value::Text(emb_json));
+    let props = snapshot_manifest_props(&result.ir, path, ir_json, emb_json);
 
     // Same exact-once-replay trap as entity KOs: without resolving the key,
     // a re-ingest would keep the stale ir_json/entity_embeddings forever.
@@ -751,6 +736,35 @@ pub(crate) fn run_ingest_dir(
         }
     }
 }
+/// Properties for the `aikoql:ingested-directory` snapshot KO — the KB's
+/// manifest record for a repo. KB-009: `source_revision` is a first-class
+/// column (queryable without deserializing ir_json), stamped only when the
+/// IR carries a git revision (non-git dirs omit it).
+pub(crate) fn snapshot_manifest_props(
+    ir: &aikoql_ingestion::KnowledgeIr,
+    path: &str,
+    ir_json: String,
+    entity_embeddings_json: String,
+) -> PropertyMap {
+    let mut props = PropertyMap::new();
+    props.insert("source_path".into(), Value::Text(path.to_string()));
+    props.insert("entity_count".into(), Value::Int(ir.entities.len() as i64));
+    props.insert("fact_count".into(), Value::Int(ir.facts.len() as i64));
+    props.insert(
+        "relation_count".into(),
+        Value::Int(ir.relations.len() as i64),
+    );
+    if let Some(rev) = &ir.source_revision {
+        props.insert("source_revision".into(), Value::Text(rev.clone()));
+    }
+    props.insert("ir_json".into(), Value::Text(ir_json));
+    props.insert(
+        "entity_embeddings".into(),
+        Value::Text(entity_embeddings_json),
+    );
+    props
+}
+
 pub(crate) fn entity_type_name(hint: Option<&str>) -> String {
     match hint {
         Some(h) if !h.trim().is_empty() => {
