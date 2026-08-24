@@ -1334,6 +1334,21 @@ mod tests {
     }
 
     #[test]
+    fn same_task_twice_renders_identical_context() {
+        // §42-44: the deterministic answer path — two compiles of the same
+        // task over the same IR must deliver byte-identical context, so a
+        // chatbot cannot answer differently across identical requests.
+        let ir = sample_ir();
+        let a = compile_context("what does the auth service do", &ir, 500);
+        let b = compile_context("what does the auth service do", &ir, 500);
+        assert_eq!(render_context_markdown(&a), render_context_markdown(&b));
+        assert_eq!(
+            serde_json::to_string(&a).unwrap(),
+            serde_json::to_string(&b).unwrap()
+        );
+    }
+
+    #[test]
     fn keyword_score_ignores_stopword_chunks() {
         // Stopwords must never match task words — the old bidirectional
         // containment rule gave every mention fake credit

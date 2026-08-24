@@ -484,7 +484,13 @@ fn t09_forget_tombstone_marks_deleted_but_retains_lineage() {
     let lineage = k.trace(alice(), &id).unwrap();
     assert_eq!(lineage.versions.len(), 2);
     assert_eq!(lineage.events.len(), 2);
-    assert_eq!(lineage.events[1].kind, EventKind::Forgotten);
+    // RET-CHAT-002/003: retained audit metadata follows policy — the
+    // Forgotten event names the actor, the reason note, and when.
+    let forgotten = &lineage.events[1];
+    assert_eq!(forgotten.kind, EventKind::Forgotten);
+    assert_eq!(forgotten.actor, "alice");
+    assert_eq!(forgotten.note.as_deref(), Some("gdpr-req-1"));
+    assert!(forgotten.commit_ts >= lineage.events[0].commit_ts);
 }
 
 #[test]
@@ -673,6 +679,39 @@ fn t15_explain_answers_why_believed() {
     assert!(ex.verified);
     assert_eq!(ex.evidence, vec![("supported-by".to_string(), evidence_id)]);
     assert!(!ex.event_refs.is_empty());
+}
+
+// §33 memory explainability — explain/trace answer what, why, where, when.
+#[test]
+fn t15b_explain_answers_what_why_where_when() {
+    let (k, _c) = mk();
+    let mut req = AssertionRequest::new(alice(), "preference");
+    req.properties
+        .insert("prefers".into(), Value::Text("concise".into()));
+    req.authority = Some("human_approved".into());
+    req.evidence = vec![Evidence::new("src/prefs.md", EvidenceMethod::HumanProvided)];
+    let id = k.assert_knowledge(req).unwrap().koid;
+
+    // what: the stated value, as committed
+    let ko = k.get(alice(), &id).unwrap();
+    assert_eq!(
+        ko.properties.get("prefers"),
+        Some(&Value::Text("concise".into()))
+    );
+    // why: source + confidence from the evidence trail
+    let ex = k.explain(alice(), &id, None).unwrap();
+    assert_eq!(ex.source.as_deref(), Some("src/prefs.md"));
+    assert!(ex.confidence.is_some());
+    // still valid (never deleted) + who can access (owner)
+    assert_ne!(ko.lifecycle.state, LifecycleState::Deleted);
+    assert_eq!(ko.security.owner, "alice");
+    // where: the artifact (same trail) — when: the commit timestamp
+    let tr = k.trace(alice(), &id).unwrap();
+    assert_eq!(tr.versions.len(), 1);
+    let when = tr.versions[0].commit_ts;
+    assert!(when > 0);
+    assert_eq!(tr.events.len(), 1);
+    assert_eq!(tr.events[0].commit_ts, when);
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,6 +1131,35 @@ fn t25b_concurrent_readers_and_writers_see_only_committed_state() {
     }
     let hot_ko = k.get(alice(), &hot).unwrap();
     assert_eq!(hot_ko.version, (1 + WRITERS * UPDATES / 2) as u64);
+}
+
+// §42 cache correctness — a warmed read cache must never serve a stale head
+// after an update, and must drop the KO after deletion.
+#[test]
+fn t35_cache_never_serves_stale_heads() {
+    let clock = Arc::new(ManualClock::new(10_000));
+    let k = Kernel::open(Arc::new(MemoryEngine::new()), clock, 0xC0FFEE)
+        .unwrap()
+        .with_cache(64);
+    let id = create_fact(&k, &alice(), "fact");
+    let _ = k.get(alice(), &id).unwrap(); // warm the cache
+
+    let mut req = RememberRequest::update(alice(), id, meta("fact"));
+    req.properties.insert("v".into(), Value::Int(2));
+    k.remember(req).unwrap();
+
+    let ko = k.get(alice(), &id).unwrap();
+    assert_eq!(ko.version, 2, "cache served the stale head");
+    assert_eq!(ko.properties.get("v"), Some(&Value::Int(2)));
+
+    k.forget(alice(), &id, ForgetMode::Tombstone, None, None)
+        .unwrap();
+    let ko = k.get(alice(), &id).unwrap();
+    assert_eq!(
+        ko.lifecycle.state,
+        LifecycleState::Deleted,
+        "cache served a pre-deletion head"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2836,6 +2904,78 @@ fn t32_untenanted_objects_visible_to_scoped_subjects() {
     // No tenant on the object — not confined, visible to any scoped subject.
     assert!(k.get(acme(), &ko).is_ok());
     assert_eq!(k.scan_by_type(&acme(), "fact").unwrap().len(), 1);
+}
+
+// §30/31 — multi-agent scenario: two agents share organization knowledge
+// (untenanted + ACL grant) while agent-private memory stays confined.
+#[test]
+fn t34_agents_share_org_knowledge_keep_private_memory() {
+    let k = mk().0;
+    let support = alice().in_tenant("support");
+    let sales = Subject::new("bob").in_tenant("sales");
+
+    // Org knowledge: no tenant, owner alice, bob granted read.
+    let mut org = RememberRequest::create(alice(), meta("org_policy"));
+    org.security = Some(SecurityDescriptor {
+        owner: "alice".into(),
+        acl: vec![AclEntry {
+            principal: "bob".into(),
+            action: Action::Read,
+            effect: Effect::Allow,
+        }],
+        classification: None,
+    });
+    org.properties
+        .insert("policy".into(), Value::Text("SLA 4h".into()));
+    let org_id = k.remember(org).unwrap().koid;
+
+    // Agent-private memory, one KO per agent tenant.
+    let mut a_priv = RememberRequest::create(alice(), meta_tenant("support_note", "support"));
+    a_priv
+        .properties
+        .insert("t".into(), Value::Text("A secret".into()));
+    let a_id = k.remember(a_priv).unwrap().koid;
+    let mut b_priv =
+        RememberRequest::create(Subject::new("bob"), meta_tenant("sales_note", "sales"));
+    b_priv
+        .properties
+        .insert("t".into(), Value::Text("B secret".into()));
+    let b_id = k.remember(b_priv).unwrap().koid;
+
+    // Shared authoritative knowledge: both agents read the org KO.
+    assert_eq!(
+        k.get(&support, &org_id).unwrap().properties.get("policy"),
+        Some(&Value::Text("SLA 4h".into()))
+    );
+    assert!(k.get(&sales, &org_id).is_ok());
+
+    // Private memory stays confined: each agent sees only their own.
+    assert!(k.get(&support, &a_id).is_ok());
+    assert!(k.get(&sales, &b_id).is_ok());
+    assert!(matches!(
+        k.get(&sales, &a_id),
+        Err(KError::AccessDenied { .. })
+    ));
+    assert!(matches!(
+        k.get(&support, &b_id),
+        Err(KError::AccessDenied { .. })
+    ));
+    assert!(matches!(
+        k.remember(RememberRequest::update(
+            sales.clone(),
+            a_id,
+            meta_tenant("support_note", "support")
+        )),
+        Err(KError::AccessDenied { .. })
+    ));
+
+    // Scans: each agent's view = own tenant + shared org; never the other's.
+    assert_eq!(k.scan_by_type(&support, "support_note").unwrap().len(), 1);
+    assert_eq!(k.scan_by_type(&sales, "support_note").unwrap().len(), 0);
+    assert_eq!(k.scan_by_type(&support, "sales_note").unwrap().len(), 0);
+    assert_eq!(k.scan_by_type(&sales, "sales_note").unwrap().len(), 1);
+    assert_eq!(k.scan_by_type(&support, "org_policy").unwrap().len(), 1);
+    assert_eq!(k.scan_by_type(&sales, "org_policy").unwrap().len(), 1);
 }
 
 #[test]

@@ -236,6 +236,15 @@ pub fn incremental_diff_ingest(
         let doc = e.evidence.document_id.as_deref().unwrap_or("");
         !renames.iter().any(|r| source_matches(doc, &r.old))
     });
+    // Freshness (FRESH-001): drop facts from re-parsed files — the new IRs
+    // replace them wholesale, so superseded statements must not survive
+    // unmarked at the query surface. Deleted files keep the [STALE] path.
+    prev_ir.facts.retain(|f| {
+        let doc = f.evidence.document_id.as_deref().unwrap_or("");
+        !existing
+            .iter()
+            .any(|p| source_matches(doc, &p.to_string_lossy()))
+    });
 
     // Merge new IRs with previous (existing entities from unchanged files persist)
     let mut all_irs: Vec<KnowledgeIr> = new_irs;
@@ -292,8 +301,10 @@ pub fn incremental_diff_ingest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::compile_context;
     use crate::ingest_dir::ingest_directory;
     use std::fs;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn track_state_roundtrip() {
@@ -574,6 +585,97 @@ mod tests {
             again.is_err() && again.unwrap_err().contains("no changes"),
             "same-SHA re-ingest should be a no-op"
         );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn freshness_sla_source_update_to_query_visibility_measured() {
+        // FRESH-001: measure the chain source update → ingestion → query
+        // visibility. Correctness: the new fact replaces the old one at the
+        // query surface. SLA: wall time printed + a generous CI ceiling
+        // (correctness does not depend on the ceiling).
+        let tmp = std::env::temp_dir().join("aikoql-fresh");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(
+            tmp.join("README.md"),
+            "# Freshness\nKnowledge reflects a revision.\n",
+        )
+        .unwrap();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test"],
+            vec!["config", "user.name", "test"],
+            vec!["add", "-A"],
+            vec!["commit", "-m", "init"],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(&args)
+                    .current_dir(&tmp)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success(),
+                "git {args:?} failed"
+            );
+        }
+
+        let (full, _) = incremental_ingest_directory(&tmp.to_string_lossy()).expect("full");
+        // The v1 fact is visible to a query.
+        let q = "what does knowledge reflect";
+        assert!(
+            compile_context(q, &full.ir, 500)
+                .facts
+                .iter()
+                .any(|f| f.statement.contains("a revision")),
+            "v1 fact must be visible"
+        );
+
+        // Source update → new commit.
+        fs::write(
+            tmp.join("README.md"),
+            "# Freshness\nKnowledge reflects the latest commit.\n",
+        )
+        .unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        assert!(std::process::Command::new("git")
+            .args(["commit", "-m", "rev B"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap()
+            .status
+            .success());
+
+        let started = Instant::now();
+        let (incr, _) = incremental_diff_ingest(&tmp.to_string_lossy(), &full.ir)
+            .expect("incremental at rev B");
+        let elapsed = started.elapsed();
+        eprintln!(
+            "[FRESH-001] source update → query visibility: {:?}",
+            elapsed
+        );
+
+        // The updated fact is visible and the stale one is gone.
+        let pkg = compile_context(q, &incr.ir, 500);
+        assert!(
+            pkg.facts
+                .iter()
+                .any(|f| f.statement.contains("latest commit")),
+            "updated fact must be visible at the query surface"
+        );
+        assert!(
+            !pkg.facts.iter().any(|f| f.statement.contains("a revision")),
+            "stale fact must not survive the update"
+        );
+        assert!(elapsed < Duration::from_secs(120), "freshness SLA exceeded");
 
         let _ = fs::remove_dir_all(&tmp);
     }

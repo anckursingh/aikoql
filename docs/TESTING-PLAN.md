@@ -33,7 +33,7 @@ This document turns the two QA certification suites — [AIKOQL-Agent-Knowledge-
 
 ## 2. Coverage verdict
 
-Substrate-level (agent suite levels 1–3) coverage is strong: ~80% of P0/P1 IDs have a real test. The chatbot layer (a consumer of AIKOQL, not part of the binary) has **no conversation-level acceptance scenarios** — its substrate mechanisms are covered, its acceptance stories are not. The comparative experiments (LLM-only / RAG / Graph-RAG baselines) and the agent-efficacy benchmark do not exist yet and are the flagship P2/P3 work.
+Substrate-level (agent suite levels 1–3) coverage is strong: all P0 rows and all closeable P1 rows have real tests (the sweep of 2026-08-24 closed KB-008, ONT-002, ONT-004, QL-007, DB-004, RET-CHAT-002/003, FRESH-001, CONT-001..003, LLM-002..004, §30/31, §33, §42–44). The chatbot layer's acceptance stories are scripted where the substrate exists (`mcp_real_world.rs` CHAT-MEM/CTX/§51 scenarios); the rows that remain open are honest ones — feature work (RET-CHAT-001 retention, §38–40 summarization/compression, EVO-003 apply/migrate, AGENT-003/005 agent loops, MM-001..004 connector matrix, PROG-CHAT discovery/approval, MEM-001 working memory, DOC-002 OCR) or chatbot-level policy phrases that are out of AIKOQL's substrate scope (PROV-CHAT, SAFE-CHAT, §34–36 per the row-166 note).
 
 ---
 
@@ -52,7 +52,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | KB-005 Duplicate filenames | P0 | ✅ | containment tree v0.1.8; `e2e_pipeline.rs` |
 | KB-006 Unsupported/binary file | P1 | ✅ | ingest-dir classifier; scan continues |
 | KB-007 Malformed source | P0 | ✅ | invalid-file handling; valid files still processed |
-| KB-008 Generated code distinguishable | P1 | 🟡 | no marker test yet |
+| KB-008 Generated code distinguishable | P1 | ✅ | `ingest_dir.rs::ingest_temp_dir_mixed` — lockfiles (`Cargo.lock`, `package-lock.json`) classified generated/skipped, no lockfile entities leak into the IR |
 | KB-009 Repository manifest | P1 | ✅ | `manifest_carries_revision_and_updates` — IR carries git HEAD (`source_revision`) = track-file SHA; advances on new commits; None for non-git; snapshot KO carries `source_revision` as a first-class property (`snapshot_manifest_props_carry_source_revision`) |
 | INC-001 Rescan idempotent | P0 | ✅ | `ingest_incremental.rs`; stable IDs |
 | INC-002 Modify one file | P0 | ✅ | `ingest_incremental.rs`; affected-KO recompute |
@@ -63,9 +63,9 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | MM-001..004 Per-source models → KO | P1 | 🟡 | fixtures `tests/fixtures/{postgres_sample.sql,mongo_sample.js,neo4j_sample.cypher}` + A9 bridge; automated per-connector matrix missing |
 | MM-005 Cross-model identity resolution | P0 | ✅ | `multi_source_ontology.rs` (config-driven resolution) |
 | ONT-001 Explicit ontology validation | P0 | ✅ | `ontology_integration.rs`, MRFC-0060 registry |
-| ONT-002 Auto-discovery | P1 | 🟡 | A9 candidate ontology exists; confidence gating untested |
+| ONT-002 Auto-discovery | P1 | ✅ | `crates/kernel/src/lifecycle/constraint.rs` — inference confidence gating: `inference_not_null_emits_when_confident` / `inference_not_null_skips_low_confidence` (≥0.9 gate; low-confidence inference is never silently promoted to authoritative truth) |
 | ONT-003 Invalid relationship | P0 | ✅ | constraint engine C3/C4 |
-| ONT-004 Ontology evolution | P1 | 🟡 | no migration test |
+| ONT-004 Ontology evolution | P1 | ✅ | t06zw (`ontology_integration.rs`): ontology v1→v2 — old knowledge stays readable, v2 rules bind on new writes |
 
 ### G3/G4 — Provenance · Temporal · Contradiction · Constraints · Query
 
@@ -79,7 +79,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | CON-001..003 Contradictions | P0/P1 | ✅ | `epistemic.rs`, `evals.rs` (e03) — claims + evidence + resolution |
 | CST-001..004 Schema/cardinality/precondition/policy constraints | P0 | ✅ | `conformance.rs` + MRFC-0060 phases C3–C9 |
 | QL-001..009 Parser determinism, diagnostics, injection | P0/P1 | ✅ | `crates/compiler/tests/golden_snapshots.rs`, `grammar_coverage.rs`, `fuzz_parser.rs` |
-| QL-007 Constraint-aware program query | P1 | 🟡 | parser path exists; no dedicated oracle |
+| QL-007 Constraint-aware program query | P1 | ✅ | `experiences.rs::match_experiences_gates_on_all_reuse_condition_tokens` — all-token all-or-nothing gate, fail-closed on empty tokens, ACL-filtered, expiry/invalidation filtered |
 | EXE-001..006 Query execution oracles | P0/P1 | ✅ | `conformance.rs`, `evals.rs`, `indexes.rs` |
 
 ### G5/G6 — Agent memory · Programs · Retrieval
@@ -145,29 +145,29 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | EP-001..004 episode retrieval, timeline, chain, provenance | ✅ | `experiences.rs` + temporal ordering + evidence links | — |
 | TEMP-CHAT-001..003 | ✅ | `temporal.rs`, `e2e-k2-temporal.js` | — |
 | CONTR-CHAT-001..003 | ✅ | `epistemic.rs`, `evals.rs` e03 | — |
-| PROV-CHAT-001..003 source-backed, unsupported claim, confidence | 🟡 | citation/evidence instruments (PR-R); ContentTrust fail-closed (003 ✅) | "insufficient information" phrase test absent |
+| PROV-CHAT-001..003 source-backed, unsupported claim, confidence | 🟡 | citation/evidence instruments (PR-R); ContentTrust fail-closed (003 ✅) | the "insufficient information" refusal phrase is chatbot-level policy, out of AIKOQL's substrate scope (row-166 precedent) — the substrate side it would compose from (evidence-cited answers, `RetrievalStatus`) is covered |
 | COMP-001..005 RAG/Graph-RAG comparisons | ✅ | `comparative_chatbot_bench.rs` (G11): factual=Q5 control, multi-hop=Q0/Q1/Q2/Q6, temporal=Q3, contradiction=Q4, provenance=Q7 (COMP-005, new) — mechanical A/B/C/D treatments | answer rows that need a live LLM (hallucination) are 0.0-by-construction here; real-model pass = `e2e_answer_quality.rs` answer_gen seam |
 | LLM-001 deterministic path | ✅ | MCP tools resolve without LLM | — |
-| LLM-002..004 context reduction, no re-derivation, no doc dump | 🟡 | context compiler (A5: ranking, budget, dedup) | token-reduction benchmark absent |
+| LLM-002..004 context reduction, no re-derivation, no doc dump | ✅ | context compiler (A5: ranking, budget, dedup) + G12 `comparative_cost_bench.rs` | measured tokens/query, KO coverage, precision, answer-hit, latency vs the RAG chunk baseline; deterministic tie-breaks pin the baselines |
 | CTX-001..003 permission/time/update-sensitive context | ✅ | compiler respects temporal + authorization | `mcp_real_world.rs::ctx_differential_scenarios` — same question, two users: owner gets the context, no-grant user gets ACCESS_DENIED; same question at two times: TTL'd experience present then dropped; same question after knowledge update: new facts/entities in, replaced ones out |
 | CTX-MIN-001..003 20/1000 relevance, no irrelevant history, dedup | ✅ | budget + ranking + dedup machinery | `context.rs::ctx_min_*` — 1000-KO IR: only the 20 relevant entities pack (irrelevant score-0 → cut), budget trims the fold by rank; duplicate entities/facts/relations packed once (dedup added at pack time) |
 | AUTH-CHAT-001..004 | ✅ | R9 tenant isolation + authorize() confinement | — |
 | Sensitive memory (PII/financial/credentials) | ✅ | A7 PII filter (11 secret types), encryption policy | — |
 | RET-CHAT-001 auto-expiry | ❌ | no retention/expiry policy yet | — |
-| RET-CHAT-002..003 deletion semantics | 🟡 | deterministic deletion exists | audit-metadata policy untested |
+| RET-CHAT-002..003 deletion semantics | ✅ | deterministic deletion + audit metadata | `conformance.rs` t09: forget → `lineage.events` carries a `Forgotten` event with actor, note, and monotone `commit_ts`; knowledge stays readable via lineage |
 | PROC-CHAT-001..004 procedure version, MFA constraint, why | ✅ | procedure KOs + CST-003 precondition blocking | explanation text is LLM-level |
 | PROG-CHAT-001..004 program discovery/approval/postconditions | 🟡 | `experiences.rs` (pre/postconditions, denied execution) | intent→program discovery + approval flow absent |
-| SAFE-CHAT-001..004 explain vs execute, denial | 🟡 | authorize() denial ✅ | explain/execute disambiguation is chatbot-level |
+| SAFE-CHAT-001..004 explain vs execute, denial | 🟡 | authorize() denial ✅ | the explain/execute disambiguation is chatbot-level policy, out of AIKOQL's substrate scope (row-166 precedent) — the substrate side (program pre/postconditions, denied execution, CST-003 precondition blocking) is covered |
 | EVO-CHAT-001..003 correction, conflicting user input, authoritative change, no retrain | ✅ | temporal versioning + trust policy (claims vs authoritative) + re-ingest without retrain (`e2e-k3-lineage.js`) | — |
-| FRESH-001 freshness SLA | 🟡 | pipeline measured informally | SLA measurement absent |
-| CONT-001..003 restart continuity, schema upgrade | 🟡 | `e2e-dogfood.js` + `e2e-restart.js` (CI) ✅ | schema-migration test absent |
-| Memory isolation (§30) / multi-agent shared knowledge (§31) | 🟡 | R9 tenant isolation ✅ | agent A/B scenario absent |
-| Memory explainability (§33) | 🟡 | provenance machinery answers what/why/where/when | packaged explainability test absent |
+| FRESH-001 freshness SLA | ✅ | `ingest_incremental.rs::freshness_sla_source_update_to_query_visibility_measured` — git update → timed incremental diff ingest → updated fact visible at the query surface, superseded fact gone, `< 120s` SLA asserted. Fixed the root cause it exposed: the incremental merge now drops previous-IR facts from re-parsed files (superseded statements no longer survive unmarked; deleted files keep the `[STALE]` reconcile path) |
+| CONT-001..003 restart continuity, schema upgrade | ✅ | `e2e-dogfood.js` + `e2e-restart.js` (CI) ✅; t06zt (`ontology_integration.rs`): v1→v2 bump — old data + versions preserved, v2 writes coexist, v1 write rejected | apply/migrate op + wire-format versioning stay open (EVO-003, feature work) |
+| Memory isolation (§30) / multi-agent shared knowledge (§31) | ✅ | R9 tenant isolation ✅ | `conformance.rs::t34_agents_share_org_knowledge_keep_private_memory` — org KO (untenanted) visible to both agents, private tenant KOs confined, cross reads/writes AccessDenied, scans = own tenant + org only |
+| Memory explainability (§33) | ✅ | `conformance.rs::t15b_explain_answers_what_why_where_when` | assert_knowledge with evidence → explain() reports what (property), why (source artifact + confidence), still-valid (not Deleted), who (owner), where/when (trace commit_ts = lineage event commit_ts) |
 | Hallucination / boundary / retrieval-failure (§34–36) | ✅ | epistemic boundary P0-1, lexical degrade fallback | `ContextPackage.status` (`RetrievalStatus`, serde-default `healthy`): a healthy EMPTY pack = "no authoritative knowledge" (unknown) vs a pack that only exists because semantic scores carried it (`semantic_fallback` = lexical instrument missed, knowledge retrieved by degrade fallback — not to be presented as lexically grounded). Tests: `healthy_empty_pack_is_unknown_not_failed_retrieval`, `semantic_only_pack_marks_lexical_degrade_fallback`, `lexical_hit_stays_healthy_and_degenerate_noise_stays_out` (sub-floor junk cosines never pack); §36 index-disable detectability: `tool_compile_context` reports `"semantic": true/false` (mcp_real_world CTX-002 assert: no provider wired → false, not silent). The §34/35 refusal phrases themselves ("Not in sources") are chatbot-level policy, out of AIKOQL's substrate scope |
 | Index independence (§37) | ✅ | `indexes.rs` | i09–i11: rebuild parity, tombstone sweep, update propagation |
 | Summarization + provenance (§38–39) | ❌ | markdown/doc compilers exist; conversation→summary not implemented | — |
 | Memory compression (§40) | ❌ | measurement target only | — |
-| Cache correctness (§42), races (§43–44) | 🟡 | `transactions.rs` concurrency ✅ | chatbot-level determinism scenarios absent |
+| Cache correctness (§42), races (§43–44) | ✅ | `transactions.rs` + kernel determinism | `conformance.rs::t35_cache_never_serves_stale_heads` (warm cache → update → get sees v2; forget → Tombstone visible) · `t25b_concurrent_readers_and_writers_see_only_committed_state` (4 writers × 40 iters vs 3 readers × 200 gets: monotone versions, no torn state, gapless journal) · `context.rs::same_task_twice_renders_identical_context` (byte-identical markdown + JSON across runs) |
 | Token/latency/cost benchmarks (§45–48) | ✅ | `comparative_cost_bench.rs`: AikoQL context compiler vs flat RAG chunk baseline, same corpus/budget/questions, per-query + summary lines | — |
 | Agent quality benchmark (§49), golden dataset (§50) | ✅ | unified golden dataset `common/golden_dataset.rs` (17 §50 questions: answer/KOs/relations/evidence, 15 textual + 2 visual-only) consumed by all corpus instruments + `golden_dataset_integrity.rs` cross-check gate (grounding, extraction, annotation-list agreement) | §49 agent benchmark = G10 (TP-4) ✅ 2026-08-23 |
 | §51 Critical e2e scenario | ✅ | `mcp_real_world.rs::critical_e2e_scenario_51_chatbot_memory` — full script: 3 memories → recall (AWS, provenance/scope) → org directive (organization_policy) → supersede (Azure + reason + evidence) → program → policy allow/deny → execute → postconditions → episode; surfaced + fixed 2 boundary bugs (parse_origin human, evidence path via assert_knowledge) | — |

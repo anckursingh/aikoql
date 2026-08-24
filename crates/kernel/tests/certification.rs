@@ -97,12 +97,12 @@ const MATRIX: &[Row] = &[
     row("KB-005", "KB", "P0", "covered", Some("crates/ingestion/tests/e2e_pipeline.rs"), None),
     row("KB-006", "KB", "P1", "covered", Some("crates/ingestion/tests/e2e_pipeline.rs"), None),
     row("KB-007", "KB", "P0", "covered", Some("crates/ingestion/tests/e2e_pipeline.rs"), None),
-    row("KB-008", "KB", "P1", "partial", None, Some("generated-code marker not implemented")),
-    row("KB-009", "KB", "P1", "partial", None, Some("scan metadata exists; versioned repository manifest untested")),
+    row("KB-008", "KB", "P1", "covered", Some("crates/ingestion/src/ingest_dir.rs"), None),
+    row("KB-009", "KB", "P1", "covered", Some("crates/ingestion/src/ingest_incremental.rs"), None),
     // INC — incremental knowledge
     row("INC-001", "INC", "P0", "covered", Some("crates/ingestion/src/ingest_incremental.rs"), None),
     row("INC-002", "INC", "P0", "covered", Some("crates/ingestion/src/ingest_incremental.rs"), None),
-    row("INC-003", "INC", "P1", "partial", None, Some("rename identity semantics implemented; untested")),
+    row("INC-003", "INC", "P1", "covered", Some("crates/ingestion/src/ingest_incremental.rs"), None),
     row("INC-004", "INC", "P0", "covered", Some("crates/ingestion/src/ingest_incremental.rs"), None),
     row("INC-005", "INC", "P1", "covered", Some("crates/ingestion/src/ingest_incremental.rs"), None),
     // KO — knowledge object model
@@ -120,7 +120,7 @@ const MATRIX: &[Row] = &[
     row("MM-005", "MM", "P0", "covered", Some("crates/ingestion/tests/multi_source_ontology.rs"), None),
     // ONT — ontology
     row("ONT-001", "ONT", "P0", "covered", Some("crates/kernel/tests/ontology_integration.rs"), None),
-    row("ONT-002", "ONT", "P1", "partial", None, Some("candidate ontology exists; confidence gating untested")),
+    row("ONT-002", "ONT", "P1", "covered", Some("crates/kernel/src/lifecycle/constraint.rs"), None),
     row("ONT-003", "ONT", "P0", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     row("ONT-004", "ONT", "P1", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     // PROV — provenance and evidence
@@ -148,7 +148,7 @@ const MATRIX: &[Row] = &[
     row("QL-004", "QL", "P0", "covered", Some("crates/compiler/tests/golden_snapshots.rs"), None),
     row("QL-005", "QL", "P1", "covered", Some("crates/compiler/tests/golden_snapshots.rs"), None),
     row("QL-006", "QL", "P1", "partial", None, Some("provenance filter in query grammar untested")),
-    row("QL-007", "QL", "P1", "partial", None, Some("constraint-aware program query: no dedicated oracle")),
+    row("QL-007", "QL", "P1", "covered", Some("crates/kernel/tests/experiences.rs"), None),
     row("QL-008", "QL", "P0", "covered", Some("crates/compiler/tests/grammar_coverage.rs"), None),
     row("QL-009", "QL", "P0", "covered", Some("crates/compiler/tests/fuzz_parser.rs"), None),
     // EXE — query execution
@@ -184,7 +184,7 @@ const MATRIX: &[Row] = &[
     row("DB-001", "DB", "P0", "covered", Some("crates/kernel/tests/durability.rs"), None),
     row("DB-002", "DB", "P0", "covered", Some("crates/kernel/tests/crash_kill.rs"), None),
     row("DB-003", "DB", "P0", "covered", Some("crates/kernel/tests/transactions.rs"), None),
-    row("DB-004", "DB", "P1", "partial", None, Some("isolation documented; concurrent reader/writer stress absent")),
+    row("DB-004", "DB", "P1", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     // PRG — programs-as-KO
     row("PRG-001", "PRG", "P0", "covered", Some("crates/kernel/tests/experiences.rs"), None),
     row("PRG-002", "PRG", "P0", "covered", Some("crates/kernel/tests/experiences.rs"), None),
@@ -214,7 +214,7 @@ const MATRIX: &[Row] = &[
     row("CMEM-005", "CMEM", "R", "covered", Some("crates/kernel/tests/epistemic.rs"), None),
     row("CMEM-006", "CMEM", "R", "covered", Some("crates/services/api/mcp/tests/mcp_real_world.rs"), None),
     row("CMEM-007", "CMEM", "R", "covered", Some("crates/services/api/mcp/tests/mcp_real_world.rs"), None),
-    row("CMEM-008", "CMEM", "R", "partial", None, Some("deterministic deletion exists; retention/expiry policy absent")),
+    row("CMEM-008", "CMEM", "R", "partial", None, Some("deletion audit metadata tested (conformance.rs t09: Forgotten lineage event with actor/note/commit_ts); retention/expiry policy absent (RET-CHAT-001, feature work)")),
     row("CMEM-009", "CMEM", "R", "covered", Some("crates/kernel/tests/evidence_wiring.rs"), None),
     // Knowledge-Grounded Chatbot Ready
     row("CKG-001", "CKG", "R", "covered", Some("crates/ingestion/tests/retrieval_quality.rs"), None),
