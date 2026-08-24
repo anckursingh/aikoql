@@ -131,7 +131,12 @@ const TASKS: &[Task] = &[
     },
     Task {
         kind: "why",
-        question: "What must a Knowledge Object never become?",
+        // Corpus claim: "a KO is never a lossy representation of its source"
+        // (TESTING-PLAN G12 row, inside the monster notes cell the split
+        // turns into a packable fact). The question carries the body's own
+        // tokens (verbatim/provenance/KO/never) so it ranks above the
+        // "source/never" crowd.
+        question: "What does verbatim provenance guarantee a KO never becomes?",
         golden: "lossy representation",
     },
     Task {
@@ -187,8 +192,11 @@ const TASKS: &[Task] = &[
     },
     Task {
         kind: "impact",
-        question: "What is the code-graph treatment's chunk cap after expansion?",
-        golden: "6",
+        // Replaced 2026-08-24: the original asked for a "chunk cap of 6" that
+        // exists nowhere — C's expansion is transitive-unbounded
+        // (comparative_chatbot_bench.rs). Encryption-at-rest was uncovered.
+        question: "How does the kernel open a store whose DEK is missing or corrupt?",
+        golden: "fail-closed open",
     },
 ];
 

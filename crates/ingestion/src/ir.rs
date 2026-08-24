@@ -579,33 +579,46 @@ impl MockSemanticAnalyzer {
                         .find(|h| h.id == cell.column_id)
                         .map(|h| h.text.as_str())
                         .unwrap_or("");
-                    ir.facts.push(FactCandidate {
-                        statement: if header.is_empty() {
-                            cell.text.clone()
+                    // Giant cells become one fact per sentence (G10 T8);
+                    // small cells stay single facts.
+                    let bodies = split_cell_bodies(&cell.text);
+                    let split = bodies.len() > 1;
+                    for body in bodies {
+                        let snippet = if split {
+                            // Per-sentence evidence: the row-level snippet
+                            // would repeat the whole row on every body.
+                            Some(body.clone())
                         } else {
-                            format!("{}: {}", header, cell.text)
-                        },
-                        entities: row_phrases
-                            .get(cell.row_id.as_str())
-                            .cloned()
-                            .unwrap_or_default(),
-                        confidence: self.confidence * cell.confidence,
-                        // The "Header: cell" statement is a synthesis —
-                        // keep the row's verbatim text as the source so
-                        // the rendered fact stays verifiable.
-                        snippet: row_text.get(cell.row_id.as_str()).cloned(),
-                        evidence: Evidence {
-                            document_id: None,
-                            page: owner.context.page,
-                            source: Some(EvidenceSource::TableCell {
-                                table_id: owner.fragment_id.clone(),
-                                cell_id: format!("{}-{}", cell.row_id, cell.column_id),
-                            }),
-                            extractor: extractor.clone(),
-                            model: Some("mock-v1".into()),
-                            confidence: self.confidence,
-                        },
-                    });
+                            // The "Header: cell" statement is a synthesis —
+                            // keep the row's verbatim text as the source so
+                            // the rendered fact stays verifiable.
+                            row_text.get(cell.row_id.as_str()).cloned()
+                        };
+                        ir.facts.push(FactCandidate {
+                            statement: if header.is_empty() {
+                                body.clone()
+                            } else {
+                                format!("{}: {}", header, body)
+                            },
+                            entities: row_phrases
+                                .get(cell.row_id.as_str())
+                                .cloned()
+                                .unwrap_or_default(),
+                            confidence: self.confidence * cell.confidence,
+                            snippet,
+                            evidence: Evidence {
+                                document_id: None,
+                                page: owner.context.page,
+                                source: Some(EvidenceSource::TableCell {
+                                    table_id: owner.fragment_id.clone(),
+                                    cell_id: format!("{}-{}", cell.row_id, cell.column_id),
+                                }),
+                                extractor: extractor.clone(),
+                                model: Some("mock-v1".into()),
+                                confidence: self.confidence,
+                            },
+                        });
+                    }
                 }
             }
         }
@@ -908,6 +921,41 @@ fn collect_text(nodes: &[crate::AstNode]) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// Split a giant table cell into sentence-sized fact bodies so a cell can
+/// rank and pack at small budgets instead of being permanently size-skipped
+/// (G10 T8: an est-816 notes cell can never enter a 500-token fold).
+/// Cells ≤ 800 chars return whole; longer cells split on ". " with
+/// sub-60-char heads merging forward into the next body.
+/// ponytail: naive dot-split — "e.g." mid-sentence fragments a body, but a
+/// fragment still carries its goldens and its verbatim snippet.
+fn split_cell_bodies(text: &str) -> Vec<String> {
+    const SPLIT_AT: usize = 800; // chars; smaller cells pack fine whole
+    const MIN_BODY: usize = 60; // chars; smaller heads merge forward
+    let text = text.trim();
+    if text.chars().count() <= SPLIT_AT {
+        return vec![text.to_string()];
+    }
+    let mut bodies: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut rest = text;
+    while let Some(pos) = rest.find(". ") {
+        cur.push_str(&rest[..pos + 1]); // keep the '.'
+        if cur.chars().count() >= MIN_BODY {
+            bodies.push(std::mem::take(&mut cur));
+        }
+        rest = rest[pos + 1..].trim_start();
+    }
+    cur.push_str(rest);
+    if !cur.trim().is_empty() {
+        bodies.push(cur);
+    }
+    if bodies.len() < 2 {
+        vec![text.to_string()]
+    } else {
+        bodies
+    }
 }
 
 /// Extract capitalized multi-word phrases (potential named entities).
@@ -1235,6 +1283,30 @@ mod tests {
     use super::*;
     use crate::ast::{AstNode, BlockType, DocumentAst};
     use crate::visual::{ChartAnalyzer, DiagramAnalyzer};
+
+    #[test]
+    fn split_cell_bodies_splits_only_monster_cells() {
+        // Short and mid cells stay whole (one body).
+        assert_eq!(split_cell_bodies("revenue: 3").len(), 1);
+        assert_eq!(split_cell_bodies(&"x".repeat(700)).len(), 1);
+        // A monster cell splits on ". " into bodies ≥ 60 chars.
+        let monster = format!(
+            "{}. {}. {}.",
+            "A".repeat(300),
+            "B".repeat(300),
+            "C".repeat(300)
+        );
+        let bodies = split_cell_bodies(&monster);
+        assert_eq!(
+            bodies.len(),
+            3,
+            "{:?}",
+            bodies.iter().map(String::len).collect::<Vec<_>>()
+        );
+        assert!(bodies.iter().all(|b| b.chars().count() >= 60));
+        // A giant cell with no ". " stays whole rather than fragmenting.
+        assert_eq!(split_cell_bodies(&"y".repeat(900)).len(), 1);
+    }
 
     #[test]
     fn retain_pages_keeps_kept_and_document_level_candidates() {

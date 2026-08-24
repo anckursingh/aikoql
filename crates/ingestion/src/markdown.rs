@@ -626,14 +626,35 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                 }
 
                 SectionKind::Artifact { language } => {
-                    for (lang, _code) in &section.code_blocks {
+                    for (lang, code) in &section.code_blocks {
                         let actual_lang = if lang.is_empty() { &language } else { lang };
+                        // Short fences are knowledge themselves (G10 T17:
+                        // the AGENT-005 `text` fence's "→ validate
+                        // preconditions" chain is the answer) — fold the
+                        // fence lines into the label fact so they rank and
+                        // pack with it. Long fences (e.g. the §52 table
+                        // dump) stay label-only: their bulk would make the
+                        // fact un-packable.
+                        // ponytail: ≤400 chars, single-space line join —
+                        // long lines in a short fence yield a big fact too.
+                        let mut statement = format!(
+                            "Code artifact ({}) under '{}'",
+                            actual_lang, section.heading
+                        );
+                        if code.chars().count() <= 400 {
+                            let lines: Vec<&str> = code
+                                .lines()
+                                .map(str::trim)
+                                .filter(|l| !l.is_empty())
+                                .collect();
+                            if !lines.is_empty() {
+                                statement.push_str(": ");
+                                statement.push_str(&lines.join(" "));
+                            }
+                        }
                         ir.facts.push(FactCandidate {
                             snippet: None,
-                            statement: format!(
-                                "Code artifact ({}) under '{}'",
-                                actual_lang, section.heading
-                            ),
+                            statement,
                             entities: vec![section.heading.clone()],
                             confidence: self.confidence,
                             evidence: Evidence {
@@ -1814,6 +1835,32 @@ Run `cargo build` to compile.
             .iter()
             .any(|f| f.statement.contains("$0.15/1M input"));
         assert!(bullet, "claim-section list items must become facts");
+    }
+
+    #[test]
+    fn short_fence_lines_fold_into_artifact_fact() {
+        // G10 T17: the AGENT-005 chain lives in a `text` fence — a short
+        // fence's lines fold into the label fact so the chain's tokens can
+        // be retrieved (long fences stay label-only so their bulk doesn't
+        // make the fact un-packable).
+        let md = r#"# Plan
+
+## Safe execution
+
+```text
+discover program
+→ validate preconditions
+→ execute
+```
+"#;
+        let ir = compile_markdown_string(md, Some("plan.md".into())).unwrap();
+        let chain = ir
+            .facts
+            .iter()
+            .find(|f| f.statement.contains("validate preconditions"))
+            .expect("short fence lines should enter the artifact fact");
+        assert!(chain.statement.contains("discover program"));
+        assert!(chain.statement.contains("→ execute"));
     }
 
     #[test]
