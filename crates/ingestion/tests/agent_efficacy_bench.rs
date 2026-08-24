@@ -58,7 +58,7 @@ use aikoql_ingestion::{
     compile_context, compile_markdown_file, merge_knowledge_ir, render_context_markdown,
     KnowledgeIr, MockEmbeddingProvider,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 /// The repo's documentation tree — the agent's knowledge corpus.
@@ -400,6 +400,122 @@ const TASKS: &[Task] = &[
     },
 ];
 
+/// §32 Agent Memory Benchmark tasks (2026-08-24). `kind` carries the §32
+/// memory dimension. Each golden is verbatim in the corpus (asserted by the
+/// same integrity check) and each question carries its carrier fact's own
+/// tokens — the task-authoring discipline from the 51-task scale. The
+/// measured dimensions are the ones a static corpus can answer: Semantic is
+/// the efficacy bench's 51 tasks (cited, not re-measured); Working /
+/// Episodic / Consolidation need a live agent loop (v2, with AGENT-003/005);
+/// Contradiction has no genuinely conflicting fact pair in the corpus.
+const MEMORY_TASKS: &[Task] = &[
+    // Procedural — procedure selection
+    Task {
+        kind: "procedural",
+        question: "What sequence does the KnowledgeStatus lifecycle follow?",
+        golden: "DISCOVERED EXTRACTED PROPOSED VALIDATED ACCEPTED ACTIVE SUPERSEDED ARCHIVED",
+    },
+    Task {
+        kind: "procedural",
+        question: "After candidate fusion, what does the multi-modal retrieval pipeline run?",
+        golden: "Authority filtering Conflict detection Relationship expansion",
+    },
+    Task {
+        kind: "procedural",
+        question: "How are indexes rebuilt after a crash?",
+        golden: "journal after any crash",
+    },
+    Task {
+        kind: "procedural",
+        question: "Which call blocks until all KEs are reflected in all indexes?",
+        golden: "wait_caught_up",
+    },
+    // Temporal — historical truth
+    Task {
+        kind: "temporal",
+        question: "When did the valid-time model land?",
+        golden: "DONE 2026-08-19",
+    },
+    Task {
+        kind: "temporal",
+        question: "When was v0.1.18 verified live?",
+        golden: "verified live 2026-08-18",
+    },
+    Task {
+        kind: "temporal",
+        question: "What does the current PR explicitly call out?",
+        golden: "DEK persistence",
+    },
+    Task {
+        kind: "temporal",
+        question: "How many questions did the local MVP gate dogfood?",
+        golden: "all 10 questions",
+    },
+    // Constraint — safe action selection
+    Task {
+        kind: "constraint",
+        question: "How must ratified syscall semantics never change?",
+        golden: "incompatibly",
+    },
+    Task {
+        kind: "constraint",
+        question: "What path must indexes stay off?",
+        golden: "commit path",
+    },
+    Task {
+        kind: "constraint",
+        question: "What uncommitted data must a reader never observe?",
+        golden: "uncommitted data",
+    },
+    Task {
+        kind: "constraint",
+        question: "What must views never own?",
+        golden: "persistent state",
+    },
+    // Provenance — evidence attribution
+    Task {
+        kind: "provenance",
+        question: "Per which MRFC must every syscall emit an audit Knowledge Event?",
+        golden: "MRFC-0001 §12",
+    },
+    Task {
+        kind: "provenance",
+        question: "Which MRFC is the single source of truth for the commit pipeline?",
+        golden: "MRFC-0008",
+    },
+    Task {
+        kind: "provenance",
+        question: "Which MRFC owns the Constraint Engine?",
+        golden: "MRFC-0060",
+    },
+    Task {
+        kind: "provenance",
+        question: "Which MRFC anchors the implementation architecture?",
+        golden: "MRFC-0005",
+    },
+    // Evolution — knowledge update (the current state, not the stale one)
+    Task {
+        kind: "evolution",
+        question: "On how many channels has v0.1.18 shipped?",
+        golden: "3 channels",
+    },
+    Task {
+        kind: "evolution",
+        question: "What does the knowledge lifecycle enforce today?",
+        golden: "12-state machine",
+    },
+    Task {
+        kind: "evolution",
+        question: "What is live in compile_context for hybrid retrieval?",
+        golden: "semantic embedding fusion",
+    },
+    Task {
+        kind: "evolution",
+        question: "Are the MRFC-0070 states exercised by production flows?",
+        golden: "never exercised",
+    },
+];
+
 /// The PR-R §53 answer-correctness judge: golden key tokens present with at
 /// most one missing. Hardened for short goldens (2026-08-23, G10): 1-2
 /// token goldens require every token — the ≤1-missing allowance let
@@ -569,18 +685,10 @@ fn render_evidence(evidence: &[String]) -> String {
         .join("\n\n")
 }
 
-struct Stats {
-    correct: usize,
-    failed: usize,
-    tokens: usize,
-    calls: usize,
-    tools: usize,
-    micros: u128,
-}
-
-#[test]
-fn agent_efficacy_bench() {
-    // ── Corpus: every docs/*.md through the real Markdown pipeline ───────
+/// The compiled corpus: merged IR + heading-split chunks. Shared by the
+/// efficacy and memory benches (each test builds its own — the test
+/// process owns the leaked doc ids).
+fn load_corpus() -> (KnowledgeIr, Vec<common::CorpusChunk<'static>>) {
     let mut ids: Vec<String> = std::fs::read_dir(DOCS_DIR)
         .unwrap_or_else(|e| panic!("read {DOCS_DIR}: {e}"))
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -618,10 +726,23 @@ fn agent_efficacy_bench() {
         merged.facts.len(),
         merged.relations.len(),
     );
+    (merged, corpus)
+}
 
-    // ── Corpus integrity: every golden phrase is verbatim in one chunk —
-    // A/B/C can in principle retrieve it from the same text.
-    for t in TASKS {
+/// (file, section) → packed-position index, for the B treatment.
+fn chunk_pos(corpus: &[common::CorpusChunk<'static>]) -> HashMap<(&'static str, usize), usize> {
+    corpus
+        .iter()
+        .enumerate()
+        .map(|(p, (f, i, _))| ((*f, *i), p))
+        .collect()
+}
+
+/// Corpus integrity: every golden phrase is verbatim in one chunk (or an
+/// adjacent pair) — the LLM treatments can in principle retrieve it from
+/// the same text.
+fn assert_goldens_verbatim(tasks: &[Task], corpus: &[common::CorpusChunk<'static>]) {
+    for t in tasks {
         let g = common::tokens(t.golden);
         let chunk_hits = |c: &str| {
             let ct = common::tokens(c);
@@ -637,6 +758,158 @@ fn agent_efficacy_bench() {
             t.golden
         );
     }
+}
+
+/// D-pack diagnosis (no model needed): per task, does the rendered pack
+/// contain the golden, how many IR facts carry it at all, and the top
+/// facts' scores — separating corpus gaps from entity-gate/ranking misses.
+/// Returns the number of tasks whose D pack contains the golden.
+fn debug_tasks(label: &str, tasks: &[Task], merged: &KnowledgeIr) -> usize {
+    let mut hits = 0;
+    for (qi, t) in tasks.iter().enumerate() {
+        let pkg = compile_context(t.question, merged, BUDGET);
+        let rendered = render_context_markdown(&pkg);
+        let hit = answer_correct(&rendered, t.golden);
+        hits += usize::from(hit);
+        let g = common::tokens(t.golden);
+        let in_ir = merged
+            .facts
+            .iter()
+            .filter(|f| {
+                let fs = common::tokens(&f.statement);
+                g.iter().all(|tok| fs.contains(tok))
+            })
+            .count();
+        eprintln!(
+            "[{label} DEBUG T{qi}] golden={:?} hit={hit} ir_facts_with_golden={in_ir} trimmed={} \
+             ents={} facts={} rels={} est={}",
+            t.golden,
+            pkg.trimmed,
+            pkg.entities.len(),
+            pkg.facts.len(),
+            pkg.relations.len(),
+            pkg.estimated_tokens
+        );
+        for rf in pkg.facts.iter().take(4) {
+            let stmt: String = rf.statement.chars().take(90).collect();
+            eprintln!("  {:>4.1} {} [{}]", rf.score, stmt, rf.justification);
+        }
+        // Where does each golden-carrying fact sit? est tokens, entity
+        // boost, and exact question-token overlap (≈ its stmt score).
+        let q_tokens: HashSet<String> = common::tokens(t.question);
+        for f in merged
+            .facts
+            .iter()
+            .filter(|f| {
+                let fs = common::tokens(&f.statement);
+                g.iter().all(|tok| fs.contains(tok))
+            })
+            .take(3)
+        {
+            let fs = common::tokens(&f.statement);
+            let overlap = q_tokens
+                .iter()
+                .filter(|w| w.len() >= 3 && fs.contains(*w))
+                .count();
+            let boost: f32 = f
+                .entities
+                .iter()
+                .map(|en| {
+                    pkg.entities
+                        .iter()
+                        .find(|e| e.name == *en)
+                        .map(|e| e.score * 0.3)
+                        .unwrap_or(0.0)
+                })
+                .sum();
+            let est = f.statement.len() / 4 + f.entities.iter().map(|e| e.len() / 4).sum::<usize>();
+            eprintln!("  golden-fact est_tokens≈{est} overlap={overlap} boost={boost:.2}");
+        }
+        if !hit {
+            for f in merged
+                .facts
+                .iter()
+                .filter(|f| {
+                    let fs = common::tokens(&f.statement);
+                    g.iter().all(|tok| fs.contains(tok))
+                })
+                .take(4)
+            {
+                let stmt: String = f.statement.chars().take(90).collect();
+                eprintln!("  IR-fact '{}' entities={:?}", stmt, f.entities);
+            }
+        }
+    }
+    hits
+}
+
+/// B treatment (conventional memory: lexical top-K chunks + one model
+/// call). Returns (hit, generation_failed, input_tokens, micros). The
+/// position index is rebuilt per call — 20 calls × 1.5k chunks is nothing
+/// next to one model generation.
+fn ask_b(
+    endpoint: &str,
+    model: &str,
+    system_with: &str,
+    question: &str,
+    golden: &str,
+    corpus: &[common::CorpusChunk<'static>],
+    provider: &MockEmbeddingProvider,
+) -> (bool, bool, usize, u128) {
+    let t0 = Instant::now();
+    let pos = chunk_pos(corpus);
+    let ranked = common::rank(corpus, question, provider, false);
+    let order: Vec<usize> = ranked.iter().map(|(f, i)| pos[&(*f, *i)]).collect();
+    let evidence = pack_evidence(&order, corpus, EVIDENCE_BUDGET_CHARS);
+    let user = format!(
+        "Question: {question}\n\nSources:\n{}",
+        render_evidence(&evidence)
+    );
+    let answer = generate(endpoint, model, system_with, &user);
+    let hit = answer
+        .as_deref()
+        .map(|s| answer_correct(s, golden))
+        .unwrap_or(false);
+    (
+        hit,
+        answer.is_none(),
+        (system_with.len() + user.len()) / 4,
+        t0.elapsed().as_micros(),
+    )
+}
+
+/// D treatment (AIKOQL): deterministic compile_context, no model call.
+/// Returns (hit, output_tokens, micros).
+fn ask_d(question: &str, golden: &str, merged: &KnowledgeIr) -> (bool, usize, u128) {
+    let t0 = Instant::now();
+    let pkg = compile_context(question, merged, BUDGET);
+    assert!(
+        pkg.estimated_tokens <= BUDGET,
+        "{}: aikoql package exceeded the budget: {} > {BUDGET}",
+        question,
+        pkg.estimated_tokens
+    );
+    let delivered = render_context_markdown(&pkg);
+    (
+        answer_correct(&delivered, golden),
+        delivered.len() / 4,
+        t0.elapsed().as_micros(),
+    )
+}
+
+struct Stats {
+    correct: usize,
+    failed: usize,
+    tokens: usize,
+    calls: usize,
+    tools: usize,
+    micros: u128,
+}
+
+#[test]
+fn agent_efficacy_bench() {
+    let (merged, corpus) = load_corpus();
+    assert_goldens_verbatim(TASKS, &corpus);
 
     // ── AIKOQL_G10_DEBUG=1: D-pack diagnosis (no model needed) ──────────
     // Per task: does the rendered D pack contain the golden token, which
@@ -645,80 +918,7 @@ fn agent_efficacy_bench() {
     // entity-gate/ranking misses. Runs before the model check so it
     // works without Ollama.
     if std::env::var("AIKOQL_G10_DEBUG").is_ok() {
-        for (qi, t) in TASKS.iter().enumerate() {
-            let pkg = compile_context(t.question, &merged, BUDGET);
-            let rendered = render_context_markdown(&pkg);
-            let hit = answer_correct(&rendered, t.golden);
-            let g = common::tokens(t.golden);
-            let in_ir = merged
-                .facts
-                .iter()
-                .filter(|f| {
-                    let fs = common::tokens(&f.statement);
-                    g.iter().all(|tok| fs.contains(tok))
-                })
-                .count();
-            eprintln!(
-                "[G10 DEBUG T{qi}] golden={:?} hit={hit} ir_facts_with_golden={in_ir} trimmed={} \
-                 ents={} facts={} rels={} est={}",
-                t.golden,
-                pkg.trimmed,
-                pkg.entities.len(),
-                pkg.facts.len(),
-                pkg.relations.len(),
-                pkg.estimated_tokens
-            );
-            for rf in pkg.facts.iter().take(4) {
-                let stmt: String = rf.statement.chars().take(90).collect();
-                eprintln!("  {:>4.1} {} [{}]", rf.score, stmt, rf.justification);
-            }
-            // Where does each golden-carrying fact sit? est tokens, entity
-            // boost, and exact question-token overlap (≈ its stmt score).
-            let q_tokens: HashSet<String> = common::tokens(t.question);
-            for f in merged
-                .facts
-                .iter()
-                .filter(|f| {
-                    let fs = common::tokens(&f.statement);
-                    g.iter().all(|tok| fs.contains(tok))
-                })
-                .take(3)
-            {
-                let fs = common::tokens(&f.statement);
-                let overlap = q_tokens
-                    .iter()
-                    .filter(|w| w.len() >= 3 && fs.contains(*w))
-                    .count();
-                let boost: f32 = f
-                    .entities
-                    .iter()
-                    .map(|en| {
-                        pkg.entities
-                            .iter()
-                            .find(|e| e.name == *en)
-                            .map(|e| e.score * 0.3)
-                            .unwrap_or(0.0)
-                    })
-                    .sum();
-                let est =
-                    f.statement.len() / 4 + f.entities.iter().map(|e| e.len() / 4).sum::<usize>();
-                eprintln!("  golden-fact est_tokens≈{est} overlap={overlap} boost={boost:.2}");
-            }
-            if !hit {
-                for f in merged
-                    .facts
-                    .iter()
-                    .filter(|f| {
-                        let fs = common::tokens(&f.statement);
-                        g.iter().all(|tok| fs.contains(tok))
-                    })
-                    .take(4)
-                {
-                    let stmt: String = f.statement.chars().take(90).collect();
-                    eprintln!("  IR-fact '{}' entities={:?}", stmt, f.entities);
-                }
-            }
-        }
+        debug_tasks("G10", TASKS, &merged);
         return;
     }
 
@@ -748,11 +948,7 @@ fn agent_efficacy_bench() {
             (n, chunks)
         })
         .collect();
-    let pos: std::collections::HashMap<(&str, usize), usize> = corpus
-        .iter()
-        .enumerate()
-        .map(|(p, (f, i, _))| ((*f, *i), p))
-        .collect();
+    let pos = chunk_pos(&corpus);
 
     let provider = MockEmbeddingProvider::new();
     let system_with =
@@ -935,6 +1131,122 @@ fn agent_efficacy_bench() {
     // ── Structural gates only: the corpus must be usable and the
     // deterministic treatment honest. Answer scores are printed, not
     // enforced (a model's answers are what they are; CI never runs one).
+    assert!(
+        merged.entities.len() >= 100,
+        "merged graph too small to be a real corpus"
+    );
+}
+
+/// §32 Agent Memory Benchmark (TESTING-PLAN row 130): AIKOQL (D) against
+/// one conventional memory implementation (B, LLM + RAG chunks) across the
+/// §32 memory dimensions. Semantic is the efficacy bench's 51 tasks (cited,
+/// not re-measured); Working/Episodic/Consolidation need a live agent loop
+/// (v2, with AGENT-003/005); Contradiction has no genuine conflicting-fact
+/// pair in the corpus. Per-dimension fractions are printed, not enforced —
+/// the model's answers are what they are.
+#[test]
+fn agent_memory_bench() {
+    let (merged, corpus) = load_corpus();
+    assert_goldens_verbatim(MEMORY_TASKS, &corpus);
+
+    // ── AIKOQL_MEMORY_DEBUG=1: D-pack diagnosis (no model needed) ────────
+    if std::env::var("AIKOQL_MEMORY_DEBUG").is_ok() {
+        let hits = debug_tasks("G10 MEMORY", MEMORY_TASKS, &merged);
+        eprintln!("[G10 MEMORY DEBUG] D hits {hits}/{}", MEMORY_TASKS.len());
+        return;
+    }
+
+    let Some(model) = std::env::var("AIKOQL_ANSWER_MODEL").ok() else {
+        eprintln!(
+            "[G10 MEMORY] SKIP — set AIKOQL_ANSWER_MODEL (and optionally \
+             AIKOQL_ANSWER_ENDPOINT) to run the memory benchmark against a local model"
+        );
+        return;
+    };
+    let endpoint = std::env::var("AIKOQL_ANSWER_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+
+    let provider = MockEmbeddingProvider::new();
+    let system_with =
+        "Answer the question using ONLY the numbered source excerpts below. Cite every \
+         source you use with its [n] number. If the sources do not answer the question, \
+         answer exactly: not in sources.";
+
+    // (b_correct, d_correct, tasks) per dimension
+    let mut per: HashMap<&'static str, (usize, usize, usize)> = HashMap::new();
+    let mut b_tokens = 0usize;
+    let mut b_failed = 0usize;
+    let mut b_micros = 0u128;
+    let mut d_tokens = 0usize;
+    let mut d_micros = 0u128;
+
+    let started = Instant::now();
+    for (qi, t) in MEMORY_TASKS.iter().enumerate() {
+        let (b_hit, b_gen_failed, b_tok, b_us) = ask_b(
+            &endpoint,
+            &model,
+            system_with,
+            t.question,
+            t.golden,
+            &corpus,
+            &provider,
+        );
+        let (d_hit, d_tok, d_us) = ask_d(t.question, t.golden, &merged);
+        b_tokens += b_tok;
+        b_failed += usize::from(b_gen_failed);
+        b_micros += b_us;
+        d_tokens += d_tok;
+        d_micros += d_us;
+        let e = per.entry(t.kind).or_default();
+        e.0 += usize::from(b_hit);
+        e.1 += usize::from(d_hit);
+        e.2 += 1;
+        eprintln!(
+            "[G10 MEMORY T{qi} {} {:?} golden={:?}] B={b_hit} D={d_hit}",
+            t.kind, t.question, t.golden
+        );
+    }
+
+    let n = MEMORY_TASKS.len();
+    let b_correct: usize = per.values().map(|e| e.0).sum();
+    let d_correct: usize = per.values().map(|e| e.1).sum();
+    eprintln!(
+        "[G10 MEMORY SUMMARY] model={model} tasks={n} wall={:.1}s",
+        started.elapsed().as_secs_f32()
+    );
+    eprintln!(
+        "[G10 MEMORY MATRIX] memory | required measurement | B: conventional (LLM+RAG chunks) | D: AIKOQL"
+    );
+    for dim in [
+        "procedural",
+        "temporal",
+        "constraint",
+        "provenance",
+        "evolution",
+    ] {
+        let e = per.get(dim).copied().unwrap_or((0, 0, 0));
+        eprintln!(
+            "[G10 MEMORY MATRIX] {dim} | {}/{} | {}/{}",
+            e.0, e.2, e.1, e.2
+        );
+    }
+    eprintln!(
+        "[G10 MEMORY MATRIX] semantic | 29/51 (canonical 0.569) | 51/51 (canonical 1.000) | cited from the G10 efficacy bench"
+    );
+    eprintln!(
+        "[G10 MEMORY MATRIX] working/episodic/consolidation | deferred — live agent loop (v2, with AGENT-003/005)"
+    );
+    eprintln!(
+        "[G10 MEMORY MATRIX] contradiction | deferred — no genuine conflicting-fact pair in the corpus; handling covered by kernel unit tests"
+    );
+    eprintln!(
+        "[G10 MEMORY MATRIX] totals | {b_correct}/{n} | {d_correct}/{n} | B {:.1} tokens/query {:.1}s, D {:.1} tokens/query {:.1}s, {b_failed} failed B generations",
+        b_tokens as f32 / n as f32,
+        b_micros as f32 / n as f32 / 1e6,
+        d_tokens as f32 / n as f32,
+        d_micros as f32 / n as f32 / 1e6,
+    );
+
     assert!(
         merged.entities.len() >= 100,
         "merged graph too small to be a real corpus"

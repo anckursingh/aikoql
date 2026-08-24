@@ -869,6 +869,22 @@ Deferred (v2): AGENT-003 (implement a feature) and AGENT-005 (safe procedural ex
 
 Compare AIKOQL against at least one conventional memory implementation.
 
+**Findings (2026-08-24, llama3.1 canonical).** `agent_efficacy_bench.rs::agent_memory_bench` measures each live dimension as treatment **D** (AIKOQL `compile_context`, deterministic, 0 LLM calls) against treatment **B** — LLM + lexical-chunk RAG, the conventional-memory baseline — on a 20-task memory corpus drawn from the same 20 docs as §31.
+
+| Memory | B: LLM + RAG chunks | D: AIKOQL |
+|---|---|---|
+| Procedural — procedure selection | 3/4 | 4/4 |
+| Temporal — historical truth | 4/4 | 4/4 |
+| Constraint — safe action selection | 2/4 | 4/4 |
+| Provenance — evidence attribution | 1/4 | 4/4 |
+| Evolution — knowledge update | 2/4 | 4/4 |
+| Semantic — factual retrieval | 29/51 (0.569) | 51/51 (1.000) — cited from the §31 canonical |
+| **Totals** | **12/20** | **20/20** |
+
+- D: 20/20 at 577 input tokens and 7.5 s per query, deterministic, 0 LLM calls. B: 1203 input tokens and 27.2 s per query, 0 failed generations.
+- B's failure signature is concentrated where the question's evidence is an MRFC identifier or a deontic rule (provenance 1/4, constraint 2/4) — lexical chunk retrieval serves the wrong document region; the compiler packs the carrier fact directly. Temporal is the only B tie: date-stamped carrier lines chunk cleanly.
+- **Working / Episodic / Consolidation** — deferred: they need a live multi-turn agent loop (v2, with AGENT-003/005); not measurable from a static corpus. **Contradiction** — deferred: no genuine conflicting-fact pair exists in the corpus; the kernel's `contradict_*` transaction paths are covered by unit tests.
+
 ---
 
 # 33. Certification Acceptance Criteria
