@@ -513,6 +513,65 @@ fn t10_forget_erase_removes_versions_but_keeps_proof_possible() {
 }
 
 // ---------------------------------------------------------------------------
+// MVP-QA-001 MVP-KO-003: delete a KO; no dangling relationship is exposed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mvp_ko_003_deleted_endpoint_is_not_exposed_by_traversal() {
+    let (k, _c) = mk();
+    let b = create_fact(&k, &alice(), "dst_doc");
+    let mut req = RememberRequest::create(alice(), meta("src_doc"));
+    req.relationships.push(RelationshipRef {
+        rel_type: "cites".into(),
+        target: b,
+        direction: Direction::Outbound,
+    });
+    let _a = k.remember(req).unwrap().koid;
+
+    let plan = aikoql_compiler::parser::compile_with_subject(
+        "MATCH src_doc TRAVERSE cites RETURN *",
+        "alice",
+    )
+    .unwrap();
+
+    // Sanity: the relationship resolves while B is live.
+    let live = aikoql_runtime::Interpreter::execute(&k, &plan).unwrap();
+    match live {
+        aikoql_runtime::RowSet::Traversal(hits) => {
+            assert!(hits.iter().any(|(koid, _rt, _d)| *koid == b));
+        }
+        other => panic!("expected traversal rowset, got {other:?}"),
+    }
+
+    // Delete B (tombstone).
+    k.forget(
+        alice(),
+        &b,
+        ForgetMode::Tombstone,
+        None,
+        Some("gdpr".into()),
+    )
+    .unwrap();
+    assert_eq!(
+        k.get(alice(), &b).unwrap().lifecycle.state,
+        LifecycleState::Deleted
+    );
+
+    // MVP-KO-003: the deleted KO is not exposed as a dangling relationship
+    // endpoint through traversal.
+    let after = aikoql_runtime::Interpreter::execute(&k, &plan).unwrap();
+    match after {
+        aikoql_runtime::RowSet::Traversal(hits) => {
+            assert!(
+                !hits.iter().any(|(koid, _rt, _d)| *koid == b),
+                "tombstoned endpoint must not appear in traversal results"
+            );
+        }
+        other => panic!("expected traversal rowset, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // verify / ACL (kernel-boundary enforcement, MRFC-0001 §12)
 // ---------------------------------------------------------------------------
 

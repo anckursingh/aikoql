@@ -10,7 +10,7 @@
 use aikoql_kernel::ir::*;
 use aikoql_kernel::knowledge::kom::*;
 use aikoql_kernel::knowledge::scoring::{cosine, jaccard, ko_text, tokenize};
-use aikoql_kernel::transaction::kernel::{Kernel, Subject};
+use aikoql_kernel::transaction::kernel::{Kernel, KnowledgeContext, Subject};
 use std::cmp::Ordering;
 
 // ---------------------------------------------------------------------------
@@ -214,6 +214,23 @@ impl Interpreter {
                         .map_err(|e| KError::InvalidObject(format!("invalid koid: {}", e)))?]
                 };
 
+                // MVP-KO-003: an edge target whose KO is gone (Erase) or
+                // tombstoned (Delete) is a dangling endpoint — traversal must
+                // not expose it as a live relationship result.
+                // ponytail: per-edge get; join against a liveness snapshot if
+                // deep traversals become a perf hotspot.
+                let endpoint_live = |target: &KOID| -> bool {
+                    let ctx = self
+                        .cached_subject
+                        .clone()
+                        .map(KnowledgeContext::new)
+                        .unwrap_or_else(|| KnowledgeContext::new(Subject::new("system")));
+                    matches!(
+                        kernel.get(ctx, target),
+                        Ok(ko) if ko.lifecycle.state != LifecycleState::Deleted
+                    )
+                };
+
                 let mut results = Vec::new();
                 let mut visited = std::collections::HashSet::new();
                 let mut queue: std::collections::VecDeque<(KOID, usize)> =
@@ -225,7 +242,7 @@ impl Interpreter {
                     }
                     if let Ok(edges) = kernel.outbound_edges(start, rel_type.as_deref()) {
                         for (rt, target) in &edges {
-                            if visited.insert(*target) {
+                            if visited.insert(*target) && endpoint_live(target) {
                                 results.push((*target, rt.clone(), 1usize));
                                 if *depth > 1 {
                                     queue.push_back((*target, 1));
@@ -241,7 +258,7 @@ impl Interpreter {
                     }
                     if let Ok(next_edges) = kernel.outbound_edges(&cur, rel_type.as_deref()) {
                         for (rt, target) in next_edges {
-                            if visited.insert(target) {
+                            if visited.insert(target) && endpoint_live(&target) {
                                 results.push((target, rt.clone(), d + 1));
                                 queue.push_back((target, d + 1));
                             }
