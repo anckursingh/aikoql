@@ -23,10 +23,15 @@ pub(crate) fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Resul
 
     // Semantic scores: embed the task and score every stored entity
     // embedding against it. Falls back to lexical-only when no provider
-    // is wired or the snapshot predates embedding support.
-    let semantic = match k.embed_text(task, None) {
-        Ok(task_emb) if !task_emb.is_empty() => semantic_scores(k, args, &task_emb),
-        _ => None,
+    // is wired or the snapshot predates embedding support. semantic_ran
+    // makes the fallback detectable in the response (§36: a disabled
+    // index must not be silently absorbed).
+    let (semantic, semantic_ran) = match k.embed_text(task, None) {
+        Ok(task_emb) if !task_emb.is_empty() => match semantic_scores(k, args, &task_emb) {
+            Some(scores) => (Some(scores), true),
+            None => (None, false),
+        },
+        _ => (None, false),
     };
 
     // Compile context package — cached per (task, budget, knowledge hash,
@@ -87,6 +92,7 @@ pub(crate) fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Resul
         "koid": hex,
         "task": task,
         "token_budget": token_budget,
+        "semantic": semantic_ran,
         "experiences": experience_json,
     }))
 }

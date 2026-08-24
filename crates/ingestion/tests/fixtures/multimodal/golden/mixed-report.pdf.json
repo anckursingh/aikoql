@@ -1487,6 +1487,7 @@
           "subject": "payment"
         }
       ],
+      "source_revision": null,
       "temporal": []
     },
     "ontology": {

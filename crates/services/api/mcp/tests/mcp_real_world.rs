@@ -1080,6 +1080,14 @@ fn ctx_differential_scenarios() {
         alice_names.contains(&"PaymentService"),
         "the owner must get the payment context: {alice_ctx}"
     );
+    // §36: a disabled/absent semantic index must be detectable in the
+    // response — this harness has no embedding provider wired, so the
+    // compile must say so instead of silently degrading.
+    assert_eq!(
+        alice_ctx["semantic"],
+        json!(false),
+        "semantic availability must be reported: {alice_ctx}"
+    );
 
     // …Bob (same tenant, no grant) gets no context at all — the context
     // compilation layer is permission-differential, not just content-differential.

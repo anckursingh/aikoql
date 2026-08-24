@@ -8,6 +8,26 @@
 use crate::ir::{Evidence, KnowledgeIr};
 use crate::source::EvidenceSource;
 
+/// Retrieval health of a compiled package (§34–36 boundary). "No
+/// authoritative knowledge" (a healthy empty pack) must be distinguishable
+/// from "knowledge exists but retrieval failed" (one instrument down, the
+/// fallback carried the package) — otherwise the caller cannot tell a
+/// genuine unknown from a degraded lookup and would refuse questions the
+/// store does answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetrievalStatus {
+    /// Pipeline ran with the instruments provided to it; an empty or
+    /// partial package is genuine absence, not a failure.
+    #[default]
+    Healthy,
+    /// The lexical index contributed nothing and every packed entity rode
+    /// in on semantic similarity (the degrade fallback). The knowledge
+    /// exists and was retrieved, but must not be presented as lexically
+    /// grounded.
+    SemanticFallback,
+}
+
 /// A context package ready for agent consumption.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ContextPackage {
@@ -21,6 +41,9 @@ pub struct ContextPackage {
     pub estimated_tokens: usize,
     /// Whether the package was trimmed to fit the budget.
     pub trimmed: bool,
+    /// Retrieval health — unknown vs failed-retrieval distinction.
+    #[serde(default)]
+    pub status: RetrievalStatus,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -120,6 +143,10 @@ pub fn compile_context_semantic_with(
         .collect();
 
     // Score entities by name overlap + mention overlap + semantic similarity
+    // §34–36: any_lexical records whether the lexical instrument contributed
+    // at all — the distinction between a healthy empty pack (unknown) and a
+    // semantic-only pack (lexical degrade fallback).
+    let mut any_lexical = false;
     let mut entities: Vec<RankedEntity> = ir
         .entities
         .iter()
@@ -149,6 +176,9 @@ pub fn compile_context_semantic_with(
                 .copied()
                 .unwrap_or(0.0);
             let lexical = name_score + mention_score;
+            if lexical > 0.0 {
+                any_lexical = true;
+            }
             let mut score = lexical + semantic_score * semantic_weight;
             // Semantic-only matches must clear a floor to enter the package —
             // below it the similarity is noise, not signal.
@@ -444,7 +474,17 @@ pub fn compile_context_semantic_with(
     } else {
         token_budget / 2
     };
-    let mut pkg = ContextPackage::default();
+    // §34–36: a package that only exists because semantic scores carried
+    // it is degraded retrieval (lexical instrument missed everything);
+    // anything else — including a healthy empty pack — is genuine.
+    let mut pkg = ContextPackage {
+        status: if semantic.is_some() && !any_lexical && entities.iter().any(|e| e.score > 0.0) {
+            RetrievalStatus::SemanticFallback
+        } else {
+            RetrievalStatus::Healthy
+        },
+        ..Default::default()
+    };
     let mut tokens = 0usize;
     let mut seen_entities: HashSet<&str> = HashSet::new();
     let mut seen_facts: HashSet<&str> = HashSet::new();
@@ -1242,6 +1282,55 @@ mod tests {
         let pkg = compile_context("auth", &ir, 5); // very small budget
         assert!(pkg.trimmed, "should be trimmed on tiny budget");
         assert!(pkg.estimated_tokens <= 10, "should be near the budget");
+    }
+
+    #[test]
+    fn healthy_empty_pack_is_unknown_not_failed_retrieval() {
+        // §34/35: a well-formed question outside the knowledge base yields a
+        // healthy EMPTY package — "no authoritative knowledge" — so the
+        // caller refuses honestly instead of guessing or blaming the index.
+        let ir = sample_ir();
+        let pkg = compile_context("what is the capital of france", &ir, 0);
+        assert_eq!(pkg.status, RetrievalStatus::Healthy);
+        assert!(pkg.entities.is_empty());
+        assert!(pkg.facts.is_empty());
+    }
+
+    #[test]
+    fn semantic_only_pack_marks_lexical_degrade_fallback() {
+        // §34–36: the knowledge exists and IS retrieved, but only by the
+        // semantic fallback (zero lexical contribution) — the package must
+        // be labeled SemanticFallback so the caller knows the lexical
+        // instrument missed and does not present it as lexically grounded.
+        let ir = sample_ir();
+        let semantic: HashMap<String, f32> = [("::ConstraintEngine".to_string(), 0.5)]
+            .into_iter()
+            .collect();
+        let pkg = compile_context_semantic("xq9 wm3 blorp zzzq", &ir, 0, Some(&semantic));
+        assert_eq!(pkg.status, RetrievalStatus::SemanticFallback);
+        assert!(
+            pkg.entities.iter().any(|e| e.name == "ConstraintEngine"),
+            "the semantically matched entity must pack via the fallback"
+        );
+    }
+
+    #[test]
+    fn lexical_hit_stays_healthy_and_degenerate_noise_stays_out() {
+        // A lexical hit keeps the package Healthy, and tokenizer-degenerate
+        // cosines below the SEMANTIC_MIN floor never pack — the package must
+        // not claim knowledge from noise (the observed 0.28–0.36 junk band).
+        let ir = sample_ir();
+        let semantic: HashMap<String, f32> =
+            [("::AuthService".to_string(), 0.31)].into_iter().collect();
+        let pkg = compile_context_semantic("auth service oauth2", &ir, 0, Some(&semantic));
+        assert_eq!(pkg.status, RetrievalStatus::Healthy);
+        assert!(pkg.entities.iter().any(|e| e.name == "AuthService"));
+        let noise = compile_context_semantic("xq9 wm3 blorp zzzq", &ir, 0, Some(&semantic));
+        assert_eq!(noise.status, RetrievalStatus::Healthy);
+        assert!(
+            noise.entities.is_empty(),
+            "a sub-floor junk cosine must not pack entities"
+        );
     }
 
     #[test]

@@ -584,6 +584,7 @@
           "subject": "gateway"
         }
       ],
+      "source_revision": null,
       "temporal": []
     },
     "ontology": {
