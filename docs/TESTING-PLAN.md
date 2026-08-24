@@ -276,7 +276,7 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | MVP-KO-002 Update KO | P0 | G1 | ✅ | t02 OCC update; temporal current-truth (`update_carries_valid_time_forward`, supersede keeps history) |
 | MVP-KO-003 Delete KO + relation | P0 | G1 | ✅ | tombstone (t09/t10) + referential policy (t06b–d) + `mvp_ko_003_deleted_endpoint_is_not_exposed_by_traversal` (TDD 2026-08-24: runtime Traverse now drops Deleted/Erased endpoints — red → fix in `crates/runtime/src/lib.rs` Traverse op → green) |
 | MVP-KO-004 Idempotent ingestion | P0 | G1 | ✅ | INC-001, `idempotency_key` tests, t06 retry-commits-once |
-| MVP-EXT-001 Raw evidence 100% addressable | P0 | G5 | 🟡 | snippets + `[p.{page} {kind} {conf}%]` provenance exist; **TDD**: 9-segment fixture (prose/table/bullet/code/fence/formula/heading/image caption/artifact) — every segment resolvable |
+| MVP-EXT-001 Raw evidence 100% addressable | P0 | G5 | ✅ | `mvp_ext_001_all_nine_segment_kinds_are_addressable` (TDD 2026-08-24): 9-segment fixture, every segment resolvable via candidate evidence + document_id. Red list was plain bullets + image captions → fixes: `push_bullet_facts` emits plain bullets at reduced confidence (0.5 floor — keeps the G10 pack-budget ranking); payload-less visual blocks keep their alt/caption text as paragraph evidence |
 | MVP-EXT-002 Artifact section must not destroy prose | P0 | G5 | 🟡 | bold-lead bullets extract (G10 T16/T17); plain prose in Artifact sections was measured negative as facts — **TDD**: assert the prose stays retrievable via the artifact's evidence representation |
 | MVP-EXT-003 Formula preservation | P1 | G5 | 🟡 | formulas are entity-less facts (G12 note); **TDD**: `E = mc^2` fixture → fact or evidence addressable |
 | MVP-ONT-001 Auto-discovery pg/mongo/neo4j | P1 | — | ❌ | NOT_IMPLEMENTED — needs connectors (TP-5); A9 bridge + fixtures only |
@@ -346,7 +346,7 @@ MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04,
 ### 9.4 TDD execution order (MVP-QA-001 → tests first)
 
 1. ~~MVP-KO-003 delete→relation exposure (kernel conformance)~~ ✅ done 2026-08-24 — `mvp_ko_003_deleted_endpoint_is_not_exposed_by_traversal`; runtime Traverse drops Deleted/Erased endpoints
-2. MVP-EXT-001 9-segment evidence addressability (ingestion)
+2. ~~MVP-EXT-001 9-segment evidence addressability (ingestion)~~ ✅ done 2026-08-24 — `mvp_ext_001_all_nine_segment_kinds_are_addressable`; plain bullets (conf 0.5) + captions kept
 3. MVP-EXT-002 artifact-section prose retrievability (ingestion)
 4. MVP-EXT-003 formula preservation (ingestion)
 5. MVP-EVO-003/004 relation freshness on modify/delete (ingestion incremental)

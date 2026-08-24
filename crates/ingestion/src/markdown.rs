@@ -218,6 +218,19 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                 BlockType::Diagram | BlockType::Chart | BlockType::Formula | BlockType::Image => {
                     // Visual content flows through the fragment leg (PR-F),
                     // not section text — keep it out of paragraph facts.
+                    // Exception (MVP-EXT-001): the markdown path never
+                    // attaches visual payloads, and the fragment leg emits no
+                    // text facts — an asset-less figure's caption/alt text
+                    // would be lost by both legs. Payload-less nodes keep
+                    // their text as paragraph evidence.
+                    if node.payload.is_none() {
+                        if let Some(ref mut s) = current_section {
+                            let t = node.text.as_deref().unwrap_or_default().trim();
+                            if !t.is_empty() {
+                                s.paragraphs.push(t.to_string());
+                            }
+                        }
+                    }
                 }
                 _ => {
                     // Other block types — collect text into current section
@@ -243,6 +256,47 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
 // ---------------------------------------------------------------------------
 // Classifier
 // ---------------------------------------------------------------------------
+
+/// Bullet facts for a section. Definitional (`**term**`) bullets are claims
+/// at the section's confidence; plain bullets are furniture — dropped
+/// wholesale they evicted measured carriers from the pack fold (G10,
+/// 2026-08-24), but MVP-EXT-001 requires every meaningful source segment to
+/// stay addressable. Emit plain bullets at reduced confidence so the
+/// confidence-ranked fold keeps its measured order while the evidence
+/// surface stays resolvable back to the source.
+fn push_bullet_facts(
+    ir: &mut KnowledgeIr,
+    section: &Section,
+    extractor: &str,
+    document_id: &Option<String>,
+    confidence: f32,
+) {
+    for item in &section.list_items {
+        let clean = item.trim();
+        if clean.len() <= 10 {
+            continue;
+        }
+        let conf = if clean.contains("**") {
+            confidence
+        } else {
+            confidence.min(0.5)
+        };
+        ir.facts.push(FactCandidate {
+            snippet: None,
+            statement: clean.to_string(),
+            entities: vec![section.heading.clone()],
+            confidence: conf,
+            evidence: Evidence {
+                document_id: document_id.clone(),
+                page: Some(1),
+                source: None,
+                extractor: extractor.into(),
+                model: Some("markdown-v1".into()),
+                confidence: conf,
+            },
+        });
+    }
+}
 
 /// Classify a heading + body into a `SectionKind`.
 ///
@@ -467,35 +521,19 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                             });
                         }
                     }
-                    // Definitional bullets (**Term** — definition) under an
-                    // entity section are claims about it too — dropping them
-                    // silently loses facts that live only as bullets
-                    // (G10 T16: the "G12 reference rates ($0.15/1M input)"
-                    // bullet under the level-1 §52 heading never entered the
-                    // IR). Plain bullets are section furniture — emitting
-                    // them wholesale crowded the fold (measured, 2026-08-24).
-                    // Untrusted injected bullets are re-detected at compile
-                    // time (R8).
-                    for item in &section.list_items {
-                        let clean = item.trim();
-                        if !clean.contains("**") || clean.len() <= 10 {
-                            continue;
-                        }
-                        ir.facts.push(FactCandidate {
-                            snippet: None,
-                            statement: clean.to_string(),
-                            entities: vec![section.heading.clone()],
-                            confidence: fact_confidence,
-                            evidence: Evidence {
-                                document_id: self.document_id.clone(),
-                                page: Some(1),
-                                source: None,
-                                extractor: extractor.clone(),
-                                model: Some("markdown-v1".into()),
-                                confidence: fact_confidence,
-                            },
-                        });
-                    }
+                    // Definitional bullets under an entity section are claims
+                    // about it too (G10 T16: the "G12 reference rates
+                    // ($0.15/1M input)" bullet never entered the IR). Plain
+                    // bullets stay addressable at reduced confidence
+                    // (MVP-EXT-001). Untrusted injected bullets are
+                    // re-detected at compile time (R8).
+                    push_bullet_facts(
+                        &mut ir,
+                        section,
+                        &extractor,
+                        &self.document_id,
+                        fact_confidence,
+                    );
                 }
 
                 SectionKind::Rule => {
@@ -671,30 +709,10 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     // un-factual — the §52 "**Input tokens / Latency /
                     // Cost** — … ($0.15/1M input)" bullet sits next to a
                     // `text` fence and was lost entirely (G10 T16). Plain
-                    // bullets are section furniture, and the section's
-                    // paragraphs measured negative when emitted (their
-                    // "Not yet measured" lines evicted T17's carriers —
-                    // 2026-08-24). Untrusted injected bullets are
+                    // bullets stay addressable at reduced confidence
+                    // (MVP-EXT-001); untrusted injected bullets are
                     // re-detected at compile time (R8).
-                    for item in &section.list_items {
-                        if !item.contains("**") {
-                            continue;
-                        }
-                        ir.facts.push(FactCandidate {
-                            snippet: None,
-                            statement: item.clone(),
-                            entities: vec![section.heading.clone()],
-                            confidence: self.confidence,
-                            evidence: Evidence {
-                                document_id: self.document_id.clone(),
-                                page: Some(1),
-                                source: None,
-                                extractor: extractor.clone(),
-                                model: Some("markdown-v1".into()),
-                                confidence: self.confidence,
-                            },
-                        });
-                    }
+                    push_bullet_facts(&mut ir, section, &extractor, &self.document_id, self.confidence);
                 }
 
                 SectionKind::Claim => {
@@ -703,29 +721,12 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     // facts that live only as such bullets (G10 T16: the
                     // "**Input tokens / Latency / Cost** — … G12 reference
                     // rates ($0.15/1M input)" bullet never entered the IR).
-                    // Plain bullets are section furniture — emitting them
-                    // wholesale crowded the fold and evicted T17's carriers
-                    // (measured, 2026-08-24). Untrusted injected bullets are
-                    // re-detected at compile time (R8).
-                    for item in &section.list_items {
-                        if !item.contains("**") {
-                            continue;
-                        }
-                        ir.facts.push(FactCandidate {
-                            snippet: None,
-                            statement: item.clone(),
-                            entities: vec![section.heading.clone()],
-                            confidence: self.confidence,
-                            evidence: Evidence {
-                                document_id: self.document_id.clone(),
-                                page: Some(1),
-                                source: None,
-                                extractor: extractor.clone(),
-                                model: Some("markdown-v1".into()),
-                                confidence: self.confidence,
-                            },
-                        });
-                    }
+                    // Plain bullets stay addressable at reduced confidence
+                    // (MVP-EXT-001); the G10 pack-budget measurement that
+                    // dropped them wholesale is preserved by the confidence
+                    // floor in push_bullet_facts. Untrusted injected bullets
+                    // are re-detected at compile time (R8).
+                    push_bullet_facts(&mut ir, section, &extractor, &self.document_id, self.confidence);
                     for para in &section.paragraphs {
                         let clean = para.trim();
                         if clean.len() > 5 {
