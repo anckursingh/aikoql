@@ -109,7 +109,15 @@ pub fn compile_context_semantic_with(
     relation_boost: f32,
 ) -> ContextPackage {
     let task_lower = task.to_lowercase();
-    let task_words: Vec<&str> = task_lower.split_whitespace().collect();
+    // Split on whitespace AND non-alphanumeric: trailing punctuation must
+    // not stick to question words — "cite?" never matched the statement
+    // token "cite", which silently under-counted the exact-token escape
+    // ("…the answer to cite?" scored overlap 1, not 2 — eligible facts
+    // stayed gated) and keyword scores.
+    let task_words: Vec<&str> = task_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
 
     // Score entities by name overlap + mention overlap + semantic similarity
     let mut entities: Vec<RankedEntity> = ir
@@ -1845,6 +1853,33 @@ mod tests {
             "facts fold must survive the entity section"
         );
         assert!(pkg.estimated_tokens <= 400);
+    }
+
+    #[test]
+    fn trailing_question_punctuation_does_not_defeat_the_escape() {
+        // G10 T10 shape: "…the answer to cite?" ends in punctuation. With
+        // whitespace-only task words the escape saw overlap 1 ("answer"
+        // only — "cite?" never matched "cite") and gated the fact. Cleaned
+        // task words see answer + cite = 2 and let it pack.
+        let ir = KnowledgeIr {
+            entities: vec![ent("AGENT-004 — Historical explanation", "Requirement", vec![])],
+            facts: vec![FactCandidate {
+                snippet: None,
+                statement: "Ask why a component works in its current form. Answer must cite source/ADR/history evidence where available."
+                    .into(),
+                entities: vec!["AGENT-004 — Historical explanation".into()],
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            }],
+            ..Default::default()
+        };
+        let pkg = compile_context("What does AGENT-004 require the answer to cite?", &ir, 500);
+        assert!(
+            pkg.facts
+                .iter()
+                .any(|f| f.statement.contains("history evidence")),
+            "the punctuation-adjacent escape must pack the fact (was gated)"
+        );
     }
 
     #[test]
