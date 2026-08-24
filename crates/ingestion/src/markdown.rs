@@ -713,6 +713,33 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     // (MVP-EXT-001); untrusted injected bullets are
                     // re-detected at compile time (R8).
                     push_bullet_facts(&mut ir, section, &extractor, &self.document_id, self.confidence);
+                    // MVP-EXT-002: prose under a fenced section must stay
+                    // retrievable. Emit paragraphs at furniture confidence
+                    // so the pack-fold ranking keeps its measured order
+                    // (full-confidence emission measured negative —
+                    // "Not yet measured" lines evicted T17's carriers,
+                    // 2026-08-24).
+                    for para in &section.paragraphs {
+                        let clean = para.trim();
+                        if clean.len() <= 10 {
+                            continue;
+                        }
+                        let conf = self.confidence.min(0.5);
+                        ir.facts.push(FactCandidate {
+                            snippet: None,
+                            statement: clean.to_string(),
+                            entities: vec![section.heading.clone()],
+                            confidence: conf,
+                            evidence: Evidence {
+                                document_id: self.document_id.clone(),
+                                page: Some(1),
+                                source: None,
+                                extractor: extractor.clone(),
+                                model: Some("markdown-v1".into()),
+                                confidence: conf,
+                            },
+                        });
+                    }
                 }
 
                 SectionKind::Claim => {

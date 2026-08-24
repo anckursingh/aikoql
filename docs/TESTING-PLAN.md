@@ -277,8 +277,8 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | MVP-KO-003 Delete KO + relation | P0 | G1 | ✅ | tombstone (t09/t10) + referential policy (t06b–d) + `mvp_ko_003_deleted_endpoint_is_not_exposed_by_traversal` (TDD 2026-08-24: runtime Traverse now drops Deleted/Erased endpoints — red → fix in `crates/runtime/src/lib.rs` Traverse op → green) |
 | MVP-KO-004 Idempotent ingestion | P0 | G1 | ✅ | INC-001, `idempotency_key` tests, t06 retry-commits-once |
 | MVP-EXT-001 Raw evidence 100% addressable | P0 | G5 | ✅ | `mvp_ext_001_all_nine_segment_kinds_are_addressable` (TDD 2026-08-24): 9-segment fixture, every segment resolvable via candidate evidence + document_id. Red list was plain bullets + image captions → fixes: `push_bullet_facts` emits plain bullets at reduced confidence (0.5 floor — keeps the G10 pack-budget ranking); payload-less visual blocks keep their alt/caption text as paragraph evidence |
-| MVP-EXT-002 Artifact section must not destroy prose | P0 | G5 | 🟡 | bold-lead bullets extract (G10 T16/T17); plain prose in Artifact sections was measured negative as facts — **TDD**: assert the prose stays retrievable via the artifact's evidence representation |
-| MVP-EXT-003 Formula preservation | P1 | G5 | 🟡 | formulas are entity-less facts (G12 note); **TDD**: `E = mc^2` fixture → fact or evidence addressable |
+| MVP-EXT-002 Artifact section must not destroy prose | P0 | G5 | ✅ | `mvp_ext_002_prose_in_fenced_section_stays_retrievable` (TDD 2026-08-25): Artifact arm emits section paragraphs as facts at 0.5 confidence — the G10 pack-budget negative measurement is preserved via the confidence floor, prose stays retrievable |
+| MVP-EXT-003 Formula preservation | P1 | G5 | ✅ | `mvp_ext_003_formula_preserved_as_evidence_and_retrievable` (2026-08-25): plain `E = mc^2` line + ```math fence both retrievable with document_id evidence — green without production change |
 | MVP-ONT-001 Auto-discovery pg/mongo/neo4j | P1 | — | ❌ | NOT_IMPLEMENTED — needs connectors (TP-5); A9 bridge + fixtures only |
 | MVP-ONT-002 Same entity across sources | P0 | G1 | ✅ | `multi_source_ontology.rs` config-driven identity (customer 123 across pg/mongo/neo4j/doc fixtures) |
 | MVP-ONT-003 Conflicting source values | P1 | G1 | ✅ | `epistemic.rs` + e03: conflicting values retained with provenance, no silent choice |
@@ -347,8 +347,8 @@ MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04,
 
 1. ~~MVP-KO-003 delete→relation exposure (kernel conformance)~~ ✅ done 2026-08-24 — `mvp_ko_003_deleted_endpoint_is_not_exposed_by_traversal`; runtime Traverse drops Deleted/Erased endpoints
 2. ~~MVP-EXT-001 9-segment evidence addressability (ingestion)~~ ✅ done 2026-08-24 — `mvp_ext_001_all_nine_segment_kinds_are_addressable`; plain bullets (conf 0.5) + captions kept
-3. MVP-EXT-002 artifact-section prose retrievability (ingestion)
-4. MVP-EXT-003 formula preservation (ingestion)
+3. ~~MVP-EXT-002 artifact-section prose retrievability (ingestion)~~ ✅ done 2026-08-25 — `mvp_ext_002_...`; Artifact arm emits paragraphs at conf 0.5
+4. ~~MVP-EXT-003 formula preservation (ingestion)~~ ✅ done 2026-08-25 — `mvp_ext_003_...`; green without production change
 5. MVP-EVO-003/004 relation freshness on modify/delete (ingestion incremental)
 6. MVP-EVO-005 10× re-ingest growth bound (ingestion incremental)
 7. MVP-SEC-004 secrets absent from rendered output (kernel/mcp)
