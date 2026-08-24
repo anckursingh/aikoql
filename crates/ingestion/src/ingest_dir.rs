@@ -202,6 +202,27 @@ pub fn parallel_ingest_directory(root: &str) -> Result<IngestResult, String> {
     finalize_ingest_result(irs, stats, root)
 }
 
+/// Get the current HEAD SHA from git. Returns empty string on failure.
+///
+/// Best-effort repo metadata — a git failure (missing git, not-a-repo, dirty
+/// worktree) yields empty provenance, which callers treat as absent; not
+/// fatal to ingestion.
+pub(crate) fn current_head_sha(root: &Path) -> String {
+    Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
+}
+
 /// Shared result finalization for both sequential and parallel ingestion.
 fn finalize_ingest_result(
     irs: Vec<KnowledgeIr>,
@@ -214,6 +235,9 @@ fn finalize_ingest_result(
 
     let mut merged = merge_knowledge_ir(&irs);
     merged.document_id = Some(format!("ingest-dir:{}", root));
+    // KB-009 versioned manifest: stamp the git revision the scan reflects.
+    let head = current_head_sha(Path::new(root));
+    merged.source_revision = (!head.is_empty()).then_some(head);
     merged.extractor = "ingest-dir".into();
     merged.page_count = stats.files_processed;
 
@@ -453,6 +477,7 @@ fn file_as_entity(path: &Path) -> KnowledgeIr {
         page_count: 1,
         extractor: "ingest-dir".into(),
         content_trust: None,
+        source_revision: None,
     }
 }
 
@@ -506,6 +531,7 @@ fn text_file_ir(path: &Path) -> KnowledgeIr {
         page_count: 1,
         extractor: "ingest-dir".into(),
         content_trust: None,
+        source_revision: None,
     }
 }
 

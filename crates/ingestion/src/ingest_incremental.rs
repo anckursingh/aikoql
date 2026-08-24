@@ -12,7 +12,7 @@
 //! Reuses the existing `reconcile()`, `merge_knowledge_ir()`, and
 //! `compile_file()` infrastructure.
 
-use crate::ingest_dir::{compile_file, IngestResult};
+use crate::ingest_dir::{compile_file, current_head_sha, IngestResult};
 use crate::ir::*;
 use crate::merge::merge_knowledge_ir;
 use crate::reconcile::{reconcile, source_matches};
@@ -41,26 +41,6 @@ fn write_track_state(root: &Path, state: &TrackState) {
     if let Ok(json) = serde_json::to_string_pretty(state) {
         let _ = std::fs::write(root.join(TRACK_FILE), json);
     }
-}
-
-/// Get the current HEAD SHA from git. Returns empty string on failure.
-fn current_head_sha(root: &Path) -> String {
-    Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(root)
-        // justified: best-effort repo metadata — a git failure (missing git,
-        // not-a-repo, dirty worktree) yields empty provenance, which callers
-        // treat as absent; not fatal to ingestion
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
-        .unwrap_or_default()
 }
 
 /// One rename pair from `git diff -M`. Only content-identical (R100) pairs
@@ -262,6 +242,9 @@ pub fn incremental_diff_ingest(
     all_irs.push(prev_ir);
     let mut merged = merge_knowledge_ir(&all_irs);
     merged.document_id = Some(format!("ingest-dir:{}", root));
+    // KB-009 versioned manifest: the merged IR carries the revision it
+    // reflects, matching the tracking file.
+    merged.source_revision = Some(head_sha.clone());
     merged.extractor = "ingest-dir-incremental".into();
     merged.page_count = existing.len() as u32;
 
@@ -345,6 +328,15 @@ mod tests {
             result.is_ok(),
             "should fall back to full ingest: {:?}",
             result.err()
+        );
+        // KB-009: no git repo → no revision in the manifest
+        assert!(
+            result.unwrap().0.ir.source_revision.is_none(),
+            "non-git ingest must not stamp a source revision"
+        );
+        assert!(
+            !tmp.join(TRACK_FILE).exists(),
+            "no tracking manifest for a non-git dir"
         );
 
         let _ = fs::remove_dir_all(&tmp);
@@ -472,6 +464,115 @@ mod tests {
         assert_eq!(
             full_entity_count, incr_entity_count,
             "full and incremental should produce same entity count"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn manifest_carries_revision_and_updates() {
+        // KB-009 versioned manifest: the ingested IR carries the git revision
+        // it reflects (same SHA as the tracking file), and a new commit
+        // updates it. Determinism: re-ingesting the same revision is a no-op.
+        let tmp = std::env::temp_dir().join("aikoql-incr-manifest");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(
+            tmp.join("README.md"),
+            "# Manifest\nKnowledge reflects a revision.\n",
+        )
+        .unwrap();
+
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "test"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+
+        let sha_a = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        let sha_a = String::from_utf8(sha_a.stdout).unwrap();
+        let sha_a = sha_a.trim();
+
+        // Full ingest at revision A
+        let (full, was_full) =
+            incremental_ingest_directory(&tmp.to_string_lossy()).expect("full ingest");
+        assert!(was_full);
+        assert_eq!(
+            full.ir.source_revision.as_deref(),
+            Some(sha_a),
+            "manifest must record the ingested revision"
+        );
+        let track = read_track_state(&tmp).expect("track file written");
+        assert_eq!(
+            track.last_sha, sha_a,
+            "tracking manifest and IR revision must agree"
+        );
+
+        // New commit → incremental ingest carries the new revision
+        fs::write(
+            tmp.join("README.md"),
+            "# Manifest\nKnowledge reflects a newer revision.\n",
+        )
+        .unwrap();
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["commit", "-m", "rev B"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap()
+            .status
+            .success());
+
+        let sha_b = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        let sha_b = String::from_utf8(sha_b.stdout).unwrap();
+        let sha_b = sha_b.trim();
+        assert_ne!(sha_a, sha_b, "test setup: distinct revisions");
+
+        let (incr, _) = incremental_diff_ingest(&tmp.to_string_lossy(), &full.ir)
+            .expect("incremental ingest at revision B");
+        assert_eq!(
+            incr.ir.source_revision.as_deref(),
+            Some(sha_b),
+            "incremental manifest must advance to the new revision"
+        );
+
+        // Determinism: same-SHA re-ingest is a no-op (INC-001)
+        let again = incremental_ingest_directory(&tmp.to_string_lossy());
+        assert!(
+            again.is_err() && again.unwrap_err().contains("no changes"),
+            "same-SHA re-ingest should be a no-op"
         );
 
         let _ = fs::remove_dir_all(&tmp);

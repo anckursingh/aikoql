@@ -189,6 +189,10 @@ pub struct KnowledgeIr {
     pub temporal: Vec<TemporalAssertion>,
     /// Source document identifier for all candidates.
     pub document_id: Option<String>,
+    /// Repository revision this IR was compiled from (git HEAD SHA for
+    /// ingest-dir). KB-009 versioned manifest: makes stored knowledge
+    /// version-addressable. `None` = not a git repo (or not stamped).
+    pub source_revision: Option<String>,
     /// Trust level of the ingested content (R8). `None` = not tagged —
     /// treated conservatively as untrusted. ingest-dir stamps `Trusted`
     /// (reviewed local repo); uploads are stamped `Untrusted` by
