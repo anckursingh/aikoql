@@ -443,14 +443,14 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     });
 
                     // Facts from paragraphs under this entity
+                    let fact_confidence = if injection_warning.is_some() {
+                        0.3
+                    } else {
+                        self.confidence
+                    };
                     for para in &section.paragraphs {
                         let clean = para.trim();
                         if clean.len() > 10 {
-                            let fact_confidence = if injection_warning.is_some() {
-                                0.3
-                            } else {
-                                self.confidence
-                            };
                             ir.facts.push(FactCandidate {
                                 snippet: None,
                                 statement: clean.to_string(),
@@ -466,6 +466,35 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                                 },
                             });
                         }
+                    }
+                    // Definitional bullets (**Term** — definition) under an
+                    // entity section are claims about it too — dropping them
+                    // silently loses facts that live only as bullets
+                    // (G10 T16: the "G12 reference rates ($0.15/1M input)"
+                    // bullet under the level-1 §52 heading never entered the
+                    // IR). Plain bullets are section furniture — emitting
+                    // them wholesale crowded the fold (measured, 2026-08-24).
+                    // Untrusted injected bullets are re-detected at compile
+                    // time (R8).
+                    for item in &section.list_items {
+                        let clean = item.trim();
+                        if !clean.contains("**") || clean.len() <= 10 {
+                            continue;
+                        }
+                        ir.facts.push(FactCandidate {
+                            snippet: None,
+                            statement: clean.to_string(),
+                            entities: vec![section.heading.clone()],
+                            confidence: fact_confidence,
+                            evidence: Evidence {
+                                document_id: self.document_id.clone(),
+                                page: Some(1),
+                                source: None,
+                                extractor: extractor.clone(),
+                                model: Some("markdown-v1".into()),
+                                confidence: fact_confidence,
+                            },
+                        });
                     }
                 }
 
@@ -617,9 +646,65 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                             },
                         });
                     }
+                    // A code fence does not make definitional bullets
+                    // un-factual — the §52 "**Input tokens / Latency /
+                    // Cost** — … ($0.15/1M input)" bullet sits next to a
+                    // `text` fence and was lost entirely (G10 T16). Plain
+                    // bullets are section furniture, and the section's
+                    // paragraphs measured negative when emitted (their
+                    // "Not yet measured" lines evicted T17's carriers —
+                    // 2026-08-24). Untrusted injected bullets are
+                    // re-detected at compile time (R8).
+                    for item in &section.list_items {
+                        if !item.contains("**") {
+                            continue;
+                        }
+                        ir.facts.push(FactCandidate {
+                            snippet: None,
+                            statement: item.clone(),
+                            entities: vec![section.heading.clone()],
+                            confidence: self.confidence,
+                            evidence: Evidence {
+                                document_id: self.document_id.clone(),
+                                page: Some(1),
+                                source: None,
+                                extractor: extractor.clone(),
+                                model: Some("markdown-v1".into()),
+                                confidence: self.confidence,
+                            },
+                        });
+                    }
                 }
 
                 SectionKind::Claim => {
+                    // Definitional bullets (**Term** — definition) in a claim
+                    // section are claims too — dropping them silently loses
+                    // facts that live only as such bullets (G10 T16: the
+                    // "**Input tokens / Latency / Cost** — … G12 reference
+                    // rates ($0.15/1M input)" bullet never entered the IR).
+                    // Plain bullets are section furniture — emitting them
+                    // wholesale crowded the fold and evicted T17's carriers
+                    // (measured, 2026-08-24). Untrusted injected bullets are
+                    // re-detected at compile time (R8).
+                    for item in &section.list_items {
+                        if !item.contains("**") {
+                            continue;
+                        }
+                        ir.facts.push(FactCandidate {
+                            snippet: None,
+                            statement: item.clone(),
+                            entities: vec![section.heading.clone()],
+                            confidence: self.confidence,
+                            evidence: Evidence {
+                                document_id: self.document_id.clone(),
+                                page: Some(1),
+                                source: None,
+                                extractor: extractor.clone(),
+                                model: Some("markdown-v1".into()),
+                                confidence: self.confidence,
+                            },
+                        });
+                    }
                     for para in &section.paragraphs {
                         let clean = para.trim();
                         if clean.len() > 5 {
@@ -1708,6 +1793,27 @@ Run `cargo build` to compile.
             .iter()
             .any(|f| f.statement.contains("must be atomic"));
         assert!(has_rule, "should contain deontic fact");
+    }
+
+    #[test]
+    fn claim_sections_emit_list_items_as_facts() {
+        // G10 T16: a plain bullet in a claim section (no deontic/imperative
+        // markers) is a fact — the "G12 reference rates ($0.15/1M input)"
+        // bullet must enter the IR, not vanish with the section's kind.
+        let md = r#"# Suite
+
+## Metrics
+
+- **Input tokens / Latency / Cost** — measured per treatment; cost uses
+  the G12 reference rates ($0.15/1M input, $0.60/1M output) so the column
+  stays comparable across runs.
+"#;
+        let ir = compile_markdown_string(md, Some("suite.md".into())).unwrap();
+        let bullet = ir
+            .facts
+            .iter()
+            .any(|f| f.statement.contains("$0.15/1M input"));
+        assert!(bullet, "claim-section list items must become facts");
     }
 
     #[test]
