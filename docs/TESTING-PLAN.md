@@ -111,7 +111,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | DB-001 Restart after large write | P0 | ✅ | `durability.rs` |
 | DB-002 Kill during write | P0 | ✅ | `crash_kill.rs`: real taskkill/SIGKILL mid-write via `crash_writer` loop mode, reopen → journal head ≥ observed, all KOs + audit chain intact |
 | DB-003 Concurrent writers | P0 | ✅ | `transactions.rs` |
-| DB-004 Concurrent readers/writers | P1 | 🟡 | isolation semantics documented; stress test absent |
+| DB-004 Concurrent readers/writers | P1 | ✅ | stress test `t25b_concurrent_readers_and_writers_see_only_committed_state` (conformance.rs): 4 writer threads × 40 iterations (hot-KO updates via `RememberRequest::update` with distinct `n` values + fresh KOs) racing 3 reader threads × 200 `get`s — asserts per-reader version monotonicity, every observed `n` ∈ written-set (no torn state), gapless journal (seq 1..N), hot-KO final version = 1 + total updates, no lost writes. Isolation semantics: MRFC-0010 |
 | DOC-001..007 PDF/OCR/tables/images/versioning | P1 | ✅ | `multimodal_golden.rs` (19 DoD rows), `multimodal_acceptance.rs`; DOC-002 OCR is feature-gated (`vlm`) 🟡 |
 | IDX-001..003 Derived index rebuild/orphans | P0 | ✅ | `indexes.rs` i09 (delete + rebuild = identical results), i10 (tombstone-while-down swept on rebuild), i11 (canonical update propagates deterministically) |
 | EVO-001..005 Evolution | P0/P1 | 🟡 | derivation (001), stale-on-source-delete (002), extraction version in evidence (005), ontology evolution (004, t06zw) ✅; schema migration (003): AC-22 pre-validation + versioned coexistence + version gate tested (t06zr/s/zt) — apply/migrate op is feature work |

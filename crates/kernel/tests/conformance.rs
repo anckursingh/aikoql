@@ -1024,6 +1024,76 @@ fn t25_concurrent_creators_get_unique_koids_and_gapless_journal() {
     }
 }
 
+// DB-004: mixed readers/writers — writes serialize on the pipe lock and
+// heads move forward atomically, so a reader racing the writers must only
+// ever observe complete committed KOs (no torn state, no version
+// regression) and every write must land exactly once.
+#[test]
+fn t25b_concurrent_readers_and_writers_see_only_committed_state() {
+    let (k, _clock) = mk();
+    let k = Arc::new(k);
+    // Seed hot KO: version 1, n = -1 (the only non-writer value).
+    let mut seed = RememberRequest::create(alice(), meta("fact"));
+    seed.properties.insert("n".into(), Value::Int(-1));
+    let hot = k.remember(seed).unwrap().koid;
+
+    const WRITERS: usize = 4;
+    const UPDATES: usize = 40;
+    let mut handles = Vec::new();
+    for t in 0..WRITERS {
+        let k = k.clone();
+        handles.push(std::thread::spawn(move || {
+            for i in 0..UPDATES {
+                // Half the load is fresh KOs, half is hot-KO updates.
+                if i % 2 == 0 {
+                    let s = Subject::new(&format!("w{}-{}", t, i));
+                    k.remember(RememberRequest::create(s, meta("fact")))
+                        .unwrap();
+                } else {
+                    let mut req = RememberRequest::update(alice(), hot, meta("fact"));
+                    req.properties
+                        .insert("n".into(), Value::Int((t * 1000 + i) as i64));
+                    k.remember(req).unwrap();
+                }
+            }
+        }));
+    }
+    // Readers watch the hot KO through the whole storm.
+    for r in 0..3 {
+        let k = k.clone();
+        handles.push(std::thread::spawn(move || {
+            let mut last_v = 0u64;
+            for _ in 0..200 {
+                let ko = k.get(alice(), &hot).unwrap();
+                let v = ko.version;
+                assert!(v >= last_v, "reader {r}: version regressed {v} < {last_v}");
+                last_v = v;
+                match ko.properties.get("n") {
+                    // Every observed n is a value a writer committed — a
+                    // torn read would surface a mixed/none value.
+                    Some(Value::Int(n)) => assert!(
+                        *n == -1 || (0..(WRITERS * 1000) as i64).contains(n),
+                        "reader {r}: torn value {n}"
+                    ),
+                    other => panic!("reader {r}: hot KO lost its n: {other:?}"),
+                }
+            }
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    // Every write landed exactly once: 1 seed + WRITERS×UPDATES entries,
+    // gapless sequence, and the hot KO ends at 1 + (WRITERS×UPDATES/2).
+    let journal = k.journal().unwrap();
+    assert_eq!(journal.len(), 1 + WRITERS * UPDATES);
+    for (i, ke) in journal.iter().enumerate() {
+        assert_eq!(ke.seq, (i + 1) as u64);
+    }
+    let hot_ko = k.get(alice(), &hot).unwrap();
+    assert_eq!(hot_ko.version, (1 + WRITERS * UPDATES / 2) as u64);
+}
+
 // ---------------------------------------------------------------------------
 // kernel reopen (journal recovery)
 // ---------------------------------------------------------------------------
