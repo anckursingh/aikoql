@@ -20,12 +20,14 @@
 //! same documents as heading-split chunks (a deterministic, naive section
 //! chunker — the baseline a keyword retriever would serve).
 //!
-//! Tasks: 20 engineering questions across the AGENT-001 (where-to-
+//! Tasks: 50 engineering questions across the AGENT-001 (where-to-
 //! implement), AGENT-002 (change impact), and AGENT-004 (historical
 //! explanation) shapes, each with one short golden answer phrase. Corpus
 //! integrity asserts every golden phrase is verbatim in a chunk of some
 //! document — A/B/C can in principle deliver it; D's reach depends on
-//! extraction (that dependence is the measurement).
+//! extraction (that dependence is the measurement). The first 20 are the
+//! v1 set; T20–T49 extend the corpus to the §31 50–100-task scale,
+//! spread across the MRFC/UCM/invariants docs so no fold is crowded.
 //!
 //! Judge (mechanical, the PR-R convention — no LLM judge): the agent
 //! output contains the golden phrase's tokens with at most one missing
@@ -85,9 +87,12 @@ struct Task {
     golden: &'static str,
 }
 
-/// 20 engineering tasks, AGENT-001/002/004 shapes. Every golden phrase is
+/// 50 engineering tasks, AGENT-001/002/004 shapes. Every golden phrase is
 /// verbatim in the docs corpus (asserted below); short phrases keep the
-/// paraphrase-tolerant judge meaningful.
+/// paraphrase-tolerant judge meaningful. T20–T49 (2026-08-24, the §31
+/// 50–100-task scale): questions carry their carrier sentence's own tokens
+/// (the T8 lesson — a paraphrase gap is a ranking gap) and goldens avoid
+/// stopwords so the LLM treatments are not judged on phrasing.
 const TASKS: &[Task] = &[
     Task {
         kind: "where",
@@ -197,6 +202,201 @@ const TASKS: &[Task] = &[
         // (comparative_chatbot_bench.rs). Encryption-at-rest was uncovered.
         question: "How does the kernel open a store whose DEK is missing or corrupt?",
         golden: "fail-closed open",
+    },
+    // ── T20–T49: the §31 50–100-task extension (2026-08-24) ────────────
+    // "where" — components, interfaces, artifacts.
+    Task {
+        kind: "where",
+        question: "What defines the primary, stable programming interface of the Knowledge Kernel?",
+        golden: "KS-ABI",
+    },
+    Task {
+        kind: "where",
+        question: "Through what is index freshness disclosed to callers?",
+        golden: "index_lag",
+    },
+    Task {
+        kind: "where",
+        question: "With what code must implementations reject unknown syscalls?",
+        golden: "UNSUPPORTED_OPERATION",
+    },
+    Task {
+        kind: "where",
+        // Re-anchored: MRFC-0040's prose carrier ("Every agent developer must
+        // write their own JSON-RPC over stdio") sits in an Artifact section
+        // (python fence) and is dropped. Carrier: the IMPLEMENTATION-PLAN
+        // mcp_client.py notes cell (table extraction).
+        question: "What kind of client is mcp_client.py?",
+        golden: "JSON-RPC client",
+    },
+    Task {
+        kind: "where",
+        question: "What must developers never do to generated files?",
+        golden: "modify",
+    },
+    // "why" — invariants and design rules.
+    Task {
+        kind: "why",
+        question: "What must all database writes pass?",
+        golden: "authorization",
+    },
+    Task {
+        kind: "why",
+        question: "What must all repository access go through?",
+        golden: "Repository trait",
+    },
+    Task {
+        kind: "why",
+        question: "What must proposals never automatically be treated as?",
+        golden: "authoritative facts",
+    },
+    Task {
+        kind: "why",
+        // Re-anchored: UCM §32's prose carrier ("The system must explicitly
+        // model contradictions") is dropped (fenced section). Carrier: the
+        // IMPLEMENTATION-PLAN Phase A4 bold-lead Goal bullet.
+        question: "What does the Conflict & Temporal Engine detect besides stale knowledge?",
+        golden: "contradictions",
+    },
+    Task {
+        kind: "why",
+        question: "What language must new Kernel code be written in?",
+        golden: "Rust",
+    },
+    Task {
+        kind: "why",
+        // Re-anchored: UCM's prose carrier ("Rules must have explicit scope
+        // and authority") is dropped (fenced section). Carrier: the
+        // IMPLEMENTATION-PLAN K1 exit-criteria cell (split into sentence
+        // bodies by the giant-cell splitter) — the question carries the
+        // cell's own words ("carries", not "carry").
+        question: "What do the reviewer exit criteria say every production KO carries?",
+        golden: "explicit epistemic state",
+    },
+    Task {
+        kind: "why",
+        // Carrier: the §83 prose ("Repeated submissions must not create
+        // duplicate semantic objects") is dropped — its section classifies
+        // Artifact (a `text` fence sits in it). Re-anchored to the HLC rule
+        // list (deontic, extracted).
+        question: "What happens when now equals last_millis on commit?",
+        golden: "increment the counter",
+    },
+    Task {
+        kind: "why",
+        // Re-anchored: MRFC-0070 §53's prose carrier ("Authority ranking must
+        // be policy-driven rather than hard-coded") is dropped (fenced
+        // section). Carrier: the PROV-004 row anchor (table extraction, the
+        // row's rule cell says "Source authority rules are deterministic").
+        question: "Which requirement makes authority ranking policy-driven rather than hard-coded?",
+        golden: "PROV-004",
+    },
+    Task {
+        kind: "why",
+        question: "What knowledge must a query from tenant A never return?",
+        golden: "tenant B knowledge",
+    },
+    Task {
+        kind: "why",
+        // Re-anchored: MRFC-0070 §96's prose carrier ("Degraded operation
+        // SHALL never silently lower security boundaries") is dropped
+        // (fenced section). Carrier: the §42 Security Model short-fence fold
+        // (the fence lists "environment boundaries").
+        question: "What kind of boundaries does the Security Model enforce?",
+        golden: "environment boundaries",
+    },
+    Task {
+        kind: "why",
+        question: "What must evidence remain, per EV2?",
+        golden: "append-only",
+    },
+    Task {
+        kind: "why",
+        // Carrier: MRFC-0001 §6's prose ("Illegal transitions MUST return a
+        // deterministic error") is dropped — its section classifies Artifact
+        // (a state-diagram fence). Re-anchored to the knowledge-invariants
+        // bold-lead E4 bullet (definitional bullets extract).
+        question: "What does E4 say cannot be forged through remember()?",
+        golden: "extension keys",
+    },
+    Task {
+        kind: "why",
+        question: "What is the parser completely unaware of about the original request?",
+        golden: "natural language",
+    },
+    Task {
+        kind: "why",
+        // Carrier: MRFC-0060's prose ("The engine must understand dependency
+        // graphs") is dropped — its section classifies Artifact (code
+        // fences). Re-anchored to the knowledge-invariants bold-lead T1
+        // bullet (definitional bullets extract).
+        question: "What interval does T1 define valid time as?",
+        golden: "half-open interval",
+    },
+    Task {
+        kind: "why",
+        question: "What must the context compiler respect?",
+        golden: "token limits",
+    },
+    Task {
+        kind: "why",
+        question: "What must the same input and same versions not create?",
+        golden: "duplicate results",
+    },
+    Task {
+        kind: "why",
+        // Re-anchored: MRFC-0050's prose carrier ("Jobs must be idempotent
+        // and checkpointed") is dropped (fenced section). Carrier: the
+        // MRFC-0050 test-expectations row ("Expected: Idempotent; no
+        // duplicate KOs/edges; stable IDs").
+        question: "What does the pipeline test expect besides no duplicate KOs?",
+        golden: "idempotent",
+    },
+    // "impact" — change-impact and cross-cutting guarantees.
+    Task {
+        kind: "impact",
+        question: "How must Programs-as-KO execution remain besides bounded, deterministic and observable?",
+        golden: "policy-controlled",
+    },
+    Task {
+        kind: "impact",
+        question: "How does the HLC pack its millis and counter?",
+        golden: "millis << 16",
+    },
+    Task {
+        kind: "impact",
+        question: "What key may the remember syscall carry?",
+        golden: "idempotency_key",
+    },
+    Task {
+        kind: "impact",
+        question: "Where do Class B syscalls execute exclusively?",
+        golden: "scheduler domain",
+    },
+    Task {
+        kind: "impact",
+        question: "How many crates make up the MCP server?",
+        golden: "6 crates",
+    },
+    Task {
+        kind: "impact",
+        question: "What knowledge must the context compiler avoid?",
+        golden: "unrelated knowledge",
+    },
+    Task {
+        kind: "impact",
+        question: "What must every syscall enforce before execution?",
+        golden: "RBAC",
+    },
+    Task {
+        kind: "impact",
+        question: "What must every syscall result carry?",
+        golden: "snapshot timestamp",
+    },
+    Task {
+        kind: "impact",
+        question: "What does SQL/Cypher injection-like text remain unless grammar treats it as syntax?",
+        golden: "remains data",
     },
 ];
 
