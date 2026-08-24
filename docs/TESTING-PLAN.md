@@ -256,10 +256,108 @@ Post-MVP sequencing note: TP-1/TP-2 are cheap and buy the "certification-grade" 
 
 ## 8. Immediate next steps
 
-1. **TP-4**: ✅ COMPLETE — all three flagships measured: G10 agent efficacy (`agent_efficacy_bench.rs`), G11 chatbot comparative (§52 table), G12 token/latency/cost. Compliance evidence packs can now be assembled from the three measured tables.
+1. **MVP-QA-001 certification (§9)**: TDD the 11 closeable substrate items in §9.4 order (KO-003 → EXT-001/002/003 → EVO-003/004/005 → SEC-004 → PRG-003 → REC-002 → DEP-003 → artifacts runner), then assemble the `artifacts/` release-gate pack. Connector rows (MVP-CON-*) stay NOT_IMPLEMENTED until the TP-5 scope decision (§9.3).
+2. **TP-4**: ✅ COMPLETE — all three flagships measured: G10 agent efficacy (`agent_efficacy_bench.rs`), G11 chatbot comparative (§52 table), G12 token/latency/cost. Compliance evidence packs can now be assembled from the three measured tables.
 2. **P1 extraction follow-ups** (from G10 rerun): section-heading anchors measured negative and reverted (D 0.350→0.300); exact-token gate escape shipped and measured positive (D 0.350→0.400, all gates green); pack budget rebalance shipped and measured positive (entities capped at 3/5 of the budget — D 0.400→0.550, all gates green); skip-over packing shipped and measured positive (D 0.550→0.700 under the lenient judge, all gates green); judge hardening shipped (1-2 token goldens require every token — honest D 0.550; A 0.100); punctuation fix for the exact-token escape shipped and measured positive (task words split on non-alphanumeric — "cite?" now matches "cite"; D 0.550→0.650 with T10/T17 gained, all gates green); entity cap tightened 3/5→1/2 and measured positive (D 0.650→0.800 with T6/T13/T18 gained — the est-241 golden facts now fit the widened facts fold — zero losses, all gates green). Closed since: the remaining 4 misses (size-skip T8, ranking eviction T11, no-bridge cell fact T16, bare-digit golden T19 — see row 128, D reached 1.000 at 20/20) and the 50–100-task corpus extension (TASKS 20 → 51, D 51/51, see row 128).
 3. **TP-5** (once connectors land): G8 per-connector contract matrix.
 4. Keep the two suite docs in `docs/` as the source of truth for ID numbering; the registry (`certification.rs`) is the enforcement layer — add a row there when a gap closes, never remove a gap row without its test.
+
+---
+
+## 9. MVP certification matrix — MVP-QA-001 (2026-08-24)
+
+QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CASES.md` (MVP-QA-001, 25 suites → 45 test IDs + 10 invariants + 14 gates) against current coverage. Status: ✅ covered · 🟡 closeable gap (TDD item) · ❌ NOT_IMPLEMENTED/BLOCKED (feature work — never PASS per the spec's execution rules).
+
+### 9.1 Per-ID mapping
+
+| MVP ID | Pri | Gate | Status | Coverage / TDD item |
+| --- | --- | --- | --- | --- |
+| MVP-KO-001 Create KO | P0 | G1 | ✅ | conformance t01/t04, idempotency keys; MCP query path (dogfood) |
+| MVP-KO-002 Update KO | P0 | G1 | ✅ | t02 OCC update; temporal current-truth (`update_carries_valid_time_forward`, supersede keeps history) |
+| MVP-KO-003 Delete KO + relation | P0 | G1 | 🟡 | tombstone (t09/t10) + referential policy (t06b–d) exist; **TDD**: delete A → query relation A→B exposes nothing dangling |
+| MVP-KO-004 Idempotent ingestion | P0 | G1 | ✅ | INC-001, `idempotency_key` tests, t06 retry-commits-once |
+| MVP-EXT-001 Raw evidence 100% addressable | P0 | G5 | 🟡 | snippets + `[p.{page} {kind} {conf}%]` provenance exist; **TDD**: 9-segment fixture (prose/table/bullet/code/fence/formula/heading/image caption/artifact) — every segment resolvable |
+| MVP-EXT-002 Artifact section must not destroy prose | P0 | G5 | 🟡 | bold-lead bullets extract (G10 T16/T17); plain prose in Artifact sections was measured negative as facts — **TDD**: assert the prose stays retrievable via the artifact's evidence representation |
+| MVP-EXT-003 Formula preservation | P1 | G5 | 🟡 | formulas are entity-less facts (G12 note); **TDD**: `E = mc^2` fixture → fact or evidence addressable |
+| MVP-ONT-001 Auto-discovery pg/mongo/neo4j | P1 | — | ❌ | NOT_IMPLEMENTED — needs connectors (TP-5); A9 bridge + fixtures only |
+| MVP-ONT-002 Same entity across sources | P0 | G1 | ✅ | `multi_source_ontology.rs` config-driven identity (customer 123 across pg/mongo/neo4j/doc fixtures) |
+| MVP-ONT-003 Conflicting source values | P1 | G1 | ✅ | `epistemic.rs` + e03: conflicting values retained with provenance, no silent choice |
+| MVP-CON-001..004 PostgreSQL/MongoDB/Neo4j/PGVector | P0 | G4 | ❌ | NOT_IMPLEMENTED — fixtures + A9 bridge only; connector matrix is TP-5 (scope conflict with §2 of MVP-QA-001 — see 9.3) |
+| MVP-CON-005 Source timeout | P1 | — | ❌ | connector-side NOT_IMPLEMENTED; product-side rollback semantics = t06k transact all-or-nothing |
+| MVP-CON-006 Auth failure, no secrets in logs | P0 | G3 | 🟡 | product auth failures covered (MCP token tests); **TDD**: log-redaction assertion (credentials never in ordinary logs) |
+| MVP-CON-007 Outage ≠ deletion | P1 | — | 🟡 | repo-side ✅ (`git_change_set_propagates_git_failure`, no-changes → cached); connector-side ❌ with connectors |
+| MVP-EVO-001 Modify source | P0 | G6 | ✅ | FRESH-001 + INC-002 (`freshness_sla_source_update_to_query_visibility_measured`) |
+| MVP-EVO-002 Rename source | P1 | G6 | ✅ | INC-003 (`rename_preserves_entity_identity`) |
+| MVP-EVO-003 Relationship change A→B to A→C | P0 | G6 | 🟡 | **TDD**: re-ingest with changed relation — A→B not retained as current truth |
+| MVP-EVO-004 Delete source | P0 | G6 | 🟡 | facts `[STALE]` path exists; **TDD**: no stale current relation remains after source delete |
+| MVP-EVO-005 Re-ingest 10× no growth | P1 | G6 | 🟡 | **TDD**: counts (KOs/facts/relations/evidence) stable across 10 re-ingests |
+| MVP-TEMP-001..004 Historical/current/future/change query | P0/P1 | G7 | ✅ | `temporal.rs` (`valid_at` half-open, `as_of`, history in commit order, future validity + invalidation collapse) + `e2e-k2-temporal.js`; change query = history + trace with provenance |
+| MVP-SEC-001 Unauthorized access, no leak | P0 | G3 | ✅ | t11 default deny, t34 A/B scenario, CTX differential ACCESS_DENIED |
+| MVP-SEC-002 Permission propagation every layer | P0 | G3 | ✅ | authorize() confinement + ACL-filtered scans (`match_experiences`) + CTX permission differential |
+| MVP-SEC-003 Revocation | P0 | G3 | ✅ | `revoked_experience_sharing_stops_matching` (share → revoke → not matched) |
+| MVP-SEC-004 Sensitive logging | P0 | G3 | 🟡 | adversarial secret detection (11 PII types) covered; **TDD**: secrets absent from rendered context/log output |
+| MVP-QRY-001..005 Valid/invalid/unknown/injection/determinism | P0/P1 | G1 | ✅ | `golden_snapshots.rs`, `grammar_coverage.rs`, `fuzz_parser.rs`, `same_task_twice_renders_identical_context`; unknown-entity = semantic error, healthy-empty = "no authoritative knowledge" (§34–36) |
+| MVP-CTX-001 Relevant context | P1 | — | ✅ | `retrieval_quality.rs`, ranked packs with snippets + provenance |
+| MVP-CTX-002 Irrelevant-fact suppression | P0 | — | ✅ | entity gate + keyword hygiene + exact-token escape (G12 row, gate tests) |
+| MVP-CTX-003 Entity-anchored retrieval (Customer A/B/C) | P0 | — | ✅ | G12 q-00 scenario + entity-gate tests — same shape |
+| MVP-CTX-004 Evidence inclusion (answer only in prose) | P0 | G5 | ✅ | evidence snippets render verbatim source; `e2e_answer_quality` |
+| MVP-CTX-005 Context budget | P1 | — | ✅ | `ctx_min_*` 1000-KO minimization tests |
+| MVP-REC-001 Restart durability | P0 | G8 | ✅ | `durability.rs`, `e2e-restart.js`, chatbot real-server restart |
+| MVP-REC-002 Backup/restore | P0 | G8 | 🟡 | `backup`/`restore`/`list_backups` tools exist, backup exercised in mcp_real_world Phase 9; **TDD**: backup → destroy → restore → equivalent KOs/facts/queries |
+| MVP-REC-003 Interrupted ingestion | P0 | G8 | ✅ | `crash_kill.rs` (taskkill/SIGKILL mid-write → consistent reopen, journal head ≥ observed) |
+| MVP-DEP-001 Clean Docker startup | — | G9 | ✅ | ci.yml docker job: build → run → health check healthy |
+| MVP-DEP-002 Fresh install → ingest → query | — | G9 | ✅ | `e2e-dogfood.js` CI job (documented instructions) |
+| MVP-DEP-003 Persistent container restart | — | G9 | 🟡 | **TDD**: volume-backed restart preserves knowledge (CI step or script) |
+| MVP-BENCH-001..003 G10/G11/G12 no regression | — | G12 | ✅ | canonical baselines pinned in §3 rows 128–130 + weekly bench regression CI (>20% alert) |
+| Suite N Agent memory | — | — | ✅ | §32 `agent_memory_bench` (D 20/20 vs B 12/20); not an MVP blocker per the spec |
+| MVP-PRG-001 Program representation | P1 | — | ✅ | MEM-005 (`experiences.rs`: identity/inputs/outputs/permissions/pre/post/side effects/provenance) |
+| MVP-PRG-002 Unauthorized program not selectable | P0 | G3 | ✅ | PRG-004 + t12 ACL + denied execution |
+| MVP-PRG-003 Invalid program metadata rejected | P1 | — | 🟡 | TTL overflow rejection exists; **TDD**: malformed program KO (missing pre/post/permissions) rejected deterministically |
+| MVP-E2E-001 PostgreSQL → KO → query | P0 | G4 | ❌ | NOT_IMPLEMENTED — connectors (TP-5) |
+| MVP-E2E-002 Document → evidence → KO → query | P0 | G5 | ✅ | `e2e_pipeline.rs` + `e2e_answer_quality` (answer grounded in document evidence) |
+| MVP-E2E-003 Repository → KB → query | P0 | — | ✅ | `e2e-dogfood.js` + G10 D treatment |
+| MVP-E2E-004 Multi-source query | P0 | G4 | 🟡 | fixture-level ✅ (`multi_source_ontology.rs` merges pg/mongo/neo4j/doc fixtures); live-connector ❌ |
+| MVP-E2E-005 Permissioned multi-source | P0 | G3 | ✅ | CTX permission differential + t34 (unauthorized source cannot enter context even when referenced) |
+| INV-001..010 invariants | — | G14 | ✅ except INV-010 | no-orphan (t06b/c), idempotence, provenance, evidence, authz closure, temporal consistency, atomicity (t06k), restart, determinism ✅; INV-010 source isolation = MVP-CON-007 (repo ✅ / connector ❌) |
+| §23 Artifacts (`artifacts/mvp-test-*.md|json`, `release-gate.md`) | — | — | ❌ | **TDD**: certification runner generates the 5 artifacts + the release-gate verdict from the registry |
+
+### 9.2 Gate readout (QA-lead view, before TDD items)
+
+| Gate | Requirement | Today |
+| --- | --- | --- |
+| GATE-01 P0 correctness | 100% | 🟡 — 9 P0 TDD items open (KO-003, EXT-001/002, EVO-003/004, SEC-004, REC-002, E2E-004 live, connector P0s) |
+| GATE-02 P1 correctness | ≥98% | 🟡 — EXT-003, EVO-005, PRG-003, CON-005/007, DEP-003 open |
+| GATE-03 Critical security | 100% | 🟡 — SEC-004 log-redaction item |
+| GATE-04 Connector certification | 100% | ❌ **BLOCKED — connectors are NOT_IMPLEMENTED (TP-5)** |
+| GATE-05 Evidence preservation | 100% | 🟡 — EXT-001/002/003 TDD items |
+| GATE-06 Mutation/evolution | 100% | 🟡 — EVO-003/004/005 TDD items |
+| GATE-07 Temporal | 100% | ✅ |
+| GATE-08 Recovery | 100% | 🟡 — REC-002 restore round-trip |
+| GATE-09 Docker/installability | 100% | 🟡 — DEP-003 volume restart |
+| GATE-10/11 Sev-1/Sev-2 | 0 | ✅ none open (unmeasured until runner) |
+| GATE-12 Benchmarks | no regression | ✅ |
+| GATE-13 Reproducibility | 100% | ✅ determinism tests + pinned benches |
+| GATE-14 Data integrity | 0 corruption | ✅ crash/durability/index sweeps |
+
+### 9.3 QA-lead scope finding (decision needed)
+
+MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04, MVP-CON-001..004, MVP-E2E-001/004), but IMPLEMENTATION-PLAN defers the connector workstream to **post-MVP (TP-5)**. Per the spec's own rules these rows are NOT_IMPLEMENTED, not PASS — so **if the MVP is advertised with live connectors, it is NO-GO on GATE-04 today**; if connectors are not claimed in MVP marketing, GATE-04 is deferred with them. Either way, the substrate closeable items below proceed now.
+
+### 9.4 TDD execution order (MVP-QA-001 → tests first)
+
+1. MVP-KO-003 delete→relation exposure (kernel conformance)
+2. MVP-EXT-001 9-segment evidence addressability (ingestion)
+3. MVP-EXT-002 artifact-section prose retrievability (ingestion)
+4. MVP-EXT-003 formula preservation (ingestion)
+5. MVP-EVO-003/004 relation freshness on modify/delete (ingestion incremental)
+6. MVP-EVO-005 10× re-ingest growth bound (ingestion incremental)
+7. MVP-SEC-004 secrets absent from rendered output (kernel/mcp)
+8. MVP-PRG-003 invalid program metadata (kernel experiences)
+9. MVP-REC-002 backup→destroy→restore round-trip (mcp_real_world)
+10. MVP-DEP-003 volume restart (CI)
+11. §23 artifacts runner (`scripts/` or registry-driven test) → `artifacts/release-gate.md`
+
+Each item: write the failing test → run (red) → fix root cause → green → full regression + G10 gate → commit. BLOCKED-on-connectors rows stay open honestly and are re-evaluated when TP-5 lands.
 
 ---
 
