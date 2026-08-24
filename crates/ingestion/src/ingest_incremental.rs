@@ -2,16 +2,20 @@
 //!
 //! Tracks the last git commit SHA in a marker file. On re-ingestion, only
 //! files changed since the last commit are re-parsed. Unchanged files retain
-//! their entities; deleted files have their entities flagged as stale.
+//! their entities; deleted files have their entities flagged as stale;
+//! renamed files (git -M detection) keep entity identity — the old path's
+//! entities are dropped and the re-compiled new path takes over, so no
+//! ghost duplicates (merge keys entities on document_id).
 //!
-//! Pipeline: git diff → changed files → parse changed → reconcile → merge.
+//! Pipeline: git diff -M → changed files + rename pairs → parse changed →
+//! reconcile → merge.
 //! Reuses the existing `reconcile()`, `merge_knowledge_ir()`, and
 //! `compile_file()` infrastructure.
 
 use crate::ingest_dir::{compile_file, IngestResult};
 use crate::ir::*;
 use crate::merge::merge_knowledge_ir;
-use crate::reconcile::reconcile;
+use crate::reconcile::{reconcile, source_matches};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -59,25 +63,60 @@ fn current_head_sha(root: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Get list of changed files between two commits.
-fn git_diff(root: &Path, from_sha: &str, to_sha: &str) -> Result<Vec<String>, String> {
+/// One rename pair from `git diff -M`. Only content-identical (R100) pairs
+/// reach the caller; an edited rename is versioned like a modify — its new
+/// path is emitted as a plain path instead.
+#[derive(Debug)]
+struct RenamePair {
+    old: String,
+    new: String,
+}
+
+/// Get changed files and rename pairs between two commits.
+///
+/// Returns `(plain_paths, renames)`. Rename pairs are detected with git's
+/// `-M` similarity heuristic; `plain_paths` includes the new path of an
+/// edited rename (so its facts get reconciled like a modify).
+fn git_change_set(
+    root: &Path,
+    from_sha: &str,
+    to_sha: &str,
+) -> Result<(Vec<String>, Vec<RenamePair>), String> {
     let range = format!("{}..{}", from_sha, to_sha);
     // R4: propagate git failures — an empty change set here silently served
     // stale IR as current, so failures must surface to the caller (which
     // falls back to full ingest).
     let output = Command::new("git")
-        .args(["diff", "--name-only", &range])
+        .args(["diff", "-M", "--name-status", &range])
         .current_dir(root)
         .output()
         .map_err(|e| format!("git diff failed: {}", e))?;
     if !output.status.success() {
         return Err("git diff exited non-zero".into());
     }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect())
+    let mut plain = Vec::new();
+    let mut renames = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (status, rest) = line.split_once('\t').unwrap_or((line, ""));
+        if let Some((old, new)) = rest.split_once('\t') {
+            if status == "R100" {
+                renames.push(RenamePair {
+                    old: old.to_string(),
+                    new: new.to_string(),
+                });
+            } else {
+                // Edited rename: reconcile the new path like a modify.
+                plain.push(new.to_string());
+            }
+        } else {
+            plain.push(rest.to_string());
+        }
+    }
+    Ok((plain, renames))
 }
 
 /// Incremental directory ingestion.
@@ -156,9 +195,13 @@ pub fn incremental_diff_ingest(
     }
 
     // Get changed files since last ingest
-    let changed = git_diff(path, &prev.last_sha, &head_sha)?;
+    let (mut changed, renames) = git_change_set(path, &prev.last_sha, &head_sha)?;
 
-    if changed.is_empty() {
+    // Never ingest our own tracking state — it lives in the repo root and
+    // would be compiled as a text entity if a user commits it.
+    changed.retain(|f| f != TRACK_FILE);
+
+    if changed.is_empty() && renames.is_empty() {
         // Update tracking SHA even if no file changes (e.g., merge commits)
         write_track_state(
             path,
@@ -170,9 +213,11 @@ pub fn incremental_diff_ingest(
         return Err("no changed files".into());
     }
 
-    // Filter to files that exist and aren't skipped
+    // Filter to files that exist and aren't skipped (rename old-halves are
+    // gone from disk and drop out here)
     let existing: Vec<PathBuf> = changed
         .iter()
+        .chain(renames.iter().map(|r| &r.new))
         .map(|f| path.join(f))
         .filter(|p| p.exists() && p.is_file())
         .collect();
@@ -202,15 +247,26 @@ pub fn incremental_diff_ingest(
         ));
     }
 
+    // Rename identity: drop the old path's entities from the previous IR so
+    // merge (keyed on document_id) yields one entity at the new path instead
+    // of a ghost duplicate. Facts survive via statement dedup; relations are
+    // name-based and re-attach to the surviving entity.
+    let mut prev_ir = previous_ir.clone();
+    prev_ir.entities.retain(|e| {
+        let doc = e.evidence.document_id.as_deref().unwrap_or("");
+        !renames.iter().any(|r| source_matches(doc, &r.old))
+    });
+
     // Merge new IRs with previous (existing entities from unchanged files persist)
     let mut all_irs: Vec<KnowledgeIr> = new_irs;
-    all_irs.push(previous_ir.clone());
+    all_irs.push(prev_ir);
     let mut merged = merge_knowledge_ir(&all_irs);
     merged.document_id = Some(format!("ingest-dir:{}", root));
     merged.extractor = "ingest-dir-incremental".into();
     merged.page_count = existing.len() as u32;
 
-    // Reconcile to flag stale facts from changed/deleted files
+    // Reconcile to flag stale facts from changed/deleted files. Pure renames
+    // stay out of this list — content-identical, so nothing is stale.
     let report = reconcile(&changed, &merged);
     for fact in &report.potentially_stale_facts {
         merged.facts.push(FactCandidate {
@@ -422,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn git_diff_propagates_git_failure() {
+    fn git_change_set_propagates_git_failure() {
         // R4: git failure must surface as Err, not an empty change set —
         // an empty set would silently serve stale IR as current.
         let tmp = std::env::temp_dir().join("aikoql-gitdiff-fail");
@@ -430,8 +486,140 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
 
         // Not a git repository → git exits non-zero.
-        let err = git_diff(&tmp, "HEAD~1", "HEAD").unwrap_err();
+        let err = git_change_set(&tmp, "HEAD~1", "HEAD").unwrap_err();
         assert!(!err.is_empty());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn rename_preserves_entity_identity() {
+        // INC-003: `git mv` a source file → the entity keeps its identity:
+        // same name set, one entity (no ghost at the old path), evidence path
+        // updated, unchanged facts survive once, no spurious [STALE] flags.
+        let tmp = std::env::temp_dir().join("aikoql-incr-rename");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        fs::write(
+            tmp.join("engine.md"),
+            "# ConstraintEngine\nThe engine validates constraints at commit time.\n",
+        )
+        .unwrap();
+
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "test"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap();
+
+        // Full ingest (first run)
+        let (full, was_full) =
+            incremental_ingest_directory(&tmp.to_string_lossy()).expect("full ingest");
+        assert!(was_full, "first ingest should be full");
+        let before_names: std::collections::BTreeSet<String> =
+            full.ir.entities.iter().map(|e| e.name.clone()).collect();
+        assert!(
+            before_names.contains("ConstraintEngine"),
+            "fixture entity missing: {:?}",
+            before_names
+        );
+        let before_entity_count = full.ir.entities.len();
+        let before_stale = full
+            .ir
+            .facts
+            .iter()
+            .filter(|f| f.statement.starts_with("[STALE]"))
+            .count();
+        assert_eq!(before_stale, 0);
+
+        // Rename the file (git mv auto-stages; commit without add -A so the
+        // untracked track file stays out of the diff)
+        assert!(std::process::Command::new("git")
+            .args(["mv", "engine.md", "core-engine.md"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        assert!(std::process::Command::new("git")
+            .args(["commit", "-m", "rename engine.md"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap()
+            .status
+            .success());
+
+        // Incremental ingest across the rename
+        let (incr, stale) = incremental_diff_ingest(&tmp.to_string_lossy(), &full.ir)
+            .expect("incremental ingest after rename");
+
+        // Identity: same entity set, same count — no ghost at the old path
+        let after_names: std::collections::BTreeSet<String> =
+            incr.ir.entities.iter().map(|e| e.name.clone()).collect();
+        assert_eq!(
+            after_names, before_names,
+            "rename must keep the identity set"
+        );
+        assert_eq!(
+            incr.ir.entities.len(),
+            before_entity_count,
+            "rename must not duplicate entities"
+        );
+
+        // Evidence path follows the new location
+        let engine = incr
+            .ir
+            .entities
+            .iter()
+            .find(|e| e.name == "ConstraintEngine")
+            .expect("entity survived the rename");
+        assert!(
+            engine
+                .evidence
+                .document_id
+                .as_deref()
+                .map(|d| d.ends_with("core-engine.md"))
+                .unwrap_or(false),
+            "evidence path should update to the new location, got {:?}",
+            engine.evidence.document_id
+        );
+
+        // Pure rename: nothing is stale, no [STALE] facts appended
+        assert!(stale.is_empty(), "pure rename flags nothing stale");
+        let after_stale = incr
+            .ir
+            .facts
+            .iter()
+            .filter(|f| f.statement.starts_with("[STALE]"))
+            .count();
+        assert_eq!(after_stale, 0, "no [STALE] facts on a pure rename");
+
+        // Deterministic: re-ingesting the same revision is a no-op
+        let again = incremental_ingest_directory(&tmp.to_string_lossy());
+        assert!(
+            again.is_err() && again.unwrap_err().contains("no changes"),
+            "same-SHA re-ingest should be a no-op"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }

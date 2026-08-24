@@ -56,7 +56,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | KB-009 Repository manifest | P1 | 🟡 | scan metadata exists; versioned manifest untested |
 | INC-001 Rescan idempotent | P0 | ✅ | `ingest_incremental.rs`; stable IDs |
 | INC-002 Modify one file | P0 | ✅ | `ingest_incremental.rs`; affected-KO recompute |
-| INC-003 Rename file | P1 | 🟡 | identity semantics implemented, untested |
+| INC-003 Rename file | P1 | ✅ | `rename_preserves_entity_identity` — git -M identity transfer: old-path entities dropped, evidence path updates, no ghost dup / no [STALE] on pure rename; edited rename versioned like modify |
 | INC-004 Delete file | P0 | ✅ | source deletion → stale/versioned (EVO-002) |
 | INC-005 Branch/revision change | P1 | ✅ | A8 git-diff reconciliation |
 | KO-001..006 Round-trip, restart, types, updates, edges | P0 | ✅ | `crates/kernel/tests/conformance.rs`, `durability.rs`, `proptest_kom.rs` |
