@@ -1,6 +1,6 @@
 # aikoql — Testing & Certification Plan
 
-**Status:** Draft v1 (2026-08-22) · **Companion to:** [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) · **Branch:** feature/mvp-launch
+**Status:** Draft v1 (2026-08-22; certification GO 2026-08-25) · **Companion to:** [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) · **Branch:** feature/mvp-launch
 
 This document turns the two QA certification suites — [AIKOQL-Agent-Knowledge-Certification-Test-Suite.md](AIKOQL-Agent-Knowledge-Certification-Test-Suite.md) (QA-AIKOQL-AGENT-MEMORY-001) and [AIKOQL-Chatbot-Memory-Knowledge-Certification-Test-Suite.md](AIKOQL-Chatbot-Memory-Knowledge-Certification-Test-Suite.md) (QA-AIKOQL-CHATBOT-001) — into an execution plan: what we already cover, what is missing, and how the suites become our end-to-end and acceptance layer.
 
@@ -33,7 +33,7 @@ This document turns the two QA certification suites — [AIKOQL-Agent-Knowledge-
 
 ## 2. Coverage verdict
 
-Substrate-level (agent suite levels 1–3) coverage is strong: all P0 rows and all closeable P1 rows have real tests (the sweep of 2026-08-24 closed KB-008, ONT-002, ONT-004, QL-007, DB-004, RET-CHAT-002/003, FRESH-001, CONT-001..003, LLM-002..004, §30/31, §33, §42–44). The chatbot layer's acceptance stories are scripted where the substrate exists (`mcp_real_world.rs` CHAT-MEM/CTX/§51 scenarios); the rows that remain open are honest ones — feature work (RET-CHAT-001 retention, §38–40 summarization/compression, EVO-003 apply/migrate, AGENT-003/005 agent loops, MM-001..004 connector matrix, PROG-CHAT discovery/approval, MEM-001 working memory, DOC-002 OCR) or chatbot-level policy phrases that are out of AIKOQL's substrate scope (PROV-CHAT, SAFE-CHAT, §34–36 per the row-166 note).
+Substrate-level (agent suite levels 1–3) coverage is strong: all P0 rows and all closeable P1 rows have real tests (the sweep of 2026-08-24 closed KB-008, ONT-002, ONT-004, QL-007, DB-004, RET-CHAT-002/003, FRESH-001, CONT-001..003, LLM-002..004, §30/31, §33, §42–44). The chatbot layer's acceptance stories are scripted where the substrate exists (`mcp_real_world.rs` CHAT-MEM/CTX/§51 scenarios); the rows that remain open are honest ones — feature work (RET-CHAT-001 retention, §38–40 summarization/compression, EVO-003 apply/migrate, AGENT-003/005 agent loops, PROG-CHAT discovery/approval, MEM-001 working memory, DOC-002 OCR) or chatbot-level policy phrases that are out of AIKOQL's substrate scope (PROV-CHAT, SAFE-CHAT, §34–36 per the row-166 note).
 
 ---
 
@@ -60,7 +60,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | INC-004 Delete file | P0 | ✅ | source deletion → stale/versioned (EVO-002) |
 | INC-005 Branch/revision change | P1 | ✅ | A8 git-diff reconciliation |
 | KO-001..006 Round-trip, restart, types, updates, edges | P0 | ✅ | `crates/kernel/tests/conformance.rs`, `durability.rs`, `proptest_kom.rs` |
-| MM-001..004 Per-source models → KO | P1 | 🟡 | fixtures `tests/fixtures/{postgres_sample.sql,mongo_sample.js,neo4j_sample.cypher}` + A9 bridge; automated per-connector matrix missing |
+| MM-001..004 Per-source models → KO | P1 | ✅ | live per-connector matrix: `connector_certification.rs` (20 tests, CI connectors job, 2026-08-25) + fixtures `tests/fixtures/{postgres_sample.sql,mongo_sample.js,neo4j_sample.cypher}` |
 | MM-005 Cross-model identity resolution | P0 | ✅ | `multi_source_ontology.rs` (config-driven resolution) |
 | ONT-001 Explicit ontology validation | P0 | ✅ | `ontology_integration.rs`, MRFC-0060 registry |
 | ONT-002 Auto-discovery | P1 | ✅ | `crates/kernel/src/lifecycle/constraint.rs` — inference confidence gating: `inference_not_null_emits_when_confident` / `inference_not_null_skips_low_confidence` (≥0.9 gate; low-confidence inference is never silently promoted to authoritative truth) |
@@ -181,7 +181,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 
 | # | Gap | Suite IDs | Effort | Notes |
 | --- | --- | --- | --- | --- |
-| G1 | **Traceability + certification runner** — map every suite ID to its test, mark P0–P3, wire to CI tiers | all | ~1 week | This document is the draft; add a machine-readable matrix + a `certs` test that fails on known-GAP P0s |
+| G1 | **Traceability + certification runner** — map every suite ID to its test, mark P0–P3, wire to CI tiers | all | ✅ done (2026-08-22) | `crates/kernel/tests/certification.rs` registry (121 gate IDs); `certification_matrix_integrity` runs in every PR (fails on unregistered ID, missing test path, note-less gap); `certification_p0_closure` in the weekly `--ignored` sweep |
 | G2 | **DB-002 kill-during-write harness** | DB-002 | ✅ done | `crash_kill.rs` d05 + `crash_writer` loop mode: taskkill/SIGKILL mid-write, reopen → journal head ≥ observed progress, all KOs + audit chain intact |
 | G3 | **IDX-001/003 rebuild consistency + orphan sweep** | IDX-001..003 | ✅ done | `indexes.rs` i09–i11: rebuild = identical results; tombstone-while-down swept; canonical update propagates (zero lag) |
 | G4 | **Schema/ontology migration tests** | EVO-003/004, CONT-003, ONT-004 | ✅ done (honest slice) | t06zt (v1→v2 bump: old data + versions preserved, v2 writes coexist, v1 write rejected), t06zw (ontology v1→v2: old knowledge readable, v2 rules bind); CON-003 was already covered; EVO-003 stays open: no apply/migrate op, codec wire format unversioned — feature work |
@@ -193,7 +193,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | G5 | **§51 critical e2e scenario as scripted test** (memory → temporal → authority → program → episode) | §51, CHAT-MEM-*, EVO-CHAT-* | ✅ done | `critical_e2e_scenario_51_chatbot_memory` in `mcp_real_world.rs`; mechanical judges; surfaced 2 boundary bugs (parse_origin `human` unreachable → Origin::Agent; evidence only via assert_knowledge, not remember) |
 | G6 | **Chatbot memory scenarios** (classification, preferences, consolidation, isolation, explainability) | CLASS-*, PERS-*, §30–33 | ✅ done | `chatbot_memory_certification_scenarios` in `mcp_real_world.rs` (§8 CHAT-MEM-001..005 incl. real restart, §9 CLASS-001..005, §11 PERS-001..004); CMEM-001/003/006/007 → covered; surfaced + fixed explain() provenance gap (asserted evidence reported as "Source: unknown" — explain now falls back to the kernel-managed EXT_EVIDENCE) |
 | G7 | **CTX differential tests** (two users, two times, post-update) + 1000-KO minimization | CTX-001..003, CTX-MIN-* | ✅ done | `ctx_differential_scenarios` over MCP (permission differential via ACL-gated IR fetch, temporal differential via experience TTL, post-update via versioned ir_json snapshot) + pure-compiler `ctx_min_*` tests; surfaced + fixed missing pack-time dedup (duplicate entities/facts/relations were packed twice) |
-| G8 | **Connector contract matrix** (postgres/mongo/neo4j positive/negative/timeout/auth/schema-change/incremental) | MM-001..004, §22 | ~2 weeks | fixtures exist; needs per-connector harness |
+| G8 | **Connector contract matrix** (postgres/mongo/neo4j positive/negative/timeout/auth/schema-change/incremental) | MM-001..004, §22 | ✅ done (2026-08-25) | `connector_certification.rs` live suite over the CI services (postgres/pgvector/mongo/neo4j): update/delete/prune/outage/timeout/secret-redaction/ontology — CON-001..007 + ONT-001 + E2E-001/004, 20/20 |
 | G9 | **Unified golden dataset** (expected KOs/relations/evidence/temporal/authorization per question) | §50 | ✅ done | `tests/common/golden_dataset.rs`: one `GOLDEN` table (17 questions × §50 fields: expected answer, KOs, relations, evidence qrels — temporal/authorization/action stay scenario-shaped in the §51 scripts), `SEMANTIC_GOLD` (per-fixture complete extraction gold), `multimodal_expected_entities` (human annotation lists); all corpus instruments (retrieval, semantic, multimodal golden, PR-R e2e) now consume it — the index-aligned `GOLDEN_ANSWERS` const is gone. `golden_dataset_integrity.rs` gates the dataset itself: unique ids/questions, answers grounded in qrel chunks, expected KOs/relations actually extracted, per-question KOs ⊆ human annotation lists. Pinned baseline unchanged (0.867/0.867/0.867, queries=15) |
 
 ### Tier 3 — Flagship benchmarks (P2/P3, post-MVP)
@@ -218,9 +218,9 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 
 | Tier | When | Content | Status today |
 | --- | --- | --- | --- |
-| **PR gate** | every PR | P0 unit + P0 integration + parser + storage + security regression + dogfood e2e | ✅ exists (check/test-linux/lint/e2e-dogfood jobs); needs the P0 traceability wiring from G1 |
-| **Nightly** | scheduled | full P0/P1, connector matrix, performance, fuzz | 🟡 partial (weekly bench regression exists); add connector matrix + full P0/P1 sweep |
-| **Release** | tag | full certification, agent benchmark, memory benchmark, recovery, cross-platform, Docker, security | ❌ — build from G1–G4 + G8; benchmarks land with G10–G12 |
+| **PR gate** | every PR | P0 unit + P0 integration + parser + storage + security regression + dogfood e2e + connectors | ✅ exists — check/test-linux/lint/e2e-dogfood/connectors jobs; P0 traceability wired (`certification_matrix_integrity`) |
+| **Nightly** | scheduled | full P0/P1, connector matrix, performance, fuzz | ✅ exists — weekly bench regression + `certification_p0_closure` sweep; the connector matrix runs live in the CI connectors job |
+| **Release** | tag | full certification, agent benchmark, memory benchmark, recovery, cross-platform, Docker, security | ✅ — certification computes GO (2026-08-25): P0 33/33, P1 13/13, ten area gates PASS, Sev-1/2 = 0; `scripts/certify.js` regenerates the artifacts pack |
 
 ### 6.2 Harness principles
 
@@ -243,11 +243,11 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 
 | Phase | Content | Depends on | Target |
 | --- | --- | --- | --- |
-| **TP-1 — Traceability & gates** | suite-ID → test matrix (machine-readable), P0 registry test that fails on known gaps, wire PR/nightly tiers | — | ✅ implemented (2026-08-22): `crates/kernel/tests/certification.rs` — 121 gate IDs (94 agent P0/P1 + 27 chatbot release claims) as the registry; `certification_matrix_integrity` runs in every PR (fails on unregistered ID, missing test path, note-less gap); `certification_p0_closure` is `#[ignore]` and runs in the weekly `cargo test --workspace -- --ignored` sweep (benchmark-nightly.yml) — currently red on 2 P0s by design (DB-002, EVO-003) |
-| **TP-2 — P0 gap closure** | G2 (kill harness), G3 (index rebuild), G4 (migration) | TP-1 | before next release tag |
+| **TP-1 — Traceability & gates** | suite-ID → test matrix (machine-readable), P0 registry test that fails on known gaps, wire PR/nightly tiers | — | ✅ implemented (2026-08-22): `crates/kernel/tests/certification.rs` — 121 gate IDs (94 agent P0/P1 + 27 chatbot release claims) as the registry; `certification_matrix_integrity` runs in every PR (fails on unregistered ID, missing test path, note-less gap); `certification_p0_closure` is `#[ignore]` and runs in the weekly `cargo test --workspace -- --ignored` sweep (benchmark-nightly.yml) — currently red on 1 P0 by design (EVO-003 — apply/migrate op is feature work); DB-002 covered via `crash_kill.rs` |
+| **TP-2 — P0 gap closure** | G2 (kill harness), G3 (index rebuild), G4 (migration) | TP-1 | ✅ done — G2 `crash_kill.rs`, G3 `indexes.rs` i09–i11, G4 t06zt/t06zw honest slice |
 | **TP-3 — Acceptance scenarios** | ✅ COMPLETE: G5 (§51 script) ✅, G6 (chatbot memory) ✅, G7 (CTX differential) ✅, G9 (unified golden dataset) ✅ | TP-1 | ✅ done (2026-08-22) |
 | **TP-4 — Flagship benchmarks** | ✅ COMPLETE: G12 token/latency/cost ✅ (2026-08-22), G11 chatbot comparative ✅ (2026-08-22), G10 agent efficacy ✅ (2026-08-23) | TP-3 corpus | ✅ done — all three flagships measured |
-| **TP-5 — Connector matrix** | G8 per-connector contract tests | connector workstream in IMPLEMENTATION-PLAN | post-MVP, ~2 weeks once connectors land |
+| **TP-5 — Connector matrix** | G8 per-connector contract tests | pulled forward per §9.3 (2026-08-25) | ✅ done (2026-08-25) — live suite in the CI connectors job, 20/20 |
 | **TP-6 — Product features** | G13 retention/summarization → then their certification | IMPLEMENTATION-PLAN roadmap | post-MVP |
 
 Post-MVP sequencing note: TP-1/TP-2 are cheap and buy the "certification-grade" claim; TP-3 gives the chatbot suite's acceptance stories; TP-4 is the flagship empirical claim ("agents solve tasks more reliably with AIKOQL while consuming less budget") and is the largest single workstream — it also produces the evidence packs the compliance workstream needs.
@@ -256,10 +256,10 @@ Post-MVP sequencing note: TP-1/TP-2 are cheap and buy the "certification-grade" 
 
 ## 8. Immediate next steps
 
-1. **MVP-QA-001 certification (§9)**: TDD the 11 closeable substrate items in §9.4 order (KO-003 → EXT-001/002/003 → EVO-003/004/005 → SEC-004 → PRG-003 → REC-002 → DEP-003 → artifacts runner), then assemble the `artifacts/` release-gate pack. Connector rows (MVP-CON-*) stay NOT_IMPLEMENTED until the TP-5 scope decision (§9.3).
+1. **MVP-QA-001 certification (§9)**: ✅ COMPLETE (2026-08-25) — 24 TDD items closed in §9.4 order (KO-003 → EXT-001/002/003 → EVO-003/004/005 → SEC-004 → PRG-003 → REC-002 → DEP-003 → artifacts runner → connectors → E2E → registry flip). `scripts/certify.js` regenerates the `artifacts/` pack and computes **GO**: P0 33/33, P1 13/13, ten area gates PASS, Sev-1/2 = 0.
 2. **TP-4**: ✅ COMPLETE — all three flagships measured: G10 agent efficacy (`agent_efficacy_bench.rs`), G11 chatbot comparative (§52 table), G12 token/latency/cost. Compliance evidence packs can now be assembled from the three measured tables.
 2. **P1 extraction follow-ups** (from G10 rerun): section-heading anchors measured negative and reverted (D 0.350→0.300); exact-token gate escape shipped and measured positive (D 0.350→0.400, all gates green); pack budget rebalance shipped and measured positive (entities capped at 3/5 of the budget — D 0.400→0.550, all gates green); skip-over packing shipped and measured positive (D 0.550→0.700 under the lenient judge, all gates green); judge hardening shipped (1-2 token goldens require every token — honest D 0.550; A 0.100); punctuation fix for the exact-token escape shipped and measured positive (task words split on non-alphanumeric — "cite?" now matches "cite"; D 0.550→0.650 with T10/T17 gained, all gates green); entity cap tightened 3/5→1/2 and measured positive (D 0.650→0.800 with T6/T13/T18 gained — the est-241 golden facts now fit the widened facts fold — zero losses, all gates green). Closed since: the remaining 4 misses (size-skip T8, ranking eviction T11, no-bridge cell fact T16, bare-digit golden T19 — see row 128, D reached 1.000 at 20/20) and the 50–100-task corpus extension (TASKS 20 → 51, D 51/51, see row 128).
-3. **TP-5** (once connectors land): G8 per-connector contract matrix.
+3. **TP-5**: ✅ done (2026-08-25) — G8 per-connector contract matrix landed (`connector_certification.rs`, CI connectors job).
 4. Keep the two suite docs in `docs/` as the source of truth for ID numbering; the registry (`certification.rs`) is the enforcement layer — add a row there when a gap closes, never remove a gap row without its test.
 
 ---
@@ -324,7 +324,7 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | INV-001..010 invariants | — | G14 | ✅ | no-orphan (t06b/c), idempotence, provenance, evidence, authz closure, temporal consistency, atomicity (t06k), restart, determinism ✅; INV-010 source isolation both sides: repo (`git_change_set_propagates_git_failure`) + connector (MVP-CON-007 live tests) |
 | §23 Artifacts (artifacts/ + release-gate.md) | — | — | ✅ | TDD 2026-08-25: `scripts/certify.js` regenerates the 5 artifacts + the release-gate verdict from this registry; `--self-test` pins the decision logic on fixtures, `--check` fails CI on stale artifacts |
 
-### 9.2 Gate readout (QA-lead view, before TDD items)
+### 9.2 Gate readout (QA-lead view — all fourteen gates read ✅/PASS per certify.js 2026-08-25)
 
 | Gate | Requirement | Today |
 | --- | --- | --- |
@@ -332,8 +332,8 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | GATE-02 P1 correctness | ≥98% | ✅ — all P1 rows pass |
 | GATE-03 Critical security | 100% | ✅ — SEC-004 log-redaction + CON-006 connector secrets |
 | GATE-04 Connector certification | 100% | ✅ **PASS — all connector rows live+green in the CI connectors job (2026-08-25)** |
-| GATE-05 Evidence preservation | 100% | 🟡 — EXT-001/002/003 TDD items |
-| GATE-06 Mutation/evolution | 100% | 🟡 — EVO-003/004/005 TDD items |
+| GATE-05 Evidence preservation | 100% | ✅ — MVP-EXT-001/002/003 + MVP-CTX-004 rows all green (TDD 2026-08-24/25) |
+| GATE-06 Mutation/evolution | 100% | ✅ — MVP-EVO-003/004/005 relation freshness + re-ingest growth all green (TDD 2026-08-25); the EVO-003 *schema*-migration apply/migrate op stays open as feature work, out of MVP-QA-001 scope |
 | GATE-07 Temporal | 100% | ✅ |
 | GATE-08 Recovery | 100% | ✅ — REC-002 restore round-trip (verified live backup, destroy, restore, equivalent KO) |
 | GATE-09 Docker/installability | 100% | ✅ — DEP-003 volume-backed restart (CI docker job) |
@@ -360,7 +360,7 @@ MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04,
 8. ~~MVP-PRG-003 invalid program metadata (kernel experiences)~~ ✅ done 2026-08-25 — `record_experience_rejects_invalid_program_metadata`; green without production change (shape/TTL/confidence validation already in ops.rs) — test pins it
 9. ~~MVP-REC-002 backup→destroy→restore round-trip (mcp_real_world)~~ ✅ done 2026-08-25 — `mvp_rec_002_backup_destroy_restore_round_trip`; red caught `std::fs::copy` on the live redb file (Windows region lock, os error 33 — the old Phase 9 assertion was a false positive on error objects) → engine-level `StorageEngine::snapshot_to`/`restore_from` (kernel-side, `EncryptedStore` delegates raw so ciphertext moves verbatim); same round: restore's hard-coded `data.redb` → `backup_data_file` from meta source, list_backups now scans the db's directory (was server CWD) and matches `contains(".backup.")` (was a never-matching `ends_with`)
 10. ~~MVP-DEP-003 volume restart (CI)~~ ✅ done 2026-08-25 — `scripts/e2e-volume-restart.js` wired into the docker job; green without a production change (the /data container contract already held) — test pins it; verified locally against `aikoql:test` (docker daemon up) + in CI
-11. ~~§23 artifacts runner (`scripts/` or registry-driven test) → `artifacts/release-gate.md`~~ ✅ done 2026-08-25 — `scripts/certify.js` (`--self-test` pins the decision logic, `--check` fails CI on stale artifacts); the generated gate is currently NO-GO per §24 — the connector rows are honestly NOT_IMPLEMENTED/BLOCKED plus CON-006/E2E-004 open (§9.3)
+11. ~~§23 artifacts runner (`scripts/` or registry-driven test) → `artifacts/release-gate.md`~~ ✅ done 2026-08-25 — `scripts/certify.js` (`--self-test` pins the decision logic, `--check` fails CI on stale artifacts); the generated gate was NO-GO per §24 at that point — the connector rows were honestly NOT_IMPLEMENTED/BLOCKED plus CON-006/E2E-004 open (§9.3); superseded by item 24 (GO, 2026-08-25)
 12. ~~CON-001 PG incremental update + ImportSink~~ ✅ done 2026-08-25 — `con001_pg_update_reflects_source_change` (red caught TWO bugs: provider owner `postgres-importer` vs runner subject `pg-importer` → every commit ACCESS_DENIED, `import postgres` was a silent no-op exiting 0; then constant idem key `pg-import-{table}-{koid}` → re-import of a changed row replays the original commit) + `con001_pg_reingest_ten_times_no_growth` (skip-if-identical pin); `ImportSink` per-run idem keys (`--run-id`, default fresh), commit failure now exits non-zero
 13. ~~CON-001 PG delete reconcile + outage guard~~ ✅ done 2026-08-25 — `con001_pg_deleted_row_is_tombstoned` (red: no prune — deleted source row stayed live) + `con001_pg_import_failure_never_prunes` (dead-port import must not tombstone anything); `ImportSink::prune_missing` runs only after every table committed — `forget(Tombstone)` per absent KOID, any failure exits before the prune pass
 14. ~~CON-001 PG foreign keys → relationships~~ ✅ done 2026-08-25 — `con001_pg_fk_becomes_relationship` (private per-test database via harness `pg_private_db`, filterless import, FK must appear as Outbound `RelationshipRef{rel_type: constraint name}` on the child KO; re-import must not duplicate); red caught a THIRD bug: the `try_is_null` heuristic misread nullable non-NULL integers as NULL (FK values imported as `Value::Null`) → `pg_cell_to_value` now reads each type family as `Option<T>` (driver-native NULL detection). Production: `introspect_foreign_keys` (information_schema) + `link_relationships` (parent PK→KOID index across the run's objects; links only single-column-PK FKs whose both tables were imported this run); runner phases A(read all)→B(link)→C(commit)→D(prune)
@@ -375,7 +375,7 @@ MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04,
 23. ~~E2E-004 multi-source coherent query~~ ✅ done 2026-08-25 — `e2e004_multisource_query_single_coherent_result`: four sources into one db (pg private db `cert_e2e004` table `e2e4_customer` alice/Berlin; mongo coll `cert_e2e004_profiles` with `customer_name: alice`; neo4j label `P_E2e004` alice + `WORKS_WITH_E2e004`→bob; ingest-dir temp dir with alice-notes.md) → `import postgres/mongodb/neo4j` + `ingest-dir` → MCP `serve` → `session/init` as an admin subject (kernel authz grants admin read across all importer owners — that is what makes one query span every source) → ONE `find_similar {text: "alice", fusion: "text"}` (cross-type kernel search, no type filter) → result must contain KOIDs from all three live sources AND resolve per-KOID through the kernel to `source:postgres`/`source:mongodb`/`source:neo4j` tags plus at least one KO tagged `ingest-dir`. **Green day one, no production change** (test-only close pinning items 2-7 + the multi-source query surface). One test-side fix on the way in: the neo4j import call passed credentials positionally, but the CLI requires `--user`/`--password` flags (401 from the runner otherwise) — a harness bug, not a product red. Asserts are "contains" so sibling tests' alice-named KOs in the shared live DBs are tolerated. Suite 20/20, fmt/clippy/workspace/certify clean
 24. ~~Registry flip + artifacts + §9.3 resolved~~ ✅ done 2026-08-25 — the `MVP-CON-001..004` row split into four (CON-001 PG, CON-002 Mongo, CON-003 Neo4j, CON-004 PGVector); flipped ✅ per the spec rule (a row flips only after its test exists and runs green): CON-001..007, ONT-001, E2E-001, E2E-004, INV-010 (both legs). GATE-01..04 read ✅ in §9.2; §9.3 rewritten as **resolved**. `scripts/certify.js` regenerated the five artifacts: **final decision GO** — P0 33/33, P1 13/13, all ten area gates PASS, Sev-1/2 = 0, no blocking rows; `--self-test` PASS (6 decision fixtures)
 
-Each item: write the failing test → run (red) → fix root cause → green → full regression + G10 gate → commit. BLOCKED-on-connectors rows stay open honestly and are re-evaluated when TP-5 lands.
+Each item: write the failing test → run (red) → fix root cause → green → full regression + G10 gate → commit. All connector rows landed with TP-5 (2026-08-25) — no BLOCKED rows remain.
 
 ---
 
