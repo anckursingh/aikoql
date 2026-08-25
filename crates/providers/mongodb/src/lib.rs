@@ -115,7 +115,10 @@ impl MongoConnector {
                         relationships: vec![],
                         event_refs: vec![],
                         security: SecurityDescriptor {
-                            owner: "mongodb-importer".into(),
+                            // Must equal the runner subject "mongo-importer" —
+                            // a mismatch makes every commit ACCESS_DENIED and
+                            // the whole import a silent no-op (item 2 lesson).
+                            owner: "mongo-importer".into(),
                             acl: vec![],
                             classification: None,
                         },
@@ -146,6 +149,8 @@ fn document_to_ko(doc: &Document, collection: &str) -> (PropertyMap, KOID) {
             props.insert(key.clone(), bson_to_value(value));
         }
     }
+    // ponytail: the fallback key is non-deterministic across re-imports, but
+    // it cannot occur in practice — MongoDB always assigns _id on insert.
     let pk = vec![id_str.unwrap_or_else(|| format!("{}:{}", collection, props.len()))];
     (props, deterministic_koid(collection, &pk))
 }

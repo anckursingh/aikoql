@@ -338,6 +338,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     let mut target_db = "./aikoql.redb";
                     let mut tenant: Option<&str> = None;
                     let mut coll_filter: Option<&str> = None;
+                    let mut run_id = fresh_run_id();
                     let mut mi = 1;
                     while mi < ti_args.len() {
                         match ti_args[mi] {
@@ -365,6 +366,14 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                                     mi += 1;
                                 }
                             }
+                            "--run-id" => {
+                                if mi + 1 < ti_args.len() {
+                                    run_id = ti_args[mi + 1].to_string();
+                                    mi += 2;
+                                } else {
+                                    mi += 1;
+                                }
+                            }
                             _ if !ti_args[mi].starts_with("--") => {
                                 if uri.is_none() {
                                     uri = Some(ti_args[mi]);
@@ -383,14 +392,14 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                         }
                     }
                     let u = uri.unwrap_or_else(|| {
-                        eprintln!("Usage: aikoql-mcp import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [DB_PATH]");
+                        eprintln!("Usage: aikoql-mcp import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [--run-id ID] [DB_PATH]");
                         std::process::exit(1);
                     });
                     let db = database.unwrap_or_else(|| {
                         eprintln!("Missing --db <DATABASE_NAME>");
                         std::process::exit(1);
                     });
-                    run_mongo_import(u, db, target_db, tenant, coll_filter);
+                    run_mongo_import(u, db, target_db, tenant, coll_filter, &run_id);
                 }
                 "sqlite" => {
                     let mut source_file: Option<&str> = None;

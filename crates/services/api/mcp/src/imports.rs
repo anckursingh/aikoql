@@ -334,6 +334,7 @@ pub(crate) fn run_mongo_import(
     target_db: &str,
     tenant: Option<&str>,
     coll_filter: Option<&str>,
+    run_id: &str,
 ) {
     use aikoql_mongodb::MongoConnector;
 
@@ -381,44 +382,54 @@ pub(crate) fn run_mongo_import(
             std::process::exit(1);
         }
     };
-    let mut total_imported = 0usize;
+    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("mongo-importer"));
+    let filtered: Vec<&aikoql_mongodb::CollectionSchema> = schemas
+        .iter()
+        .filter(|s| coll_filter.is_none_or(|cf| s.name == cf))
+        .collect();
 
-    for schema in &schemas {
-        if let Some(cf) = coll_filter {
-            if schema.name != cf {
-                continue;
-            }
-        }
+    // Phase A: read every filtered collection (no commits yet).
+    let mut all_objects: Vec<KnowledgeObject> = Vec::new();
+    for schema in &filtered {
         println!("Importing {}...", schema.name);
-        match connector.import_collection(schema, tenant) {
-            Ok(objects) => {
-                let count = objects.len();
-                for ko in objects {
-                    let idem_key = format!("mongo-import-{}-{}", schema.name, ko.koid.to_hex());
-                    match kernel.remember(RememberRequest {
-                        context: Subject::new("mongo-importer").into(),
-                        koid: Some(ko.koid),
-                        expected_version: Some(0),
-                        idempotency_key: Some(idem_key),
-                        metadata: ko.metadata,
-                        properties: ko.properties,
-                        semantic: None,
-                        relationships: vec![],
-                        security: Some(ko.security),
-                        extensions: ko.extensions,
-                        origin: Origin::Human,
-                        note: Some("imported from MongoDB".into()),
-                        referential_policy: ReferentialPolicy::Permissive,
-                    }) {
-                        Ok(_) => {}
-                        Err(e) => eprintln!("  Warning: failed to commit doc: {}", e),
-                    }
-                }
-                total_imported += count;
-                println!("  {} documents imported", count);
-            }
+        let objects = match connector.import_collection(schema, tenant) {
+            Ok(o) => o,
             Err(e) => {
                 eprintln!("  Error importing {}: {}", schema.name, e);
+                std::process::exit(1);
+            }
+        };
+        println!("  {} documents read", objects.len());
+        all_objects.extend(objects);
+    }
+
+    // Phase B: commit. Any failure exits before the prune pass (CON-007).
+    let mut present_by_table: HashMap<String, HashSet<KOID>> = HashMap::new();
+    let mut total_imported = 0usize;
+    for ko in all_objects {
+        let coll = ko.metadata.type_name.clone();
+        present_by_table
+            .entry(coll.clone())
+            .or_default()
+            .insert(ko.koid);
+        match sink.put(ko, "mongo-import", "imported from MongoDB") {
+            Ok(true) => total_imported += 1,
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("  Failed to commit doc from {coll}: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Phase C: reconcile deletions on the all-success path only.
+    for (coll, present) in &present_by_table {
+        match sink.prune_missing(coll, present) {
+            Ok(0) => {}
+            Ok(n) => println!("  {n} stale doc(s) tombstoned in {coll}"),
+            Err(e) => {
+                eprintln!("  prune {coll}: {e}");
+                std::process::exit(1);
             }
         }
     }

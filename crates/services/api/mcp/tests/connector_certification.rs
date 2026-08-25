@@ -326,3 +326,211 @@ fn con001_pg_fk_becomes_relationship() {
         "re-import must not duplicate relationships"
     );
 }
+
+// ---------------------------------------------------------------------------
+// MVP-CON-002 — MongoDB connector (item 5)
+// ---------------------------------------------------------------------------
+
+fn con002_ko_by_name(
+    k: &aikoql_kernel::Kernel,
+    coll: &str,
+    name: &str,
+) -> aikoql_kernel::KnowledgeObject {
+    use aikoql_kernel::Value;
+    connectors::scan_type(k, "mongo-importer", coll)
+        .into_iter()
+        .find(|ko| ko.properties.get("name") == Some(&Value::Text(name.into())))
+        .unwrap_or_else(|| panic!("{name} missing"))
+}
+
+fn con002_age_of(k: &aikoql_kernel::Kernel, coll: &str) -> i64 {
+    use aikoql_kernel::Value;
+    let kos = connectors::scan_type(k, "mongo-importer", coll);
+    assert_eq!(kos.len(), 1, "one doc expected, got {}", kos.len());
+    match kos[0].properties.get("age") {
+        Some(Value::Int(a)) => *a,
+        other => panic!("age not an int: {other:?}"),
+    }
+}
+
+/// MVP-CON-002: nested documents and arrays must survive the import as
+/// Value::Map / Value::List. Red today: mongo import is a silent no-op
+/// (owner `mongodb-importer` vs runner subject `mongo-importer` →
+/// ACCESS_DENIED on every commit, exit 0) — no KOs at all.
+#[test]
+fn con002_mongo_nested_structures_preserved() {
+    use aikoql_kernel::Value;
+    let Some(live) = connectors::Live::mongo() else {
+        return;
+    };
+    let coll = "cert_con002_nested";
+    connectors::mongo_seed(
+        &live.mongo_uri,
+        &live.mongo_db,
+        coll,
+        vec![mongodb::bson::doc! {
+            "_id": "u1",
+            "name": "alice",
+            "profile": { "city": "Berlin", "age": 30 },
+            "tags": ["a", "b"],
+        }],
+    );
+    let db = connectors::temp_db("con002-nested");
+    let out = connectors::run_import(&[
+        "import",
+        "mongodb",
+        &live.mongo_uri,
+        "--db",
+        &live.mongo_db,
+        "--collection",
+        coll,
+        &db,
+    ]);
+    connectors::assert_import_ok(&out, coll);
+
+    let k = connectors::open_kernel(&db);
+    let kos = connectors::scan_type(&k, "mongo-importer", coll);
+    assert_eq!(kos.len(), 1, "one document must import as one KO");
+    let props = &kos[0].properties;
+    let mut m = std::collections::BTreeMap::new();
+    m.insert("city".to_string(), Value::Text("Berlin".into()));
+    m.insert("age".to_string(), Value::Int(30));
+    assert_eq!(
+        props.get("profile"),
+        Some(&Value::Map(m)),
+        "nested doc must import as Value::Map"
+    );
+    assert_eq!(
+        props.get("tags"),
+        Some(&Value::List(vec![
+            Value::Text("a".into()),
+            Value::Text("b".into())
+        ])),
+        "array must import as Value::List"
+    );
+}
+
+/// MVP-CON-002: re-import after a source UPDATE must move the head KO.
+/// Red today: constant idem key replays the original commit (same bug as
+/// PG item 2) — and the owner mismatch no-ops even the first import.
+#[test]
+fn con002_mongo_update_reflects_source_change() {
+    let Some(live) = connectors::Live::mongo() else {
+        return;
+    };
+    let coll = "cert_con002_update";
+    connectors::mongo_seed(
+        &live.mongo_uri,
+        &live.mongo_db,
+        coll,
+        vec![mongodb::bson::doc! {"_id": "u1", "name": "alice", "age": 30}],
+    );
+    let db = connectors::temp_db("con002-update");
+
+    let import = || {
+        let out = connectors::run_import(&[
+            "import",
+            "mongodb",
+            &live.mongo_uri,
+            "--db",
+            &live.mongo_db,
+            "--collection",
+            coll,
+            &db,
+        ]);
+        connectors::assert_import_ok(&out, coll);
+    };
+
+    import();
+    {
+        let k = connectors::open_kernel(&db);
+        assert_eq!(con002_age_of(&k, coll), 30, "initial import");
+        drop(k);
+    }
+
+    connectors::mongo_update(
+        &live.mongo_uri,
+        &live.mongo_db,
+        coll,
+        mongodb::bson::doc! {"_id": "u1"},
+        mongodb::bson::doc! {"$set": {"age": 31}},
+    );
+    import();
+
+    let k = connectors::open_kernel(&db);
+    assert_eq!(
+        con002_age_of(&k, coll),
+        31,
+        "re-import must reflect the source change (update)"
+    );
+}
+
+/// MVP-CON-002: a document deleted at the source is tombstoned on the next
+/// successful re-import.
+#[test]
+fn con002_mongo_deleted_doc_is_tombstoned() {
+    use aikoql_kernel::LifecycleState;
+    let Some(live) = connectors::Live::mongo() else {
+        return;
+    };
+    let coll = "cert_con002_delete";
+    connectors::mongo_seed(
+        &live.mongo_uri,
+        &live.mongo_db,
+        coll,
+        vec![
+            mongodb::bson::doc! {"_id": "u1", "name": "alice", "age": 30},
+            mongodb::bson::doc! {"_id": "u2", "name": "bob", "age": 25},
+        ],
+    );
+    let db = connectors::temp_db("con002-delete");
+
+    let import = || {
+        let out = connectors::run_import(&[
+            "import",
+            "mongodb",
+            &live.mongo_uri,
+            "--db",
+            &live.mongo_db,
+            "--collection",
+            coll,
+            &db,
+        ]);
+        connectors::assert_import_ok(&out, coll);
+    };
+
+    import();
+    let bob = {
+        let k = connectors::open_kernel(&db);
+        let ko = con002_ko_by_name(&k, coll, "bob");
+        drop(k);
+        ko.koid
+    };
+
+    connectors::mongo_delete(
+        &live.mongo_uri,
+        &live.mongo_db,
+        coll,
+        mongodb::bson::doc! {"_id": "u2"},
+    );
+    import();
+
+    let k = connectors::open_kernel(&db);
+    let live_bob = connectors::scan_type(&k, "mongo-importer", coll)
+        .iter()
+        .any(|ko| ko.koid == bob);
+    assert!(
+        !live_bob,
+        "bob must not appear as live knowledge after the source DELETE"
+    );
+    let ctx = aikoql_kernel::KnowledgeContext::from(aikoql_kernel::Subject::new("mongo-importer"));
+    let head = k
+        .get(ctx, &bob)
+        .unwrap_or_else(|e| panic!("bob's head vanished: {e}"));
+    assert_eq!(
+        head.lifecycle.state,
+        LifecycleState::Deleted,
+        "deleted source doc must be tombstoned"
+    );
+    assert_eq!(con002_age_of(&k, coll), 30);
+}

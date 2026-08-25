@@ -153,6 +153,7 @@ dependencies = [
  "aikoql-semantic",
  "aikoql-sqlite",
  "base64 0.22.1",
+ "mongodb",
  "postgres",
  "serde",
  "serde_json",

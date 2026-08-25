@@ -263,6 +263,71 @@ pub fn pg_exec(dsn: &str, stmts: &[&str]) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// MongoDB seeding (TDD item 5)
+// ---------------------------------------------------------------------------
+
+fn mongo_rt() -> tokio::runtime::Runtime {
+    tokio::runtime::Runtime::new().unwrap_or_else(|e| panic!("mongo tokio runtime: {e}"))
+}
+
+/// Drop + seed one collection. The drop clears leftovers from earlier runs —
+/// the live mongo database is shared state across test invocations, unlike
+/// the per-run redb files.
+pub fn mongo_seed(uri: &str, db: &str, coll: &str, docs: Vec<mongodb::bson::Document>) {
+    let rt = mongo_rt();
+    rt.block_on(async {
+        let client = mongodb::Client::with_uri_str(uri)
+            .await
+            .unwrap_or_else(|e| panic!("mongo seed connect: {e}"));
+        let c = client
+            .database(db)
+            .collection::<mongodb::bson::Document>(coll);
+        c.drop()
+            .await
+            .unwrap_or_else(|e| panic!("mongo drop {coll}: {e}"));
+        c.insert_many(docs)
+            .await
+            .unwrap_or_else(|e| panic!("mongo seed {coll}: {e}"));
+    });
+}
+
+pub fn mongo_update(
+    uri: &str,
+    db: &str,
+    coll: &str,
+    filter: mongodb::bson::Document,
+    update: mongodb::bson::Document,
+) {
+    let rt = mongo_rt();
+    rt.block_on(async {
+        let client = mongodb::Client::with_uri_str(uri)
+            .await
+            .unwrap_or_else(|e| panic!("mongo update connect: {e}"));
+        client
+            .database(db)
+            .collection::<mongodb::bson::Document>(coll)
+            .update_one(filter, update)
+            .await
+            .unwrap_or_else(|e| panic!("mongo update {coll}: {e}"));
+    });
+}
+
+pub fn mongo_delete(uri: &str, db: &str, coll: &str, filter: mongodb::bson::Document) {
+    let rt = mongo_rt();
+    rt.block_on(async {
+        let client = mongodb::Client::with_uri_str(uri)
+            .await
+            .unwrap_or_else(|e| panic!("mongo delete connect: {e}"));
+        client
+            .database(db)
+            .collection::<mongodb::bson::Document>(coll)
+            .delete_one(filter)
+            .await
+            .unwrap_or_else(|e| panic!("mongo delete {coll}: {e}"));
+    });
+}
+
 /// Create a throwaway database for this test and return the dsn pointed at
 /// it. Parallel test fns share one live server, so any filterless import
 /// (FK item, E2E items) gets its own database instead of racing the other

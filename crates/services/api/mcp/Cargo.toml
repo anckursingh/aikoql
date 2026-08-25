@@ -37,4 +37,5 @@ embedding-openai = ["aikoql-semantic/embedding-openai"]
 # directly (aikoql-mcp is a binary crate — no lib API to read state back).
 aikoql-kernel = { path = "../../../kernel" }
 postgres = "0.19"
+mongodb = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
