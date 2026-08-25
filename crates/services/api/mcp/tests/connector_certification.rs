@@ -1481,3 +1481,80 @@ fn ont001_live_discovery_merges_three_sources() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// MVP-E2E-001 — PostgreSQL → KO → query with provenance (item 12)
+// ---------------------------------------------------------------------------
+
+/// MVP-E2E-001: a live PostgreSQL table must flow end-to-end — import row →
+/// KnowledgeObject → MCP `aikoql` query → resolvable provenance. The query
+/// returns the seeded rows with their KOIDs, and a result KOID must resolve
+/// through the kernel to a KO tagged `source:postgres`.
+#[test]
+fn e2e001_pg_to_ko_to_query_with_provenance() {
+    let Some(live) = connectors::Live::pg() else {
+        return;
+    };
+    let dsn = connectors::pg_private_db(&live.dsn, "cert_e2e001");
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE e2e_customer (id SERIAL PRIMARY KEY, name TEXT NOT NULL, city TEXT NOT NULL)",
+            "INSERT INTO e2e_customer (name, city) VALUES ('alice', 'Berlin'), ('bob', 'London')",
+        ],
+    );
+    let db = connectors::temp_db("e2e001");
+
+    let out = connectors::run_import(&["import", "postgres", &dsn, &db]);
+    connectors::assert_import_ok(&out, "e2e_customer");
+
+    // Query through the product surface (MCP server + aikoql), as the owner
+    // subject — the scan is authz-filtered (item 2 lesson).
+    let mut client = connectors::McpQueryClient::start(&db);
+    let all = client.call(
+        "aikoql",
+        serde_json::json!({"subject": "pg-importer", "query": "MATCH e2e_customer RETURN *"}),
+    );
+    let rows = all["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "both seeded rows must be queryable: {all}");
+    let alice = rows
+        .iter()
+        .find(|r| r["properties"]["name"] == "alice")
+        .unwrap_or_else(|| panic!("alice missing: {all}"));
+    assert_eq!(alice["properties"]["city"], "Berlin");
+    assert_eq!(alice["type_name"], "e2e_customer");
+    let alice_koid = alice["koid"].as_str().unwrap().to_string();
+
+    let filtered = client.call(
+        "aikoql",
+        serde_json::json!({
+            "subject": "pg-importer",
+            "query": "MATCH e2e_customer WHERE name == \"alice\" RETURN *"
+        }),
+    );
+    let frows = filtered["results"].as_array().unwrap();
+    assert_eq!(frows.len(), 1, "WHERE filter must narrow: {filtered}");
+    assert_eq!(
+        frows[0]["koid"], alice_koid,
+        "same KO must back both results"
+    );
+    drop(client); // release the redb lock before the kernel read
+
+    // Provenance: the query result's KOID must resolve to a KO carrying the
+    // source tag — the answer is traceable back to PostgreSQL.
+    let k = connectors::open_kernel(&db);
+    let ko = connectors::scan_type(&k, "pg-importer", "e2e_customer")
+        .into_iter()
+        .find(|ko| ko.koid.to_hex() == alice_koid)
+        .unwrap_or_else(|| panic!("koid {alice_koid} not resolvable"));
+    assert!(
+        ko.metadata.tags.iter().any(|t| t == "source:postgres"),
+        "tags: {:?}",
+        ko.metadata.tags
+    );
+    assert!(ko.metadata.tags.iter().any(|t| t == "imported"));
+    assert_eq!(
+        ko.properties.get("name"),
+        Some(&aikoql_kernel::Value::Text("alice".into()))
+    );
+}

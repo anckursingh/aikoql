@@ -407,3 +407,92 @@ pub fn scan_type(
     k.scan_by_type(&aikoql_kernel::Subject::new(subject), type_name)
         .unwrap_or_else(|e| panic!("scan {type_name}: {e}"))
 }
+
+// ---------------------------------------------------------------------------
+// MCP query client (TDD items 12..13)
+// ---------------------------------------------------------------------------
+
+/// Minimal MCP stdio client — spawns `aikoql-mcp serve <db>`, completes the
+/// JSON-RPC initialize handshake, and exposes one `call` (tool name + args).
+/// ponytail: a third copy of mcp_real_world/mcp_stdio's private client; those
+/// predate this harness and consolidating them is churn outside the TDD items.
+pub struct McpQueryClient {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    reader: std::io::BufReader<std::process::ChildStdout>,
+    next_id: u64,
+}
+
+impl McpQueryClient {
+    pub fn start(db: &str) -> Self {
+        let mut child = Command::new(binary_path())
+            .args(["serve", db])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit()) // crash output lands in CI logs
+            .spawn()
+            .unwrap_or_else(|e| panic!("start MCP server: {e}"));
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut client = McpQueryClient {
+            child,
+            stdin,
+            reader: std::io::BufReader::new(stdout),
+            next_id: 1,
+        };
+        let _ = client.exchange(serde_json::json!({
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                       "clientInfo": {"name": "connector-cert", "version": "0"}}
+        }));
+        // Notifications get no response — write, don't read.
+        use std::io::Write;
+        client
+            .stdin
+            .write_all(
+                (serde_json::to_string(&serde_json::json!({
+                    "jsonrpc": "2.0", "method": "notifications/initialized"
+                }))
+                .unwrap()
+                    + "\n")
+                    .as_bytes(),
+            )
+            .unwrap();
+        client.stdin.flush().unwrap();
+        client
+    }
+
+    /// One JSON-RPC request, one response line (stdio transport).
+    fn exchange(&mut self, req: serde_json::Value) -> serde_json::Value {
+        use std::io::{BufRead, Write};
+        self.stdin
+            .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
+            .unwrap();
+        self.stdin.flush().unwrap();
+        let mut response = String::new();
+        self.reader.read_line(&mut response).unwrap();
+        serde_json::from_str(&response).unwrap()
+    }
+
+    /// Call an MCP tool; returns the parsed `content[0].text` JSON payload.
+    pub fn call(&mut self, tool: &str, args: serde_json::Value) -> serde_json::Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        let v = self.exchange(serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": tool, "arguments": args}
+        }));
+        if let Some(err) = v.get("error") {
+            panic!("MCP error for {tool}: {err}");
+        }
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({"raw": text}))
+    }
+}
+
+impl Drop for McpQueryClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
