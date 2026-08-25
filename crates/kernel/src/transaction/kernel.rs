@@ -892,8 +892,9 @@ impl Kernel {
     /// `schema_version` stamp is bumped, and the batch commits through
     /// `transact` (per-object authz via the existing write path, OCC on every
     /// head, schema + constraint validation against the NEW schema). The
-    /// target schema is registered only after the batch commits; on any
-    /// failure the previous registration is restored and nothing changes.
+    /// target schema row commits in the SAME engine batch as the data rows
+    /// (SCHEMA-006: no hybrid window); on any failure only the in-memory
+    /// registration is rolled back and nothing persists.
     ///
     /// Deterministic version gate: the new version must be prev+1, or — for an
     /// identical re-apply (idempotent retry) — equal to prev with the exact
@@ -998,18 +999,16 @@ impl Kernel {
         }
         let migrated = ops.len();
 
-        // Register the target schema first so `transact` validates the stamped
-        // KOs against it; roll back on failure. Registration is persisted
-        // (REC-002), so rollback rewrites the previous schema row. Transact's
-        // OCC re-check makes the pre-transact scan race-safe.
-        self.register_schema(new_schema.clone())?;
-        if let Err(e) = self.transact(ops) {
-            if let Err(rb) = self.register_schema(prev) {
-                return Err(KError::InvalidSchema(format!(
-                    "migration failed ({}); schema rollback also failed: {}",
-                    e, rb
-                )));
-            }
+        // Register the target schema in-memory first so `transact` validates
+        // the stamped KOs against it. The persisted row commits in the SAME
+        // engine batch as the data rows (SCHEMA-006): a kill mid-migration
+        // leaves valid pre OR post state, never a hybrid. On failure only
+        // the in-memory registry is restored — the persisted row was never
+        // written, so nothing to roll back. Transact's OCC re-check makes
+        // the pre-transact scan race-safe.
+        self.schemas.write().unwrap().register(new_schema.clone());
+        if let Err(e) = self.transact_with_schema_row(ops, Some(new_schema)) {
+            self.schemas.write().unwrap().register(prev);
             return Err(e);
         }
         Ok(MigrationReport {
@@ -1745,7 +1744,30 @@ impl Kernel {
     /// Idempotency keys inside transaction requests are not supported: a batch
     /// is already atomic and the caller can use an external idempotency token.
     pub fn transact(&self, ops: Vec<TransactionOp>) -> KResult<Vec<Remembered>> {
+        self.transact_with_schema_row(ops, None)
+    }
+
+    /// Internal: `transact` with an optional schema row folded into the same
+    /// commit batch (SCHEMA-006). The schema row must become durable in the
+    /// SAME engine batch as the data rows it validates — two batches leave a
+    /// kill window where the new schema row coexists with old-version data.
+    fn transact_with_schema_row(
+        &self,
+        ops: Vec<TransactionOp>,
+        schema_row: Option<&Schema>,
+    ) -> KResult<Vec<Remembered>> {
         if ops.is_empty() {
+            let Some(schema) = schema_row else {
+                return Ok(Vec::new());
+            };
+            // Idempotent re-apply with nothing left to migrate: persist the
+            // schema row alone so the persisted registry never lags the
+            // data stamps (all heads already at the target version).
+            let mut batch = WriteBatch::new();
+            let bytes = crate::knowledge::codec::encode_schema(schema);
+            self.repo
+                .put_schema_row(&mut batch, &schema.type_name, &bytes);
+            self.repo.write_batch(&batch)?;
             return Ok(Vec::new());
         }
         let mut pipe = self.pipe.lock().unwrap();
@@ -2143,6 +2165,11 @@ impl Kernel {
         let final_seq = start_seq + events.len() as u64;
         self.repo
             .put_journal(&mut batch, final_seq, prev_audit, commit_ts);
+        if let Some(schema) = schema_row {
+            let bytes = crate::knowledge::codec::encode_schema(schema);
+            self.repo
+                .put_schema_row(&mut batch, &schema.type_name, &bytes);
+        }
         self.repo.write_batch(&batch)?;
         pipe.seq = final_seq;
         pipe.audit = prev_audit;
