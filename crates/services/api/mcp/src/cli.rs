@@ -207,8 +207,9 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             let ti_args: Vec<&str> = args.iter().skip(idx + 2).map(String::as_str).collect();
             if ti_args.is_empty() {
                 eprintln!("Usage: aikoql-mcp import <SOURCE> [ARGS...]");
-                eprintln!("Sources: postgres, sqlite, mongodb, neo4j");
+                eprintln!("Sources: postgres, pgvector, sqlite, mongodb, neo4j");
                 eprintln!("  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [DB_PATH]");
+                eprintln!("  import pgvector <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [DB_PATH]");
                 eprintln!("  import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
                 eprintln!(
                     "  import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [DB_PATH]"
@@ -217,7 +218,9 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 std::process::exit(1);
             }
             match ti_args[0] {
-                "postgres" => {
+                // pgvector: same wire protocol and flow as postgres — the
+                // provider parses vector columns to Value::List via ::text.
+                "postgres" | "pgvector" => {
                     let mut conn_str: Option<&str> = None;
                     let mut target_db = "./aikoql.redb";
                     let mut tenant: Option<&str> = None;
@@ -456,7 +459,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 }
                 other => {
                     eprintln!(
-                        "Unknown import source: {}. Supported: postgres, sqlite",
+                        "Unknown import source: {}. Supported: postgres, pgvector, sqlite, mongodb, neo4j",
                         other
                     );
                     std::process::exit(1);

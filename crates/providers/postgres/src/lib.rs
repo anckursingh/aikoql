@@ -84,14 +84,20 @@ impl PostgresConnector {
 
     /// Introspect a table: columns, types, primary keys.
     pub fn introspect_table(&mut self, table_name: &str) -> Result<TableSchema, String> {
-        // Discover columns.
+        // Discover columns. format_type adds the typmod so pgvector columns
+        // report as "vector(3)" (dims) instead of the bare USER-DEFINED
+        // data_type — and numeric/varchar keep their precision.
         let col_rows = self
             .client
             .query(
-                "SELECT column_name, data_type, is_nullable
-                 FROM information_schema.columns
-                 WHERE table_name = $1
-                 ORDER BY ordinal_position",
+                "SELECT c.column_name, c.data_type, c.is_nullable,
+                        COALESCE(format_type(a.atttypid, a.atttypmod), c.data_type) AS pg_type
+                 FROM information_schema.columns c
+                 LEFT JOIN pg_catalog.pg_attribute a
+                   ON a.attrelid = to_regclass(c.table_schema || '.' || c.table_name)
+                  AND a.attname = c.column_name
+                 WHERE c.table_name = $1
+                 ORDER BY c.ordinal_position",
                 &[&table_name],
             )
             .map_err(|e| format!("introspect columns for {}: {}", table_name, e))?;
@@ -118,7 +124,7 @@ impl PostgresConnector {
                 ColumnInfo {
                     is_primary_key: pks.contains(&name),
                     name,
-                    pg_type: r.get(1),
+                    pg_type: r.get(3),
                     is_nullable: r.get::<_, String>(2) == "YES",
                 }
             })
@@ -152,6 +158,24 @@ impl PostgresConnector {
         Ok(schemas)
     }
 
+    /// List tables carrying at least one pgvector `vector` column (CON-004
+    /// discovery). Dims per column come from the introspected pg_type
+    /// ("vector(N)") — see introspect_table.
+    pub fn list_vector_tables(&mut self) -> Result<Vec<String>, String> {
+        let rows = self
+            .client
+            .query(
+                "SELECT DISTINCT table_name
+                 FROM information_schema.columns
+                 WHERE udt_name = 'vector'
+                   AND table_schema NOT IN ('pg_catalog', 'information_schema')
+                 ORDER BY table_name",
+                &[],
+            )
+            .map_err(|e| format!("list vector tables: {}", e))?;
+        Ok(rows.iter().map(|r| r.get(0)).collect())
+    }
+
     // ------------------------------------------------------------------
     // Row import
     // ------------------------------------------------------------------
@@ -167,7 +191,16 @@ impl PostgresConnector {
         let col_list: Vec<String> = schema
             .columns
             .iter()
-            .map(|c| quote_ident(&c.name))
+            .map(|c| {
+                let q = quote_ident(&c.name);
+                // pgvector UDTs have no driver-native FromSql — read the
+                // column ::text and let pg_cell_to_value parse the form.
+                if c.pg_type.starts_with("vector") {
+                    format!("{q}::text")
+                } else {
+                    q
+                }
+            })
             .collect();
         let query = format!(
             "SELECT {} FROM {}",
@@ -356,7 +389,10 @@ fn pg_cell_to_value(row: &postgres::Row, col_idx: usize, pg_type: &str) -> Value
             .map(f)
             .unwrap_or(Value::Null)
     }
-    match pg_type {
+    // format_type adds typmods ("vector(3)", "numeric(10,2)") — match on the
+    // bare type name.
+    let base = pg_type.split('(').next().unwrap_or(pg_type);
+    match base {
         // Integer family
         "smallint" | "integer" | "int" | "int4" => opt(row, col_idx, |v: i32| Value::Int(v as i64)),
         "bigint" | "int8" => opt(row, col_idx, Value::Int),
@@ -378,9 +414,24 @@ fn pg_cell_to_value(row: &postgres::Row, col_idx: usize, pg_type: &str) -> Value
         | "date"
         | "time"
         | "timetz" => opt(row, col_idx, Value::Text),
+        // pgvector (import_table selects the column ::text) → List of floats
+        "vector" => opt(row, col_idx, parse_vector),
         // Everything else → text representation
         _ => opt(row, col_idx, Value::Text),
     }
+}
+
+/// "[0.1,0.2,0.3]" → Value::List of Float; malformed → Value::Null.
+fn parse_vector(s: String) -> Value {
+    let inner = s.trim().trim_start_matches('[').trim_end_matches(']');
+    let vals: Vec<Value> = inner
+        .split(',')
+        .filter_map(|t| t.trim().parse::<f64>().ok().map(Value::Float))
+        .collect();
+    if vals.is_empty() && !inner.trim().is_empty() {
+        return Value::Null;
+    }
+    Value::List(vals)
 }
 
 /// Deterministic KOID from table name and primary key parts.
@@ -479,5 +530,23 @@ mod tests {
     fn pg_cell_text_to_value() {
         // ponytail: unit-tested via integration test with real PG.
         // Type mapping is verified by inspection.
+    }
+
+    #[test]
+    fn parse_vector_pgvector_text() {
+        assert_eq!(
+            parse_vector("[0.1,0.2,0.3]".into()),
+            Value::List(vec![
+                Value::Float(0.1),
+                Value::Float(0.2),
+                Value::Float(0.3)
+            ])
+        );
+        assert_eq!(parse_vector("[]".into()), Value::List(vec![]));
+        assert_eq!(parse_vector("garbage".into()), Value::Null);
+        assert_eq!(
+            parse_vector("[0.5]".into()),
+            Value::List(vec![Value::Float(0.5)])
+        );
     }
 }

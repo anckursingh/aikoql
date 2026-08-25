@@ -773,3 +773,99 @@ fn con003_neo4j_direction_pinned() {
         "the stored end node must carry no outbound ref"
     );
 }
+
+// ---------------------------------------------------------------------------
+// MVP-CON-004 — PGVector connector (item 7)
+// ---------------------------------------------------------------------------
+
+/// MVP-CON-004: a pgvector `vector(N)` column must import as a Value::List
+/// of floats on the KO (association only — similarity retrieval is kernel
+/// embedding territory). Red today: `import pgvector` is not a CLI source at
+/// all ("Unknown import source"), and the provider has no vector handling.
+#[test]
+fn con004_pgvector_embedding_associated() {
+    use aikoql_kernel::Value;
+    let Some(live) = connectors::Live::pgvector() else {
+        return;
+    };
+    let table = "cert_con004_vec";
+    connectors::pg_exec(
+        &live.dsn,
+        &[
+            "CREATE EXTENSION IF NOT EXISTS vector",
+            &format!("DROP TABLE IF EXISTS {table}"),
+            &format!(
+                "CREATE TABLE {table} (id SERIAL PRIMARY KEY, name TEXT NOT NULL, embedding vector(3))"
+            ),
+            &format!("INSERT INTO {table} (name, embedding) VALUES ('alice', '[0.1,0.2,0.3]')"),
+        ],
+    );
+
+    // Discovery pin: the connector must see it as a vector table, with the
+    // dims visible in the introspected type string.
+    let mut conn =
+        aikoql_postgres::PostgresConnector::connect(&live.dsn).expect("pgvector connect");
+    let vt = conn.list_vector_tables().expect("list_vector_tables");
+    assert!(
+        vt.contains(&table.to_string()),
+        "vector table not discovered: {vt:?}"
+    );
+    let schema = conn.introspect_table(table).expect("introspect");
+    let emb = schema
+        .columns
+        .iter()
+        .find(|c| c.name == "embedding")
+        .expect("embedding column");
+    assert_eq!(
+        emb.pg_type, "vector(3)",
+        "dims must come from format_type, got {}",
+        emb.pg_type
+    );
+    drop(conn);
+
+    let db = connectors::temp_db("con004-vec");
+    let import = || {
+        let out = connectors::run_import(&["import", "pgvector", &live.dsn, &db, "--table", table]);
+        connectors::assert_import_ok(&out, table);
+    };
+
+    import();
+    {
+        let k = connectors::open_kernel(&db);
+        let kos = connectors::scan_type(&k, "pg-importer", table);
+        assert_eq!(kos.len(), 1, "one row must import as one KO");
+        assert_eq!(
+            kos[0].properties.get("embedding"),
+            Some(&Value::List(vec![
+                Value::Float(0.1),
+                Value::Float(0.2),
+                Value::Float(0.3)
+            ])),
+            "the vector column must import as a List of floats"
+        );
+        drop(k);
+    }
+
+    // Update leg: the ImportSink idem path must reflect a changed embedding
+    // (same machinery as CON-001 — pins that vector props participate in
+    // skip-if-identical).
+    connectors::pg_exec(
+        &live.dsn,
+        &[&format!(
+            "UPDATE {table} SET embedding = '[0.9,0.8,0.7]' WHERE name = 'alice'"
+        )],
+    );
+    import();
+
+    let k = connectors::open_kernel(&db);
+    let kos = connectors::scan_type(&k, "pg-importer", table);
+    assert_eq!(
+        kos[0].properties.get("embedding"),
+        Some(&Value::List(vec![
+            Value::Float(0.9),
+            Value::Float(0.8),
+            Value::Float(0.7)
+        ])),
+        "re-import must reflect the changed embedding"
+    );
+}
