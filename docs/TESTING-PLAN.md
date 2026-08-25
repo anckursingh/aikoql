@@ -288,9 +288,9 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | MVP-CON-007 Outage ≠ deletion | P1 | — | 🟡 | repo-side ✅ (`git_change_set_propagates_git_failure`, no-changes → cached); connector-side ❌ with connectors |
 | MVP-EVO-001 Modify source | P0 | G6 | ✅ | FRESH-001 + INC-002 (`freshness_sla_source_update_to_query_visibility_measured`) |
 | MVP-EVO-002 Rename source | P1 | G6 | ✅ | INC-003 (`rename_preserves_entity_identity`) |
-| MVP-EVO-003 Relationship change A→B to A→C | P0 | G6 | 🟡 | **TDD**: re-ingest with changed relation — A→B not retained as current truth |
-| MVP-EVO-004 Delete source | P0 | G6 | 🟡 | facts `[STALE]` path exists; **TDD**: no stale current relation remains after source delete |
-| MVP-EVO-005 Re-ingest 10× no growth | P1 | G6 | 🟡 | **TDD**: counts (KOs/facts/relations/evidence) stable across 10 re-ingests |
+| MVP-EVO-003 Relationship change A→B to A→C | P0 | G6 | ✅ | `mvp_evo_003_relation_change_drops_old_relation` — `drop_changed_relations` drops relations for changed paths (re-parse supplies current) |
+| MVP-EVO-004 Delete source | P0 | G6 | ✅ | `mvp_evo_004_deleted_source_leaves_no_stale_current_relation` — all-deleted branch now drops relations too (facts keep their [STALE] survival semantics) |
+| MVP-EVO-005 Re-ingest 10× no growth | P1 | G6 | ✅ | `mvp_evo_005_reingest_ten_times_no_uncontrolled_growth` — 10 incremental cycles ≡ fresh full ingest; [STALE] markers no longer re-appended for re-supplied facts |
 | MVP-TEMP-001..004 Historical/current/future/change query | P0/P1 | G7 | ✅ | `temporal.rs` (`valid_at` half-open, `as_of`, history in commit order, future validity + invalidation collapse) + `e2e-k2-temporal.js`; change query = history + trace with provenance |
 | MVP-SEC-001 Unauthorized access, no leak | P0 | G3 | ✅ | t11 default deny, t34 A/B scenario, CTX differential ACCESS_DENIED |
 | MVP-SEC-002 Permission propagation every layer | P0 | G3 | ✅ | authorize() confinement + ACL-filtered scans (`match_experiences`) + CTX permission differential |
@@ -349,8 +349,8 @@ MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04,
 2. ~~MVP-EXT-001 9-segment evidence addressability (ingestion)~~ ✅ done 2026-08-24 — `mvp_ext_001_all_nine_segment_kinds_are_addressable`; plain bullets (conf 0.5) + captions kept
 3. ~~MVP-EXT-002 artifact-section prose retrievability (ingestion)~~ ✅ done 2026-08-25 — `mvp_ext_002_...`; Artifact arm emits paragraphs at conf 0.5
 4. ~~MVP-EXT-003 formula preservation (ingestion)~~ ✅ done 2026-08-25 — `mvp_ext_003_...`; green without production change
-5. MVP-EVO-003/004 relation freshness on modify/delete (ingestion incremental)
-6. MVP-EVO-005 10× re-ingest growth bound (ingestion incremental)
+5. ~~MVP-EVO-003/004 relation freshness on modify/delete (ingestion incremental)~~ ✅ done 2026-08-25 — `mvp_evo_003_relation_change_drops_old_relation` + `mvp_evo_004_deleted_source_leaves_no_stale_current_relation`; `drop_changed_relations` applied on both the merge path and the all-deleted branch
+6. ~~MVP-EVO-005 10× re-ingest growth bound (ingestion incremental)~~ ✅ done 2026-08-25 — `mvp_evo_005_reingest_ten_times_no_uncontrolled_growth`; red caught 12 accumulated [STALE] marker facts → markers now skipped for re-supplied facts
 7. MVP-SEC-004 secrets absent from rendered output (kernel/mcp)
 8. MVP-PRG-003 invalid program metadata (kernel experiences)
 9. MVP-REC-002 backup→destroy→restore round-trip (mcp_real_world)

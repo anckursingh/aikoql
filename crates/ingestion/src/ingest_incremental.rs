@@ -99,6 +99,22 @@ fn git_change_set(
     Ok((plain, renames))
 }
 
+/// EVO-003/004: drop relations whose source document is in the changed set
+/// (modified or deleted). Relations are derived name-based signals with no
+/// [STALE] representation like facts — the surviving content's re-parse
+/// supplies the current relations, so stale ones must not persist as truth.
+/// Rename old-paths are covered too; the rename-new IR re-emits
+/// content-identical relations.
+fn drop_changed_relations(ir: &mut KnowledgeIr, changed: &[String], renames: &[RenamePair]) {
+    ir.relations.retain(|r| {
+        let doc = r.evidence.document_id.as_deref().unwrap_or("");
+        !changed
+            .iter()
+            .chain(renames.iter().map(|r| &r.old))
+            .any(|c| source_matches(doc, c))
+    });
+}
+
 /// Incremental directory ingestion.
 ///
 /// On first run (no tracking file): does a full ingest and saves the commit SHA.
@@ -206,7 +222,11 @@ pub fn incremental_diff_ingest(
     let new_irs: Vec<KnowledgeIr> = existing.iter().filter_map(|p| compile_file(p)).collect();
 
     if new_irs.is_empty() && existing.is_empty() {
-        // All changed files were deleted — entities should be marked stale
+        // All changed files were deleted — facts stay (knowledge survives,
+        // flagged stale via the report), but relations have no [STALE]
+        // representation and must not survive as current truth (EVO-004).
+        let mut ir = previous_ir.clone();
+        drop_changed_relations(&mut ir, &changed, &renames);
         let report = reconcile(&changed, previous_ir);
         write_track_state(
             path,
@@ -217,7 +237,7 @@ pub fn incremental_diff_ingest(
         );
         return Ok((
             IngestResult {
-                ir: previous_ir.clone(),
+                ir,
                 files_processed: 0,
                 files_skipped: changed.len() as u32,
                 dirs_skipped: 0,
@@ -245,6 +265,11 @@ pub fn incremental_diff_ingest(
             .iter()
             .any(|p| source_matches(doc, &p.to_string_lossy()))
     });
+    // EVO-003: relations from changed files must not survive as current
+    // truth — the re-parsed new IRs supply the current relations. Rename
+    // old-paths are covered too; the rename-new IR re-emits
+    // content-identical relations.
+    drop_changed_relations(&mut prev_ir, &changed, &renames);
 
     // Merge new IRs with previous (existing entities from unchanged files persist)
     let mut all_irs: Vec<KnowledgeIr> = new_irs;
@@ -260,7 +285,32 @@ pub fn incremental_diff_ingest(
     // Reconcile to flag stale facts from changed/deleted files. Pure renames
     // stay out of this list — content-identical, so nothing is stale.
     let report = reconcile(&changed, &merged);
+    // EVO-005: a [STALE] marker only for facts NOT re-supplied by a
+    // re-parsed file. Markers carry the dir-level document_id and escape
+    // the FRESH-001 path drop, so marking current facts would re-append a
+    // duplicate trail on every ingest and grow the IR without bound.
+    // Deleted-file facts survive the merge (their doc is not in `existing`),
+    // so their markers still get appended.
+    let re_supplied: std::collections::HashSet<String> = merged
+        .facts
+        .iter()
+        .filter(|f| {
+            f.evidence
+                .document_id
+                .as_deref()
+                .map(|d| {
+                    existing
+                        .iter()
+                        .any(|p| source_matches(d, &p.to_string_lossy()))
+                })
+                .unwrap_or(false)
+        })
+        .map(|f| f.statement.clone())
+        .collect();
     for fact in &report.potentially_stale_facts {
+        if re_supplied.contains(fact) {
+            continue;
+        }
         merged.facts.push(FactCandidate {
             snippet: None,
             statement: format!("[STALE] {}", fact),
@@ -825,5 +875,185 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Init a git repo at `tmp` with the given files, all committed.
+    fn git_repo_with(tmp: &std::path::Path, files: &[(&str, &str)]) {
+        fs::create_dir_all(tmp).unwrap();
+        for (name, content) in files {
+            fs::write(tmp.join(name), content).unwrap();
+        }
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@test"],
+            vec!["config", "user.name", "test"],
+            vec!["add", "-A"],
+            vec!["commit", "-m", "init"],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(&args)
+                    .current_dir(tmp)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success(),
+                "git {args:?} failed"
+            );
+        }
+    }
+
+    #[test]
+    fn mvp_evo_003_relation_change_drops_old_relation() {
+        // A -> calls -> B becomes A -> calls -> C in the source. After
+        // incremental ingest the merged IR must carry A→C as current truth
+        // and must NOT retain A→B (MVP-QA-001 MVP-EVO-003).
+        let tmp = std::env::temp_dir().join("aikoql-evo003");
+        let _ = fs::remove_dir_all(&tmp);
+        git_repo_with(&tmp, &[("README.md", "# A\n\ncalls [[B]]\n")]);
+
+        let (full, _) = incremental_ingest_directory(&tmp.to_string_lossy()).expect("full");
+        let has_relation = |ir: &KnowledgeIr, target: &str| {
+            ir.relations.iter().any(|r| {
+                r.subject == "A" && r.predicate == "references" && r.object == target
+            })
+        };
+        assert!(has_relation(&full.ir, "B"), "v1 relation A→B must exist");
+
+        // Source update: A now calls C.
+        fs::write(tmp.join("README.md"), "# A\n\ncalls [[C]]\n").unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        assert!(std::process::Command::new("git")
+            .args(["commit", "-m", "rel change"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap()
+            .status
+            .success());
+
+        let (incr, _) =
+            incremental_diff_ingest(&tmp.to_string_lossy(), &full.ir).expect("incremental");
+        assert!(
+            has_relation(&incr.ir, "C"),
+            "A→C must be current after the update"
+        );
+        assert!(
+            !has_relation(&incr.ir, "B"),
+            "A→B must not survive as current truth after the update"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn mvp_evo_004_deleted_source_leaves_no_stale_current_relation() {
+        // Deleting the source doc must not leave A→B as a current relation
+        // (MVP-QA-001 MVP-EVO-004: no stale current relation remains).
+        let tmp = std::env::temp_dir().join("aikoql-evo004");
+        let _ = fs::remove_dir_all(&tmp);
+        git_repo_with(&tmp, &[("README.md", "# A\n\ncalls [[B]]\n")]);
+
+        let (full, _) = incremental_ingest_directory(&tmp.to_string_lossy()).expect("full");
+        let has_relation = |ir: &KnowledgeIr, target: &str| {
+            ir.relations.iter().any(|r| {
+                r.subject == "A" && r.predicate == "references" && r.object == target
+            })
+        };
+        assert!(has_relation(&full.ir, "B"), "v1 relation A→B must exist");
+
+        // Delete the doc and commit.
+        fs::remove_file(tmp.join("README.md")).unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        assert!(std::process::Command::new("git")
+            .args(["commit", "-m", "delete doc"])
+            .current_dir(&tmp)
+            .output()
+            .unwrap()
+            .status
+            .success());
+
+        let (incr, _) =
+            incremental_diff_ingest(&tmp.to_string_lossy(), &full.ir).expect("incremental");
+        assert!(
+            !has_relation(&incr.ir, "B"),
+            "deleted source must not leave a stale current relation"
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn mvp_evo_005_reingest_ten_times_no_uncontrolled_growth() {
+        // Ten re-ingests, one appended sentence each (MVP-QA-001 MVP-EVO-005:
+        // no uncontrolled growth in KOs/facts/relations/evidence). The gate:
+        // counts after 10 incremental cycles must equal a fresh full ingest of
+        // the final content — incremental re-ingest accumulates zero history.
+        let tmp = std::env::temp_dir().join("aikoql-evo005");
+        let _ = fs::remove_dir_all(&tmp);
+        git_repo_with(&tmp, &[("README.md", "# A\n\nalpha fact one.\n")]);
+
+        let (full, _) = incremental_ingest_directory(&tmp.to_string_lossy()).expect("full");
+        let mut prev = full.ir.clone();
+
+        let mut final_content = String::new();
+        for i in 0..10 {
+            final_content = format!("# A\n\nalpha fact one.\n\nbeta fact number {}.\n", i);
+            fs::write(tmp.join("README.md"), &final_content).unwrap();
+            assert!(std::process::Command::new("git")
+                .args(["add", "-A"])
+                .current_dir(&tmp)
+                .output()
+                .unwrap()
+                .status
+                .success());
+            assert!(std::process::Command::new("git")
+                .args(["commit", "-m", &format!("cycle {}", i)])
+                .current_dir(&tmp)
+                .output()
+                .unwrap()
+                .status
+                .success());
+            let (incr, _) =
+                incremental_diff_ingest(&tmp.to_string_lossy(), &prev).expect("incremental");
+            prev = incr.ir.clone();
+        }
+
+        // Reference: a fresh full ingest of the final content.
+        let tmp2 = std::env::temp_dir().join("aikoql-evo005-ref");
+        let _ = fs::remove_dir_all(&tmp2);
+        git_repo_with(&tmp2, &[("README.md", final_content.as_str())]);
+        let (fresh, _) = incremental_ingest_directory(&tmp2.to_string_lossy()).expect("fresh");
+
+        let counts = |ir: &KnowledgeIr| {
+            (ir.entities.len(), ir.facts.len(), ir.relations.len())
+        };
+        if counts(&prev) != counts(&fresh.ir) {
+            let mut incr_facts: Vec<&str> = prev.facts.iter().map(|f| f.statement.as_str()).collect();
+            let mut fresh_facts: Vec<&str> =
+                fresh.ir.facts.iter().map(|f| f.statement.as_str()).collect();
+            incr_facts.sort_unstable();
+            fresh_facts.sort_unstable();
+            panic!(
+                "10 incremental re-ingests must match a fresh full ingest — no accumulated growth\n\
+                 incremental {:?}: {incr_facts:#?}\nfresh full {:?}: {fresh_facts:#?}",
+                counts(&prev),
+                counts(&fresh.ir),
+            );
+        }
+
+        let _ = fs::remove_dir_all(&tmp);
+        let _ = fs::remove_dir_all(&tmp2);
     }
 }
