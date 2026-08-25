@@ -1032,3 +1032,132 @@ fn con006_credentials_never_in_ordinary_output() {
     connectors::assert_import_fails(&out, "pg dead port");
     assert_clean(&out, "postgres");
 }
+
+// ---------------------------------------------------------------------------
+// MVP-CON-007 — outage ≠ deletion (item 10)
+// ---------------------------------------------------------------------------
+
+/// MVP-CON-007: an unreachable source must NEVER be treated as an empty one —
+/// the failed run must not prune or tombstone prior KOs (outage ≠ deletion).
+/// The PG leg is already pinned by `con001_pg_import_failure_never_prunes`;
+/// this pins the mongo and neo4j runners, which carry their own prune passes.
+/// Green day one: connect failure aborts before the all-success prune gate
+/// (items 5/6/8) — red only if a runner leaks a prune on the failure path.
+#[test]
+fn con007_unreachable_source_never_prunes() {
+    use aikoql_kernel::{LifecycleState, Value};
+
+    // MongoDB leg: baseline import, then the same source goes unreachable.
+    if let Some(live) = connectors::Live::mongo() {
+        let coll = "cert_con007_mongo";
+        connectors::mongo_seed(
+            &live.mongo_uri,
+            &live.mongo_db,
+            coll,
+            vec![mongodb::bson::doc! {"_id": "u1", "name": "alice", "age": 30}],
+        );
+        let db = connectors::temp_db("con007-mongo");
+        let out = connectors::run_import(&[
+            "import",
+            "mongodb",
+            &live.mongo_uri,
+            "--db",
+            &live.mongo_db,
+            "--collection",
+            coll,
+            &db,
+        ]);
+        connectors::assert_import_ok(&out, coll);
+
+        let out = connectors::run_import(&[
+            "import",
+            "mongodb",
+            "mongodb://127.0.0.1:1",
+            "--db",
+            &live.mongo_db,
+            "--collection",
+            coll,
+            &db,
+            "--timeout-ms",
+            "2000",
+        ]);
+        connectors::assert_import_fails(&out, "mongo dead port");
+
+        let k = connectors::open_kernel(&db);
+        let kos = connectors::scan_type(&k, "mongo-importer", coll);
+        assert_eq!(kos.len(), 1, "outage must not prune the collection KO");
+        assert_eq!(
+            kos[0].properties.get("age"),
+            Some(&Value::Int(30)),
+            "prior value must survive the outage"
+        );
+        let ctx =
+            aikoql_kernel::KnowledgeContext::from(aikoql_kernel::Subject::new("mongo-importer"));
+        let head = k
+            .get(ctx, &kos[0].koid)
+            .unwrap_or_else(|e| panic!("KO lost after outage: {e}"));
+        assert_eq!(
+            head.lifecycle.state,
+            LifecycleState::Draft,
+            "outage must not tombstone the KO"
+        );
+        let markers = connectors::scan_type(&k, "mongo-importer", "connector_run");
+        assert_eq!(markers.len(), 1, "the failed run must be marked incomplete");
+        drop(k);
+    }
+
+    // Neo4j leg: baseline import, then the same source goes unreachable.
+    if let Some(live) = connectors::Live::neo4j() {
+        let label = "P_Con007";
+        connectors::neo4j_exec(
+            &live.neo4j_uri,
+            &live.neo4j_user,
+            &live.neo4j_password,
+            &[
+                &format!("MATCH (n:`{label}`) DETACH DELETE n"),
+                &format!("CREATE (a:`{label}` {{name:'alice'}}), (b:`{label}` {{name:'bob'}})"),
+            ],
+        );
+        let db = connectors::temp_db("con007-neo4j");
+        let out = connectors::run_import(&[
+            "import",
+            "neo4j",
+            &live.neo4j_uri,
+            "--user",
+            &live.neo4j_user,
+            "--password",
+            &live.neo4j_password,
+            &db,
+        ]);
+        connectors::assert_import_ok(&out, "neo4j");
+
+        let out = connectors::run_import(&[
+            "import",
+            "neo4j",
+            "http://127.0.0.1:1",
+            &db,
+            "--timeout-ms",
+            "2000",
+        ]);
+        connectors::assert_import_fails(&out, "neo4j dead port");
+
+        let k = connectors::open_kernel(&db);
+        let kos = connectors::scan_type(&k, "neo4j-importer", label);
+        assert_eq!(kos.len(), 2, "outage must not prune label KOs");
+        for ko in &kos {
+            let ctx = aikoql_kernel::KnowledgeContext::from(aikoql_kernel::Subject::new(
+                "neo4j-importer",
+            ));
+            let head = k
+                .get(ctx, &ko.koid)
+                .unwrap_or_else(|e| panic!("KO lost after outage: {e}"));
+            assert_eq!(
+                head.lifecycle.state,
+                LifecycleState::Draft,
+                "outage must not tombstone the KO"
+            );
+        }
+        let markers = connectors::scan_type(&k, "neo4j-importer", "connector_run");
+        assert_eq!(markers.len(), 1, "the failed run must be marked incomplete");
+    }
+}
