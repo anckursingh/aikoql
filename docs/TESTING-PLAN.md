@@ -380,6 +380,110 @@ Each item: write the failing test → run (red) → fix root cause → green →
 
 ---
 
+## 10. Wave 2 certification matrix — MVP-QA-002 (2026-08-25)
+
+QA-lead mapping of `AIKOQL_QA_WAVE_2_TDD_TEST_SPECIFICATION.md` (MVP-QA-002, 10 suites → 65 test IDs + 12 invariants INV-001..012 + 11 release gates W2-01..11) against current coverage. Status: ✅ covered · 🟡 closeable gap (TDD item) · ❌ NOT_IMPLEMENTED/BLOCKED (feature work — never PASS per the spec's execution rules). TDD order per spec §16, highest-risk first: concurrency → knowledge consistency → derived-state → fault injection → schema evolution → adversarial retrieval → agent security → property/state-machine → knowledge continuity → performance.
+
+Wave 2's claim under test: *knowledge remains correct under concurrent mutation, conflicting sources, failures, recovery, schema evolution, adversarial retrieval and hostile agent-oriented content.*
+
+### 10.1 Per-ID mapping
+
+| ID | Pri | Gate | Status | Coverage / TDD item |
+| --- | --- | --- | --- | --- |
+| QA2-CONC-001 Concurrent readers/writers | P0 | W2-09 | ✅ | `w2_conc_001_all_four_reader_shapes_see_only_committed_state` (ingestion) — writer storm (hot KO + ir_json snapshot restate) vs all four reader shapes: point get, h1→h2→h3 traversal, trace history (commit+version-ordered per snapshot), context compilation byte-identical per version; gapless journal |
+| QA2-CONC-002 Concurrent ingestion | P0 | W2-09 | ✅ | `w2_conc_002a` (kernel) — 4 threads sharing one idempotency key commit exactly once (1 shared + 4 distinct journal entries, version 1); `w2_conc_002b` (ingestion) — 4× parallel + 1 sequential ingest of the same corpus yield byte-identical IR (W2-11 determinism) |
+| QA2-CONC-003 Concurrent update/delete | P0 | W2-09 | ✅ | `w2_conc_003_concurrent_update_and_delete_never_hybrid` (kernel) — 30 rounds of OCC update-vs-Tombstone on version 1: exactly one wins, no hybrid state, audit chain valid |
+| QA2-CONC-004 Concurrent relationship mutation | P0 | W2-09 | ✅ | `w2_conc_004_concurrent_relationship_mutation_leaves_no_orphans` (kernel) — flip/create/delete-endpoint racing: every endpoint resolves to a live KO, deleted B leaves no references |
+| QA2-CONC-005 Concurrent temporal updates | P0 | W2-09 | ✅ | `w2_conc_005_concurrent_overlapping_temporal_updates_keep_one_head` (kernel) — 2×25 overlapping valid_from windows: one head, gapless journal, head stamp ∈ written set, monotone commit_ts |
+| QA2-CONC-006 Authorization during mutation | P0 | W2-06 | ✅ | `w2_conc_006_grant_revoke_during_mutation_never_leaks` (kernel) — 4 readers × 6 barrier-synchronized deny/allow flips: deny-phase Ok reads only below the deny commit, allow-phase only ≥ allow commit, errors AccessDenied-only |
+| QA2-KNOW-001 Conflicting evidence | P0 | W2-05 | ✅ | `e03_contradictions_between_similar_claims` + `epistemic.rs` + PROV-003 — both claims, provenance, temporal info retained; no silent collapse |
+| QA2-KNOW-002 Source authority | P1 | W2-05 | 🟡 | authority ranking exists (`ops.rs::ko_authority_rank`, `authority.rs` levels, R5/R8 trust spine); the per-source current-truth selection pin ("PostgreSQL > MongoDB" → higher-authority claim is current, loser traceable) — item 2 |
+| QA2-KNOW-003 Stale evidence | P0 | W2-05 | ✅ | `temporal.rs` valid_at/as_of + `e2e-k2-temporal.js` — current query returns valid current, history retrieves old |
+| QA2-KNOW-004 Correction propagation | P0 | W2-05 | ✅ | FRESH-001 (source→query visibility, superseded fact gone) + i11 (index propagation, zero lag) |
+| QA2-KNOW-005 Duplicate entity | P1 | W2-05 | ✅ | `multi_source_ontology.rs` config-driven identity + INC-003 rename identity — no uncontrolled duplicate canonical entities |
+| QA2-KNOW-006 Entity split | P1 | W2-05 | ❌ | NOT_IMPLEMENTED — entity split is unsupported; per spec: report NOT_IMPLEMENTED, never PASS (honest row) |
+| QA2-KNOW-007 Relationship conflict | P0 | W2-05 | 🟡 | e03 covers conflicting facts, not conflicting relations (A→OWNS→B vs A→DOES_NOT_OWN→B retained, resolved only by explicit policy) — item 2 |
+| QA2-KNOW-008 Evidence/facts divergence | P0 | W2-05 | 🟡 | MVP-EXT-001/002 keep evidence when extraction drops prose; dedicated evidence≠fact pin (failed extraction leaves evidence retrievable) — item 2 |
+| QA2-KNOW-009 Canonical vs index | P0 | W2-08 | ✅ | i09 rebuild parity + i11 update propagation |
+| QA2-KNOW-010 Rebuild consistency | P0 | W2-08 | ✅ | i09 delete+rebuild = identical results |
+| QA2-RET-001 Keyword flooding | P0 | W2-07 | ✅ | G12 q-00 hoover scenario + keyword hygiene + entity gate — irrelevant matches cannot consume the context budget |
+| QA2-RET-002 Zero lexical overlap | P1 | W2-07 | ✅ | semantic degrade fallback + G11 Track-B zero-overlap hop facts (D treatment) |
+| QA2-RET-003 Entity ambiguity | P1 | W2-07 | 🟡 | no ambiguity pin — deterministic ranking must not silently select an arbitrary entity (Apple Inc/Records/Bank) — item 6 |
+| QA2-RET-004 Duplicate evidence | P0 | W2-07 | ✅ | pack-time dedup (`ctx_min_*`) — duplicates packed once |
+| QA2-RET-005 Conflicting evidence retrieval | P1 | W2-07 | 🟡 | e03 covers storage; the retrieval-side pin (conflicting evidence surfaced, not hidden) — item 6 |
+| QA2-RET-006 Stale knowledge suppression | P0 | W2-07 | ✅ | supersede keeps history, current-truth returns successor; RET-CHAT-001 expiry filter |
+| QA2-RET-007 Temporal retrieval | P1 | W2-07 | ✅ | `temporal.rs` valid_at + `e2e-k2-temporal.js` — historical evidence selected over current |
+| QA2-RET-008 Deep multi-hop | P1 | W2-07 | 🟡 | graph traversal exists (G11 multi-hop 0.875, PR-L RRF fusion); the depth-chain pin within configured traversal limits — item 6 |
+| QA2-RET-009 Pure prose retrieval | P0 | W2-07 | ✅ | MVP-EXT-002 artifact-section prose + CTX-004 evidence inclusion |
+| QA2-RET-010 Table retrieval | P0 | W2-07 | ✅ | G10 GFM pipe tables → TableCell-evidenced cell facts |
+| QA2-RET-011 Code retrieval | P1 | W2-07 | ✅ | G10 fence folds (code as evidence, never as executable) + SEC-006 program gate |
+| QA2-RET-012 Mixed source retrieval | P0 | W2-07 | ✅ | E2E-004 multi-source coherent query (pg+mongo+neo4j+docs in one result) |
+| QA2-FAULT-001..004 Crash before/after journal append/commit | P0 | W2-08 | ✅ | d04/d04b deterministic crash at every commit boundary (`crash_writer`) — prefix survives, never a torn commit |
+| QA2-FAULT-005 Crash during index update | P0 | W2-08 | ✅ | indexes are derived from canonical; d04 crash + i10 tombstone sweep on rebuild |
+| QA2-FAULT-006 Crash during ontology update | P0 | W2-10 | ✅ | schema rows written in one atomic batch (REC-002); corrupt row → open fails closed — crash = before or after, never partial |
+| QA2-FAULT-007 Connector failure mid-ingestion | P0 | W2-08 | ✅ | CON-005 incomplete-run marker + CON-007 prune only on all-success — no partial logical commit |
+| QA2-FAULT-008 Backup failure | P0 | W2-08 | 🟡 | `snapshot_to` writes one batch but has no failure pin (live knowledge unaffected) — item 4 |
+| QA2-FAULT-009 Restore interruption | P0 | W2-08 | 🟡 | `restore_from` validates the source before writing, but the interrupted/truncated-snapshot pin is missing (never exposed as valid) — item 4 |
+| QA2-SCHEMA-001 v1→v2 | P0 | W2-10 | ✅ | t06zt (old data readable, v2 rules bind on new writes) + t06zw ontology evolution |
+| QA2-SCHEMA-002 v2→v3 additive + incompatible | P1 | W2-10 | 🟡 | additive mechanics covered by t06zt; the v2→v3 chain pin + incompatible-change leg — item 5 |
+| QA2-SCHEMA-003 Migration rollback | P0 | W2-10 | ✅ | t06zzb violation→nothing changed + REC-002 persisted rollback funnel |
+| QA2-SCHEMA-004 Old reader / new data | P1 | W2-10 | ✅ | t06zzd version gate rejects cleanly, never misinterprets |
+| QA2-SCHEMA-005 New reader / old data | P1 | W2-10 | ✅ | t06zze/t06zzf wire envelope — legacy bytes readable, magic stamped |
+| QA2-SCHEMA-006 Interrupted migration | P0 | W2-10 | ❌ | `apply_schema_migration` = `register_schema` + `transact` in TWO batches → kill between them leaves the new schema row with old-version data (hybrid window). Item 5 production fix: one atomic batch |
+| QA2-SCHEMA-007 Migration recovery | P0 | W2-10 | 🟡 | resume/restart semantics pinned after item 5's atomicity lands — item 5 |
+| QA2-SEC-001 Prompt injection in knowledge | P0 | W2-06 | 🟡 | no explicit pin — injection-shaped content stays data, never elevated to trusted instructions — item 7 |
+| QA2-SEC-002 Malicious provenance | P0 | W2-06 | 🟡 | authority/confidence are stamped by the extraction/assert layer, not source content; the forged-metadata pin — item 7 |
+| QA2-SEC-003 Cross-tenant graph traversal | P0 | W2-06 | ✅ | t34 tenant isolation + R9 authorize() confinement — traversal cannot cross tenants |
+| QA2-SEC-004 Revocation during retrieval | P0 | W2-06 | ✅ | `revoked_experience_sharing_stops_matching` + item 1's CONC-006 (revoke racing mutation) |
+| QA2-SEC-005 Poisoned memory | P0 | W2-05 | ✅ | trust spine R5/R8 + epistemic guards — authority/trust policy enforceable over hostile memory |
+| QA2-SEC-006 Malicious program-as-KO | P0 | W2-06 | ✅ | PRG-003 invalid metadata rejected + PRG-004 unauthorized not selectable + denied execution |
+| QA2-SEC-007 Secret leakage through context | P0 | W2-06 | ✅ | MVP-SEC-004 whole-field redaction across all rendered IR fields |
+| QA2-PROP-001 Random KO lifecycle | P0 | W2-11 | 🟡 | `proptest_kom.rs` covers the codec only; the lifecycle state machine (create/update/delete/supersede/reingest/relate/unrelate with invariant checks) — item 8 |
+| QA2-PROP-002 Random relationship ops | P0 | W2-11 | 🟡 | no orphan endpoints / impossible relationship state under random ops — item 8 |
+| QA2-PROP-003 Random temporal ops | P0 | W2-11 | 🟡 | overlapping validity intervals keep temporal invariants — item 8 |
+| QA2-PROP-004 Random query/mutation interleaving | P0 | W2-11 | 🟡 | every result consistent with the committed state — item 8 |
+| QA2-CONT-001 Full knowledge continuity | P0 | W2-08 | ❌ | the flagship chain (source→ingest→query→modify→incremental→query→restart→rebuild→backup→restore→migration→query, 8-dimension compare per checkpoint) — item 9 |
+| QA2-DER-001 Canonical vs index | P0 | W2-08 | ✅ | i09 rebuild parity |
+| QA2-DER-002 Canonical vs graph projection | P0 | W2-08 | ✅ | `mvp_ko_003` traversal drops Deleted/Erased endpoints |
+| QA2-DER-003 Canonical vs vector projection | P1 | W2-08 | 🟡 | the semantic block lives on the KO and versions with it; the pin that a stale embedding is never current after update — item 3 |
+| QA2-DER-004 Stale cache | P0 | W2-08 | ✅ | t35 cache never serves stale heads (warm cache → update → v2; forget → tombstone) |
+| QA2-DER-005 Rebuild everything | P0 | W2-08 | ✅ | i09/i10/i11 — rebuild parity, tombstone sweep, deterministic propagation |
+| QA2-PERF-001..003 Read/write/mixed load | P2 | W2-11 | ✅ | R14 scale bench (16 scenarios 100K–1M keys) + weekly regression CI (>20% alert) — correctness asserted alongside p50/p95/p99 |
+| QA2-PERF-004 Large context compilation | P1 | W2-11 | ✅ | `ctx_min_*` budget tests + G12 delivered-token measurements — no token explosion |
+
+### 10.2 Wave 2 gate readout (W2-01..11)
+
+| Gate | Requirement |
+| --- | --- |
+| W2-01 | All P0 tests pass |
+| W2-02 | ≥98% of P1 tests pass |
+| W2-03/04 | Sev-1 = 0, Sev-2 = 0 |
+| W2-05 | No known knowledge-integrity violation |
+| W2-06 | No authorization bypass |
+| W2-07 | No unexplained retrieval regression |
+| W2-08 | Fault/recovery tests preserve canonical knowledge |
+| W2-09 | Concurrency tests preserve invariants |
+| W2-10 | Schema evolution does not silently corrupt knowledge |
+| W2-11 | Tests deterministic and reproducible |
+
+### 10.3 TDD execution order (MVP-QA-002 → tests first)
+
+1. ~~Suite A concurrency~~ → done (2026-08-25) — `crates/kernel/tests/qa2_concurrency.rs` (5 tests) + `crates/ingestion/tests/qa2_concurrency.rs` (2 tests). REDs were test-side only (stale cross-snapshot comparator, miscounted journal); production pipe-lock/HLC/OCC/idempotency/per-version-ACL held day one — pins, not fixes. All 7 green; workspace + clippy clean.
+2. Suite B knowledge consistency — KNOW-002 source-authority current-truth pin, KNOW-007 relationship-conflict preservation, KNOW-008 evidence≠fact divergence; KNOW-006 stays NOT_IMPLEMENTED (honest)
+3. Suite I derived-state — DER-003 embedding-version pin (semantic block versions with the KO)
+4. Suite D fault injection — FAULT-008 backup failure, FAULT-009 interrupted/truncated restore (`qa2_fault.rs` in durability-land)
+5. Suite E schema evolution — SCHEMA-002 v2→v3 chain, SCHEMA-006 atomic migration (production: register+transact one batch), SCHEMA-007 resume
+6. Suite C adversarial retrieval — RET-003 ambiguity no-silent-pick, RET-005 conflicts surfaced, RET-008 depth-chain within limits
+7. Suite F agent security — SEC-001 injection-as-data, SEC-002 forged provenance
+8. Suite G property/state-machine — PROP-001..004 (`qa2_prop.rs`, proptest)
+9. Suite H knowledge continuity — CONT-001 flagship (ingestion crate, 8-dimension checkpoint compare)
+10. Suite J performance — covered (R14 + benches + weekly regression); pointer rows only
+11. Wave-2 artifacts — certify.js parses §10.1, emits `qa-wave2-{report,results,failures,benchmarks,release-gate}` + the §19 gate block; W2-01..11 verdict; self-test fixtures; `--check` covers both packs
+
+Each item: failing test → red → root-cause fix → green → regression → registry flip → commit (NO push).
+
+---
+
 ## Appendix — Existing instruments that serve the suites
 
 | Instrument | What it measures | Serves |
