@@ -1558,3 +1558,174 @@ fn e2e001_pg_to_ko_to_query_with_provenance() {
         Some(&aikoql_kernel::Value::Text("alice".into()))
     );
 }
+
+// ---------------------------------------------------------------------------
+// MVP-E2E-004 — multi-source coherent query (item 13)
+// ---------------------------------------------------------------------------
+
+/// MVP-E2E-004: pg customer + mongo profile + neo4j graph + ingest-dir doc
+/// evidence about ONE entity (alice) in one database → ONE cross-type
+/// `find_similar` query (an admin session — kernel authz lets the admin role
+/// read across owners) must return results referencing all four sources, and
+/// each result KOID must resolve to per-source provenance tags.
+#[test]
+fn e2e004_multisource_query_single_coherent_result() {
+    use aikoql_kernel::{Subject, Value};
+    let db = connectors::temp_db("e2e004");
+
+    // ── Postgres: customer row (private db) ──
+    let Some(pg) = connectors::Live::pg() else {
+        return;
+    };
+    let dsn = connectors::pg_private_db(&pg.dsn, "cert_e2e004");
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE e2e4_customer (id SERIAL PRIMARY KEY, name TEXT NOT NULL, city TEXT NOT NULL)",
+            "INSERT INTO e2e4_customer (name, city) VALUES ('alice', 'Berlin')",
+        ],
+    );
+    let out = connectors::run_import(&["import", "postgres", &dsn, &db]);
+    connectors::assert_import_ok(&out, "e2e4_customer");
+
+    // ── MongoDB: profile doc ──
+    if let Some(m) = connectors::Live::mongo() {
+        connectors::mongo_seed(
+            &m.mongo_uri,
+            &m.mongo_db,
+            "cert_e2e004_profiles",
+            vec![mongodb::bson::doc! {
+                "_id": "p1",
+                "customer_name": "alice",
+                "bio": "senior platform engineer",
+            }],
+        );
+        let out = connectors::run_import(&[
+            "import",
+            "mongodb",
+            &m.mongo_uri,
+            "--db",
+            &m.mongo_db,
+            "--collection",
+            "cert_e2e004_profiles",
+            &db,
+        ]);
+        connectors::assert_import_ok(&out, "cert_e2e004_profiles");
+    }
+
+    // ── Neo4j: alice node + relation to bob ──
+    if let Some(n) = connectors::Live::neo4j() {
+        let label = "P_E2e004";
+        connectors::neo4j_exec(
+            &n.neo4j_uri,
+            &n.neo4j_user,
+            &n.neo4j_password,
+            &[
+                &format!("MATCH (x:`{label}`) DETACH DELETE x"),
+                &format!(
+                    "CREATE (a:`{label}` {{name:'alice', title:'lead'}}), (b:`{label}` {{name:'bob'}}), (a)-[:WORKS_WITH_E2e004]->(b)"
+                ),
+            ],
+        );
+        let out = connectors::run_import(&[
+            "import",
+            "neo4j",
+            &n.neo4j_uri,
+            "--user",
+            &n.neo4j_user,
+            "--password",
+            &n.neo4j_password,
+            &db,
+        ]);
+        connectors::assert_import_ok(&out, label);
+    }
+
+    // ── Document evidence: a note about alice ──
+    let doc_dir = std::env::temp_dir().join("e2e004-doc");
+    let _ = std::fs::remove_dir_all(&doc_dir);
+    std::fs::create_dir_all(&doc_dir).expect("create doc dir");
+    std::fs::write(
+        doc_dir.join("alice-notes.md"),
+        "# Alice's Notes\n\nalice leads the platform team. She prefers deep work in the mornings.\n",
+    )
+    .expect("write doc");
+    let out = connectors::run_import(&["ingest-dir", &doc_dir.to_string_lossy(), &db]);
+    connectors::assert_import_ok(&out, "ingest-dir");
+
+    // ── ONE coherent query over all four sources ──
+    let mut client = connectors::McpQueryClient::start(&db);
+    client.session_init("e2e004-agent", &["admin"]);
+    let res = client.call(
+        "find_similar",
+        serde_json::json!({"text": "alice", "k": 20, "fusion": "text"}),
+    );
+    let results = res["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results: {res}"));
+    let types: Vec<&str> = results
+        .iter()
+        .filter_map(|r| r["type_name"].as_str())
+        .collect();
+    assert!(
+        types.contains(&"e2e4_customer"),
+        "pg source missing from the coherent result: {types:?}"
+    );
+    assert!(
+        types.contains(&"cert_e2e004_profiles"),
+        "mongo source missing from the coherent result: {types:?}"
+    );
+    assert!(
+        types.contains(&"P_E2e004"),
+        "neo4j source missing from the coherent result: {types:?}"
+    );
+    drop(client); // release the redb lock before the kernel read
+
+    // ── Per-source provenance: each result KOID resolves to its source tag ──
+    let k = connectors::open_kernel(&db);
+    let admin = Subject::with_roles("e2e004-admin", &["admin"]);
+    let result_koids: Vec<String> = results
+        .iter()
+        .filter_map(|r| r["koid"].as_str().map(String::from))
+        .collect();
+
+    // Connector sources: the alice KO must be in the result set AND tagged.
+    for (type_name, prop, tag) in [
+        ("e2e4_customer", "name", "source:postgres"),
+        ("cert_e2e004_profiles", "customer_name", "source:mongodb"),
+        ("P_E2e004", "name", "source:neo4j"),
+    ] {
+        let kos = k.scan_by_type(&admin, type_name).unwrap_or_default();
+        let alice = kos
+            .iter()
+            .find(|ko| ko.properties.get(prop) == Some(&Value::Text("alice".into())))
+            .unwrap_or_else(|| panic!("{type_name}: alice missing"));
+        assert!(
+            alice.metadata.tags.iter().any(|t| t == tag),
+            "{type_name}: tags {:?}",
+            alice.metadata.tags
+        );
+        assert!(
+            result_koids.contains(&alice.koid.to_hex()),
+            "{type_name}: alice KO not in the coherent result set"
+        );
+    }
+
+    // Document source: at least one result KOID resolves to an ingest-dir
+    // artifact (tags carry the ingest-dir provenance).
+    let doc_hit = results.iter().any(|r| {
+        let tn = r["type_name"].as_str().unwrap_or("");
+        let koid_hex = r["koid"].as_str().unwrap_or("");
+        k.scan_by_type(&admin, tn)
+            .map(|kos| {
+                kos.iter().any(|ko| {
+                    ko.koid.to_hex() == koid_hex
+                        && ko.metadata.tags.iter().any(|t| t == "ingest-dir")
+                })
+            })
+            .unwrap_or(false)
+    });
+    assert!(
+        doc_hit,
+        "no ingest-dir evidence in the coherent result: {types:?}"
+    );
+}

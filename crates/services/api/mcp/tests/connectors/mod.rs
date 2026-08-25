@@ -488,6 +488,17 @@ impl McpQueryClient {
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
         serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({"raw": text}))
     }
+
+    /// Establish session identity (R9): agent_id + roles are injected into
+    /// every subsequent tool call — e.g. `["admin"]` reads across owners.
+    pub fn session_init(&mut self, agent_id: &str, roles: &[&str]) -> serde_json::Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.exchange(serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "session/init",
+            "params": {"agent_id": agent_id, "roles": roles}
+        }))
+    }
 }
 
 impl Drop for McpQueryClient {
