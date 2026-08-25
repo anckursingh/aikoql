@@ -104,6 +104,12 @@ jobs:
           echo "$out"
           [ "$rc" -eq 2 ] || { echo "expected exit 2, got $rc"; exit 1; }
           echo "$out" | grep -q "non-loopback"
+      # MVP-DEP-003 (TESTING-PLAN §9.4 item 10): volume-backed restart
+      # preserves knowledge — container A writes a KO on a named volume,
+      # container B (fresh container, same volume) resolves the same KOID
+      # with the same content. Asserts the /data container contract.
+      - name: DEP-003 — volume-backed restart preserves knowledge
+        run: node scripts/e2e-volume-restart.js
 
   build-release:
     name: Build Release (Linux)

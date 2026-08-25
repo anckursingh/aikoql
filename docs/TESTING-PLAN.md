@@ -307,7 +307,7 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | MVP-REC-003 Interrupted ingestion | P0 | G8 | ✅ | `crash_kill.rs` (taskkill/SIGKILL mid-write → consistent reopen, journal head ≥ observed) |
 | MVP-DEP-001 Clean Docker startup | — | G9 | ✅ | ci.yml docker job: build → run → health check healthy |
 | MVP-DEP-002 Fresh install → ingest → query | — | G9 | ✅ | `e2e-dogfood.js` CI job (documented instructions) |
-| MVP-DEP-003 Persistent container restart | — | G9 | 🟡 | **TDD**: volume-backed restart preserves knowledge (CI step or script) |
+| MVP-DEP-003 Persistent container restart | — | G9 | ✅ | `scripts/e2e-volume-restart.js` (CI docker job): container A remembers a KO on a named volume, container B (fresh container, same volume) resolves the same KOID + content; green without a production change — pins the Dockerfile /data contract |
 | MVP-BENCH-001..003 G10/G11/G12 no regression | — | G12 | ✅ | canonical baselines pinned in §3 rows 128–130 + weekly bench regression CI (>20% alert) |
 | Suite N Agent memory | — | — | ✅ | §32 `agent_memory_bench` (D 20/20 vs B 12/20); not an MVP blocker per the spec |
 | MVP-PRG-001 Program representation | P1 | — | ✅ | MEM-005 (`experiences.rs`: identity/inputs/outputs/permissions/pre/post/side effects/provenance) |
@@ -333,7 +333,7 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | GATE-06 Mutation/evolution | 100% | 🟡 — EVO-003/004/005 TDD items |
 | GATE-07 Temporal | 100% | ✅ |
 | GATE-08 Recovery | 100% | ✅ — REC-002 restore round-trip (verified live backup, destroy, restore, equivalent KO) |
-| GATE-09 Docker/installability | 100% | 🟡 — DEP-003 volume restart |
+| GATE-09 Docker/installability | 100% | ✅ — DEP-003 volume-backed restart (CI docker job) |
 | GATE-10/11 Sev-1/Sev-2 | 0 | ✅ none open (unmeasured until runner) |
 | GATE-12 Benchmarks | no regression | ✅ |
 | GATE-13 Reproducibility | 100% | ✅ determinism tests + pinned benches |
@@ -354,7 +354,7 @@ MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04,
 7. ~~MVP-SEC-004 secrets absent from rendered output (kernel/mcp)~~ ✅ done 2026-08-25 — `mvp_sec_004_raw_secret_never_survives_redaction_or_rendering`; red caught 4 leaks (marker-prefix keeps raw key; snippets unredacted) → whole-field replacement across all rendered IR fields
 8. ~~MVP-PRG-003 invalid program metadata (kernel experiences)~~ ✅ done 2026-08-25 — `record_experience_rejects_invalid_program_metadata`; green without production change (shape/TTL/confidence validation already in ops.rs) — test pins it
 9. ~~MVP-REC-002 backup→destroy→restore round-trip (mcp_real_world)~~ ✅ done 2026-08-25 — `mvp_rec_002_backup_destroy_restore_round_trip`; red caught `std::fs::copy` on the live redb file (Windows region lock, os error 33 — the old Phase 9 assertion was a false positive on error objects) → engine-level `StorageEngine::snapshot_to`/`restore_from` (kernel-side, `EncryptedStore` delegates raw so ciphertext moves verbatim); same round: restore's hard-coded `data.redb` → `backup_data_file` from meta source, list_backups now scans the db's directory (was server CWD) and matches `contains(".backup.")` (was a never-matching `ends_with`)
-10. MVP-DEP-003 volume restart (CI)
+10. ~~MVP-DEP-003 volume restart (CI)~~ ✅ done 2026-08-25 — `scripts/e2e-volume-restart.js` wired into the docker job; green without a production change (the /data container contract already held) — test pins it; verified locally against `aikoql:test` (docker daemon up) + in CI
 11. §23 artifacts runner (`scripts/` or registry-driven test) → `artifacts/release-gate.md`
 
 Each item: write the failing test → run (red) → fix root cause → green → full regression + G10 gate → commit. BLOCKED-on-connectors rows stay open honestly and are re-evaluated when TP-5 lands.
