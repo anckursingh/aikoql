@@ -447,6 +447,7 @@ pub(crate) fn run_neo4j_import(
     target_db: &str,
     tenant: Option<&str>,
     label_filter: Option<&str>,
+    run_id: &str,
 ) {
     use aikoql_neo4j::Neo4jConnector;
 
@@ -460,14 +461,14 @@ pub(crate) fn run_neo4j_import(
     };
 
     println!("Discovering graph schema...");
-    let labels = match connector.list_labels() {
+    let mut labels = match connector.list_labels() {
         Ok(l) => l,
         Err(e) => {
             eprintln!("Failed to list labels: {}", e);
             std::process::exit(1);
         }
     };
-    let rel_types = match connector.list_rel_types() {
+    let mut rel_types = match connector.list_rel_types() {
         Ok(l) => l,
         Err(e) => {
             eprintln!("Failed to list relationship types: {}", e);
@@ -490,105 +491,118 @@ pub(crate) fn run_neo4j_import(
             std::process::exit(1);
         }
     };
-    let mut total_nodes = 0usize;
-    let mut total_rels = 0usize;
+    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("neo4j-importer"));
 
-    // Phase 1: import nodes, build elementId → KOID map.
+    // Deterministic iteration order: the first sorted label becomes the
+    // type_name of multi-label nodes; the KOID is label-independent, so the
+    // later label passes see the same KO and skip it.
+    labels.sort();
+    let filtered: Vec<&str> = labels
+        .iter()
+        .filter(|l| label_filter.is_none_or(|lf| l.as_str() == lf))
+        .map(String::as_str)
+        .collect();
+
+    // Phase A: nodes — one KO per elementId (multi-label dedupe by KOID).
     let mut global_id_map: HashMap<String, KOID> = HashMap::new();
-    let filtered_labels: Vec<&str> = if let Some(lf) = label_filter {
-        labels
-            .iter()
-            .filter(|l| l.as_str() == lf)
-            .map(String::as_str)
-            .collect()
-    } else {
-        labels.iter().map(String::as_str).collect()
-    };
-
-    for label in &filtered_labels {
+    let mut all_objects: Vec<KnowledgeObject> = Vec::new();
+    let mut seen: HashSet<KOID> = HashSet::new();
+    for label in &filtered {
         println!("Importing nodes with label '{}'...", label);
-        match connector.import_nodes(label, tenant) {
-            Ok((objects, id_map)) => {
-                let count = objects.len();
-                for (elem_id, koid) in &id_map {
-                    global_id_map.insert(elem_id.clone(), *koid);
-                }
-                for ko in objects {
-                    let idem_key = format!("neo4j-node-{}-{}", label, ko.koid.to_hex());
-                    match kernel.remember(RememberRequest {
-                        context: Subject::new("neo4j-importer").into(),
-                        koid: Some(ko.koid),
-                        expected_version: Some(0),
-                        idempotency_key: Some(idem_key),
-                        metadata: ko.metadata,
-                        properties: ko.properties,
-                        semantic: None,
-                        relationships: vec![],
-                        security: Some(ko.security),
-                        extensions: ko.extensions,
-                        origin: Origin::Human,
-                        note: Some("imported from Neo4j".into()),
-                        referential_policy: ReferentialPolicy::Permissive,
-                    }) {
-                        Ok(_) => {}
-                        Err(e) => eprintln!("  Warning: commit failed: {}", e),
-                    }
-                }
-                total_nodes += count;
-                println!("  {} nodes imported", count);
+        let (objects, id_map) = match connector.import_nodes(label, tenant) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("  Error importing label {label}: {e}");
+                std::process::exit(1);
             }
-            Err(e) => eprintln!("  Error: {}", e),
+        };
+        for (elem_id, koid) in id_map {
+            global_id_map.entry(elem_id).or_insert(koid);
+        }
+        let count = objects.len();
+        for ko in objects {
+            if seen.insert(ko.koid) {
+                all_objects.push(ko);
+            }
+        }
+        println!("  {count} nodes read");
+    }
+
+    // Phase B: relationships — append per type. Rel properties fold into the
+    // source node's properties["rel:<TYPE>"] list (RelationshipRef has no
+    // props field), each map tagged with the target KOID. Rel types sorted so
+    // the result is deterministic across re-imports.
+    rel_types.sort();
+    let mut node_rels: HashMap<KOID, Vec<RelationshipRef>> = HashMap::new();
+    let mut node_rel_props: HashMap<KOID, HashMap<String, Vec<Value>>> = HashMap::new();
+    for rt in &rel_types {
+        println!("Importing relationships [{}]...", rt);
+        let rels = match connector.import_relationships(rt, &global_id_map) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("  Error importing relationships {rt}: {e}");
+                std::process::exit(1);
+            }
+        };
+        println!("  {} relationships read", rels.len());
+        for (rel, src_koid, tgt_koid, rprops) in &rels {
+            node_rels.entry(*src_koid).or_default().push(rel.clone());
+            let mut m = rprops.clone();
+            m.insert("target".to_string(), Value::Text(tgt_koid.to_hex()));
+            node_rel_props
+                .entry(*src_koid)
+                .or_default()
+                .entry(format!("rel:{rt}"))
+                .or_default()
+                .push(Value::Map(m));
         }
     }
 
-    // Phase 2: import relationships (only if we have nodes mapped).
-    if !global_id_map.is_empty() {
-        for rt in &rel_types {
-            println!("Importing relationships [{}]...", rt);
-            match connector.import_relationships(rt, &global_id_map) {
-                Ok(rels) => {
-                    let count = rels.len();
-                    // Update source nodes to include these relationships.
-                    let mut node_rels: HashMap<KOID, Vec<RelationshipRef>> = HashMap::new();
-                    for (rel, src_koid, _tgt_koid) in &rels {
-                        node_rels.entry(*src_koid).or_default().push(rel.clone());
-                    }
-                    for (koid, rels) in &node_rels {
-                        // Re-remember the source node with relationships attached.
-                        if let Ok(ko) =
-                            kernel.get(KnowledgeContext::from(Subject::new("neo4j-importer")), koid)
-                        {
-                            let mut updated = ko.clone();
-                            updated.relationships = rels.clone();
-                            let idem_key = format!("neo4j-rel-update-{}", koid.to_hex());
-                            let _ = kernel.remember(RememberRequest {
-                                context: Subject::new("neo4j-importer").into(),
-                                koid: Some(*koid),
-                                expected_version: Some(ko.version),
-                                idempotency_key: Some(idem_key),
-                                metadata: updated.metadata,
-                                properties: updated.properties,
-                                semantic: None,
-                                relationships: updated.relationships,
-                                security: Some(updated.security),
-                                extensions: updated.extensions,
-                                origin: Origin::Human,
-                                note: Some("Neo4j relationships attached".into()),
-                                referential_policy: ReferentialPolicy::Permissive,
-                            });
-                        }
-                    }
-                    total_rels += count;
-                    println!("  {} relationships imported", count);
-                }
-                Err(e) => eprintln!("  Error: {}", e),
+    // Phase C: commit. Any failure exits before the prune pass (CON-007).
+    let mut present_by_label: HashMap<String, HashSet<KOID>> = HashMap::new();
+    let mut total_nodes = 0usize;
+    for mut ko in all_objects {
+        let label = ko.metadata.type_name.clone();
+        let koid = ko.koid;
+        ko.relationships = node_rels.remove(&koid).unwrap_or_default();
+        if let Some(rel_props) = node_rel_props.remove(&koid) {
+            for (key, list) in rel_props {
+                ko.properties.insert(key, Value::List(list));
+            }
+        }
+        present_by_label
+            .entry(label.clone())
+            .or_default()
+            .insert(koid);
+        match sink.put(ko, "neo4j-import", "imported from Neo4j") {
+            Ok(true) => total_nodes += 1,
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("  Failed to commit node from {label}: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Phase D: reconcile deletions on the all-success path only.
+    // ponytail: a node that loses its PRIMARY label while keeping another is
+    // tombstoned here even though the source still has the node — the KO's
+    // identity is its primary label; upgrade to label-set tracking if real
+    // graphs hit this.
+    for (label, present) in &present_by_label {
+        match sink.prune_missing(label, present) {
+            Ok(0) => {}
+            Ok(n) => println!("  {n} stale node(s) tombstoned in {label}"),
+            Err(e) => {
+                eprintln!("  prune {label}: {e}");
+                std::process::exit(1);
             }
         }
     }
 
     println!();
     println!(
-        "Import complete. {} nodes, {} relationships imported into {}",
-        total_nodes, total_rels, target_db
+        "Import complete. {} nodes imported into {}",
+        total_nodes, target_db
     );
 }

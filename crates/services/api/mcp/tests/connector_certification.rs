@@ -534,3 +534,242 @@ fn con002_mongo_deleted_doc_is_tombstoned() {
     );
     assert_eq!(con002_age_of(&k, coll), 30);
 }
+
+// ---------------------------------------------------------------------------
+// MVP-CON-003 — Neo4j connector (item 6)
+// ---------------------------------------------------------------------------
+
+fn con003_ko_by_name(
+    k: &aikoql_kernel::Kernel,
+    label: &str,
+    name: &str,
+) -> aikoql_kernel::KnowledgeObject {
+    use aikoql_kernel::Value;
+    connectors::scan_type(k, "neo4j-importer", label)
+        .into_iter()
+        .find(|ko| ko.properties.get("name") == Some(&Value::Text(name.into())))
+        .unwrap_or_else(|| panic!("{name} missing among label {label}"))
+}
+
+fn con003_import(live: &connectors::Live, db: &str) {
+    let out = connectors::run_import(&[
+        "import",
+        "neo4j",
+        &live.neo4j_uri,
+        "--user",
+        &live.neo4j_user,
+        "--password",
+        &live.neo4j_password,
+        db,
+    ]);
+    connectors::assert_import_ok(&out, "neo4j");
+}
+
+/// MVP-CON-003: relationship properties must survive the import, kept on the
+/// source node as `properties["rel:<TYPE>"]` — a List of Maps, each tagged
+/// with `target` (RelationshipRef itself has no props field). Red today:
+/// `import_relationships` fetches `properties(r)` and drops it.
+#[test]
+fn con003_neo4j_rel_props_preserved() {
+    use aikoql_kernel::{Direction, RelationshipRef, Value};
+    let Some(live) = connectors::Live::neo4j() else {
+        return;
+    };
+    let label = "P_Con003RelProps";
+    let rel = "KNOWS_Con003RelProps";
+    connectors::neo4j_exec(
+        &live.neo4j_uri,
+        &live.neo4j_user,
+        &live.neo4j_password,
+        &[
+            &format!("MATCH (n:`{label}`) DETACH DELETE n"),
+            &format!(
+                "CREATE (a:`{label}` {{name:'alice'}}), (b:`{label}` {{name:'bob'}}), \
+                 (a)-[:`{rel}` {{since:2020, strength:0.9}}]->(b)"
+            ),
+        ],
+    );
+    let db = connectors::temp_db("con003-relprops");
+    con003_import(&live, &db);
+
+    let k = connectors::open_kernel(&db);
+    let alice = con003_ko_by_name(&k, label, "alice");
+    let bob = con003_ko_by_name(&k, label, "bob").koid;
+    let mut m = std::collections::BTreeMap::new();
+    m.insert("since".to_string(), Value::Int(2020));
+    m.insert("strength".to_string(), Value::Float(0.9));
+    m.insert("target".to_string(), Value::Text(bob.to_hex()));
+    assert_eq!(
+        alice.properties.get(&format!("rel:{rel}")),
+        Some(&Value::List(vec![Value::Map(m)])),
+        "relationship properties must survive the import"
+    );
+    assert_eq!(
+        alice.relationships,
+        vec![RelationshipRef {
+            rel_type: rel.into(),
+            target: bob,
+            direction: Direction::Outbound,
+        }],
+        "the relationship ref itself must be present"
+    );
+}
+
+/// MVP-CON-003: when one node has relationships of two different types, both
+/// must survive. Red today: the phase-2 loop re-remembers the source node per
+/// rel type with `updated.relationships = rels.clone()` — REPLACE, so the
+/// last type wins and the other is lost.
+#[test]
+fn con003_neo4j_multiple_rel_types_survive() {
+    use aikoql_kernel::Direction;
+    let Some(live) = connectors::Live::neo4j() else {
+        return;
+    };
+    let label = "P_Con003Multi";
+    let rel_a = "KNOWS_Con003Multi";
+    let rel_b = "LIKES_Con003Multi";
+    connectors::neo4j_exec(
+        &live.neo4j_uri,
+        &live.neo4j_user,
+        &live.neo4j_password,
+        &[
+            &format!("MATCH (n:`{label}`) DETACH DELETE n"),
+            &format!(
+                "CREATE (a:`{label}` {{name:'alice'}}), (b:`{label}` {{name:'bob'}}), \
+                 (a)-[:`{rel_a}`]->(b), (a)-[:`{rel_b}`]->(b)"
+            ),
+        ],
+    );
+    let db = connectors::temp_db("con003-multirel");
+    con003_import(&live, &db);
+
+    let k = connectors::open_kernel(&db);
+    let alice = con003_ko_by_name(&k, label, "alice");
+    let bob = con003_ko_by_name(&k, label, "bob").koid;
+    let mut got: Vec<String> = alice
+        .relationships
+        .iter()
+        .map(|r| r.rel_type.clone())
+        .collect();
+    got.sort();
+    let mut want = vec![rel_a.to_string(), rel_b.to_string()];
+    want.sort();
+    assert_eq!(
+        got, want,
+        "both relationship types must survive (phase 2 must append, not replace)"
+    );
+    assert!(
+        alice
+            .relationships
+            .iter()
+            .all(|r| { r.target == bob && r.direction == Direction::Outbound }),
+        "every ref must point at bob, outbound"
+    );
+    assert!(
+        alice.properties.contains_key(&format!("rel:{rel_a}"))
+            && alice.properties.contains_key(&format!("rel:{rel_b}")),
+        "rel props keyed per type must coexist"
+    );
+}
+
+/// MVP-CON-003: a node carrying two labels must import as exactly ONE KO
+/// (primary label = first sorted label → type_name; the full label list kept
+/// in `properties["labels"]`). Red today: `import_nodes` runs per label, so
+/// the node is imported once per label — two KOs (type explosion).
+#[test]
+fn con003_neo4j_multilabel_node_single_ko() {
+    use aikoql_kernel::Value;
+    let Some(live) = connectors::Live::neo4j() else {
+        return;
+    };
+    let label_a = "A_Con003Label";
+    let label_b = "B_Con003Label";
+    connectors::neo4j_exec(
+        &live.neo4j_uri,
+        &live.neo4j_user,
+        &live.neo4j_password,
+        &[
+            &format!(
+                "MATCH (n) WHERE any(l IN labels(n) WHERE l IN ['{label_a}','{label_b}']) DETACH DELETE n"
+            ),
+            &format!("CREATE (n:`{label_a}`:`{label_b}` {{name:'ann'}})"),
+        ],
+    );
+    let db = connectors::temp_db("con003-multilabel");
+    con003_import(&live, &db);
+
+    let k = connectors::open_kernel(&db);
+    let mut ann_kos: Vec<aikoql_kernel::KnowledgeObject> =
+        connectors::scan_type(&k, "neo4j-importer", label_a)
+            .into_iter()
+            .chain(connectors::scan_type(&k, "neo4j-importer", label_b))
+            .filter(|ko| ko.properties.get("name") == Some(&Value::Text("ann".into())))
+            .collect();
+    assert_eq!(
+        ann_kos.len(),
+        1,
+        "a multi-label node must import as ONE KO, got {}",
+        ann_kos.len()
+    );
+    let ann = ann_kos.pop().unwrap();
+    assert_eq!(
+        ann.metadata.type_name, label_a,
+        "primary label = first sorted label"
+    );
+    assert_eq!(
+        ann.properties.get("labels"),
+        Some(&Value::List(vec![
+            Value::Text(label_a.into()),
+            Value::Text(label_b.into())
+        ])),
+        "the full sorted label list must be preserved"
+    );
+}
+
+/// MVP-CON-003: the RelationshipRef must be pinned on the STORED start node.
+/// Red today: the Cypher match returns endpoints in elementId order, not
+/// stored direction — car (created first, lower elementId) would steal the
+/// ref and point Outbound at alice, inverting the graph.
+#[test]
+fn con003_neo4j_direction_pinned() {
+    use aikoql_kernel::{Direction, RelationshipRef};
+    let Some(live) = connectors::Live::neo4j() else {
+        return;
+    };
+    let label = "P_Con003Dir";
+    let rel = "OWNS_Con003Dir";
+    // car created FIRST: its elementId sorts below alice's, so an
+    // orientation-agnostic match returns a=car and pins the ref on the
+    // wrong KO.
+    connectors::neo4j_exec(
+        &live.neo4j_uri,
+        &live.neo4j_user,
+        &live.neo4j_password,
+        &[
+            &format!("MATCH (n:`{label}`) DETACH DELETE n"),
+            &format!(
+                "CREATE (car:`{label}` {{name:'car'}}), (a:`{label}` {{name:'alice'}}), \
+                 (a)-[:`{rel}`]->(car)"
+            ),
+        ],
+    );
+    let db = connectors::temp_db("con003-dir");
+    con003_import(&live, &db);
+
+    let k = connectors::open_kernel(&db);
+    let alice = con003_ko_by_name(&k, label, "alice");
+    let car = con003_ko_by_name(&k, label, "car");
+    assert_eq!(
+        alice.relationships,
+        vec![RelationshipRef {
+            rel_type: rel.into(),
+            target: car.koid,
+            direction: Direction::Outbound,
+        }],
+        "the ref must be pinned on the stored START node (alice)"
+    );
+    assert!(
+        car.relationships.is_empty(),
+        "the stored end node must carry no outbound ref"
+    );
+}

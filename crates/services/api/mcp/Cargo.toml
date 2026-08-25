@@ -38,4 +38,5 @@ embedding-openai = ["aikoql-semantic/embedding-openai"]
 aikoql-kernel = { path = "../../../kernel" }
 postgres = "0.19"
 mongodb = "3"
+ureq = { version = "2", features = ["json"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }

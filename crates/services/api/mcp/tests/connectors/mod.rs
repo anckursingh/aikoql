@@ -328,6 +328,37 @@ pub fn mongo_delete(uri: &str, db: &str, coll: &str, filter: mongodb::bson::Docu
     });
 }
 
+// ---------------------------------------------------------------------------
+// Neo4j seeding (TDD item 6)
+// ---------------------------------------------------------------------------
+
+/// Run Cypher statements against the live Neo4j through the same HTTP JSON
+/// API the provider uses (ureq). One transaction per call, statements in
+/// order. Per-test label/rel-type names are mandatory — the live graph is
+/// shared state across parallel test fns, like the mongo database.
+pub fn neo4j_exec(uri: &str, user: &str, pass: &str, stmts: &[&str]) {
+    let auth = format!(
+        "Basic {}",
+        aikoql_neo4j::base64_encode(&format!("{user}:{pass}"))
+    );
+    let body = serde_json::json!({
+        "statements": stmts
+            .iter()
+            .map(|s| serde_json::json!({ "statement": s }))
+            .collect::<Vec<_>>()
+    });
+    let resp = ureq::post(&format!("{}/db/neo4j/tx/commit", uri.trim_end_matches('/')))
+        .set("Authorization", &auth)
+        .set("Content-Type", "application/json")
+        .send_json(&body)
+        .unwrap_or_else(|e| panic!("neo4j seed request: {e}"));
+    let neo: serde_json::Value = resp
+        .into_json()
+        .unwrap_or_else(|e| panic!("neo4j seed response: {e}"));
+    let errors = neo["errors"].as_array().map(Vec::len).unwrap_or(0);
+    assert_eq!(errors, 0, "neo4j seed failed: {}", neo);
+}
+
 /// Create a throwaway database for this test and return the dsn pointed at
 /// it. Parallel test fns share one live server, so any filterless import
 /// (FK item, E2E items) gets its own database instead of racing the other

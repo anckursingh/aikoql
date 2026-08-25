@@ -170,7 +170,7 @@ impl Neo4jConnector {
                 }
                 let elem_id = data.row[0].as_str().unwrap_or("").to_string();
                 let props_val = &data.row[1];
-                let _labels_val = &data.row[2];
+                let labels_val = &data.row[2];
 
                 let mut props = PropertyMap::new();
                 if let Some(obj) = props_val.as_object() {
@@ -178,8 +178,27 @@ impl Neo4jConnector {
                         props.insert(k.clone(), neo4j_json_to_value(v));
                     }
                 }
+                // Full label list, sorted. The runner iterates labels sorted,
+                // so the first sorted label is the KO's type_name — the list
+                // here keeps the other labels visible on the KO.
+                let mut labels: Vec<String> = labels_val
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                labels.sort();
+                props.insert(
+                    "labels".into(),
+                    Value::List(labels.into_iter().map(Value::Text).collect()),
+                );
 
-                let koid = deterministic_koid(label, &elem_id);
+                // Label-independent KOID: the same node matched under two
+                // label passes must yield the SAME KOID, or the runner would
+                // import it once per label (type explosion).
+                let koid = deterministic_koid("neo4j", &elem_id);
                 id_map.insert(elem_id, koid);
 
                 objects.push(KnowledgeObject {
@@ -214,13 +233,21 @@ impl Neo4jConnector {
 
     /// Import all relationships of a given type.
     /// Requires `id_map` from node import to resolve elementIds to KOIDs.
+    /// Returns (ref, source KOID, target KOID, relationship properties) —
+    /// the ref is pinned on the STORED start node.
     pub fn import_relationships(
         &self,
         rel_type: &str,
         id_map: &HashMap<String, KOID>,
-    ) -> Result<Vec<(RelationshipRef, KOID, KOID)>, String> {
+    ) -> Result<Vec<(RelationshipRef, KOID, KOID, PropertyMap)>, String> {
+        // startNode(r)/endNode(r) pin the stored direction — a Cypher arrow
+        // in MATCH does NOT, the endpoints come back in elementId order and
+        // inverted rels would land on the wrong KO. The undirected match
+        // returns each relationship in BOTH orientations, so the WHERE keeps
+        // exactly one row per rel; ORDER BY makes the order deterministic so
+        // re-imports are byte-identical.
         let stmt = format!(
-            "MATCH (a)-[r:`{}`]->(b) RETURN elementId(a), elementId(b), type(r), properties(r)",
+            "MATCH (a)-[r:`{}`]-(b) WHERE elementId(a) < elementId(b) RETURN elementId(startNode(r)), elementId(endNode(r)), type(r), properties(r) ORDER BY elementId(startNode(r)), elementId(endNode(r))",
             rel_type
         );
         let body = serde_json::json!({ "statements": [{"statement": stmt}] });
@@ -253,6 +280,13 @@ impl Neo4jConnector {
                     None => continue,
                 };
 
+                let mut rprops = PropertyMap::new();
+                if let Some(obj) = data.row[3].as_object() {
+                    for (k, v) in obj {
+                        rprops.insert(k.clone(), neo4j_json_to_value(v));
+                    }
+                }
+
                 rels.push((
                     RelationshipRef {
                         rel_type: rtype.to_string(),
@@ -261,6 +295,7 @@ impl Neo4jConnector {
                     },
                     src_koid,
                     tgt_koid,
+                    rprops,
                 ));
             }
         }
@@ -307,7 +342,9 @@ fn basic_auth(user: &str, pass: &str) -> String {
     format!("Basic {}", encoded)
 }
 
-fn base64_encode(input: &str) -> String {
+/// pub so the connector-certification harness can build its seed requests
+/// with the same auth encoding the provider uses.
+pub fn base64_encode(input: &str) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let bytes = input.as_bytes();
     let mut out = String::new();

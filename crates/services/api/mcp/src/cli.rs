@@ -213,7 +213,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 eprintln!(
                     "  import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [DB_PATH]"
                 );
-                eprintln!("  import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [DB_PATH]");
+                eprintln!("  import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [--run-id ID] [DB_PATH]");
                 std::process::exit(1);
             }
             match ti_args[0] {
@@ -277,6 +277,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     let mut target_db = "./aikoql.redb";
                     let mut tenant: Option<&str> = None;
                     let mut label_filter: Option<&str> = None;
+                    let mut run_id = fresh_run_id();
                     let mut ni = 1;
                     while ni < ti_args.len() {
                         match ti_args[ni] {
@@ -312,6 +313,14 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                                     ni += 1;
                                 }
                             }
+                            "--run-id" => {
+                                if ni + 1 < ti_args.len() {
+                                    run_id = ti_args[ni + 1].to_string();
+                                    ni += 2;
+                                } else {
+                                    ni += 1;
+                                }
+                            }
                             _ if !ti_args[ni].starts_with("--") => {
                                 if uri.is_none() {
                                     uri = Some(ti_args[ni]);
@@ -327,10 +336,10 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                         }
                     }
                     let u = uri.unwrap_or_else(|| {
-                        eprintln!("Usage: aikoql-mcp import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [DB_PATH]");
+                        eprintln!("Usage: aikoql-mcp import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [--run-id ID] [DB_PATH]");
                         std::process::exit(1);
                     });
-                    run_neo4j_import(u, user, password, target_db, tenant, label_filter);
+                    run_neo4j_import(u, user, password, target_db, tenant, label_filter, &run_id);
                 }
                 "mongodb" => {
                     let mut uri: Option<&str> = None;
