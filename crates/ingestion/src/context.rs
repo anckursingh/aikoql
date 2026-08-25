@@ -41,6 +41,12 @@ pub struct ContextPackage {
     pub estimated_tokens: usize,
     /// Whether the package was trimmed to fit the budget.
     pub trimmed: bool,
+    /// RET-003: a score-tie group that could not fit the budget whole.
+    /// None of these entities was packed (no arbitrary pick); the names
+    /// are surfaced so the caller can resolve the ambiguity explicitly
+    /// instead of guessing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ambiguous_entities: Vec<String>,
     /// Retrieval health — unknown vs failed-retrieval distinction.
     #[serde(default)]
     pub status: RetrievalStatus,
@@ -490,7 +496,7 @@ pub fn compile_context_semantic_with(
     let mut seen_facts: HashSet<&str> = HashSet::new();
     let mut seen_relations: HashSet<(&str, &str, &str)> = HashSet::new();
 
-    for e in &entities {
+    for (i, e) in entities.iter().enumerate() {
         if e.score <= 0.0 {
             break;
         }
@@ -505,6 +511,37 @@ pub fn compile_context_semantic_with(
             + est_tokens(&e.justification)
             + mentions.iter().map(|m| est_tokens(m)).sum::<usize>();
         if !unlimited && tokens + est > entity_cap {
+            // RET-003: never silently select one entity from a score-tie
+            // group. Entities sort score-desc, so a tie group is
+            // contiguous; packing only the alphabetically-first of several
+            // equally-matched candidates ("Apple Inc." / "Apple Records" /
+            // "Apple Bank" all matching "apple") would hand the agent an
+            // arbitrary pick for an ambiguous task. When the group cannot
+            // fit whole, the packed group head is retracted and the whole
+            // group is surfaced as an explicit ambiguity instead — no
+            // guess, and the facts fold keeps its budget (the entity cap
+            // exists to prevent exactly that starvation).
+            if pkg.entities.last().map(|last| last.score == e.score) == Some(true) {
+                // Retract every packed member of the group (its head and
+                // any that fit before this overflow), then name the whole
+                // group — a partial group must never stay packed.
+                let mut group = Vec::new();
+                while pkg.entities.last().map(|last| last.score == e.score) == Some(true) {
+                    let packed = pkg.entities.pop().expect("tie-group member was packed");
+                    tokens -= est_tokens(&packed.name)
+                        + est_tokens(&packed.justification)
+                        + packed.mentions.iter().map(|m| est_tokens(m)).sum::<usize>();
+                    group.push(packed.name);
+                }
+                group.reverse(); // score order, group head first
+                group.extend(
+                    entities[i..]
+                        .iter()
+                        .take_while(|rest| rest.score == e.score)
+                        .map(|rest| rest.name.clone()),
+                );
+                pkg.ambiguous_entities = group;
+            }
             pkg.trimmed = true;
             break;
         }
@@ -782,6 +819,17 @@ pub fn render_context_markdown(pkg: &ContextPackage) -> String {
         md.push_str(
             "> ⚠️ Context trimmed to fit token budget. Some relevant items were omitted.\n\n",
         );
+    }
+
+    if !pkg.ambiguous_entities.is_empty() {
+        md.push_str("## Ambiguous Entities\n\n");
+        md.push_str(
+            "These equally-matched entities could not all fit the budget; none was selected:\n\n",
+        );
+        for name in &pkg.ambiguous_entities {
+            md.push_str(&format!("- {name}\n"));
+        }
+        md.push('\n');
     }
 
     md
