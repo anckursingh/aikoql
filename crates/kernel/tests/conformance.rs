@@ -3116,3 +3116,262 @@ fn t35_find_similar_respects_tenant_scope() {
     );
     assert_eq!(res[0].ko.koid, acme_ko);
 }
+
+// ── EVO-003: apply/migrate op + wire format versioning ──
+
+#[test]
+fn t06zx_apply_migration_renames_property_and_bumps_version() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("sword".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2).required_property("label", "Text"),
+        transforms: vec![PropertyTransform::Rename {
+            from: "name".into(),
+            to: "label".into(),
+        }],
+    };
+    let report = k.apply_schema_migration(&alice(), &mig).unwrap();
+    assert_eq!(report.scanned, 1);
+    assert_eq!(report.migrated, 1);
+    assert_eq!(report.already_at_target, 0);
+
+    let ko = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko.metadata.schema_version, 2);
+    assert_eq!(
+        ko.properties.get("label"),
+        Some(&Value::Text("sword".into()))
+    );
+    assert!(!ko.properties.contains_key("name"));
+}
+
+#[test]
+fn t06zy_apply_migration_set_default_fills_existing() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties.insert("name".into(), Value::Text("a".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+    let mut r2 = RememberRequest::create(alice(), meta("Item"));
+    r2.properties.insert("name".into(), Value::Text("b".into()));
+    r2.properties
+        .insert("grade".into(), Value::Text("premium".into()));
+    let id2 = k.remember(r2).unwrap().koid;
+
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2)
+            .required_property("name", "Text")
+            .required_property("grade", "Text"),
+        transforms: vec![PropertyTransform::SetDefault {
+            property: "grade".into(),
+            value: Value::Text("standard".into()),
+        }],
+    };
+    let report = k.apply_schema_migration(&alice(), &mig).unwrap();
+    assert_eq!(report.migrated, 2);
+
+    let ko1 = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko1.metadata.schema_version, 2);
+    assert_eq!(
+        ko1.properties.get("grade"),
+        Some(&Value::Text("standard".into()))
+    );
+    // existing value untouched
+    let ko2 = k.get(alice(), &id2).unwrap();
+    assert_eq!(
+        ko2.properties.get("grade"),
+        Some(&Value::Text("premium".into()))
+    );
+}
+
+#[test]
+fn t06zz_apply_migration_is_idempotent() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("sword".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2).required_property("label", "Text"),
+        transforms: vec![PropertyTransform::Rename {
+            from: "name".into(),
+            to: "label".into(),
+        }],
+    };
+    assert_eq!(
+        k.apply_schema_migration(&alice(), &mig).unwrap().migrated,
+        1
+    );
+    let v_after_first = k.get(alice(), &id1).unwrap().version;
+
+    // re-apply the identical migration: pure no-op, no version churn
+    let report = k.apply_schema_migration(&alice(), &mig).unwrap();
+    assert_eq!(report.scanned, 1);
+    assert_eq!(report.migrated, 0);
+    assert_eq!(report.already_at_target, 1);
+    let ko = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko.version, v_after_first);
+    assert_eq!(
+        ko.properties.get("label"),
+        Some(&Value::Text("sword".into()))
+    );
+}
+
+#[test]
+fn t06zza_apply_migration_rejects_unauthorized_targets() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("alices".into()));
+    k.remember(r1).unwrap();
+    let mut r2 = RememberRequest::create(Subject::new("bob"), meta("Item"));
+    r2.properties
+        .insert("name".into(), Value::Text("bobs".into()));
+    k.remember(r2).unwrap();
+
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2)
+            .required_property("name", "Text")
+            .property("grade", "Text"),
+        transforms: vec![],
+    };
+    // fail-closed: alice cannot migrate bob's KO -> whole op denied
+    assert!(matches!(
+        k.apply_schema_migration(&alice(), &mig).unwrap_err(),
+        KError::AccessDenied { .. }
+    ));
+    // schema rolled back: a v1-stamped write still validates
+    let mut r3 = RememberRequest::create(alice(), meta("Item"));
+    r3.properties.insert("name".into(), Value::Text("c".into()));
+    assert!(k.remember(r3).is_ok());
+}
+
+#[test]
+fn t06zzb_apply_migration_fails_clean_on_violation() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"));
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties.insert("price".into(), Value::Int(-5));
+    let id1 = k.remember(r1).unwrap().koid;
+
+    // v2 adds a check the existing data violates
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2).property("price", "Int").check(
+            "price_non_negative",
+            CheckExpression::Compare {
+                op: CompareOp::Gte,
+                left: Box::new(CheckExpression::Property("price".into())),
+                right: Box::new(CheckExpression::Literal(Value::Int(0))),
+            },
+        ),
+        transforms: vec![],
+    };
+    assert!(k.apply_schema_migration(&alice(), &mig).is_err());
+    // nothing changed: KO still v1-stamped at its original version
+    let ko = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko.metadata.schema_version, 1);
+    assert_eq!(ko.version, 1);
+    // schema NOT registered: v1-stamped writes still validate
+    let mut r2 = RememberRequest::create(alice(), meta("Item"));
+    r2.properties.insert("price".into(), Value::Int(7));
+    assert!(k.remember(r2).is_ok());
+}
+
+#[test]
+fn t06zzc_apply_migration_rename_source_missing_fails() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("sword".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2).required_property("label", "Text"),
+        transforms: vec![PropertyTransform::Rename {
+            from: "nickname".into(), // does not exist on the KO
+            to: "label".into(),
+        }],
+    };
+    assert!(matches!(
+        k.apply_schema_migration(&alice(), &mig).unwrap_err(),
+        KError::InvalidObject(_)
+    ));
+    let ko = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko.metadata.schema_version, 1);
+}
+
+#[test]
+fn t06zzd_apply_migration_enforces_version_gate() {
+    // non-sequential version jump is rejected
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1));
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 3),
+        transforms: vec![],
+    };
+    assert!(matches!(
+        k.apply_schema_migration(&alice(), &mig).unwrap_err(),
+        KError::InvalidSchema(_)
+    ));
+
+    // no registered schema at all is rejected
+    let (k2, _c2) = mk();
+    let mig2 = SchemaMigration {
+        schema: Schema::new("Fresh", 2),
+        transforms: vec![],
+    };
+    assert!(matches!(
+        k2.apply_schema_migration(&alice(), &mig2).unwrap_err(),
+        KError::InvalidSchema(_)
+    ));
+}
+
+#[test]
+fn t06zze_legacy_object_bytes_remain_readable() {
+    // EVO-003 wire slice: stores written before the wire envelope existed
+    // (legacy unversioned bytes) must stay readable forever.
+    let (k, store, clock) = mk_with_store();
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("old".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+    let ko1 = k.get(alice(), &id1).unwrap();
+
+    // rewrite the stored object version with LEGACY (unversioned) bytes
+    let legacy = codec::encode_ko(&ko1);
+    let mut batch = WriteBatch::new();
+    batch.put(obj_store_key(&id1, ko1.commit_ts), legacy);
+    store.write_batch(&batch).unwrap();
+
+    // a fresh kernel over the same store still decodes the legacy bytes
+    drop(k);
+    let k2 = Kernel::open(store, clock, 0xC0FFEE).unwrap();
+    let ko2 = k2.get(alice(), &id1).unwrap();
+    assert_eq!(ko2.koid, id1);
+    assert_eq!(ko2.properties.get("name"), Some(&Value::Text("old".into())));
+}
+
+#[test]
+fn t06zzf_stored_object_bytes_use_wire_envelope() {
+    let (k, store, _c) = mk_with_store();
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("new".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+    let ko1 = k.get(alice(), &id1).unwrap();
+
+    let raw = store
+        .get(&obj_store_key(&id1, ko1.commit_ts))
+        .unwrap()
+        .unwrap();
+    assert_eq!(&raw[..8], codec::WIRE_HEADER_V1);
+    assert!(codec::decode_ko_wire(&raw).is_ok());
+}

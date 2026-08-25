@@ -869,6 +869,135 @@ impl Kernel {
         Ok(violations)
     }
 
+    /// Apply a schema migration atomically (EVO-003 apply/migrate op).
+    ///
+    /// Every live object of `migration.schema.type_name` not yet stamped with
+    /// the target version is rewritten: property transforms are applied, the
+    /// `schema_version` stamp is bumped, and the batch commits through
+    /// `transact` (per-object authz via the existing write path, OCC on every
+    /// head, schema + constraint validation against the NEW schema). The
+    /// target schema is registered only after the batch commits; on any
+    /// failure the previous registration is restored and nothing changes.
+    ///
+    /// Deterministic version gate: the new version must be prev+1, or — for an
+    /// identical re-apply (idempotent retry) — equal to prev with the exact
+    /// same schema. Warnings from constraint evaluation do not block; errors
+    /// do (pre-validated on the transformed view, because `transact` skips
+    /// check evaluation on empty write-sets).
+    pub fn apply_schema_migration(
+        &self,
+        subject: &Subject,
+        migration: &SchemaMigration,
+    ) -> KResult<MigrationReport> {
+        let new_schema = &migration.schema;
+        let prev = {
+            let schemas = self.schemas.read().unwrap();
+            match schemas.get(&new_schema.type_name) {
+                Some(s) => s.clone(),
+                None => {
+                    return Err(KError::InvalidSchema(format!(
+                        "no schema registered for type '{}' — register an initial schema before migrating",
+                        new_schema.type_name
+                    )));
+                }
+            }
+        };
+        let new_version = new_schema.schema_version;
+        if new_version != prev.schema_version + 1
+            && (new_version != prev.schema_version || *new_schema != prev)
+        {
+            return Err(KError::InvalidSchema(format!(
+                "schema migration for '{}' must bump version {} -> {}",
+                new_schema.type_name, prev.schema_version, new_version
+            )));
+        }
+
+        let heads = self.objects.scan_heads()?;
+        let mut ops = Vec::new();
+        let mut scanned = 0usize;
+        let mut already_at_target = 0usize;
+        for (hkoid, _version, _ts, state) in &heads {
+            if *state == LifecycleState::Deleted {
+                continue;
+            }
+            let Some(head) = self.objects.get(hkoid)? else {
+                continue;
+            };
+            if head.metadata.type_name != new_schema.type_name {
+                continue;
+            }
+            scanned += 1;
+            if head.metadata.schema_version == new_version {
+                already_at_target += 1;
+                continue;
+            }
+            let mut props = head.properties.clone();
+            for t in &migration.transforms {
+                match t {
+                    PropertyTransform::Rename { from, to } => match props.remove(from) {
+                        Some(v) => {
+                            props.insert(to.clone(), v);
+                        }
+                        None => {
+                            return Err(KError::InvalidObject(format!(
+                                "rename transform: property '{}' missing on {}",
+                                from, hkoid
+                            )));
+                        }
+                    },
+                    PropertyTransform::SetDefault { property, value } => {
+                        if !props.contains_key(property) {
+                            props.insert(property.clone(), value.clone());
+                        }
+                    }
+                }
+            }
+            // Pre-validate the transformed view against the new schema's
+            // constraints (check/domain) — transact skips these on empty
+            // write-sets, so a migration must evaluate them explicitly.
+            let result =
+                self.constraint_eval
+                    .evaluate_full(new_schema, &props, None, Some(*hkoid), None);
+            if !result.violations.is_empty() {
+                return Err(KError::InvalidSchema(format!(
+                    "schema migration of '{}' would violate constraints on {}: {}",
+                    new_schema.type_name, hkoid, result.violations[0].message
+                )));
+            }
+            let mut meta = head.metadata.clone();
+            meta.schema_version = new_version;
+            let mut req = RememberRequest::update(subject.clone(), *hkoid, meta);
+            req.expected_version = Some(head.version);
+            req.properties = props;
+            // preserve everything the migration does not touch
+            req.semantic = head.semantic.clone();
+            req.relationships = head.relationships.clone();
+            req.extensions = head.extensions.clone();
+            req.origin = head.lifecycle.origin.clone();
+            req.note = Some(format!(
+                "schema migration {} -> {}",
+                prev.schema_version, new_version
+            ));
+            ops.push(TransactionOp::new(subject.clone(), req));
+        }
+        let migrated = ops.len();
+
+        // Register the target schema first so `transact` validates the stamped
+        // KOs against it; roll back on failure. The registry is in-memory, so
+        // restoration is a re-insert. Transact's OCC re-check makes the
+        // pre-transact scan race-safe.
+        self.schemas.write().unwrap().register(new_schema.clone());
+        if let Err(e) = self.transact(ops) {
+            self.schemas.write().unwrap().register(prev);
+            return Err(e);
+        }
+        Ok(MigrationReport {
+            scanned,
+            migrated,
+            already_at_target,
+        })
+    }
+
     /// Version payload access for index maintenance (internal; bypasses ACL).
     #[doc(hidden)]
     pub fn raw_object_at(&self, koid: &KOID, commit_ts: u64) -> KResult<Option<KnowledgeObject>> {

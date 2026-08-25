@@ -1763,6 +1763,34 @@ pub struct Schema {
     pub check_constraints: Vec<CheckConstraint>,
 }
 
+/// An atomic schema migration: a new schema plus per-object property
+/// transforms (EVO-003 apply/migrate op).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SchemaMigration {
+    pub schema: Schema,
+    pub transforms: Vec<PropertyTransform>,
+}
+
+/// One per-object property rewrite applied during a schema migration.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PropertyTransform {
+    /// Move a property's value to a new key. Fails the migration if absent.
+    Rename { from: String, to: String },
+    /// Fill a missing property with a fixed value (existing values untouched).
+    SetDefault { property: String, value: Value },
+}
+
+/// Outcome of `Kernel::apply_schema_migration`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MigrationReport {
+    /// Live objects of the type examined.
+    pub scanned: usize,
+    /// Objects rewritten to the target schema version.
+    pub migrated: usize,
+    /// Objects already stamped with the target version (skipped).
+    pub already_at_target: usize,
+}
+
 /// A typed property definition within a schema (MRFC-0060 Phase C1).
 /// Separate from the ontology's `PropertyDef` — schema properties are the
 /// enforced subset of what the ontology discovers.

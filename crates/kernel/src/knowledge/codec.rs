@@ -510,6 +510,38 @@ pub fn decode_ko(buf: &[u8]) -> KResult<KnowledgeObject> {
     })
 }
 
+/// Wire-format envelope for stored KnowledgeObject payloads (EVO-003).
+///
+/// The first 8 bytes are a header: 7-byte magic + 1 version byte. Legacy
+/// stores (pre-envelope) carry no header and decode via the frozen v1 path.
+/// `encode_ko`/`decode_ko` themselves must NEVER change: `payload_hash` in the
+/// audit chain is a sha256 over those canonical bytes, and `prove()` re-encodes
+/// stored objects to compare. Future formats bump the version byte; old
+/// readers reject unknown versions.
+///
+/// `ponytail:` a legacy koid whose first 8 bytes equal the header (≈2^-64)
+/// would mis-route and fail with a Codec error — never silently corrupt.
+pub const WIRE_HEADER_V1: [u8; 8] = [0xA1, 0x4B, 0x4F, 0x31, 0x00, 0x00, 0x00, 0x01];
+
+/// Encode a KO for storage, wrapped in the current wire envelope.
+pub fn encode_ko_wire(ko: &KnowledgeObject) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(8 + 256);
+    buf.extend_from_slice(&WIRE_HEADER_V1);
+    buf.extend_from_slice(&encode_ko(ko));
+    buf
+}
+
+/// Decode a stored KO payload: wire-enveloped (current) or legacy bytes.
+pub fn decode_ko_wire(buf: &[u8]) -> KResult<KnowledgeObject> {
+    if buf.len() < 8 || buf[..7] != WIRE_HEADER_V1[..7] {
+        return decode_ko(buf);
+    }
+    match buf[7] {
+        1 => decode_ko(&buf[8..]),
+        v => Err(KError::Codec(format!("unknown wire format version {}", v))),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // KnowledgeEvent
 // ---------------------------------------------------------------------------
@@ -700,5 +732,31 @@ mod tests {
             },
         );
         assert_eq!(ko, decode_ko(&encode_ko(&ko)).expect("decode"));
+    }
+
+    // --- EVO-003: wire format v1 envelope ---
+
+    #[test]
+    fn wire_codec_roundtrips_with_version_magic() {
+        let ko = sample_ko();
+        let bytes = encode_ko_wire(&ko);
+        assert_eq!(&bytes[..8], WIRE_HEADER_V1);
+        assert_eq!(ko, decode_ko_wire(&bytes).expect("decode"));
+    }
+
+    #[test]
+    fn wire_codec_decodes_legacy_bytes() {
+        let ko = sample_ko();
+        let legacy = encode_ko(&ko);
+        assert!(!legacy.starts_with(&WIRE_HEADER_V1));
+        assert_eq!(ko, decode_ko_wire(&legacy).expect("legacy decode"));
+    }
+
+    #[test]
+    fn wire_codec_rejects_unknown_version() {
+        let ko = sample_ko();
+        let mut bytes = encode_ko_wire(&ko);
+        bytes[7] = 0x7F;
+        assert!(matches!(decode_ko_wire(&bytes), Err(KError::Codec(_))));
     }
 }

@@ -457,7 +457,7 @@ impl KnowledgeRepository {
             }
         }
         let res = match self.engine().get(&obj_key(koid, commit_ts))? {
-            Some(b) => Some(codec::decode_ko(&b)?),
+            Some(b) => Some(codec::decode_ko_wire(&b)?),
             None => None,
         };
         if let Some(ko) = &res {
@@ -495,7 +495,7 @@ impl KnowledgeRepository {
             let mut ts = [0u8; 8];
             ts.copy_from_slice(ts_bytes);
             if u64::from_be_bytes(ts) <= snap_ts {
-                return Ok(Some(codec::decode_ko(v)?));
+                return Ok(Some(codec::decode_ko_wire(v)?));
             }
         }
         Ok(None)
@@ -508,7 +508,7 @@ impl KnowledgeRepository {
         commit_ts: u64,
         ko: &KnowledgeObject,
     ) {
-        batch.put(obj_key(koid, commit_ts), codec::encode_ko(ko));
+        batch.put(obj_key(koid, commit_ts), codec::encode_ko_wire(ko));
         if let Some(c) = &self.cache {
             c.delete_object(koid, commit_ts);
         }
@@ -563,7 +563,7 @@ impl KnowledgeRepository {
             let ts_bytes = &k[k.len() - 8..];
             let mut ts = [0u8; 8];
             ts.copy_from_slice(ts_bytes);
-            out.push((u64::from_be_bytes(ts), codec::decode_ko(&v)?));
+            out.push((u64::from_be_bytes(ts), codec::decode_ko_wire(&v)?));
         }
         Ok(out)
     }

@@ -197,7 +197,7 @@ const MATRIX: &[Row] = &[
     // EVO — knowledge evolution
     row("EVO-001", "EVO", "P1", "covered", Some("crates/kernel/tests/derivation.rs"), None),
     row("EVO-002", "EVO", "P0", "covered", Some("crates/ingestion/src/ingest_incremental.rs"), None),
-    row("EVO-003", "EVO", "P0", "partial", None, Some("AC-22 pre-migration validation (t06zr/t06zs) + versioned coexistence + deterministic version gate (t06zt) tested; apply/migrate op + codec format versioning are feature work")),
+    row("EVO-003", "EVO", "P0", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     row("EVO-004", "EVO", "P1", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     row("EVO-005", "EVO", "P1", "covered", Some("crates/kernel/tests/evidence_wiring.rs"), None),
     // IDX — derived index consistency (suite §23)
