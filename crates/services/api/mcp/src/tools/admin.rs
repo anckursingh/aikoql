@@ -70,10 +70,7 @@ pub(crate) fn tool_verify_backup(args: &J) -> Result<J, String> {
         .get("backup")
         .and_then(|b| b.as_str())
         .ok_or("missing argument: backup")?;
-    let data_path = format!("{}/data.redb", backup);
-    if !std::path::Path::new(&data_path).exists() {
-        return Err(format!("backup data file not found: {}", data_path));
-    }
+    let data_path = backup_data_file(backup)?;
     let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
@@ -145,10 +142,11 @@ pub(crate) fn tool_backup(k: &Kernel, db_path: &str) -> Result<J, String> {
     };
     std::fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
 
-    // Copy the database file — use filename from source for multi-file db support.
+    // Snapshot the store through the kernel — the live file is region-locked
+    // on Windows, so a file-level copy cannot read it (os error 33).
     let src_file = src.file_name().ok_or("invalid db path: no filename")?;
     let dest_path = backup_dir.join(src_file);
-    std::fs::copy(src, &dest_path).map_err(|e| e.to_string())?;
+    k.backup_store_to(&dest_path).map_err(|e| e.to_string())?;
 
     // Record source metadata.
     let (seq, _audit) = k.journal_head().map_err(|e| e.to_string())?;
@@ -187,7 +185,33 @@ pub(crate) fn verify_backup_file(path: &str, expected_seq: u64, expected_objects
     seq == expected_seq && count == expected_objects
 }
 
-pub(crate) fn tool_restore(args: &J, current_db: &str) -> Result<J, String> {
+/// The data file inside a backup dir. tool_backup stores it under the source
+/// db's filename (meta.json "source") — never a hard-coded data.redb.
+fn backup_data_file(backup: &str) -> Result<String, String> {
+    let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
+        .map_err(|e| format!("not a valid backup: {}", e))?;
+    let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
+    if let Some(f) = meta
+        .get("source")
+        .and_then(|s| s.as_str())
+        .and_then(|s| std::path::Path::new(s).file_name())
+    {
+        let p = format!("{}/{}", backup, f.to_string_lossy());
+        if std::path::Path::new(&p).exists() {
+            return Ok(p);
+        }
+    }
+    // Fallback: any redb file in the backup dir.
+    std::fs::read_dir(backup)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("redb"))
+        .map(|p| p.to_string_lossy().to_string())
+        .ok_or_else(|| "backup data file missing".into())
+}
+
+pub(crate) fn tool_restore(k: &Kernel, args: &J) -> Result<J, String> {
     let backup = args
         .get("backup")
         .and_then(|b| b.as_str())
@@ -195,10 +219,14 @@ pub(crate) fn tool_restore(args: &J, current_db: &str) -> Result<J, String> {
     let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
-    if !std::path::Path::new(&format!("{}/data.redb", backup)).exists() {
-        return Err("backup data file missing".into());
-    }
-    std::fs::copy(format!("{}/data.redb", backup), current_db).map_err(|e| e.to_string())?;
+    let data_file = backup_data_file(backup)?;
+    // Engine-level restore: the live file cannot be overwritten while the
+    // server holds it open (region lock), so rows are swapped through the
+    // kernel in one atomic batch.
+    // ponytail: in-memory derived state is stale until restart — restart
+    // the server after restore (TESTING-PLAN §9.4 REC-002).
+    k.restore_store_from(std::path::Path::new(&data_file))
+        .map_err(|e| e.to_string())?;
     // Report PITR recovery point from backup metadata.
     let pitr_seq = meta.get("journal_seq").and_then(|v| v.as_u64());
     let pitr_ts = meta.get("timestamp").and_then(|v| v.as_u64());
@@ -212,13 +240,17 @@ pub(crate) fn tool_restore(args: &J, current_db: &str) -> Result<J, String> {
     }))
 }
 
-pub(crate) fn tool_list_backups() -> Result<J, String> {
+pub(crate) fn tool_list_backups(db_path: &str) -> Result<J, String> {
+    // Backups land next to the db file, not in the server's CWD.
+    let dir = std::path::Path::new(db_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
     let mut backups = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(".") {
+    if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.ends_with(".backup.") {
-                let meta_path = format!("{}/meta.json", name);
+            if name.contains(".backup.") {
+                let meta_path = format!("{}/meta.json", dir.join(&name).display());
                 if let Ok(meta_str) = std::fs::read_to_string(&meta_path) {
                     if let Ok(meta) = serde_json::from_str::<J>(&meta_str) {
                         backups.push(json!({"name": name, "meta": meta}));

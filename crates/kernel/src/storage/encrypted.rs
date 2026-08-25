@@ -10,6 +10,7 @@
 use super::store::{StorageEngine, WriteBatch};
 use crate::knowledge::kom::KResult;
 use crate::security::crypto::Crypto;
+use std::path::Path;
 use std::sync::Arc;
 
 pub struct EncryptedStore {
@@ -76,6 +77,19 @@ impl StorageEngine for EncryptedStore {
             encrypted_batch.del(k.clone());
         }
         self.inner.write_batch(&encrypted_batch)
+    }
+
+    fn snapshot_to(&self, dest: &Path) -> KResult<()> {
+        // Raw delegation: scan() decrypts, so the default impl would write a
+        // PLAINTEXT backup. The inner engine's rows (ciphertext) must move
+        // verbatim — a fresh kernel opens the backup with decryption on.
+        self.inner.snapshot_to(dest)
+    }
+
+    fn restore_from(&self, src: &Path) -> KResult<()> {
+        // Raw delegation: backup rows are already encrypted; writing them
+        // through the encrypting layer would double-encrypt.
+        self.inner.restore_from(src)
     }
 }
 
@@ -178,5 +192,50 @@ mod tests {
         );
         // Must start with version byte 0x01.
         assert_eq!(raw[0], 0x01, "version byte missing");
+    }
+
+    #[test]
+    fn encrypted_snapshot_and_restore_stay_ciphertext() {
+        // REC-002: the overrides must delegate to the RAW inner rows. A
+        // plaintext backup would leak values and be unopenable by a fresh
+        // encrypted kernel; a restore through the encrypting layer would
+        // double-encrypt the already-encrypted rows.
+        let mem = Arc::new(MemoryEngine::new());
+        let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+        let key = crypto.generate_key();
+        let store = EncryptedStore::new(mem, crypto, key);
+        store
+            .write_batch(&WriteBatch {
+                puts: vec![(b"secret".to_vec(), b"classified".to_vec())],
+                dels: vec![],
+            })
+            .unwrap();
+
+        let dest =
+            std::env::temp_dir().join(format!("aikoql_enc_snap_{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&dest);
+        store.snapshot_to(&dest).unwrap();
+
+        // Raw rows in the backup file must not contain the plaintext.
+        let raw = crate::storage::store_redb::RedbEngine::open(&dest)
+            .unwrap()
+            .get(b"secret")
+            .unwrap()
+            .unwrap();
+        let raw_str = String::from_utf8_lossy(&raw);
+        assert!(
+            !raw_str.contains("classified"),
+            "plaintext leaked into backup: {}",
+            raw_str
+        );
+
+        // Restoring into a fresh encrypted wrapper decrypts back to the
+        // original value — ciphertext was never double-encrypted.
+        let mem2 = Arc::new(MemoryEngine::new());
+        let crypto2 = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+        let store2 = EncryptedStore::new(mem2, crypto2, key);
+        store2.restore_from(&dest).unwrap();
+        assert_eq!(store2.get(b"secret").unwrap().unwrap(), b"classified");
+        let _ = std::fs::remove_file(&dest);
     }
 }

@@ -303,7 +303,7 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | MVP-CTX-004 Evidence inclusion (answer only in prose) | P0 | G5 | ✅ | evidence snippets render verbatim source; `e2e_answer_quality` |
 | MVP-CTX-005 Context budget | P1 | — | ✅ | `ctx_min_*` 1000-KO minimization tests |
 | MVP-REC-001 Restart durability | P0 | G8 | ✅ | `durability.rs`, `e2e-restart.js`, chatbot real-server restart |
-| MVP-REC-002 Backup/restore | P0 | G8 | 🟡 | `backup`/`restore`/`list_backups` tools exist, backup exercised in mcp_real_world Phase 9; **TDD**: backup → destroy → restore → equivalent KOs/facts/queries |
+| MVP-REC-002 Backup/restore | P0 | G8 | ✅ | `mvp_rec_002_backup_destroy_restore_round_trip` (mcp_real_world): verified live backup → destroy → restore → reopen → same KOID + content; engine-level `snapshot_to`/`restore_from` (trait + `EncryptedStore` raw delegation so ciphertext stays verbatim); **server restart required after restore** (in-memory derived state) |
 | MVP-REC-003 Interrupted ingestion | P0 | G8 | ✅ | `crash_kill.rs` (taskkill/SIGKILL mid-write → consistent reopen, journal head ≥ observed) |
 | MVP-DEP-001 Clean Docker startup | — | G9 | ✅ | ci.yml docker job: build → run → health check healthy |
 | MVP-DEP-002 Fresh install → ingest → query | — | G9 | ✅ | `e2e-dogfood.js` CI job (documented instructions) |
@@ -325,14 +325,14 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 
 | Gate | Requirement | Today |
 | --- | --- | --- |
-| GATE-01 P0 correctness | 100% | 🟡 — 9 P0 TDD items open (KO-003, EXT-001/002, EVO-003/004, SEC-004, REC-002, E2E-004 live, connector P0s) |
+| GATE-01 P0 correctness | 100% | 🟡 — P0 open: E2E-004 live + MVP-CON-001..004 + MVP-E2E-001 (all connector-scope, §9.3) |
 | GATE-02 P1 correctness | ≥98% | 🟡 — EXT-003, EVO-005, PRG-003, CON-005/007, DEP-003 open |
 | GATE-03 Critical security | 100% | 🟡 — SEC-004 log-redaction item |
 | GATE-04 Connector certification | 100% | ❌ **BLOCKED — connectors are NOT_IMPLEMENTED (TP-5)** |
 | GATE-05 Evidence preservation | 100% | 🟡 — EXT-001/002/003 TDD items |
 | GATE-06 Mutation/evolution | 100% | 🟡 — EVO-003/004/005 TDD items |
 | GATE-07 Temporal | 100% | ✅ |
-| GATE-08 Recovery | 100% | 🟡 — REC-002 restore round-trip |
+| GATE-08 Recovery | 100% | ✅ — REC-002 restore round-trip (verified live backup, destroy, restore, equivalent KO) |
 | GATE-09 Docker/installability | 100% | 🟡 — DEP-003 volume restart |
 | GATE-10/11 Sev-1/Sev-2 | 0 | ✅ none open (unmeasured until runner) |
 | GATE-12 Benchmarks | no regression | ✅ |
@@ -353,7 +353,7 @@ MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04,
 6. ~~MVP-EVO-005 10× re-ingest growth bound (ingestion incremental)~~ ✅ done 2026-08-25 — `mvp_evo_005_reingest_ten_times_no_uncontrolled_growth`; red caught 12 accumulated [STALE] marker facts → markers now skipped for re-supplied facts
 7. ~~MVP-SEC-004 secrets absent from rendered output (kernel/mcp)~~ ✅ done 2026-08-25 — `mvp_sec_004_raw_secret_never_survives_redaction_or_rendering`; red caught 4 leaks (marker-prefix keeps raw key; snippets unredacted) → whole-field replacement across all rendered IR fields
 8. ~~MVP-PRG-003 invalid program metadata (kernel experiences)~~ ✅ done 2026-08-25 — `record_experience_rejects_invalid_program_metadata`; green without production change (shape/TTL/confidence validation already in ops.rs) — test pins it
-9. MVP-REC-002 backup→destroy→restore round-trip (mcp_real_world)
+9. ~~MVP-REC-002 backup→destroy→restore round-trip (mcp_real_world)~~ ✅ done 2026-08-25 — `mvp_rec_002_backup_destroy_restore_round_trip`; red caught `std::fs::copy` on the live redb file (Windows region lock, os error 33 — the old Phase 9 assertion was a false positive on error objects) → engine-level `StorageEngine::snapshot_to`/`restore_from` (kernel-side, `EncryptedStore` delegates raw so ciphertext moves verbatim); same round: restore's hard-coded `data.redb` → `backup_data_file` from meta source, list_backups now scans the db's directory (was server CWD) and matches `contains(".backup.")` (was a never-matching `ends_with`)
 10. MVP-DEP-003 volume restart (CI)
 11. §23 artifacts runner (`scripts/` or registry-driven test) → `artifacts/release-gate.md`
 

@@ -2853,6 +2853,20 @@ impl Kernel {
         }
     }
 
+    /// REC-002: write a durable snapshot of the store into a fresh database
+    /// file at `path` (live backup — works while the kernel holds the store).
+    pub fn backup_store_to(&self, path: &std::path::Path) -> KResult<()> {
+        self.store.snapshot_to(path)
+    }
+
+    /// REC-002: replace the store contents with the snapshot at `path`
+    /// (point-in-time restore). In-memory derived state (semantic status,
+    /// enrichment indexes) stays stale until the next kernel open — restart
+    /// after restore.
+    pub fn restore_store_from(&self, path: &std::path::Path) -> KResult<()> {
+        self.store.restore_from(path)
+    }
+
     // ---- Programs-as-KOs (MRFC-0030 Phase 7a) ----------------------------
 
     /// Deploy a Program KO. The program is aikoql stored as a Knowledge Object

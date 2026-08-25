@@ -94,8 +94,7 @@ fn record_experience_rejects_invalid_program_metadata() {
         attempts.push(req);
     }
     // TTL that overflows the millis bound (P1-6).
-    let mut req =
-        ExperienceRequest::new(Subject::new("alice"), "parse the file", "parsed", "ok");
+    let mut req = ExperienceRequest::new(Subject::new("alice"), "parse the file", "parsed", "ok");
     req.evidence = vec![ev("run-log")];
     req.ttl_seconds = Some(u64::MAX);
     attempts.push(req);

@@ -137,4 +137,41 @@ mod tests {
         assert_eq!(e.get(b"z").unwrap(), Some(vec![3]));
         let _ = std::fs::remove_file(&p);
     }
+
+    #[test]
+    fn snapshot_and_restore_round_trip() {
+        // REC-002 engine contract: snapshot_to works while the live db stays
+        // open (no file-level copy), and restore_from atomically swaps the
+        // contents back — rows absent from the snapshot disappear.
+        let p = tmp("snap_src");
+        let snap = tmp("snap_dest");
+        let e = RedbEngine::open(&p).unwrap();
+        let mut b = WriteBatch::new();
+        b.put(b"a/1".to_vec(), vec![1]);
+        b.put(b"a/2".to_vec(), vec![2]);
+        e.write_batch(&b).unwrap();
+
+        e.snapshot_to(&snap).unwrap();
+
+        let mut b = WriteBatch::new();
+        b.put(b"a/3".to_vec(), vec![3]);
+        b.del(b"a/1".to_vec());
+        e.write_batch(&b).unwrap();
+
+        e.restore_from(&snap).unwrap();
+        assert_eq!(e.get(b"a/1").unwrap(), Some(vec![1]));
+        assert_eq!(e.get(b"a/2").unwrap(), Some(vec![2]));
+        assert_eq!(
+            e.get(b"a/3").unwrap(),
+            None,
+            "rows not in the snapshot must be gone after restore"
+        );
+
+        // A missing source must be rejected — never treated as an empty wipe.
+        let missing = tmp("snap_missing");
+        assert!(e.restore_from(&missing).is_err());
+
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(&snap);
+    }
 }

@@ -78,7 +78,7 @@ fn route_inner(
         ("GET", "/api/v1/abi-version") => tool_abi_version(k),
         ("GET", "/api/v1/metrics-info") => tool_metrics(k),
         ("GET", "/api/v1/audit") => tool_audit_report(k),
-        ("GET", "/api/v1/backups") => tool_list_backups(),
+        ("GET", "/api/v1/backups") => tool_list_backups(db_path),
         ("POST", "/api/v1/discover-ontology") => tool_discover_ontology(k),
 
         ("GET", p) if p.starts_with("/api/v1/schema") => {
@@ -297,7 +297,7 @@ fn route_inner(
             tool_document_compile(k, &args(), db_path)
         }
         ("POST", "/api/v1/backup") => tool_backup(k, db_path),
-        ("POST", "/api/v1/restore") => tool_restore(&args(), db_path),
+        ("POST", "/api/v1/restore") => tool_restore(k, &args()),
         ("POST", "/api/v1/verify-backup") => tool_verify_backup(&args()),
         ("POST", "/api/v1/eval/recall") => {
             need_auth()?;

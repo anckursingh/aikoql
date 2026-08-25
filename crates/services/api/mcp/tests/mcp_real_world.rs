@@ -1283,3 +1283,78 @@ fn mcp_idempotency_guarantee() {
 
     let _ = std::fs::remove_file(&db);
 }
+
+#[test]
+fn mvp_rec_002_backup_destroy_restore_round_trip() {
+    // MVP-QA-001 MVP-REC-002: backup → destroy → restore yields equivalent
+    // knowledge — same KOID resolvable with the same content, and the
+    // backup is listable.
+    let db = std::env::temp_dir().join(format!("mcp-recv-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&db);
+
+    // Phase 1: build knowledge.
+    let mut c = McpClient::start(db.to_str().unwrap());
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note", "tenant": "acme",
+            "properties": {"body": "quarterly revenue reached 42M", "memo": "rec002"}
+        }),
+    );
+    let koid = note["koid"].as_str().unwrap().to_string();
+
+    // Phase 2: verified backup + it must be listable.
+    let backup = c.call("backup", &json!({"subject": "admin"}));
+    assert_eq!(backup["verified"], true, "backup must verify: {backup}");
+    let backup_dir = backup["backup"].as_str().unwrap().to_string();
+
+    let list = c.call("list_backups", &json!({"subject": "admin"}));
+    let names: Vec<&str> = list["backups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["name"].as_str())
+        .collect();
+    assert!(
+        names.iter().any(|n| backup_dir.ends_with(n)),
+        "backup must appear in list_backups, got {names:?}"
+    );
+
+    // Phase 3: destroy — kill the server, delete the database file (give
+    // the killed process a moment to release the handle on Windows).
+    drop(c);
+    let mut removed = false;
+    for _ in 0..20 {
+        if std::fs::remove_file(&db).is_ok() {
+            removed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    assert!(removed, "destroy: database file must be removable");
+
+    // Phase 4: fresh server on the same path (empty DB), then restore.
+    let mut c = McpClient::start(db.to_str().unwrap());
+    let restored = c.call(
+        "restore",
+        &json!({"subject": "admin", "backup": &backup_dir}),
+    );
+    assert_eq!(
+        restored["restored"], true,
+        "restore must succeed: {restored}"
+    );
+
+    // Phase 5: the restored file lands on reopen — restart the server.
+    drop(c);
+    let mut c = McpClient::start(db.to_str().unwrap());
+
+    // Phase 6: equivalent knowledge — same KOID, same content.
+    let fetched = c.call("get", &json!({"koid": &koid, "subject": "admin"}));
+    assert_eq!(fetched["type_name"], "note");
+    assert_eq!(
+        fetched["properties"]["body"],
+        "quarterly revenue reached 42M"
+    );
+
+    let _ = std::fs::remove_file(&db);
+}
