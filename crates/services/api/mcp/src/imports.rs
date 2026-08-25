@@ -15,24 +15,51 @@ pub(crate) fn fresh_run_id() -> String {
     format!("{}-{}", std::process::id(), nanos)
 }
 
+/// Mask credentials in a URI for printing: everything between "://" and the
+/// first "@" becomes "***" (mongodb://user:pass@host → mongodb://***@host).
+fn redact_uri(uri: &str) -> String {
+    match (uri.find("://"), uri.find('@')) {
+        (Some(s), Some(a)) if a > s => format!("{}***{}", &uri[..s + 3], &uri[a..]),
+        _ => uri.to_string(),
+    }
+}
+
+/// Replace every occurrence of each secret with [REDACTED], longest first so
+/// overlapping secrets mask fully. Full-substring matching (CON-006): a
+/// provider error echoing the URI loses its credential part even when the
+/// whole URI isn't a listed secret.
+fn redact_secrets(msg: &str, secrets: &[String]) -> String {
+    let mut out = msg.to_string();
+    let mut sorted: Vec<&String> = secrets.iter().filter(|s| !s.is_empty()).collect();
+    sorted.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    for s in sorted {
+        out = out.replace(s.as_str(), "[REDACTED]");
+    }
+    out
+}
+
 /// Per-run commit path for connector imports.
 ///
 /// Idempotency keys include `run_id`: a fresh run (default `--run-id`) may
 /// update existing KOs, while retrying the same `--run-id` replays the
 /// original commits cleanly. Identical heads are skipped before `remember`
-/// so unchanged re-imports churn no versions.
+/// so unchanged re-imports churn no versions. `secrets` (conn strings,
+/// passwords) are scrubbed from every failure message before it is printed
+/// or stored.
 struct ImportSink<'k> {
     kernel: &'k Kernel,
     run_id: String,
     subject: Subject,
+    secrets: Vec<String>,
 }
 
 impl<'k> ImportSink<'k> {
-    fn new(kernel: &'k Kernel, run_id: String, subject: Subject) -> Self {
+    fn new(kernel: &'k Kernel, run_id: String, subject: Subject, secrets: Vec<String>) -> Self {
         ImportSink {
             kernel,
             run_id,
             subject,
+            secrets,
         }
     }
 
@@ -142,9 +169,12 @@ impl<'k> ImportSink<'k> {
 
     /// CON-005: print the failure, record the incomplete marker, exit
     /// non-zero. Every runner error path after kernel open funnels here.
+    /// The message is scrubbed (CON-006) before print or store — provider
+    /// error text can echo the connection string.
     fn abort(&self, source: &str, msg: &str) -> ! {
+        let msg = redact_secrets(msg, &self.secrets);
         eprintln!("{msg}");
-        self.mark_incomplete(source, msg);
+        self.mark_incomplete(source, &msg);
         std::process::exit(1);
     }
 }
@@ -168,7 +198,12 @@ pub(crate) fn run_pg_import(
             std::process::exit(1);
         }
     };
-    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("pg-importer"));
+    let sink = ImportSink::new(
+        &kernel,
+        run_id.to_string(),
+        Subject::new("pg-importer"),
+        vec![conn_str.to_string()],
+    );
 
     println!("Connecting to PostgreSQL...");
     let mut connector = match PostgresConnector::connect_with_timeout(conn_str, timeout_ms) {
@@ -398,9 +433,14 @@ pub(crate) fn run_mongo_import(
             std::process::exit(1);
         }
     };
-    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("mongo-importer"));
+    let sink = ImportSink::new(
+        &kernel,
+        run_id.to_string(),
+        Subject::new("mongo-importer"),
+        vec![uri.to_string()],
+    );
 
-    println!("Connecting to MongoDB: {}", uri);
+    println!("Connecting to MongoDB: {}", redact_uri(uri));
     let connector = match MongoConnector::connect_with_timeout(uri, database, timeout_ms) {
         Ok(c) => c,
         Err(e) => sink.abort("mongodb", &format!("Connection failed: {e}")),
@@ -510,9 +550,14 @@ pub(crate) fn run_neo4j_import(
             std::process::exit(1);
         }
     };
-    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("neo4j-importer"));
+    let sink = ImportSink::new(
+        &kernel,
+        run_id.to_string(),
+        Subject::new("neo4j-importer"),
+        vec![uri.to_string(), user.to_string(), password.to_string()],
+    );
 
-    println!("Connecting to Neo4j: {}", uri);
+    println!("Connecting to Neo4j: {}", redact_uri(uri));
     let connector = match Neo4jConnector::connect_with_timeout(uri, user, password, timeout_ms) {
         Ok(c) => c,
         Err(e) => sink.abort("neo4j", &format!("Connection failed: {e}")),
@@ -648,4 +693,33 @@ pub(crate) fn run_neo4j_import(
         "Import complete. {} nodes imported into {}",
         total_nodes, target_db
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redact_uri_masks_credentials() {
+        assert_eq!(
+            redact_uri("mongodb://ancku:SECRET@127.0.0.1:1"),
+            "mongodb://***@127.0.0.1:1"
+        );
+        // No credentials → unchanged.
+        assert_eq!(redact_uri("http://localhost:7474"), "http://localhost:7474");
+    }
+
+    #[test]
+    fn redact_secrets_scrubs_error_text() {
+        let secrets = vec![
+            "mongodb://ancku:SECRET@127.0.0.1:1".to_string(),
+            "SECRET".to_string(),
+        ];
+        let out = redact_secrets(
+            "failed: SECRET in mongodb://ancku:SECRET@127.0.0.1:1",
+            &secrets,
+        );
+        assert!(!out.contains("SECRET"), "secret survived: {out}");
+        assert!(out.contains("[REDACTED]"), "no redaction marker: {out}");
+    }
 }

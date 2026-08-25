@@ -970,3 +970,65 @@ fn con005_pg_timeout_marks_incomplete_keeps_existing() {
         "retry must import the healed source"
     );
 }
+
+// ---------------------------------------------------------------------------
+// MVP-CON-006 — no credentials in ordinary output (item 9)
+// ---------------------------------------------------------------------------
+
+/// MVP-CON-006: credentials passed to a connector must never appear in
+/// stdout or stderr, even on failure. Dead ports, no live DB needed. Red
+/// today: the mongo and neo4j runners print the raw URI (`Connecting to
+/// MongoDB: {uri}` / `Connecting to Neo4j: {uri}`) — a URI carrying
+/// `user:pass@` leaks the credential verbatim.
+#[test]
+fn con006_credentials_never_in_ordinary_output() {
+    let secret = "SUPERSECRET-CRED";
+    let db = connectors::temp_db("con006-secrets");
+    let assert_clean = |out: &connectors::ImportOut, what: &str| {
+        assert!(
+            !out.stdout.contains(secret) && !out.stderr.contains(secret),
+            "import {what} leaked the credential:\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            out.stdout,
+            out.stderr
+        );
+    };
+
+    // MongoDB: creds live inside the URI.
+    let out = connectors::run_import(&[
+        "import",
+        "mongodb",
+        &format!("mongodb://ancku:{secret}@127.0.0.1:1"),
+        "--db",
+        "knowledge",
+        &db,
+        "--timeout-ms",
+        "2000",
+    ]);
+    connectors::assert_import_fails(&out, "mongo dead port");
+    assert_clean(&out, "mongodb");
+
+    // Neo4j: creds in the URI's userinfo.
+    let out = connectors::run_import(&[
+        "import",
+        "neo4j",
+        &format!("http://{secret}@127.0.0.1:1"),
+        &db,
+        "--timeout-ms",
+        "2000",
+    ]);
+    connectors::assert_import_fails(&out, "neo4j dead port");
+    assert_clean(&out, "neo4j");
+
+    // PostgreSQL: creds in the conn string (pin — the runner never prints
+    // it today; guards against a future regression).
+    let out = connectors::run_import(&[
+        "import",
+        "postgres",
+        &format!("host=127.0.0.1 port=1 user=ancku password={secret}"),
+        &db,
+        "--timeout-ms",
+        "2000",
+    ]);
+    connectors::assert_import_fails(&out, "pg dead port");
+    assert_clean(&out, "postgres");
+}
