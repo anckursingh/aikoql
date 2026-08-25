@@ -73,6 +73,57 @@ fn record_experience_rejects_ttl_overflow() {
 }
 
 #[test]
+fn record_experience_rejects_invalid_program_metadata() {
+    // MVP-QA-001 MVP-PRG-003: invalid program metadata is rejected
+    // deterministically — incomplete shape, out-of-range confidence, and
+    // overflowing TTL all fail with InvalidObject, and no rejected request
+    // leaves a partially-recorded experience behind.
+    let (k, _clock, _store) = mk_kernel();
+
+    let mut attempts: Vec<ExperienceRequest> = Vec::new();
+    // Incomplete shape: goal, action, and outcome are all required.
+    for missing in ["goal", "action", "outcome"] {
+        let mut req =
+            ExperienceRequest::new(Subject::new("alice"), "parse the file", "parsed", "ok");
+        req.evidence = vec![ev("run-log")];
+        match missing {
+            "goal" => req.goal = String::new(),
+            "action" => req.action = String::new(),
+            _ => req.outcome = String::new(),
+        }
+        attempts.push(req);
+    }
+    // TTL that overflows the millis bound (P1-6).
+    let mut req =
+        ExperienceRequest::new(Subject::new("alice"), "parse the file", "parsed", "ok");
+    req.evidence = vec![ev("run-log")];
+    req.ttl_seconds = Some(u64::MAX);
+    attempts.push(req);
+    // Confidence outside [0, 1] — rejected, never clamped silently (P1-7).
+    for bad in [f32::NAN, 1.5] {
+        let mut req =
+            ExperienceRequest::new(Subject::new("alice"), "parse the file", "parsed", "ok");
+        req.evidence = vec![ev("run-log")];
+        req.confidence = Some(bad);
+        attempts.push(req);
+    }
+
+    for req in attempts {
+        let err = k.record_experience(req).unwrap_err();
+        assert!(
+            matches!(err, KError::InvalidObject(_)),
+            "malformed program metadata must be rejected deterministically, got {err:?}"
+        );
+    }
+
+    // No silent partial write: nothing is matchable after the rejections.
+    let m = k
+        .match_experiences(Subject::new("alice"), "parse the file", 10)
+        .unwrap();
+    assert!(m.is_empty(), "rejected experiences must not be recorded");
+}
+
+#[test]
 fn record_experience_stamps_agent_derived_provenance_and_ttl() {
     let (k, _clock, _store) = mk_kernel();
     let mut req = ExperienceRequest::new(

@@ -312,7 +312,7 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | Suite N Agent memory | — | — | ✅ | §32 `agent_memory_bench` (D 20/20 vs B 12/20); not an MVP blocker per the spec |
 | MVP-PRG-001 Program representation | P1 | — | ✅ | MEM-005 (`experiences.rs`: identity/inputs/outputs/permissions/pre/post/side effects/provenance) |
 | MVP-PRG-002 Unauthorized program not selectable | P0 | G3 | ✅ | PRG-004 + t12 ACL + denied execution |
-| MVP-PRG-003 Invalid program metadata rejected | P1 | — | 🟡 | TTL overflow rejection exists; **TDD**: malformed program KO (missing pre/post/permissions) rejected deterministically |
+| MVP-PRG-003 Invalid program metadata rejected | P1 | — | ✅ | `record_experience_rejects_invalid_program_metadata` — incomplete shape (goal/action/outcome), TTL overflow, NaN/out-of-range confidence all rejected deterministically; no partial write |
 | MVP-E2E-001 PostgreSQL → KO → query | P0 | G4 | ❌ | NOT_IMPLEMENTED — connectors (TP-5) |
 | MVP-E2E-002 Document → evidence → KO → query | P0 | G5 | ✅ | `e2e_pipeline.rs` + `e2e_answer_quality` (answer grounded in document evidence) |
 | MVP-E2E-003 Repository → KB → query | P0 | — | ✅ | `e2e-dogfood.js` + G10 D treatment |
@@ -352,7 +352,7 @@ MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04,
 5. ~~MVP-EVO-003/004 relation freshness on modify/delete (ingestion incremental)~~ ✅ done 2026-08-25 — `mvp_evo_003_relation_change_drops_old_relation` + `mvp_evo_004_deleted_source_leaves_no_stale_current_relation`; `drop_changed_relations` applied on both the merge path and the all-deleted branch
 6. ~~MVP-EVO-005 10× re-ingest growth bound (ingestion incremental)~~ ✅ done 2026-08-25 — `mvp_evo_005_reingest_ten_times_no_uncontrolled_growth`; red caught 12 accumulated [STALE] marker facts → markers now skipped for re-supplied facts
 7. ~~MVP-SEC-004 secrets absent from rendered output (kernel/mcp)~~ ✅ done 2026-08-25 — `mvp_sec_004_raw_secret_never_survives_redaction_or_rendering`; red caught 4 leaks (marker-prefix keeps raw key; snippets unredacted) → whole-field replacement across all rendered IR fields
-8. MVP-PRG-003 invalid program metadata (kernel experiences)
+8. ~~MVP-PRG-003 invalid program metadata (kernel experiences)~~ ✅ done 2026-08-25 — `record_experience_rejects_invalid_program_metadata`; green without production change (shape/TTL/confidence validation already in ops.rs) — test pins it
 9. MVP-REC-002 backup→destroy→restore round-trip (mcp_real_world)
 10. MVP-DEP-003 volume restart (CI)
 11. §23 artifacts runner (`scripts/` or registry-driven test) → `artifacts/release-gate.md`
