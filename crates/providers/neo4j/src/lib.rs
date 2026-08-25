@@ -74,11 +74,15 @@ impl Neo4jConnector {
     }
 
     /// Execute a Cypher query and return results.
+    ///
+    /// Neo4j 5 removed the legacy /db/data/transaction/commit alias — the
+    /// db-scoped /db/neo4j/tx/commit endpoint is the only one that answers
+    /// (verified live: legacy 404, db-scoped 200).
     fn cypher(&self, statement: &str) -> Result<Vec<serde_json::Value>, String> {
         let body = serde_json::json!({
             "statements": [{"statement": statement}]
         });
-        let resp = ureq::post(&format!("{}/db/data/transaction/commit", self.base_url))
+        let resp = ureq::post(&format!("{}/db/neo4j/tx/commit", self.base_url))
             .set("Authorization", &self.auth)
             .set("Content-Type", "application/json")
             .send_json(&body)
@@ -146,7 +150,7 @@ impl Neo4jConnector {
             label
         );
         let body = serde_json::json!({ "statements": [{"statement": stmt}] });
-        let resp = ureq::post(&format!("{}/db/data/transaction/commit", self.base_url))
+        let resp = ureq::post(&format!("{}/db/neo4j/tx/commit", self.base_url))
             .set("Authorization", &self.auth)
             .set("Content-Type", "application/json")
             .send_json(&body)
@@ -220,7 +224,7 @@ impl Neo4jConnector {
             rel_type
         );
         let body = serde_json::json!({ "statements": [{"statement": stmt}] });
-        let resp = ureq::post(&format!("{}/db/data/transaction/commit", self.base_url))
+        let resp = ureq::post(&format!("{}/db/neo4j/tx/commit", self.base_url))
             .set("Authorization", &self.auth)
             .set("Content-Type", "application/json")
             .send_json(&body)

@@ -189,11 +189,69 @@ jobs:
           node scripts/e2e-dogfood.js bin/aikoql-mcp "$DB" "$KOID"
           node scripts/e2e-restart.js bin/aikoql-mcp "$DB"
 
+  # MVP-QA-001 GATE-04 (§9.3 decision: connectors ARE in MVP scope): the
+  # connector certification suite runs against real databases as GitHub
+  # Actions services — the testcontainers equivalent in CI. The tests
+  # env-gate (AIKOQL_TEST_* set here; unset → skip with notice), so the
+  # Windows check job stays green without services.
+  connectors:
+    name: Connector certification — live pg/pgvector/mongo/neo4j
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      pg:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: aikoql
+          POSTGRES_PASSWORD: aikoql-ci
+          POSTGRES_DB: knowledge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aikoql"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit()'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/aikoql-ci
+        ports:
+          - 7474:7474
+          - 7687:7687
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p aikoql-ci 'RETURN 1'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p aikoql-mcp --test connector_certification -- --nocapture
+        env:
+          AIKOQL_TEST_PG_DSN: host=localhost port=5432 user=aikoql password=aikoql-ci dbname=knowledge
+          AIKOQL_TEST_PGVECTOR_DSN: host=localhost port=5432 user=aikoql password=aikoql-ci dbname=knowledge
+          AIKOQL_TEST_MONGO_URI: mongodb://localhost:27017
+          AIKOQL_TEST_MONGO_DB: knowledge
+          AIKOQL_TEST_NEO4J_URI: http://localhost:7474
+          AIKOQL_TEST_NEO4J_USER: neo4j
+          AIKOQL_TEST_NEO4J_PASSWORD: aikoql-ci
+
   # MVP-QA-001 §23: certification artifacts must always match the §9.1
   # registry — --self-test pins the decision logic, --check regenerates and
   # fails on stale artifacts (e.g. a registry edit without re-running the
-  # runner). The release gate is NO-GO until connector-scope (§9.3) is
-  # resolved or TP-5 lands — this job asserts the artifacts say so.
+  # runner). The gate stays NO-GO while connector rows are open (§9.3
+  # decision: connectors are in MVP scope — this job asserts the artifacts
+  # say so).
   certification-artifacts:
     name: Certification artifacts (§23)
     runs-on: ubuntu-latest

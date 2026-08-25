@@ -339,11 +339,13 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | GATE-13 Reproducibility | 100% | ✅ determinism tests + pinned benches |
 | GATE-14 Data integrity | 0 corruption | ✅ crash/durability/index sweeps |
 
-### 9.3 QA-lead scope finding (decision needed)
+### 9.3 QA-lead scope finding (decision made 2026-08-25)
 
-MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04, MVP-CON-001..004, MVP-E2E-001/004), but IMPLEMENTATION-PLAN defers the connector workstream to **post-MVP (TP-5)**. Per the spec's own rules these rows are NOT_IMPLEMENTED, not PASS — so **if the MVP is advertised with live connectors, it is NO-GO on GATE-04 today**; if connectors are not claimed in MVP marketing, GATE-04 is deferred with them. Either way, the substrate closeable items below proceed now.
+MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04, MVP-CON-001..004, MVP-E2E-001/004), while IMPLEMENTATION-PLAN defers the connector workstream to **post-MVP (TP-5)**. **Product decision (2026-08-25): connectors stay in MVP scope** — the connector workstream is pulled forward, certified TDD-style against real databases via testcontainers (Docker, already available in CI's linux docker job). GATE-04 is a hard gate: the MVP is NO-GO until MVP-CON-001..004, MVP-CON-005/006/007, MVP-E2E-001/004 and MVP-ONT-001 pass against live connectors. Per the spec's execution rules these rows remain NOT_IMPLEMENTED — never PASS — until their tests are written and green.
 
 ### 9.4 TDD execution order (MVP-QA-001 → tests first)
+
+0. ~~infra: live-DB services + test harness (compose pgvector/mongo, CI `connectors` job, `tests/connectors/` harness)~~ ✅ done 2026-08-25 — the one non-TDD item (a red test needs a live database to be red against); `infra_live_db_connectivity` probes each source through the provider crates, env-skip locally
 
 1. ~~MVP-KO-003 delete→relation exposure (kernel conformance)~~ ✅ done 2026-08-24 — `mvp_ko_003_deleted_endpoint_is_not_exposed_by_traversal`; runtime Traverse drops Deleted/Erased endpoints
 2. ~~MVP-EXT-001 9-segment evidence addressability (ingestion)~~ ✅ done 2026-08-24 — `mvp_ext_001_all_nine_segment_kinds_are_addressable`; plain bullets (conf 0.5) + captions kept
