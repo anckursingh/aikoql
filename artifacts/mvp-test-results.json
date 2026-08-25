@@ -1,0 +1,385 @@
+{
+  "generated_by": "scripts/certify.js",
+  "summary": {
+    "p0": {
+      "pass": 26,
+      "total": 30,
+      "pct": 87
+    },
+    "p1": {
+      "pass": 10,
+      "total": 13,
+      "pct": 77
+    },
+    "sev": {
+      "sev1": 0,
+      "sev2": 0
+    },
+    "benchmarks": "pinned-baselines-present",
+    "final_decision": "NO-GO"
+  },
+  "gates": {
+    "p0": "FAIL (87%)",
+    "p1": "FAIL (77%)",
+    "security": "PASS",
+    "connectors": "FAIL",
+    "evidence": "PASS",
+    "evolution": "PASS",
+    "temporal": "PASS",
+    "recovery": "PASS",
+    "docker": "PASS",
+    "e2e": "FAIL"
+  },
+  "tests": [
+    {
+      "id": "MVP-KO-001 Create KO",
+      "priority": "P0",
+      "gate": "G1",
+      "status": "pass",
+      "evidence": "conformance t01/t04, idempotency keys; MCP query path (dogfood)"
+    },
+    {
+      "id": "MVP-KO-002 Update KO",
+      "priority": "P0",
+      "gate": "G1",
+      "status": "pass",
+      "evidence": "t02 OCC update; temporal current-truth (`update_carries_valid_time_forward`, supersede keeps history)"
+    },
+    {
+      "id": "MVP-KO-003 Delete KO + relation",
+      "priority": "P0",
+      "gate": "G1",
+      "status": "pass",
+      "evidence": "tombstone (t09/t10) + referential policy (t06b–d) + `mvp_ko_003_deleted_endpoint_is_not_exposed_by_traversal` (TDD 2026-08-24: runtime Traverse now drops Deleted/Erased endpoints — red → fix in `crates/runtime/src/lib.rs` Traverse op → green)"
+    },
+    {
+      "id": "MVP-KO-004 Idempotent ingestion",
+      "priority": "P0",
+      "gate": "G1",
+      "status": "pass",
+      "evidence": "INC-001, `idempotency_key` tests, t06 retry-commits-once"
+    },
+    {
+      "id": "MVP-EXT-001 Raw evidence 100% addressable",
+      "priority": "P0",
+      "gate": "G5",
+      "status": "pass",
+      "evidence": "`mvp_ext_001_all_nine_segment_kinds_are_addressable` (TDD 2026-08-24): 9-segment fixture, every segment resolvable via candidate evidence + document_id. Red list was plain bullets + image captions → fixes: `push_bullet_facts` emits plain bullets at reduced confidence (0.5 floor — keeps the G10 pack-budget ranking); payload-less visual blocks keep their alt/caption text as paragraph evidence"
+    },
+    {
+      "id": "MVP-EXT-002 Artifact section must not destroy prose",
+      "priority": "P0",
+      "gate": "G5",
+      "status": "pass",
+      "evidence": "`mvp_ext_002_prose_in_fenced_section_stays_retrievable` (TDD 2026-08-25): Artifact arm emits section paragraphs as facts at 0.5 confidence — the G10 pack-budget negative measurement is preserved via the confidence floor, prose stays retrievable"
+    },
+    {
+      "id": "MVP-EXT-003 Formula preservation",
+      "priority": "P1",
+      "gate": "G5",
+      "status": "pass",
+      "evidence": "`mvp_ext_003_formula_preserved_as_evidence_and_retrievable` (2026-08-25): plain `E = mc^2` line + ```math fence both retrievable with document_id evidence — green without production change"
+    },
+    {
+      "id": "MVP-ONT-001 Auto-discovery pg/mongo/neo4j",
+      "priority": "P1",
+      "gate": null,
+      "status": "not_implemented",
+      "evidence": "NOT_IMPLEMENTED — needs connectors (TP-5); A9 bridge + fixtures only"
+    },
+    {
+      "id": "MVP-ONT-002 Same entity across sources",
+      "priority": "P0",
+      "gate": "G1",
+      "status": "pass",
+      "evidence": "`multi_source_ontology.rs` config-driven identity (customer 123 across pg/mongo/neo4j/doc fixtures)"
+    },
+    {
+      "id": "MVP-ONT-003 Conflicting source values",
+      "priority": "P1",
+      "gate": "G1",
+      "status": "pass",
+      "evidence": "`epistemic.rs` + e03: conflicting values retained with provenance, no silent choice"
+    },
+    {
+      "id": "MVP-CON-001..004 PostgreSQL/MongoDB/Neo4j/PGVector",
+      "priority": "P0",
+      "gate": "G4",
+      "status": "not_implemented",
+      "evidence": "NOT_IMPLEMENTED — fixtures + A9 bridge only; connector matrix is TP-5 (scope conflict with §2 of MVP-QA-001 — see 9.3)"
+    },
+    {
+      "id": "MVP-CON-005 Source timeout",
+      "priority": "P1",
+      "gate": null,
+      "status": "not_implemented",
+      "evidence": "connector-side NOT_IMPLEMENTED; product-side rollback semantics = t06k transact all-or-nothing"
+    },
+    {
+      "id": "MVP-CON-006 Auth failure, no secrets in logs",
+      "priority": "P0",
+      "gate": "G3",
+      "status": "open",
+      "evidence": "product auth failures covered (MCP token tests); **TDD**: log-redaction assertion (credentials never in ordinary logs)"
+    },
+    {
+      "id": "MVP-CON-007 Outage ≠ deletion",
+      "priority": "P1",
+      "gate": null,
+      "status": "open",
+      "evidence": "repo-side ✅ (`git_change_set_propagates_git_failure`, no-changes → cached); connector-side ❌ with connectors"
+    },
+    {
+      "id": "MVP-EVO-001 Modify source",
+      "priority": "P0",
+      "gate": "G6",
+      "status": "pass",
+      "evidence": "FRESH-001 + INC-002 (`freshness_sla_source_update_to_query_visibility_measured`)"
+    },
+    {
+      "id": "MVP-EVO-002 Rename source",
+      "priority": "P1",
+      "gate": "G6",
+      "status": "pass",
+      "evidence": "INC-003 (`rename_preserves_entity_identity`)"
+    },
+    {
+      "id": "MVP-EVO-003 Relationship change A→B to A→C",
+      "priority": "P0",
+      "gate": "G6",
+      "status": "pass",
+      "evidence": "`mvp_evo_003_relation_change_drops_old_relation` — `drop_changed_relations` drops relations for changed paths (re-parse supplies current)"
+    },
+    {
+      "id": "MVP-EVO-004 Delete source",
+      "priority": "P0",
+      "gate": "G6",
+      "status": "pass",
+      "evidence": "`mvp_evo_004_deleted_source_leaves_no_stale_current_relation` — all-deleted branch now drops relations too (facts keep their [STALE] survival semantics)"
+    },
+    {
+      "id": "MVP-EVO-005 Re-ingest 10× no growth",
+      "priority": "P1",
+      "gate": "G6",
+      "status": "pass",
+      "evidence": "`mvp_evo_005_reingest_ten_times_no_uncontrolled_growth` — 10 incremental cycles ≡ fresh full ingest; [STALE] markers no longer re-appended for re-supplied facts"
+    },
+    {
+      "id": "MVP-TEMP-001..004 Historical/current/future/change query",
+      "priority": "P0/P1",
+      "gate": "G7",
+      "status": "pass",
+      "evidence": "`temporal.rs` (`valid_at` half-open, `as_of`, history in commit order, future validity + invalidation collapse) + `e2e-k2-temporal.js`; change query = history + trace with provenance"
+    },
+    {
+      "id": "MVP-SEC-001 Unauthorized access, no leak",
+      "priority": "P0",
+      "gate": "G3",
+      "status": "pass",
+      "evidence": "t11 default deny, t34 A/B scenario, CTX differential ACCESS_DENIED"
+    },
+    {
+      "id": "MVP-SEC-002 Permission propagation every layer",
+      "priority": "P0",
+      "gate": "G3",
+      "status": "pass",
+      "evidence": "authorize() confinement + ACL-filtered scans (`match_experiences`) + CTX permission differential"
+    },
+    {
+      "id": "MVP-SEC-003 Revocation",
+      "priority": "P0",
+      "gate": "G3",
+      "status": "pass",
+      "evidence": "`revoked_experience_sharing_stops_matching` (share → revoke → not matched)"
+    },
+    {
+      "id": "MVP-SEC-004 Sensitive logging",
+      "priority": "P0",
+      "gate": "G3",
+      "status": "pass",
+      "evidence": "`mvp_sec_004_raw_secret_never_survives_redaction_or_rendering` — R8 now replaces the whole secret-bearing field (statements, snippets, relation endpoints, events, temporal) instead of marker-prefixing; raw value never reaches rendered context"
+    },
+    {
+      "id": "MVP-QRY-001..005 Valid/invalid/unknown/injection/determinism",
+      "priority": "P0/P1",
+      "gate": "G1",
+      "status": "pass",
+      "evidence": "`golden_snapshots.rs`, `grammar_coverage.rs`, `fuzz_parser.rs`, `same_task_twice_renders_identical_context`; unknown-entity = semantic error, healthy-empty = \"no authoritative knowledge\" (§34–36)"
+    },
+    {
+      "id": "MVP-CTX-001 Relevant context",
+      "priority": "P1",
+      "gate": null,
+      "status": "pass",
+      "evidence": "`retrieval_quality.rs`, ranked packs with snippets + provenance"
+    },
+    {
+      "id": "MVP-CTX-002 Irrelevant-fact suppression",
+      "priority": "P0",
+      "gate": null,
+      "status": "pass",
+      "evidence": "entity gate + keyword hygiene + exact-token escape (G12 row, gate tests)"
+    },
+    {
+      "id": "MVP-CTX-003 Entity-anchored retrieval (Customer A/B/C)",
+      "priority": "P0",
+      "gate": null,
+      "status": "pass",
+      "evidence": "G12 q-00 scenario + entity-gate tests — same shape"
+    },
+    {
+      "id": "MVP-CTX-004 Evidence inclusion (answer only in prose)",
+      "priority": "P0",
+      "gate": "G5",
+      "status": "pass",
+      "evidence": "evidence snippets render verbatim source; `e2e_answer_quality`"
+    },
+    {
+      "id": "MVP-CTX-005 Context budget",
+      "priority": "P1",
+      "gate": null,
+      "status": "pass",
+      "evidence": "`ctx_min_*` 1000-KO minimization tests"
+    },
+    {
+      "id": "MVP-REC-001 Restart durability",
+      "priority": "P0",
+      "gate": "G8",
+      "status": "pass",
+      "evidence": "`durability.rs`, `e2e-restart.js`, chatbot real-server restart"
+    },
+    {
+      "id": "MVP-REC-002 Backup/restore",
+      "priority": "P0",
+      "gate": "G8",
+      "status": "pass",
+      "evidence": "`mvp_rec_002_backup_destroy_restore_round_trip` (mcp_real_world): verified live backup → destroy → restore → reopen → same KOID + content; engine-level `snapshot_to`/`restore_from` (trait + `EncryptedStore` raw delegation so ciphertext stays verbatim); **server restart required after restore** (in-memory derived state)"
+    },
+    {
+      "id": "MVP-REC-003 Interrupted ingestion",
+      "priority": "P0",
+      "gate": "G8",
+      "status": "pass",
+      "evidence": "`crash_kill.rs` (taskkill/SIGKILL mid-write → consistent reopen, journal head ≥ observed)"
+    },
+    {
+      "id": "MVP-DEP-001 Clean Docker startup",
+      "priority": "—",
+      "gate": "G9",
+      "status": "pass",
+      "evidence": "ci.yml docker job: build → run → health check healthy"
+    },
+    {
+      "id": "MVP-DEP-002 Fresh install → ingest → query",
+      "priority": "—",
+      "gate": "G9",
+      "status": "pass",
+      "evidence": "`e2e-dogfood.js` CI job (documented instructions)"
+    },
+    {
+      "id": "MVP-DEP-003 Persistent container restart",
+      "priority": "—",
+      "gate": "G9",
+      "status": "pass",
+      "evidence": "`scripts/e2e-volume-restart.js` (CI docker job): container A remembers a KO on a named volume, container B (fresh container, same volume) resolves the same KOID + content; green without a production change — pins the Dockerfile /data contract"
+    },
+    {
+      "id": "MVP-BENCH-001..003 G10/G11/G12 no regression",
+      "priority": "—",
+      "gate": "G12",
+      "status": "pass",
+      "evidence": "canonical baselines pinned in §3 rows 128–130 + weekly bench regression CI (>20% alert)"
+    },
+    {
+      "id": "Suite N Agent memory",
+      "priority": "—",
+      "gate": null,
+      "status": "pass",
+      "evidence": "§32 `agent_memory_bench` (D 20/20 vs B 12/20); not an MVP blocker per the spec"
+    },
+    {
+      "id": "MVP-PRG-001 Program representation",
+      "priority": "P1",
+      "gate": null,
+      "status": "pass",
+      "evidence": "MEM-005 (`experiences.rs`: identity/inputs/outputs/permissions/pre/post/side effects/provenance)"
+    },
+    {
+      "id": "MVP-PRG-002 Unauthorized program not selectable",
+      "priority": "P0",
+      "gate": "G3",
+      "status": "pass",
+      "evidence": "PRG-004 + t12 ACL + denied execution"
+    },
+    {
+      "id": "MVP-PRG-003 Invalid program metadata rejected",
+      "priority": "P1",
+      "gate": null,
+      "status": "pass",
+      "evidence": "`record_experience_rejects_invalid_program_metadata` — incomplete shape (goal/action/outcome), TTL overflow, NaN/out-of-range confidence all rejected deterministically; no partial write"
+    },
+    {
+      "id": "MVP-E2E-001 PostgreSQL → KO → query",
+      "priority": "P0",
+      "gate": "G4",
+      "status": "not_implemented",
+      "evidence": "NOT_IMPLEMENTED — connectors (TP-5)"
+    },
+    {
+      "id": "MVP-E2E-002 Document → evidence → KO → query",
+      "priority": "P0",
+      "gate": "G5",
+      "status": "pass",
+      "evidence": "`e2e_pipeline.rs` + `e2e_answer_quality` (answer grounded in document evidence)"
+    },
+    {
+      "id": "MVP-E2E-003 Repository → KB → query",
+      "priority": "P0",
+      "gate": null,
+      "status": "pass",
+      "evidence": "`e2e-dogfood.js` + G10 D treatment"
+    },
+    {
+      "id": "MVP-E2E-004 Multi-source query",
+      "priority": "P0",
+      "gate": "G4",
+      "status": "open",
+      "evidence": "fixture-level ✅ (`multi_source_ontology.rs` merges pg/mongo/neo4j/doc fixtures); live-connector ❌"
+    },
+    {
+      "id": "MVP-E2E-005 Permissioned multi-source",
+      "priority": "P0",
+      "gate": "G3",
+      "status": "pass",
+      "evidence": "CTX permission differential + t34 (unauthorized source cannot enter context even when referenced)"
+    },
+    {
+      "id": "INV-001..010 invariants",
+      "priority": "—",
+      "gate": "G14",
+      "status": "open",
+      "evidence": "no-orphan (t06b/c), idempotence, provenance, evidence, authz closure, temporal consistency, atomicity (t06k), restart, determinism ✅; INV-010 source isolation = MVP-CON-007 (repo ✅ / connector ❌)"
+    },
+    {
+      "id": "§23 Artifacts (artifacts/ + release-gate.md)",
+      "priority": "—",
+      "gate": null,
+      "status": "pass",
+      "evidence": "TDD 2026-08-25: `scripts/certify.js` regenerates the 5 artifacts + the release-gate verdict from this registry; `--self-test` pins the decision logic on fixtures, `--check` fails CI on stale artifacts"
+    }
+  ],
+  "blocking": [
+    "MVP-ONT-001 Auto-discovery pg/mongo/neo4j [not_implemented] — NOT_IMPLEMENTED — needs connectors (TP-5); A9 bridge + fixtures only",
+    "MVP-CON-001..004 PostgreSQL/MongoDB/Neo4j/PGVector [not_implemented] — NOT_IMPLEMENTED — fixtures + A9 bridge only; connector matrix is TP-5 (scope conflict with §2 of MVP-QA-001 — see 9.3)",
+    "MVP-CON-005 Source timeout [not_implemented] — connector-side NOT_IMPLEMENTED; product-side rollback semantics = t06k transact all-or-nothing",
+    "MVP-CON-006 Auth failure, no secrets in logs [open] — product auth failures covered (MCP token tests); **TDD**: log-redaction assertion (credentials never in ordinary logs)",
+    "MVP-CON-007 Outage ≠ deletion [open] — repo-side ✅ (`git_change_set_propagates_git_failure`, no-changes → cached); connector-side ❌ with connectors",
+    "MVP-E2E-001 PostgreSQL → KO → query [not_implemented] — NOT_IMPLEMENTED — connectors (TP-5)",
+    "MVP-E2E-004 Multi-source query [open] — fixture-level ✅ (`multi_source_ontology.rs` merges pg/mongo/neo4j/doc fixtures); live-connector ❌",
+    "INV-001..010 invariants [open] — no-orphan (t06b/c), idempotence, provenance, evidence, authz closure, temporal consistency, atomicity (t06k), restart, determinism ✅; INV-010 source isolation =",
+    "P0 at 87% (26/30 pass)",
+    "P1 at 77% (10/13 pass)",
+    "Connectors gate not fully passing",
+    "E2E gate not fully passing"
+  ]
+}

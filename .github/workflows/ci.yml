@@ -189,6 +189,22 @@ jobs:
           node scripts/e2e-dogfood.js bin/aikoql-mcp "$DB" "$KOID"
           node scripts/e2e-restart.js bin/aikoql-mcp "$DB"
 
+  # MVP-QA-001 §23: certification artifacts must always match the §9.1
+  # registry — --self-test pins the decision logic, --check regenerates and
+  # fails on stale artifacts (e.g. a registry edit without re-running the
+  # runner). The release gate is NO-GO until connector-scope (§9.3) is
+  # resolved or TP-5 lands — this job asserts the artifacts say so.
+  certification-artifacts:
+    name: Certification artifacts (§23)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/certify.js --self-test
+      - run: node scripts/certify.js --check
+
   dependency-dag:
     name: Verify Dependency DAG
     runs-on: ubuntu-latest

@@ -319,7 +319,7 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | MVP-E2E-004 Multi-source query | P0 | G4 | 🟡 | fixture-level ✅ (`multi_source_ontology.rs` merges pg/mongo/neo4j/doc fixtures); live-connector ❌ |
 | MVP-E2E-005 Permissioned multi-source | P0 | G3 | ✅ | CTX permission differential + t34 (unauthorized source cannot enter context even when referenced) |
 | INV-001..010 invariants | — | G14 | ✅ except INV-010 | no-orphan (t06b/c), idempotence, provenance, evidence, authz closure, temporal consistency, atomicity (t06k), restart, determinism ✅; INV-010 source isolation = MVP-CON-007 (repo ✅ / connector ❌) |
-| §23 Artifacts (`artifacts/mvp-test-*.md|json`, `release-gate.md`) | — | — | ❌ | **TDD**: certification runner generates the 5 artifacts + the release-gate verdict from the registry |
+| §23 Artifacts (artifacts/ + release-gate.md) | — | — | ✅ | TDD 2026-08-25: `scripts/certify.js` regenerates the 5 artifacts + the release-gate verdict from this registry; `--self-test` pins the decision logic on fixtures, `--check` fails CI on stale artifacts |
 
 ### 9.2 Gate readout (QA-lead view, before TDD items)
 
@@ -355,7 +355,7 @@ MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04,
 8. ~~MVP-PRG-003 invalid program metadata (kernel experiences)~~ ✅ done 2026-08-25 — `record_experience_rejects_invalid_program_metadata`; green without production change (shape/TTL/confidence validation already in ops.rs) — test pins it
 9. ~~MVP-REC-002 backup→destroy→restore round-trip (mcp_real_world)~~ ✅ done 2026-08-25 — `mvp_rec_002_backup_destroy_restore_round_trip`; red caught `std::fs::copy` on the live redb file (Windows region lock, os error 33 — the old Phase 9 assertion was a false positive on error objects) → engine-level `StorageEngine::snapshot_to`/`restore_from` (kernel-side, `EncryptedStore` delegates raw so ciphertext moves verbatim); same round: restore's hard-coded `data.redb` → `backup_data_file` from meta source, list_backups now scans the db's directory (was server CWD) and matches `contains(".backup.")` (was a never-matching `ends_with`)
 10. ~~MVP-DEP-003 volume restart (CI)~~ ✅ done 2026-08-25 — `scripts/e2e-volume-restart.js` wired into the docker job; green without a production change (the /data container contract already held) — test pins it; verified locally against `aikoql:test` (docker daemon up) + in CI
-11. §23 artifacts runner (`scripts/` or registry-driven test) → `artifacts/release-gate.md`
+11. ~~§23 artifacts runner (`scripts/` or registry-driven test) → `artifacts/release-gate.md`~~ ✅ done 2026-08-25 — `scripts/certify.js` (`--self-test` pins the decision logic, `--check` fails CI on stale artifacts); the generated gate is currently NO-GO per §24 — the connector rows are honestly NOT_IMPLEMENTED/BLOCKED plus CON-006/E2E-004 open (§9.3)
 
 Each item: write the failing test → run (red) → fix root cause → green → full regression + G10 gate → commit. BLOCKED-on-connectors rows stay open honestly and are re-evaluated when TP-5 lands.
 
