@@ -145,6 +145,60 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(resp)
 }
 
+/// G13 §38–39: summarize a conversation into a structured summary KO.
+/// The kernel extracts verbatim only — the summary cannot invent facts —
+/// and every item carries speaker/message-range/timestamp provenance.
+pub(crate) fn tool_summarize_conversation(k: &Kernel, args: &J) -> Result<J, String> {
+    let subject = subject_of(args);
+    let conversation_id = args
+        .get("conversation_id")
+        .and_then(|x| x.as_str())
+        .ok_or("missing argument: conversation_id")?;
+    let messages = args
+        .get("messages")
+        .and_then(|m| m.as_array())
+        .ok_or("missing argument: messages")?
+        .iter()
+        .map(|m| {
+            let speaker = m
+                .get("speaker")
+                .and_then(|s| s.as_str())
+                .ok_or("each message needs a speaker")?;
+            let ts_ms = m
+                .get("ts_ms")
+                .and_then(|t| t.as_u64())
+                .ok_or("each message needs ts_ms")?;
+            let text = m
+                .get("text")
+                .and_then(|t| t.as_str())
+                .ok_or("each message needs text")?;
+            Ok(ConversationMessage {
+                speaker: speaker.to_string(),
+                timestamp_ms: ts_ms,
+                text: text.to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let req = SummarizeConversationRequest {
+        context: subject.into(),
+        conversation_id: conversation_id.to_string(),
+        messages,
+        evidence: parse_evidence(args)?,
+        note: args.get("note").and_then(|n| n.as_str()).map(String::from),
+    };
+    let r = k.summarize_conversation(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "koid": r.koid.to_hex(),
+        "version": r.version,
+        "type_name": "aikoql:conversation_summary",
+        "message_count": args
+            .get("messages")
+            .and_then(|m| m.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0),
+    }))
+}
+
 pub(crate) fn tool_forget(k: &Kernel, args: &J) -> Result<J, String> {
     let mode = match args
         .get("mode")

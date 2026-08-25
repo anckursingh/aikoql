@@ -32,7 +32,7 @@
 use super::*;
 use crate::knowledge::evidence::{Evidence, EvidenceMethod};
 use crate::knowledge::scope::Scope;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 // ---------------------------------------------------------------------------
 // Requests & results
@@ -1665,6 +1665,195 @@ impl Kernel {
         self.remember_trusted(rr)
     }
 
+    /// Summarize a conversation into a structured summary KO (G13 §38–39).
+    ///
+    /// Extraction is deterministic and verbatim-only: sentences are
+    /// classified into facts/decisions/actions/open issues/constraints/
+    /// outcomes; capitalized mid-sentence phrases become entities. Every
+    /// item carries provenance (speaker, message range, timestamp) and the
+    /// KO carries the conversation_id + mandatory evidence, so each
+    /// summarized fact traces back to its transcript.
+    pub fn summarize_conversation(&self, req: SummarizeConversationRequest) -> KResult<Remembered> {
+        require_evidence(&req.evidence)?;
+        if req.conversation_id.trim().is_empty() {
+            return Err(KError::InvalidObject(
+                "a summary requires a conversation_id".into(),
+            ));
+        }
+        if req.messages.is_empty() {
+            return Err(KError::InvalidObject(
+                "a summary requires at least one message".into(),
+            ));
+        }
+
+        // ponytail: naive keyword classification — substring matches on a
+        // fixed cue list. False positives only mislabel a bucket; the text is
+        // always verbatim, so the no-invention property holds. Upgrade path:
+        // a real intent classifier behind the same op signature.
+        const DECISION_CUES: &[&str] = &[
+            "decided", "decide", "decision", "agreed", "agree", "we will", "we'll", "plan to",
+            "chose", "choose",
+        ];
+        const ACTION_CUES: &[&str] = &["todo", "action item", "next step", "will do", "assigned"];
+        const CONSTRAINT_CUES: &[&str] = &[
+            "must",
+            "never",
+            "always",
+            "cannot",
+            "can't",
+            "should not",
+            "required",
+        ];
+        const OUTCOME_CUES: &[&str] = &[
+            "done",
+            "finished",
+            "completed",
+            "resolved",
+            "shipped",
+            "passed",
+            "result",
+        ];
+        let has_cue = |text: &str, cues: &[&str]| {
+            let t = text.to_lowercase();
+            cues.iter().any(|c| t.contains(c))
+        };
+
+        let mut facts = Vec::new();
+        let mut decisions = Vec::new();
+        let mut actions = Vec::new();
+        let mut open_issues = Vec::new();
+        let mut constraints = Vec::new();
+        let mut outcomes = Vec::new();
+        let mut entities = Vec::new();
+
+        // provenance-bearing item: text + speaker + message range + timestamp
+        let make_item = |text: String, m: &ConversationMessage, i: usize| {
+            let mut map = BTreeMap::new();
+            map.insert("text".into(), Value::Text(text));
+            map.insert("speaker".into(), Value::Text(m.speaker.clone()));
+            map.insert(
+                "msg_range".into(),
+                Value::List(vec![Value::Int(i as i64), Value::Int(i as i64)]),
+            );
+            map.insert("ts_ms".into(), Value::Int(m.timestamp_ms as i64));
+            Value::Map(map)
+        };
+
+        for (i, m) in req.messages.iter().enumerate() {
+            for sentence in m
+                .text
+                .split_inclusive(['.', '!', '?'])
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                let is_open = sentence.ends_with('?')
+                    || has_cue(sentence, &["open:", "unresolved", "question:"]);
+                let mut bucketed = false;
+                let push = |bucket: &mut Vec<Value>, bucketed: &mut bool| {
+                    bucket.push(make_item(sentence.to_string(), m, i));
+                    *bucketed = true;
+                };
+                if has_cue(sentence, DECISION_CUES) {
+                    push(&mut decisions, &mut bucketed);
+                }
+                if has_cue(sentence, ACTION_CUES) {
+                    push(&mut actions, &mut bucketed);
+                }
+                if is_open {
+                    push(&mut open_issues, &mut bucketed);
+                }
+                if has_cue(sentence, CONSTRAINT_CUES) {
+                    push(&mut constraints, &mut bucketed);
+                }
+                if has_cue(sentence, OUTCOME_CUES) {
+                    push(&mut outcomes, &mut bucketed);
+                }
+                if !bucketed {
+                    facts.push(make_item(sentence.to_string(), m, i));
+                }
+            }
+
+            // entities: runs of capitalized words that are not
+            // sentence-initial. ponytail: naive casing heuristic, not NER —
+            // upgrade path: the extraction pipeline's entity detectors.
+            let mut run: Vec<&str> = Vec::new();
+            let mut flush = |run: &mut Vec<&str>| {
+                if !run.is_empty() {
+                    entities.push(make_item(run.join(" "), m, i));
+                    run.clear();
+                }
+            };
+            for sentence in m.text.split_inclusive(['.', '!', '?']) {
+                for (pos, w) in sentence
+                    .trim_end_matches(['.', '!', '?'])
+                    .split_whitespace()
+                    .enumerate()
+                {
+                    let cap_word = w.len() >= 2
+                        && w.chars().next().is_some_and(|c| c.is_uppercase())
+                        && w.chars().all(|c| c.is_alphabetic());
+                    if pos > 0 && cap_word {
+                        run.push(w);
+                    } else {
+                        flush(&mut run);
+                    }
+                }
+                flush(&mut run);
+            }
+        }
+
+        let mut properties = PropertyMap::new();
+        properties.insert("conversation_id".into(), Value::Text(req.conversation_id));
+        properties.insert(
+            "message_count".into(),
+            Value::Int(req.messages.len() as i64),
+        );
+        for (key, items) in [
+            ("facts", facts),
+            ("decisions", decisions),
+            ("actions", actions),
+            ("open_issues", open_issues),
+            ("constraints", constraints),
+            ("outcomes", outcomes),
+            ("entities", entities),
+        ] {
+            properties.insert(key.into(), Value::List(items));
+        }
+
+        let mut extensions = ExtensionMap::new();
+        extensions.insert(
+            KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
+            Value::Text("asserted".into()),
+        );
+        extensions.insert("authority".into(), Value::Text("agent_derived".into()));
+        extensions.insert(
+            KnowledgeObject::EXT_EVIDENCE.into(),
+            evidence_value(&req.evidence),
+        );
+
+        let rr = RememberRequest {
+            context: req.context.clone(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "aikoql:conversation_summary".into(),
+                tenant: req.context.tenant.clone(),
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions,
+            origin: Origin::Agent(req.context.subject.name.clone()),
+            note: req.note,
+            referential_policy: ReferentialPolicy::default(),
+        };
+        self.remember_trusted(rr)
+    }
+
     /// Match recorded experiences against a task description for reuse.
     ///
     /// Eligibility gate: with `reuse_conditions`, EVERY condition token must
@@ -1734,6 +1923,28 @@ impl Kernel {
 
 /// A captured agent execution outcome (`aikoql:experience`), for reuse
 /// matching by later tasks.
+/// One utterance in a conversation to be summarized (G13 §38–39).
+#[derive(Clone, Debug)]
+pub struct ConversationMessage {
+    pub speaker: String,
+    pub timestamp_ms: u64,
+    pub text: String,
+}
+
+/// Summarize a conversation into a structured, provenance-carrying
+/// summary KO. Deterministic extraction — the summary NEVER invents
+/// facts: every emitted item is a verbatim sentence or capitalized
+/// phrase from the transcript.
+#[derive(Clone, Debug)]
+pub struct SummarizeConversationRequest {
+    pub context: KnowledgeContext,
+    /// Identity of the conversation being summarized (the §39 root).
+    pub conversation_id: String,
+    pub messages: Vec<ConversationMessage>,
+    pub evidence: Vec<Evidence>,
+    pub note: Option<String>,
+}
+
 pub struct ExperienceRequest {
     pub context: KnowledgeContext,
     /// Which agent the experience belongs to (properties.actor).

@@ -1982,3 +1982,48 @@ fn m_ret1_remember_tool_retention_expiry() {
 
     let _ = std::fs::remove_file(&db);
 }
+
+#[test]
+fn m_sum1_summarize_conversation_tool() {
+    // §38–39 acceptance: a conversation is summarized into the seven
+    // buckets; every item traces to speaker + message range + timestamp.
+    let db = tmp_db("summarize");
+    let mut c = McpClient::start(&db);
+
+    let out = c.call_tool(
+        "summarize_conversation",
+        json!({
+            "subject": "alice",
+            "conversation_id": "conv-9",
+            "messages": [
+                {"speaker": "alice", "ts_ms": 1000, "text": "We decided to launch on Tuesday."},
+                {"speaker": "bob", "ts_ms": 2000, "text": "The rollout must include backups."},
+                {"speaker": "alice", "ts_ms": 3000, "text": "The smoke test passed."}
+            ],
+            "evidence": [{"source_artifact": "chat-export.json", "method": "doc_extraction"}]
+        }),
+    );
+    assert_eq!(out["type_name"], "aikoql:conversation_summary");
+    assert_eq!(out["message_count"], 3);
+    let koid = out["koid"].as_str().unwrap().to_string();
+
+    let ko = c.call_tool("get", json!({"subject": "alice", "koid": koid}));
+    let p = &ko["properties"];
+    assert_eq!(p["conversation_id"], "conv-9");
+    assert_eq!(p["message_count"], 3);
+    assert_eq!(p["decisions"].as_array().unwrap().len(), 1);
+    assert_eq!(p["constraints"].as_array().unwrap().len(), 1);
+    assert_eq!(p["outcomes"].as_array().unwrap().len(), 1);
+
+    // §39: provenance per item — speaker, message range, timestamp
+    let d = &p["decisions"][0];
+    assert_eq!(d["speaker"], "alice");
+    assert_eq!(d["msg_range"], json!([0, 0]));
+    assert_eq!(d["ts_ms"], 1000);
+    let con = &p["constraints"][0];
+    assert_eq!(con["speaker"], "bob");
+    assert_eq!(con["msg_range"], json!([1, 1]));
+    assert_eq!(con["ts_ms"], 2000);
+
+    let _ = std::fs::remove_file(&db);
+}
