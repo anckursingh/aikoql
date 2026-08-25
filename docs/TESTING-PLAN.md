@@ -397,13 +397,13 @@ Wave 2's claim under test: *knowledge remains correct under concurrent mutation,
 | QA2-CONC-005 Concurrent temporal updates | P0 | W2-09 | ✅ | `w2_conc_005_concurrent_overlapping_temporal_updates_keep_one_head` (kernel) — 2×25 overlapping valid_from windows: one head, gapless journal, head stamp ∈ written set, monotone commit_ts |
 | QA2-CONC-006 Authorization during mutation | P0 | W2-06 | ✅ | `w2_conc_006_grant_revoke_during_mutation_never_leaks` (kernel) — 4 readers × 6 barrier-synchronized deny/allow flips: deny-phase Ok reads only below the deny commit, allow-phase only ≥ allow commit, errors AccessDenied-only |
 | QA2-KNOW-001 Conflicting evidence | P0 | W2-05 | ✅ | `e03_contradictions_between_similar_claims` + `epistemic.rs` + PROV-003 — both claims, provenance, temporal info retained; no silent collapse |
-| QA2-KNOW-002 Source authority | P1 | W2-05 | 🟡 | authority ranking exists (`ops.rs::ko_authority_rank`, `authority.rs` levels, R5/R8 trust spine); the per-source current-truth selection pin ("PostgreSQL > MongoDB" → higher-authority claim is current, loser traceable) — item 2 |
+| QA2-KNOW-002 Source authority | P1 | W2-05 | ✅ | `w2_know_002_source_authority_selects_current_truth` (qa2_knowledge.rs) — postgres claim (source_code=7) vs mongo counter (documentation=3): `resolve_conflict_by_authority` → A preferred, winner current, loser Contradicted but traceable (evidence + CONTRADICTS edge + conflict KO + history). No per-source-type priority config — the authority level IS the configured policy |
 | QA2-KNOW-003 Stale evidence | P0 | W2-05 | ✅ | `temporal.rs` valid_at/as_of + `e2e-k2-temporal.js` — current query returns valid current, history retrieves old |
 | QA2-KNOW-004 Correction propagation | P0 | W2-05 | ✅ | FRESH-001 (source→query visibility, superseded fact gone) + i11 (index propagation, zero lag) |
 | QA2-KNOW-005 Duplicate entity | P1 | W2-05 | ✅ | `multi_source_ontology.rs` config-driven identity + INC-003 rename identity — no uncontrolled duplicate canonical entities |
 | QA2-KNOW-006 Entity split | P1 | W2-05 | ❌ | NOT_IMPLEMENTED — entity split is unsupported; per spec: report NOT_IMPLEMENTED, never PASS (honest row) |
-| QA2-KNOW-007 Relationship conflict | P0 | W2-05 | 🟡 | e03 covers conflicting facts, not conflicting relations (A→OWNS→B vs A→DOES_NOT_OWN→B retained, resolved only by explicit policy) — item 2 |
-| QA2-KNOW-008 Evidence/facts divergence | P0 | W2-05 | 🟡 | MVP-EXT-001/002 keep evidence when extraction drops prose; dedicated evidence≠fact pin (failed extraction leaves evidence retrievable) — item 2 |
+| QA2-KNOW-007 Relationship conflict | P0 | W2-05 | ✅ | `w2_know_007_relationship_conflict_preserved_resolved_by_policy_only` (qa2_knowledge.rs) — owns vs does_not_own claims both current with own data, Conflict KO unresolved (no implicit pick), equal-authority `resolve_conflict_by_authority` REFUSED (tie = explicit decision required), explicit `resolve_conflict` flips only the loser to Contradicted |
+| QA2-KNOW-008 Evidence/facts divergence | P0 | W2-05 | ✅ | `w2_know_008_failed_extraction_keeps_evidence_retrievable` (qa2_knowledge.rs) — document KO observed with evidence; fact commit without evidence rejected (InvalidObject); document + evidence trail retrievable; no partial fact (journal len 1) |
 | QA2-KNOW-009 Canonical vs index | P0 | W2-08 | ✅ | i09 rebuild parity + i11 update propagation |
 | QA2-KNOW-010 Rebuild consistency | P0 | W2-08 | ✅ | i09 delete+rebuild = identical results |
 | QA2-RET-001 Keyword flooding | P0 | W2-07 | ✅ | G12 q-00 hoover scenario + keyword hygiene + entity gate — irrelevant matches cannot consume the context budget |
@@ -469,7 +469,7 @@ Wave 2's claim under test: *knowledge remains correct under concurrent mutation,
 ### 10.3 TDD execution order (MVP-QA-002 → tests first)
 
 1. ~~Suite A concurrency~~ → done (2026-08-25) — `crates/kernel/tests/qa2_concurrency.rs` (5 tests) + `crates/ingestion/tests/qa2_concurrency.rs` (2 tests). REDs were test-side only (stale cross-snapshot comparator, miscounted journal); production pipe-lock/HLC/OCC/idempotency/per-version-ACL held day one — pins, not fixes. All 7 green; workspace + clippy clean.
-2. Suite B knowledge consistency — KNOW-002 source-authority current-truth pin, KNOW-007 relationship-conflict preservation, KNOW-008 evidence≠fact divergence; KNOW-006 stays NOT_IMPLEMENTED (honest)
+2. ~~Suite B knowledge consistency~~ → done (2026-08-25) — `crates/kernel/tests/qa2_knowledge.rs` (3 tests: KNOW-002/007/008). All green day one — contradict/Conflict-KO/`resolve_conflict_by_authority` (MRFC-0070 + P1 reviews) already implemented the semantics; these are pins. KNOW-006 stays NOT_IMPLEMENTED (honest row, spec §KNOW-006).
 3. Suite I derived-state — DER-003 embedding-version pin (semantic block versions with the KO)
 4. Suite D fault injection — FAULT-008 backup failure, FAULT-009 interrupted/truncated restore (`qa2_fault.rs` in durability-land)
 5. Suite E schema evolution — SCHEMA-002 v2→v3 chain, SCHEMA-006 atomic migration (production: register+transact one batch), SCHEMA-007 resume
