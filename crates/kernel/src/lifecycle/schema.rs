@@ -1,6 +1,8 @@
-//! Schema Registry — in-memory type schemas for validation.
+//! Schema Registry — type schemas for validation.
 //!
-//! Increment-1 stores schemas in memory only (MRFC-0001). The kernel calls
+//! The registry itself is in-memory; the kernel persists each schema as a
+//! reserved row via `Kernel::register_schema` (REC-002) and reloads all rows
+//! on open, so backup/restore preserves constraints. The kernel calls
 //! `SchemaRegistry::validate` before committing a new version.
 
 use crate::knowledge::kom::{KResult, KnowledgeObject, Schema};

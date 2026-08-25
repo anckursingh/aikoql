@@ -274,7 +274,7 @@
       "priority": "P0",
       "gate": "G8",
       "status": "pass",
-      "evidence": "`mvp_rec_002_backup_destroy_restore_round_trip` (mcp_real_world): verified live backup → destroy → restore → reopen → same KOID + content; engine-level `snapshot_to`/`restore_from` (trait + `EncryptedStore` raw delegation so ciphertext stays verbatim); **server restart required after restore** (in-memory derived state)"
+      "evidence": "`mvp_rec_002_backup_destroy_restore_round_trip` (mcp_real_world): verified live backup → destroy → restore → reopen → same KOID + content + relations/supersession/evidence/valid_from equivalence legs (TDD 2026-08-25); `d09_restore_preserves_relations_provenance_temporal_and_constraints` (durability.rs): **constraints equivalent** — schemas persist as reserved rows (`Kernel::register_schema` → `sys/schema/<type>`, reloaded on open, fail-closed on corrupt rows) so a check-violating write is rejected after restore; engine-level `snapshot_to`/`restore_from` (trait + `EncryptedStore` raw delegation so ciphertext stays verbatim); **server restart required after restore** (in-memory derived state)"
     },
     {
       "id": "MVP-REC-003 Interrupted ingestion",

@@ -10,7 +10,7 @@
 //! binary format (prost/rkyv) without changing KS-ABI semantics.
 
 use crate::knowledge::kom::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Encoder
@@ -584,6 +584,388 @@ pub fn decode_ke(buf: &[u8]) -> KResult<KnowledgeEvent> {
 }
 
 // ---------------------------------------------------------------------------
+// Schema (REC-002): persisted as reserved rows so backup/restore preserves
+// constraints. Deterministic: the same registry encodes to identical bytes
+// (allowed_properties is sorted; everything else is already Vec-ordered).
+// ---------------------------------------------------------------------------
+
+fn enc_domain(e: &mut Enc, d: &DomainConstraint) {
+    match d {
+        DomainConstraint::Range { min, max } => {
+            e.u8(0);
+            match min {
+                None => e.u8(0),
+                Some(v) => {
+                    e.u8(1);
+                    e.f64(*v);
+                }
+            }
+            match max {
+                None => e.u8(0),
+                Some(v) => {
+                    e.u8(1);
+                    e.f64(*v);
+                }
+            }
+        }
+        DomainConstraint::Pattern(p) => {
+            e.u8(1);
+            e.str(p);
+        }
+        DomainConstraint::Length { min, max } => {
+            e.u8(2);
+            match min {
+                None => e.u8(0),
+                Some(v) => {
+                    e.u8(1);
+                    e.u64(*v as u64);
+                }
+            }
+            match max {
+                None => e.u8(0),
+                Some(v) => {
+                    e.u8(1);
+                    e.u64(*v as u64);
+                }
+            }
+        }
+        DomainConstraint::Enum(vs) => {
+            e.u8(3);
+            e.u64(vs.len() as u64);
+            for v in vs {
+                enc_value(e, v);
+            }
+        }
+        DomainConstraint::Format(f) => {
+            e.u8(4);
+            e.str(f);
+        }
+    }
+}
+
+fn dec_domain(d: &mut Dec) -> KResult<DomainConstraint> {
+    Ok(match d.u8()? {
+        0 => DomainConstraint::Range {
+            min: match d.u8()? {
+                0 => None,
+                1 => Some(d.f64()?),
+                t => return Err(KError::Codec(format!("invalid min tag {}", t))),
+            },
+            max: match d.u8()? {
+                0 => None,
+                1 => Some(d.f64()?),
+                t => return Err(KError::Codec(format!("invalid max tag {}", t))),
+            },
+        },
+        1 => DomainConstraint::Pattern(d.str()?),
+        2 => DomainConstraint::Length {
+            min: match d.u8()? {
+                0 => None,
+                1 => Some(d.u64()? as usize),
+                t => return Err(KError::Codec(format!("invalid min tag {}", t))),
+            },
+            max: match d.u8()? {
+                0 => None,
+                1 => Some(d.u64()? as usize),
+                t => return Err(KError::Codec(format!("invalid max tag {}", t))),
+            },
+        },
+        3 => {
+            let n = d.u64()? as usize;
+            let mut vs = Vec::with_capacity(n.min(4096));
+            for _ in 0..n {
+                vs.push(dec_value(d)?);
+            }
+            DomainConstraint::Enum(vs)
+        }
+        4 => DomainConstraint::Format(d.str()?),
+        t => return Err(KError::Codec(format!("invalid domain tag {}", t))),
+    })
+}
+
+fn enc_expr(e: &mut Enc, x: &CheckExpression) {
+    match x {
+        CheckExpression::Property(p) => {
+            e.u8(0);
+            e.str(p);
+        }
+        CheckExpression::Literal(v) => {
+            e.u8(1);
+            enc_value(e, v);
+        }
+        CheckExpression::Compare { op, left, right } => {
+            e.u8(2);
+            e.u8(*op as u8);
+            enc_expr(e, left);
+            enc_expr(e, right);
+        }
+        CheckExpression::And(l, r) => {
+            e.u8(3);
+            enc_expr(e, l);
+            enc_expr(e, r);
+        }
+        CheckExpression::Or(l, r) => {
+            e.u8(4);
+            enc_expr(e, l);
+            enc_expr(e, r);
+        }
+        CheckExpression::Not(x) => {
+            e.u8(5);
+            enc_expr(e, x);
+        }
+        CheckExpression::Arith(l, op, r) => {
+            e.u8(6);
+            e.u8(*op as u8);
+            enc_expr(e, l);
+            enc_expr(e, r);
+        }
+        CheckExpression::If(c, t, f) => {
+            e.u8(7);
+            enc_expr(e, c);
+            enc_expr(e, t);
+            enc_expr(e, f);
+        }
+    }
+}
+
+fn dec_expr(d: &mut Dec) -> KResult<CheckExpression> {
+    Ok(match d.u8()? {
+        0 => CheckExpression::Property(d.str()?),
+        1 => CheckExpression::Literal(dec_value(d)?),
+        2 => CheckExpression::Compare {
+            op: dec_tag(
+                d,
+                |t| match t {
+                    0 => Some(CompareOp::Eq),
+                    1 => Some(CompareOp::Neq),
+                    2 => Some(CompareOp::Lt),
+                    3 => Some(CompareOp::Lte),
+                    4 => Some(CompareOp::Gt),
+                    5 => Some(CompareOp::Gte),
+                    _ => None,
+                },
+                "compare op",
+            )?,
+            left: Box::new(dec_expr(d)?),
+            right: Box::new(dec_expr(d)?),
+        },
+        3 => CheckExpression::And(Box::new(dec_expr(d)?), Box::new(dec_expr(d)?)),
+        4 => CheckExpression::Or(Box::new(dec_expr(d)?), Box::new(dec_expr(d)?)),
+        5 => CheckExpression::Not(Box::new(dec_expr(d)?)),
+        6 => {
+            let op = dec_tag(
+                d,
+                |t| match t {
+                    0 => Some(ArithOp::Add),
+                    1 => Some(ArithOp::Sub),
+                    2 => Some(ArithOp::Mul),
+                    3 => Some(ArithOp::Div),
+                    _ => None,
+                },
+                "arith op",
+            )?;
+            CheckExpression::Arith(Box::new(dec_expr(d)?), op, Box::new(dec_expr(d)?))
+        }
+        7 => CheckExpression::If(
+            Box::new(dec_expr(d)?),
+            Box::new(dec_expr(d)?),
+            Box::new(dec_expr(d)?),
+        ),
+        t => return Err(KError::Codec(format!("invalid expr tag {}", t))),
+    })
+}
+
+fn enc_scope(e: &mut Enc, s: UniquenessScope) {
+    e.u8(match s {
+        UniquenessScope::Type => 0,
+        UniquenessScope::Tenant => 1,
+        UniquenessScope::Global => 2,
+    });
+}
+
+fn dec_scope(d: &mut Dec) -> KResult<UniquenessScope> {
+    dec_tag(
+        d,
+        |t| match t {
+            0 => Some(UniquenessScope::Type),
+            1 => Some(UniquenessScope::Tenant),
+            2 => Some(UniquenessScope::Global),
+            _ => None,
+        },
+        "scope",
+    )
+}
+
+fn enc_timing(e: &mut Enc, t: ConstraintTiming) {
+    e.u8(match t {
+        ConstraintTiming::Immediate => 0,
+        ConstraintTiming::Deferred => 1,
+    });
+}
+
+fn dec_timing(d: &mut Dec) -> KResult<ConstraintTiming> {
+    dec_tag(
+        d,
+        |t| match t {
+            0 => Some(ConstraintTiming::Immediate),
+            1 => Some(ConstraintTiming::Deferred),
+            _ => None,
+        },
+        "timing",
+    )
+}
+
+pub fn encode_schema(s: &Schema) -> Vec<u8> {
+    let mut e = Enc::new();
+    e.str(&s.type_name);
+    e.u32(s.schema_version);
+    e.u64(s.required_properties.len() as u64);
+    for p in &s.required_properties {
+        e.str(p);
+    }
+    match &s.allowed_properties {
+        None => e.u8(0),
+        Some(set) => {
+            e.u8(1);
+            let mut names: Vec<&String> = set.iter().collect();
+            names.sort();
+            e.u64(names.len() as u64);
+            for n in names {
+                e.str(n);
+            }
+        }
+    }
+    e.u64(s.properties.len() as u64);
+    for p in &s.properties {
+        e.str(&p.name);
+        e.str(&p.value_type);
+        e.bool(p.required);
+        e.bool(p.nullable);
+        e.bool(p.provenance_required);
+        e.u64(p.domain_constraints.len() as u64);
+        for d in &p.domain_constraints {
+            enc_domain(&mut e, d);
+        }
+    }
+    e.u64(s.unique_constraints.len() as u64);
+    for u in &s.unique_constraints {
+        e.u64(u.properties.len() as u64);
+        for p in &u.properties {
+            e.str(p);
+        }
+        enc_scope(&mut e, u.scope);
+        enc_timing(&mut e, u.timing);
+    }
+    e.u64(s.check_constraints.len() as u64);
+    for c in &s.check_constraints {
+        e.str(&c.name);
+        enc_expr(&mut e, &c.predicate);
+        enc_timing(&mut e, c.timing);
+    }
+    e.buf
+}
+
+pub fn decode_schema(buf: &[u8]) -> KResult<Schema> {
+    let mut d = Dec::new(buf);
+    let type_name = d.str()?;
+    let schema_version = d.u32()?;
+    let required_properties = {
+        let n = d.u64()? as usize;
+        let mut v = Vec::with_capacity(n.min(4096));
+        for _ in 0..n {
+            v.push(d.str()?);
+        }
+        v
+    };
+    let allowed_properties = match d.u8()? {
+        0 => None,
+        1 => {
+            let n = d.u64()? as usize;
+            let mut set = HashSet::with_capacity(n.min(4096));
+            for _ in 0..n {
+                set.insert(d.str()?);
+            }
+            Some(set)
+        }
+        t => {
+            return Err(KError::Codec(format!(
+                "invalid allowed_properties tag {}",
+                t
+            )))
+        }
+    };
+    let properties = {
+        let n = d.u64()? as usize;
+        let mut v = Vec::with_capacity(n.min(4096));
+        for _ in 0..n {
+            let name = d.str()?;
+            let value_type = d.str()?;
+            let required = d.bool()?;
+            let nullable = d.bool()?;
+            let provenance_required = d.bool()?;
+            let dn = d.u64()? as usize;
+            let mut domain_constraints = Vec::with_capacity(dn.min(4096));
+            for _ in 0..dn {
+                domain_constraints.push(dec_domain(&mut d)?);
+            }
+            v.push(SchemaProperty {
+                name,
+                value_type,
+                required,
+                nullable,
+                provenance_required,
+                domain_constraints,
+            });
+        }
+        v
+    };
+    let unique_constraints = {
+        let n = d.u64()? as usize;
+        let mut v = Vec::with_capacity(n.min(4096));
+        for _ in 0..n {
+            let pn = d.u64()? as usize;
+            let mut props = Vec::with_capacity(pn.min(4096));
+            for _ in 0..pn {
+                props.push(d.str()?);
+            }
+            let scope = dec_scope(&mut d)?;
+            let timing = dec_timing(&mut d)?;
+            v.push(UniqueConstraint {
+                properties: props,
+                scope,
+                timing,
+            });
+        }
+        v
+    };
+    let check_constraints = {
+        let n = d.u64()? as usize;
+        let mut v = Vec::with_capacity(n.min(4096));
+        for _ in 0..n {
+            let name = d.str()?;
+            let predicate = dec_expr(&mut d)?;
+            let timing = dec_timing(&mut d)?;
+            v.push(CheckConstraint {
+                name,
+                predicate,
+                timing,
+            });
+        }
+        v
+    };
+    d.finish()?;
+    Ok(Schema {
+        type_name,
+        schema_version,
+        required_properties,
+        allowed_properties,
+        properties,
+        unique_constraints,
+        check_constraints,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
 
@@ -758,5 +1140,92 @@ mod tests {
         let mut bytes = encode_ko_wire(&ko);
         bytes[7] = 0x7F;
         assert!(matches!(decode_ko_wire(&bytes), Err(KError::Codec(_))));
+    }
+
+    // --- REC-002: schema codec ---
+
+    #[test]
+    fn schema_round_trip_full_and_canonical() {
+        let mut schema = Schema::new("Item", 3);
+        schema.required_properties = vec!["name".into(), "qty".into()];
+        schema.allowed_properties = Some(
+            ["qty".into(), "name".into(), "tags".into()]
+                .into_iter()
+                .collect(),
+        );
+        schema.properties = vec![SchemaProperty {
+            name: "qty".into(),
+            value_type: "Int".into(),
+            required: true,
+            nullable: false,
+            provenance_required: true,
+            domain_constraints: vec![
+                DomainConstraint::Range {
+                    min: Some(0.0),
+                    max: None,
+                },
+                DomainConstraint::Pattern("*/prod/*".into()),
+                DomainConstraint::Length {
+                    min: Some(1),
+                    max: Some(8),
+                },
+                DomainConstraint::Enum(vec![
+                    Value::Int(1),
+                    Value::Text("x".into()),
+                    Value::List(vec![Value::Bool(true)]),
+                ]),
+                DomainConstraint::Format("uuid".into()),
+            ],
+        }];
+        schema.unique_constraints = vec![
+            UniqueConstraint {
+                properties: vec!["name".into(), "qty".into()],
+                scope: UniquenessScope::Tenant,
+                timing: ConstraintTiming::Deferred,
+            },
+            UniqueConstraint {
+                properties: vec!["qty".into()],
+                scope: UniquenessScope::Global,
+                timing: ConstraintTiming::Immediate,
+            },
+        ];
+        schema.check_constraints = vec![
+            CheckConstraint {
+                name: "qty_positive".into(),
+                predicate: CheckExpression::Compare {
+                    op: CompareOp::Gt,
+                    left: Box::new(CheckExpression::Property("qty".into())),
+                    right: Box::new(CheckExpression::Literal(Value::Int(0))),
+                },
+                timing: ConstraintTiming::Immediate,
+            },
+            CheckConstraint {
+                name: "fancy".into(),
+                predicate: CheckExpression::If(
+                    Box::new(CheckExpression::Arith(
+                        Box::new(CheckExpression::Property("qty".into())),
+                        ArithOp::Mul,
+                        Box::new(CheckExpression::Literal(Value::Int(2))),
+                    )),
+                    Box::new(CheckExpression::And(
+                        Box::new(CheckExpression::Not(Box::new(CheckExpression::Literal(
+                            Value::Bool(false),
+                        )))),
+                        Box::new(CheckExpression::Literal(Value::Bool(true))),
+                    )),
+                    Box::new(CheckExpression::Or(
+                        Box::new(CheckExpression::Literal(Value::Null)),
+                        Box::new(CheckExpression::Literal(Value::Null)),
+                    )),
+                ),
+                timing: ConstraintTiming::Deferred,
+            },
+        ];
+        let bytes = encode_schema(&schema);
+        assert_eq!(schema, decode_schema(&bytes).expect("decode"));
+        assert_eq!(bytes, encode_schema(&schema), "canonical encoding");
+        let mut truncated = bytes.clone();
+        truncated.pop();
+        assert!(matches!(decode_schema(&truncated), Err(KError::Codec(_))));
     }
 }

@@ -643,6 +643,15 @@ impl Kernel {
         let relationships = Arc::new(RelationshipManager::new(repo.clone()));
         let objects = Arc::new(ObjectManager::new(repo.clone()));
         let constraint_caps = repo.constraint_capabilities();
+        // REC-002: reload persisted schemas. Fail closed — a corrupt schema row
+        // must not silently drop constraints.
+        let schemas = Arc::new(RwLock::new(SchemaRegistry::new()));
+        for (type_name, bytes) in repo.schema_rows()? {
+            let schema = crate::knowledge::codec::decode_schema(&bytes).map_err(|e| {
+                KError::Store(format!("persisted schema '{}' corrupt: {}", type_name, e))
+            })?;
+            schemas.write().unwrap().register(schema);
+        }
         Ok(Kernel {
             repo,
             store,
@@ -653,7 +662,7 @@ impl Kernel {
             events: Arc::new(Mutex::new(events)),
             auth: Arc::new(RwLock::new(auth)),
             indexes: Arc::new(RwLock::new(Some(IndexCoordinator::new()))),
-            schemas: Arc::new(RwLock::new(SchemaRegistry::new())),
+            schemas,
             ontologies: Arc::new(RwLock::new(OntologyRegistry::empty())),
             constraint_eval: ConstraintEvaluator::new(),
             constraint_caps,
@@ -820,9 +829,16 @@ impl Kernel {
     }
 
     /// Register a schema for automatic validation on `remember`.
-    /// Schemas are currently in-memory only (MRFC-0001 Increment-1).
-    pub fn register_schema(&self, schema: Schema) {
+    /// Persisted as a reserved row (REC-002) so backup/restore preserves
+    /// constraints. A store failure leaves the registry unchanged.
+    pub fn register_schema(&self, schema: Schema) -> KResult<()> {
+        let bytes = crate::knowledge::codec::encode_schema(&schema);
+        let mut batch = WriteBatch::new();
+        self.repo
+            .put_schema_row(&mut batch, &schema.type_name, &bytes);
+        self.repo.write_batch(&batch)?;
         self.schemas.write().unwrap().register(schema);
+        Ok(())
     }
 
     /// Register an ontology for relationship validation (MRFC-0060 Phase C3).
@@ -983,12 +999,17 @@ impl Kernel {
         let migrated = ops.len();
 
         // Register the target schema first so `transact` validates the stamped
-        // KOs against it; roll back on failure. The registry is in-memory, so
-        // restoration is a re-insert. Transact's OCC re-check makes the
-        // pre-transact scan race-safe.
-        self.schemas.write().unwrap().register(new_schema.clone());
+        // KOs against it; roll back on failure. Registration is persisted
+        // (REC-002), so rollback rewrites the previous schema row. Transact's
+        // OCC re-check makes the pre-transact scan race-safe.
+        self.register_schema(new_schema.clone())?;
         if let Err(e) = self.transact(ops) {
-            self.schemas.write().unwrap().register(prev);
+            if let Err(rb) = self.register_schema(prev) {
+                return Err(KError::InvalidSchema(format!(
+                    "migration failed ({}); schema rollback also failed: {}",
+                    e, rb
+                )));
+            }
             return Err(e);
         }
         Ok(MigrationReport {

@@ -278,7 +278,8 @@ fn t06d_permissive_policy_allows_dangling_ref() {
 #[test]
 fn t06e_registered_schema_rejects_missing_required_property() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("fact", 1).require("title"));
+    k.register_schema(Schema::new("fact", 1).require("title"))
+        .unwrap();
     let req = RememberRequest::create(alice(), meta("fact"));
     assert!(matches!(
         k.remember(req).unwrap_err(),
@@ -289,7 +290,7 @@ fn t06e_registered_schema_rejects_missing_required_property() {
 #[test]
 fn t06f_registered_schema_rejects_version_mismatch() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("fact", 2));
+    k.register_schema(Schema::new("fact", 2)).unwrap();
     let req = RememberRequest::create(alice(), meta("fact"));
     assert!(matches!(
         k.remember(req).unwrap_err(),
@@ -300,7 +301,8 @@ fn t06f_registered_schema_rejects_version_mismatch() {
 #[test]
 fn t06g_registered_schema_accepts_conforming_object() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("fact", 1).require("title"));
+    k.register_schema(Schema::new("fact", 1).require("title"))
+        .unwrap();
     let mut req = RememberRequest::create(alice(), meta("fact"));
     req.properties
         .insert("title".into(), Value::Text("ok".into()));
@@ -311,7 +313,8 @@ fn t06g_registered_schema_accepts_conforming_object() {
 #[test]
 fn t06h_unregistered_type_is_not_validated() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("claim", 1).require("title"));
+    k.register_schema(Schema::new("claim", 1).require("title"))
+        .unwrap();
     // "fact" is not registered, so remember succeeds without required props.
     let req = RememberRequest::create(alice(), meta("fact"));
     let r = k.remember(req).unwrap();
@@ -321,7 +324,8 @@ fn t06h_unregistered_type_is_not_validated() {
 #[test]
 fn t06i_registered_closed_schema_rejects_unknown_core_field() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("fact", 1).require("title").allow("title"));
+    k.register_schema(Schema::new("fact", 1).require("title").allow("title"))
+        .unwrap();
     let mut req = RememberRequest::create(alice(), meta("fact"));
     req.properties
         .insert("title".into(), Value::Text("ok".into()));
@@ -1257,7 +1261,8 @@ fn t26_reopen_recovers_journal_head_and_continues_chain() {
 #[test]
 fn t06m_unique_constraint_prevents_duplicate() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("User"));
     r1.properties
         .insert("email".into(), Value::Text("dup@b.com".into()));
@@ -1274,7 +1279,8 @@ fn t06m_unique_constraint_prevents_duplicate() {
 #[test]
 fn t06n_composite_unique_enforced() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Org", 1).unique(&["tenant", "slug"], UniquenessScope::Type));
+    k.register_schema(Schema::new("Org", 1).unique(&["tenant", "slug"], UniquenessScope::Type))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Org"));
     r1.properties
         .insert("tenant".into(), Value::Text("t1".into()));
@@ -1302,7 +1308,8 @@ fn t06n_composite_unique_enforced() {
 #[test]
 fn t06o_unique_update_same_value_does_not_conflict_with_self() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique(&["name"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique(&["name"], UniquenessScope::Type))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("User"));
     r1.properties
         .insert("name".into(), Value::Text("Alice".into()));
@@ -2020,7 +2027,8 @@ fn t06y_transact_range_check_within_batch() {
 #[test]
 fn t06z_deferred_unique_intra_batch_conflict() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type))
+        .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta("User"));
     r1.properties
@@ -2044,7 +2052,8 @@ fn t06z_deferred_unique_intra_batch_conflict() {
 #[test]
 fn t06za_deferred_unique_storage_conflict() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type))
+        .unwrap();
 
     // Commit one first
     let mut r1 = RememberRequest::create(alice(), meta("User"));
@@ -2078,7 +2087,8 @@ fn t06zb_deferred_check_constraint_in_transact() {
                     right: Box::new(CheckExpression::Property("start_date".into())),
                 },
             ),
-    );
+    )
+    .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta("Event"));
     r1.properties
@@ -2096,7 +2106,8 @@ fn t06zb_deferred_check_constraint_in_transact() {
 #[test]
 fn t06zc_deferred_unique_passes_when_no_conflict() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type))
+        .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta("User"));
     r1.properties
@@ -2118,7 +2129,8 @@ fn t06zc_deferred_unique_passes_when_no_conflict() {
 #[test]
 fn t06zd_immediate_unique_still_fails_fast_in_transact() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type))
+        .unwrap();
 
     // Commit one first
     let mut r1 = RememberRequest::create(alice(), meta("User"));
@@ -2159,7 +2171,8 @@ fn t06ze_write_set_filters_unaffected_check_constraints() {
                     right: Box::new(CheckExpression::Property("start_date".into())),
                 },
             ),
-    );
+    )
+    .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta("Event"));
     r1.properties
@@ -2195,7 +2208,8 @@ fn t06zf_update_no_property_change_skim_passes() {
             left: Box::new(CheckExpression::Property("name".into())),
             right: Box::new(CheckExpression::Literal(Value::Text("".into()))),
         },
-    ));
+    ))
+    .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties
@@ -2261,7 +2275,8 @@ fn t06zg_check_pushdown_skips_kernel_evaluation() {
             left: Box::new(CheckExpression::Property("qty".into())),
             right: Box::new(CheckExpression::Literal(Value::Int(0))),
         },
-    ));
+    ))
+    .unwrap();
 
     // qty=-5 violates qty > 0, but kernel trusts backend → write succeeds.
     let mut r = RememberRequest::create(alice(), meta("Item"));
@@ -2285,7 +2300,8 @@ fn t06zh_default_capabilities_still_enforce() {
             left: Box::new(CheckExpression::Property("qty".into())),
             right: Box::new(CheckExpression::Literal(Value::Int(0))),
         },
-    ));
+    ))
+    .unwrap();
 
     let mut r = RememberRequest::create(alice(), meta("Item"));
     r.properties.insert("qty".into(), Value::Int(-5));
@@ -2308,7 +2324,8 @@ fn t06zi_not_null_pushdown_skips_required_check() {
     let clock = Arc::new(ManualClock::new(1000));
     let k = Kernel::open(engine, clock.clone(), 42).unwrap();
 
-    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
 
     // Missing required "name" — kernel trusts backend's NOT NULL enforcement.
     let r = RememberRequest::create(alice(), meta("Item"));
@@ -2332,7 +2349,8 @@ fn t06zj_unique_pushdown_skips_immediate_uniqueness_in_transact() {
     let clock = Arc::new(ManualClock::new(1000));
     let k = Kernel::open(engine, clock.clone(), 42).unwrap();
 
-    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type))
+        .unwrap();
 
     // First object with email X.
     let mut r1 = RememberRequest::create(alice(), meta("User"));
@@ -2359,7 +2377,8 @@ fn t06zj_unique_pushdown_skips_immediate_uniqueness_in_transact() {
 #[test]
 fn t06zk_inference_discovers_uniqueness_candidate() {
     let (k, _clock) = mk();
-    k.register_schema(Schema::new("User", 1).property("email", "Text"));
+    k.register_schema(Schema::new("User", 1).property("email", "Text"))
+        .unwrap();
 
     // Create 3 users with distinct emails.
     let mut r1 = RememberRequest::create(alice(), meta("User"));
@@ -2392,7 +2411,8 @@ fn t06zk_inference_discovers_uniqueness_candidate() {
 fn t06zl_inference_never_auto_enforces() {
     // AC-18: inferred constraints must never auto-promote to ENFORCED.
     let (k, _clock) = mk();
-    k.register_schema(Schema::new("Item", 1).property("value", "Int"));
+    k.register_schema(Schema::new("Item", 1).property("value", "Int"))
+        .unwrap();
 
     // Create items with duplicate values (would violate UNIQUE).
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
@@ -2444,7 +2464,7 @@ fn t06zm_arithmetic_check_constraint_enforced() {
                 )),
             },
         );
-    k.register_schema(schema);
+    k.register_schema(schema).unwrap();
 
     // Valid: total == price * quantity
     let mut r1 = RememberRequest::create(alice(), meta("Order"));
@@ -2487,7 +2507,7 @@ fn t06zn_conditional_if_constraint() {
                 Box::new(CheckExpression::Literal(Value::Bool(true))),
             ),
         );
-    k.register_schema(schema);
+    k.register_schema(schema).unwrap();
 
     // Active with email → ok
     let mut r1 = RememberRequest::create(alice(), meta("User"));
@@ -2527,7 +2547,8 @@ fn meta_tenant(t: &str, tenant: &str) -> Metadata {
 #[test]
 fn t06zo_tenant_scoped_unique_allows_same_value_different_tenants() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Tenant));
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Tenant))
+        .unwrap();
 
     // t1 owns email
     let mut r1 = RememberRequest::create(alice(), meta_tenant("User", "t1"));
@@ -2545,7 +2566,8 @@ fn t06zo_tenant_scoped_unique_allows_same_value_different_tenants() {
 #[test]
 fn t06zp_tenant_scoped_unique_rejects_same_tenant() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Tenant));
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Tenant))
+        .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta_tenant("User", "t1"));
     r1.properties
@@ -2563,8 +2585,10 @@ fn t06zp_tenant_scoped_unique_rejects_same_tenant() {
 #[test]
 fn t06zq_global_unique_rejects_across_types() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Alpha", 1).unique(&["code"], UniquenessScope::Global));
-    k.register_schema(Schema::new("Beta", 1).unique(&["code"], UniquenessScope::Global));
+    k.register_schema(Schema::new("Alpha", 1).unique(&["code"], UniquenessScope::Global))
+        .unwrap();
+    k.register_schema(Schema::new("Beta", 1).unique(&["code"], UniquenessScope::Global))
+        .unwrap();
 
     // Alpha owns code
     let mut r1 = RememberRequest::create(alice(), meta("Alpha"));
@@ -2586,7 +2610,8 @@ fn t06zq_global_unique_rejects_across_types() {
 fn t06zr_migration_detects_violations() {
     let (k, _c) = mk();
     // Register relaxed schema v1: no constraints on price
-    k.register_schema(Schema::new("Item", 1).property("price", "Int"));
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties.insert("price".into(), Value::Int(-5));
     assert!(k.remember(r1).is_ok());
@@ -2609,7 +2634,8 @@ fn t06zr_migration_detects_violations() {
 #[test]
 fn t06zs_migration_passes_clean_data() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Item", 1).property("price", "Int"));
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties.insert("price".into(), Value::Int(42));
     assert!(k.remember(r1).is_ok());
@@ -2633,7 +2659,8 @@ fn t06zt_schema_bump_preserves_existing_knowledge_and_versions() {
     // interpretable with its own version stamp, v2 writes coexist, and a
     // v1-stamped write is rejected deterministically (no silent coercion).
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Item", 1).property("price", "Int"));
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties.insert("price".into(), Value::Int(42));
     let id1 = k.remember(r1).unwrap().koid;
@@ -2651,7 +2678,7 @@ fn t06zt_schema_bump_preserves_existing_knowledge_and_versions() {
         .validate_schema_migration(&alice(), &v2)
         .unwrap()
         .is_empty());
-    k.register_schema(v2);
+    k.register_schema(v2).unwrap();
 
     // semantics preserved: the v1 KO is still readable, still stamped v1
     let ko1 = k.get(alice(), &id1).unwrap();
@@ -2781,7 +2808,8 @@ fn t06zw_ontology_evolution_keeps_existing_knowledge_interpretable() {
 #[test]
 fn t06zu_provenance_required_rejects_missing_source() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Fact", 1).provenance_required_property("claim", "Text"));
+    k.register_schema(Schema::new("Fact", 1).provenance_required_property("claim", "Text"))
+        .unwrap();
     // No semantic source → rejected
     let mut r = RememberRequest::create(alice(), meta("Fact"));
     r.properties
@@ -2793,7 +2821,8 @@ fn t06zu_provenance_required_rejects_missing_source() {
 #[test]
 fn t06zv_provenance_required_accepts_sourced() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Fact", 1).provenance_required_property("claim", "Text"));
+    k.register_schema(Schema::new("Fact", 1).provenance_required_property("claim", "Text"))
+        .unwrap();
     let mut r = RememberRequest::create(alice(), meta("Fact"));
     r.properties
         .insert("claim".into(), Value::Text("sky is blue".into()));
@@ -3122,7 +3151,8 @@ fn t35_find_similar_respects_tenant_scope() {
 #[test]
 fn t06zx_apply_migration_renames_property_and_bumps_version() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties
         .insert("name".into(), Value::Text("sword".into()));
@@ -3152,7 +3182,8 @@ fn t06zx_apply_migration_renames_property_and_bumps_version() {
 #[test]
 fn t06zy_apply_migration_set_default_fills_existing() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties.insert("name".into(), Value::Text("a".into()));
     let id1 = k.remember(r1).unwrap().koid;
@@ -3191,7 +3222,8 @@ fn t06zy_apply_migration_set_default_fills_existing() {
 #[test]
 fn t06zz_apply_migration_is_idempotent() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties
         .insert("name".into(), Value::Text("sword".into()));
@@ -3226,7 +3258,8 @@ fn t06zz_apply_migration_is_idempotent() {
 #[test]
 fn t06zza_apply_migration_rejects_unauthorized_targets() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties
         .insert("name".into(), Value::Text("alices".into()));
@@ -3256,7 +3289,8 @@ fn t06zza_apply_migration_rejects_unauthorized_targets() {
 #[test]
 fn t06zzb_apply_migration_fails_clean_on_violation() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Item", 1).property("price", "Int"));
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties.insert("price".into(), Value::Int(-5));
     let id1 = k.remember(r1).unwrap().koid;
@@ -3287,7 +3321,8 @@ fn t06zzb_apply_migration_fails_clean_on_violation() {
 #[test]
 fn t06zzc_apply_migration_rename_source_missing_fails() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties
         .insert("name".into(), Value::Text("sword".into()));
@@ -3312,7 +3347,7 @@ fn t06zzc_apply_migration_rename_source_missing_fails() {
 fn t06zzd_apply_migration_enforces_version_gate() {
     // non-sequential version jump is rejected
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Item", 1));
+    k.register_schema(Schema::new("Item", 1)).unwrap();
     let mig = SchemaMigration {
         schema: Schema::new("Item", 3),
         transforms: vec![],

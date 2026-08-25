@@ -418,6 +418,35 @@ impl KnowledgeRepository {
     }
 
     // -----------------------------------------------------------------------
+    // Schemas (REC-002: persisted so backup/restore preserves constraints)
+    // -----------------------------------------------------------------------
+
+    /// Reserved key prefix for schema rows. ASCII — cannot collide with
+    /// hash-keyed object rows or the other reserved ASCII markers.
+    pub const K_SCHEMA_PREFIX: &[u8] = b"sys/schema/";
+
+    pub fn put_schema_row(&self, batch: &mut WriteBatch, type_name: &str, bytes: &[u8]) {
+        let mut key = Vec::with_capacity(Self::K_SCHEMA_PREFIX.len() + type_name.len());
+        key.extend_from_slice(Self::K_SCHEMA_PREFIX);
+        key.extend_from_slice(type_name.as_bytes());
+        batch.put(key, bytes.to_vec());
+    }
+
+    /// All persisted schema rows as (type_name, encoded bytes), key order.
+    pub fn schema_rows(&self) -> KResult<Vec<(String, Vec<u8>)>> {
+        let mut out = Vec::new();
+        for (k, v) in self.engine().scan(Self::K_SCHEMA_PREFIX)? {
+            if k.len() <= Self::K_SCHEMA_PREFIX.len() {
+                continue;
+            }
+            let name = String::from_utf8(k[Self::K_SCHEMA_PREFIX.len()..].to_vec())
+                .map_err(|_| KError::Codec("schema row key bad utf-8".into()))?;
+            out.push((name, v));
+        }
+        Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
     // Journal
     // -----------------------------------------------------------------------
 

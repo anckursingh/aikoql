@@ -355,3 +355,118 @@ fn d07_point_read_p99_gate() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+// ---------------------------------------------------------------------------
+// REC-002 backup/restore knowledge-equivalence (MVP-QA-001)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn d09_restore_preserves_relations_provenance_temporal_and_constraints() {
+    // MVP-QA-001 REC-002: backup → destroy → restore yields equivalent KOs,
+    // facts, relations, provenance, temporal state AND constraints.
+    // Red 2026-08-25: the schema registry is in-memory only — after restore
+    // the check-violating write was accepted (constraints lost).
+    let path = tmp_db("rec002");
+    let snap = tmp_db("rec002snap");
+    let salt = 0xC0FFEE;
+    let (catalog, item, asserted);
+    {
+        let k = kernel_at(&path, salt);
+        k.register_schema(
+            Schema::new("Item", 1)
+                .required_property("name", "Text")
+                .property("qty", "Int")
+                .check(
+                    "qty_positive",
+                    CheckExpression::Compare {
+                        op: CompareOp::Gt,
+                        left: Box::new(CheckExpression::Property("qty".into())),
+                        right: Box::new(CheckExpression::Literal(Value::Int(0))),
+                    },
+                ),
+        )
+        .unwrap();
+
+        // relations: Catalog <- Item (Outbound from Item)
+        catalog = k
+            .remember(RememberRequest::create(alice(), meta("Catalog")))
+            .unwrap()
+            .koid;
+        let mut item_req = RememberRequest::create(alice(), meta("Item"));
+        item_req
+            .properties
+            .insert("name".into(), Value::Text("widget".into()));
+        item_req.properties.insert("qty".into(), Value::Int(7));
+        item_req.relationships.push(RelationshipRef {
+            rel_type: "listed_in".into(),
+            target: catalog,
+            direction: Direction::Outbound,
+        });
+        item = k.remember(item_req).unwrap().koid;
+
+        // provenance + temporal state: an asserted KO carrying evidence and
+        // an explicit assertion instant.
+        asserted = k
+            .assert_knowledge(AssertionRequest {
+                context: alice().into(),
+                type_name: "Policy".into(),
+                properties: {
+                    let mut p = PropertyMap::new();
+                    p.insert("text".into(), Value::Text("retention is 30 days".into()));
+                    p
+                },
+                authority: Some("architecture_decision".into()),
+                evidence: vec![Evidence::new("runbook.md", EvidenceMethod::DocExtraction)],
+                valid_from: Some(1_000),
+                security: None,
+                note: None,
+            })
+            .unwrap()
+            .koid;
+
+        k.backup_store_to(&snap).unwrap();
+    }
+
+    // destroy → fresh kernel → restore → reopen (restart after restore)
+    std::fs::remove_file(&path).unwrap();
+    {
+        let k = kernel_at(&path, salt);
+        k.restore_store_from(&snap).unwrap();
+    }
+    let k = kernel_at(&path, salt);
+
+    // relations equivalent
+    let restored_item = k.get(alice(), &item).unwrap();
+    assert_eq!(restored_item.relationships.len(), 1);
+    assert_eq!(restored_item.relationships[0].target, catalog);
+
+    // provenance + temporal state equivalent
+    let restored_asserted = k.get(alice(), &asserted).unwrap();
+    match restored_asserted
+        .extensions
+        .get(KnowledgeObject::EXT_EVIDENCE)
+    {
+        Some(Value::List(items)) => assert!(!items.is_empty(), "evidence survives restore"),
+        other => panic!("expected evidence list after restore, got {other:?}"),
+    }
+    assert_eq!(
+        restored_asserted
+            .extensions
+            .get(KnowledgeObject::EXT_VALID_FROM),
+        Some(&Value::Int(1_000)),
+        "assertion instant survives restore"
+    );
+
+    // constraints equivalent — the red leg: a qty<=0 write must be REJECTED
+    let mut bad = RememberRequest::create(alice(), meta("Item"));
+    bad.properties
+        .insert("name".into(), Value::Text("bad".into()));
+    bad.properties.insert("qty".into(), Value::Int(-3));
+    assert!(
+        k.remember(bad).is_err(),
+        "restored kernel must enforce the registered check constraint"
+    );
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&snap);
+}

@@ -1303,6 +1303,50 @@ fn mvp_rec_002_backup_destroy_restore_round_trip() {
     );
     let koid = note["koid"].as_str().unwrap().to_string();
 
+    // MVP-QA-001 REC-002 equivalence legs (2026-08-25): relations,
+    // provenance (evidence + assertion instant) and temporal state
+    // (supersession) must all survive backup → destroy → restore.
+    let asserted = c.call(
+        "assert_knowledge",
+        &json!({
+            "subject": "admin", "type_name": "Policy",
+            "properties": {"text": "retention is 30 days"},
+            "authority": "architecture_decision",
+            "evidence": [{"source_artifact": "runbook.md", "method": "doc_extraction"}],
+            "valid_from": 1000
+        }),
+    );
+    let asserted_koid = asserted["koid"].as_str().unwrap().to_string();
+
+    let rel = c.call(
+        "relate",
+        &json!({
+            "subject": "admin", "from": &koid, "to": &asserted_koid,
+            "rel_type": "derived_from"
+        }),
+    );
+    assert!(rel["koid"].as_str().is_some());
+
+    let successor = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note", "tenant": "acme",
+            "properties": {"body": "quarterly revenue reached 45M", "memo": "rec002-v2"}
+        }),
+    );
+    let successor_koid = successor["koid"].as_str().unwrap().to_string();
+    let sup = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin",
+            "old": &koid,
+            "superseded_by": &successor_koid,
+            "reason": "correction: 45M",
+            "evidence": [{"source_artifact": "finance.md", "method": "human_provided"}]
+        }),
+    );
+    assert_eq!(sup["new"], successor_koid);
+
     // Phase 2: verified backup + it must be listable.
     let backup = c.call("backup", &json!({"subject": "admin"}));
     assert_eq!(backup["verified"], true, "backup must verify: {backup}");
@@ -1355,6 +1399,28 @@ fn mvp_rec_002_backup_destroy_restore_round_trip() {
         fetched["properties"]["body"],
         "quarterly revenue reached 42M"
     );
+
+    // Relations survive: note → Policy derived_from.
+    let rels = fetched["relationships"].as_array().unwrap();
+    assert!(
+        rels.iter().any(|r| r["target"] == asserted_koid),
+        "relation to asserted policy must survive restore: {fetched}"
+    );
+
+    // Temporal state survives: the supersession mark + successor link.
+    assert_eq!(fetched["extensions"]["epistemic_status"], "superseded");
+    assert!(
+        rels.iter().any(|r| r["target"] == successor_koid),
+        "supersession link must survive restore"
+    );
+
+    // Provenance survives: evidence list + assertion instant on the asserted KO.
+    let restored_asserted = c.call("get", &json!({"koid": &asserted_koid, "subject": "admin"}));
+    let evidence = restored_asserted["extensions"]["evidence"]
+        .as_array()
+        .unwrap();
+    assert!(!evidence.is_empty(), "evidence must survive restore");
+    assert_eq!(restored_asserted["extensions"]["valid_from"], 1000);
 
     let _ = std::fs::remove_file(&db);
 }
