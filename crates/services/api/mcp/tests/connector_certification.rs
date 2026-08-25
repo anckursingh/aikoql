@@ -20,7 +20,8 @@ fn infra_live_db_connectivity() {
 }
 
 // ---------------------------------------------------------------------------
-// MVP-CON-001 — PostgreSQL connector (item 2: update; item 3: delete/outage)
+// MVP-CON-001 — PostgreSQL connector (item 2: update; item 3: delete/outage;
+// item 4: foreign keys)
 // ---------------------------------------------------------------------------
 
 /// One table per test — cargo runs test fns in parallel threads against one
@@ -242,4 +243,86 @@ fn con001_pg_import_failure_never_prunes() {
         );
     }
     assert_eq!(con001_age_of(&k, table, "alice"), 30);
+}
+
+// ---------------------------------------------------------------------------
+// MVP-CON-001 — foreign keys become relationships (item 4)
+// ---------------------------------------------------------------------------
+
+fn con001_child_by_note(
+    k: &aikoql_kernel::Kernel,
+    table: &str,
+    note: &str,
+) -> aikoql_kernel::KnowledgeObject {
+    use aikoql_kernel::Value;
+    connectors::scan_type(k, "pg-importer", table)
+        .into_iter()
+        .find(|ko| ko.properties.get("note") == Some(&Value::Text(note.into())))
+        .unwrap_or_else(|| panic!("child {note} missing"))
+}
+
+/// MVP-CON-001: a row's foreign key must become an Outbound RelationshipRef
+/// to the referenced row (rel_type = constraint name). Red today:
+/// `import_table` emits `relationships: vec![]` and no FK introspection
+/// exists (provider header: "Phase 2").
+#[test]
+fn con001_pg_fk_becomes_relationship() {
+    use aikoql_kernel::{Direction, RelationshipRef};
+    let Some(live) = connectors::Live::pg() else {
+        return;
+    };
+    // Private DB so the filterless import sees ONLY the two FK tables.
+    let dsn = connectors::pg_private_db(&live.dsn, "cert_con001_fk");
+    connectors::pg_exec(
+        &dsn,
+        &[
+            "CREATE TABLE fk_parent (id SERIAL PRIMARY KEY, name TEXT NOT NULL)",
+            "INSERT INTO fk_parent (name) VALUES ('alice'), ('bob')",
+            "CREATE TABLE fk_child (id SERIAL PRIMARY KEY, parent_id INT REFERENCES fk_parent(id), note TEXT NOT NULL)",
+            "INSERT INTO fk_child (parent_id, note) VALUES (1, 'first'), (2, 'second')",
+        ],
+    );
+    let db = connectors::temp_db("con001-fk");
+
+    let import = || {
+        let out = connectors::run_import(&["import", "postgres", &dsn, &db]);
+        connectors::assert_import_ok(&out, "fk tables");
+    };
+
+    import();
+    let k = connectors::open_kernel(&db);
+    let alice = con001_ko_by_name(&k, "fk_parent", "alice").koid;
+    let first = con001_child_by_note(&k, "fk_child", "first");
+    assert_eq!(
+        first.relationships,
+        vec![RelationshipRef {
+            rel_type: "fk_child_parent_id_fkey".into(),
+            target: alice,
+            direction: Direction::Outbound,
+        }],
+        "FK column must link the child row to its parent"
+    );
+    let bob = con001_ko_by_name(&k, "fk_parent", "bob").koid;
+    assert_eq!(
+        con001_child_by_note(&k, "fk_child", "second").relationships,
+        vec![RelationshipRef {
+            rel_type: "fk_child_parent_id_fkey".into(),
+            target: bob,
+            direction: Direction::Outbound,
+        }],
+        "second child must link to bob"
+    );
+    drop(k);
+
+    // Re-import: linking is deterministic — an unchanged re-import must not
+    // duplicate the relationship (sink skip-if-identical covers the KO).
+    import();
+    let k = connectors::open_kernel(&db);
+    assert_eq!(
+        con001_child_by_note(&k, "fk_child", "first")
+            .relationships
+            .len(),
+        1,
+        "re-import must not duplicate relationships"
+    );
 }

@@ -146,15 +146,15 @@ pub(crate) fn run_pg_import(
         }
     };
     let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("pg-importer"));
-    let mut total_imported = 0usize;
-    let mut present_by_table: HashMap<String, HashSet<KOID>> = HashMap::new();
+    let filtered: Vec<&aikoql_postgres::TableSchema> = schemas
+        .iter()
+        .filter(|s| table_filter.is_none_or(|tf| s.name == tf))
+        .collect();
 
-    for schema in &schemas {
-        if let Some(tf) = table_filter {
-            if schema.name != tf {
-                continue;
-            }
-        }
+    // Phase A: read every filtered table. No commits yet — FK linking
+    // (Phase B) resolves parent KOIDs across this run's objects.
+    let mut all_objects: Vec<KnowledgeObject> = Vec::new();
+    for schema in &filtered {
         println!("Importing {}...", schema.name);
         let objects = match connector.import_table(schema, tenant) {
             Ok(o) => o,
@@ -163,26 +163,53 @@ pub(crate) fn run_pg_import(
                 std::process::exit(1);
             }
         };
-        let count = objects.len();
-        present_by_table.insert(
-            schema.name.clone(),
-            objects.iter().map(|o| o.koid).collect(),
-        );
-        let mut committed = 0usize;
-        for ko in objects {
-            match sink.put(ko, "pg-import", "imported from PostgreSQL") {
-                Ok(true) => committed += 1,
-                Ok(false) => {}
-                Err(e) => {
-                    // A failed put = failed run: partial imports must not
-                    // look successful (CON-007 prune gate keys off this).
-                    eprintln!("  Failed to commit row from {}: {}", schema.name, e);
-                    std::process::exit(1);
-                }
+        println!("  {} rows read", objects.len());
+        all_objects.extend(objects);
+    }
+
+    // Phase B: foreign keys → RelationshipRef on the child rows (links only
+    // tables imported in this run).
+    if !all_objects.is_empty() {
+        match connector.link_relationships(&filtered, &mut all_objects) {
+            Ok(0) => {}
+            Ok(n) => println!("  {n} foreign-key relationship(s) linked"),
+            Err(e) => {
+                eprintln!("  FK linking failed: {}", e);
+                std::process::exit(1);
             }
         }
-        total_imported += committed;
-        println!("  {} rows imported ({} committed)", count, committed);
+    }
+
+    // Phase C: commit. Any failure exits before the prune pass (CON-007).
+    let mut present_by_table: HashMap<String, HashSet<KOID>> = HashMap::new();
+    let mut committed_by_table: HashMap<String, usize> = HashMap::new();
+    let mut total_imported = 0usize;
+    for ko in all_objects {
+        let table = ko.metadata.type_name.clone();
+        present_by_table
+            .entry(table.clone())
+            .or_default()
+            .insert(ko.koid);
+        match sink.put(ko, "pg-import", "imported from PostgreSQL") {
+            Ok(true) => {
+                *committed_by_table.entry(table).or_default() += 1;
+                total_imported += 1;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                // A failed put = failed run: partial imports must not
+                // look successful (CON-007 prune gate keys off this).
+                eprintln!("  Failed to commit row from {table}: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+    for schema in &filtered {
+        println!(
+            "  {} rows committed in {}",
+            committed_by_table.get(&schema.name).copied().unwrap_or(0),
+            schema.name
+        );
     }
 
     // All tables committed without a failure — only now reconcile deletions

@@ -11,7 +11,9 @@
 //! - PG types mapped to Aikoql Value types
 //!
 //! ponytail: synchronous, single-threaded. Batch imports land when throughput
-//! matters (>100k rows). Foreign key relationship creation lands in Phase 2.
+//! matters (>100k rows).
+
+use std::collections::HashSet;
 
 use aikoql_kernel::knowledge::kom::*;
 use postgres::{Client, NoTls};
@@ -36,6 +38,16 @@ pub struct TableSchema {
     pub columns: Vec<ColumnInfo>,
     pub primary_keys: Vec<String>,
     pub row_count_estimate: i64,
+}
+
+/// One foreign key as discovered from information_schema.
+#[derive(Clone, Debug)]
+pub struct ForeignKeyInfo {
+    pub constraint_name: String,
+    pub child_table: String,
+    pub child_column: String,
+    pub parent_table: String,
+    pub parent_column: String,
 }
 
 /// The import connector.
@@ -173,7 +185,7 @@ impl PostgresConnector {
             let mut pk_parts: Vec<String> = Vec::new();
 
             for (i, col) in schema.columns.iter().enumerate() {
-                let val = pg_cell_to_value(row, i, &col.pg_type, col.is_nullable);
+                let val = pg_cell_to_value(row, i, &col.pg_type);
                 props.insert(col.name.clone(), val.clone());
 
                 if col.is_primary_key {
@@ -212,53 +224,152 @@ impl PostgresConnector {
         }
         Ok(objects)
     }
+
+    /// List single-column foreign keys. ponytail: a composite FK (same
+    /// constraint_name twice) keeps only its first column pair — MVP schemas
+    /// are single-column.
+    pub fn introspect_foreign_keys(&mut self) -> Result<Vec<ForeignKeyInfo>, String> {
+        let rows = self
+            .client
+            .query(
+                "SELECT tc.constraint_name, tc.table_name, kcu.column_name,
+                        ccu.table_name AS parent_table, ccu.column_name AS parent_column
+                 FROM information_schema.table_constraints tc
+                 JOIN information_schema.key_column_usage kcu
+                   ON tc.constraint_name = kcu.constraint_name
+                  AND tc.table_schema = kcu.table_schema
+                 JOIN information_schema.constraint_column_usage ccu
+                   ON ccu.constraint_name = tc.constraint_name
+                  AND ccu.table_schema = tc.table_schema
+                 WHERE tc.constraint_type = 'FOREIGN KEY'
+                   AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+                 ORDER BY tc.table_name, tc.constraint_name",
+                &[],
+            )
+            .map_err(|e| format!("introspect foreign keys: {}", e))?;
+        let mut seen = HashSet::new();
+        let mut fks = Vec::new();
+        for r in &rows {
+            let fk = ForeignKeyInfo {
+                constraint_name: r.get(0),
+                child_table: r.get(1),
+                child_column: r.get(2),
+                parent_table: r.get(3),
+                parent_column: r.get(4),
+            };
+            if seen.insert(fk.constraint_name.clone()) {
+                fks.push(fk);
+            }
+        }
+        Ok(fks)
+    }
+
+    /// Phase 2: foreign keys → RelationshipRefs on the child rows. Links
+    /// only FKs whose referenced column is the parent's single-column PK and
+    /// whose both tables are in `schemas` (i.e. imported this run — a
+    /// `--table`-filtered run links only what it imported). Returns the
+    /// number of relationships attached.
+    pub fn link_relationships(
+        &mut self,
+        schemas: &[&TableSchema],
+        objects: &mut [KnowledgeObject],
+    ) -> Result<usize, String> {
+        let fks = self.introspect_foreign_keys()?;
+        let pk_cols: std::collections::HashMap<&str, &[String]> = schemas
+            .iter()
+            .map(|s| (s.name.as_str(), s.primary_keys.as_slice()))
+            .collect();
+
+        // Parent index: (parent_table, pk-value) → KOID, built from this
+        // run's objects. pk values use the same value_to_string form as
+        // deterministic_koid, so child FK values ("1") match parent PKs (1).
+        let mut parent_index: std::collections::HashMap<(String, String), KOID> =
+            std::collections::HashMap::new();
+        for ko in objects.iter() {
+            let Some(pk) = pk_cols.get(ko.metadata.type_name.as_str()) else {
+                continue;
+            };
+            let parts: Vec<String> = pk
+                .iter()
+                .map(|c| value_to_string(ko.properties.get(c.as_str()).unwrap_or(&Value::Null)))
+                .collect();
+            parent_index.insert(
+                (ko.metadata.type_name.clone(), parts.join("\u{1f}")),
+                ko.koid,
+            );
+        }
+
+        let mut linked = 0usize;
+        for fk in &fks {
+            // Skip FKs we cannot resolve honestly (parent column is not a
+            // single-column PK, or a side was filtered out of this run).
+            match pk_cols.get(fk.parent_table.as_str()) {
+                Some(pk) if pk.len() == 1 && pk[0] == fk.parent_column => {}
+                _ => continue,
+            }
+            if !pk_cols.contains_key(fk.child_table.as_str()) {
+                continue;
+            }
+            // ponytail: O(rows) scan per FK — fine for MVP row counts.
+            for ko in objects.iter_mut() {
+                if ko.metadata.type_name != fk.child_table {
+                    continue;
+                }
+                let val = value_to_string(
+                    ko.properties
+                        .get(fk.child_column.as_str())
+                        .unwrap_or(&Value::Null),
+                );
+                let Some(parent) = parent_index.get(&(fk.parent_table.clone(), val.clone())) else {
+                    continue; // NULL FK or value without a parent row
+                };
+                ko.relationships.push(RelationshipRef {
+                    rel_type: fk.constraint_name.clone(),
+                    target: *parent,
+                    direction: Direction::Outbound,
+                });
+                linked += 1;
+            }
+        }
+        Ok(linked)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Value mapping helpers
 // ---------------------------------------------------------------------------
 
-/// Convert a PostgreSQL cell to a Aikoql Value.
-fn pg_cell_to_value(row: &postgres::Row, col_idx: usize, pg_type: &str, nullable: bool) -> Value {
-    // Try each target type; if the column is NULL, return Value::Null.
-    if nullable && try_is_null(row, col_idx) {
-        return Value::Null;
+/// Convert a PostgreSQL cell to an Aikoql Value. Each family reads as
+/// `Option<T>` so a NULL cell is recognized by the driver itself — the old
+/// try-get heuristic misread nullable non-NULL integers as NULL (item 4 red
+/// debug found FK values importing as Value::Null). Read failures per type
+/// also become Value::Null, as before.
+fn pg_cell_to_value(row: &postgres::Row, col_idx: usize, pg_type: &str) -> Value {
+    fn opt<T, F>(row: &postgres::Row, col_idx: usize, f: F) -> Value
+    where
+        T: postgres::types::FromSqlOwned,
+        F: FnOnce(T) -> Value,
+    {
+        row.try_get::<_, Option<T>>(col_idx)
+            .ok()
+            .flatten()
+            .map(f)
+            .unwrap_or(Value::Null)
     }
     match pg_type {
         // Integer family
-        "smallint" | "integer" | "int" | "int4" => row
-            .try_get::<_, i32>(col_idx)
-            .map(|v| Value::Int(v as i64))
-            .unwrap_or(Value::Null),
-        "bigint" | "int8" => row
-            .try_get::<_, i64>(col_idx)
-            .map(Value::Int)
-            .unwrap_or(Value::Null),
+        "smallint" | "integer" | "int" | "int4" => opt(row, col_idx, |v: i32| Value::Int(v as i64)),
+        "bigint" | "int8" => opt(row, col_idx, Value::Int),
         // Float family
-        "real" | "float4" => row
-            .try_get::<_, f32>(col_idx)
-            .map(|v| Value::Float(v as f64))
-            .unwrap_or(Value::Null),
-        "double precision" | "float8" | "numeric" | "decimal" => row
-            .try_get::<_, f64>(col_idx)
-            .map(Value::Float)
-            .unwrap_or(Value::Null),
+        "real" | "float4" => opt(row, col_idx, |v: f32| Value::Float(v as f64)),
+        "double precision" | "float8" | "numeric" | "decimal" => opt(row, col_idx, Value::Float),
         // Boolean
-        "boolean" | "bool" => row
-            .try_get::<_, bool>(col_idx)
-            .map(Value::Bool)
-            .unwrap_or(Value::Null),
+        "boolean" | "bool" => opt(row, col_idx, Value::Bool),
         // Text family
         "text" | "varchar" | "character varying" | "char" | "character" | "name" | "uuid"
-        | "json" | "jsonb" => row
-            .try_get::<_, String>(col_idx)
-            .map(Value::Text)
-            .unwrap_or(Value::Null),
+        | "json" | "jsonb" => opt(row, col_idx, Value::Text),
         // Binary
-        "bytea" => row
-            .try_get::<_, Vec<u8>>(col_idx)
-            .map(Value::Bytes)
-            .unwrap_or(Value::Null),
+        "bytea" => opt(row, col_idx, Value::Bytes),
         // Timestamps → ISO 8601 text
         "timestamp"
         | "timestamptz"
@@ -266,39 +377,10 @@ fn pg_cell_to_value(row: &postgres::Row, col_idx: usize, pg_type: &str, nullable
         | "timestamp with time zone"
         | "date"
         | "time"
-        | "timetz" => row
-            .try_get::<_, String>(col_idx)
-            .map(Value::Text)
-            .unwrap_or(Value::Null),
+        | "timetz" => opt(row, col_idx, Value::Text),
         // Everything else → text representation
-        _ => row
-            .try_get::<_, String>(col_idx)
-            .map(Value::Text)
-            .unwrap_or(Value::Null),
+        _ => opt(row, col_idx, Value::Text),
     }
-}
-
-fn try_is_null(row: &postgres::Row, col_idx: usize) -> bool {
-    // ponytail: check null by trying to get as Option<String>.
-    row.try_get::<_, Option<String>>(col_idx)
-        .ok()
-        .flatten()
-        .is_none()
-        && row
-            .try_get::<_, Option<i64>>(col_idx)
-            .ok()
-            .flatten()
-            .is_none()
-        && row
-            .try_get::<_, Option<f64>>(col_idx)
-            .ok()
-            .flatten()
-            .is_none()
-        && row
-            .try_get::<_, Option<bool>>(col_idx)
-            .ok()
-            .flatten()
-            .is_none()
 }
 
 /// Deterministic KOID from table name and primary key parts.

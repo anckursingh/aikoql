@@ -263,6 +263,33 @@ pub fn pg_exec(dsn: &str, stmts: &[&str]) {
     }
 }
 
+/// Create a throwaway database for this test and return the dsn pointed at
+/// it. Parallel test fns share one live server, so any filterless import
+/// (FK item, E2E items) gets its own database instead of racing the other
+/// fns' DROP/CREATE on shared tables.
+pub fn pg_private_db(dsn: &str, name: &str) -> String {
+    pg_exec(
+        dsn,
+        &[
+            &format!("DROP DATABASE IF EXISTS {name}"),
+            &format!("CREATE DATABASE {name}"),
+        ],
+    );
+    dsn_with_dbname(dsn, name)
+}
+
+/// ponytail: the DSN format is ours (space-separated key=value, env-var
+/// controlled) — swap the dbname token in place.
+pub fn dsn_with_dbname(dsn: &str, dbname: &str) -> String {
+    dsn.split(' ')
+        .map(|tok| match tok.strip_prefix("dbname=") {
+            Some(_) => format!("dbname={dbname}"),
+            None => tok.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Open the imported db for reads (same engine + id_seed as the CLI — see
 /// mcp src/engine.rs open_kernel_auto). The import process has exited by the
 /// time this runs, so the redb file lock is free.
