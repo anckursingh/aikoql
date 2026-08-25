@@ -199,7 +199,7 @@ impl PostgresConnector {
                 relationships: vec![],
                 event_refs: vec![],
                 security: SecurityDescriptor {
-                    owner: "postgres-importer".into(),
+                    owner: "pg-importer".into(),
                     acl: vec![],
                     classification: None,
                 },

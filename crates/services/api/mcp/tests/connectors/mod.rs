@@ -232,3 +232,45 @@ pub fn assert_import_ok(out: &ImportOut, what: &str) {
         out.stderr
     );
 }
+
+// ---------------------------------------------------------------------------
+// Seeding + state reads (TDD items 2..13)
+// ---------------------------------------------------------------------------
+
+/// Run SQL against the live PostgreSQL (DDL/seed/update) through the same
+/// `postgres` driver the provider uses — the connector's own client is
+/// private, and a test backdoor in the prod API would be worse than a second
+/// connection here.
+pub fn pg_exec(dsn: &str, stmts: &[&str]) {
+    // postgres::Client::connect is sync (runs its own internal runtime) —
+    // wrapping it in block_on panics with "runtime from within a runtime".
+    let mut client = postgres::Client::connect(dsn, postgres::NoTls)
+        .unwrap_or_else(|e| panic!("pg seed connect failed: {e}"));
+    for s in stmts {
+        client
+            .batch_execute(s)
+            .unwrap_or_else(|e| panic!("pg seed failed ({s}): {e}"));
+    }
+}
+
+/// Open the imported db for reads (same engine + id_seed as the CLI — see
+/// mcp src/engine.rs open_kernel_auto). The import process has exited by the
+/// time this runs, so the redb file lock is free.
+pub fn open_kernel(db: &str) -> aikoql_kernel::Kernel {
+    use aikoql_kernel::{Kernel, RedbEngine, SystemClock};
+    let store =
+        std::sync::Arc::new(RedbEngine::open(db).unwrap_or_else(|e| panic!("open {db}: {e}")));
+    Kernel::open(store, std::sync::Arc::new(SystemClock), 0xA9C9)
+        .unwrap_or_else(|e| panic!("open kernel {db}: {e}"))
+}
+
+/// All head KOs of one type. Reads as the importer subject (owner of
+/// everything a connector import committed) — authz-clean by construction.
+pub fn scan_type(
+    k: &aikoql_kernel::Kernel,
+    subject: &str,
+    type_name: &str,
+) -> Vec<aikoql_kernel::KnowledgeObject> {
+    k.scan_by_type(&aikoql_kernel::Subject::new(subject), type_name)
+        .unwrap_or_else(|e| panic!("scan {type_name}: {e}"))
+}

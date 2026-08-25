@@ -208,7 +208,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             if ti_args.is_empty() {
                 eprintln!("Usage: aikoql-mcp import <SOURCE> [ARGS...]");
                 eprintln!("Sources: postgres, sqlite, mongodb, neo4j");
-                eprintln!("  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [DB_PATH]");
+                eprintln!("  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [DB_PATH]");
                 eprintln!("  import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
                 eprintln!(
                     "  import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [DB_PATH]"
@@ -222,6 +222,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     let mut target_db = "./aikoql.redb";
                     let mut tenant: Option<&str> = None;
                     let mut table_filter: Option<&str> = None;
+                    let mut run_id = fresh_run_id();
                     let mut ti = 1;
                     while ti < ti_args.len() {
                         match ti_args[ti] {
@@ -236,6 +237,14 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                             "--table" => {
                                 if ti + 1 < ti_args.len() {
                                     table_filter = Some(ti_args[ti + 1]);
+                                    ti += 2;
+                                } else {
+                                    ti += 1;
+                                }
+                            }
+                            "--run-id" => {
+                                if ti + 1 < ti_args.len() {
+                                    run_id = ti_args[ti + 1].to_string();
                                     ti += 2;
                                 } else {
                                     ti += 1;
@@ -256,10 +265,10 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                         }
                     }
                     let cs = conn_str.unwrap_or_else(|| {
-                        eprintln!("Usage: aikoql-mcp import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [DB_PATH]");
+                        eprintln!("Usage: aikoql-mcp import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [DB_PATH]");
                         std::process::exit(1);
                     });
-                    run_pg_import(cs, target_db, tenant, table_filter);
+                    run_pg_import(cs, target_db, tenant, table_filter, &run_id);
                 }
                 "neo4j" => {
                     let mut uri: Option<&str> = None;

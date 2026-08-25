@@ -1,13 +1,85 @@
-//! Subcommand runners extracted verbatim from cli.rs (PRR-7).
-//! No behavior changes.
+//! Subcommand runners (PRR-7) + the ImportSink commit path (connector TDD
+//! items 2+). The old runners used constant idempotency keys and warned
+//! through commit failures — a failed row still exited 0 and a changed row
+//! could never update (remember replays the original commit on a key hit).
 
 use crate::*;
+
+/// Fresh default for `--run-id`: unique per invocation. Deliberately
+/// non-cryptographic — the key only scopes idempotency within one database.
+pub(crate) fn fresh_run_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{}-{}", std::process::id(), nanos)
+}
+
+/// Per-run commit path for connector imports.
+///
+/// Idempotency keys include `run_id`: a fresh run (default `--run-id`) may
+/// update existing KOs, while retrying the same `--run-id` replays the
+/// original commits cleanly. Identical heads are skipped before `remember`
+/// so unchanged re-imports churn no versions.
+struct ImportSink<'k> {
+    kernel: &'k Kernel,
+    run_id: String,
+    subject: Subject,
+}
+
+impl<'k> ImportSink<'k> {
+    fn new(kernel: &'k Kernel, run_id: String, subject: Subject) -> Self {
+        ImportSink {
+            kernel,
+            run_id,
+            subject,
+        }
+    }
+
+    /// Commit one imported KO. `Ok(false)` = head already identical (skipped).
+    /// Errors are loud on purpose — a failed put means a failed run.
+    fn put(&self, ko: KnowledgeObject, source: &str, note: &str) -> KResult<bool> {
+        let ctx = KnowledgeContext::from(self.subject.clone());
+        let head = self.kernel.get(ctx, &ko.koid).ok();
+        if let Some(h) = &head {
+            // ponytail: compares properties+relationships only — connector
+            // metadata derives from the source schema and is stable per type.
+            if h.properties == ko.properties && h.relationships == ko.relationships {
+                return Ok(false);
+            }
+        }
+        let expected_version = Some(head.map(|h| h.version).unwrap_or(0));
+        let idem = format!(
+            "{source}-{}-{}-{}",
+            self.run_id,
+            ko.metadata.type_name,
+            ko.koid.to_hex()
+        );
+        self.kernel.remember(RememberRequest {
+            context: self.subject.clone().into(),
+            koid: Some(ko.koid),
+            expected_version,
+            idempotency_key: Some(idem),
+            metadata: ko.metadata,
+            properties: ko.properties,
+            semantic: None,
+            relationships: ko.relationships,
+            security: Some(ko.security),
+            extensions: ko.extensions,
+            origin: Origin::Human,
+            note: Some(note.into()),
+            referential_policy: ReferentialPolicy::Permissive,
+        })?;
+        Ok(true)
+    }
+}
 
 pub(crate) fn run_pg_import(
     conn_str: &str,
     target_db: &str,
     tenant: Option<&str>,
     table_filter: Option<&str>,
+    run_id: &str,
 ) {
     use aikoql_postgres::PostgresConnector;
 
@@ -52,6 +124,7 @@ pub(crate) fn run_pg_import(
             std::process::exit(1);
         }
     };
+    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("pg-importer"));
     let mut total_imported = 0usize;
 
     for schema in &schemas {
@@ -61,42 +134,29 @@ pub(crate) fn run_pg_import(
             }
         }
         println!("Importing {}...", schema.name);
-        match connector.import_table(schema, tenant) {
-            Ok(objects) => {
-                let count = objects.len();
-                for ko in objects {
-                    match kernel.remember(RememberRequest {
-                        context: Subject::new("pg-importer").into(),
-                        koid: Some(ko.koid),
-                        expected_version: Some(0),
-                        idempotency_key: Some(format!(
-                            "pg-import-{}-{}",
-                            schema.name,
-                            ko.koid.to_hex()
-                        )),
-                        metadata: ko.metadata,
-                        properties: ko.properties,
-                        semantic: None,
-                        relationships: vec![],
-                        security: Some(ko.security),
-                        extensions: ko.extensions,
-                        origin: Origin::Human,
-                        note: Some("imported from PostgreSQL".into()),
-                        referential_policy: ReferentialPolicy::Permissive,
-                    }) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            eprintln!("  Warning: failed to commit row: {}", e);
-                        }
-                    }
-                }
-                total_imported += count;
-                println!("  {} rows imported", count);
-            }
+        let objects = match connector.import_table(schema, tenant) {
+            Ok(o) => o,
             Err(e) => {
                 eprintln!("  Error importing {}: {}", schema.name, e);
+                std::process::exit(1);
+            }
+        };
+        let count = objects.len();
+        let mut committed = 0usize;
+        for ko in objects {
+            match sink.put(ko, "pg-import", "imported from PostgreSQL") {
+                Ok(true) => committed += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    // A failed put = failed run: partial imports must not
+                    // look successful (CON-007 prune gate keys off this).
+                    eprintln!("  Failed to commit row from {}: {}", schema.name, e);
+                    std::process::exit(1);
+                }
             }
         }
+        total_imported += committed;
+        println!("  {} rows imported ({} committed)", count, committed);
     }
 
     println!();
