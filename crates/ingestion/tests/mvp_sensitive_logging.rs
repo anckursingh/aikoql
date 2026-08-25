@@ -101,7 +101,11 @@ fn mvp_sec_004_raw_secret_never_survives_redaction_or_rendering() {
             leaks.push(format!("rendered context leaks raw key: {}", s));
         }
     }
-    assert!(leaks.is_empty(), "raw secret survived redaction:\n{}", leaks.join("\n"));
+    assert!(
+        leaks.is_empty(),
+        "raw secret survived redaction:\n{}",
+        leaks.join("\n")
+    );
 
     // The knowledge survives, marked: at least one fact statement carries
     // the redaction marker (strip-not-drop — content loss is not the fix).

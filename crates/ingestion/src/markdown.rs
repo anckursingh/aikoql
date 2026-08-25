@@ -712,7 +712,13 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     // bullets stay addressable at reduced confidence
                     // (MVP-EXT-001); untrusted injected bullets are
                     // re-detected at compile time (R8).
-                    push_bullet_facts(&mut ir, section, &extractor, &self.document_id, self.confidence);
+                    push_bullet_facts(
+                        &mut ir,
+                        section,
+                        &extractor,
+                        &self.document_id,
+                        self.confidence,
+                    );
                     // MVP-EXT-002: prose under a fenced section must stay
                     // retrievable. Emit paragraphs at furniture confidence
                     // so the pack-fold ranking keeps its measured order
@@ -753,7 +759,13 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     // dropped them wholesale is preserved by the confidence
                     // floor in push_bullet_facts. Untrusted injected bullets
                     // are re-detected at compile time (R8).
-                    push_bullet_facts(&mut ir, section, &extractor, &self.document_id, self.confidence);
+                    push_bullet_facts(
+                        &mut ir,
+                        section,
+                        &extractor,
+                        &self.document_id,
+                        self.confidence,
+                    );
                     for para in &section.paragraphs {
                         let clean = para.trim();
                         if clean.len() > 5 {

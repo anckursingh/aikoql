@@ -914,9 +914,9 @@ mod tests {
 
         let (full, _) = incremental_ingest_directory(&tmp.to_string_lossy()).expect("full");
         let has_relation = |ir: &KnowledgeIr, target: &str| {
-            ir.relations.iter().any(|r| {
-                r.subject == "A" && r.predicate == "references" && r.object == target
-            })
+            ir.relations
+                .iter()
+                .any(|r| r.subject == "A" && r.predicate == "references" && r.object == target)
         };
         assert!(has_relation(&full.ir, "B"), "v1 relation A→B must exist");
 
@@ -961,9 +961,9 @@ mod tests {
 
         let (full, _) = incremental_ingest_directory(&tmp.to_string_lossy()).expect("full");
         let has_relation = |ir: &KnowledgeIr, target: &str| {
-            ir.relations.iter().any(|r| {
-                r.subject == "A" && r.predicate == "references" && r.object == target
-            })
+            ir.relations
+                .iter()
+                .any(|r| r.subject == "A" && r.predicate == "references" && r.object == target)
         };
         assert!(has_relation(&full.ir, "B"), "v1 relation A→B must exist");
 
@@ -1036,13 +1036,16 @@ mod tests {
         git_repo_with(&tmp2, &[("README.md", final_content.as_str())]);
         let (fresh, _) = incremental_ingest_directory(&tmp2.to_string_lossy()).expect("fresh");
 
-        let counts = |ir: &KnowledgeIr| {
-            (ir.entities.len(), ir.facts.len(), ir.relations.len())
-        };
+        let counts = |ir: &KnowledgeIr| (ir.entities.len(), ir.facts.len(), ir.relations.len());
         if counts(&prev) != counts(&fresh.ir) {
-            let mut incr_facts: Vec<&str> = prev.facts.iter().map(|f| f.statement.as_str()).collect();
-            let mut fresh_facts: Vec<&str> =
-                fresh.ir.facts.iter().map(|f| f.statement.as_str()).collect();
+            let mut incr_facts: Vec<&str> =
+                prev.facts.iter().map(|f| f.statement.as_str()).collect();
+            let mut fresh_facts: Vec<&str> = fresh
+                .ir
+                .facts
+                .iter()
+                .map(|f| f.statement.as_str())
+                .collect();
             incr_facts.sort_unstable();
             fresh_facts.sort_unstable();
             panic!(
