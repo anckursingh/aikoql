@@ -6,26 +6,26 @@ Registry: `docs/TESTING-PLAN.md` §9.1 (MVP-QA-001, 45 test IDs + gates). Status
 
 ## Summary
 
-- P0: **26/30 pass (87%)**
-- P1: **10/13 pass (77%)**
+- P0: **33/33 pass (100%)**
+- P1: **13/13 pass (100%)**
 - Sev-1: 0 · Sev-2: 0
 - Benchmarks: pinned baselines present
-- **Final decision: NO-GO** (12 blocking items)
+- **Final decision: GO** (0 blocking items)
 
 ## Gate readout
 
 | Gate | Verdict |
 | --- | --- |
-| P0 correctness | FAIL (87%) |
-| P1 correctness | FAIL (77%) |
+| P0 correctness | PASS |
+| P1 correctness | PASS |
 | Security | PASS |
-| Connectors | FAIL |
+| Connectors | PASS |
 | Evidence | PASS |
 | Evolution | PASS |
 | Temporal | PASS |
 | Recovery | PASS |
 | Docker | PASS |
-| E2E | FAIL |
+| E2E | PASS |
 
 ## Per-ID results
 
@@ -38,13 +38,16 @@ Registry: `docs/TESTING-PLAN.md` §9.1 (MVP-QA-001, 45 test IDs + gates). Status
 | MVP-EXT-001 Raw evidence 100% addressable | P0 | G5 | PASS | `mvp_ext_001_all_nine_segment_kinds_are_addressable` (TDD 2026-08-24): 9-segment fixture, every segment resolvable via candidate evidence + document_id. Red list was plain bullets + image captions → fixes: `push_bullet_facts` emits plain bullets at reduced confidence (0.5 floor — keeps the G10 pack-budget ranking); payload-less visual blocks keep their alt/caption text as paragraph evidence |
 | MVP-EXT-002 Artifact section must not destroy prose | P0 | G5 | PASS | `mvp_ext_002_prose_in_fenced_section_stays_retrievable` (TDD 2026-08-25): Artifact arm emits section paragraphs as facts at 0.5 confidence — the G10 pack-budget negative measurement is preserved via the confidence floor, prose stays retrievable |
 | MVP-EXT-003 Formula preservation | P1 | G5 | PASS | `mvp_ext_003_formula_preserved_as_evidence_and_retrievable` (2026-08-25): plain `E = mc^2` line + ```math fence both retrievable with document_id evidence — green without production change |
-| MVP-ONT-001 Auto-discovery pg/mongo/neo4j | P1 | — | NOT_IMPLEMENTED | NOT_IMPLEMENTED — needs connectors (TP-5); A9 bridge + fixtures only |
+| MVP-ONT-001 Auto-discovery pg/mongo/neo4j | P1 | — | PASS | `ont001_live_discovery_merges_three_sources` (TDD 2026-08-25): live schema discovery over pg+mongo+neo4j merged into typed property proposals with `connector://` evidence — connector-bridge fact pass + neo4j `introspect_label_props` |
 | MVP-ONT-002 Same entity across sources | P0 | G1 | PASS | `multi_source_ontology.rs` config-driven identity (customer 123 across pg/mongo/neo4j/doc fixtures) |
 | MVP-ONT-003 Conflicting source values | P1 | G1 | PASS | `epistemic.rs` + e03: conflicting values retained with provenance, no silent choice |
-| MVP-CON-001..004 PostgreSQL/MongoDB/Neo4j/PGVector | P0 | G4 | NOT_IMPLEMENTED | NOT_IMPLEMENTED — fixtures + A9 bridge only; connector matrix is TP-5 (scope conflict with §2 of MVP-QA-001 — see 9.3) |
-| MVP-CON-005 Source timeout | P1 | — | NOT_IMPLEMENTED | connector-side NOT_IMPLEMENTED; product-side rollback semantics = t06k transact all-or-nothing |
-| MVP-CON-006 Auth failure, no secrets in logs | P0 | G3 | OPEN | product auth failures covered (MCP token tests); **TDD**: log-redaction assertion (credentials never in ordinary logs) |
-| MVP-CON-007 Outage ≠ deletion | P1 | — | OPEN | repo-side ✅ (`git_change_set_propagates_git_failure`, no-changes → cached); connector-side ❌ with connectors |
+| MVP-CON-001 PostgreSQL live sync | P0 | G4 | PASS | `con001_pg_update_reflects_source_change` + `con001_pg_reingest_ten_times_no_growth` + `con001_pg_deleted_row_is_tombstoned` + `con001_pg_import_failure_never_prunes` + `con001_pg_fk_becomes_relationship` (TDD 2026-08-25, live, CI connectors job) |
+| MVP-CON-002 MongoDB live sync | P0 | G4 | PASS | `con002_mongo_nested_structures_preserved` + `con002_mongo_update_reflects_source_change` + `con002_mongo_deleted_doc_is_tombstoned` (TDD 2026-08-25, live) |
+| MVP-CON-003 Neo4j live sync | P0 | G4 | PASS | `con003_neo4j_rel_props_preserved` + `con003_neo4j_multiple_rel_types_survive` + `con003_neo4j_multilabel_node_single_ko` + `con003_neo4j_direction_pinned` (TDD 2026-08-25, live) |
+| MVP-CON-004 PGVector live sync | P0 | G4 | PASS | `con004_pgvector_embedding_associated` — discovery, dims, changed-embedding re-import (TDD 2026-08-25, live); similarity retrieval out of scope by design (kernel embedding territory) |
+| MVP-CON-005 Source timeout | P1 | — | PASS | `con005_pg_timeout_marks_incomplete_keeps_existing` (TDD 2026-08-25): timed-out run exits non-zero, prior KOs intact, `connector_run` incomplete marker, same-run-id retry heals |
+| MVP-CON-006 Auth failure, no secrets in logs | P0 | G3 | PASS | `con006_credentials_never_in_ordinary_output` + unit tests `redact_uri_masks_credentials`/`redact_secrets_scrubs_error_text` (TDD 2026-08-25): all three runners at dead ports with embedded secrets — stdout+stderr clean |
+| MVP-CON-007 Outage ≠ deletion | P1 | — | PASS | `con007_unreachable_source_never_prunes` (mongo+neo4j legs) + `con001_pg_import_failure_never_prunes` (PG leg): dead-port re-import exits non-zero, prior KOs stay Draft, prune only on the all-success path |
 | MVP-EVO-001 Modify source | P0 | G6 | PASS | FRESH-001 + INC-002 (`freshness_sla_source_update_to_query_visibility_measured`) |
 | MVP-EVO-002 Rename source | P1 | G6 | PASS | INC-003 (`rename_preserves_entity_identity`) |
 | MVP-EVO-003 Relationship change A→B to A→C | P0 | G6 | PASS | `mvp_evo_003_relation_change_drops_old_relation` — `drop_changed_relations` drops relations for changed paths (re-parse supplies current) |
@@ -72,12 +75,12 @@ Registry: `docs/TESTING-PLAN.md` §9.1 (MVP-QA-001, 45 test IDs + gates). Status
 | MVP-PRG-001 Program representation | P1 | — | PASS | MEM-005 (`experiences.rs`: identity/inputs/outputs/permissions/pre/post/side effects/provenance) |
 | MVP-PRG-002 Unauthorized program not selectable | P0 | G3 | PASS | PRG-004 + t12 ACL + denied execution |
 | MVP-PRG-003 Invalid program metadata rejected | P1 | — | PASS | `record_experience_rejects_invalid_program_metadata` — incomplete shape (goal/action/outcome), TTL overflow, NaN/out-of-range confidence all rejected deterministically; no partial write |
-| MVP-E2E-001 PostgreSQL → KO → query | P0 | G4 | NOT_IMPLEMENTED | NOT_IMPLEMENTED — connectors (TP-5) |
+| MVP-E2E-001 PostgreSQL → KO → query | P0 | G4 | PASS | `e2e001_pg_to_ko_to_query_with_provenance` (TDD 2026-08-25): import → MCP query → result koid resolves through the kernel to a KO tagged `source:postgres` |
 | MVP-E2E-002 Document → evidence → KO → query | P0 | G5 | PASS | `e2e_pipeline.rs` + `e2e_answer_quality` (answer grounded in document evidence) |
 | MVP-E2E-003 Repository → KB → query | P0 | — | PASS | `e2e-dogfood.js` + G10 D treatment |
-| MVP-E2E-004 Multi-source query | P0 | G4 | OPEN | fixture-level ✅ (`multi_source_ontology.rs` merges pg/mongo/neo4j/doc fixtures); live-connector ❌ |
+| MVP-E2E-004 Multi-source query | P0 | G4 | PASS | `e2e004_multisource_query_single_coherent_result` (TDD 2026-08-25): pg+mongo+neo4j+ingest-dir in one db, one admin-session `find_similar` spanning all four with per-source provenance verified at kernel level; fixture-level `multi_source_ontology.rs` |
 | MVP-E2E-005 Permissioned multi-source | P0 | G3 | PASS | CTX permission differential + t34 (unauthorized source cannot enter context even when referenced) |
-| INV-001..010 invariants | — | G14 | OPEN | no-orphan (t06b/c), idempotence, provenance, evidence, authz closure, temporal consistency, atomicity (t06k), restart, determinism ✅; INV-010 source isolation = MVP-CON-007 (repo ✅ / connector ❌) |
+| INV-001..010 invariants | — | G14 | PASS | no-orphan (t06b/c), idempotence, provenance, evidence, authz closure, temporal consistency, atomicity (t06k), restart, determinism ✅; INV-010 source isolation both sides: repo (`git_change_set_propagates_git_failure`) + connector (MVP-CON-007 live tests) |
 | §23 Artifacts (artifacts/ + release-gate.md) | — | — | PASS | TDD 2026-08-25: `scripts/certify.js` regenerates the 5 artifacts + the release-gate verdict from this registry; `--self-test` pins the decision logic on fixtures, `--check` fails CI on stale artifacts |
 
 See `failed-tests.md` for the non-pass rows and their root-cause notes.
