@@ -123,7 +123,13 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(|v| v.as_str())
         .map(String::from);
     let embed_requested = args.get("embed").and_then(|v| v.as_bool()).unwrap_or(false);
-    let r = k.remember(req).map_err(|e| e.to_string())?;
+    let r = match args.get("retention_ms").and_then(|v| v.as_u64()) {
+        // G13: declarative retention — the kernel stamps the expiry horizon
+        // from its own clock; callers cannot forge valid_to.
+        Some(ms) => k.remember_retained(req, ms),
+        None => k.remember(req),
+    }
+    .map_err(|e| e.to_string())?;
     let mut resp = json!({
         "koid": r.koid.to_hex(),
         "version": r.version,

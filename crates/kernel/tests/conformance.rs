@@ -3375,3 +3375,141 @@ fn t06zzf_stored_object_bytes_use_wire_envelope() {
     assert_eq!(&raw[..8], codec::WIRE_HEADER_V1);
     assert!(codec::decode_ko_wire(&raw).is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// G13 / RET-CHAT-001: declarative retention — automatic expiry by policy
+// ---------------------------------------------------------------------------
+
+fn match_object_koids(k: &Kernel, query: &str) -> Vec<KOID> {
+    let plan = aikoql_compiler::parser::compile_with_subject(query, "alice").unwrap();
+    match aikoql_runtime::Interpreter::execute(k, &plan).unwrap() {
+        aikoql_runtime::RowSet::Objects(kos) => kos.into_iter().map(|ko| ko.koid).collect(),
+        other => panic!("expected object rowset, got {other:?}"),
+    }
+}
+
+#[test]
+fn t_ret1_retention_stamps_horizon_and_expires_retrieval() {
+    let (k, clock) = mk();
+    let mut req = RememberRequest::create(alice(), meta("temp_note"));
+    req.properties
+        .insert("v".into(), Value::Text("ephemeral".into()));
+    let r = k.remember_retained(req, 5_000).unwrap();
+
+    // kernel-stamped horizon: now (10_000) + retention_ms
+    let head = k.get(alice(), &r.koid).unwrap();
+    assert_eq!(
+        head.extensions.get(KnowledgeObject::EXT_VALID_TO),
+        Some(&Value::Int(15_000))
+    );
+
+    // live at default time: relational scan and similarity recall
+    assert_eq!(
+        match_object_koids(&k, "MATCH temp_note RETURN *"),
+        vec![r.koid]
+    );
+    assert_eq!(
+        k.find_similar(SimilarityQuery {
+            context: alice().into(),
+            filter: None,
+            text: Some("ephemeral".into()),
+            vector: None,
+            embedding_model: None,
+            k: 5,
+            fusion: Fusion::TextOnly,
+        })
+        .unwrap()
+        .len(),
+        1
+    );
+
+    // past the horizon: default-time retrieval drops it everywhere
+    clock.tick(5_001);
+    assert!(match_object_koids(&k, "MATCH temp_note RETURN *").is_empty());
+    assert!(k
+        .find_similar(SimilarityQuery {
+            context: alice().into(),
+            filter: None,
+            text: Some("ephemeral".into()),
+            vector: None,
+            embedding_model: None,
+            k: 5,
+            fusion: Fusion::TextOnly,
+        })
+        .unwrap()
+        .is_empty());
+
+    // historical evidence survives (RET-CHAT-003): get + AS_OF
+    assert!(k.get(alice(), &r.koid).is_ok());
+    assert_eq!(
+        match_object_koids(&k, "MATCH temp_note AS_OF 12000 RETURN *"),
+        vec![r.koid]
+    );
+}
+
+#[test]
+fn t_ret2_retention_overflow_is_rejected() {
+    let (k, _c) = mk();
+    let req = RememberRequest::create(alice(), meta("temp_note"));
+    assert!(matches!(
+        k.remember_retained(req, u64::MAX).unwrap_err(),
+        KError::InvalidObject(_)
+    ));
+}
+
+#[test]
+fn t_ret3_retention_update_refreshes_horizon() {
+    let (k, clock) = mk();
+    let mut req = RememberRequest::create(alice(), meta("temp_note"));
+    req.properties.insert("v".into(), Value::Text("one".into()));
+    let r = k.remember_retained(req, 5_000).unwrap();
+    clock.tick(4_000);
+
+    let mut up = RememberRequest::update(alice(), r.koid, meta("temp_note"));
+    up.properties.insert("v".into(), Value::Text("two".into()));
+    let r2 = k.remember_retained(up, 5_000).unwrap();
+
+    // horizon re-stamped from the new now (14_000), not carried forward
+    let head = k.get(alice(), &r.koid).unwrap();
+    assert_eq!(
+        head.extensions.get(KnowledgeObject::EXT_VALID_TO),
+        Some(&Value::Int(19_000))
+    );
+    assert_eq!(r2.version, 2);
+
+    // still live inside the refreshed horizon, gone beyond it
+    assert_eq!(
+        match_object_koids(&k, "MATCH temp_note RETURN *"),
+        vec![r.koid]
+    );
+    clock.tick(6_000);
+    assert!(match_object_koids(&k, "MATCH temp_note RETURN *").is_empty());
+}
+
+#[test]
+fn t_ret4_retention_never_inverts_valid_interval() {
+    let (k, _c) = mk();
+    let mut req = RememberRequest::create(alice(), meta("temp_note"));
+    req.extensions
+        .insert(KnowledgeObject::EXT_VALID_FROM.into(), Value::Int(16_000));
+    assert!(matches!(
+        k.remember_retained(req, 5_000).unwrap_err(),
+        KError::InvalidObject(_)
+    ));
+}
+
+#[test]
+fn t_ret5_zero_retention_expires_immediately_but_stays_in_lineage() {
+    let (k, _c) = mk();
+    let mut req = RememberRequest::create(alice(), meta("temp_note"));
+    req.properties
+        .insert("v".into(), Value::Text("gone".into()));
+    let r = k.remember_retained(req, 0).unwrap();
+
+    // zero-duration interval: valid nowhere at default time
+    assert!(match_object_koids(&k, "MATCH temp_note RETURN *").is_empty());
+
+    // but the knowledge is not erased — lineage and audit keep it
+    assert_eq!(k.get(alice(), &r.koid).unwrap().koid, r.koid);
+    assert_eq!(k.trace(alice(), &r.koid).unwrap().versions.len(), 1);
+}

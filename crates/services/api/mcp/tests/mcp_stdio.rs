@@ -1938,3 +1938,47 @@ fn k5_experience_reuse_end_to_end() {
 
     let _ = std::fs::remove_file(&db);
 }
+
+#[test]
+fn m_ret1_remember_tool_retention_expiry() {
+    // RET-CHAT-001 acceptance: create temporary memory with short retention;
+    // expected automatic expiry according to policy.
+    let db = tmp_db("retention");
+    let mut c = McpClient::start(&db);
+
+    // temporary: retention_ms 0 => zero-duration interval, expired on arrival
+    let temp = c.call_tool(
+        "remember",
+        json!({
+            "subject": "alice",
+            "type_name": "chat_note",
+            "properties": {"text": "the wifi password is hunter2"},
+            "retention_ms": 0
+        }),
+    );
+    let temp_koid = temp["koid"].as_str().unwrap().to_string();
+    // control: no retention declaration => permanent
+    c.call_tool(
+        "remember",
+        json!({
+            "subject": "alice",
+            "type_name": "chat_note",
+            "properties": {"text": "alice prefers tea"}
+        }),
+    );
+
+    // default-time query answers with current truth: only the permanent note
+    let q = c.call_tool(
+        "aikoql",
+        json!({"subject": "alice", "query": "MATCH chat_note RETURN *"}),
+    );
+    let rows = q["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["properties"]["text"], "alice prefers tea");
+
+    // expired memory is not erased: still fetchable via get (audit/lineage)
+    let got = c.call_tool("get", json!({"subject": "alice", "koid": temp_koid}));
+    assert_eq!(got["koid"], temp_koid);
+
+    let _ = std::fs::remove_file(&db);
+}

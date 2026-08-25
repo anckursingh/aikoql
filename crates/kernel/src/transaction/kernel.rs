@@ -1258,6 +1258,52 @@ impl Kernel {
         self.remember_trusted(req)
     }
 
+    /// Declarative retention (G13 / RET-CHAT-001): commit through the normal
+    /// write path with an automatic expiry horizon. The kernel computes
+    /// `valid_to = clock_now() + retention_ms` from its own clock, so callers
+    /// can never forge the stamp (P0-1: EXT_VALID_TO stays kernel-managed).
+    /// Updating an existing KO refreshes the horizon — the stamped value wins
+    /// the update carry-forward. Expired KOs stay readable via get/lineage
+    /// (RET-CHAT-003) but drop out of default-time retrieval.
+    pub fn remember_retained(
+        &self,
+        mut req: RememberRequest,
+        retention_ms: u64,
+    ) -> KResult<Remembered> {
+        let now = self.clock_now();
+        // Same checked arithmetic as record_experience (Review P1-6): a
+        // hostile u64::MAX retention must be rejected, not wrapped.
+        let valid_to = now
+            .checked_add(retention_ms)
+            .filter(|v| *v <= i64::MAX as u64)
+            .ok_or_else(|| {
+                KError::InvalidObject(
+                    "retention pushes valid_to past the representable epoch bound".into(),
+                )
+            })?;
+        // The effective interval must never invert (P1-1), on create too:
+        // remember_locked's inversion check only covers the update path.
+        if let Some(f) = req
+            .extensions
+            .get(KnowledgeObject::EXT_VALID_FROM)
+            .and_then(|v| match v {
+                Value::Int(i) if *i >= 0 => Some(*i as u64),
+                _ => None,
+            })
+        {
+            if f > valid_to {
+                return Err(KError::InvalidObject(format!(
+                    "valid interval must satisfy valid_from <= valid_to (got {f} > {valid_to})"
+                )));
+            }
+        }
+        req.extensions.insert(
+            KnowledgeObject::EXT_VALID_TO.into(),
+            Value::Int(valid_to as i64),
+        );
+        self.remember_trusted(req)
+    }
+
     /// remember() without the managed-extension guard — for the semantic
     /// operations (K4) that construct extension maps with kernel-owned keys
     /// and commit through the same locked path.
@@ -2607,14 +2653,21 @@ impl Kernel {
     // ---- find_similar (MRFC-0011 §6.4) --------------------------------------
 
     pub fn find_similar(&self, q: SimilarityQuery) -> KResult<Vec<ScoredKO>> {
-        self.indexes
+        let results = self
+            .indexes
             .read()
             .unwrap()
             .as_ref()
             // justified: Kernel::open seeds Some(IndexCoordinator) (see open());
             // attach_indexes only swaps Some→Some
             .expect("kernel always has a coordinator")
-            .search(self, q)
+            .search(self, q)?;
+        // v0.3 K2 sibling of the QL Scan filter: similarity recall (vector +
+        // BM25 text) also answers with current truth — expired facts stay out
+        // of default-time results. Temporal (AS_OF) plans are scan-based and
+        // handle time themselves.
+        let now = self.clock_now();
+        Ok(results.into_iter().filter(|s| s.ko.valid_at(now)).collect())
     }
 
     /// Type-scoped text search via the IndexCoordinator (BM25 when maintainer

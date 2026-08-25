@@ -214,7 +214,7 @@ const MATRIX: &[Row] = &[
     row("CMEM-005", "CMEM", "R", "covered", Some("crates/kernel/tests/epistemic.rs"), None),
     row("CMEM-006", "CMEM", "R", "covered", Some("crates/services/api/mcp/tests/mcp_real_world.rs"), None),
     row("CMEM-007", "CMEM", "R", "covered", Some("crates/services/api/mcp/tests/mcp_real_world.rs"), None),
-    row("CMEM-008", "CMEM", "R", "partial", None, Some("deletion audit metadata tested (conformance.rs t09: Forgotten lineage event with actor/note/commit_ts); retention/expiry policy absent (RET-CHAT-001, feature work)")),
+    row("CMEM-008", "CMEM", "R", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     row("CMEM-009", "CMEM", "R", "covered", Some("crates/kernel/tests/evidence_wiring.rs"), None),
     // Knowledge-Grounded Chatbot Ready
     row("CKG-001", "CKG", "R", "covered", Some("crates/ingestion/tests/retrieval_quality.rs"), None),
