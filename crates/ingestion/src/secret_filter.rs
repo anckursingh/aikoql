@@ -90,15 +90,77 @@ pub fn filter_secrets(ir: &KnowledgeIr) -> (KnowledgeIr, Vec<SecretFinding>) {
         }
     }
 
-    // Scan fact statements
+    // Scan fact statements and their evidence snippets (SEC-004). The whole
+    // field is replaced, not marker-prefixed: a prefixed statement still
+    // embeds the raw value, and the snippet is raw source text.
     for fact in &mut redacted.facts {
         if let Some(kind) = detect_secret(&fact.statement) {
-            let _original = fact.statement.clone();
-            fact.statement = format!("[REDACTED:{}] {}", kind.as_str(), fact.statement);
+            fact.statement = format!("[REDACTED:{}]", kind.as_str());
             findings.push(SecretFinding {
                 kind,
                 location: "fact.statement".to_string(),
                 redacted: fact.statement.clone(),
+            });
+        }
+        if let Some(snippet) = &fact.snippet {
+            if let Some(kind) = detect_secret(snippet) {
+                fact.snippet = Some(format!("[REDACTED:{}]", kind.as_str()));
+                findings.push(SecretFinding {
+                    kind,
+                    location: "fact.snippet".to_string(),
+                    redacted: fact.snippet.clone().unwrap_or_default(),
+                });
+            }
+        }
+    }
+
+    // Same boundary for the remaining rendered fields: relation endpoints,
+    // event descriptions/triggers, temporal text.
+    for rel in &mut redacted.relations {
+        if let Some(kind) = detect_secret(&rel.subject) {
+            rel.subject = format!("[REDACTED:{}]", kind.as_str());
+            findings.push(SecretFinding {
+                kind,
+                location: "relation.subject".to_string(),
+                redacted: rel.subject.clone(),
+            });
+        }
+        if let Some(kind) = detect_secret(&rel.object) {
+            rel.object = format!("[REDACTED:{}]", kind.as_str());
+            findings.push(SecretFinding {
+                kind,
+                location: "relation.object".to_string(),
+                redacted: rel.object.clone(),
+            });
+        }
+    }
+    for ev in &mut redacted.events {
+        if let Some(kind) = detect_secret(&ev.description) {
+            ev.description = format!("[REDACTED:{}]", kind.as_str());
+            findings.push(SecretFinding {
+                kind,
+                location: "event.description".to_string(),
+                redacted: ev.description.clone(),
+            });
+        }
+        if let Some(trigger) = &ev.trigger {
+            if let Some(kind) = detect_secret(trigger) {
+                ev.trigger = Some(format!("[REDACTED:{}]", kind.as_str()));
+                findings.push(SecretFinding {
+                    kind,
+                    location: "event.trigger".to_string(),
+                    redacted: ev.trigger.clone().unwrap_or_default(),
+                });
+            }
+        }
+    }
+    for t in &mut redacted.temporal {
+        if let Some(kind) = detect_secret(&t.text) {
+            t.text = format!("[REDACTED:{}]", kind.as_str());
+            findings.push(SecretFinding {
+                kind,
+                location: "temporal.text".to_string(),
+                redacted: t.text.clone(),
             });
         }
     }

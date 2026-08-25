@@ -295,7 +295,7 @@ QA-lead mapping of the MVP acceptance spec `AIKOQL_MVP_QA_CERTIFICATION_TEST_CAS
 | MVP-SEC-001 Unauthorized access, no leak | P0 | G3 | ✅ | t11 default deny, t34 A/B scenario, CTX differential ACCESS_DENIED |
 | MVP-SEC-002 Permission propagation every layer | P0 | G3 | ✅ | authorize() confinement + ACL-filtered scans (`match_experiences`) + CTX permission differential |
 | MVP-SEC-003 Revocation | P0 | G3 | ✅ | `revoked_experience_sharing_stops_matching` (share → revoke → not matched) |
-| MVP-SEC-004 Sensitive logging | P0 | G3 | 🟡 | adversarial secret detection (11 PII types) covered; **TDD**: secrets absent from rendered context/log output |
+| MVP-SEC-004 Sensitive logging | P0 | G3 | ✅ | `mvp_sec_004_raw_secret_never_survives_redaction_or_rendering` — R8 now replaces the whole secret-bearing field (statements, snippets, relation endpoints, events, temporal) instead of marker-prefixing; raw value never reaches rendered context |
 | MVP-QRY-001..005 Valid/invalid/unknown/injection/determinism | P0/P1 | G1 | ✅ | `golden_snapshots.rs`, `grammar_coverage.rs`, `fuzz_parser.rs`, `same_task_twice_renders_identical_context`; unknown-entity = semantic error, healthy-empty = "no authoritative knowledge" (§34–36) |
 | MVP-CTX-001 Relevant context | P1 | — | ✅ | `retrieval_quality.rs`, ranked packs with snippets + provenance |
 | MVP-CTX-002 Irrelevant-fact suppression | P0 | — | ✅ | entity gate + keyword hygiene + exact-token escape (G12 row, gate tests) |
@@ -351,7 +351,7 @@ MVP-QA-001 §2 puts PostgreSQL/MongoDB/Neo4j/PGVector **in MVP scope** (GATE-04,
 4. ~~MVP-EXT-003 formula preservation (ingestion)~~ ✅ done 2026-08-25 — `mvp_ext_003_...`; green without production change
 5. ~~MVP-EVO-003/004 relation freshness on modify/delete (ingestion incremental)~~ ✅ done 2026-08-25 — `mvp_evo_003_relation_change_drops_old_relation` + `mvp_evo_004_deleted_source_leaves_no_stale_current_relation`; `drop_changed_relations` applied on both the merge path and the all-deleted branch
 6. ~~MVP-EVO-005 10× re-ingest growth bound (ingestion incremental)~~ ✅ done 2026-08-25 — `mvp_evo_005_reingest_ten_times_no_uncontrolled_growth`; red caught 12 accumulated [STALE] marker facts → markers now skipped for re-supplied facts
-7. MVP-SEC-004 secrets absent from rendered output (kernel/mcp)
+7. ~~MVP-SEC-004 secrets absent from rendered output (kernel/mcp)~~ ✅ done 2026-08-25 — `mvp_sec_004_raw_secret_never_survives_redaction_or_rendering`; red caught 4 leaks (marker-prefix keeps raw key; snippets unredacted) → whole-field replacement across all rendered IR fields
 8. MVP-PRG-003 invalid program metadata (kernel experiences)
 9. MVP-REC-002 backup→destroy→restore round-trip (mcp_real_world)
 10. MVP-DEP-003 volume restart (CI)
