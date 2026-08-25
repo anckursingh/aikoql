@@ -1161,3 +1161,323 @@ fn con007_unreachable_source_never_prunes() {
         assert_eq!(markers.len(), 1, "the failed run must be marked incomplete");
     }
 }
+
+// ---------------------------------------------------------------------------
+// MVP-ONT-001 — live ontology discovery over three sources (item 11)
+// ---------------------------------------------------------------------------
+
+/// MVP-ONT-001: live connector schemas (pg/mongo/neo4j) must flow through
+/// the bridge → KnowledgeIr → discover_ontology_from_ir pipeline and merge
+/// into one coherent proposal: classes per source container type, FK/graph
+/// relationships, property proposals typed from schema facts, and
+/// `connector://` provenance on every proposal. Red today: connector-bridge
+/// schema facts yield ZERO property proposals (discover_ontology_from_ir
+/// only mines dates/numbers from prose), and the neo4j provider cannot
+/// introspect label properties at all.
+#[test]
+fn ont001_live_discovery_merges_three_sources() {
+    use aikoql_ingestion::{
+        connector_metadata_to_ir, discover_ontology_from_ir, merge_proposals, ConnectorMetadata,
+        ContainerInfo, FieldInfo, ReferenceInfo,
+    };
+
+    let mut metas: Vec<ConnectorMetadata> = Vec::new();
+
+    // ── Postgres: two tables with a FK, in a private database ──
+    if let Some(live) = connectors::Live::pg() {
+        let dsn = connectors::pg_private_db(&live.dsn, "cert_ont001");
+        connectors::pg_exec(
+            &dsn,
+            &[
+                "CREATE TABLE ont_parent (id SERIAL PRIMARY KEY, name TEXT NOT NULL, age INT NOT NULL)",
+                "INSERT INTO ont_parent (name, age) VALUES ('alice', 30), ('bob', 25)",
+                "CREATE TABLE ont_child (id SERIAL PRIMARY KEY, parent_id INT REFERENCES ont_parent(id), note TEXT)",
+                "INSERT INTO ont_child (parent_id, note) VALUES (1, 'first')",
+            ],
+        );
+        let mut conn = aikoql_postgres::PostgresConnector::connect(&dsn).expect("pg connect");
+        let tables = conn.introspect_all().expect("introspect_all");
+        let fks = conn
+            .introspect_foreign_keys()
+            .expect("introspect_foreign_keys");
+        drop(conn);
+
+        let containers = tables
+            .into_iter()
+            .map(|t| ContainerInfo {
+                name: t.name,
+                row_count: Some(t.row_count_estimate.max(0) as u64),
+                fields: t
+                    .columns
+                    .into_iter()
+                    .map(|c| FieldInfo {
+                        name: c.name,
+                        data_type: c.pg_type,
+                        is_primary_key: c.is_primary_key,
+                        nullable: c.is_nullable,
+                        is_unique: false,
+                    })
+                    .collect(),
+            })
+            .collect();
+        let references = fks
+            .into_iter()
+            .map(|f| ReferenceInfo {
+                from_container: f.child_table,
+                from_fields: vec![f.child_column],
+                to_container: f.parent_table,
+                to_fields: vec![f.parent_column],
+                name: Some(f.constraint_name),
+            })
+            .collect();
+        metas.push(ConnectorMetadata {
+            connector_type: "postgres".into(),
+            label: "cert_ont001".into(),
+            containers,
+            references,
+            version: None,
+        });
+    }
+
+    // ── MongoDB: one collection with nested + typed fields ──
+    if let Some(live) = connectors::Live::mongo() {
+        let coll = "cert_ont001_people";
+        connectors::mongo_seed(
+            &live.mongo_uri,
+            &live.mongo_db,
+            coll,
+            vec![mongodb::bson::doc! {
+                "_id": "u1",
+                "name": "alice",
+                "age": 30,
+                "profile": { "city": "Berlin" },
+            }],
+        );
+        let conn = aikoql_mongodb::MongoConnector::connect(&live.mongo_uri, &live.mongo_db)
+            .expect("mongo");
+        let schemas = conn.introspect_all().expect("mongo introspect_all");
+        // Shared live DB: filter to this test's collection.
+        let containers = schemas
+            .into_iter()
+            .filter(|s| s.name == coll)
+            .map(|s| ContainerInfo {
+                name: s.name,
+                row_count: Some(s.document_count),
+                fields: s
+                    .properties
+                    .into_iter()
+                    .map(|p| FieldInfo {
+                        is_primary_key: p == "_id",
+                        name: p,
+                        data_type: "bson".into(),
+                        nullable: true,
+                        is_unique: false,
+                    })
+                    .collect(),
+            })
+            .collect();
+        metas.push(ConnectorMetadata {
+            connector_type: "mongodb".into(),
+            label: live.mongo_db.clone(),
+            containers,
+            references: vec![],
+            version: None,
+        });
+    }
+
+    // ── Neo4j: one label with props + one relationship type ──
+    if let Some(live) = connectors::Live::neo4j() {
+        let label = "P_Ont001";
+        let rel = "KNOWS_Ont001";
+        connectors::neo4j_exec(
+            &live.neo4j_uri,
+            &live.neo4j_user,
+            &live.neo4j_password,
+            &[
+                &format!("MATCH (n:`{label}`) DETACH DELETE n"),
+                &format!(
+                    "CREATE (a:`{label}` {{name:'alice', age:30}}), (b:`{label}` {{name:'bob'}}), (a)-[:`{rel}`]->(b)"
+                ),
+            ],
+        );
+        let conn = aikoql_neo4j::Neo4jConnector::connect(
+            &live.neo4j_uri,
+            &live.neo4j_user,
+            &live.neo4j_password,
+        )
+        .expect("neo4j connect");
+        // Shared live DB: filter to this test's label/rel type.
+        let containers: Vec<ContainerInfo> = conn
+            .list_labels()
+            .expect("list_labels")
+            .into_iter()
+            .filter(|l| l == label)
+            .map(|l| ContainerInfo {
+                fields: conn
+                    .introspect_label_props(&l)
+                    .expect("introspect_label_props")
+                    .into_iter()
+                    .map(|p| FieldInfo {
+                        name: p,
+                        data_type: "any".into(),
+                        is_primary_key: false,
+                        nullable: true,
+                        is_unique: false,
+                    })
+                    .collect(),
+                name: l,
+                row_count: conn.count_nodes(label).ok(),
+            })
+            .collect();
+        let references: Vec<ReferenceInfo> = conn
+            .list_rel_types()
+            .expect("list_rel_types")
+            .into_iter()
+            .filter(|r| r == rel)
+            .map(|r| ReferenceInfo {
+                from_container: label.into(),
+                from_fields: vec![],
+                to_container: label.into(),
+                to_fields: vec![],
+                name: Some(r),
+            })
+            .collect();
+        metas.push(ConnectorMetadata {
+            connector_type: "neo4j".into(),
+            label: "aikoql".into(),
+            containers,
+            references,
+            version: None,
+        });
+    }
+
+    if metas.is_empty() {
+        return; // env-skip (no live sources configured)
+    }
+
+    let merged = merge_proposals(
+        &metas
+            .iter()
+            .map(|m| discover_ontology_from_ir(&connector_metadata_to_ir(m)))
+            .collect::<Vec<_>>(),
+    );
+
+    // Classes: one per source container type — no per-table type explosion.
+    let class_names: Vec<&str> = merged.classes.iter().map(|c| c.name.as_str()).collect();
+    assert!(
+        class_names.contains(&"postgresTable"),
+        "classes: {class_names:?}"
+    );
+    assert!(
+        class_names.contains(&"mongodbCollection"),
+        "classes: {class_names:?}"
+    );
+    assert!(
+        class_names.contains(&"neo4jNodeLabel"),
+        "classes: {class_names:?}"
+    );
+    assert!(
+        merged.classes.len() < 15,
+        "no type explosion, got {}",
+        merged.classes.len()
+    );
+
+    // Relationships: the FK and the graph rel both survive.
+    assert!(
+        merged
+            .relationships
+            .iter()
+            .any(|r| r.name == "ont_child_parent_id_fkey"),
+        "FK must become a relationship proposal: {:?}",
+        merged.relationships
+    );
+    assert!(
+        merged.relationships.iter().any(|r| {
+            r.domain.as_deref() == Some("neo4jNodeLabel")
+                && r.name.replace('_', "") == "knowsont001"
+        }),
+        "graph rel must become a relationship proposal: {:?}",
+        merged.relationships
+    );
+
+    // Properties: schema facts must become typed proposals (RED today —
+    // discover_ontology_from_ir yields none for connector-bridge facts).
+    assert!(
+        merged.properties.iter().any(|p| {
+            p.name == "name" && p.class_name == "postgresTable" && p.value_type == "Text"
+        }),
+        "pg text column must propose a property: {:?}",
+        merged.properties
+    );
+    assert!(
+        merged.properties.iter().any(|p| {
+            p.name == "age" && p.class_name == "postgresTable" && p.value_type == "Int"
+        }),
+        "pg int column must propose an Int property: {:?}",
+        merged.properties
+    );
+    assert!(
+        merged
+            .properties
+            .iter()
+            .any(|p| p.name == "id" && p.class_name == "postgresTable" && p.required),
+        "pk column must propose a required property: {:?}",
+        merged.properties
+    );
+    assert!(
+        merged
+            .properties
+            .iter()
+            .any(|p| p.name == "note" && p.class_name == "postgresTable" && !p.required),
+        "nullable column must propose an optional property: {:?}",
+        merged.properties
+    );
+    assert!(
+        merged
+            .properties
+            .iter()
+            .any(|p| p.name == "name" && p.class_name == "mongodbCollection"),
+        "mongo field must propose a property: {:?}",
+        merged.properties
+    );
+    assert!(
+        merged
+            .properties
+            .iter()
+            .any(|p| p.name == "profile.city" && p.class_name == "mongodbCollection"),
+        "nested mongo field must propose a dotted property: {:?}",
+        merged.properties
+    );
+    assert!(
+        merged
+            .properties
+            .iter()
+            .any(|p| p.name == "name" && p.class_name == "neo4jNodeLabel"),
+        "neo4j label prop must propose a property: {:?}",
+        merged.properties
+    );
+
+    // Provenance: every proposal carries connector:// evidence.
+    for (what, evidence) in merged
+        .classes
+        .iter()
+        .map(|c| ("class", &c.evidence))
+        .chain(merged.properties.iter().map(|p| ("property", &p.evidence)))
+        .chain(
+            merged
+                .relationships
+                .iter()
+                .map(|r| ("relationship", &r.evidence)),
+        )
+    {
+        assert!(
+            evidence.iter().all(|e| e
+                .document_id
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("connector://")),
+            "{what} evidence must come from connector:// sources: {:?}",
+            evidence
+        );
+    }
+}

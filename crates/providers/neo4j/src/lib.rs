@@ -157,6 +157,24 @@ impl Neo4jConnector {
             .ok_or_else(|| "unexpected count result".to_string())
     }
 
+    /// Property names of a label (ONT-001 schema discovery).
+    /// ponytail: samples ONE node — heterogeneous labels under-report props;
+    /// switch to a per-label properties UNION scan if discovery completeness
+    /// ever matters.
+    pub fn introspect_label_props(&self, label: &str) -> Result<Vec<String>, String> {
+        let rows = self.cypher(&format!(
+            "MATCH (n:`{}`) RETURN properties(n) LIMIT 1",
+            label
+        ))?;
+        let mut props: Vec<String> = rows
+            .first()
+            .and_then(|v| v.as_object())
+            .map(|obj| obj.keys().cloned().collect())
+            .unwrap_or_default();
+        props.sort();
+        Ok(props)
+    }
+
     // ------------------------------------------------------------------
     // Import
     // ------------------------------------------------------------------
