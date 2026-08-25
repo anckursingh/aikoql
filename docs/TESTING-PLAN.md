@@ -445,7 +445,7 @@ Wave 2's claim under test: *knowledge remains correct under concurrent mutation,
 | QA2-CONT-001 Full knowledge continuity | P0 | W2-08 | ❌ | the flagship chain (source→ingest→query→modify→incremental→query→restart→rebuild→backup→restore→migration→query, 8-dimension compare per checkpoint) — item 9 |
 | QA2-DER-001 Canonical vs index | P0 | W2-08 | ✅ | i09 rebuild parity |
 | QA2-DER-002 Canonical vs graph projection | P0 | W2-08 | ✅ | `mvp_ko_003` traversal drops Deleted/Erased endpoints |
-| QA2-DER-003 Canonical vs vector projection | P1 | W2-08 | 🟡 | the semantic block lives on the KO and versions with it; the pin that a stale embedding is never current after update — item 3 |
+| QA2-DER-003 Canonical vs vector projection | P1 | W2-08 | ✅ | `w2_der_003_stale_embedding_never_current_after_update` (qa2_derived.rs) — v1 embeds m1 [1,2,3], v2 m2 [9,8,7], v3 drops the block: head has no stale embedding, each historical version keeps exactly its own, audit chain valid |
 | QA2-DER-004 Stale cache | P0 | W2-08 | ✅ | t35 cache never serves stale heads (warm cache → update → v2; forget → tombstone) |
 | QA2-DER-005 Rebuild everything | P0 | W2-08 | ✅ | i09/i10/i11 — rebuild parity, tombstone sweep, deterministic propagation |
 | QA2-PERF-001..003 Read/write/mixed load | P2 | W2-11 | ✅ | R14 scale bench (16 scenarios 100K–1M keys) + weekly regression CI (>20% alert) — correctness asserted alongside p50/p95/p99 |
@@ -470,7 +470,7 @@ Wave 2's claim under test: *knowledge remains correct under concurrent mutation,
 
 1. ~~Suite A concurrency~~ → done (2026-08-25) — `crates/kernel/tests/qa2_concurrency.rs` (5 tests) + `crates/ingestion/tests/qa2_concurrency.rs` (2 tests). REDs were test-side only (stale cross-snapshot comparator, miscounted journal); production pipe-lock/HLC/OCC/idempotency/per-version-ACL held day one — pins, not fixes. All 7 green; workspace + clippy clean.
 2. ~~Suite B knowledge consistency~~ → done (2026-08-25) — `crates/kernel/tests/qa2_knowledge.rs` (3 tests: KNOW-002/007/008). All green day one — contradict/Conflict-KO/`resolve_conflict_by_authority` (MRFC-0070 + P1 reviews) already implemented the semantics; these are pins. KNOW-006 stays NOT_IMPLEMENTED (honest row, spec §KNOW-006).
-3. Suite I derived-state — DER-003 embedding-version pin (semantic block versions with the KO)
+3. ~~Suite I derived-state~~ → done (2026-08-25) — `crates/kernel/tests/qa2_derived.rs` (DER-003). Green day one — semantic block versions with the KO by design; pin, not fix. DER-001/002/004/005 were already ✅ (i09–i11, mvp_ko_003, t35).
 4. Suite D fault injection — FAULT-008 backup failure, FAULT-009 interrupted/truncated restore (`qa2_fault.rs` in durability-land)
 5. Suite E schema evolution — SCHEMA-002 v2→v3 chain, SCHEMA-006 atomic migration (production: register+transact one batch), SCHEMA-007 resume
 6. Suite C adversarial retrieval — RET-003 ambiguity no-silent-pick, RET-005 conflicts surfaced, RET-008 depth-chain within limits
