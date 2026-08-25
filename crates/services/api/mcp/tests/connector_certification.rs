@@ -125,3 +125,121 @@ fn con001_pg_reingest_ten_times_no_growth() {
         drop(k);
     }
 }
+
+// ---------------------------------------------------------------------------
+// MVP-CON-001 — delete reconcile + outage guard (item 3)
+// ---------------------------------------------------------------------------
+
+fn con001_ko_by_name(
+    k: &aikoql_kernel::Kernel,
+    table: &str,
+    name: &str,
+) -> aikoql_kernel::KnowledgeObject {
+    use aikoql_kernel::Value;
+    connectors::scan_type(k, "pg-importer", table)
+        .into_iter()
+        .find(|ko| ko.properties.get("name") == Some(&Value::Text(name.into())))
+        .unwrap_or_else(|| panic!("{name} missing"))
+}
+
+/// MVP-CON-001: a row deleted at the source must be tombstoned on the next
+/// successful re-import — stale KOs must not linger as live knowledge. Red
+/// today: no prune machinery exists, so bob survives the DELETE.
+#[test]
+fn con001_pg_deleted_row_is_tombstoned() {
+    use aikoql_kernel::LifecycleState;
+    let Some(live) = connectors::Live::pg() else {
+        return;
+    };
+    let table = "cert_con001_delete";
+    con001_seed(&live.dsn, table);
+    let db = connectors::temp_db("con001-delete");
+
+    let import = || {
+        let out = connectors::run_import(&["import", "postgres", &live.dsn, &db, "--table", table]);
+        connectors::assert_import_ok(&out, table);
+    };
+
+    import();
+    let bob = {
+        let k = connectors::open_kernel(&db);
+        let ko = con001_ko_by_name(&k, table, "bob");
+        assert_eq!(con001_age_of(&k, table, "alice"), 30);
+        drop(k);
+        ko.koid
+    };
+
+    connectors::pg_exec(
+        &live.dsn,
+        &[&format!("DELETE FROM {table} WHERE name = 'bob'")],
+    );
+    import();
+
+    let k = connectors::open_kernel(&db);
+    let live_bob = connectors::scan_type(&k, "pg-importer", table)
+        .iter()
+        .any(|ko| ko.koid == bob);
+    assert!(
+        !live_bob,
+        "bob must not appear as live knowledge after the source DELETE"
+    );
+    // The tombstone itself: the KO head is still there, but Deleted.
+    let ctx = aikoql_kernel::KnowledgeContext::from(aikoql_kernel::Subject::new("pg-importer"));
+    let head = k
+        .get(ctx, &bob)
+        .unwrap_or_else(|e| panic!("bob's head vanished: {e}"));
+    assert_eq!(
+        head.lifecycle.state,
+        LifecycleState::Deleted,
+        "deleted source row must be tombstoned"
+    );
+    // alice survives untouched.
+    assert_eq!(con001_age_of(&k, table, "alice"), 30);
+}
+
+/// MVP-CON-001 / CON-007 groundwork: a FAILED import must never prune —
+/// prior KOs stay live even when the source is unreachable. Red today: no
+/// prune exists either way, so this pins the all-success gate once prune
+/// lands; a leaked prune would delete both rows here.
+#[test]
+fn con001_pg_import_failure_never_prunes() {
+    use aikoql_kernel::LifecycleState;
+    let Some(live) = connectors::Live::pg() else {
+        return;
+    };
+    let table = "cert_con001_fail";
+    con001_seed(&live.dsn, table);
+    let db = connectors::temp_db("con001-fail");
+
+    let import = || {
+        let out = connectors::run_import(&["import", "postgres", &live.dsn, &db, "--table", table]);
+        connectors::assert_import_ok(&out, table);
+    };
+
+    import();
+    let (alice, bob) = {
+        let k = connectors::open_kernel(&db);
+        let kos = connectors::scan_type(&k, "pg-importer", table);
+        assert_eq!(kos.len(), 2);
+        (kos[0].koid, kos[1].koid)
+    };
+
+    // Dead port: connect must fail (nothing listens on 59999).
+    let dead_dsn = "host=localhost port=59999 user=aikoql password=x dbname=knowledge";
+    let out = connectors::run_import(&["import", "postgres", dead_dsn, &db, "--table", table]);
+    connectors::assert_import_fails(&out, "dead-port import");
+
+    let k = connectors::open_kernel(&db);
+    let ctx = aikoql_kernel::KnowledgeContext::from(aikoql_kernel::Subject::new("pg-importer"));
+    for koid in [alice, bob] {
+        let head = k
+            .get(ctx.clone(), &koid)
+            .unwrap_or_else(|e| panic!("KO {koid:?} lost after failed import: {e}"));
+        assert_eq!(
+            head.lifecycle.state,
+            LifecycleState::Draft,
+            "failed import must not tombstone {koid:?}"
+        );
+    }
+    assert_eq!(con001_age_of(&k, table, "alice"), 30);
+}

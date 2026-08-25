@@ -233,6 +233,16 @@ pub fn assert_import_ok(out: &ImportOut, what: &str) {
     );
 }
 
+/// The failure twin: the import must NOT succeed (outage guards).
+pub fn assert_import_fails(out: &ImportOut, what: &str) {
+    assert!(
+        !out.status.success(),
+        "import {what} unexpectedly succeeded:\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        out.stdout,
+        out.stderr
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Seeding + state reads (TDD items 2..13)
 // ---------------------------------------------------------------------------

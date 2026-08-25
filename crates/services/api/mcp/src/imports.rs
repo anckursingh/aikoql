@@ -72,6 +72,27 @@ impl<'k> ImportSink<'k> {
         })?;
         Ok(true)
     }
+
+    /// Tombstone head KOs of `type_name` whose KOIDs the source no longer
+    /// contains (CON-001 delete reconcile). Callers must invoke this only on
+    /// the all-success path — a partial run must not be mistaken for a full
+    /// picture of the source (CON-007).
+    fn prune_missing(&self, type_name: &str, present: &HashSet<KOID>) -> KResult<usize> {
+        let mut pruned = 0;
+        for ko in self.kernel.scan_by_type(&self.subject, type_name)? {
+            if !present.contains(&ko.koid) {
+                self.kernel.forget(
+                    KnowledgeContext::from(self.subject.clone()),
+                    &ko.koid,
+                    ForgetMode::Tombstone,
+                    None,
+                    Some("row deleted at source".into()),
+                )?;
+                pruned += 1;
+            }
+        }
+        Ok(pruned)
+    }
 }
 
 pub(crate) fn run_pg_import(
@@ -126,6 +147,7 @@ pub(crate) fn run_pg_import(
     };
     let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("pg-importer"));
     let mut total_imported = 0usize;
+    let mut present_by_table: HashMap<String, HashSet<KOID>> = HashMap::new();
 
     for schema in &schemas {
         if let Some(tf) = table_filter {
@@ -142,6 +164,10 @@ pub(crate) fn run_pg_import(
             }
         };
         let count = objects.len();
+        present_by_table.insert(
+            schema.name.clone(),
+            objects.iter().map(|o| o.koid).collect(),
+        );
         let mut committed = 0usize;
         for ko in objects {
             match sink.put(ko, "pg-import", "imported from PostgreSQL") {
@@ -157,6 +183,19 @@ pub(crate) fn run_pg_import(
         }
         total_imported += committed;
         println!("  {} rows imported ({} committed)", count, committed);
+    }
+
+    // All tables committed without a failure — only now reconcile deletions
+    // (any failure above exited instead of reaching this point).
+    for (table, present) in &present_by_table {
+        match sink.prune_missing(table, present) {
+            Ok(0) => {}
+            Ok(n) => println!("  {n} stale row(s) tombstoned in {table}"),
+            Err(e) => {
+                eprintln!("  prune {table}: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 
     println!();
