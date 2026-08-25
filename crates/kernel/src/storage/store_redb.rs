@@ -26,15 +26,29 @@ pub struct RedbEngine {
 
 impl RedbEngine {
     /// Open (or create) a durable store at `path`.
+    ///
+    /// Fail-closed on corrupt/truncated files (FAULT-009): redb asserts
+    /// internally on short/corrupt headers (page-manager layout check) and
+    /// panics instead of erroring — a panic must never escape the storage
+    /// boundary as an embedder process crash. An interrupted
+    /// backup/restore is rejected, not fatal.
     pub fn open(path: impl AsRef<Path>) -> KResult<Self> {
-        let db = Database::create(path.as_ref()).map_err(se)?;
-        // ensure the table exists, even on a fresh file
-        let tx = db.begin_write().map_err(se)?;
-        {
-            let _ = tx.open_table(TABLE).map_err(se)?;
-        }
-        tx.commit().map_err(se)?;
-        Ok(RedbEngine { db })
+        let open_inner = || -> KResult<Self> {
+            let db = Database::create(path.as_ref()).map_err(se)?;
+            // ensure the table exists, even on a fresh file
+            let tx = db.begin_write().map_err(se)?;
+            {
+                let _ = tx.open_table(TABLE).map_err(se)?;
+            }
+            tx.commit().map_err(se)?;
+            Ok(RedbEngine { db })
+        };
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(open_inner)).unwrap_or_else(|_| {
+            Err(KError::Store(format!(
+                "redb: corrupt or truncated database file: {}",
+                path.as_ref().display()
+            )))
+        })
     }
 }
 

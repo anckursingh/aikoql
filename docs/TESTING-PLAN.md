@@ -422,8 +422,8 @@ Wave 2's claim under test: *knowledge remains correct under concurrent mutation,
 | QA2-FAULT-005 Crash during index update | P0 | W2-08 | ✅ | indexes are derived from canonical; d04 crash + i10 tombstone sweep on rebuild |
 | QA2-FAULT-006 Crash during ontology update | P0 | W2-10 | ✅ | schema rows written in one atomic batch (REC-002); corrupt row → open fails closed — crash = before or after, never partial |
 | QA2-FAULT-007 Connector failure mid-ingestion | P0 | W2-08 | ✅ | CON-005 incomplete-run marker + CON-007 prune only on all-success — no partial logical commit |
-| QA2-FAULT-008 Backup failure | P0 | W2-08 | 🟡 | `snapshot_to` writes one batch but has no failure pin (live knowledge unaffected) — item 4 |
-| QA2-FAULT-009 Restore interruption | P0 | W2-08 | 🟡 | `restore_from` validates the source before writing, but the interrupted/truncated-snapshot pin is missing (never exposed as valid) — item 4 |
+| QA2-FAULT-008 Backup failure | P0 | W2-08 | ✅ | `w2_fault_008_backup_failure_leaves_live_knowledge_unaffected` (qa2_fault.rs) — backup onto a directory path and into a missing parent both fail; reads/journal/new writes unaffected; subsequent valid backup succeeds |
+| QA2-FAULT-009 Restore interruption | P0 | W2-08 | ✅ | `w2_fault_009_interrupted_restore_never_exposed_as_valid` (qa2_fault.rs) — garbage, TRUNCATED snapshot, and directory sources all rejected with live state intact; valid restore then swaps atomically (post-snapshot KO gone after restart). **Production fix**: `RedbEngine::open` fail-closed via `catch_unwind` — redb asserts on truncated headers instead of erroring, which crashed the embedder before the fix |
 | QA2-SCHEMA-001 v1→v2 | P0 | W2-10 | ✅ | t06zt (old data readable, v2 rules bind on new writes) + t06zw ontology evolution |
 | QA2-SCHEMA-002 v2→v3 additive + incompatible | P1 | W2-10 | 🟡 | additive mechanics covered by t06zt; the v2→v3 chain pin + incompatible-change leg — item 5 |
 | QA2-SCHEMA-003 Migration rollback | P0 | W2-10 | ✅ | t06zzb violation→nothing changed + REC-002 persisted rollback funnel |
@@ -471,7 +471,7 @@ Wave 2's claim under test: *knowledge remains correct under concurrent mutation,
 1. ~~Suite A concurrency~~ → done (2026-08-25) — `crates/kernel/tests/qa2_concurrency.rs` (5 tests) + `crates/ingestion/tests/qa2_concurrency.rs` (2 tests). REDs were test-side only (stale cross-snapshot comparator, miscounted journal); production pipe-lock/HLC/OCC/idempotency/per-version-ACL held day one — pins, not fixes. All 7 green; workspace + clippy clean.
 2. ~~Suite B knowledge consistency~~ → done (2026-08-25) — `crates/kernel/tests/qa2_knowledge.rs` (3 tests: KNOW-002/007/008). All green day one — contradict/Conflict-KO/`resolve_conflict_by_authority` (MRFC-0070 + P1 reviews) already implemented the semantics; these are pins. KNOW-006 stays NOT_IMPLEMENTED (honest row, spec §KNOW-006).
 3. ~~Suite I derived-state~~ → done (2026-08-25) — `crates/kernel/tests/qa2_derived.rs` (DER-003). Green day one — semantic block versions with the KO by design; pin, not fix. DER-001/002/004/005 were already ✅ (i09–i11, mvp_ko_003, t35).
-4. Suite D fault injection — FAULT-008 backup failure, FAULT-009 interrupted/truncated restore (`qa2_fault.rs` in durability-land)
+4. ~~Suite D fault injection~~ → done (2026-08-25) — `crates/kernel/tests/qa2_fault.rs` (FAULT-008/009). Real RED → production fix: `RedbEngine::open` now fail-closed (`catch_unwind` → `KError::Store`) — a truncated snapshot previously PANICKED the process (redb internal assert); restore/backup reject instead of crash.
 5. Suite E schema evolution — SCHEMA-002 v2→v3 chain, SCHEMA-006 atomic migration (production: register+transact one batch), SCHEMA-007 resume
 6. Suite C adversarial retrieval — RET-003 ambiguity no-silent-pick, RET-005 conflicts surfaced, RET-008 depth-chain within limits
 7. Suite F agent security — SEC-001 injection-as-data, SEC-002 forged provenance
