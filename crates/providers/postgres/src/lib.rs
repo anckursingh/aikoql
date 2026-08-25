@@ -59,8 +59,28 @@ impl PostgresConnector {
     /// Connect to a PostgreSQL database.
     /// `conn_str` format: `host=localhost user=postgres dbname=mydb`
     pub fn connect(conn_str: &str) -> Result<Self, String> {
-        let client =
-            Client::connect(conn_str, NoTls).map_err(|e| format!("PG connection failed: {}", e))?;
+        Self::connect_with_timeout(conn_str, None)
+    }
+
+    /// Connect with an optional timeout (CON-005): `connect_timeout` bounds
+    /// the TCP handshake, `SET statement_timeout` makes the server abort any
+    /// query that stalls past it — a hung query fails the run instead of
+    /// hanging the import forever.
+    pub fn connect_with_timeout(conn_str: &str, timeout_ms: Option<u64>) -> Result<Self, String> {
+        let mut config: postgres::Config = conn_str
+            .parse()
+            .map_err(|e| format!("PG connection string: {}", e))?;
+        if let Some(ms) = timeout_ms {
+            config.connect_timeout(std::time::Duration::from_millis(ms));
+        }
+        let mut client = config
+            .connect(NoTls)
+            .map_err(|e| format!("PG connection failed: {}", e))?;
+        if let Some(ms) = timeout_ms {
+            client
+                .batch_execute(&format!("SET statement_timeout = {ms}"))
+                .map_err(|e| format!("SET statement_timeout: {}", e))?;
+        }
         Ok(PostgresConnector { client })
     }
 

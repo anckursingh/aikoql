@@ -869,3 +869,104 @@ fn con004_pgvector_embedding_associated() {
         "re-import must reflect the changed embedding"
     );
 }
+
+// ---------------------------------------------------------------------------
+// MVP-CON-005 — timeouts + incomplete-run marker (item 8)
+// ---------------------------------------------------------------------------
+
+/// MVP-CON-005: a source that stalls past `--timeout-ms` must fail the run
+/// non-zero, leave prior KOs intact, and leave a `connector_run` marker KO
+/// with status "incomplete"; a retry of the same `--run-id` against a healed
+/// source succeeds. Red today: `--timeout-ms` is no CLI flag — the parser
+/// swallows it and its value becomes a positional db path, no timeout
+/// exists, no marker exists.
+#[test]
+fn con005_pg_timeout_marks_incomplete_keeps_existing() {
+    use aikoql_kernel::Value;
+    let Some(live) = connectors::Live::pg() else {
+        return;
+    };
+    let table = "cert_con005_timeout";
+    let slow_view = "cert_con005_timeout_slow";
+    connectors::pg_exec(
+        &live.dsn,
+        &[
+            &format!("DROP VIEW IF EXISTS {slow_view}"),
+            &format!("DROP TABLE IF EXISTS {table}"),
+            &format!(
+                "CREATE TABLE {table} (id SERIAL PRIMARY KEY, name TEXT NOT NULL, age INT NOT NULL)"
+            ),
+            &format!("INSERT INTO {table} (name, age) VALUES ('alice', 30), ('bob', 25)"),
+            // pg_sleep(1) per row: ~2s per full scan — far past a 500ms
+            // statement timeout. ::text because a view column cannot be void.
+            &format!("CREATE VIEW {slow_view} AS SELECT id, pg_sleep(1)::text AS s FROM {table}"),
+        ],
+    );
+    let db = connectors::temp_db("con005-timeout");
+
+    // Baseline: the real table imports cleanly.
+    let out = connectors::run_import(&["import", "postgres", &live.dsn, &db, "--table", table]);
+    connectors::assert_import_ok(&out, "con005 baseline");
+
+    // The slow view must fail within the timeout, not hang or succeed.
+    let out = connectors::run_import(&[
+        "import",
+        "postgres",
+        &live.dsn,
+        &db,
+        "--table",
+        slow_view,
+        "--timeout-ms",
+        "500",
+        "--run-id",
+        "run-con005",
+    ]);
+    connectors::assert_import_fails(&out, "slow import with --timeout-ms 500");
+
+    let k = connectors::open_kernel(&db);
+    // Prior KOs untouched by the failed run.
+    assert_eq!(
+        con001_age_of(&k, table, "alice"),
+        30,
+        "prior KOs must survive the timed-out run"
+    );
+    // The failed run is explicitly marked, not silently rolled back.
+    let markers = connectors::scan_type(&k, "pg-importer", "connector_run");
+    assert_eq!(
+        markers.len(),
+        1,
+        "exactly one incomplete-run marker expected"
+    );
+    assert_eq!(
+        markers[0].properties.get("status"),
+        Some(&Value::Text("incomplete".into())),
+        "marker must carry status incomplete"
+    );
+    assert!(
+        markers[0].properties.contains_key("error"),
+        "marker must carry the failure reason"
+    );
+    drop(k);
+
+    // Retry the SAME --run-id against a healed source: succeeds cleanly.
+    connectors::pg_exec(&live.dsn, &[&format!("DROP VIEW {slow_view}")]);
+    let out = connectors::run_import(&[
+        "import",
+        "postgres",
+        &live.dsn,
+        &db,
+        "--table",
+        table,
+        "--timeout-ms",
+        "5000",
+        "--run-id",
+        "run-con005",
+    ]);
+    connectors::assert_import_ok(&out, "con005 retry after source healed");
+    let k = connectors::open_kernel(&db);
+    assert_eq!(
+        con001_age_of(&k, table, "alice"),
+        30,
+        "retry must import the healed source"
+    );
+}

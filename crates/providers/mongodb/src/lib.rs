@@ -31,11 +31,31 @@ pub struct MongoConnector {
 
 impl MongoConnector {
     pub fn connect(uri: &str, database: &str) -> Result<Self, String> {
+        Self::connect_with_timeout(uri, database, None)
+    }
+
+    /// Connect with an optional timeout (CON-005): the driver's default
+    /// server selection waits 30s — `--timeout-ms` must bound it.
+    pub fn connect_with_timeout(
+        uri: &str,
+        database: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<Self, String> {
         let rt = Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
-        let client = rt
-            .block_on(async { Client::with_uri_str(uri).await })
-            .map_err(|e| format!("MongoDB connection failed: {}", e))?;
-        let db = client.database(database);
+        // Client construction needs a tokio reactor context (mongodb 3.8) —
+        // parse + with_options stay inside block_on.
+        let (client, db) = rt.block_on(async {
+            let mut opts = mongodb::options::ClientOptions::parse(uri)
+                .await
+                .map_err(|e| format!("MongoDB connection failed: {}", e))?;
+            if let Some(ms) = timeout_ms {
+                opts.server_selection_timeout = Some(std::time::Duration::from_millis(ms));
+            }
+            let client = Client::with_options(opts)
+                .map_err(|e| format!("MongoDB connection failed: {}", e))?;
+            let db = client.database(database);
+            Ok::<_, String>((client, db))
+        })?;
         Ok(MongoConnector { rt, client, db })
     }
 

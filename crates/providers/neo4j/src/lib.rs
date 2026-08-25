@@ -50,6 +50,7 @@ struct Neo4jError {
 pub struct Neo4jConnector {
     base_url: String,
     auth: String, // "Basic <base64>"
+    agent: ureq::Agent,
 }
 
 impl Neo4jConnector {
@@ -58,9 +59,28 @@ impl Neo4jConnector {
     /// `user`: e.g. "neo4j"
     /// `password`: e.g. "password"
     pub fn connect(uri: &str, user: &str, password: &str) -> Result<Self, String> {
+        Self::connect_with_timeout(uri, user, password, None)
+    }
+
+    /// Connect with an optional timeout (CON-005): ureq has NO default
+    /// timeout — a hung neo4j hangs forever — so `--timeout-ms` must bound
+    /// every request.
+    pub fn connect_with_timeout(
+        uri: &str,
+        user: &str,
+        password: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<Self, String> {
         let base_url = uri.trim_end_matches('/').to_string();
+        let agent = match timeout_ms {
+            Some(ms) => ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_millis(ms))
+                .build(),
+            None => ureq::Agent::new(),
+        };
         // Verify connection.
-        let resp = ureq::get(&base_url)
+        let resp = agent
+            .get(&base_url)
             .set("Authorization", &basic_auth(user, password))
             .call()
             .map_err(|e| format!("Neo4j connection failed: {}", e))?;
@@ -70,6 +90,7 @@ impl Neo4jConnector {
         Ok(Neo4jConnector {
             base_url,
             auth: basic_auth(user, password),
+            agent,
         })
     }
 
@@ -82,7 +103,9 @@ impl Neo4jConnector {
         let body = serde_json::json!({
             "statements": [{"statement": statement}]
         });
-        let resp = ureq::post(&format!("{}/db/neo4j/tx/commit", self.base_url))
+        let resp = self
+            .agent
+            .post(&format!("{}/db/neo4j/tx/commit", self.base_url))
             .set("Authorization", &self.auth)
             .set("Content-Type", "application/json")
             .send_json(&body)

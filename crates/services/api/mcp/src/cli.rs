@@ -18,7 +18,7 @@ pub(crate) fn print_usage() {
         "  restore BACKUP [DB]    Restore from a backup\n",
         "  audit [DB]             Print encryption compliance report\n",
         "  keygen [PATH]          Generate an encryption master key\n",
-        "  import <SOURCE> [ARGS]  Import from DB (postgres, sqlite, mongodb)\n",
+        "  import <SOURCE> [ARGS]  Import from DB (postgres, pgvector, sqlite, mongodb, neo4j)\n",
         "  ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR] Ingest directory into knowledge base\n",
         "  report [PATH]          Print knowledge report for directory\n",
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
@@ -208,13 +208,13 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             if ti_args.is_empty() {
                 eprintln!("Usage: aikoql-mcp import <SOURCE> [ARGS...]");
                 eprintln!("Sources: postgres, pgvector, sqlite, mongodb, neo4j");
-                eprintln!("  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [DB_PATH]");
-                eprintln!("  import pgvector <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [DB_PATH]");
+                eprintln!("  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [--timeout-ms MS] [DB_PATH]");
+                eprintln!("  import pgvector <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [--timeout-ms MS] [DB_PATH]");
                 eprintln!("  import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
                 eprintln!(
-                    "  import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [DB_PATH]"
+                    "  import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [--run-id ID] [--timeout-ms MS] [DB_PATH]"
                 );
-                eprintln!("  import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [--run-id ID] [DB_PATH]");
+                eprintln!("  import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [--run-id ID] [--timeout-ms MS] [DB_PATH]");
                 std::process::exit(1);
             }
             match ti_args[0] {
@@ -226,6 +226,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     let mut tenant: Option<&str> = None;
                     let mut table_filter: Option<&str> = None;
                     let mut run_id = fresh_run_id();
+                    let mut timeout_ms: Option<u64> = None;
                     let mut ti = 1;
                     while ti < ti_args.len() {
                         match ti_args[ti] {
@@ -253,6 +254,14 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                                     ti += 1;
                                 }
                             }
+                            "--timeout-ms" => {
+                                if ti + 1 < ti_args.len() {
+                                    timeout_ms = ti_args[ti + 1].parse().ok();
+                                    ti += 2;
+                                } else {
+                                    ti += 1;
+                                }
+                            }
                             _ if !ti_args[ti].starts_with("--") => {
                                 if conn_str.is_none() {
                                     conn_str = Some(ti_args[ti]);
@@ -271,7 +280,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                         eprintln!("Usage: aikoql-mcp import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [DB_PATH]");
                         std::process::exit(1);
                     });
-                    run_pg_import(cs, target_db, tenant, table_filter, &run_id);
+                    run_pg_import(cs, target_db, tenant, table_filter, &run_id, timeout_ms);
                 }
                 "neo4j" => {
                     let mut uri: Option<&str> = None;
@@ -281,6 +290,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     let mut tenant: Option<&str> = None;
                     let mut label_filter: Option<&str> = None;
                     let mut run_id = fresh_run_id();
+                    let mut timeout_ms: Option<u64> = None;
                     let mut ni = 1;
                     while ni < ti_args.len() {
                         match ti_args[ni] {
@@ -324,6 +334,14 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                                     ni += 1;
                                 }
                             }
+                            "--timeout-ms" => {
+                                if ni + 1 < ti_args.len() {
+                                    timeout_ms = ti_args[ni + 1].parse().ok();
+                                    ni += 2;
+                                } else {
+                                    ni += 1;
+                                }
+                            }
                             _ if !ti_args[ni].starts_with("--") => {
                                 if uri.is_none() {
                                     uri = Some(ti_args[ni]);
@@ -342,7 +360,16 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                         eprintln!("Usage: aikoql-mcp import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [--run-id ID] [DB_PATH]");
                         std::process::exit(1);
                     });
-                    run_neo4j_import(u, user, password, target_db, tenant, label_filter, &run_id);
+                    run_neo4j_import(
+                        u,
+                        user,
+                        password,
+                        target_db,
+                        tenant,
+                        label_filter,
+                        &run_id,
+                        timeout_ms,
+                    );
                 }
                 "mongodb" => {
                     let mut uri: Option<&str> = None;
@@ -351,6 +378,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     let mut tenant: Option<&str> = None;
                     let mut coll_filter: Option<&str> = None;
                     let mut run_id = fresh_run_id();
+                    let mut timeout_ms: Option<u64> = None;
                     let mut mi = 1;
                     while mi < ti_args.len() {
                         match ti_args[mi] {
@@ -386,6 +414,14 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                                     mi += 1;
                                 }
                             }
+                            "--timeout-ms" => {
+                                if mi + 1 < ti_args.len() {
+                                    timeout_ms = ti_args[mi + 1].parse().ok();
+                                    mi += 2;
+                                } else {
+                                    mi += 1;
+                                }
+                            }
                             _ if !ti_args[mi].starts_with("--") => {
                                 if uri.is_none() {
                                     uri = Some(ti_args[mi]);
@@ -411,7 +447,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                         eprintln!("Missing --db <DATABASE_NAME>");
                         std::process::exit(1);
                     });
-                    run_mongo_import(u, db, target_db, tenant, coll_filter, &run_id);
+                    run_mongo_import(u, db, target_db, tenant, coll_filter, &run_id, timeout_ms);
                 }
                 "sqlite" => {
                     let mut source_file: Option<&str> = None;

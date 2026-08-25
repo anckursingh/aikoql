@@ -93,6 +93,60 @@ impl<'k> ImportSink<'k> {
         }
         Ok(pruned)
     }
+
+    /// CON-005: a failed run is "explicitly marked", not silently rolled
+    /// back — a `connector_run` marker KO with status "incomplete".
+    /// Deterministic KOID per (source, run_id): retried failures land on
+    /// the same KO and put()'s skip-if-identical means no version churn.
+    /// ponytail: markers are audit records and are NOT removed by a later
+    /// successful run of the same run-id.
+    fn mark_incomplete(&self, source: &str, error: &str) {
+        let mut koid = [0u8; 16];
+        koid[..8].copy_from_slice(
+            &fnv1a64(format!("connector_run:{source}:{}", self.run_id).as_bytes()).to_be_bytes(),
+        );
+        let mut props: std::collections::BTreeMap<String, Value> =
+            std::collections::BTreeMap::new();
+        props.insert("source".to_string(), Value::Text(source.to_string()));
+        props.insert("status".to_string(), Value::Text("incomplete".to_string()));
+        props.insert("error".to_string(), Value::Text(error.to_string()));
+        let ko = KnowledgeObject {
+            koid: KOID(koid),
+            version: 0,
+            commit_ts: 0,
+            metadata: Metadata {
+                type_name: "connector_run".to_string(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec!["connector".to_string(), "incomplete".to_string()],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            event_refs: vec![],
+            security: SecurityDescriptor {
+                owner: self.subject.name.clone(),
+                acl: vec![],
+                classification: None,
+            },
+            lifecycle: Lifecycle {
+                state: LifecycleState::Draft,
+                origin: Origin::Human,
+            },
+            extensions: ExtensionMap::new(),
+        };
+        // Best-effort audit write on an already-failing path — the original
+        // error is the loud one and a marker failure must not mask it.
+        let _ = self.put(ko, "connector-run-marker", "incomplete connector run");
+    }
+
+    /// CON-005: print the failure, record the incomplete marker, exit
+    /// non-zero. Every runner error path after kernel open funnels here.
+    fn abort(&self, source: &str, msg: &str) -> ! {
+        eprintln!("{msg}");
+        self.mark_incomplete(source, msg);
+        std::process::exit(1);
+    }
 }
 
 pub(crate) fn run_pg_import(
@@ -101,25 +155,31 @@ pub(crate) fn run_pg_import(
     tenant: Option<&str>,
     table_filter: Option<&str>,
     run_id: &str,
+    timeout_ms: Option<u64>,
 ) {
     use aikoql_postgres::PostgresConnector;
 
-    println!("Connecting to PostgreSQL...");
-    let mut connector = match PostgresConnector::connect(conn_str) {
-        Ok(c) => c,
+    // Kernel first: every failure path below marks the run incomplete
+    // (CON-005), so the sink must exist before any source I/O.
+    let kernel = match engine::open_kernel_auto(target_db) {
+        Ok(k) => k,
         Err(e) => {
-            eprintln!("Connection failed: {}", e);
+            eprintln!("open kernel: {}", e);
             std::process::exit(1);
         }
+    };
+    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("pg-importer"));
+
+    println!("Connecting to PostgreSQL...");
+    let mut connector = match PostgresConnector::connect_with_timeout(conn_str, timeout_ms) {
+        Ok(c) => c,
+        Err(e) => sink.abort("postgres", &format!("Connection failed: {e}")),
     };
 
     println!("Discovering schema...");
     let schemas = match connector.introspect_all() {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("Schema discovery failed: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => sink.abort("postgres", &format!("Schema discovery failed: {e}")),
     };
 
     if schemas.is_empty() {
@@ -138,14 +198,6 @@ pub(crate) fn run_pg_import(
     }
     println!();
 
-    let kernel = match engine::open_kernel_auto(target_db) {
-        Ok(k) => k,
-        Err(e) => {
-            eprintln!("open kernel: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("pg-importer"));
     let filtered: Vec<&aikoql_postgres::TableSchema> = schemas
         .iter()
         .filter(|s| table_filter.is_none_or(|tf| s.name == tf))
@@ -159,8 +211,10 @@ pub(crate) fn run_pg_import(
         let objects = match connector.import_table(schema, tenant) {
             Ok(o) => o,
             Err(e) => {
-                eprintln!("  Error importing {}: {}", schema.name, e);
-                std::process::exit(1);
+                sink.abort(
+                    "postgres",
+                    &format!("  Error importing {}: {e}", schema.name),
+                );
             }
         };
         println!("  {} rows read", objects.len());
@@ -173,10 +227,7 @@ pub(crate) fn run_pg_import(
         match connector.link_relationships(&filtered, &mut all_objects) {
             Ok(0) => {}
             Ok(n) => println!("  {n} foreign-key relationship(s) linked"),
-            Err(e) => {
-                eprintln!("  FK linking failed: {}", e);
-                std::process::exit(1);
-            }
+            Err(e) => sink.abort("postgres", &format!("  FK linking failed: {e}")),
         }
     }
 
@@ -199,8 +250,10 @@ pub(crate) fn run_pg_import(
             Err(e) => {
                 // A failed put = failed run: partial imports must not
                 // look successful (CON-007 prune gate keys off this).
-                eprintln!("  Failed to commit row from {table}: {}", e);
-                std::process::exit(1);
+                sink.abort(
+                    "postgres",
+                    &format!("  Failed to commit row from {table}: {e}"),
+                );
             }
         }
     }
@@ -218,10 +271,7 @@ pub(crate) fn run_pg_import(
         match sink.prune_missing(table, present) {
             Ok(0) => {}
             Ok(n) => println!("  {n} stale row(s) tombstoned in {table}"),
-            Err(e) => {
-                eprintln!("  prune {table}: {e}");
-                std::process::exit(1);
-            }
+            Err(e) => sink.abort("postgres", &format!("  prune {table}: {e}")),
         }
     }
 
@@ -335,25 +385,31 @@ pub(crate) fn run_mongo_import(
     tenant: Option<&str>,
     coll_filter: Option<&str>,
     run_id: &str,
+    timeout_ms: Option<u64>,
 ) {
     use aikoql_mongodb::MongoConnector;
 
-    println!("Connecting to MongoDB: {}", uri);
-    let connector = match MongoConnector::connect(uri, database) {
-        Ok(c) => c,
+    // Kernel first: every failure path below marks the run incomplete
+    // (CON-005), so the sink must exist before any source I/O.
+    let kernel = match engine::open_kernel_auto(target_db) {
+        Ok(k) => k,
         Err(e) => {
-            eprintln!("Connection failed: {}", e);
+            eprintln!("open kernel: {}", e);
             std::process::exit(1);
         }
+    };
+    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("mongo-importer"));
+
+    println!("Connecting to MongoDB: {}", uri);
+    let connector = match MongoConnector::connect_with_timeout(uri, database, timeout_ms) {
+        Ok(c) => c,
+        Err(e) => sink.abort("mongodb", &format!("Connection failed: {e}")),
     };
 
     println!("Discovering collections in '{}'...", database);
     let schemas = match connector.introspect_all() {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("Discovery failed: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => sink.abort("mongodb", &format!("Discovery failed: {e}")),
     };
 
     if schemas.is_empty() {
@@ -375,14 +431,6 @@ pub(crate) fn run_mongo_import(
     }
     println!();
 
-    let kernel = match engine::open_kernel_auto(target_db) {
-        Ok(k) => k,
-        Err(e) => {
-            eprintln!("open kernel: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("mongo-importer"));
     let filtered: Vec<&aikoql_mongodb::CollectionSchema> = schemas
         .iter()
         .filter(|s| coll_filter.is_none_or(|cf| s.name == cf))
@@ -395,8 +443,10 @@ pub(crate) fn run_mongo_import(
         let objects = match connector.import_collection(schema, tenant) {
             Ok(o) => o,
             Err(e) => {
-                eprintln!("  Error importing {}: {}", schema.name, e);
-                std::process::exit(1);
+                sink.abort(
+                    "mongodb",
+                    &format!("  Error importing {}: {e}", schema.name),
+                );
             }
         };
         println!("  {} documents read", objects.len());
@@ -416,8 +466,10 @@ pub(crate) fn run_mongo_import(
             Ok(true) => total_imported += 1,
             Ok(false) => {}
             Err(e) => {
-                eprintln!("  Failed to commit doc from {coll}: {}", e);
-                std::process::exit(1);
+                sink.abort(
+                    "mongodb",
+                    &format!("  Failed to commit doc from {coll}: {e}"),
+                );
             }
         }
     }
@@ -427,10 +479,7 @@ pub(crate) fn run_mongo_import(
         match sink.prune_missing(coll, present) {
             Ok(0) => {}
             Ok(n) => println!("  {n} stale doc(s) tombstoned in {coll}"),
-            Err(e) => {
-                eprintln!("  prune {coll}: {e}");
-                std::process::exit(1);
-            }
+            Err(e) => sink.abort("mongodb", &format!("  prune {coll}: {e}")),
         }
     }
 
@@ -448,32 +497,35 @@ pub(crate) fn run_neo4j_import(
     tenant: Option<&str>,
     label_filter: Option<&str>,
     run_id: &str,
+    timeout_ms: Option<u64>,
 ) {
     use aikoql_neo4j::Neo4jConnector;
 
-    println!("Connecting to Neo4j: {}", uri);
-    let connector = match Neo4jConnector::connect(uri, user, password) {
-        Ok(c) => c,
+    // Kernel first: every failure path below marks the run incomplete
+    // (CON-005), so the sink must exist before any source I/O.
+    let kernel = match engine::open_kernel_auto(target_db) {
+        Ok(k) => k,
         Err(e) => {
-            eprintln!("Connection failed: {}", e);
+            eprintln!("open kernel: {}", e);
             std::process::exit(1);
         }
+    };
+    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("neo4j-importer"));
+
+    println!("Connecting to Neo4j: {}", uri);
+    let connector = match Neo4jConnector::connect_with_timeout(uri, user, password, timeout_ms) {
+        Ok(c) => c,
+        Err(e) => sink.abort("neo4j", &format!("Connection failed: {e}")),
     };
 
     println!("Discovering graph schema...");
     let mut labels = match connector.list_labels() {
         Ok(l) => l,
-        Err(e) => {
-            eprintln!("Failed to list labels: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => sink.abort("neo4j", &format!("Failed to list labels: {e}")),
     };
     let mut rel_types = match connector.list_rel_types() {
         Ok(l) => l,
-        Err(e) => {
-            eprintln!("Failed to list relationship types: {}", e);
-            std::process::exit(1);
-        }
+        Err(e) => sink.abort("neo4j", &format!("Failed to list relationship types: {e}")),
     };
     println!(
         "Labels: {} ({}), Relationship types: {} ({})",
@@ -483,15 +535,6 @@ pub(crate) fn run_neo4j_import(
         rel_types.join(", ")
     );
     println!();
-
-    let kernel = match engine::open_kernel_auto(target_db) {
-        Ok(k) => k,
-        Err(e) => {
-            eprintln!("open kernel: {}", e);
-            std::process::exit(1);
-        }
-    };
-    let sink = ImportSink::new(&kernel, run_id.to_string(), Subject::new("neo4j-importer"));
 
     // Deterministic iteration order: the first sorted label becomes the
     // type_name of multi-label nodes; the KOID is label-independent, so the
@@ -512,8 +555,7 @@ pub(crate) fn run_neo4j_import(
         let (objects, id_map) = match connector.import_nodes(label, tenant) {
             Ok(o) => o,
             Err(e) => {
-                eprintln!("  Error importing label {label}: {e}");
-                std::process::exit(1);
+                sink.abort("neo4j", &format!("  Error importing label {label}: {e}"));
             }
         };
         for (elem_id, koid) in id_map {
@@ -540,8 +582,10 @@ pub(crate) fn run_neo4j_import(
         let rels = match connector.import_relationships(rt, &global_id_map) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("  Error importing relationships {rt}: {e}");
-                std::process::exit(1);
+                sink.abort(
+                    "neo4j",
+                    &format!("  Error importing relationships {rt}: {e}"),
+                );
             }
         };
         println!("  {} relationships read", rels.len());
@@ -578,8 +622,10 @@ pub(crate) fn run_neo4j_import(
             Ok(true) => total_nodes += 1,
             Ok(false) => {}
             Err(e) => {
-                eprintln!("  Failed to commit node from {label}: {}", e);
-                std::process::exit(1);
+                sink.abort(
+                    "neo4j",
+                    &format!("  Failed to commit node from {label}: {e}"),
+                );
             }
         }
     }
@@ -593,10 +639,7 @@ pub(crate) fn run_neo4j_import(
         match sink.prune_missing(label, present) {
             Ok(0) => {}
             Ok(n) => println!("  {n} stale node(s) tombstoned in {label}"),
-            Err(e) => {
-                eprintln!("  prune {label}: {e}");
-                std::process::exit(1);
-            }
+            Err(e) => sink.abort("neo4j", &format!("  prune {label}: {e}")),
         }
     }
 
