@@ -33,7 +33,7 @@ This document turns the two QA certification suites — [AIKOQL-Agent-Knowledge-
 
 ## 2. Coverage verdict
 
-Substrate-level (agent suite levels 1–3) coverage is strong: all P0 rows and all closeable P1 rows have real tests (the sweep of 2026-08-24 closed KB-008, ONT-002, ONT-004, QL-007, DB-004, RET-CHAT-002/003, FRESH-001, CONT-001..003, LLM-002..004, §30/31, §33, §42–44). The chatbot layer's acceptance stories are scripted where the substrate exists (`mcp_real_world.rs` CHAT-MEM/CTX/§51 scenarios); the rows that remain open are honest ones — feature work (§40 memory compression, AGENT-003/005 agent loops, PROG-CHAT discovery/approval, MEM-001 working memory, DOC-002 OCR) or chatbot-level policy phrases that are out of AIKOQL's substrate scope (PROV-CHAT, SAFE-CHAT, §34–36 per the row-166 note). EVO-003 (apply/migrate op + codec wire format) closed 2026-08-25 — see G4. RET-CHAT-001 (retention/expiry, G13) closed 2026-08-25 — see row 156. §38–39 (conversation summarization + provenance, G13) closed 2026-08-25 — see row 168.
+Substrate-level (agent suite levels 1–3) coverage is strong: all P0 rows and all closeable P1 rows have real tests (the sweep of 2026-08-24 closed KB-008, ONT-002, ONT-004, QL-007, DB-004, RET-CHAT-002/003, FRESH-001, CONT-001..003, LLM-002..004, §30/31, §33, §42–44). The chatbot layer's acceptance stories are scripted where the substrate exists (`mcp_real_world.rs` CHAT-MEM/CTX/§51 scenarios); the rows that remain open are honest ones — feature work (§40 memory compression — mechanical measurement only) or agent-side concerns that are out of AIKOQL's substrate scope per the 2026-08-25 directive — the product is a knowledge OS for AI agents, not an agentic app (AGENT-003/005 agent loops, PROG-CHAT discovery/approval, MEM-001 working memory, DOC-002 OCR) — or chatbot-level policy phrases (PROV-CHAT, SAFE-CHAT, §34–36 per the row-166 note). EVO-003 (apply/migrate op + codec wire format) closed 2026-08-25 — see G4. RET-CHAT-001 (retention/expiry, G13) closed 2026-08-25 — see row 156. §38–39 (conversation summarization + provenance, G13) closed 2026-08-25 — see row 168.
 
 ---
 
@@ -86,7 +86,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 
 | ID | Pri | Status | Location / note |
 | --- | --- | --- | --- |
-| MEM-001 Working memory (ephemeral by default) | — | 🟡 | ingest_observation op (63c1f43); no working-memory construct |
+| MEM-001 Working memory (ephemeral by default) | — | 🟡 | ingest_observation op (63c1f43); no working-memory construct — agent-side, out of substrate scope (2026-08-25 directive; agent_memory K5 + retention are the substrate analogs) |
 | MEM-002 Episodic memory with links | — | ✅ | `experiences.rs`, `scripts/e2e-k5-experience.js` |
 | MEM-003 Semantic memory from experience | — | ✅ | `derivation.rs` |
 | MEM-004 Procedural memory | — | ✅ | `experiences.rs` |
@@ -100,7 +100,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | RET-003 Hybrid retrieval | P1 | ✅ | PR-L RRF fusion, §60 matrix |
 | RET-004 Reranking with labeled set | P1 | 🟡 | fusion only; no learned reranker (HLD §60 decision: mock stays) |
 | RET-005 Evidence/authority-aware ranking | P0 | ✅ | v0.1.15 relation boost + trust-aware ranks |
-| AGENT-001..005 Repository-agent scenarios | — | ✅ 001/002/004 · 🟡 003/005 | `agent_efficacy_bench.rs` (G10): where-to-implement, change-impact, historical-explanation measured over the docs corpus with A/B/C/D treatments; AGENT-003 (implement a feature) + AGENT-005 (safe procedural execution) need agent loops — deferred |
+| AGENT-001..005 Repository-agent scenarios | — | ✅ 001/002/004 · 🟡 003/005 | `agent_efficacy_bench.rs` (G10): where-to-implement, change-impact, historical-explanation measured over the docs corpus with A/B/C/D treatments; AGENT-003 (implement a feature) + AGENT-005 (safe procedural execution) need agent loops — agent-side, out of substrate scope (2026-08-25 directive) |
 
 ### G7 Security · Persistence · Documents · Indexes · Evolution
 
@@ -156,7 +156,7 @@ AIKOQL is the memory/knowledge layer, not the chatbot. "Substrate" = the mechani
 | RET-CHAT-001 auto-expiry | ✅ | declarative retention: `remember_retained` / `remember` tool `retention_ms` → kernel-stamps `valid_to = now + retention_ms`; default-time retrieval (QL scan + similarity recall) drops expired; history stays via get/AS_OF | `conformance.rs` t_ret1..t_ret5 (stamp, expiry from MATCH + find_similar, overflow rejection, update-refresh, zero-duration + lineage) + `mcp_stdio.rs` m_ret1 (tool acceptance) |
 | RET-CHAT-002..003 deletion semantics | ✅ | deterministic deletion + audit metadata | `conformance.rs` t09: forget → `lineage.events` carries a `Forgotten` event with actor, note, and monotone `commit_ts`; knowledge stays readable via lineage |
 | PROC-CHAT-001..004 procedure version, MFA constraint, why | ✅ | procedure KOs + CST-003 precondition blocking | explanation text is LLM-level |
-| PROG-CHAT-001..004 program discovery/approval/postconditions | 🟡 | `experiences.rs` (pre/postconditions, denied execution) | intent→program discovery + approval flow absent |
+| PROG-CHAT-001..004 program discovery/approval/postconditions | 🟡 | `experiences.rs` (pre/postconditions, denied execution) | intent→program discovery + approval flow absent — agent-side, out of substrate scope (2026-08-25 directive) |
 | SAFE-CHAT-001..004 explain vs execute, denial | 🟡 | authorize() denial ✅ | the explain/execute disambiguation is chatbot-level policy, out of AIKOQL's substrate scope (row-166 precedent) — the substrate side (program pre/postconditions, denied execution, CST-003 precondition blocking) is covered |
 | EVO-CHAT-001..003 correction, conflicting user input, authoritative change, no retrain | ✅ | temporal versioning + trust policy (claims vs authoritative) + re-ingest without retrain (`e2e-k3-lineage.js`) | — |
 | FRESH-001 freshness SLA | ✅ | `ingest_incremental.rs::freshness_sla_source_update_to_query_visibility_measured` — git update → timed incremental diff ingest → updated fact visible at the query surface, superseded fact gone, `< 120s` SLA asserted. Fixed the root cause it exposed: the incremental merge now drops previous-IR facts from re-parsed files (superseded statements no longer survive unmarked; deleted files keep the `[STALE]` reconcile path) |
