@@ -148,6 +148,11 @@ impl McpClient {
 impl Drop for McpClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        // Wait for the process to fully exit: the child holds the redb
+        // exclusive flock, and a respawn on the same db before the OS tears
+        // it down fails to open and dies before responding (EOF flake under
+        // parallel load).
+        let _ = self.child.wait();
     }
 }
 
