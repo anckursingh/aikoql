@@ -38,6 +38,8 @@ fn token_name(t: &Token) -> String {
         Token::Historical => "HISTORICAL".into(),
         Token::Epistemic => "EPISTEMIC".into(),
         Token::Source => "SOURCE".into(),
+        Token::Limit => "LIMIT".into(),
+        Token::Offset => "OFFSET".into(),
         Token::Eq => "==".into(),
         Token::Neq => "!=".into(),
         Token::Lt => "<".into(),
@@ -156,6 +158,8 @@ impl Parser {
         let mut temporal = None;
         let mut epistemic = None;
         let mut provenance = None;
+        let mut limit = None;
+        let mut offset = None;
         loop {
             match &self.current {
                 Token::Where | Token::And | Token::Or => {
@@ -207,6 +211,22 @@ impl Parser {
                     self.advance();
                     provenance = Some(self.expect_string()?);
                 }
+                Token::Limit => {
+                    if limit.is_some() {
+                        return Err(unexpected(&self.current, self.line, self.col)
+                            .with_hint("duplicate limit clause"));
+                    }
+                    self.advance();
+                    limit = Some(self.parse_nonneg_int("LIMIT count")?);
+                    if let Token::Offset = self.current {
+                        self.advance();
+                        offset = Some(self.parse_nonneg_int("OFFSET count")?);
+                    }
+                }
+                Token::Offset => {
+                    return Err(unexpected(&self.current, self.line, self.col)
+                        .with_hint("OFFSET requires LIMIT"));
+                }
                 Token::Return => {
                     self.advance();
                     return Ok(MatchStatement {
@@ -217,6 +237,8 @@ impl Parser {
                         temporal,
                         epistemic,
                         provenance,
+                        limit,
+                        offset,
                         projection: self.parse_projection()?,
                     });
                 }
@@ -225,7 +247,7 @@ impl Parser {
                 }
                 _ => {
                     return Err(unexpected(&self.current, self.line, self.col).with_hint(
-                        "expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, SOURCE, or RETURN",
+                        "expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, SOURCE, LIMIT, or RETURN",
                     ))
                 }
             }
@@ -292,6 +314,21 @@ impl Parser {
                 self.line,
                 self.col,
             )),
+        }
+    }
+
+    /// A pagination count: whole, non-negative `Number`.
+    fn parse_nonneg_int(&mut self, desc: &str) -> Result<usize, ParseError> {
+        match &self.current {
+            Token::Number(n) => {
+                let n = *n;
+                self.advance();
+                if n < 0.0 || n.fract() != 0.0 || n > usize::MAX as f64 {
+                    return Err(expected_err(desc, &Token::Number(n), self.line, self.col));
+                }
+                Ok(n as usize)
+            }
+            _ => Err(expected_err(desc, &self.current, self.line, self.col)),
         }
     }
 
@@ -869,6 +906,55 @@ mod tests {
         assert!(Parser::new("MATCH Fact SOURCE \"a\" SOURCE \"b\" RETURN *")
             .parse_statement()
             .is_err());
+    }
+
+    #[test]
+    fn parse_match_limit() {
+        let m = parse_match("MATCH Fact LIMIT 5 RETURN *");
+        assert_eq!(m.limit, Some(5));
+        assert_eq!(m.offset, None);
+    }
+
+    #[test]
+    fn parse_match_limit_offset() {
+        let m = parse_match("MATCH Fact LIMIT 5 OFFSET 10 RETURN *");
+        assert_eq!(m.limit, Some(5));
+        assert_eq!(m.offset, Some(10));
+    }
+
+    #[test]
+    fn parse_match_offset_without_limit_is_rejected() {
+        assert!(Parser::new("MATCH Fact OFFSET 10 RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn parse_match_duplicate_limit_is_rejected() {
+        assert!(Parser::new("MATCH Fact LIMIT 5 LIMIT 6 RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn parse_match_limit_rejects_negative_and_fractional() {
+        assert!(Parser::new("MATCH Fact LIMIT -1 RETURN *")
+            .parse_statement()
+            .is_err());
+        assert!(Parser::new("MATCH Fact LIMIT 2.5 RETURN *")
+            .parse_statement()
+            .is_err());
+        assert!(Parser::new("MATCH Fact LIMIT \"5\" RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn parse_match_limit_composes_with_source() {
+        let m = parse_match("MATCH Fact SOURCE \"a.md\" LIMIT 3 OFFSET 1 RETURN *");
+        assert_eq!(m.provenance, Some("a.md".into()));
+        assert_eq!(m.limit, Some(3));
+        assert_eq!(m.offset, Some(1));
     }
 
     #[test]

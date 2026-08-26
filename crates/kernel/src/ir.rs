@@ -157,6 +157,9 @@ pub enum IrOp {
     /// QL-006: provenance filter — keep rows whose evidence trail contains
     /// an entry with this source artifact (exact match).
     ProvenanceFilter { source: String },
+    /// EXE-006: pagination over the final deterministic row order — skip
+    /// `offset` rows, then keep at most `limit`.
+    Limit { limit: usize, offset: usize },
     /// Project specific fields from the result set.
     Project { fields: Vec<String> },
 }
@@ -225,6 +228,7 @@ impl IrPlan {
                 IrOp::Temporal { .. }
                 | IrOp::EpistemicFilter { .. }
                 | IrOp::ProvenanceFilter { .. }
+                | IrOp::Limit { .. }
                     if !seen_scan =>
                 {
                     return Err(KError::InvalidQuery(format!(

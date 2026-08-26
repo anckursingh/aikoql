@@ -299,6 +299,15 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
         }
     }
 
+    // EXE-006: LIMIT/OFFSET applies to the final deterministic row order —
+    // last operator in the pipeline (after Project/Traverse).
+    if let Some(limit) = m.limit {
+        ops.push(IrOp::Limit {
+            limit,
+            offset: m.offset.unwrap_or(0),
+        });
+    }
+
     let plan = IrPlan::new(ops).with_description(if relational_first {
         format!(
             "MATCH {} — strategy: relational (vector search skipped)",
@@ -506,6 +515,28 @@ mod tests {
             .unwrap();
         assert!(matches!(plan.operators[1], IrOp::ProvenanceFilter { .. }));
         assert!(matches!(plan.operators[2], IrOp::Filter { .. }));
+    }
+
+    #[test]
+    fn compile_match_limit_lowers_to_limit_op() {
+        let plan = compile("MATCH Fact LIMIT 3 OFFSET 1 RETURN *").unwrap();
+        assert_eq!(plan.operators.len(), 2);
+        match &plan.operators[1] {
+            IrOp::Limit { limit, offset } => {
+                assert_eq!(*limit, 3);
+                assert_eq!(*offset, 1);
+            }
+            _ => panic!("expected Limit op"),
+        }
+    }
+
+    #[test]
+    fn compile_match_limit_lands_after_project() {
+        // Pagination is the last operator — it trims the final row order,
+        // never the intermediate rowset.
+        let plan = compile("MATCH Fact LIMIT 3 RETURN koid").unwrap();
+        assert!(matches!(plan.operators[1], IrOp::Project { .. }));
+        assert!(matches!(plan.operators[2], IrOp::Limit { .. }));
     }
 
     #[test]

@@ -157,7 +157,7 @@ const MATRIX: &[Row] = &[
     row("EXE-003", "EXE", "P0", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     row("EXE-004", "EXE", "P0", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     row("EXE-005", "EXE", "P1", "covered", Some("crates/kernel/tests/conformance.rs"), None),
-    row("EXE-006", "EXE", "P1", "partial", None, Some("pagination not explicitly tested")),
+    row("EXE-006", "EXE", "P1", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     // RET — retrieval
     row("RET-001", "RET", "P1", "covered", Some("crates/ingestion/tests/retrieval_quality.rs"), None),
     row("RET-002", "RET", "P0", "covered", Some("crates/kernel/tests/conformance.rs"), None),

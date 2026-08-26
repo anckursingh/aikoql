@@ -87,6 +87,16 @@ fn cover_match_source() {
 }
 
 #[test]
+fn cover_match_limit_offset() {
+    let m = match parser::parse(r#"MATCH Fact LIMIT 10 OFFSET 3 RETURN *"#).unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.limit, Some(10));
+    assert_eq!(m.offset, Some(3));
+}
+
+#[test]
 fn cover_match_all_clauses() {
     let m = match parser::parse(
         r#"MATCH Person WHERE x == "y" SIMILAR TO "q" TRAVERSE knows RETURN explain"#,

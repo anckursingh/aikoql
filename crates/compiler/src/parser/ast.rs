@@ -43,6 +43,10 @@ pub struct MatchStatement {
     /// QL-006: provenance filter (SOURCE "artifact") — keep rows whose
     /// evidence trail contains the given source artifact (exact match).
     pub provenance: Option<String>,
+    /// EXE-006: pagination over the final deterministic row order.
+    /// OFFSET is only valid together with LIMIT (parser-enforced).
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
     pub projection: Projection,
 }
 

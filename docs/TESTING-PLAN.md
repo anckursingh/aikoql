@@ -81,7 +81,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | CST-001..004 Schema/cardinality/precondition/policy constraints | P0 | ✅ | `conformance.rs` + MRFC-0060 phases C3–C9 |
 | QL-001..009 Parser determinism, diagnostics, injection | P0/P1 | ✅ | `crates/compiler/tests/golden_snapshots.rs`, `grammar_coverage.rs`, `fuzz_parser.rs`; QL-006 provenance filter (`SOURCE "artifact"` → `IrOp::ProvenanceFilter`, exact match on `EXT_EVIDENCE.source_artifact`): `conformance.rs::t_ql6_source_filters_by_evidence_artifact` + runtime `provenance_filter_keeps_kos_by_source_artifact` |
 | QL-007 Constraint-aware program query | P1 | ✅ | `experiences.rs::match_experiences_gates_on_all_reuse_condition_tokens` — all-token all-or-nothing gate, fail-closed on empty tokens, ACL-filtered, expiry/invalidation filtered |
-| EXE-001..006 Query execution oracles | P0/P1 | ✅ | `conformance.rs`, `evals.rs`, `indexes.rs` |
+| EXE-001..006 Query execution oracles | P0/P1 | ✅ | `conformance.rs`, `evals.rs`, `indexes.rs`; EXE-006 pagination (`LIMIT n [OFFSET m]` → `IrOp::Limit`, last operator over the deterministic order): `conformance.rs::t_exe6_limit_offset_paginates_without_duplicates_or_skips` (pages disjoint, union == full, same order) + runtime `limit_offset_paginates_deterministic_order` |
 
 ### G5/G6 — Agent memory · Programs · Retrieval
 

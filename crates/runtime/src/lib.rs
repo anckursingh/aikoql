@@ -33,6 +33,13 @@ fn compare_values(a: Option<&Value>, b: Option<&Value>) -> Option<Ordering> {
     }
 }
 
+/// EXE-006: apply LIMIT/OFFSET over a deterministic row order — skip
+/// `offset` rows, then keep at most `limit`. Preserves relative order, so
+/// pages concatenated in query order reconstruct the unpaged rowset.
+fn skip_take<T>(v: Vec<T>, offset: usize, limit: usize) -> Vec<T> {
+    v.into_iter().skip(offset).take(limit).collect()
+}
+
 // ---------------------------------------------------------------------------
 // Intermediate result set
 // ---------------------------------------------------------------------------
@@ -432,6 +439,15 @@ impl Interpreter {
                     .collect();
                 self.cached_objects = Some(out.clone());
                 Ok(RowSet::Objects(out))
+            }
+            IrOp::Limit { limit, offset } => {
+                // EXE-006: trims whatever rowset shape arrives (Objects,
+                // Scored, Traversal) — pagination is shape-agnostic.
+                Ok(match input {
+                    RowSet::Objects(kos) => RowSet::Objects(skip_take(kos, *offset, *limit)),
+                    RowSet::Scored(s) => RowSet::Scored(skip_take(s, *offset, *limit)),
+                    RowSet::Traversal(t) => RowSet::Traversal(skip_take(t, *offset, *limit)),
+                })
             }
             IrOp::Project { fields } => {
                 let mut kos = match input {
@@ -1527,5 +1543,39 @@ mod tests {
         // exact match: prefix and absent artifacts yield nothing
         assert!(run("sec-filing").is_empty());
         assert!(run("nope.md").is_empty());
+    }
+
+    #[test]
+    fn limit_offset_paginates_deterministic_order() {
+        let (k, clock) = mk_with_clock();
+        for v in 1..=5 {
+            fact_with_validity(&k, &clock, "alice", "v", v, None);
+        }
+
+        let page = |limit: usize, offset: usize| {
+            let mut plan = scan_plan();
+            plan.operators.push(IrOp::Limit { limit, offset });
+            objects(Interpreter::execute(&k, &plan).unwrap())
+                .into_iter()
+                .map(|ko| match ko.properties.get("v") {
+                    Some(Value::Int(v)) => *v,
+                    other => panic!("unexpected row: {:?}", other),
+                })
+                .collect::<Vec<i64>>()
+        };
+
+        let full = page(100, 0);
+        assert_eq!(full.len(), 5, "unpaged sees everything");
+        let p1 = page(2, 0);
+        let p2 = page(2, 2);
+        let p3 = page(2, 4);
+        // pages are disjoint and their union reconstructs the full order
+        let mut union = p1.clone();
+        union.extend(p2.iter().chain(p3.iter()));
+        assert_eq!(union, full, "pages union == full, same order");
+        // boundary behavior
+        assert!(page(0, 0).is_empty(), "LIMIT 0 is empty, not an error");
+        assert!(page(10, 6).is_empty(), "offset past the end is empty");
+        assert_eq!(page(3, 3).len(), 2, "last partial page");
     }
 }

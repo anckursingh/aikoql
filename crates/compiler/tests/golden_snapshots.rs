@@ -31,6 +31,8 @@ Match(
         temporal: None,
         epistemic: None,
         provenance: None,
+        limit: None,
+        offset: None,
         projection: Star,
     },
 )";
@@ -42,6 +44,14 @@ fn golden_match_source() {
     let stmt = parser::parse(r#"MATCH Fact SOURCE "sec-filing.pdf" RETURN *"#).unwrap();
     let m = as_match(&stmt);
     assert_eq!(m.provenance.as_deref(), Some("sec-filing.pdf"));
+}
+
+#[test]
+fn golden_match_limit_offset() {
+    let stmt = parser::parse(r#"MATCH Fact LIMIT 10 OFFSET 3 RETURN *"#).unwrap();
+    let m = as_match(&stmt);
+    assert_eq!(m.limit, Some(10));
+    assert_eq!(m.offset, Some(3));
 }
 
 #[test]

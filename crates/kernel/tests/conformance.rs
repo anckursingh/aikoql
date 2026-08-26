@@ -3590,3 +3590,54 @@ fn t_ql6_source_filters_by_evidence_artifact() {
     // Unfiltered matches see both.
     assert_eq!(match_object_koids(&k, "MATCH fact RETURN *").len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// EXE-006: LIMIT/OFFSET pagination — end to end
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t_exe6_limit_offset_paginates_without_duplicates_or_skips() {
+    let (k, _c) = mk();
+    for v in 0..5 {
+        let mut req = RememberRequest::create(alice(), meta("fact"));
+        req.properties.insert("v".into(), Value::Int(v));
+        k.remember(req).unwrap();
+    }
+
+    let vals = |query: &str| -> Vec<i64> {
+        let plan = aikoql_compiler::parser::compile_with_subject(query, "alice").unwrap();
+        match aikoql_runtime::Interpreter::execute(&k, &plan).unwrap() {
+            aikoql_runtime::RowSet::Objects(kos) => kos
+                .into_iter()
+                .map(|ko| match ko.properties.get("v") {
+                    Some(Value::Int(v)) => *v,
+                    other => panic!("unexpected row: {:?}", other),
+                })
+                .collect(),
+            other => panic!("expected object rowset, got {other:?}"),
+        }
+    };
+
+    let full = vals("MATCH fact RETURN *");
+    assert_eq!(full.len(), 5, "unpaged sees all five facts");
+
+    // Same order as unpaged, no duplicates, no skips: pages of 2.
+    let p1 = vals("MATCH fact LIMIT 2 RETURN *");
+    let p2 = vals("MATCH fact LIMIT 2 OFFSET 2 RETURN *");
+    let p3 = vals("MATCH fact LIMIT 2 OFFSET 4 RETURN *");
+    assert_eq!(p1, full[..2], "page 1 is the unpaged prefix");
+    assert_eq!(p2, full[2..4], "page 2 continues without overlap");
+    assert_eq!(p3, full[4..], "last page is the partial tail");
+    let mut union = p1.clone();
+    union.extend(p2.iter().chain(p3.iter()));
+    assert_eq!(union, full, "pages union == full result, same order");
+
+    // Boundary behavior.
+    assert!(vals("MATCH fact LIMIT 0 RETURN *").is_empty());
+    assert!(vals("MATCH fact LIMIT 5 OFFSET 5 RETURN *").is_empty());
+    assert_eq!(
+        vals("MATCH fact LIMIT 5 OFFSET 3 RETURN *"),
+        full[3..],
+        "offset into the middle"
+    );
+}

@@ -36,6 +36,9 @@ pub enum Token {
     Epistemic,
     // QL-006: provenance filter (SOURCE "artifact")
     Source,
+    // EXE-006: pagination (LIMIT n [OFFSET m])
+    Limit,
+    Offset,
     // Symbols
     Eq,     // ==
     Neq,    // !=
@@ -165,6 +168,8 @@ impl Lexer {
             "HISTORICAL" => Token::Historical,
             "EPISTEMIC" => Token::Epistemic,
             "SOURCE" => Token::Source,
+            "LIMIT" => Token::Limit,
+            "OFFSET" => Token::Offset,
             _ => Token::Ident(s),
         }
     }
