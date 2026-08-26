@@ -216,7 +216,12 @@ pub use markdown::{
 
 // Phase A2: Code-to-Knowledge Compiler
 mod code;
+mod code_tree_sitter;
 pub use code::{compile_rust_file, compile_rust_source};
+pub use code_tree_sitter::{
+    compile_java_file, compile_java_source, compile_python_file, compile_python_source,
+    compile_ts_file, compile_ts_source,
+};
 
 // Phase A3: Multi-source Knowledge Graph merging
 mod merge;
@@ -230,9 +235,10 @@ pub use staleness::{detect_staleness, StalenessWarning};
 mod context;
 pub use context::{
     compile_context, compile_context_cached, compile_context_cached_semantic,
-    compile_context_semantic, compile_context_semantic_with, compile_context_with_validity, context_cache_stats, expand_entity,
-    expand_relationship, expand_source, invalidate_context_cache, render_context_markdown,
-    ContextPackage, EntityExpansion, RankedEntity, RankedFact, RankedRelation,
+    compile_context_semantic, compile_context_semantic_with, compile_context_with_validity,
+    context_cache_stats, expand_entity, expand_relationship, expand_source,
+    invalidate_context_cache, render_context_markdown, ContextPackage, EntityExpansion,
+    RankedEntity, RankedFact, RankedRelation,
 };
 
 mod reconcile;

@@ -20,6 +20,12 @@ rayon = "1"
 syn = { version = "2", features = ["full", "parsing", "extra-traits", "printing"] }
 quote = "1"
 proc-macro2 = "1"
+# A2 code parsers: Python/TypeScript/Java via tree-sitter. All three grammars
+# expose the tree-sitter-language 0.1 LanguageFn ABI, so they unify on core 0.25.
+tree-sitter = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-java = "0.23"
 # PR-F feature "vlm": OpenAI-compatible vision calls. Optional — never in the
 # default build (HLD §33: no mandatory VLM).
 ureq = { version = "3", features = ["json"], optional = true }

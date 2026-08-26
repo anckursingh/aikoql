@@ -429,9 +429,7 @@ pub fn compile_context_semantic_with(
     let mut relations: Vec<RankedRelation> = ir
         .relations
         .iter()
-        .filter(|r| {
-            !stale.contains(&format!("r:{}|{}|{}", r.subject, r.predicate, r.object))
-        })
+        .filter(|r| !stale.contains(&format!("r:{}|{}|{}", r.subject, r.predicate, r.object)))
         .map(|r| {
             let subj_score = entities
                 .iter()
@@ -2285,8 +2283,7 @@ mod tests {
 
         // The kernel has superseded the old claim (valid_to in the past) —
         // the caller keys it stale and the compiler suppresses it.
-        let stale: HashSet<String> =
-            HashSet::from(["f:Retry limit is 3 attempts.".to_string()]);
+        let stale: HashSet<String> = HashSet::from(["f:Retry limit is 3 attempts.".to_string()]);
         let filtered = compile_context_with_validity("Retry limit", &ir, 0, None, &stale);
         assert_eq!(filtered.facts.len(), 1);
         assert_eq!(filtered.facts[0].statement, "Retry limit is 5 attempts.");
@@ -2294,13 +2291,7 @@ mod tests {
         // The stale boundary is never lossy for other questions: a task that
         // matches only the stale fact gets a healthy empty pack, and history
         // is a kernel concern (get/trace/AS_OF) the compiler does not touch.
-        let other = compile_context_with_validity(
-            "unrelated topic",
-            &ir,
-            0,
-            None,
-            &stale,
-        );
+        let other = compile_context_with_validity("unrelated topic", &ir, 0, None, &stale);
         assert!(other.facts.is_empty());
     }
 
@@ -2329,9 +2320,6 @@ mod tests {
         let names: Vec<&str> = pkg.entities.iter().map(|e| e.name.as_str()).collect();
         assert!(!names.contains(&"LegacyPolicy"));
         assert!(names.contains(&"RetryPolicy"));
-        assert!(!pkg
-            .relations
-            .iter()
-            .any(|r| r.object == "LegacyPolicy"));
+        assert!(!pkg.relations.iter().any(|r| r.object == "LegacyPolicy"));
     }
 }

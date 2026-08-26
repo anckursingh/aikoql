@@ -58,6 +58,10 @@ const SKIP_FILES: &[&str] = &[
 /// File extensions that map to language compilers.
 const MARKDOWN_EXTS: &[&str] = &["md", "mdx"];
 const RUST_EXTS: &[&str] = &["rs"];
+const PY_EXTS: &[&str] = &["py", "pyi"];
+const TS_EXTS: &[&str] = &["ts", "js", "mjs", "cjs"];
+const TSX_EXTS: &[&str] = &["tsx", "jsx"];
+const JVM_EXTS: &[&str] = &["java"];
 
 /// Text-like extensions that get basic entity extraction (file → entity,
 /// first doc-comment line → fact).
@@ -68,16 +72,7 @@ const TEXT_EXTS: &[&str] = &[
     "yml",
     "xml",
     "csv",
-    "ts",
-    "tsx",
-    "js",
-    "jsx",
-    "mjs",
-    "cjs",
-    "py",
-    "pyi",
     "go",
-    "java",
     "kt",
     "kts",
     "c",
@@ -423,6 +418,21 @@ pub fn compile_file(path: &Path) -> Option<KnowledgeIr> {
         .or_else(|| Some(file_as_entity(path)))
     } else if RUST_EXTS.contains(&ext.as_str()) {
         crate::code::compile_rust_file(&path.to_string_lossy())
+            .ok()
+            .filter(|ir| !ir.entities.is_empty())
+            .or_else(|| Some(file_as_entity(path)))
+    } else if PY_EXTS.contains(&ext.as_str()) {
+        crate::code_tree_sitter::compile_python_file(&path.to_string_lossy())
+            .ok()
+            .filter(|ir| !ir.entities.is_empty())
+            .or_else(|| Some(file_as_entity(path)))
+    } else if TS_EXTS.contains(&ext.as_str()) || TSX_EXTS.contains(&ext.as_str()) {
+        crate::code_tree_sitter::compile_ts_file(&path.to_string_lossy())
+            .ok()
+            .filter(|ir| !ir.entities.is_empty())
+            .or_else(|| Some(file_as_entity(path)))
+    } else if JVM_EXTS.contains(&ext.as_str()) {
+        crate::code_tree_sitter::compile_java_file(&path.to_string_lossy())
             .ok()
             .filter(|ir| !ir.entities.is_empty())
             .or_else(|| Some(file_as_entity(path)))

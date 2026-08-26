@@ -47,7 +47,8 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | --- | --- | --- | --- |
 | KB-001 Empty repository | P0 | ✅ | `crates/ingestion/tests/e2e_pipeline.rs` (zero entities, no stale state) |
 | KB-002 Single source file | P0 | ✅ | `e2e_pipeline.rs`; artifact KO + hash + provenance |
-| KB-003 Multi-file dependency | P0 | ✅ | Phase A2 Rust parser (`DEPENDS_ON`); `e2e_pipeline.rs` |
+| KB-003 Multi-file dependency | P0 | ✅ | Phase A2 parsers (`DEPENDS_ON`); `e2e_pipeline.rs` + `a2_code_parsers.rs` |
+| AKI-004 Python/TypeScript/Java code parsers | P1 | ✅ | A2 tree-sitter parsers (`code_tree_sitter.rs`, 2026-08-26): entities (Class/Function/Interface/Method/Test/Constructor), imports → DEPENDS_ON, extends/implements → IMPLEMENTS, test markers → TESTED_BY (`test_`-prefix, `it(`/`test(`/`describe(`, `@Test`), docstring/JSDoc/Javadoc → facts; ingest-dir dispatch `py/pyi/ts/tsx/js/jsx/mjs/cjs/java`; golden fixtures `a2_code_parsers.rs` exact-match per language (100% P/R on the labeled fixture). AKI-004's 90/85 targets on larger real-world corpora + AKI-019/020 traceability fixtures stay future benchmarks (honest note) |
 | KB-004 Cross-module duplicate symbols | P0 | ✅ | Phase A3 entity merging; `multi_source_ontology.rs` |
 | KB-005 Duplicate filenames | P0 | ✅ | containment tree v0.1.8; `e2e_pipeline.rs` |
 | KB-006 Unsupported/binary file | P1 | ✅ | ingest-dir classifier; scan continues |
