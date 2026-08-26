@@ -7,20 +7,20 @@ Registry: `docs/TESTING-PLAN.md` §10.1 (MVP-QA-002). Statuses are never invente
 ## Summary
 
 - P0: **45/45 pass (100%)**
-- P1: **13/14 pass (93%)**
+- P1: **14/14 pass (100%)**
 - Sev-1: 0 · Sev-2: 0
 - Benchmarks: pinned baselines present
-- **Final decision: NO-GO** (3 blocking items)
+- **Final decision: GO** (0 blocking items)
 
 ## Wave 2 gate readout (W2-01..11)
 
 | Gate | Requirement | Verdict |
 | --- | --- | --- |
 | W2-01 | All P0 tests pass | PASS |
-| W2-02 | ≥98% of P1 tests pass | FAIL (P1 93%) |
+| W2-02 | ≥98% of P1 tests pass | PASS |
 | W2-03 | Sev-1 = 0 | PASS |
 | W2-04 | Sev-2 = 0 | PASS |
-| W2-05 | No known knowledge-integrity violation | FAIL (Knowledge consistency) |
+| W2-05 | No known knowledge-integrity violation | PASS |
 | W2-06 | No authorization bypass | PASS |
 | W2-07 | No unexplained retrieval regression | PASS |
 | W2-08 | Fault/recovery tests preserve canonical knowledge | PASS |
@@ -33,7 +33,7 @@ Registry: `docs/TESTING-PLAN.md` §10.1 (MVP-QA-002). Statuses are never invente
 | Area | Verdict |
 | --- | --- |
 | Concurrency | PASS |
-| Knowledge consistency | FAIL |
+| Knowledge consistency | PASS |
 | Derived-state consistency | PASS |
 | Fault injection | PASS |
 | Schema evolution | PASS |
@@ -58,7 +58,7 @@ Registry: `docs/TESTING-PLAN.md` §10.1 (MVP-QA-002). Statuses are never invente
 | QA2-KNOW-003 Stale evidence | P0 | W2-05 | PASS | `temporal.rs` valid_at/as_of + `e2e-k2-temporal.js` — current query returns valid current, history retrieves old |
 | QA2-KNOW-004 Correction propagation | P0 | W2-05 | PASS | FRESH-001 (source→query visibility, superseded fact gone) + i11 (index propagation, zero lag) |
 | QA2-KNOW-005 Duplicate entity | P1 | W2-05 | PASS | `multi_source_ontology.rs` config-driven identity + INC-003 rename identity — no uncontrolled duplicate canonical entities |
-| QA2-KNOW-006 Entity split | P1 | W2-05 | NOT_IMPLEMENTED | NOT_IMPLEMENTED — entity split is unsupported; per spec: report NOT_IMPLEMENTED, never PASS (honest row) |
+| QA2-KNOW-006 Entity split | P1 | W2-05 | PASS | `w2_know_006_entity_split_preserves_unrelated_relationships_and_provenance` (qa2_knowledge.rs) + `m_split_entity_over_mcp` (mcp_stdio.rs) — merged entity splits via `Kernel::split` / MCP `split_entity`: side A keeps KOID + version lineage and everything not moved; side B is a first-class derivation (DERIVED_FROM edge, derivation op `split`, inherited evidence trail + confidence); moved edges leave A's index (traversal proof); OCC stale version → VersionConflict; superseding A sweeps B (lineage continuity). Kernel-managed lineage edges (supersedes/derived_from/contradicts) are not movable |
 | QA2-KNOW-007 Relationship conflict | P0 | W2-05 | PASS | `w2_know_007_relationship_conflict_preserved_resolved_by_policy_only` (qa2_knowledge.rs) — owns vs does_not_own claims both current with own data, Conflict KO unresolved (no implicit pick), equal-authority `resolve_conflict_by_authority` REFUSED (tie = explicit decision required), explicit `resolve_conflict` flips only the loser to Contradicted |
 | QA2-KNOW-008 Evidence/facts divergence | P0 | W2-05 | PASS | `w2_know_008_failed_extraction_keeps_evidence_retrievable` (qa2_knowledge.rs) — document KO observed with evidence; fact commit without evidence rejected (InvalidObject); document + evidence trail retrievable; no partial fact (journal len 1) |
 | QA2-KNOW-009 Canonical vs index | P0 | W2-08 | PASS | i09 rebuild parity + i11 update propagation |

@@ -585,6 +585,69 @@ fn m07_graph_relate_and_traverse_over_mcp() {
 }
 
 #[test]
+fn m_split_entity_over_mcp() {
+    let db = tmp_db("split");
+    let mut c = McpClient::start(&db);
+    c.request("initialize", json!({"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "split", "version": "0"}}));
+    c.notify("notifications/initialized");
+
+    // A merged entity holding two facts, with a caller-owned edge on it.
+    let m = c.call_tool(
+        "remember",
+        json!({"subject": "alice", "type_name": "entity", "properties": {"name": "Apple", "sector": "banking", "family": "Rosaceae"}}),
+    );
+    let m_koid = m["koid"].as_str().unwrap();
+    let t = c.call_tool(
+        "remember",
+        json!({"subject": "alice", "type_name": "entity", "properties": {"name": "Subsidiary"}}),
+    );
+    let t_koid = t["koid"].as_str().unwrap();
+    let rel = c.call_tool(
+        "relate",
+        json!({"subject": "alice", "from": m_koid, "to": t_koid, "rel_type": "supplies"}),
+    );
+
+    // QA2-KNOW-006: split the fruit side off, moving its fact and its edge.
+    let split = c.call_tool(
+        "split_entity",
+        json!({
+            "subject": "alice",
+            "koid": m_koid,
+            "expected_version": rel["version"],
+            "properties": {"name": "Apple", "family": "Rosaceae"},
+            "relationships": [{"rel_type": "supplies", "target": t_koid}],
+            "reason": "the bank and the fruit are distinct entities"
+        }),
+    );
+    assert_eq!(split["original_koid"], m_koid);
+    let b_koid = split["new_entity_koid"].as_str().unwrap();
+
+    // Side B: the moved fact, the moved edge, and derivation lineage back to A.
+    let b = c.call_tool("get", json!({"subject": "alice", "koid": b_koid}));
+    assert_eq!(b["type_name"], "entity");
+    assert_eq!(b["properties"]["family"], "Rosaceae");
+    assert!(b["properties"].get("sector").is_none());
+    let b_rels = b["relationships"].as_array().unwrap();
+    assert!(b_rels
+        .iter()
+        .any(|r| r["rel_type"] == "supplies" && r["target"] == t_koid));
+    assert!(b_rels
+        .iter()
+        .any(|r| r["rel_type"] == "derived_from" && r["target"] == m_koid));
+    assert_eq!(b["extensions"]["derivation"]["operation"], "split");
+
+    // Side A: same KOID, bumped version, only the unmoved parts survive.
+    let a = c.call_tool("get", json!({"subject": "alice", "koid": m_koid}));
+    assert_eq!(a["version"], rel["version"].as_u64().unwrap() + 1);
+    assert_eq!(a["properties"]["sector"], "banking");
+    assert!(a["properties"].get("family").is_none());
+    let a_rels = a["relationships"].as_array().unwrap();
+    assert!(!a_rels.iter().any(|r| r["rel_type"] == "supplies"));
+
+    let _ = std::fs::remove_file(&db);
+}
+
+#[test]
 fn m08_aikoql_query_over_mcp() {
     let db = tmp_db("aikoql");
     let mut c = McpClient::start(&db);

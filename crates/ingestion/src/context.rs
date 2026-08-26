@@ -122,12 +122,19 @@ pub fn compile_context_semantic(
         SEMANTIC_WEIGHT,
         SEMANTIC_MIN,
         RELATION_BOOST_FACTOR,
+        None,
     )
 }
 
 /// Tunable variant for ranking experiments (see
 /// crates/services/api/mcp/examples/probe_rank.rs) — production calls go
 /// through [`compile_context_semantic`] with the defaults.
+///
+/// `stale` carries the temporal-policy boundary: candidate keys known to be
+/// invalid at "now" (expired/superseded KOs, keyed `e:{name}`, `f:{statement}`,
+/// `r:{subject}|{predicate}|{object}`). A stale candidate never enters the
+/// package — the same boundary the kernel's default-time retrieval applies
+/// (`valid_at(now)` in Scan/find_similar). `None` = everything valid.
 pub fn compile_context_semantic_with(
     task: &str,
     ir: &KnowledgeIr,
@@ -136,8 +143,11 @@ pub fn compile_context_semantic_with(
     semantic_weight: f32,
     semantic_min: f32,
     relation_boost: f32,
+    stale: Option<&HashSet<String>>,
 ) -> ContextPackage {
     let task_lower = task.to_lowercase();
+    let empty_stale = HashSet::new();
+    let stale = stale.unwrap_or(&empty_stale);
     // Split on whitespace AND non-alphanumeric: trailing punctuation must
     // not stick to question words — "cite?" never matched the statement
     // token "cite", which silently under-counted the exact-token escape
@@ -156,6 +166,7 @@ pub fn compile_context_semantic_with(
     let mut entities: Vec<RankedEntity> = ir
         .entities
         .iter()
+        .filter(|e| !stale.contains(&format!("e:{}", e.name)))
         .map(|e| {
             // Raw case preserved: keyword_score matches case-insensitively
             // but ident_parts needs the camelCase boundaries ("TimeoutPolicy"
@@ -329,6 +340,7 @@ pub fn compile_context_semantic_with(
     let mut facts: Vec<RankedFact> = ir
         .facts
         .iter()
+        .filter(|f| !stale.contains(&format!("f:{}", f.statement)))
         .map(|f| {
             if !trusted && crate::markdown::detect_instruction_injection(&f.statement).is_some() {
                 return RankedFact {
@@ -417,6 +429,9 @@ pub fn compile_context_semantic_with(
     let mut relations: Vec<RankedRelation> = ir
         .relations
         .iter()
+        .filter(|r| {
+            !stale.contains(&format!("r:{}|{}|{}", r.subject, r.predicate, r.object))
+        })
         .map(|r| {
             let subj_score = entities
                 .iter()
@@ -630,6 +645,30 @@ const SEMANTIC_WEIGHT: f32 = 3.0;
 // lexical, so a word filter would catch a different class. The compile-time
 // gate here is the fix, not a stopgap.
 const SEMANTIC_MIN: f32 = 0.35;
+
+/// Compile with a temporal-validity boundary: candidates whose key appears in
+/// `stale` (see [`compile_context_semantic_with`]) are excluded from the
+/// package. `stale` is built from the kernel's current state — KOs whose
+/// `valid_at(now)` is false (superseded/expired) are stale, their history
+/// remains reachable via get/trace/AS_OF.
+pub fn compile_context_with_validity(
+    task: &str,
+    ir: &KnowledgeIr,
+    token_budget: usize,
+    semantic: Option<&HashMap<String, f32>>,
+    stale: &HashSet<String>,
+) -> ContextPackage {
+    compile_context_semantic_with(
+        task,
+        ir,
+        token_budget,
+        semantic,
+        SEMANTIC_WEIGHT,
+        SEMANTIC_MIN,
+        RELATION_BOOST_FACTOR,
+        Some(stale),
+    )
+}
 
 /// Relation-aware boost: a ranked anchor hands each neighbor max(own score,
 /// anchor × this). Fix locations (callees, tests, containing files) ride
@@ -2211,5 +2250,88 @@ mod tests {
             1,
             "duplicate relation must be packed once"
         );
+    }
+
+    /// G11 temporal-policy boundary: a claim whose backing KO is no longer
+    /// valid at "now" (superseded → valid_to stamped) must not enter the
+    /// compiled context, while its history stays reachable in the kernel.
+    /// The stale set is the caller's bridge from kernel state to candidate
+    /// keys — the compiler itself never invents validity.
+    #[test]
+    fn stale_candidates_are_suppressed_by_validity_filter() {
+        let ir = KnowledgeIr {
+            facts: vec![
+                FactCandidate {
+                    snippet: None,
+                    statement: "Retry limit is 3 attempts.".into(),
+                    entities: vec![],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+                FactCandidate {
+                    snippet: None,
+                    statement: "Retry limit is 5 attempts.".into(),
+                    entities: vec![],
+                    confidence: 0.9,
+                    evidence: Evidence::default(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Without the filter both claims reach the package.
+        let unfiltered = compile_context("Retry limit", &ir, 0);
+        assert_eq!(unfiltered.facts.len(), 2);
+
+        // The kernel has superseded the old claim (valid_to in the past) —
+        // the caller keys it stale and the compiler suppresses it.
+        let stale: HashSet<String> =
+            HashSet::from(["f:Retry limit is 3 attempts.".to_string()]);
+        let filtered = compile_context_with_validity("Retry limit", &ir, 0, None, &stale);
+        assert_eq!(filtered.facts.len(), 1);
+        assert_eq!(filtered.facts[0].statement, "Retry limit is 5 attempts.");
+
+        // The stale boundary is never lossy for other questions: a task that
+        // matches only the stale fact gets a healthy empty pack, and history
+        // is a kernel concern (get/trace/AS_OF) the compiler does not touch.
+        let other = compile_context_with_validity(
+            "unrelated topic",
+            &ir,
+            0,
+            None,
+            &stale,
+        );
+        assert!(other.facts.is_empty());
+    }
+
+    /// The same boundary for entities and relations — a superseded entity
+    /// (or an edge whose endpoint was superseded) leaves the package.
+    #[test]
+    fn stale_entities_and_relations_are_suppressed() {
+        let ir = KnowledgeIr {
+            entities: vec![
+                ent("LegacyPolicy", "Policy", vec!["old retry policy"]),
+                ent("RetryPolicy", "Policy", vec!["current retry policy"]),
+                ent("PaymentService", "Service", vec!["processes payments"]),
+            ],
+            facts: vec![],
+            relations: vec![
+                rel("PaymentService", "depends_on", "LegacyPolicy"),
+                rel("PaymentService", "depends_on", "RetryPolicy"),
+            ],
+            ..Default::default()
+        };
+        let stale: HashSet<String> = HashSet::from([
+            "e:LegacyPolicy".to_string(),
+            "r:PaymentService|depends_on|LegacyPolicy".to_string(),
+        ]);
+        let pkg = compile_context_with_validity("retry policy", &ir, 0, None, &stale);
+        let names: Vec<&str> = pkg.entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&"LegacyPolicy"));
+        assert!(names.contains(&"RetryPolicy"));
+        assert!(!pkg
+            .relations
+            .iter()
+            .any(|r| r.object == "LegacyPolicy"));
     }
 }

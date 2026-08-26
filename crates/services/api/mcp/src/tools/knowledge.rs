@@ -32,6 +32,53 @@ pub(crate) fn tool_relate(k: &Kernel, args: &J) -> Result<J, String> {
     }))
 }
 
+/// QA2-KNOW-006: split a merged entity in two. Side A keeps its KOID and
+/// everything not moved; side B is a first-class derivation of A (DERIVED_FROM
+/// edge + inherited evidence/confidence). Moving a relationship whose target
+/// fails to parse is an error — a silent skip would leave the edge on A.
+pub(crate) fn tool_split_entity(k: &Kernel, args: &J) -> Result<J, String> {
+    let reason = args
+        .get("reason")
+        .and_then(|x| x.as_str())
+        .ok_or("missing argument: reason")?;
+    let mut req = SplitRequest {
+        context: subject_of(args).into(),
+        subject: koid_of(args)?,
+        expected_version: args.get("expected_version").and_then(|v| v.as_u64()),
+        b_properties: parse_properties(args)?,
+        b_relationships: vec![],
+        reason: reason.to_string(),
+        idempotency_key: args
+            .get("idempotency_key")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+    };
+    if let Some(rels) = args.get("relationships").and_then(|r| r.as_array()) {
+        for rel in rels {
+            let rel_type = rel
+                .get("rel_type")
+                .and_then(|v| v.as_str())
+                .ok_or("missing argument: relationships[].rel_type")?;
+            let target = rel
+                .get("target")
+                .and_then(|v| v.as_str())
+                .ok_or("missing argument: relationships[].target")?;
+            req.b_relationships.push(RelationshipRef {
+                rel_type: rel_type.into(),
+                target: KOID::from_hex(target).map_err(|e| e.to_string())?,
+                direction: Direction::Outbound,
+            });
+        }
+    }
+    let r = k.split(req).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "original_koid": r.original.0.to_hex(),
+        "original_version": r.original.1,
+        "new_entity_koid": r.new_entity.0.to_hex(),
+        "new_entity_version": r.new_entity.1,
+    }))
+}
+
 pub(crate) fn tool_traverse(k: &Kernel, args: &J) -> Result<J, String> {
     let mut q = TraverseQuery::new(subject_of(args), koid_of(args)?);
     if let Some(rt) = args.get("rel_type").and_then(|x| x.as_str()) {

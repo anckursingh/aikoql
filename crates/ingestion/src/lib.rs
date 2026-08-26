@@ -230,7 +230,7 @@ pub use staleness::{detect_staleness, StalenessWarning};
 mod context;
 pub use context::{
     compile_context, compile_context_cached, compile_context_cached_semantic,
-    compile_context_semantic, compile_context_semantic_with, context_cache_stats, expand_entity,
+    compile_context_semantic, compile_context_semantic_with, compile_context_with_validity, context_cache_stats, expand_entity,
     expand_relationship, expand_source, invalidate_context_cache, render_context_markdown,
     ContextPackage, EntityExpansion, RankedEntity, RankedFact, RankedRelation,
 };

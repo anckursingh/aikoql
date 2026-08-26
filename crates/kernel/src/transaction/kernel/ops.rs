@@ -300,6 +300,50 @@ impl MergeRequest {
     }
 }
 
+/// Split a merged entity into two distinct entities (QA2-KNOW-006). The
+/// original KO keeps its KOID and version lineage and becomes side A (its
+/// properties/relationships minus the moved subset); side B is a new KO wired
+/// as a first-class derivation of the original (operation "split").
+#[derive(Clone)]
+pub struct SplitRequest {
+    pub context: KnowledgeContext,
+    /// The merged entity to split.
+    pub subject: KOID,
+    /// Optimistic concurrency — must match the subject's head version.
+    pub expected_version: Option<u64>,
+    /// Side B's full property set (including its name). Every key must exist
+    /// on the subject; the key (with B's value) leaves the subject.
+    pub b_properties: PropertyMap,
+    /// Caller-owned relationships that move to side B (identity match against
+    /// the subject's edges). Kernel-managed lineage edges (supersedes /
+    /// derived_from / contradicts) are not movable.
+    pub b_relationships: Vec<RelationshipRef>,
+    pub reason: String,
+    /// Exact-once replay key — a replay returns the stored outcome without
+    /// touching side A again.
+    pub idempotency_key: Option<String>,
+}
+
+impl SplitRequest {
+    pub fn new(context: impl Into<KnowledgeContext>, subject: KOID) -> Self {
+        SplitRequest {
+            context: context.into(),
+            subject,
+            expected_version: None,
+            b_properties: PropertyMap::new(),
+            b_relationships: vec![],
+            reason: String::new(),
+            idempotency_key: None,
+        }
+    }
+}
+
+/// Outcome of a split: the updated original (side A) and the new side B.
+pub struct SplitResult {
+    pub original: (KOID, u64),
+    pub new_entity: (KOID, u64),
+}
+
 /// Withdraw support for a KO and everything derived from it. Evidence is
 /// mandatory. The target transitions to Contradicted where legal; every
 /// dependent gets the invalidation stamp + valid_to=now (stale, dropped from
@@ -1081,6 +1125,187 @@ impl Kernel {
         dr.reason = req.reason;
         dr.evidence = req.evidence;
         self.derive(dr)
+    }
+
+    // ---- split ------------------------------------------------------------
+
+    /// Split a merged entity into two (QA2-KNOW-006). The original keeps its
+    /// KOID/version lineage as side A; side B is a new KO wired as a
+    /// first-class derivation of the original, inheriting the full evidence
+    /// trail (there is no safe evidence partition — both sides are backed by
+    /// the same sources). Unrelated relationships and provenance stay on side
+    /// A; the moved subset follows side B. One pipe-lock section: validate,
+    /// create B, update A.
+    pub fn split(&self, req: SplitRequest) -> KResult<SplitResult> {
+        if req.reason.trim().is_empty() {
+            return Err(KError::InvalidObject("split requires a reason".into()));
+        }
+        let ctx = req.context.clone();
+        // Exact-once replay: the idempotency key is stored by side B's create.
+        if let Some(key) = &req.idempotency_key {
+            if let Some((b_koid, b_version, _)) = self.resolve_idempotency(key)? {
+                let a_version = self
+                    .head_object(&req.subject)?
+                    .ok_or(KError::NotFound(req.subject))?
+                    .version;
+                return Ok(SplitResult {
+                    original: (req.subject, a_version),
+                    new_entity: (b_koid, b_version),
+                });
+            }
+        }
+        let mut pipe = self.pipe.lock().unwrap();
+        let head = self
+            .head_object(&req.subject)?
+            .ok_or(KError::NotFound(req.subject))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &head, Action::Write)?;
+        if head.invalidation().is_some() {
+            return Err(KError::InvalidObject(
+                "cannot split an invalidated entity".into(),
+            ));
+        }
+        if let Some(ev) = req.expected_version {
+            if head.version != ev {
+                return Err(KError::VersionConflict {
+                    koid: req.subject,
+                    expected: ev,
+                    found: head.version,
+                });
+            }
+        }
+        if req.b_properties.is_empty() && req.b_relationships.is_empty() {
+            return Err(KError::InvalidObject(
+                "split requires at least one moved property or relationship".into(),
+            ));
+        }
+        for key in req.b_properties.keys() {
+            if !head.properties.contains_key(key) {
+                return Err(KError::InvalidObject(format!(
+                    "split cannot move property '{key}' — not on the subject"
+                )));
+            }
+        }
+        let lineage: [&str; 3] = [SUPERSEDES, DERIVED_FROM, CONTRADICTS];
+        for r in &req.b_relationships {
+            if lineage.contains(&r.rel_type.as_str()) {
+                return Err(KError::InvalidObject(format!(
+                    "split cannot move kernel-managed edge '{}'",
+                    r.rel_type
+                )));
+            }
+        }
+        // Every moved edge must exist on the subject (multiset containment).
+        {
+            let mut remaining: Vec<&RelationshipRef> = head.relationships.iter().collect();
+            for r in &req.b_relationships {
+                let pos = remaining.iter().position(|x| *x == r).ok_or_else(|| {
+                    KError::InvalidObject(format!(
+                        "split cannot move relationship '{}-{}' — not on the subject",
+                        r.rel_type, r.target
+                    ))
+                })?;
+                remaining.remove(pos);
+            }
+        }
+
+        // Side B: a new KO wired as a derivation of the original.
+        let mut b_rels = req.b_relationships.clone();
+        b_rels.push(RelationshipRef {
+            rel_type: DERIVED_FROM.into(),
+            target: req.subject,
+            direction: Direction::Inbound,
+        });
+        let at = self.clock_now();
+        let derivation = Derivation {
+            operation: "split".into(),
+            actor: ctx.subject.name.clone(),
+            model: None,
+            timestamp: at,
+            sources: vec![req.subject],
+            reason: Some(req.reason.clone()),
+        };
+        let mut b_ext = ExtensionMap::new();
+        b_ext.insert(
+            KnowledgeObject::EXT_DERIVATION.into(),
+            derivation_to_value(&derivation),
+        );
+        if let Some(c) = head.confidence_context() {
+            b_ext.insert(
+                KnowledgeObject::EXT_CONFIDENCE.into(),
+                confidence_to_value(&c),
+            );
+        }
+        b_ext.insert(
+            KnowledgeObject::EXT_EVIDENCE.into(),
+            KnowledgeObject::evidence_value(&head.evidence()),
+        );
+        let b_req = RememberRequest {
+            context: ctx.clone(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: req.idempotency_key.clone(),
+            metadata: Metadata {
+                type_name: head.metadata.type_name.clone(),
+                tenant: ctx.tenant.clone(),
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: req.b_properties.clone(),
+            semantic: None,
+            relationships: b_rels,
+            security: None,
+            extensions: b_ext,
+            origin: Origin::Reason,
+            note: Some(req.reason.clone()),
+            referential_policy: ReferentialPolicy::default(),
+        };
+        let b = self.remember_locked(&mut pipe, &b_req)?;
+
+        // Side A: the original, restated without the moved subset. Extensions
+        // are restated wholesale (the evidence trail must stay intact), and
+        // the OCC check above is re-asserted by expected_version.
+        let mut a_props = head.properties.clone();
+        for key in req.b_properties.keys() {
+            a_props.remove(key);
+        }
+        let mut removed: Vec<RelationshipRef> = req.b_relationships.clone();
+        let a_rels: Vec<RelationshipRef> = head
+            .relationships
+            .iter()
+            .filter(|r| {
+                if let Some(pos) = removed.iter().position(|x| x == *r) {
+                    removed.remove(pos);
+                    false
+                } else {
+                    true
+                }
+            })
+            .cloned()
+            .collect();
+        let a_req = RememberRequest {
+            context: ctx.clone(),
+            koid: Some(req.subject),
+            expected_version: Some(head.version),
+            idempotency_key: None,
+            metadata: head.metadata.clone(),
+            properties: a_props,
+            semantic: None,
+            relationships: a_rels,
+            security: None,
+            extensions: head.extensions.clone(),
+            origin: Origin::Reason,
+            note: Some(req.reason.clone()),
+            referential_policy: ReferentialPolicy::default(),
+        };
+        let a = self.remember_locked(&mut pipe, &a_req)?;
+
+        Ok(SplitResult {
+            original: (req.subject, a.version),
+            new_entity: (b.koid, b.version),
+        })
     }
 
     // ---- invalidate ------------------------------------------------------

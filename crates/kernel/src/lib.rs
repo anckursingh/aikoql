@@ -145,7 +145,8 @@ pub use transaction::kernel::{
     DeriveRequest, EventFilter, Evolved, ExperienceRequest, Explanation, ForgetMode, Forgotten,
     Fusion, IngestRequest, InvalidationRequest, InvalidationResult, Kernel, KnowledgeContext,
     Lineage, ManualClock, MergeRequest, MergeStrategy, ObservationRequest, OfflineProof, Proof,
-    PropertyFilter, RememberRequest, Remembered, ScoredKO, SimilarityQuery, Subject,
-    SubscriptionRecord, SummarizeConversationRequest, SupersedeRequest, SupersedeResult,
-    SystemClock, TransactionOp, VerificationRequest, VerificationResult, VersionRecord,
+    PropertyFilter, RememberRequest, Remembered, ScoredKO, SimilarityQuery, SplitRequest,
+    SplitResult, Subject, SubscriptionRecord, SummarizeConversationRequest, SupersedeRequest,
+    SupersedeResult, SystemClock, TransactionOp, VerificationRequest, VerificationResult,
+    VersionRecord,
 };

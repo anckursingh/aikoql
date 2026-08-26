@@ -7,23 +7,23 @@
       "pct": 100
     },
     "p1": {
-      "pass": 13,
+      "pass": 14,
       "total": 14,
-      "pct": 93
+      "pct": 100
     },
     "sev": {
       "sev1": 0,
       "sev2": 0
     },
     "benchmarks": "pinned-baselines-present",
-    "final_decision": "NO-GO"
+    "final_decision": "GO"
   },
   "wave2_gates": {
     "W2-01": "PASS",
-    "W2-02": "FAIL (P1 93%)",
+    "W2-02": "PASS",
     "W2-03": "PASS",
     "W2-04": "PASS",
-    "W2-05": "FAIL (Knowledge consistency)",
+    "W2-05": "PASS",
     "W2-06": "PASS",
     "W2-07": "PASS",
     "W2-08": "PASS",
@@ -33,7 +33,7 @@
   },
   "areas": {
     "Concurrency": "PASS",
-    "Knowledge consistency": "FAIL",
+    "Knowledge consistency": "PASS",
     "Derived-state consistency": "PASS",
     "Fault injection": "PASS",
     "Schema evolution": "PASS",
@@ -125,8 +125,8 @@
       "id": "QA2-KNOW-006 Entity split",
       "priority": "P1",
       "gate": "W2-05",
-      "status": "not_implemented",
-      "coverage": "NOT_IMPLEMENTED — entity split is unsupported; per spec: report NOT_IMPLEMENTED, never PASS (honest row)"
+      "status": "pass",
+      "coverage": "`w2_know_006_entity_split_preserves_unrelated_relationships_and_provenance` (qa2_knowledge.rs) + `m_split_entity_over_mcp` (mcp_stdio.rs) — merged entity splits via `Kernel::split` / MCP `split_entity`: side A keeps KOID + version lineage and everything not moved; side B is a first-class derivation (DERIVED_FROM edge, derivation op `split`, inherited evidence trail + confidence); moved edges leave A's index (traversal proof); OCC stale version → VersionConflict; superseding A sweeps B (lineage continuity). Kernel-managed lineage edges (supersedes/derived_from/contradicts) are not movable"
     },
     {
       "id": "QA2-KNOW-007 Relationship conflict",
@@ -465,9 +465,5 @@
       "coverage": "`ctx_min_*` budget tests + G12 delivered-token measurements — no token explosion"
     }
   ],
-  "blocking": [
-    "QA2-KNOW-006 Entity split [not_implemented] — NOT_IMPLEMENTED — entity split is unsupported; per spec: report NOT_IMPLEMENTED, never PASS (honest row)",
-    "W2-02 failing: FAIL (P1 93%)",
-    "W2-05 failing: FAIL (Knowledge consistency)"
-  ]
+  "blocking": []
 }
