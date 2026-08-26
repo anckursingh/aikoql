@@ -30,10 +30,18 @@ Match(
         traverse: None,
         temporal: None,
         epistemic: None,
+        provenance: None,
         projection: Star,
     },
 )";
     assert_eq!(snap.trim(), expected.trim());
+}
+
+#[test]
+fn golden_match_source() {
+    let stmt = parser::parse(r#"MATCH Fact SOURCE "sec-filing.pdf" RETURN *"#).unwrap();
+    let m = as_match(&stmt);
+    assert_eq!(m.provenance.as_deref(), Some("sec-filing.pdf"));
 }
 
 #[test]

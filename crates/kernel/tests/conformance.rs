@@ -3548,3 +3548,45 @@ fn t_ret5_zero_retention_expires_immediately_but_stays_in_lineage() {
     assert_eq!(k.get(alice(), &r.koid).unwrap().koid, r.koid);
     assert_eq!(k.trace(alice(), &r.koid).unwrap().versions.len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// QL-006: provenance filter (SOURCE clause) — end to end
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t_ql6_source_filters_by_evidence_artifact() {
+    let (k, _c) = mk();
+    // Evidence minted through derive(): remember() rejects EXT_EVIDENCE as
+    // kernel-managed (P0-1 — callers cannot forge a provenance trail).
+    let mut d1 = DeriveRequest::new(alice(), "fact");
+    d1.properties.insert("v".into(), Value::Int(1));
+    d1.evidence = vec![Evidence::new(
+        "sec-filing.pdf",
+        EvidenceMethod::DocExtraction,
+    )];
+    let koid1 = k.derive(d1).unwrap().koid;
+
+    let mut d2 = DeriveRequest::new(alice(), "fact");
+    d2.properties.insert("v".into(), Value::Int(2));
+    d2.evidence = vec![Evidence::new(
+        "meeting-notes.md",
+        EvidenceMethod::DocExtraction,
+    )];
+    let koid2 = k.derive(d2).unwrap().koid;
+
+    // SOURCE retains exactly the KOs whose evidence trail names the artifact.
+    assert_eq!(
+        match_object_koids(&k, r#"MATCH fact SOURCE "sec-filing.pdf" RETURN *"#),
+        vec![koid1]
+    );
+    assert_eq!(
+        match_object_koids(&k, r#"MATCH fact SOURCE "meeting-notes.md" RETURN *"#),
+        vec![koid2]
+    );
+    // Exact match only — a prefix is not a hit.
+    assert!(match_object_koids(&k, r#"MATCH fact SOURCE "sec-filing" RETURN *"#).is_empty());
+    // No matching artifact → empty, not an error.
+    assert!(match_object_koids(&k, r#"MATCH fact SOURCE "nope.md" RETURN *"#).is_empty());
+    // Unfiltered matches see both.
+    assert_eq!(match_object_koids(&k, "MATCH fact RETURN *").len(), 2);
+}

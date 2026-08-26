@@ -154,6 +154,9 @@ pub enum IrOp {
     /// v0.3 K1 leftover: protocol-level epistemic filter — keep rows whose
     /// epistemic status (an extension-backed field) is in `allowed`.
     EpistemicFilter { allowed: Vec<String> },
+    /// QL-006: provenance filter — keep rows whose evidence trail contains
+    /// an entry with this source artifact (exact match).
+    ProvenanceFilter { source: String },
     /// Project specific fields from the result set.
     Project { fields: Vec<String> },
 }
@@ -219,7 +222,11 @@ impl IrPlan {
                         i
                     )))
                 }
-                IrOp::Temporal { .. } | IrOp::EpistemicFilter { .. } if !seen_scan => {
+                IrOp::Temporal { .. }
+                | IrOp::EpistemicFilter { .. }
+                | IrOp::ProvenanceFilter { .. }
+                    if !seen_scan =>
+                {
                     return Err(KError::InvalidQuery(format!(
                         "{:?} at position {}: requires Scan",
                         op, i

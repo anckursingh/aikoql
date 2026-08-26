@@ -78,6 +78,15 @@ fn cover_match_traverse() {
 }
 
 #[test]
+fn cover_match_source() {
+    let m = match parser::parse(r#"MATCH Fact SOURCE "x.pdf" RETURN *"#).unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.provenance.as_deref(), Some("x.pdf"));
+}
+
+#[test]
 fn cover_match_all_clauses() {
     let m = match parser::parse(
         r#"MATCH Person WHERE x == "y" SIMILAR TO "q" TRAVERSE knows RETURN explain"#,

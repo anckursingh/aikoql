@@ -417,6 +417,22 @@ impl Interpreter {
                 self.cached_objects = Some(out.clone());
                 Ok(RowSet::Objects(out))
             }
+            IrOp::ProvenanceFilter { source } => {
+                let kos = match input {
+                    RowSet::Objects(kos) => kos,
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "ProvenanceFilter requires Object input".into(),
+                        ))
+                    }
+                };
+                let out: Vec<KnowledgeObject> = kos
+                    .into_iter()
+                    .filter(|ko| ko.evidence().iter().any(|e| e.source_artifact == *source))
+                    .collect();
+                self.cached_objects = Some(out.clone());
+                Ok(RowSet::Objects(out))
+            }
             IrOp::Project { fields } => {
                 let mut kos = match input {
                     RowSet::Objects(kos) => kos,
@@ -635,7 +651,8 @@ impl Default for Runtime {
 mod tests {
     use super::*;
     use aikoql_kernel::{
-        Clock, ManualClock, MemoryEngine, Metadata, RememberRequest, SemanticBlock,
+        Clock, DeriveRequest, Evidence, EvidenceMethod, ManualClock, MemoryEngine, Metadata,
+        RememberRequest, SemanticBlock,
     };
     use std::sync::Arc;
 
@@ -1473,5 +1490,42 @@ mod tests {
         let kos = objects(Interpreter::execute(&k, &plan).unwrap());
         assert_eq!(kos.len(), 1);
         assert_eq!(kos[0].epistemic_status(), EpistemicStatus::Verified);
+    }
+
+    #[test]
+    fn provenance_filter_keeps_kos_by_source_artifact() {
+        let (k, _clock) = mk_with_clock();
+        let mut d1 = DeriveRequest::new(Subject::new("alice"), "fact");
+        d1.evidence = vec![Evidence::new(
+            "sec-filing.pdf",
+            EvidenceMethod::DocExtraction,
+        )];
+        k.derive(d1).unwrap();
+        let mut d2 = DeriveRequest::new(Subject::new("alice"), "fact");
+        d2.evidence = vec![Evidence::new(
+            "meeting-notes.md",
+            EvidenceMethod::DocExtraction,
+        )];
+        k.derive(d2).unwrap();
+        // a bare remember()d fact carries no evidence → always dropped
+        fact_with_validity(&k, &_clock, "alice", "plain", 3, None);
+
+        let run = |source: &str| {
+            let mut plan = scan_plan();
+            plan.operators.push(IrOp::ProvenanceFilter {
+                source: source.into(),
+            });
+            objects(Interpreter::execute(&k, &plan).unwrap())
+        };
+
+        assert_eq!(run("sec-filing.pdf").len(), 1);
+        assert_eq!(
+            run("sec-filing.pdf")[0].evidence()[0].source_artifact,
+            "sec-filing.pdf"
+        );
+        assert_eq!(run("meeting-notes.md").len(), 1);
+        // exact match: prefix and absent artifacts yield nothing
+        assert!(run("sec-filing").is_empty());
+        assert!(run("nope.md").is_empty());
     }
 }

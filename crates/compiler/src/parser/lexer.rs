@@ -34,6 +34,8 @@ pub enum Token {
     Between,
     Historical,
     Epistemic,
+    // QL-006: provenance filter (SOURCE "artifact")
+    Source,
     // Symbols
     Eq,     // ==
     Neq,    // !=
@@ -162,6 +164,7 @@ impl Lexer {
             "BETWEEN" => Token::Between,
             "HISTORICAL" => Token::Historical,
             "EPISTEMIC" => Token::Epistemic,
+            "SOURCE" => Token::Source,
             _ => Token::Ident(s),
         }
     }

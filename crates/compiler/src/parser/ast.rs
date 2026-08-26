@@ -40,6 +40,9 @@ pub struct MatchStatement {
     pub temporal: Option<TemporalClause>,
     /// v0.3 K1 leftover: epistemic filter clause (EPISTEMIC <status>, ...).
     pub epistemic: Option<EpistemicClause>,
+    /// QL-006: provenance filter (SOURCE "artifact") — keep rows whose
+    /// evidence trail contains the given source artifact (exact match).
+    pub provenance: Option<String>,
     pub projection: Projection,
 }
 

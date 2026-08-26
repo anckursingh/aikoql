@@ -79,7 +79,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | TEMP-001..003 Validity windows, history, future | P0/P1 | ✅ | `temporal.rs`, `scripts/e2e-k2-temporal.js` |
 | CON-001..003 Contradictions | P0/P1 | ✅ | `epistemic.rs`, `evals.rs` (e03) — claims + evidence + resolution |
 | CST-001..004 Schema/cardinality/precondition/policy constraints | P0 | ✅ | `conformance.rs` + MRFC-0060 phases C3–C9 |
-| QL-001..009 Parser determinism, diagnostics, injection | P0/P1 | ✅ | `crates/compiler/tests/golden_snapshots.rs`, `grammar_coverage.rs`, `fuzz_parser.rs` |
+| QL-001..009 Parser determinism, diagnostics, injection | P0/P1 | ✅ | `crates/compiler/tests/golden_snapshots.rs`, `grammar_coverage.rs`, `fuzz_parser.rs`; QL-006 provenance filter (`SOURCE "artifact"` → `IrOp::ProvenanceFilter`, exact match on `EXT_EVIDENCE.source_artifact`): `conformance.rs::t_ql6_source_filters_by_evidence_artifact` + runtime `provenance_filter_keeps_kos_by_source_artifact` |
 | QL-007 Constraint-aware program query | P1 | ✅ | `experiences.rs::match_experiences_gates_on_all_reuse_condition_tokens` — all-token all-or-nothing gate, fail-closed on empty tokens, ACL-filtered, expiry/invalidation filtered |
 | EXE-001..006 Query execution oracles | P0/P1 | ✅ | `conformance.rs`, `evals.rs`, `indexes.rs` |
 

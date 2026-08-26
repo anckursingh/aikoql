@@ -223,6 +223,11 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
             allowed: ep.allowed.clone(),
         });
     }
+    if let Some(ref src) = m.provenance {
+        ops.push(IrOp::ProvenanceFilter {
+            source: src.clone(),
+        });
+    }
 
     // Predicates → Filter.
     let flat = flatten_predicates(&m.predicates);
@@ -480,6 +485,26 @@ mod tests {
         // temporal op lands before Filter in the operator pipeline.
         let plan = compile("MATCH Fact WHERE severity == \"high\" AS_OF 1000 RETURN *").unwrap();
         assert!(matches!(plan.operators[1], IrOp::Temporal { .. }));
+        assert!(matches!(plan.operators[2], IrOp::Filter { .. }));
+    }
+
+    #[test]
+    fn compile_match_source_lowers_to_provenance_filter() {
+        let plan = compile("MATCH Fact SOURCE \"sec-filing\" RETURN *").unwrap();
+        assert_eq!(plan.operators.len(), 2);
+        match &plan.operators[1] {
+            IrOp::ProvenanceFilter { source } => assert_eq!(source, "sec-filing"),
+            _ => panic!("expected ProvenanceFilter op"),
+        }
+    }
+
+    #[test]
+    fn provenance_clause_placed_before_filter() {
+        // WHERE must apply after provenance retention — the filter op lands
+        // after ProvenanceFilter in the operator pipeline.
+        let plan = compile("MATCH Fact SOURCE \"sec-filing\" WHERE severity == \"high\" RETURN *")
+            .unwrap();
+        assert!(matches!(plan.operators[1], IrOp::ProvenanceFilter { .. }));
         assert!(matches!(plan.operators[2], IrOp::Filter { .. }));
     }
 

@@ -147,7 +147,7 @@ const MATRIX: &[Row] = &[
     row("QL-003", "QL", "P0", "covered", Some("crates/compiler/tests/golden_snapshots.rs"), None),
     row("QL-004", "QL", "P0", "covered", Some("crates/compiler/tests/golden_snapshots.rs"), None),
     row("QL-005", "QL", "P1", "covered", Some("crates/compiler/tests/golden_snapshots.rs"), None),
-    row("QL-006", "QL", "P1", "partial", None, Some("provenance filter in query grammar untested")),
+    row("QL-006", "QL", "P1", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     row("QL-007", "QL", "P1", "covered", Some("crates/kernel/tests/experiences.rs"), None),
     row("QL-008", "QL", "P0", "covered", Some("crates/compiler/tests/grammar_coverage.rs"), None),
     row("QL-009", "QL", "P0", "covered", Some("crates/compiler/tests/fuzz_parser.rs"), None),

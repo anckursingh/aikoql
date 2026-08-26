@@ -37,6 +37,7 @@ fn token_name(t: &Token) -> String {
         Token::Between => "BETWEEN".into(),
         Token::Historical => "HISTORICAL".into(),
         Token::Epistemic => "EPISTEMIC".into(),
+        Token::Source => "SOURCE".into(),
         Token::Eq => "==".into(),
         Token::Neq => "!=".into(),
         Token::Lt => "<".into(),
@@ -154,6 +155,7 @@ impl Parser {
         let mut trav = None;
         let mut temporal = None;
         let mut epistemic = None;
+        let mut provenance = None;
         loop {
             match &self.current {
                 Token::Where | Token::And | Token::Or => {
@@ -197,6 +199,14 @@ impl Parser {
                     }
                     epistemic = Some(EpistemicClause { allowed });
                 }
+                Token::Source => {
+                    if provenance.is_some() {
+                        return Err(unexpected(&self.current, self.line, self.col)
+                            .with_hint("duplicate provenance clause"));
+                    }
+                    self.advance();
+                    provenance = Some(self.expect_string()?);
+                }
                 Token::Return => {
                     self.advance();
                     return Ok(MatchStatement {
@@ -206,6 +216,7 @@ impl Parser {
                         traverse: trav,
                         temporal,
                         epistemic,
+                        provenance,
                         projection: self.parse_projection()?,
                     });
                 }
@@ -214,7 +225,7 @@ impl Parser {
                 }
                 _ => {
                     return Err(unexpected(&self.current, self.line, self.col).with_hint(
-                        "expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, or RETURN",
+                        "expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, SOURCE, or RETURN",
                     ))
                 }
             }
@@ -829,6 +840,33 @@ mod tests {
     #[test]
     fn parse_match_duplicate_temporal_is_rejected() {
         assert!(Parser::new("MATCH Person AS_OF 1000 AS_OF 2000 RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn parse_match_source_clause() {
+        let m = parse_match("MATCH Fact SOURCE \"sec-filing\" RETURN *");
+        assert_eq!(m.provenance, Some("sec-filing".into()));
+    }
+
+    #[test]
+    fn parse_match_source_composes_with_temporal() {
+        let m = parse_match("MATCH Fact AS_OF 1000 SOURCE \"sec-filing\" RETURN *");
+        assert_eq!(m.temporal, Some(TemporalClause::AsOf(1_000)));
+        assert_eq!(m.provenance, Some("sec-filing".into()));
+    }
+
+    #[test]
+    fn parse_match_source_requires_string() {
+        assert!(Parser::new("MATCH Fact SOURCE 42 RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn parse_match_duplicate_source_is_rejected() {
+        assert!(Parser::new("MATCH Fact SOURCE \"a\" SOURCE \"b\" RETURN *")
             .parse_statement()
             .is_err());
     }
