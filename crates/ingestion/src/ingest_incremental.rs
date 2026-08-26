@@ -265,6 +265,17 @@ pub fn incremental_diff_ingest(
             .iter()
             .any(|p| source_matches(doc, &p.to_string_lossy()))
     });
+    // FRESH-001 symmetry for entities: a re-parsed document replaces its
+    // previous entities wholesale too. Without this, merge_knowledge_ir
+    // folds the fresh entity into its own stale copy and its multi-source
+    // confidence boost double-counts the SAME document (0.75+0.75 → 1.0),
+    // silently inflating epistemic metadata on every edit.
+    prev_ir.entities.retain(|e| {
+        let doc = e.evidence.document_id.as_deref().unwrap_or("");
+        !existing
+            .iter()
+            .any(|p| source_matches(doc, &p.to_string_lossy()))
+    });
     // EVO-003: relations from changed files must not survive as current
     // truth — the re-parsed new IRs supply the current relations. Rename
     // old-paths are covered too; the rename-new IR re-emits

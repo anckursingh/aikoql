@@ -28,6 +28,8 @@ ureq = { version = "3", features = ["json"], optional = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 # FlateDecode PDF fixtures in tests. Already in the lockfile via lopdf.
 flate2 = "1"
+# QA2-CONT-001 restart/rebuild legs: IndexMaintainer journal replay.
+aikoql-scheduler = { path = "../engines/scheduler" }
 
 [features]
 # PR-F DoD row 14: optional VLM analyzer set (ureq, env-configured).
