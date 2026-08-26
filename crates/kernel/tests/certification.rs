@@ -192,7 +192,7 @@ const MATRIX: &[Row] = &[
     row("PRG-004", "PRG", "P0", "covered", Some("crates/kernel/tests/conformance.rs"), None),
     row("PRG-005", "PRG", "P0", "covered", Some("crates/kernel/tests/experiences.rs"), None),
     row("PRG-006", "PRG", "P0", "covered", Some("crates/kernel/tests/experiences.rs"), None),
-    row("PRG-007", "PRG", "P1", "partial", None, Some("idempotency/retry untested")),
+    row("PRG-007", "PRG", "P1", "covered", Some("crates/services/api/mcp/src/tests.rs"), None),
     row("PRG-008", "PRG", "P1", "covered", Some("crates/kernel/tests/experiences.rs"), None),
     // EVO — knowledge evolution
     row("EVO-001", "EVO", "P1", "covered", Some("crates/kernel/tests/derivation.rs"), None),

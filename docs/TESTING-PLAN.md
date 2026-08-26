@@ -95,7 +95,7 @@ Status: ✅ covered · 🟡 partial · ❌ gap. *Location* names the existing te
 | MEM-006 Consolidation (3 episodes → procedure) | — | ✅ | `derivation.rs` (cites source episodes, confidence) |
 | MEM-007 Failed experience | — | ✅ | `experiences.rs` (CONS-004 semantics) |
 | MEM-008 Staleness detection | — | ✅ | `evals.rs` (e02 staleness distribution) |
-| PRG-001..008 Program lifecycle | P0/P1 | ✅ | `experiences.rs`; PRG-007 idempotency/retry 🟡 |
+| PRG-001..008 Program lifecycle | P0/P1 | ✅ | `experiences.rs`; PRG-007 execution_id idempotency/retry → `mcp/src/tests.rs` execute_program_idempotency_execution_id_replays |
 | RET-001 Semantic retrieval | P1 | ✅ | `retrieval_quality.rs` (fusion + degrade paths) |
 | RET-002 Exact structured retrieval | P0 | ✅ | `conformance.rs`, prefix-scan audit (R6) |
 | RET-003 Hybrid retrieval | P1 | ✅ | PR-L RRF fusion, §60 matrix |
