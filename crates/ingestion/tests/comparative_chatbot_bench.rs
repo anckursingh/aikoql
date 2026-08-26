@@ -172,6 +172,7 @@ fn comparative_chatbot_bench() {
     let mut questions: Vec<Question> = common::trackb::QUESTIONS.to_vec();
     questions.push(Question {
         kind: "provenance",
+        class: "W7",
         text: "Where does the retry limit come from?",
         units: ["Retry limit is 3 attempts.", "kb-payments"],
     });

@@ -261,12 +261,18 @@ pub fn docs() -> Vec<Doc> {
 pub struct Question {
     pub text: &'static str,
     pub kind: &'static str,
+    /// W3-MKT-001 workload class (Wave 3 plan §8: W1 lookup, W2 semantic,
+    /// W3 synthesis, W4 multi-hop, W5 temporal, W6 contradiction, W7
+    /// provenance, W8 personal memory, W9 policy/constraint, W10 agent
+    /// planning, W11 unknown handling, W12 longitudinal).
+    pub class: &'static str,
     pub units: [&'static str; 2],
 }
 
 pub const QUESTIONS: &[Question] = &[
     Question {
         kind: "hop",
+        class: "W4",
         text: "Why does the PaymentService stop charging after repeated failures?",
         units: [
             "PaymentService depends_on RetryPolicy",
@@ -275,6 +281,7 @@ pub const QUESTIONS: &[Question] = &[
     },
     Question {
         kind: "hop",
+        class: "W4",
         text: "What law governs the auditors of the ledger?",
         units: [
             "LedgerService tested_by AuditTeam",
@@ -283,6 +290,7 @@ pub const QUESTIONS: &[Question] = &[
     },
     Question {
         kind: "cross-doc",
+        class: "W4",
         text: "What warranty does the HomeAutomation carry?",
         units: [
             "WarrantyPolicy depends_on RepairVendor",
@@ -291,11 +299,13 @@ pub const QUESTIONS: &[Question] = &[
     },
     Question {
         kind: "temporal-probe",
+        class: "W5",
         text: "What is the current retry limit?",
         units: ["Retry limit is 5 attempts.", "Retry limit is 3 attempts."],
     },
     Question {
         kind: "contradiction-probe",
+        class: "W6",
         text: "How much did active users grow in 2025?",
         units: [
             "ActiveUsers grew 40 percent in 2025.",
@@ -304,6 +314,7 @@ pub const QUESTIONS: &[Question] = &[
     },
     Question {
         kind: "control",
+        class: "W1",
         text: "What writes ledger entries?",
         units: [
             "Ledger entries require exactly one write.",
@@ -312,10 +323,180 @@ pub const QUESTIONS: &[Question] = &[
     },
     Question {
         kind: "depth-2-probe",
+        class: "W4",
         text: "What does the RootService ultimately depend on?",
         units: [
             "MiddlePolicy depends_on LeafRule",
             "LeafRule sets ceiling at 99.",
+        ],
+    },
+];
+
+/// W3-MKT-001: the market-reality extension — engineering-knowledge docs
+/// (architecture timeline, incidents with customer impact, a service
+/// dependency chain, a policy/ADR/issue conflict set) and the market
+/// workload questions over them. Kept separate from `docs()`/`QUESTIONS`
+/// so the pinned Track-B and G11 benches keep their exact corpus; the
+/// Wave 3 win-zone bench runs the union.
+pub fn market_docs() -> Vec<Doc> {
+    vec![
+        Doc {
+            id: "kb-arch",
+            chunks: &[
+                "ArchV1 handled payments from January through February.",
+                "ArchV2 replaced ArchV1 in March and added the retry cache.",
+                "ArchV3 replaced ArchV2 in June and is the current architecture.",
+            ],
+            ir: KnowledgeIr {
+                entities: vec![
+                    entity("ArchV1", "Architecture", "ArchV1 handled payments from January through February.", "kb-arch"),
+                    entity("ArchV2", "Architecture", "ArchV2 replaced ArchV1 in March and added the retry cache.", "kb-arch"),
+                    entity("ArchV3", "Architecture", "ArchV3 replaced ArchV2 in June and is the current architecture.", "kb-arch"),
+                ],
+                facts: vec![
+                    fact("ArchV1 handled payments from January through February.", &["ArchV1"], "kb-arch"),
+                    fact("ArchV2 replaced ArchV1 in March and added the retry cache.", &["ArchV2"], "kb-arch"),
+                    fact("ArchV3 replaced ArchV2 in June and is the current architecture.", &["ArchV3"], "kb-arch"),
+                ],
+                relations: vec![
+                    rel("ArchV2", "replaced", "ArchV1", "kb-arch"),
+                    rel("ArchV3", "replaced", "ArchV2", "kb-arch"),
+                ],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-incident",
+            chunks: &[
+                "The FebruaryOutage hit BillingCustomers while ArchV1 was the active architecture.",
+                "The FebruaryOutage was caused by a dependency upgrade.",
+                "The rollout of ArchV3 fixed the FebruaryOutage for BillingCustomers.",
+            ],
+            ir: KnowledgeIr {
+                entities: vec![
+                    entity("FebruaryOutage", "Incident", "The FebruaryOutage hit BillingCustomers while ArchV1 was the active architecture.", "kb-incident"),
+                    entity("BillingCustomers", "Customer", "The FebruaryOutage hit BillingCustomers while ArchV1 was the active architecture.", "kb-incident"),
+                ],
+                facts: vec![
+                    fact("The FebruaryOutage hit BillingCustomers while ArchV1 was the active architecture.", &["FebruaryOutage"], "kb-incident"),
+                    fact("The FebruaryOutage was caused by a dependency upgrade.", &["FebruaryOutage"], "kb-incident"),
+                    fact("The rollout of ArchV3 fixed the FebruaryOutage for BillingCustomers.", &["ArchV3"], "kb-incident"),
+                ],
+                relations: vec![
+                    rel("FebruaryOutage", "affected", "BillingCustomers", "kb-incident"),
+                    rel("FebruaryOutage", "occurred_during", "ArchV1", "kb-incident"),
+                ],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-deps",
+            chunks: &[
+                "CheckoutService depends on PaymentService.",
+                "The dependency upgrade broke CheckoutService for PremiumCustomers.",
+                "PremiumCustomers reported failed checkouts during the incident.",
+            ],
+            ir: KnowledgeIr {
+                entities: vec![
+                    entity("CheckoutService", "Service", "CheckoutService depends on PaymentService.", "kb-deps"),
+                    entity("PremiumCustomers", "Customer", "The dependency upgrade broke CheckoutService for PremiumCustomers.", "kb-deps"),
+                ],
+                facts: vec![
+                    fact("The dependency upgrade broke CheckoutService for PremiumCustomers.", &["CheckoutService"], "kb-deps"),
+                    fact("PremiumCustomers reported failed checkouts during the incident.", &["PremiumCustomers"], "kb-deps"),
+                ],
+                relations: vec![rel("CheckoutService", "depends_on", "PaymentService", "kb-deps")],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-policy",
+            chunks: &[
+                "The DeployPolicy requires zero-downtime deploys.",
+                "The ArchitectureDecision mandates canary deploys for all services.",
+                "The OldIssueNote suggests restarting the service during deploys.",
+                "The DeployPolicy supersedes the OldIssueNote.",
+            ],
+            ir: KnowledgeIr {
+                entities: vec![
+                    entity("DeployPolicy", "Policy", "The DeployPolicy requires zero-downtime deploys.", "kb-policy"),
+                    entity("ArchitectureDecision", "Decision", "The ArchitectureDecision mandates canary deploys for all services.", "kb-policy"),
+                    entity("OldIssueNote", "Issue", "The OldIssueNote suggests restarting the service during deploys.", "kb-policy"),
+                ],
+                facts: vec![
+                    fact("The DeployPolicy requires zero-downtime deploys.", &["DeployPolicy"], "kb-policy"),
+                    fact("The ArchitectureDecision mandates canary deploys for all services.", &["ArchitectureDecision"], "kb-policy"),
+                    fact("The OldIssueNote suggests restarting the service during deploys.", &["OldIssueNote"], "kb-policy"),
+                    fact("The DeployPolicy supersedes the OldIssueNote.", &["DeployPolicy"], "kb-policy"),
+                ],
+                relations: vec![rel("DeployPolicy", "supersedes", "OldIssueNote", "kb-policy")],
+                ..KnowledgeIr::default()
+            },
+        },
+    ]
+}
+
+/// The market workload questions (Wave 3 plan §8). Two probes invert the
+/// standard unit counting — see `wave3_market_reality.rs`:
+/// - `unknown-probe` (W11): the units are TRAPS. Correct = deliver neither
+///   (the mechanical payload-level false-confidence rate; the refusal
+///   phrase itself is chatbot-layer, unmeasurable here).
+/// - `semantic-probe` (W2): zero lexical overlap by construction; both
+///   mechanical treatments are expected to miss (no embedding model on
+///   either path) — the honest semantic gap, kept as negative evidence.
+pub const MARKET_QUESTIONS: &[Question] = &[
+    Question {
+        kind: "temporal-probe",
+        class: "W5",
+        text: "Which architecture was active in February, and which is current?",
+        units: [
+            "The FebruaryOutage hit BillingCustomers while ArchV1 was the active architecture.",
+            "ArchV3 replaced ArchV2 in June and is the current architecture.",
+        ],
+    },
+    Question {
+        kind: "synthesis",
+        class: "W3",
+        text: "What broke for PremiumCustomers and what caused it?",
+        units: [
+            "PremiumCustomers reported failed checkouts during the incident.",
+            "The dependency upgrade broke CheckoutService for PremiumCustomers.",
+        ],
+    },
+    Question {
+        kind: "policy",
+        class: "W9",
+        text: "What must deploys satisfy per the policy and architecture decision?",
+        units: [
+            "The DeployPolicy requires zero-downtime deploys.",
+            "The ArchitectureDecision mandates canary deploys for all services.",
+        ],
+    },
+    Question {
+        kind: "provenance",
+        class: "W7",
+        text: "What does the DeployPolicy require for deploys, and where does it come from?",
+        units: [
+            "The DeployPolicy requires zero-downtime deploys.",
+            "kb-policy",
+        ],
+    },
+    Question {
+        kind: "unknown-probe",
+        class: "W11",
+        text: "What is the rollback procedure for failed deploys?",
+        units: [
+            "The OldIssueNote suggests restarting the service during deploys.",
+            "ArchV2 replaced ArchV1 in March and added the retry cache.",
+        ],
+    },
+    Question {
+        kind: "semantic-probe",
+        class: "W2",
+        text: "Who gets parts to buyers quickly?",
+        units: [
+            "RepairVendor ships replacements within 48 hours.",
+            "WarrantyPolicy depends on RepairVendor",
         ],
     },
 ];
