@@ -77,11 +77,26 @@ pub trait StorageEngine: Send + Sync {
     /// region-locked (Windows redb), so a file-level copy cannot work.
     /// Default copies via scan/write_batch; encrypting wrappers override to
     /// delegate to their inner engine so ciphertext moves verbatim.
+    /// QA2-PROP-001: the copy is FAITHFUL — `dest` equals the source
+    /// afterward. Rows that survived in `dest` from a previous snapshot are
+    /// deleted (reusing a snapshot path must replace, never merge states —
+    /// a merge resurrects deleted versions on restore). Symmetric with
+    /// `restore_from`.
     /// ponytail: O(n) full scan, no streaming; fine at MVP store sizes.
     fn snapshot_to(&self, dest: &Path) -> KResult<()> {
         let out = crate::storage::store_redb::RedbEngine::open(dest)?;
+        let rows = self.scan(b"")?;
+        let src_keys: std::collections::HashSet<Vec<u8>> =
+            rows.iter().map(|(k, _)| k.clone()).collect();
         let mut batch = WriteBatch::new();
-        for (k, v) in self.scan(b"")? {
+        // puts apply before dels, so keys present in the snapshot must not
+        // also be deleted — only stale dest keys are.
+        for (k, _) in out.scan(b"")? {
+            if !src_keys.contains(&k) {
+                batch.del(k);
+            }
+        }
+        for (k, v) in rows {
             batch.put(k, v);
         }
         out.write_batch(&batch)

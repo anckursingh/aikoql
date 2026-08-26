@@ -30,6 +30,18 @@ impl RelationshipManager {
         self.repo.write_rel_index(batch, src, rel_type, dst);
     }
 
+    /// Remove both outbound and inbound index entries for one edge.
+    /// Idempotent: deleting an absent key is a no-op at the KV level.
+    pub fn delete_index(
+        &self,
+        batch: &mut crate::storage::store::WriteBatch,
+        src: &KOID,
+        rel_type: &str,
+        dst: &KOID,
+    ) {
+        self.repo.del_rel_index(batch, src, rel_type, dst);
+    }
+
     /// Return outbound edges from `koid`, optionally filtered by `rel_type`.
     pub fn outbound(&self, koid: &KOID, rel_type: Option<&str>) -> KResult<Vec<(String, KOID)>> {
         self.repo.scan_outbound(koid, rel_type)

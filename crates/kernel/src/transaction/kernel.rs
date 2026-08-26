@@ -1155,6 +1155,7 @@ impl Kernel {
         actor: &str,
         note: Option<String>,
         idem: Option<&str>,
+        prev_rels: Option<&[RelationshipRef]>,
     ) -> KResult<(u64, u64)> {
         ko.validate()?;
         let commit_ts = self.hlc.now(self.clock.as_ref());
@@ -1207,6 +1208,27 @@ impl Kernel {
             };
             self.relationships
                 .write_index(&mut batch, &src, &rel.rel_type, &dst);
+        }
+        // QA2-PROP-002: remove index entries for edges that were on the
+        // previous head but are absent from this version (unrelate). The
+        // removals land in the same batch as the commit, so the index and
+        // the head can never drift — across a crash or otherwise. The diff
+        // is a multiset subtraction: a removed-and-readded edge stays.
+        if let Some(prev) = prev_rels {
+            let mut removed: Vec<RelationshipRef> = prev.to_vec();
+            for rel in &ko.relationships {
+                if let Some(i) = removed.iter().position(|p| p == rel) {
+                    removed.swap_remove(i);
+                }
+            }
+            for rel in &removed {
+                let (src, dst) = match rel.direction {
+                    Direction::Outbound => (ko.koid, rel.target),
+                    Direction::Inbound => (rel.target, ko.koid),
+                };
+                self.relationships
+                    .delete_index(&mut batch, &src, &rel.rel_type, &dst);
+            }
         }
         self.repo.put_head(
             &mut batch,
@@ -1551,7 +1573,28 @@ impl Kernel {
             metadata: req.metadata.clone(),
             properties: req.properties.clone(),
             semantic: req.semantic.clone(),
-            relationships: req.relationships.clone(),
+            relationships: if creating {
+                req.relationships.clone()
+            } else {
+                // Kernel-managed edges (written by derive/supersede/contradict)
+                // survive updates the caller did not restate — dropping them
+                // would break lineage BFS (DERIVED_FROM), supersession
+                // traversal, and conflict resolution. Symmetric with the
+                // extension carry-forward above. Caller-restated edges are
+                // replaced wholesale as before (remember() semantics).
+                let mut rels = req.relationships.clone();
+                let h = head.as_ref().unwrap();
+                for hr in &h.relationships {
+                    if (hr.rel_type == SUPERSEDES
+                        || hr.rel_type == DERIVED_FROM
+                        || hr.rel_type == CONTRADICTS)
+                        && !rels.contains(hr)
+                    {
+                        rels.push(hr.clone());
+                    }
+                }
+                rels
+            },
             event_refs: head
                 .as_ref()
                 .map(|h| h.event_refs.clone())
@@ -1720,6 +1763,7 @@ impl Kernel {
             &req.context.subject.name,
             req.note.clone(),
             req.idempotency_key.as_deref(),
+            head.as_ref().map(|h| h.relationships.as_slice()),
         )?;
         if is_auth_meta {
             self.refresh_auth_cache()?;
@@ -2241,6 +2285,7 @@ impl Kernel {
             &ctx.subject.name,
             note,
             None,
+            Some(&head.relationships),
         )?;
         Ok(Evolved {
             koid: *koid,
@@ -2362,6 +2407,7 @@ impl Kernel {
             &ctx.subject.name,
             reason,
             None,
+            Some(&head.relationships),
         )?;
         Ok(EpistemicChanged {
             koid: *koid,
@@ -2414,6 +2460,7 @@ impl Kernel {
                     &ctx.subject.name,
                     note,
                     None,
+                    Some(&head.relationships),
                 )?;
                 Ok(Forgotten {
                     koid: *koid,

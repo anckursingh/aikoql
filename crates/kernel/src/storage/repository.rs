@@ -344,6 +344,13 @@ impl KnowledgeRepository {
         batch.put(rel_in_key(dst, rel_type, src), vec![]);
     }
 
+    /// Remove both outbound and inbound index entries for one edge.
+    /// Idempotent: deleting an absent key is a no-op at the KV level.
+    pub fn del_rel_index(&self, batch: &mut WriteBatch, src: &KOID, rel_type: &str, dst: &KOID) {
+        batch.del(rel_out_key(src, rel_type, dst));
+        batch.del(rel_in_key(dst, rel_type, src));
+    }
+
     /// Scan outbound edges from `src`, optionally filtered by `rel_type`.
     /// Returns `(rel_type, target_koid)` pairs in key order.
     pub fn scan_outbound(
