@@ -25,7 +25,7 @@
 
 mod common;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::time::Instant;
 
 use aikoql_ingestion::{
@@ -38,6 +38,7 @@ use common::trackb::{
 use common::trackb31::MARKET_QUESTIONS_31;
 use common::trackb31_docs::market_docs_31;
 use common::trackb_holdout::{holdout_docs, HOLDOUT_QUESTIONS};
+use common::wave31_sim::{entity_chunk_index, graph_expand, pack_budgeted, rank_positions};
 
 /// Token budget all treatments must respect (len/4 estimate — the G12
 /// convention, same value `knowledge_bench.rs` and Wave 3 use).
@@ -65,91 +66,6 @@ fn union_questions() -> Vec<&'static Question> {
         .iter()
         .chain(MARKET_QUESTIONS.iter())
         .chain(MARKET_QUESTIONS_31.iter())
-        .collect()
-}
-
-/// Treatment Graph-RAG's expansion: every chunk naming an entity named by
-/// a packed chunk is added, transitively (G11's `graph_expand`).
-/// ponytail: expansion is transitive unbounded within the corpus; a real
-/// Graph-RAG caps hops/top-N — the corpus bounds it here.
-fn graph_expand(
-    seed: &[usize],
-    corpus: &[common::CorpusChunk],
-    index: &[(String, Vec<usize>)],
-) -> Vec<usize> {
-    let mut order = seed.to_vec();
-    let mut packed: HashSet<usize> = seed.iter().copied().collect();
-    loop {
-        let texts: Vec<String> = order.iter().map(|&p| corpus[p].2.to_lowercase()).collect();
-        let mut added = false;
-        for (name, chunks) in index {
-            if !texts.iter().any(|t| t.contains(name)) {
-                continue;
-            }
-            for &p in chunks {
-                if packed.insert(p) {
-                    order.push(p);
-                    added = true;
-                }
-            }
-        }
-        if !added {
-            break;
-        }
-    }
-    order
-}
-
-/// Ranked (fixture, index) pairs → corpus positions, in rank order.
-fn rank_positions(
-    corpus: &[common::CorpusChunk],
-    q: &str,
-    provider: &MockEmbeddingProvider,
-) -> Vec<usize> {
-    let pos: HashMap<(&str, usize), usize> = corpus
-        .iter()
-        .enumerate()
-        .map(|(p, (f, i, _))| ((*f, *i), p))
-        .collect();
-    common::rank(corpus, q, provider, false)
-        .iter()
-        .map(|pair| pos[pair])
-        .collect()
-}
-
-/// Pack chunk positions in order until the token budget is spent.
-fn pack_budgeted(order: &[usize], corpus: &[common::CorpusChunk]) -> String {
-    let mut out = String::new();
-    for &p in order {
-        let text = &corpus[p].2;
-        if (out.len() + text.len() + 1) / 4 > BUDGET {
-            break;
-        }
-        out.push_str(text);
-        out.push(' ');
-    }
-    out
-}
-
-/// Entity name (lowercased) → corpus positions of chunks mentioning it —
-/// the extracted graph's entity→chunk links (G11 convention).
-fn entity_chunk_index(
-    merged: &KnowledgeIr,
-    corpus: &[common::CorpusChunk],
-) -> Vec<(String, Vec<usize>)> {
-    merged
-        .entities
-        .iter()
-        .map(|e| e.name.to_lowercase())
-        .map(|n| {
-            let chunks: Vec<usize> = corpus
-                .iter()
-                .enumerate()
-                .filter(|(_, (_, _, t))| t.to_lowercase().contains(&n))
-                .map(|(p, _)| p)
-                .collect();
-            (n, chunks)
-        })
         .collect()
 }
 

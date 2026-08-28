@@ -143,3 +143,45 @@ authoritative answers, repeatable advantage on the W7 class. Verdict:
   Gated real-LLM leg: `wave31_agent_sim_llm` (feature `answer_gen`,
   `AIKOQL_ANSWER_MODEL`) — same chain with a live generator, and the
   generation-retry surface the deterministic slice structurally lacks.
+
+## Wave 3.1 evidence-to-decision + temporal answer (W31-DEC-001 / W31-TEMP-001)
+
+Predefined acceptance (written before first measurement): DEC-001's five
+items each judged independently; TEMP-001's four dimensions each judged
+independently — no aggregate can hide a failure. Verdict: **all true,
+2/2 on all four TEMP dimensions**.
+
+W31-DEC-001 (deployment-window scenario, kernel supersession lineage
+v1→v2→v3 + live conflicting runbook):
+- current authoritative evidence selected — the decision leads with the
+  v3 policy statement; superseded v1/v2 statements appear nowhere;
+- historical evidence preserved — superseded claims still return from
+  the kernel with statements and properties intact (valid_to stamped);
+- material conflict disclosed — the runbook's conflicting statement is
+  delivered as an explicit conflict;
+- unsafe instruction rejected — both action probes Refused by both the
+  sim policy and the decision script (no Act arm);
+- decision supported by evidence — every decision statement comes from
+  the package, and the source doc is cited.
+
+W31-TEMP-001 (retry-limit timeline v1/v2/v3, four spec questions):
+
+| Dimension | AIKOQL | Graph-RAG | RAG |
+|---|---|---|---|
+| historical (Feb) | 2/2 grounded | 1/2 | 1/2 |
+| current (now) | 2/2 grounded | 1/2 **stale** | 1/2 **stale** |
+| change | 2/2 | 2/2 | 2/2 |
+| why | 2/2 | 2/2 | 2/2 |
+
+- On "what is the retry limit now?" both RAG treatments deliver the
+  superseded statements as current (stale=true) — the G11 temporal
+  finding reproduced at agent-answer level; AIKOQL's validity boundary
+  excludes them (zero stale statements on every dimension).
+- Only AIKOQL answers are grounded (cite a source); raw chunks carry no
+  citations, so the RAG rows miss the evidence unit on historical/current.
+- Production fix driven by this test: the validity boundary now filters
+  entity mentions whose text is a stale statement
+  (`compile_context_semantic_with`), with the pinned unit test
+  `stale_mentions_are_suppressed_by_validity_filter`.
+- Tests: `wave31_decision::w31_dec_001_evidence_to_decision_correctness`,
+  `wave31_decision::w31_temp_001_historical_vs_current_agent_answer`.

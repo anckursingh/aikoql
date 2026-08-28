@@ -80,3 +80,23 @@ All 12 classes ≥ 10 tasks. Holdout: 24 tasks, 2 per class.
   and an invalidation note here.
 - Wave 3 measurements (`wave3_market_reality.rs`) are untouched by this
   corpus: the Wave 3 numbers stay frozen.
+
+## Scenario corpora (DEC-001 / TEMP-001) — v1.0
+
+Two small scenario corpora back the decision and temporal experiments
+(`trackb31_docs::decision_docs` / `timeline_docs`), NOT part of the
+frozen 148-task union corpus:
+
+- kb-deploy-{v1,v2,policy,runbook}: deployment-window policy lineage,
+  supersession recorded in the kernel (wave31_decision.rs), plus a live
+  conflicting runbook claim. History facts are past-tense statements in
+  the current doc so stale statements stay exact-substring
+  distinguishable from history.
+- kb-retry-{v1,v2,v3}: retry-limit timeline; the current doc states the
+  full history and the reasons (change/why dimensions).
+
+Rule added by these corpora: the historical question must name the
+entity ("What was the retry limit in February?") — the exact-token gate
+(≥2 content tokens or a ranked entity) is the compiler's lexical
+reachability ceiling; recorded in losses.md, not silently designed
+around.

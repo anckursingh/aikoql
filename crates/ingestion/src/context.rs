@@ -175,6 +175,13 @@ pub fn compile_context_semantic_with(
             let mut mention_score: f32 = 0.0;
             let mut matched_mentions = Vec::new();
             for mention in &e.mentions {
+                // Validity boundary: a mention that is itself a stale
+                // statement (the `f:` contract) must neither score nor
+                // ride into the package — the current-context package
+                // would otherwise present a superseded claim as current.
+                if stale.contains(&format!("f:{mention}")) {
+                    continue;
+                }
                 let ms = keyword_score(mention, &task_words) * 0.5;
                 if ms > 0.0 {
                     matched_mentions.push(mention.clone());
@@ -239,7 +246,12 @@ pub fn compile_context_semantic_with(
                 name: e.name.clone(),
                 type_hint: e.type_hint.clone(),
                 score,
-                mentions: e.mentions.clone(),
+                mentions: e
+                    .mentions
+                    .iter()
+                    .filter(|m| !stale.contains(&format!("f:{m}")))
+                    .cloned()
+                    .collect(),
                 document_id: e.evidence.document_id.clone(),
                 justification,
             }
@@ -648,7 +660,10 @@ const SEMANTIC_MIN: f32 = 0.35;
 /// `stale` (see [`compile_context_semantic_with`]) are excluded from the
 /// package. `stale` is built from the kernel's current state — KOs whose
 /// `valid_at(now)` is false (superseded/expired) are stale, their history
-/// remains reachable via get/trace/AS_OF.
+/// remains reachable via get/trace/AS_OF. The boundary applies to fact
+/// statements AND to entity mentions whose text is itself a stale statement
+/// (the `f:` contract): a superseded claim must not ride into a
+/// current-context package as a mention.
 pub fn compile_context_with_validity(
     task: &str,
     ir: &KnowledgeIr,
@@ -2321,5 +2336,37 @@ mod tests {
         assert!(!names.contains(&"LegacyPolicy"));
         assert!(names.contains(&"RetryPolicy"));
         assert!(!pkg.relations.iter().any(|r| r.object == "LegacyPolicy"));
+    }
+
+    /// The validity boundary applies to entity mentions too: a mention
+    /// whose text IS a stale statement must not ride into a
+    /// current-context package (W31-TEMP-001's finding — a merged
+    /// entity's v1 mention leaked the superseded claim into the current
+    /// answer while the facts were correctly filtered).
+    #[test]
+    fn stale_mentions_are_suppressed_by_validity_filter() {
+        let ir = KnowledgeIr {
+            entities: vec![ent(
+                "RetryPolicy",
+                "Policy",
+                vec!["Retry limit is 2 attempts.", "Retry limit is 5 attempts."],
+            )],
+            facts: vec![],
+            ..Default::default()
+        };
+        let stale: HashSet<String> = HashSet::from(["f:Retry limit is 2 attempts.".to_string()]);
+        let pkg = compile_context_with_validity("retry limit", &ir, 0, None, &stale);
+        let packed: Vec<&str> = pkg
+            .entities
+            .iter()
+            .flat_map(|e| e.mentions.iter().map(|m| m.as_str()))
+            .collect();
+        assert!(!packed.contains(&"Retry limit is 2 attempts."));
+        assert!(packed.contains(&"Retry limit is 5 attempts."));
+
+        // Without the boundary both mentions ride in (the pre-fix
+        // behavior — this assert pins the difference).
+        let unfiltered = compile_context("retry limit", &ir, 0);
+        assert_eq!(unfiltered.entities[0].mentions.len(), 2);
     }
 }

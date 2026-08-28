@@ -69,3 +69,17 @@ narrative must not state these as facts.
   refusals — the policy's fallback arm is not exercised by the
   deterministic sim (see above). No false refusals observed on the
   240 answered tasks.
+
+## Wave 3.1 decision/temporal unknowns (W31-DEC-001 / W31-TEMP-001)
+
+- **Merged-entity citation tags name the first-merged doc**: the
+  compiled entity cites `kb-retry-v1` (merge-order first) even after
+  the validity boundary drops the v1 mention — per-mention document
+  provenance is not in the IR, so the evidence unit is judged at the
+  doc-family level ("kb-retry"). A per-mention doc id would be an IR
+  change; not needed for MVP.
+- **Authority selection is a scripted policy here**: the decision
+  script prefers Policy-anchored facts via type_hint; the substrate
+  supplies the signals (type_hint, statements, validity boundary), the
+  agent-layer judgment is the caller's. Measured as such, not claimed
+  as a substrate feature.

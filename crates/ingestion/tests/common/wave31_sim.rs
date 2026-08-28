@@ -10,7 +10,7 @@
 //! as grounded) and an empty pack (genuine absence). It never Acts.
 #![allow(dead_code)]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 
 use aikoql_ingestion::{
@@ -105,7 +105,11 @@ pub struct SimContext {
 }
 
 /// Ranked (fixture, index) pairs → corpus positions, in rank order.
-fn rank_positions(corpus: &[CorpusChunk], q: &str, provider: &MockEmbeddingProvider) -> Vec<usize> {
+pub fn rank_positions(
+    corpus: &[CorpusChunk],
+    q: &str,
+    provider: &MockEmbeddingProvider,
+) -> Vec<usize> {
     let pos: HashMap<(&str, usize), usize> = corpus
         .iter()
         .enumerate()
@@ -118,7 +122,7 @@ fn rank_positions(corpus: &[CorpusChunk], q: &str, provider: &MockEmbeddingProvi
 }
 
 /// Pack chunk positions in order until the token budget is spent.
-fn pack_budgeted(order: &[usize], corpus: &[CorpusChunk]) -> String {
+pub fn pack_budgeted(order: &[usize], corpus: &[CorpusChunk]) -> String {
     let mut out = String::new();
     for &p in order {
         let text = &corpus[p].2;
@@ -129,6 +133,60 @@ fn pack_budgeted(order: &[usize], corpus: &[CorpusChunk]) -> String {
         out.push(' ');
     }
     out
+}
+
+/// Treatment Graph-RAG's expansion: every chunk naming an entity named by
+/// a packed chunk is added, transitively (G11's `graph_expand`).
+/// ponytail: expansion is transitive unbounded within the corpus; a real
+/// Graph-RAG caps hops/top-N — the corpus bounds it here.
+pub fn graph_expand(
+    seed: &[usize],
+    corpus: &[CorpusChunk],
+    index: &[(String, Vec<usize>)],
+) -> Vec<usize> {
+    let mut order = seed.to_vec();
+    let mut packed: HashSet<usize> = seed.iter().copied().collect();
+    loop {
+        let texts: Vec<String> = order.iter().map(|&p| corpus[p].2.to_lowercase()).collect();
+        let mut added = false;
+        for (name, chunks) in index {
+            if !texts.iter().any(|t| t.contains(name)) {
+                continue;
+            }
+            for &p in chunks {
+                if packed.insert(p) {
+                    order.push(p);
+                    added = true;
+                }
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    order
+}
+
+/// Entity name (lowercased) → corpus positions of chunks mentioning it —
+/// the extracted graph's entity→chunk links (G11 convention).
+pub fn entity_chunk_index(
+    merged: &KnowledgeIr,
+    corpus: &[CorpusChunk],
+) -> Vec<(String, Vec<usize>)> {
+    merged
+        .entities
+        .iter()
+        .map(|e| e.name.to_lowercase())
+        .map(|n| {
+            let chunks: Vec<usize> = corpus
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, _, t))| t.to_lowercase().contains(&n))
+                .map(|(p, _)| p)
+                .collect();
+            (n, chunks)
+        })
+        .collect()
 }
 
 /// The AIKOQL leg: one deterministic compile. Retries stay 0 by

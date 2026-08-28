@@ -77,3 +77,18 @@ per plan §29 — never dropped, never spun.
 - **W6 contradiction is nearly parity**: AIKOQL 27/30 vs RAG 26/30
   (Δ1). Conflict handling helps, but on this corpus the RAG pack
   already carries the conflict sentences.
+
+## Wave 3.1 decision/temporal losses (W31-DEC-001 / W31-TEMP-001)
+
+- **RAG/Graph-RAG deliver stale as current**: on "what is the retry
+  limit now?" both baseline treatments pack the superseded v1/v2 chunks
+  (they share the question's tokens) — 1/2 with stale statements in the
+  payload. The validity boundary is the AIKOQL-side fix; the baselines
+  have no such instrument by construction.
+- **The historical question needs the entity named**: the spec's
+  phrasing "What was true in February?" shares one content token with
+  the history fact, so the compiler's exact-token gate (≥2 content
+  tokens or a ranked entity) yields a healthy empty pack. The corpus
+  rule (lexical match should suffice, the W1 precedent) rewords it to
+  "What was the retry limit in February?" — recorded here as the
+  reachability ceiling of the gate, not silently.

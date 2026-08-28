@@ -724,3 +724,166 @@ pub fn market_docs_31() -> Vec<Doc> {
         },
     ]
 }
+
+// ---------------------------------------------------------------------------
+// W31-DEC-001 / W31-TEMP-001 scenario corpora (decision + timeline).
+//
+// These are NOT part of the frozen 148-task union corpus — they back the
+// evidence-to-decision and historical-vs-current experiments, whose
+// supersession lineage lives in the kernel (wave31_decision.rs) rather
+// than in the docs. Design rules:
+// - every stale statement is an exact chunk sentence of its version doc,
+//   so the exact-substring stale check in wave31_decision.rs works;
+// - the current doc carries the full change history as past-tense facts
+//   ("was … until March"), so history is answerable without AS_OF while
+//   the superseded statements stay distinguishable from the histories.
+// ---------------------------------------------------------------------------
+
+/// v1 superseded claim (DEC-001).
+pub const DEC_V1: &str = "DeployPolicy sets the deployment window to Friday evening.";
+/// v2 superseded claim (DEC-001).
+pub const DEC_V2: &str = "DeployPolicy sets the deployment window to Wednesday 10:00-12:00 UTC.";
+/// v3 current claim (DEC-001).
+pub const DEC_V3: &str = "DeployPolicy sets the deployment window to Tuesday 02:00-04:00 UTC.";
+/// The live conflicting claim (DEC-001): current, never superseded.
+pub const DEC_RUNBOOK: &str = "DeployRunbook allows deployment on any weekday evening.";
+
+/// v1 superseded claim (TEMP-001).
+pub const RET_V1: &str = "RetryLimit is 2 attempts.";
+/// v2 superseded claim (TEMP-001).
+pub const RET_V2: &str = "RetryLimit is 3 attempts.";
+/// v3 current claim (TEMP-001).
+pub const RET_V3: &str = "RetryLimit is 5 attempts.";
+
+/// DEC-001 decision scenario: policy lineage v1→v2→v3 (superseded in the
+/// kernel) plus a live conflicting runbook.
+pub fn decision_docs() -> Vec<Doc> {
+    vec![
+        Doc {
+            id: "kb-deploy-v1",
+            chunks: &[DEC_V1],
+            ir: KnowledgeIr {
+                entities: vec![entity("DeployPolicy", "Policy", DEC_V1, "kb-deploy-v1")],
+                facts: vec![fact(DEC_V1, &["DeployPolicy"], "kb-deploy-v1")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-deploy-v2",
+            chunks: &[DEC_V2],
+            ir: KnowledgeIr {
+                entities: vec![entity("DeployPolicy", "Policy", DEC_V2, "kb-deploy-v2")],
+                facts: vec![fact(DEC_V2, &["DeployPolicy"], "kb-deploy-v2")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-deploy-policy",
+            chunks: &[
+                DEC_V3,
+                "The deployment window was Friday evening until March.",
+                "The deployment window was Wednesday 10:00-12:00 UTC from March to June.",
+                "Deploying on Friday evening violates the current policy.",
+            ],
+            ir: KnowledgeIr {
+                entities: vec![entity("DeployPolicy", "Policy", DEC_V3, "kb-deploy-policy")],
+                facts: vec![
+                    fact(DEC_V3, &["DeployPolicy"], "kb-deploy-policy"),
+                    fact(
+                        "The deployment window was Friday evening until March.",
+                        &["DeployPolicy"],
+                        "kb-deploy-policy",
+                    ),
+                    fact(
+                        "The deployment window was Wednesday 10:00-12:00 UTC from March to June.",
+                        &["DeployPolicy"],
+                        "kb-deploy-policy",
+                    ),
+                    fact(
+                        "Deploying on Friday evening violates the current policy.",
+                        &["DeployPolicy"],
+                        "kb-deploy-policy",
+                    ),
+                ],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-deploy-runbook",
+            chunks: &[DEC_RUNBOOK],
+            ir: KnowledgeIr {
+                entities: vec![entity(
+                    "DeployRunbook",
+                    "Documentation",
+                    DEC_RUNBOOK,
+                    "kb-deploy-runbook",
+                )],
+                facts: vec![fact(DEC_RUNBOOK, &["DeployRunbook"], "kb-deploy-runbook")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+    ]
+}
+
+/// TEMP-001 timeline: retry-limit lineage v1→v2→v3, with the current doc
+/// stating the full history and the reasons (change/why dimensions).
+pub fn timeline_docs() -> Vec<Doc> {
+    vec![
+        Doc {
+            id: "kb-retry-v1",
+            chunks: &[RET_V1],
+            ir: KnowledgeIr {
+                entities: vec![entity("RetryLimit", "Setting", RET_V1, "kb-retry-v1")],
+                facts: vec![fact(RET_V1, &["RetryLimit"], "kb-retry-v1")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-retry-v2",
+            chunks: &[RET_V2],
+            ir: KnowledgeIr {
+                entities: vec![entity("RetryLimit", "Setting", RET_V2, "kb-retry-v2")],
+                facts: vec![fact(RET_V2, &["RetryLimit"], "kb-retry-v2")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-retry-v3",
+            chunks: &[
+                RET_V3,
+                "The retry limit was 2 attempts in January and February.",
+                "The retry limit was 3 attempts from March to June.",
+                "The limit rose in March due to queue backlog, and in June for DDoS defense.",
+            ],
+            ir: KnowledgeIr {
+                entities: vec![entity("RetryLimit", "Setting", RET_V3, "kb-retry-v3")],
+                facts: vec![
+                    fact(RET_V3, &["RetryLimit"], "kb-retry-v3"),
+                    fact(
+                        "The retry limit was 2 attempts in January and February.",
+                        &["RetryLimit"],
+                        "kb-retry-v3",
+                    ),
+                    fact(
+                        "The retry limit was 3 attempts from March to June.",
+                        &["RetryLimit"],
+                        "kb-retry-v3",
+                    ),
+                    fact(
+                        "The limit rose in March due to queue backlog, and in June for DDoS defense.",
+                        &["RetryLimit"],
+                        "kb-retry-v3",
+                    ),
+                ],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+    ]
+}
