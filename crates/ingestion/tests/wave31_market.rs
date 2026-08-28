@@ -17,7 +17,10 @@ mod common;
 use std::collections::BTreeSet;
 
 use aikoql_ingestion::{merge_knowledge_ir, KnowledgeIr};
-use common::trackb::{assert_integrity, docs as wave3_dev_docs, market_docs as wave3_market_docs, Doc, Question, MARKET_QUESTIONS, QUESTIONS};
+use common::trackb::{
+    assert_integrity, docs as wave3_dev_docs, market_docs as wave3_market_docs, Doc, Question,
+    MARKET_QUESTIONS, QUESTIONS,
+};
 use common::trackb31::MARKET_QUESTIONS_31;
 use common::trackb31_docs::market_docs_31;
 use common::trackb_holdout::{holdout_docs, HOLDOUT_QUESTIONS};
@@ -31,7 +34,11 @@ const W31_CLASSES: [&str; 12] = [
 /// be an exact corpus sentence, a document id, or a relation triple
 /// ("Subject predicate Object") present in the merged IR (the pinned
 /// Wave 3 depth-2 probe uses that form).
-fn unit_backing_docs<'a>(q: &'a Question, docs: &'a [Doc], merged: &'a KnowledgeIr) -> Vec<&'a str> {
+fn unit_backing_docs<'a>(
+    q: &'a Question,
+    docs: &'a [Doc],
+    merged: &'a KnowledgeIr,
+) -> Vec<&'a str> {
     let ids: BTreeSet<&str> = docs.iter().map(|d| d.id).collect();
     q.units
         .iter()
@@ -104,7 +111,11 @@ fn w31_mkt_001_market_corpus_expansion() {
         .collect();
 
     // ── ≥100 tasks ────────────────────────────────────────────────────────
-    assert!(all.len() >= 100, "corpus has {} tasks, need ≥100", all.len());
+    assert!(
+        all.len() >= 100,
+        "corpus has {} tasks, need ≥100",
+        all.len()
+    );
 
     // ── ≥10 tasks per class, all 12 classes ───────────────────────────────
     for class in W31_CLASSES {
@@ -177,11 +188,17 @@ fn w31_mkt_001_market_corpus_expansion() {
     let total = all.len() as f64;
     let pct = |label: &str, n: usize, need: f64| {
         let got = n as f64 / total * 100.0;
-        eprintln!("[W31-MKT-001] {label}: {n}/{all} = {got:.1}% (need ≥{need}%)", all = all.len());
+        eprintln!(
+            "[W31-MKT-001] {label}: {n}/{all} = {got:.1}% (need ≥{need}%)",
+            all = all.len()
+        );
         assert!(got >= need, "{label} {got:.1}% < {need}%");
     };
 
-    let multi = all.iter().filter(|q| is_multi_source(q, &docs, &merged)).count();
+    let multi = all
+        .iter()
+        .filter(|q| is_multi_source(q, &docs, &merged))
+        .count();
     pct("multi-source", multi, 20.0);
 
     let rel_dep = all.iter().filter(|q| q.gt.relationships != "none").count();

@@ -210,7 +210,10 @@ fn measure_task(
     row.ag = cites(&aikoql);
 
     let t0 = Instant::now();
-    let graph = pack_budgeted(&graph_expand(&rank_positions(corpus, q.text, provider), corpus, index), corpus);
+    let graph = pack_budgeted(
+        &graph_expand(&rank_positions(corpus, q.text, provider), corpus, index),
+        corpus,
+    );
     row.gm = t0.elapsed().as_micros();
     row.g = judge(&graph);
     row.gt = graph.len() / 4;
@@ -348,7 +351,14 @@ fn run_comparison(
             n = c.n,
         );
     }
-    let mut sorted: Vec<Vec<u128>> = totals.micros.into_iter().map(|mut v| { v.sort(); v }).collect();
+    let sorted: Vec<Vec<u128>> = totals
+        .micros
+        .into_iter()
+        .map(|mut v| {
+            v.sort();
+            v
+        })
+        .collect();
     for (t, name) in ["aikoql", "graphrag", "rag"].iter().enumerate() {
         eprintln!(
             "[W31-COMP {label}] {name}: units {}/{} grounded {}/{} tokens {} p50 {}µs p95 {}µs cost ${:.4}",
@@ -403,7 +413,11 @@ fn run_comparison(
 fn w31_comp_001_three_way_comparison() {
     let docs = union_docs();
     let questions = union_questions();
-    assert!(questions.len() >= 100, "comparison corpus has {} tasks, need ≥100", questions.len());
+    assert!(
+        questions.len() >= 100,
+        "comparison corpus has {} tasks, need ≥100",
+        questions.len()
+    );
     run_comparison("001", &docs, &questions, true);
 }
 
@@ -416,5 +430,9 @@ fn w31_comp_002_holdout_evaluation() {
     let docs = holdout_docs();
     let questions: Vec<&Question> = HOLDOUT_QUESTIONS.iter().collect();
     run_comparison("HO", &docs, &questions, false);
-    eprintln!("[W31-HO] holdout pass complete: {} docs, {} tasks", docs.len(), questions.len());
+    eprintln!(
+        "[W31-HO] holdout pass complete: {} docs, {} tasks",
+        docs.len(),
+        questions.len()
+    );
 }

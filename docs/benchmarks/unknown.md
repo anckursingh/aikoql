@@ -51,3 +51,21 @@ narrative must not state these as facts.
 - **Latency at scale**: p95 AIKOQL 74.9ms vs RAG 6.8ms on 148 tasks;
   no measurement at production scale (millions of KOs) — SCALE-001's
   job.
+
+## Wave 3.1 agent-chain unknowns (W31-REAL-001)
+
+- **W11 false-confidence 25/30**: on unknown-probe tasks the AIKOQL
+  agent answered with a healthy non-empty pack 25 of 30 times — fewer
+  than RAG (30/30, it has no refusal surface), but each one is a trap
+  delivered. UNK-001 (#164) is the formal measurement of these rates.
+- **Retrieval retries are structurally 0** in the mechanical slice:
+  `compile_context` is deterministic, so a re-query returns the same
+  package; the SemanticFallback status (and its refusal arm) only
+  arises via `compile_context_semantic` with embedding scores, which
+  the mechanical treatment doesn't run. The real-LLM leg measures
+  generation retries; the fallback boundary is only measurable with an
+  embedding provider deployed.
+- **Refusal boundary reach**: 10 aikoql refusals are all empty-pack
+  refusals — the policy's fallback arm is not exercised by the
+  deterministic sim (see above). No false refusals observed on the
+  240 answered tasks.

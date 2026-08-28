@@ -175,7 +175,14 @@ fn comparative_chatbot_bench() {
         class: "W7",
         text: "Where does the retry limit come from?",
         units: ["Retry limit is 3 attempts.", "kb-payments"],
-        gt: g("none", "kb-payments", "none", "current", "documentation", "none"),
+        gt: g(
+            "none",
+            "kb-payments",
+            "none",
+            "current",
+            "documentation",
+            "none",
+        ),
     });
 
     // Entity→chunk links for treatment C, from the merged graph.

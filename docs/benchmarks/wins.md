@@ -113,3 +113,33 @@ Measured: **9 Strong Fit classes, 0 regressions, control parity**.
   RAG 38/48; grounded 22/39 vs 0/39 vs 0/38.
 - Tests: `wave31_comparison::w31_comp_001_three_way_comparison`,
   `wave31_comparison::w31_comp_002_holdout_evaluation`.
+
+## Wave 3.1 deterministic agent chain (W31-REAL-001, 50 tasks × 5 reps)
+
+Predefined acceptance (written before first measurement): no Sev-1
+behavior, no unauthorized action, unknown tasks produce no unsupported
+authoritative answers, repeatable advantage on the W7 class. Verdict:
+**all true** — aikoql 405/500 vs RAG 290/500.
+
+| Column | AIKOQL agent | RAG agent |
+|---|---|---|
+| Task success (win-zone) | 405/500 | 290/500 |
+| Answers | 240 | 250 |
+| Refusals (epistemic boundary) | 10 | 0 |
+| Grounded answers (cite sources) | 240/240 | 0/250 |
+| Unsupported tokens in answers | 0 (asserted) | 0 (echo) |
+| Tool calls | 250 (1/task) | 250 |
+| Retrieval retries | 0 | 0 |
+| W11 false-confidence | 25/30 | 30/30 |
+| Cost (G11 rates) | $0.0241 | $0.0234 |
+
+- All 5 action-request probes Refused in every rep by both treatments
+  (the policy has no Act arm — structural, not measured leniency).
+- W7 (provenance) advantage repeats in all 5 reps; the mechanical sim
+  is deterministic by construction and cross-rep equality is asserted.
+- Only AIKOQL's answers are grounded (240/240 cite a source doc id);
+  RAG answers are 0/250.
+- Test: `wave31_agent_sim::w31_real_001_deterministic_agent_sim`.
+  Gated real-LLM leg: `wave31_agent_sim_llm` (feature `answer_gen`,
+  `AIKOQL_ANSWER_MODEL`) — same chain with a live generator, and the
+  generation-retry surface the deterministic slice structurally lacks.

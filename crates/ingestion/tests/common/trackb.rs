@@ -303,7 +303,14 @@ pub const fn g(
     authority: &'static str,
     ambiguity: &'static str,
 ) -> Gt {
-    Gt { variants, evidence, relationships, temporal, authority, ambiguity }
+    Gt {
+        variants,
+        evidence,
+        relationships,
+        temporal,
+        authority,
+        ambiguity,
+    }
 }
 
 pub const QUESTIONS: &[Question] = &[
@@ -315,7 +322,14 @@ pub const QUESTIONS: &[Question] = &[
             "PaymentService depends_on RetryPolicy",
             "Retry limit is 3 attempts.",
         ],
-        gt: g("none", "kb-payments", "PaymentService depends_on RetryPolicy", "current", "source_code", "none"),
+        gt: g(
+            "none",
+            "kb-payments",
+            "PaymentService depends_on RetryPolicy",
+            "current",
+            "source_code",
+            "none",
+        ),
     },
     Question {
         kind: "hop",
@@ -325,7 +339,14 @@ pub const QUESTIONS: &[Question] = &[
             "LedgerService tested_by AuditTeam",
             "Audit activities are mandated by SOX.",
         ],
-        gt: g("none", "kb-audit", "LedgerService tested_by AuditTeam", "current", "documentation", "none"),
+        gt: g(
+            "none",
+            "kb-audit",
+            "LedgerService tested_by AuditTeam",
+            "current",
+            "documentation",
+            "none",
+        ),
     },
     Question {
         kind: "cross-doc",
@@ -335,7 +356,14 @@ pub const QUESTIONS: &[Question] = &[
             "WarrantyPolicy depends_on RepairVendor",
             "RepairVendor ships replacements within 48 hours.",
         ],
-        gt: g("none", "kb-warranty-a", "WarrantyPolicy depends_on RepairVendor", "current", "documentation", "none"),
+        gt: g(
+            "none",
+            "kb-warranty-a",
+            "WarrantyPolicy depends_on RepairVendor",
+            "current",
+            "documentation",
+            "none",
+        ),
     },
     Question {
         kind: "temporal-probe",
@@ -352,7 +380,14 @@ pub const QUESTIONS: &[Question] = &[
             "ActiveUsers grew 40 percent in 2025.",
             "ActiveUsers grew 20 percent in 2025.",
         ],
-        gt: g("either documented figure; both sources present", "any", "none", "current", "documentation", "conflict"),
+        gt: g(
+            "either documented figure; both sources present",
+            "any",
+            "none",
+            "current",
+            "documentation",
+            "conflict",
+        ),
     },
     Question {
         kind: "control",
@@ -362,7 +397,14 @@ pub const QUESTIONS: &[Question] = &[
             "Ledger entries require exactly one write.",
             "LedgerService tested_by AuditTeam",
         ],
-        gt: g("none", "kb-ledger", "none", "current", "documentation", "none"),
+        gt: g(
+            "none",
+            "kb-ledger",
+            "none",
+            "current",
+            "documentation",
+            "none",
+        ),
     },
     Question {
         kind: "depth-2-probe",
@@ -372,7 +414,14 @@ pub const QUESTIONS: &[Question] = &[
             "MiddlePolicy depends_on LeafRule",
             "LeafRule sets ceiling at 99.",
         ],
-        gt: g("none", "kb-depth", "MiddlePolicy depends_on LeafRule", "current", "documentation", "none"),
+        gt: g(
+            "none",
+            "kb-depth",
+            "MiddlePolicy depends_on LeafRule",
+            "current",
+            "documentation",
+            "none",
+        ),
     },
 ];
 
@@ -497,7 +546,14 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "The FebruaryOutage hit BillingCustomers while ArchV1 was the active architecture.",
             "ArchV3 replaced ArchV2 in June and is the current architecture.",
         ],
-        gt: g("none", "kb-arch", "ArchV3 replaced ArchV2", "mixed", "deployment_observed", "none"),
+        gt: g(
+            "none",
+            "kb-arch",
+            "ArchV3 replaced ArchV2",
+            "mixed",
+            "deployment_observed",
+            "none",
+        ),
     },
     Question {
         kind: "synthesis",
@@ -507,7 +563,14 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "PremiumCustomers reported failed checkouts during the incident.",
             "The dependency upgrade broke CheckoutService for PremiumCustomers.",
         ],
-        gt: g("none", "kb-deps", "CheckoutService depends_on PaymentService", "current", "deployment_observed", "none"),
+        gt: g(
+            "none",
+            "kb-deps",
+            "CheckoutService depends_on PaymentService",
+            "current",
+            "deployment_observed",
+            "none",
+        ),
     },
     Question {
         kind: "policy",
@@ -517,7 +580,14 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "The DeployPolicy requires zero-downtime deploys.",
             "The ArchitectureDecision mandates canary deploys for all services.",
         ],
-        gt: g("none", "kb-policy", "none", "current", "organization_policy", "none"),
+        gt: g(
+            "none",
+            "kb-policy",
+            "none",
+            "current",
+            "organization_policy",
+            "none",
+        ),
     },
     Question {
         kind: "provenance",
@@ -527,7 +597,14 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "The DeployPolicy requires zero-downtime deploys.",
             "kb-policy",
         ],
-        gt: g("none", "kb-policy", "none", "current", "organization_policy", "none"),
+        gt: g(
+            "none",
+            "kb-policy",
+            "none",
+            "current",
+            "organization_policy",
+            "none",
+        ),
     },
     Question {
         kind: "unknown-probe",
@@ -537,7 +614,14 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "The OldIssueNote suggests restarting the service during deploys.",
             "ArchV2 replaced ArchV1 in March and added the retry cache.",
         ],
-        gt: g("no authoritative answer", "any", "none", "current", "documentation", "unknown"),
+        gt: g(
+            "no authoritative answer",
+            "any",
+            "none",
+            "current",
+            "documentation",
+            "unknown",
+        ),
     },
     Question {
         kind: "semantic-probe",
@@ -547,7 +631,14 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "RepairVendor ships replacements within 48 hours.",
             "WarrantyPolicy depends on RepairVendor",
         ],
-        gt: g("none", "kb-warranty-a", "WarrantyPolicy depends_on RepairVendor", "current", "documentation", "none"),
+        gt: g(
+            "none",
+            "kb-warranty-a",
+            "WarrantyPolicy depends_on RepairVendor",
+            "current",
+            "documentation",
+            "none",
+        ),
     },
 ];
 
