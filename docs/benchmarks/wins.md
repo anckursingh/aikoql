@@ -186,6 +186,46 @@ W31-TEMP-001 (retry-limit timeline v1/v2/v3, four spec questions):
 - Tests: `wave31_decision::w31_dec_001_evidence_to_decision_correctness`,
   `wave31_decision::w31_temp_001_historical_vs_current_agent_answer`.
 
+## Wave 3.1 build-vs-buy, corrected (W31-DEV-001)
+
+Predefined acceptance (written before first measurement): functional
+parity on the shared battery, application-owned complexity strictly
+less than the conventional stack's, the conventional app's custom
+code genuinely exercised, the spec's human-time columns printed n/a
+with deterministic ops proxies. Verdict: **all true** — parity 6/6,
+app-owned totals 88 vs 153 LOC.
+
+The Wave 3 report compared a 1,042-LOC retrieval baseline against the
+engine's 9,410-LOC surface — the spec's point: that does not prove
+developer productivity. Two equivalent applications over the same
+scenario (deployment-window conflict, retry timeline, two-day
+capacity/ftp memory), measured by source span (`line!()` windows) —
+engine-internal LOC excluded by construction, never referenced:
+
+| Capability | Conventional app LOC | AIKOQL app LOC |
+|---|---|---|
+| config | 11 (8 infra components) | 9 (1 component) |
+| ingestion | 16 | 6 |
+| retrieval | 52 | 2 |
+| temporal | 23 | 65 |
+| provenance | 8 | 0 |
+| conflict | 16 | 0 |
+| memory | 19 | 5 |
+| **total (app-owned)** | **153** | **88** |
+
+- Retrieval 52 → 2 (one validity-bounded compile), provenance 8 → 0
+  (citations ride the payload), conflict 16 → 0 (the kernel discloses
+  conflicts), memory 19 → 5, infrastructure 8 → 1.
+- Both applications pass the same parity battery (6/6 probes, day 1
+  and day 7, asserted per probe — no aggregate).
+- The conventional app's custom code is real, not decorative: the
+  conflict handler restores a dropped counterpart (micro-assert) and
+  the transcript scrub is asserted through the day-7 forbidden check.
+- Measurement is fmt-stable: the AIKOQL impl carries
+  `#[rustfmt::skip]` — spans are the instrument, a reflow must not
+  reprice them (unpinned, fmt added +44 LOC of formatting alone).
+- Test: `wave31_dev::w31_dev_001_application_owned_complexity`.
+
 ## Wave 3.1 epistemic boundary (W31-UNK-001)
 
 Predefined acceptance (written before first measurement): each of the

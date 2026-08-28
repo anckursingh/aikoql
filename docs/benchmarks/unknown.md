@@ -99,3 +99,13 @@ narrative must not state these as facts.
   CONTRADICTS edge**: both sev1 claims are current with equal
   authority, so the pack discloses both; the kernel-edge conflict
   path is measured by the UNK-001 conflicting probe instead.
+
+## Wave 3.1 build-vs-buy unknowns (W31-DEV-001)
+
+- **Developer hours / defects / time-to-add-source / time-to-change-
+  rule are n/a in deterministic CI**: a CI run has no human
+  developers, so the test prints n/a with deterministic ops proxies
+  (defects: the 6/6 parity battery on both apps; add-source: one
+  call each; change-rule: conv 3 statements vs aikoql 4, one
+  callsite each). The spec's time columns are only measurable with
+  real developers on a real project — not faked here.

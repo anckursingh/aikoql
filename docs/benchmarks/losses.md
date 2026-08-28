@@ -112,3 +112,19 @@ per plan §29 — never dropped, never spun.
   packed facts; the spec's "do not present as current" is asserted on
   the package, and the noise is counted in the false-confidence rate
   above, not hidden.
+
+## Wave 3.1 build-vs-buy losses (W31-DEV-001)
+
+- **Temporal bookkeeping costs more app code on the AIKOQL side**:
+  65 LOC vs 23 — nine lineage operations through the kernel API
+  (assert → supersede chains, claim-list maintenance, stale-set
+  refresh) against chunk replacement + transcript scrub. The kernel
+  lineage API is more verbose per knowledge-rule change than chunk
+  surgery; the moat is retrieval/provenance/conflict/infrastructure,
+  not temporal setup.
+- **Marginal rule-change cost is near parity**: the ops proxy counts
+  4 statements on the AIKOQL side (find claim, supersede, update
+  claim list, refresh stale set) vs 3 conventional (remove chunk,
+  insert successor, scrub transcript). The app-owned moat is the
+  capabilities the conventional stack must build, not the marginal
+  cost of one rule change — measured, not hidden.
