@@ -32,13 +32,11 @@ use aikoql_ingestion::{
     compile_context, merge_knowledge_ir, render_context_markdown, KnowledgeIr,
     MockEmbeddingProvider,
 };
-use common::trackb::{
-    assert_integrity, corpus, units_hit, Doc, Question, MARKET_QUESTIONS, QUESTIONS,
-};
-use common::trackb31::MARKET_QUESTIONS_31;
-use common::trackb31_docs::market_docs_31;
+use common::trackb::{assert_integrity, corpus, units_hit, Doc, Question};
 use common::trackb_holdout::{holdout_docs, HOLDOUT_QUESTIONS};
-use common::wave31_sim::{entity_chunk_index, graph_expand, pack_budgeted, rank_positions};
+use common::wave31_sim::{
+    entity_chunk_index, graph_expand, pack_budgeted, rank_positions, union_docs, union_questions,
+};
 
 /// Token budget all treatments must respect (len/4 estimate — the G12
 /// convention, same value `knowledge_bench.rs` and Wave 3 use).
@@ -53,21 +51,6 @@ const ANSWER_TOKENS: usize = 100;
 /// Predefined acceptance thresholds (written before first measurement).
 const MIN_STRONG_FIT: usize = 1;
 const MAX_REGRESSION_UNITS: isize = 2;
-
-fn union_docs() -> Vec<Doc> {
-    let mut docs = market_docs_31();
-    docs.extend(common::trackb::docs());
-    docs.extend(common::trackb::market_docs());
-    docs
-}
-
-fn union_questions() -> Vec<&'static Question> {
-    QUESTIONS
-        .iter()
-        .chain(MARKET_QUESTIONS.iter())
-        .chain(MARKET_QUESTIONS_31.iter())
-        .collect()
-}
 
 /// One task, three treatments, one judge.
 #[derive(Default)]

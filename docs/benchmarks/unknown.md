@@ -83,3 +83,19 @@ narrative must not state these as facts.
   supplies the signals (type_hint, statements, validity boundary), the
   agent-layer judgment is the caller's. Measured as such, not claimed
   as a substrate feature.
+
+## Wave 3.1 epistemic/longitudinal unknowns (W31-UNK-001 / W31-MEM-001)
+
+- **Unsupported-assertion with a live generator is unmeasured here**:
+  the deterministic echo is 0 by construction; the real rate is the
+  gated LLM leg's column (REAL-001).
+- **Baseline evidence retention is n/a**: the chunk-text proxy
+  carries no doc ids (G11 convention), so scoring it would rig the
+  baseline on an artifact — printed n/a, not measured.
+- **Developer-intervention count n/a**: the sim's world updates are
+  scripted (corpus + kernel ops on a fixed schedule), so no
+  intervention count exists to compare.
+- **MEM-001's contradiction is a documentation pair, not a kernel
+  CONTRADICTS edge**: both sev1 claims are current with equal
+  authority, so the pack discloses both; the kernel-edge conflict
+  path is measured by the UNK-001 conflicting probe instead.

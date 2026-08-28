@@ -887,3 +887,204 @@ pub fn timeline_docs() -> Vec<Doc> {
         },
     ]
 }
+
+// ── UNK-001 legacy scenario ───────────────────────────────────────────────
+
+/// The only claim of the historical-only entity (UNK-001): superseded in
+/// the kernel by a kernel-only successor whose doc is NOT in the corpus
+/// (the doc was retired). Exact chunk sentence for the stale checks.
+pub const TLS_LEGACY: &str = "LegacyTlsProtocol allows TLS 1.0.";
+
+pub fn legacy_docs() -> Vec<Doc> {
+    vec![Doc {
+        id: "kb-tls-legacy",
+        chunks: &[TLS_LEGACY],
+        ir: KnowledgeIr {
+            entities: vec![entity(
+                "LegacyTlsProtocol",
+                "Setting",
+                TLS_LEGACY,
+                "kb-tls-legacy",
+            )],
+            facts: vec![fact(TLS_LEGACY, &["LegacyTlsProtocol"], "kb-tls-legacy")],
+            relations: vec![],
+            ..KnowledgeIr::default()
+        },
+    }]
+}
+
+// ── MEM-001 longitudinal scenario ─────────────────────────────────────────
+// Day 1/7/30/60/90 doc sets exercising the spec's six introduction types:
+// new facts (day 7 failover), superseded facts (capacity v1→v4), corrections
+// (threshold day 30), contradictions (sev1 day 60 — two live claims),
+// new relationships (prose depends-on day 7), deletions (ftp doc retired
+// day 90 — the doc is dropped from the day-90 set, not superseded).
+// Every stale statement is an exact chunk sentence (stale substring checks).
+
+/// Day-1 capacity claim (superseded day 7).
+pub const MEM_CAP_100: &str = "Region capacity is 100.";
+/// Day-7 capacity claim (superseded day 30).
+pub const MEM_CAP_200: &str = "Region capacity is 200.";
+/// Day-30 capacity claim (superseded day 90).
+pub const MEM_CAP_500: &str = "Region capacity is 500.";
+/// Day-90 capacity claim (current).
+pub const MEM_CAP_900: &str = "Region capacity is 900.";
+/// The important fact (retention probe): current all 90 days.
+pub const MEM_KEYRING: &str = "ProdKeyRing rotates every 90 days.";
+/// Day-1 claim, deleted (forgotten) day 90.
+pub const MEM_FTP: &str = "LegacyFtp serves legacy clients.";
+/// Day-7 new entity + new relationship (prose).
+pub const MEM_FAILOVER: &str = "DbFailover automates database failover.";
+pub const MEM_DEPENDS: &str = "DbFailover depends on Region.";
+/// Day-60 contradiction pair — both current, never superseded.
+pub const MEM_SEV1_A: &str = "Sev1Runbook pages the primary on-call.";
+pub const MEM_SEV1_B: &str = "Sev1Runbook pages the whole on-call team.";
+/// Day-1 threshold claim, corrected day 30.
+pub const MEM_THRESH_V1: &str = "AlertThreshold is 10 percent.";
+pub const MEM_THRESH_V2: &str = "AlertThreshold is 15 percent.";
+
+pub fn mem_docs_day1() -> Vec<Doc> {
+    vec![
+        Doc {
+            id: "kb-cap-v1",
+            chunks: &[MEM_CAP_100],
+            ir: KnowledgeIr {
+                entities: vec![entity("Region", "Region", MEM_CAP_100, "kb-cap-v1")],
+                facts: vec![fact(MEM_CAP_100, &["Region"], "kb-cap-v1")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-keyring",
+            chunks: &[MEM_KEYRING],
+            ir: KnowledgeIr {
+                entities: vec![entity("ProdKeyRing", "Process", MEM_KEYRING, "kb-keyring")],
+                facts: vec![fact(MEM_KEYRING, &["ProdKeyRing"], "kb-keyring")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-ops-ftp",
+            chunks: &[MEM_FTP],
+            ir: KnowledgeIr {
+                entities: vec![entity("LegacyFtp", "Service", MEM_FTP, "kb-ops-ftp")],
+                facts: vec![fact(MEM_FTP, &["LegacyFtp"], "kb-ops-ftp")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-threshold-v1",
+            chunks: &[MEM_THRESH_V1],
+            ir: KnowledgeIr {
+                entities: vec![entity(
+                    "AlertThreshold",
+                    "Setting",
+                    MEM_THRESH_V1,
+                    "kb-threshold-v1",
+                )],
+                facts: vec![fact(MEM_THRESH_V1, &["AlertThreshold"], "kb-threshold-v1")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+    ]
+}
+
+pub fn mem_docs_day7() -> Vec<Doc> {
+    vec![
+        Doc {
+            id: "kb-cap-v2",
+            chunks: &[MEM_CAP_200],
+            ir: KnowledgeIr {
+                entities: vec![entity("Region", "Region", MEM_CAP_200, "kb-cap-v2")],
+                facts: vec![fact(MEM_CAP_200, &["Region"], "kb-cap-v2")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-failover",
+            chunks: &[MEM_FAILOVER, MEM_DEPENDS],
+            ir: KnowledgeIr {
+                entities: vec![entity("DbFailover", "Process", MEM_FAILOVER, "kb-failover")],
+                facts: vec![
+                    fact(MEM_FAILOVER, &["DbFailover"], "kb-failover"),
+                    fact(MEM_DEPENDS, &["DbFailover", "Region"], "kb-failover"),
+                ],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+    ]
+}
+
+pub fn mem_docs_day30() -> Vec<Doc> {
+    vec![
+        Doc {
+            id: "kb-cap-v3",
+            chunks: &[MEM_CAP_500],
+            ir: KnowledgeIr {
+                entities: vec![entity("Region", "Region", MEM_CAP_500, "kb-cap-v3")],
+                facts: vec![fact(MEM_CAP_500, &["Region"], "kb-cap-v3")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-threshold-v2",
+            chunks: &[MEM_THRESH_V2],
+            ir: KnowledgeIr {
+                entities: vec![entity(
+                    "AlertThreshold",
+                    "Setting",
+                    MEM_THRESH_V2,
+                    "kb-threshold-v2",
+                )],
+                facts: vec![fact(MEM_THRESH_V2, &["AlertThreshold"], "kb-threshold-v2")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+    ]
+}
+
+pub fn mem_docs_day60() -> Vec<Doc> {
+    vec![
+        Doc {
+            id: "kb-sev1",
+            chunks: &[MEM_SEV1_A],
+            ir: KnowledgeIr {
+                entities: vec![entity("Sev1Runbook", "Runbook", MEM_SEV1_A, "kb-sev1")],
+                facts: vec![fact(MEM_SEV1_A, &["Sev1Runbook"], "kb-sev1")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+        Doc {
+            id: "kb-sev1-rev",
+            chunks: &[MEM_SEV1_B],
+            ir: KnowledgeIr {
+                entities: vec![entity("Sev1Runbook", "Runbook", MEM_SEV1_B, "kb-sev1-rev")],
+                facts: vec![fact(MEM_SEV1_B, &["Sev1Runbook"], "kb-sev1-rev")],
+                relations: vec![],
+                ..KnowledgeIr::default()
+            },
+        },
+    ]
+}
+
+pub fn mem_docs_day90() -> Vec<Doc> {
+    vec![Doc {
+        id: "kb-cap-v4",
+        chunks: &[MEM_CAP_900],
+        ir: KnowledgeIr {
+            entities: vec![entity("Region", "Region", MEM_CAP_900, "kb-cap-v4")],
+            facts: vec![fact(MEM_CAP_900, &["Region"], "kb-cap-v4")],
+            relations: vec![],
+            ..KnowledgeIr::default()
+        },
+    }]
+}

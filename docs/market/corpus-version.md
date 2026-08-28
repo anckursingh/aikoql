@@ -100,3 +100,27 @@ entity ("What was the retry limit in February?") — the exact-token gate
 (≥2 content tokens or a ranked entity) is the compiler's lexical
 reachability ceiling; recorded in losses.md, not silently designed
 around.
+
+## Scenario corpora (UNK-001 / MEM-001) — v1.0
+
+Two more small scenario corpora back the epistemic and longitudinal
+experiments (`trackb31_docs::legacy_docs` / `mem_docs_day1..90`),
+also NOT part of the frozen union:
+
+- kb-tls-legacy: one claim about a retired entity
+  (`LegacyTlsProtocol`), superseded in the kernel by a successor
+  whose evidence doc is kernel-only (kb-tls-retired, never in the
+  corpus) — the doc-retired shape. RAG must deliver the retired
+  claim as current (the scenario pin, W3-CONF-001 convention).
+- kb-cap-v1..v4, kb-keyring, kb-ops-ftp, kb-failover,
+  kb-threshold-v1/v2, kb-sev1 + kb-sev1-rev: the 90-day memory
+  timeline. Every stale statement is an exact chunk sentence (the
+  `f:{statement}` stale keys must match the chunk text substring).
+  Day 90 drops the ftp doc from the corpus while the kernel
+  tombstones the claim — deletion is a corpus change AND a kernel
+  op, asserted on both sides.
+
+Rules added by these corpora: (1) a retired entity's claim may be
+superseded by a kernel-only successor whose evidence doc never appears
+in the corpus; (2) each MEM day's corpus is the cumulative doc list —
+later days re-rank over the whole timeline, not just the new doc.

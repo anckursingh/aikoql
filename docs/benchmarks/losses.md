@@ -92,3 +92,23 @@ per plan §29 — never dropped, never spun.
   rule (lexical match should suffice, the W1 precedent) rewords it to
   "What was the retry limit in February?" — recorded here as the
   reachability ceiling of the gate, not silently.
+
+## Wave 3.1 epistemic/longitudinal losses (W31-UNK-001 / W31-MEM-001)
+
+- **False-confidence is not zero**: aikoql answered 13/15 unknown
+  probes with an authoritative pack (rag 15/15) — the W11 trap docs
+  still pack non-empty. The Unknown→Refuse boundary holds only when
+  the exact-token gate yields an empty pack; vocabulary-overlap traps
+  remain the known gap (same row as the W11 Good-Fit entry above).
+- **Conversation history collapses under stale weight**: 25/30 task
+  success and 24/30 answers carrying stale statements at day 90 —
+  the budget keeps the oldest chunks, which are exactly the
+  superseded ones. The baseline has no supersession signal.
+- **RAG's one task miss is the deletion lane**: the day-90 tombstone
+  works only if the dropped doc stops ranking — stateless RAG
+  delivers the retired fact as current.
+- **The historical-only probe is the presentation boundary, not a
+  hard refusal**: the agent may still emit unrelated noise from other
+  packed facts; the spec's "do not present as current" is asserted on
+  the package, and the noise is counted in the false-confidence rate
+  above, not hidden.

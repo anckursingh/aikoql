@@ -42,89 +42,15 @@ use aikoql_ingestion::{
     compile_context_with_validity, merge_knowledge_ir, render_context_markdown, ContextPackage,
     KnowledgeIr, MockEmbeddingProvider,
 };
-use aikoql_kernel::*;
-use common::trackb::{corpus, Doc, Question};
+use aikoql_kernel::KnowledgeEntity;
+use common::trackb::{corpus, Question};
 use common::trackb31_docs::{
     decision_docs, timeline_docs, DEC_RUNBOOK, DEC_V1, DEC_V2, DEC_V3, RET_V1, RET_V2, RET_V3,
 };
 use common::wave31_sim::{
-    agent_policy, entity_chunk_index, graph_expand, pack_budgeted, rank_positions, AgentOutcome,
-    BUDGET,
+    agent_policy, alice, assert_claim, entity_chunk_index, graph_expand, kernel_stale, mk,
+    pack_budgeted, payload_has, props, rank_positions, supersede_claim, AgentOutcome, BUDGET,
 };
-use std::sync::Arc;
-
-// ── kernel helpers (mirror wave3_market_reality.rs — the experiment
-// suites keep their own six-liners rather than sharing a test crate) ────
-
-fn mk() -> (Kernel, Arc<ManualClock>) {
-    let clock = Arc::new(ManualClock::new(0));
-    let kernel = Kernel::open(Arc::new(MemoryEngine::new()), clock.clone(), 0xC0FFEE).unwrap();
-    (kernel, clock)
-}
-
-fn alice() -> KnowledgeContext {
-    KnowledgeContext::new(Subject::new("alice"))
-}
-
-fn ev(src: &str) -> Evidence {
-    Evidence::new(src, EvidenceMethod::DocExtraction)
-}
-
-fn props(pairs: &[(&str, &str)]) -> PropertyMap {
-    let mut m = PropertyMap::new();
-    for (k, v) in pairs {
-        m.insert((*k).into(), Value::Text((*v).into()));
-    }
-    m
-}
-
-/// Assert `properties` on explicit `authority`, return the claim KOID.
-fn assert_claim(
-    k: &Kernel,
-    type_name: &str,
-    properties: PropertyMap,
-    authority: &str,
-    src: &str,
-) -> KOID {
-    let mut req = AssertionRequest::new(alice(), type_name);
-    req.properties = properties;
-    req.authority = Some(authority.into());
-    req.evidence = vec![ev(src)];
-    k.assert_knowledge(req).unwrap().koid
-}
-
-/// Supersede `old` with a new-generation claim, return the new KOID.
-fn supersede_claim(
-    k: &Kernel,
-    old: KOID,
-    properties: PropertyMap,
-    reason: &str,
-    src: &str,
-) -> KOID {
-    let mut req = SupersedeRequest::new(alice(), old, "Claim");
-    req.properties = properties;
-    req.reason = Some(reason.into());
-    req.evidence = vec![ev(src)];
-    k.supersede(req).unwrap().new
-}
-
-/// The kernel-computed stale set: every claim whose KO is superseded
-/// (valid_to set) contributes its fact statement key — the contract
-/// `compile_context_with_validity` consumes.
-fn kernel_stale(k: &Kernel, claims: &[(KOID, &str)]) -> HashSet<String> {
-    let mut stale = HashSet::new();
-    for (koid, statement) in claims {
-        if k.get(alice(), koid).unwrap().valid_to().is_some() {
-            stale.insert(format!("f:{statement}"));
-        }
-    }
-    stale
-}
-
-fn payload_has(payload: &str, needle: &str) -> bool {
-    let pool = common::tokens(payload);
-    common::tokens(needle).iter().all(|t| pool.contains(t))
-}
 
 /// The DEC-001 decision script: prefer facts anchored to Policy entities
 /// (the authority step), disclose every other packed fact as a conflict.
@@ -171,7 +97,7 @@ struct Dim {
     stale: bool,
 }
 
-fn run_dim(q: &Question, payload: &str, units: [&str; 2]) -> Dim {
+fn run_dim(payload: &str, units: [&str; 2]) -> Dim {
     let mut d = Dim::default();
     for u in units {
         if payload_has(payload, u) {
@@ -360,9 +286,9 @@ fn measure_temp(
         corpus_chunks,
     );
     [
-        run_dim(q, &aikoql, units),
-        run_dim(q, &graph, units),
-        run_dim(q, &rag, units),
+        run_dim(&aikoql, units),
+        run_dim(&graph, units),
+        run_dim(&rag, units),
     ]
 }
 

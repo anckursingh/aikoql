@@ -21,32 +21,15 @@
 mod common;
 
 use aikoql_ingestion::{merge_knowledge_ir, KnowledgeIr, MockEmbeddingProvider};
-use common::trackb::{corpus, Doc, Question, MARKET_QUESTIONS, QUESTIONS};
-use common::trackb31::MARKET_QUESTIONS_31;
-use common::trackb31_docs::market_docs_31;
+use common::trackb::{corpus, Question};
 use common::wave31_sim::{
-    agent_policy, aikoql_context, generate, rag_context, sample_tasks, unsupported_tokens,
-    win_zone, AgentOutcome, REPS,
+    agent_policy, aikoql_context, generate, rag_context, sample_tasks, union_docs, union_questions,
+    unsupported_tokens, win_zone, AgentOutcome, REPS,
 };
 
 const SYSTEM: &str = "You are a support agent with access to a knowledge store. \
     Answer the task using ONLY the evidence provided. Cite sources where possible. \
     If the evidence is insufficient, say you do not know.";
-
-fn union_docs() -> Vec<Doc> {
-    let mut docs = market_docs_31();
-    docs.extend(common::trackb::docs());
-    docs.extend(common::trackb::market_docs());
-    docs
-}
-
-fn union_questions() -> Vec<&'static Question> {
-    QUESTIONS
-        .iter()
-        .chain(MARKET_QUESTIONS.iter())
-        .chain(MARKET_QUESTIONS_31.iter())
-        .collect()
-}
 
 /// 50 × 5 with a live generator, both treatments, judged by the same
 /// win-zone. Prints only; the deterministic sim owns the asserts.

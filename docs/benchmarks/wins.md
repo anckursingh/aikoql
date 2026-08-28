@@ -185,3 +185,64 @@ W31-TEMP-001 (retry-limit timeline v1/v2/v3, four spec questions):
   `stale_mentions_are_suppressed_by_validity_filter`.
 - Tests: `wave31_decision::w31_dec_001_evidence_to_decision_correctness`,
   `wave31_decision::w31_temp_001_historical_vs_current_agent_answer`.
+
+## Wave 3.1 epistemic boundary (W31-UNK-001)
+
+Predefined acceptance (written before first measurement): each of the
+four behavioral probes lands in its mapped outcome, asserted
+individually — no aggregate. Verdict: **all four landed**.
+
+- known → answer (the current retry claim delivered, cited, zero
+  unsupported tokens);
+- unknown → refuse (healthy EMPTY pack — insufficient evidence);
+- conflicting → disclose (BOTH current deployment-window statements
+  delivered, neither superseded statement present);
+- historical-only → not present as current (the superseded TLS claim
+  appears nowhere, no current fact anchors the entity, the entity
+  bullet carries no mention).
+
+Measured rates over frozen batteries (the spec says "measure" — no
+threshold is invented):
+
+- false-confidence: aikoql 13/15 vs rag 15/15 on the union-corpus
+  unknown-probe battery (W11);
+- incorrect-current: aikoql 0/3 (asserted) vs rag 3/3 on the temporal
+  battery — RAG delivers the superseded claims as current (scenario
+  pin asserted, W3-CONF-001 convention);
+- unsupported-assertion: aikoql 0 by construction (deterministic
+  echo) — the real rate is the gated LLM leg's (REAL-001).
+
+Historical preservation held: the retired claim is still readable
+with valid_to stamped; its successor is current. Test:
+`wave31_unk::w31_unk_001_four_state_epistemic_boundary`.
+
+## Wave 3.1 longitudinal agent (W31-MEM-001, 90 days)
+
+The spec's six introduction types — new facts, superseded facts,
+corrections, contradictions, new relationships, deletions — over five
+checkpoints (days 1/7/30/60/90), three treatments on one agent.
+
+| Column | AIKOQL | RAG | Conv. history |
+|---|---|---|---|
+| Task success | 30/30 | 29/30 | 25/30 |
+| Memory accuracy (zero stale statements) | 25/25 | 17/26 | 6/30 |
+| Stale-memory rate | 0/25 | 9/26 | 24/30 |
+| Context tokens day1→90 (cap lane / hist) | [35,43,43,43,43] / [45,128,237,300,300] | n/a | [45,128,237,300,300] |
+
+- AIKOQL tokens stay flat through three capacity supersessions
+  (100→200→500→900) and a deletion; the history transcript grows and
+  plateaus at the 300-token budget — crowded with the stale
+  statements it cannot drop (24/30 answers carry them).
+- Day-90 deletion lane: AIKOQL refuses (kernel tombstone + doc
+  dropped); RAG answers the retired fact — its only task miss, and a
+  stale one.
+- Kernel history preserved through all six transitions: every claim
+  readable, capacity current (valid_to none), the ftp claim
+  `LifecycleState::Deleted`; retention 1.0; evidence 25/25 cited.
+- Judge fairness: citation required only of AIKOQL (the chunk-text
+  proxy carries no doc ids — G11 convention); the baselines'
+  evidence-retention column is printed n/a, not scored on an
+  artifact.
+- Test: `wave31_mem::w31_mem_001_longitudinal_agent`; gated LLM leg
+  behind `answer_gen` + `AIKOQL_ANSWER_MODEL` (same world, print-only
+  totals).

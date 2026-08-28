@@ -11,13 +11,18 @@
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Instant;
 
 use aikoql_ingestion::{
-    compile_context, render_context_markdown, KnowledgeIr, MockEmbeddingProvider, RetrievalStatus,
+    compile_context, compile_context_with_validity, render_context_markdown, KnowledgeIr,
+    MockEmbeddingProvider, RetrievalStatus,
 };
+use aikoql_kernel::*;
 
-use super::trackb::Question;
+use super::trackb::{docs as trackb_docs, market_docs, Doc, Question, MARKET_QUESTIONS, QUESTIONS};
+use super::trackb31::MARKET_QUESTIONS_31;
+use super::trackb31_docs::market_docs_31;
 use super::{rank, tokens, CorpusChunk};
 
 pub const CLASSES: [&str; 12] = [
@@ -290,4 +295,113 @@ pub fn generate(endpoint: &str, model: &str, system: &str, user: &str) -> Option
         .and_then(|resp| resp.into_body().read_json::<serde_json::Value>().ok())
         .and_then(|v| v["message"]["content"].as_str().map(str::to_string))
         .filter(|s| !s.trim().is_empty())
+}
+
+// ── kernel-state helpers (shared by DEC/TEMP/UNK/MEM) ─────────────────────
+// W3's wave3_market_reality.rs keeps its own copies by design (frozen Wave 3
+// experiment file); the Wave 3.1 suites share these.
+
+pub fn mk() -> (Kernel, Arc<ManualClock>) {
+    let clock = Arc::new(ManualClock::new(0));
+    let kernel = Kernel::open(Arc::new(MemoryEngine::new()), clock.clone(), 0xC0FFEE).unwrap();
+    (kernel, clock)
+}
+
+pub fn alice() -> KnowledgeContext {
+    KnowledgeContext::new(Subject::new("alice"))
+}
+
+pub fn ev(src: &str) -> Evidence {
+    Evidence::new(src, EvidenceMethod::DocExtraction)
+}
+
+pub fn props(pairs: &[(&str, &str)]) -> PropertyMap {
+    let mut m = PropertyMap::new();
+    for (k, v) in pairs {
+        m.insert((*k).into(), Value::Text((*v).into()));
+    }
+    m
+}
+
+/// Assert `properties` on explicit `authority`, return the claim KOID.
+pub fn assert_claim(
+    k: &Kernel,
+    type_name: &str,
+    properties: PropertyMap,
+    authority: &str,
+    src: &str,
+) -> KOID {
+    let mut req = AssertionRequest::new(alice(), type_name);
+    req.properties = properties;
+    req.authority = Some(authority.into());
+    req.evidence = vec![ev(src)];
+    k.assert_knowledge(req).unwrap().koid
+}
+
+/// Supersede `old` with a new-generation claim, return the new KOID.
+pub fn supersede_claim(
+    k: &Kernel,
+    old: KOID,
+    properties: PropertyMap,
+    reason: &str,
+    src: &str,
+) -> KOID {
+    let mut req = SupersedeRequest::new(alice(), old, "Claim");
+    req.properties = properties;
+    req.reason = Some(reason.into());
+    req.evidence = vec![ev(src)];
+    k.supersede(req).unwrap().new
+}
+
+/// The kernel-computed stale set: every claim whose KO is superseded
+/// (valid_to set) contributes its fact statement key — the contract
+/// `compile_context_with_validity` consumes.
+pub fn kernel_stale(k: &Kernel, claims: &[(KOID, &str)]) -> HashSet<String> {
+    let mut stale = HashSet::new();
+    for (koid, statement) in claims {
+        if k.get(alice(), koid).unwrap().valid_to().is_some() {
+            stale.insert(format!("f:{statement}"));
+        }
+    }
+    stale
+}
+
+pub fn payload_has(payload: &str, needle: &str) -> bool {
+    let pool = tokens(payload);
+    tokens(needle).iter().all(|t| pool.contains(t))
+}
+
+/// The AIKOQL leg bounded by the kernel-computed validity set (the DEC/TEMP
+/// contract, shared by UNK/MEM): one deterministic compile + render.
+pub fn aikoql_context_with_validity(
+    q: &Question,
+    merged: &KnowledgeIr,
+    stale: &HashSet<String>,
+) -> SimContext {
+    let t0 = Instant::now();
+    let pkg = compile_context_with_validity(q.text, merged, BUDGET, None, stale);
+    SimContext {
+        payload: render_context_markdown(&pkg),
+        status: pkg.status,
+        tool_calls: 1,
+        retries: 0,
+        micros: t0.elapsed().as_micros(),
+    }
+}
+
+/// The 148-task union corpus (docs + questions) — COMP-001/REAL-001/UNK-001
+/// share it; the holdout is NOT part of the union.
+pub fn union_docs() -> Vec<Doc> {
+    let mut docs = market_docs_31();
+    docs.extend(trackb_docs());
+    docs.extend(market_docs());
+    docs
+}
+
+pub fn union_questions() -> Vec<&'static Question> {
+    QUESTIONS
+        .iter()
+        .chain(MARKET_QUESTIONS.iter())
+        .chain(MARKET_QUESTIONS_31.iter())
+        .collect()
 }
