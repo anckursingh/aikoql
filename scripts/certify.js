@@ -1,4 +1,4 @@
-// §23 certification artifacts generator (MVP-QA-001 + MVP-QA-002).
+// §23 certification artifacts generator (MVP-QA-001 + MVP-QA-002 + Wave 3).
 //
 // Reads the per-ID registries in docs/TESTING-PLAN.md (single source of
 // truth — the QA lead verifies each row), computes the gate verdicts, and
@@ -17,6 +17,11 @@
 //   artifacts/qa-wave2-failures.md       non-pass rows with root-cause notes
 //   artifacts/qa-wave2-benchmarks.md     pinned baselines (cross-checked vs §3)
 //   artifacts/qa-wave2-release-gate.md   the exact §19 gate block
+//
+// §11.1 (Wave 3 market reality) → plan §31 Wave-3 pack:
+//   artifacts/qa-wave3-report.md         rollup + W3-G01..G07 readout
+//   artifacts/qa-wave3-results.json      machine-readable per-test results
+//   artifacts/qa-wave3-release-gate.md   the exact §31 gate block
 //
 // Statuses are never invented: ✅ pass, 🟡 open, ❌ not-implemented/blocked
 // come straight from the registry. The spec's execution rules forbid marking
@@ -510,6 +515,9 @@ function writeArtifacts(files) {
     w2failed: 'qa-wave2-failures.md',
     w2bench: 'qa-wave2-benchmarks.md',
     w2gate: 'qa-wave2-release-gate.md',
+    w3report: 'qa-wave3-report.md',
+    w3results: 'qa-wave3-results.json',
+    w3gate: 'qa-wave3-release-gate.md',
   };
   fs.mkdirSync(OUT, { recursive: true });
   for (const [key, name] of Object.entries(names)) {
@@ -637,6 +645,203 @@ function wave2SelfTest() {
   console.log(`certify: wave2 self-test PASS — ${cases.length + 1} wave-2 decision fixtures`);
 }
 
+// ---------------------------------------------------------------------------
+// Wave 3 (market reality): §11.1 registry → W3-G01..G07 gates (plan §31)
+// ---------------------------------------------------------------------------
+
+const W3_GATE_NAMES = ['W3-G01', 'W3-G02', 'W3-G03', 'W3-G04', 'W3-G05', 'W3-G06', 'W3-G07'];
+const W3_GATE_REQS = {
+  'W3-G01': 'Wave-2 release gate remains GO (no regression)',
+  'W3-G02': '100% corpus integrity (MKT/TEMP/CONF/UNK/LONG/DEBUG rows pass)',
+  'W3-G03': 'Comparative results reproducible (documented §28 recipe)',
+  'W3-G04': '≥1 Strong-Fit class with a measured margin',
+  'W3-G05': 'No unsupported universal claims in evidence docs',
+  'W3-G06': 'Build-vs-buy quantifies application complexity',
+  'W3-G07': 'Negative evidence preserved (wins/parity/losses/unknown)',
+};
+// W3-G05 ban list (plan §31): bare comparative/superlative claims are
+// forbidden unless the same sentence carries the measured number. The
+// mechanical check greps the evidence docs for these phrases.
+const W3_BANNED = ['better than rag', 'cheaper', 'faster', 'eliminates hallucination'];
+// The W3-G04 margin pin: this measured headline must still appear in the
+// plan — if it is edited away, the Strong-Fit gate flips to FAIL instead
+// of silently citing a stale margin.
+const W3_BENCH_CHECK = 'W4 multi-hop 7/8 vs RAG 3/8';
+
+function parseWave3Registry(text) {
+  const m = text.match(/### 11\.1 Per-ID mapping\s*\n([\s\S]*?)\n### 11\.2/);
+  if (!m) throw new Error('TESTING-PLAN §11.1 table not found');
+  const glyphs = { '✅': 'pass', '🟡': 'open', '❌': 'blocked' };
+  const rows = [];
+  for (const line of m[1].split('\n')) {
+    if (!line.trim().startsWith('|')) continue;
+    const c = line.split('|').map((s) => s.trim());
+    if (c.length < 6) continue;
+    const [id, pri, gate, glyph, evidence] = [c[1], c[2], c[3], c[4], c[5]];
+    if (id === 'ID' || /^-+$/.test(id)) continue;
+    let status = null;
+    for (const [g, s] of Object.entries(glyphs)) if (glyph.startsWith(g)) status = s;
+    if (!status) throw new Error(`unknown status glyph in wave-3 row ${id}: ${glyph}`);
+    if (status === 'pass' && glyph !== '✅') status = 'open'; // "✅ except …" = partial → never counts as a full pass
+    if (status === 'blocked' && evidence.includes('NOT_IMPLEMENTED')) status = 'not_implemented';
+    rows.push({ id, pri, gate: gate === '—' ? '' : gate, status, evidence });
+  }
+  if (rows.length < 9) throw new Error(`§11.1 parsed only ${rows.length} rows — table broken?`);
+  return rows;
+}
+
+// File-based checks (evidence docs on disk) — computed once, injected so the
+// self-test can exercise each failure shape without touching files.
+function wave3Env(planText) {
+  const read = (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '');
+  const evPath = path.join(ROOT, 'docs', 'WAVE3-MARKET-EVIDENCE.md');
+  const ev = read(evPath);
+  const negPaths = ['wins', 'parity', 'losses', 'unknown'].map((n) => path.join(ROOT, 'docs', 'benchmarks', `${n}.md`));
+  const banned = [];
+  for (const doc of [ev, ...negPaths.map(read)]) {
+    const lower = doc.toLowerCase();
+    for (const b of W3_BANNED) if (lower.includes(b) && !banned.includes(b)) banned.push(b);
+  }
+  const negMissing = negPaths.filter((p) => read(p).trim() === '').map((p) => path.basename(p));
+  return {
+    g03Ok: ev.includes('Reproduction recipe') && ev.includes('node scripts/certify.js'),
+    g05Ok: banned.length === 0,
+    g05Banned: banned,
+    g06Ok: ev.includes('1,042 LOC') && ev.includes('9,410 LOC'),
+    g07Ok: negMissing.length === 0,
+    g07Missing: negMissing,
+    benchOk: planText.includes(W3_BENCH_CHECK),
+  };
+}
+
+function wave3Verdict(rows, w2Go, env) {
+  const gateRows = (g) => rows.filter((r) => r.gate.split('/').includes(g));
+  const gates = {
+    'W3-G01': w2Go ? 'PASS' : 'FAIL (Wave-2 gate not GO)',
+    'W3-G02': gateRows('W3-G02').every((r) => r.status === 'pass') ? 'PASS' : 'FAIL (non-pass corpus row)',
+    'W3-G03': env.g03Ok ? 'PASS' : 'FAIL (reproduction recipe missing)',
+    'W3-G04': gateRows('W3-G04').every((r) => r.status === 'pass') && env.benchOk ? 'PASS' : 'FAIL (no measured Strong-Fit margin)',
+    'W3-G05': env.g05Ok ? 'PASS' : `FAIL (banned claim in evidence docs: ${env.g05Banned.join(', ')})`,
+    'W3-G06': gateRows('W3-G06').every((r) => r.status === 'pass') && env.g06Ok ? 'PASS' : 'FAIL (build-vs-buy numbers missing)',
+    'W3-G07': env.g07Ok ? 'PASS' : `FAIL (empty negative-evidence file: ${env.g07Missing.join(', ')})`,
+  };
+  const blocking = [];
+  for (const r of rows) if (r.status !== 'pass') blocking.push(`${r.id} [${r.status}] — ${r.evidence.slice(0, 160)}`);
+  for (const [g, v] of Object.entries(gates)) if (v !== 'PASS') blocking.push(`${g} failing: ${v}`);
+  const go = Object.values(gates).every((v) => v === 'PASS');
+  return { gates, blocking, go };
+}
+
+function renderWave3(planText, w2Go) {
+  const rows = parseWave3Registry(planText);
+  const env = wave3Env(planText);
+  const v = wave3Verdict(rows, w2Go, env);
+  const gen = 'generated from TESTING-PLAN.md §11.1 by scripts/certify.js';
+  const statusName = { pass: 'PASS', open: 'OPEN', not_implemented: 'NOT_IMPLEMENTED', blocked: 'BLOCKED' };
+
+  const report = [
+    '# AikoQL QA Wave 3 Report',
+    '',
+    `> ${gen}`,
+    '',
+    'Registry: `docs/TESTING-PLAN.md` §11.1 (Wave 3 market-reality plan). Every number is measured by a committed, deterministic, LLM-free test; negative evidence lives in `docs/benchmarks/{wins,parity,losses,unknown}.md` (plan §29). Statuses are never invented.',
+    '',
+    '## Summary',
+    '',
+    ...rows.map((r) => `- ${r.id}: ${statusName[r.status]}`),
+    `- **Final decision: ${v.go ? 'GO' : 'NO-GO'}** (${v.blocking.length} blocking item${v.blocking.length === 1 ? '' : 's'})`,
+    '',
+    '## Wave 3 gate readout (W3-G01..G07)',
+    '',
+    '| Gate | Requirement | Verdict |',
+    '| --- | --- | --- |',
+    ...W3_GATE_NAMES.map((g) => `| ${g} | ${W3_GATE_REQS[g]} | ${v.gates[g]} |`),
+    '',
+    '## Per-ID results',
+    '',
+    '| ID | Pri | Gate | Status | Coverage / TDD item |',
+    '| --- | --- | --- | --- | --- |',
+    ...rows.map((r) => `| ${r.id} | ${r.pri} | ${r.gate || '—'} | ${statusName[r.status]} | ${r.evidence} |`),
+    '',
+    '## Evidence docs (plan §28–§30)',
+    '',
+    '- `docs/WAVE3-MARKET-EVIDENCE.md` — coverage matrix, reproduction recipe, evidence matrix, build-vs-buy',
+    '- `docs/benchmarks/{wins,parity,losses,unknown}.md` — the negative-evidence set (W3-G07)',
+    '',
+  ].join('\n');
+
+  const results = {
+    generated_by: 'scripts/certify.js',
+    summary: {
+      final_decision: v.go ? 'GO' : 'NO-GO',
+      wave2_gate: w2Go ? 'GO' : 'NO-GO',
+    },
+    wave3_gates: v.gates,
+    tests: rows.map((r) => ({ id: r.id, priority: r.pri, gate: r.gate || null, status: r.status, coverage: r.evidence })),
+    blocking: v.blocking,
+  };
+
+  // The plan §31 gate block — labels verbatim, padded like the Wave-2 gate.
+  const gate = [
+    'AIKOQL QA WAVE 3',
+    '',
+    ...W3_GATE_NAMES.map((g) => `${g}:`.padEnd(25) + v.gates[g]),
+    '',
+    'FINAL:',
+    v.go ? 'GO' : 'NO-GO',
+    '',
+    'Blocking tests:',
+    ...(v.blocking.length ? v.blocking : ['(none)']),
+    '',
+    `> ${gen}`,
+    '',
+  ].join('\n');
+
+  return { w3report: report, w3results: JSON.stringify(results, null, 2) + '\n', w3gate: gate };
+}
+
+// Required plan-§31 wave-3 gate lines — each label must appear verbatim.
+const W3_GATE_FORMAT = ['AIKOQL QA WAVE 3', ...W3_GATE_NAMES.map((g) => `${g}:`), 'FINAL:'];
+
+function validateWave3(files) {
+  for (const line of W3_GATE_FORMAT) {
+    if (!files.w3gate.includes(line)) throw new Error(`qa-wave3-release-gate.md missing required line: ${JSON.stringify(line)}`);
+  }
+  if (!/FINAL:\nGO|FINAL:\nNO-GO/.test(files.w3gate)) throw new Error('qa-wave3-release-gate.md missing GO/NO-GO verdict');
+  JSON.parse(files.w3results); // machine-readable results must parse
+  return true;
+}
+
+function wave3SelfTest() {
+  const pass = (id, pri, gate) => ({ id, pri, gate, status: 'pass', evidence: 'ok' });
+  const allPass = () => [
+    pass('W3-MKT-001', 'P0', 'W3-G02'), pass('W3-WIN-001', 'P0', 'W3-G04'),
+    pass('W3-TEMP-001', 'P0', 'W3-G02'), pass('W3-CONF-001', 'P0', 'W3-G02'),
+    pass('W3-UNK-001', 'P0', 'W3-G02'), pass('W3-LONG-001', 'P1', 'W3-G02'),
+    pass('W3-DEBUG-001', 'P1', 'W3-G02'), pass('W3-DEV-001', 'P0', 'W3-G06'),
+    pass('W3-DEV-002', 'P1', 'W3-G06'),
+  ];
+  const goodEnv = () => ({ g03Ok: true, g05Ok: true, g05Banned: [], g06Ok: true, g07Ok: true, g07Missing: [], benchOk: true });
+  const cases = [
+    ['all green → GO', allPass(), true, goodEnv(), true],
+    ['Wave-2 NO-GO → W3-G01 fail', allPass(), false, goodEnv(), false],
+    ['open MKT row → W3-G02 fail', [Object.assign(pass('W3-MKT-001', 'P0', 'W3-G02'), { status: 'open' }), ...allPass().filter((r) => r.id !== 'W3-MKT-001')], true, goodEnv(), false],
+    ['open WIN row → W3-G04 fail', [Object.assign(pass('W3-WIN-001', 'P0', 'W3-G04'), { status: 'open' }), ...allPass().filter((r) => r.id !== 'W3-WIN-001')], true, goodEnv(), false],
+    ['bench margin edited away → W3-G04 fail', allPass(), true, Object.assign(goodEnv(), { benchOk: false }), false],
+    ['banned claim in evidence docs → W3-G05 fail', allPass(), true, Object.assign(goodEnv(), { g05Ok: false, g05Banned: ['better than rag'] }), false],
+    ['missing build-vs-buy numbers → W3-G06 fail', allPass(), true, Object.assign(goodEnv(), { g06Ok: false }), false],
+    ['empty negative-evidence file → W3-G07 fail', allPass(), true, Object.assign(goodEnv(), { g07Ok: false, g07Missing: ['losses.md'] }), false],
+  ];
+  for (const [name, rows, w2Go, env, want] of cases) {
+    const v = wave3Verdict(rows, w2Go, env);
+    if (v.go !== want) {
+      throw new Error(`wave3 self-test FAIL [${name}]: decision ${v.go}, expected ${want} — blocking: ${v.blocking.join('; ')}`);
+    }
+    if (!want && v.blocking.length === 0) throw new Error(`wave3 self-test FAIL [${name}]: NO-GO with empty blocking list`);
+  }
+  console.log(`certify: wave3 self-test PASS — ${cases.length} wave-3 decision fixtures`);
+}
+
 // ---- main ------------------------------------------------------------------
 
 const mode = process.argv[2] || '';
@@ -645,22 +850,28 @@ const planText = fs.readFileSync(PLAN, 'utf8');
 if (mode === '--self-test') {
   selfTest();
   wave2SelfTest();
+  wave3SelfTest();
   const files = render(planText);
   const w2 = renderWave2(planText);
+  const w3 = renderWave3(planText, true);
   validate(files);
   validateWave2(w2);
-  console.log('certify: both release-gate formats validated');
+  validateWave3(w3);
+  console.log('certify: all three release-gate formats validated');
   process.exit(0);
 }
 
 const files = render(planText);
 const w2 = renderWave2(planText);
+const w2Go = w2.w2gate.includes('FINAL:\nGO');
+const w3 = renderWave3(planText, w2Go);
 validate(files);
 validateWave2(w2);
-writeArtifacts({ ...files, ...w2 });
+validateWave3(w3);
+writeArtifacts({ ...files, ...w2, ...w3 });
 const mvpGo = files.gate.includes('Final decision:\nGO');
-const w2Go = w2.w2gate.includes('FINAL:\nGO');
-console.log(`certify: wrote 10 artifacts to artifacts/ (MVP: ${mvpGo ? 'GO' : 'NO-GO'}, Wave 2: ${w2Go ? 'GO' : 'NO-GO'})`);
+const w3Go = w3.w3gate.includes('FINAL:\nGO');
+console.log(`certify: wrote 13 artifacts to artifacts/ (MVP: ${mvpGo ? 'GO' : 'NO-GO'}, Wave 2: ${w2Go ? 'GO' : 'NO-GO'}, Wave 3: ${w3Go ? 'GO' : 'NO-GO'})`);
 
 if (mode === '--check') {
   try {

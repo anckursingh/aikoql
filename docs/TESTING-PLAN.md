@@ -483,6 +483,38 @@ Wave 2's claim under test: *knowledge remains correct under concurrent mutation,
 
 Each item: failing test → red → root-cause fix → green → regression → registry flip → commit (NO push).
 
+## 11. Wave 3 certification matrix — Market Reality (2026-08-28)
+
+QA-lead mapping of `AIKOQL_Wave3_Market_Reality_TDD_Test_Plan_v2.md` (W3-P0/P1 experiments + §31 gates W3-G01..G07) against current coverage. Status: ✅ covered · ⛔ out of substrate scope (2026-08-25 directive). Wave 3's claim under test: *the win zone (temporal, conflict, provenance, longitudinal, multi-hop) is real, measured, and honestly bounded by documented losses and unknowns* — every number from a committed, deterministic, LLM-free test.
+
+### 11.1 Per-ID mapping
+
+| ID | Pri | Gate | Status | Coverage / TDD item |
+| --- | --- | --- | --- | --- |
+| W3-MKT-001 Market corpus | P0 | W3-G02 | ✅ | `w3_mkt_001_market_corpus_integrity` (ingestion) — 19 docs / 34 chunks / 13 questions, W1-W12 labeled, every answer unit verbatim-backed by chunk text (rig check) |
+| W3-WIN-001 Workload classification | P0 | W3-G04 | ✅ | `w3_win_001_workload_classification` (ingestion) — W4 multi-hop 7/8 vs RAG 3/8 (Strong Fit), W7 provenance 2/2 vs 1/2 (Strong Fit), W11 Good Fit, W1/W3/W5/W6/W9 parity, W2 unknown |
+| W3-TEMP-001 Temporal reality | P0 | W3-G02 | ✅ | `w3_temp_001_temporal_market_reality` (ingestion) — 2026 timeline (assert → supersede → supersede): 2/2 superseded claims+entities suppressed vs RAG 2/2 confusion; valid_to stamps + lineage preserved |
+| W3-CONF-001 Contradiction value | P0 | W3-G02 | ✅ | `w3_conf_001_contradiction_value` (ingestion) — policy-only pack (1/3) vs RAG 3/3 incl. the unsafe note; superseded claims stay readable |
+| W3-UNK-001 Unknown handling | P0 | W3-G02 | ✅ | `w3_unk_001_unknown_handling_classification` (ingestion) — 4 classes (known/unknown/conflicting/historical-only) + honest false-confidence probe (5/5 facts on an absent answer, losses.md) |
+| W3-LONG-001 Longitudinal | P1 | W3-G02 | ✅ | `w3_long_001_longitudinal_value` (ingestion) — 90-day capacity evolution: 4/4 checkpoints at flat tokens [27,27,27,27] vs RAG 1/4 and history 1/4 with growing tokens |
+| W3-DEBUG-001 Debuggability | P1 | W3-G02 | ✅ | `w3_debug_001_observability_root_cause` (ingestion) — 5 injected failures surfaced by deterministic kernel reads (5/5 diagnosed); evidence-free assertion fails closed (P0-1 held) |
+| W3-DEV-001 Build-vs-buy | P0 | W3-G06 | ✅ | `docs/WAVE3-MARKET-EVIDENCE.md` §4 — retrieval-only baseline 1,042 LOC vs 9,410 LOC engine surface (kernel 6,590 + graph 551 + compiler/runtime 2,269); moat table |
+| W3-DEV-002 Source expansion | P1 | W3-G06 | ✅ | `docs/WAVE3-MARKET-EVIDENCE.md` §4 — one `compile_file` dispatch: md/pdf/rust/python/ts/java/images + 8 storage adapters behind one kernel API |
+
+### 11.2 Wave 3 gate readout (W3-G01..G07)
+
+| Gate | Requirement |
+| --- | --- |
+| W3-G01 | Wave-2 release gate remains GO (no regression) |
+| W3-G02 | 100% corpus integrity (MKT/TEMP/CONF/UNK/LONG/DEBUG rows) |
+| W3-G03 | Comparative reproducibility — §28 recipe, deterministic LLM-free instruments |
+| W3-G04 | ≥1 Strong-Fit class with a measured margin (W4 multi-hop 7/8 vs RAG 3/8) |
+| W3-G05 | No unsupported universal claims in the evidence docs (plan §31 ban list) |
+| W3-G06 | Build-vs-buy quantifies application complexity (1,042 vs 9,410 LOC) |
+| W3-G07 | Negative evidence preserved — `docs/benchmarks/{wins,parity,losses,unknown}.md` |
+
+Mechanical readout: `node scripts/certify.js` → `artifacts/qa-wave3-{report,results,release-gate}.md` (the §31 gate block, FINAL GO). The W3-G05 check greps the evidence docs for the plan's banned-claim list; the W3-G04 margin pin cross-checks the W4 headline still appears in this plan.
+
 ---
 
 ## Appendix — Existing instruments that serve the suites

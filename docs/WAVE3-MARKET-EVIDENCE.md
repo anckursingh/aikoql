@@ -1,9 +1,10 @@
 # Wave 3 — Market Reality: Implementation Analysis & Evidence
 
 Status: all W3-P0/P1 experiments **implemented and measured** (commits
-f7b6fda, 0c23a18). Every number below comes from a committed,
-deterministic, LLM-free test (the G12 convention). Negative evidence is
-kept in `docs/benchmarks/{wins,parity,losses,unknown}.md` (plan §29).
+f7b6fda, 0c23a18) and the §31 release gates W3-G01..G07 certified GO by
+`scripts/certify.js` (TESTING-PLAN §11). Every number below comes from a
+committed, deterministic, LLM-free test (the G12 convention). Negative
+evidence is kept in `docs/benchmarks/{wins,parity,losses,unknown}.md` (plan §29).
 
 ## 1. Coverage matrix — plan item → status → evidence
 
@@ -30,7 +31,7 @@ kept in `docs/benchmarks/{wins,parity,losses,unknown}.md` (plan §29).
 | W3-P2 §28 reproducibility | ✅ | §2 recipe below |
 | W3-P2 §29 negative evidence | ✅ | docs/benchmarks/{wins,parity,losses,unknown}.md |
 | W3-P2 §30 evidence matrix | ✅ | §3 below |
-| W3-G01..G07 release gates | ⏳ | certify.js Wave 3 block + TESTING-PLAN rows — next milestone (this doc is committed first, the gate block pins it) |
+| W3-G01..G07 release gates | ✅ | certify.js Wave 3 block — `artifacts/qa-wave3-release-gate.md` FINAL GO; gate mechanics in TESTING-PLAN §11.2 |
 
 Legend: ✅ measured and pinned · 📐 measured but open-ended by design ·
 ⛔ out of substrate scope (2026-08-25 directive: OCR, agent loops W10,
@@ -61,8 +62,8 @@ feature-gated and off by default.
 
 | Claim | Instrument | Measured | Verdict |
 |-------|-----------|----------|---------|
-| "Beats RAG on multi-hop" | WIN-001 W4 | 7/8 vs 3/8 (Δ+4, fewer tokens) | Strong Fit |
-| "Beats RAG on provenance" | WIN-001 W7 + G11 | 2/2 vs 1/2; prov 2/2 pinned | Strong Fit |
+| "Multi-hop advantage" | WIN-001 W4 | 7/8 vs 3/8 (Δ+4, fewer tokens) | Strong Fit |
+| "Provenance advantage" | WIN-001 W7 + G11 | 2/2 vs 1/2; prov 2/2 pinned | Strong Fit |
 | "Superseded claims never reach the agent" | TEMP-001 | 2/2 suppressed vs 2/2 RAG confusion | Win |
 | "Conflict resolution is auditable, not silent" | CONF-001 | 1/3 vs 3/3; superseded claims readable | Win |
 | "Stays correct as the world changes" | LONG-001 | 4/4 flat vs 1/4 both baselines | Win |

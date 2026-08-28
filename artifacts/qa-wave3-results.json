@@ -1,0 +1,82 @@
+{
+  "generated_by": "scripts/certify.js",
+  "summary": {
+    "final_decision": "GO",
+    "wave2_gate": "GO"
+  },
+  "wave3_gates": {
+    "W3-G01": "PASS",
+    "W3-G02": "PASS",
+    "W3-G03": "PASS",
+    "W3-G04": "PASS",
+    "W3-G05": "PASS",
+    "W3-G06": "PASS",
+    "W3-G07": "PASS"
+  },
+  "tests": [
+    {
+      "id": "W3-MKT-001 Market corpus",
+      "priority": "P0",
+      "gate": "W3-G02",
+      "status": "pass",
+      "coverage": "`w3_mkt_001_market_corpus_integrity` (ingestion) — 19 docs / 34 chunks / 13 questions, W1-W12 labeled, every answer unit verbatim-backed by chunk text (rig check)"
+    },
+    {
+      "id": "W3-WIN-001 Workload classification",
+      "priority": "P0",
+      "gate": "W3-G04",
+      "status": "pass",
+      "coverage": "`w3_win_001_workload_classification` (ingestion) — W4 multi-hop 7/8 vs RAG 3/8 (Strong Fit), W7 provenance 2/2 vs 1/2 (Strong Fit), W11 Good Fit, W1/W3/W5/W6/W9 parity, W2 unknown"
+    },
+    {
+      "id": "W3-TEMP-001 Temporal reality",
+      "priority": "P0",
+      "gate": "W3-G02",
+      "status": "pass",
+      "coverage": "`w3_temp_001_temporal_market_reality` (ingestion) — 2026 timeline (assert → supersede → supersede): 2/2 superseded claims+entities suppressed vs RAG 2/2 confusion; valid_to stamps + lineage preserved"
+    },
+    {
+      "id": "W3-CONF-001 Contradiction value",
+      "priority": "P0",
+      "gate": "W3-G02",
+      "status": "pass",
+      "coverage": "`w3_conf_001_contradiction_value` (ingestion) — policy-only pack (1/3) vs RAG 3/3 incl. the unsafe note; superseded claims stay readable"
+    },
+    {
+      "id": "W3-UNK-001 Unknown handling",
+      "priority": "P0",
+      "gate": "W3-G02",
+      "status": "pass",
+      "coverage": "`w3_unk_001_unknown_handling_classification` (ingestion) — 4 classes (known/unknown/conflicting/historical-only) + honest false-confidence probe (5/5 facts on an absent answer, losses.md)"
+    },
+    {
+      "id": "W3-LONG-001 Longitudinal",
+      "priority": "P1",
+      "gate": "W3-G02",
+      "status": "pass",
+      "coverage": "`w3_long_001_longitudinal_value` (ingestion) — 90-day capacity evolution: 4/4 checkpoints at flat tokens [27,27,27,27] vs RAG 1/4 and history 1/4 with growing tokens"
+    },
+    {
+      "id": "W3-DEBUG-001 Debuggability",
+      "priority": "P1",
+      "gate": "W3-G02",
+      "status": "pass",
+      "coverage": "`w3_debug_001_observability_root_cause` (ingestion) — 5 injected failures surfaced by deterministic kernel reads (5/5 diagnosed); evidence-free assertion fails closed (P0-1 held)"
+    },
+    {
+      "id": "W3-DEV-001 Build-vs-buy",
+      "priority": "P0",
+      "gate": "W3-G06",
+      "status": "pass",
+      "coverage": "`docs/WAVE3-MARKET-EVIDENCE.md` §4 — retrieval-only baseline 1,042 LOC vs 9,410 LOC engine surface (kernel 6,590 + graph 551 + compiler/runtime 2,269); moat table"
+    },
+    {
+      "id": "W3-DEV-002 Source expansion",
+      "priority": "P1",
+      "gate": "W3-G06",
+      "status": "pass",
+      "coverage": "`docs/WAVE3-MARKET-EVIDENCE.md` §4 — one `compile_file` dispatch: md/pdf/rust/python/ts/java/images + 8 storage adapters behind one kernel API"
+    }
+  ],
+  "blocking": []
+}
