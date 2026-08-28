@@ -267,6 +267,43 @@ pub struct Question {
     /// planning, W11 unknown handling, W12 longitudinal).
     pub class: &'static str,
     pub units: [&'static str; 2],
+    /// W31-MKT-001 (Wave 3.1 spec §5): the task's declared ground truth.
+    pub gt: Gt,
+}
+
+/// W31-MKT-001 declared per-task ground truth (Wave 3.1 spec §5): expected
+/// answer, acceptable variants, expected evidence, expected relationships,
+/// expected temporal state, expected authority, expected ambiguity. The
+/// expected answer is `Question.units`; these fields declare the rest.
+#[derive(Clone)]
+pub struct Gt {
+    /// Acceptable answer variants ("none" = the units are the exact answer).
+    pub variants: &'static str,
+    /// Expected evidence backing the answer (document id, or "any").
+    pub evidence: &'static str,
+    /// Expected relationships the answer must involve ("none" = not
+    /// relationship-dependent).
+    pub relationships: &'static str,
+    /// Expected temporal state: "current" | "historical" | "mixed".
+    pub temporal: &'static str,
+    /// Expected authority level of the answer's source (the kernel
+    /// Authority enum vocabulary, snake_case).
+    pub authority: &'static str,
+    /// Expected ambiguity: "none" | "conflict" | "unknown".
+    pub ambiguity: &'static str,
+}
+
+/// Compact `Gt` constructor — positional order: variants, evidence,
+/// relationships, temporal, authority, ambiguity.
+pub const fn g(
+    variants: &'static str,
+    evidence: &'static str,
+    relationships: &'static str,
+    temporal: &'static str,
+    authority: &'static str,
+    ambiguity: &'static str,
+) -> Gt {
+    Gt { variants, evidence, relationships, temporal, authority, ambiguity }
 }
 
 pub const QUESTIONS: &[Question] = &[
@@ -278,6 +315,7 @@ pub const QUESTIONS: &[Question] = &[
             "PaymentService depends_on RetryPolicy",
             "Retry limit is 3 attempts.",
         ],
+        gt: g("none", "kb-payments", "PaymentService depends_on RetryPolicy", "current", "source_code", "none"),
     },
     Question {
         kind: "hop",
@@ -287,6 +325,7 @@ pub const QUESTIONS: &[Question] = &[
             "LedgerService tested_by AuditTeam",
             "Audit activities are mandated by SOX.",
         ],
+        gt: g("none", "kb-audit", "LedgerService tested_by AuditTeam", "current", "documentation", "none"),
     },
     Question {
         kind: "cross-doc",
@@ -296,12 +335,14 @@ pub const QUESTIONS: &[Question] = &[
             "WarrantyPolicy depends_on RepairVendor",
             "RepairVendor ships replacements within 48 hours.",
         ],
+        gt: g("none", "kb-warranty-a", "WarrantyPolicy depends_on RepairVendor", "current", "documentation", "none"),
     },
     Question {
         kind: "temporal-probe",
         class: "W5",
         text: "What is the current retry limit?",
         units: ["Retry limit is 5 attempts.", "Retry limit is 3 attempts."],
+        gt: g("none", "any", "none", "mixed", "documentation", "none"),
     },
     Question {
         kind: "contradiction-probe",
@@ -311,6 +352,7 @@ pub const QUESTIONS: &[Question] = &[
             "ActiveUsers grew 40 percent in 2025.",
             "ActiveUsers grew 20 percent in 2025.",
         ],
+        gt: g("either documented figure; both sources present", "any", "none", "current", "documentation", "conflict"),
     },
     Question {
         kind: "control",
@@ -320,6 +362,7 @@ pub const QUESTIONS: &[Question] = &[
             "Ledger entries require exactly one write.",
             "LedgerService tested_by AuditTeam",
         ],
+        gt: g("none", "kb-ledger", "none", "current", "documentation", "none"),
     },
     Question {
         kind: "depth-2-probe",
@@ -329,6 +372,7 @@ pub const QUESTIONS: &[Question] = &[
             "MiddlePolicy depends_on LeafRule",
             "LeafRule sets ceiling at 99.",
         ],
+        gt: g("none", "kb-depth", "MiddlePolicy depends_on LeafRule", "current", "documentation", "none"),
     },
 ];
 
@@ -453,6 +497,7 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "The FebruaryOutage hit BillingCustomers while ArchV1 was the active architecture.",
             "ArchV3 replaced ArchV2 in June and is the current architecture.",
         ],
+        gt: g("none", "kb-arch", "ArchV3 replaced ArchV2", "mixed", "deployment_observed", "none"),
     },
     Question {
         kind: "synthesis",
@@ -462,6 +507,7 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "PremiumCustomers reported failed checkouts during the incident.",
             "The dependency upgrade broke CheckoutService for PremiumCustomers.",
         ],
+        gt: g("none", "kb-deps", "CheckoutService depends_on PaymentService", "current", "deployment_observed", "none"),
     },
     Question {
         kind: "policy",
@@ -471,6 +517,7 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "The DeployPolicy requires zero-downtime deploys.",
             "The ArchitectureDecision mandates canary deploys for all services.",
         ],
+        gt: g("none", "kb-policy", "none", "current", "organization_policy", "none"),
     },
     Question {
         kind: "provenance",
@@ -480,6 +527,7 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "The DeployPolicy requires zero-downtime deploys.",
             "kb-policy",
         ],
+        gt: g("none", "kb-policy", "none", "current", "organization_policy", "none"),
     },
     Question {
         kind: "unknown-probe",
@@ -489,6 +537,7 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "The OldIssueNote suggests restarting the service during deploys.",
             "ArchV2 replaced ArchV1 in March and added the retry cache.",
         ],
+        gt: g("no authoritative answer", "any", "none", "current", "documentation", "unknown"),
     },
     Question {
         kind: "semantic-probe",
@@ -498,6 +547,7 @@ pub const MARKET_QUESTIONS: &[Question] = &[
             "RepairVendor ships replacements within 48 hours.",
             "WarrantyPolicy depends on RepairVendor",
         ],
+        gt: g("none", "kb-warranty-a", "WarrantyPolicy depends_on RepairVendor", "current", "documentation", "none"),
     },
 ];
 

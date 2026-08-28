@@ -77,6 +77,9 @@
 
 pub mod golden_dataset;
 pub mod trackb;
+pub mod trackb31;
+pub mod trackb31_docs;
+pub mod trackb_holdout;
 
 use aikoql_ingestion::{EmbeddingProvider, KnowledgeBoundaryDetector, VisualIndexRecord};
 use std::collections::{HashMap, HashSet};
