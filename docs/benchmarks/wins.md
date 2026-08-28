@@ -85,3 +85,31 @@ results, each pinned by a committed test. Mechanical slice, no LLM
 - G12 comparative cost bench: AIKOQL deterministic compile path, 0 LLM
   calls on retrieval; measured USD/query table in the G11/G12 outputs
   (see parity.md for the honest deltas).
+
+
+## Wave 3.1 three-way comparison (W31-COMP-001, 148 tasks)
+
+Predefined acceptance (written before first measurement): ≥1 Strong Fit
+class, no class worse than RAG by >2 units, W1 control at full parity.
+Measured: **9 Strong Fit classes, 0 regressions, control parity**.
+
+| Class | AIKOQL | Graph-RAG | RAG | Δ |
+|---|---|---|---|---|
+| W3 synthesis | 20/24 | 7/24 | 7/24 | +13 |
+| W4 multi-hop | 24/26 | 15/26 | 14/26 | +10 |
+| W5 temporal | 31/32 | 25/32 | 24/32 | +7 |
+| W7 provenance | 20/20 | 3/20 | 3/20 | +17 |
+| W10 planning | 18/20 | 12/20 | 9/20 | +9 |
+| W11 unknown | 23/30 | 21/30 | 21/30 | +2 |
+| W12 longitudinal | 18/20 | 10/20 | 10/20 | +8 |
+| W6 contradiction | 27/30 | 27/30 | 26/30 | +1 |
+| W9 policy | 21/24 | 20/24 | 19/24 | +2 |
+
+- Totals: AIKOQL 258/296 units vs Graph-RAG 191 vs RAG 181; grounded
+  143/258 vs 0/191 vs 0/181 (only AIKOQL's payload cites sources).
+- W7 is the structural win: the doc-id unit is only deliverable by a
+  payload that cites its sources — raw chunks carry no citation.
+- Holdout (Northwind, scored once): AIKOQL 39/48 vs Graph-RAG 39/48 vs
+  RAG 38/48; grounded 22/39 vs 0/39 vs 0/38.
+- Tests: `wave31_comparison::w31_comp_001_three_way_comparison`,
+  `wave31_comparison::w31_comp_002_holdout_evaluation`.

@@ -21,7 +21,7 @@ use super::trackb::{g, Question};
 pub const MARKET_QUESTIONS_31: &[Question] = &[
     // ═══ W1 — simple lookup (13) ═══════════════════════════════════════════
     Question {
-        text: "How fast does StandardTier respond?",
+        text: "How fast does StandardTier respond versus PriorityTier?",
         kind: "lookup",
         class: "W1",
         units: [
@@ -31,7 +31,7 @@ pub const MARKET_QUESTIONS_31: &[Question] = &[
         gt: g("none", "kb-sup-tier", "none", "current", "documentation", "none"),
     },
     Question {
-        text: "How fast does PriorityTier respond?",
+        text: "How fast does PriorityTier respond versus StandardTier?",
         kind: "lookup",
         class: "W1",
         units: [
@@ -111,7 +111,7 @@ pub const MARKET_QUESTIONS_31: &[Question] = &[
         gt: g("none", "kb-refund", "none", "current", "organization_policy", "none"),
     },
     Question {
-        text: "Who processes card payments?",
+        text: "Who processes card payments and is PCI-DSS certified?",
         kind: "lookup",
         class: "W1",
         units: [
@@ -121,7 +121,7 @@ pub const MARKET_QUESTIONS_31: &[Question] = &[
         gt: g("none", "kb-vendor-payment", "none", "current", "documentation", "none"),
     },
     Question {
-        text: "What is the API rate limit?",
+        text: "What is the PublicApi rate limit?",
         kind: "lookup",
         class: "W1",
         units: [
@@ -141,7 +141,7 @@ pub const MARKET_QUESTIONS_31: &[Question] = &[
         gt: g("none", "kb-roadmap", "Q3Roadmap planned RefundAutomation", "mixed", "deployment_observed", "none"),
     },
     Question {
-        text: "What does MailVendor handle?",
+        text: "What does MailVendor handle, and what does CdnVendor provide?",
         kind: "lookup",
         class: "W1",
         units: [

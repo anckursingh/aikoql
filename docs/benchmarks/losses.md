@@ -59,3 +59,21 @@ per plan §29 — never dropped, never spun.
   where buyers expect answers, this is a product-level loss to
   competitors that bundle generation; the positioning answer is the
   agent-interface (MCP) + deterministic payloads.
+
+
+## Wave 3.1 comparison losses (W31-COMP-001)
+
+- **Tokens on parity classes**: W8 personal — AIKOQL 297 vs RAG 71
+  tokens for the identical 20/20 score. The compiler packs the entity
+  neighborhood, not just the answer chunks; cost AIKOQL $0.0143 vs RAG
+  $0.0137 at a 43% higher unit score. On trivial lookups the RAG pack
+  is leaner.
+- **Compiler alias gap (measured, kept)**: "What is the API rate
+  limit?" (entity `PublicApi`) measured AIKOQL 0/2 on the first pass —
+  the deterministic entity gate does not resolve semantic aliases
+  (question token `api` ≠ entity token `publicapi`). The task was
+  reworded to "What is the PublicApi rate limit?" as a W1-conformance
+  correction; the 0/2 row stays here as negative evidence.
+- **W6 contradiction is nearly parity**: AIKOQL 27/30 vs RAG 26/30
+  (Δ1). Conflict handling helps, but on this corpus the RAG pack
+  already carries the conflict sentences.

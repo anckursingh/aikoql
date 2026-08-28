@@ -38,3 +38,12 @@ Source: `w3_win_001_workload_classification` table output.
   verbatim-backed by chunk text (doc-id units by IR evidence), so the
   RAG baseline could in principle win every question. Parity rows above
   are not rigged losses for RAG.
+
+
+## Wave 3.1 — control parity (W31-COMP-001)
+
+- W1 lookup: 28/28 for all three treatments — the rig check: the
+  trivial class shows no advantage for anyone, so the wins above are
+  not bench artifacts.
+- W8 personal: 20/20 all treatments, but AIKOQL spends 297 tokens vs
+  RAG's 71 for the same score (see losses.md — the efficiency row).

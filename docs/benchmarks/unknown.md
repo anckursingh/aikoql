@@ -40,3 +40,14 @@ narrative must not state these as facts.
 - The 51-task G10 scale and the dogfood gate are the largest runs.
   Production-scale retrieval latency/memory (millions of KOs) is
   unmeasured; the plan's scale-to-value experiment is future work.
+
+
+## Wave 3.1 comparison unknowns (W31-COMP-001)
+
+- **W2 semantic probes**: AIKOQL reaches 8/22 units on zero-overlap
+  probes via the entity graph (RAG 0/22 by construction); the other
+  14/22 need a real embedding provider — measured only by the gated
+  real-model harness (REAL-001).
+- **Latency at scale**: p95 AIKOQL 74.9ms vs RAG 6.8ms on 148 tasks;
+  no measurement at production scale (millions of KOs) — SCALE-001's
+  job.
