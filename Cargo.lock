@@ -100,6 +100,7 @@ dependencies = [
 name = "aikoql-ingestion"
 version = "0.1.18"
 dependencies = [
+ "aikoql-graph",
  "aikoql-kernel",
  "aikoql-scheduler",
  "criterion",
