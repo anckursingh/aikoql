@@ -394,3 +394,33 @@ AIKOQL observability only (compiled ContextPackage per-item evidence,
   provenance carried on every packed fact (`RankedFact.evidence`) is
   what makes wrong-source/stale-source/conflict diagnosable at all.
 - Test: `wave31_debug::w31_debug_001_end_to_end_debuggability`.
+
+## Wave 3.1 knowledge change propagation (W31-IMPACT-001)
+
+Dependency change — Aurora depends on Beacon becomes Aurora depends on
+Cobalt. Re-ingest the edited doc, recompile the same tasks, measure
+what the change touched. Ground truth and pins declared in the test
+header BEFORE measurement (spec §4):
+
+| Metric | Pinned | Measured |
+|---|---|---|
+| knowledge records changed | 2 (1 fact + 1 relation) | 2 |
+| affected relationships | 1 edge replaced | 1 |
+| impact precision | 1.0 | 1.0 |
+| impact recall | 1.0 | 1.0 |
+| false propagation | 0 | 0 |
+| missed propagation | 0 | 0 |
+| stale answers | 0 | 0 |
+
+- The changed edge re-routes the relationship-boost (0.65 × anchor
+  score): post-change the new neighbor Cobalt ranks and its sla fact
+  passes the entity gate, while Beacon's fact drops back out — the
+  two-hop answer ("sla of the service Aurora depends on") flips
+  99.9 → 99.5 with no re-prompting, no cache invalidation, no
+  migration. The propagation IS the recompile over the new state.
+- Blast radius is exactly the changed records: T1/T2 (edge + fact) and
+  T3 (Beacon's incoming edge leaves its context) change; the unrelated
+  control T4 (Dune) compiles to a byte-identical payload.
+- A touched entity's own knowledge survives its neighbor's change: T3
+  still answers Beacon's sla after losing the incoming edge.
+- Test: `wave31_impact::w31_impact_001_knowledge_change_propagation`.

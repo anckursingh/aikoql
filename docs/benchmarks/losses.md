@@ -192,3 +192,16 @@ per plan §29 — never dropped, never spun.
   never be spun into an efficiency claim.
 - The single-source row is NOT a loss (32 vs 38 tokens — see wins.md,
   a 2-token noise margin).
+
+## Wave 3.1 impact measurement caveat (W31-IMPACT-001)
+
+- **Prefix-colliding names inflate ranking**: the deliberate morphology
+  rule (shared prefix ≥4 chars) makes every `ServiceX` entity rank for
+  any question naming a `ServiceY`. During RED, the T1 post-change
+  package still carried the old target solely because all four fixture
+  names shared the "service" prefix — a fixture leak, not a
+  propagation defect, but it exposes the real behavior: for
+  name-heavy corpora with near-identical names, retrieval co-ranks
+  all of them, which widens a change's apparent blast radius. The
+  measurement fixture had to use prefix-distinct names
+  (Aurora/Beacon/Cobalt/Dune) to isolate edge-driven propagation.
