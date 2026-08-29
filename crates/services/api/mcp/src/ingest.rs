@@ -1,8 +1,11 @@
 //! Subcommand runners extracted verbatim from cli.rs (PRR-7).
 //! No behavior changes.
 
-use crate::*;
-
+use crate::{
+    engine, kom, Arc, ContentTrust, Direction, EmbeddingProvider, Evidence, EvidenceMethod,
+    HashMap, IngestRequest, Instant, KnowledgeContext, Metadata, PropertyMap, RelationshipRef,
+    RememberRequest, SecurityDescriptor, Subject, Value, KOID,
+};
 /// Enrich the merged IR before the snapshot write: one `file` entity per
 /// source file referenced by entity evidence, plus `file contains entity`
 /// relations. compile_context's relation-aware boost follows these edges, so

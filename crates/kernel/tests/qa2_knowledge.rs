@@ -230,6 +230,7 @@ fn w2_know_007_relationship_conflict_preserved_resolved_by_policy_only() {
             decision: ConflictResolution::ResolvedAPreferred,
             rationale: "deed registry confirms ownership".into(),
             replacement: None,
+            split_at: None,
         })
         .unwrap();
     assert_eq!(outcome.decision, ConflictResolution::ResolvedAPreferred);

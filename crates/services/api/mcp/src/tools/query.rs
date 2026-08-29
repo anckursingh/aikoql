@@ -1,10 +1,12 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
-
 use crate::helpers::*;
 use crate::session::*;
+use crate::{
+    json, ExtensionMap, FuseMode, IrOp, IrPlan, KError, Kernel, Metadata, Ordering, Origin,
+    PropertyMap, ReferentialPolicy, RememberRequest, SimilarityQuery, Value, J, STREAM_ID,
+};
 pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
     let source = args
         .get("query")

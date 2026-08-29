@@ -1,10 +1,12 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
-
 use crate::helpers::*;
 use crate::session::*;
+use crate::{
+    json, ExtensionMap, Kernel, Metadata, Origin, PropertyMap, ReferentialPolicy, RememberRequest,
+    SecurityDescriptor, Value, J, MEMORY_DIR,
+};
 pub(crate) fn tool_agent_memory(kernel: &Kernel, args: &J) -> Result<J, String> {
     let agent_id = args
         .get("agent_id")

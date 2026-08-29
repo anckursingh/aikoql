@@ -1130,6 +1130,22 @@ impl KnowledgeObject {
             && self.valid_to().map(|t| t > at_millis).unwrap_or(true)
     }
 
+    /// Extension key for the verify-commit link (P2-5): the journal seq of
+    /// the verify op's final commit — the event that carries the confidence
+    /// bump this key lives beside. Kernel-managed (set by verify_knowledge,
+    /// never by remember()).
+    pub const EXT_VERIFIED_EVENT: &str = "verified_event";
+
+    /// Journal seq of the most recent verify commit for this KO; None when
+    /// never verified. Pairs with `last_verified` (the wall-clock instant) —
+    /// this is the durable event in the audit journal that records it.
+    pub fn verified_event(&self) -> Option<u64> {
+        match self.extensions.get(Self::EXT_VERIFIED_EVENT) {
+            Some(Value::Int(v)) if *v >= 0 => Some(*v as u64),
+            _ => None,
+        }
+    }
+
     // ---- v0.3 K3: Derivation & confidence context (stored in extensions) ----
 
     /// Extension key for the Derivation record (Map; absent = asserted).
@@ -1656,12 +1672,31 @@ pub enum ConflictResolution {
     /// Conflict is under active review.
     UnderReview,
     /// Claim A takes precedence over Claim B.
+    ///
+    /// Semantics (P2-1): a recorded selection of A as the current truth —
+    /// B is transitioned to Contradicted with the mandatory rationale. It
+    /// is a decision with a justification, never a strength ranking or an
+    /// automatic win for the "stronger" side.
     ResolvedAPreferred,
     /// Claim B takes precedence over Claim A.
+    ///
+    /// Semantics (P2-1): the mirror of ResolvedAPreferred — A is
+    /// transitioned to Contradicted with the mandatory rationale.
     ResolvedBPreferred,
     /// Both claims are valid in different contexts/scopes.
+    ///
+    /// Semantics (P2-1): a coexistence claim — neither side is demoted.
+    /// `resolve_conflict` accepts an optional `split_at` instant that
+    /// partitions validity along the valid-time axis (claim A valid until
+    /// `split_at`, claim B valid from `split_at`), which is how "different
+    /// contexts" is made queryable. Without `split_at` the resolution is a
+    /// bare statement that both stand.
     ResolvedBothValid,
     /// Both claims rejected, replaced by a new claim.
+    ///
+    /// Semantics (P2-1): full supersession — both claims transition to
+    /// Superseded with SUPERSEDES edges to the replacement, and derived
+    /// dependents are swept for staleness.
     ResolvedReplaced,
 }
 

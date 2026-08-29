@@ -1302,15 +1302,16 @@ impl Kernel {
     // ---- remember (MRFC-0011 §6.1) -----------------------------------------
 
     /// Extension keys owned by the kernel: epistemic status/history, lifecycle,
-    /// invalidation, evidence, derivation, confidence, valid_to, authority,
     /// Extension keys owned by the kernel: epistemic status/history, lifecycle,
-    /// evidence, derivation, confidence, valid_to, authority, scope, and
-    /// content trust. Only the semantic operations may write them — a caller
-    /// supplying them to remember() would forge epistemic state (review P0-1).
-    /// `valid_from` is deliberately absent: callers declare their own claim's
-    /// temporal start (and may not have written `valid_to`). Public so callers
-    /// can strip these keys from a read-modify-write update instead of being
-    /// rejected.
+    /// invalidation, evidence, derivation, confidence, verified_event,
+    /// valid_to, authority, scope, and content trust. Only the semantic
+    /// operations may write them — a caller supplying them to remember()
+    /// would forge epistemic state (review P0-1). `valid_from` is deliberately
+    /// absent: callers declare their own claim's temporal start (and may not
+    /// have written `valid_to`). Public so callers can strip these keys from a
+    /// read-modify-write update instead of being rejected. P2-8: this is the
+    /// complete enumeration — the typed-struct migration stays deferred, but
+    /// every managed key lands here.
     pub const KERNEL_MANAGED_EXTENSIONS: &[&str] = &[
         KnowledgeObject::EXT_EPISTEMIC_STATUS,
         KnowledgeObject::EXT_EPISTEMIC_HISTORY,
@@ -1319,6 +1320,7 @@ impl Kernel {
         KnowledgeObject::EXT_EVIDENCE,
         KnowledgeObject::EXT_DERIVATION,
         KnowledgeObject::EXT_CONFIDENCE,
+        KnowledgeObject::EXT_VERIFIED_EVENT,
         KnowledgeObject::EXT_VALID_TO,
         KnowledgeObject::EXT_CONTENT_TRUST,
         "authority",

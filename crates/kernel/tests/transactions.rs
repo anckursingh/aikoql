@@ -217,6 +217,7 @@ fn verify_rejects_illegal_epistemic_moves() {
             decision: ConflictResolution::ResolvedAPreferred,
             rationale: "a has stronger evidence".into(),
             replacement: None,
+            split_at: None,
         })
         .unwrap();
     let (_, st) = out
@@ -679,6 +680,7 @@ fn resolve_conflict_applies_decision_and_records_rationale() {
             decision: ConflictResolution::ResolvedAPreferred,
             rationale: "a's observation is stronger".into(),
             replacement: None,
+            split_at: None,
         })
         .unwrap();
 
@@ -720,6 +722,7 @@ fn resolve_conflict_validates_decision_rationale_and_state() {
             decision: ConflictResolution::Unresolved,
             rationale: "still thinking".into(),
             replacement: None,
+            split_at: None,
         })
         .unwrap_err();
     assert!(matches!(err, KError::InvalidObject(_)));
@@ -732,6 +735,7 @@ fn resolve_conflict_validates_decision_rationale_and_state() {
             decision: ConflictResolution::ResolvedAPreferred,
             rationale: "  ".into(),
             replacement: None,
+            split_at: None,
         })
         .unwrap_err();
     assert!(matches!(err, KError::InvalidObject(_)));
@@ -743,6 +747,7 @@ fn resolve_conflict_validates_decision_rationale_and_state() {
         decision: ConflictResolution::ResolvedAPreferred,
         rationale: "a's observation is stronger".into(),
         replacement: None,
+        split_at: None,
     })
     .unwrap();
     let err = k
@@ -752,6 +757,7 @@ fn resolve_conflict_validates_decision_rationale_and_state() {
             decision: ConflictResolution::ResolvedAPreferred,
             rationale: "again".into(),
             replacement: None,
+            split_at: None,
         })
         .unwrap_err();
     assert!(matches!(err, KError::InvalidObject(_)));
@@ -775,6 +781,7 @@ fn resolve_conflict_replaced_requires_replacement_and_supersedes_both() {
             decision: ConflictResolution::ResolvedReplaced,
             rationale: "both were wrong".into(),
             replacement: None,
+            split_at: None,
         })
         .unwrap_err();
     assert!(matches!(err, KError::InvalidObject(_)));
@@ -786,6 +793,7 @@ fn resolve_conflict_replaced_requires_replacement_and_supersedes_both() {
             decision: ConflictResolution::ResolvedReplaced,
             rationale: "both were wrong".into(),
             replacement: Some(replacement),
+            split_at: None,
         })
         .unwrap();
     let mut superseded = out.effects.iter().map(|(ko, _)| *ko).collect::<Vec<_>>();
@@ -824,6 +832,7 @@ fn resolve_replaced_wires_supersedes_edges_and_sweeps_dependents() {
             decision: ConflictResolution::ResolvedReplaced,
             rationale: "both were wrong".into(),
             replacement: Some(replacement),
+            split_at: None,
         })
         .unwrap();
 
@@ -854,6 +863,180 @@ fn resolve_replaced_wires_supersedes_edges_and_sweeps_dependents() {
         assert!(ko.invalidation().is_some());
         assert_eq!(ko.valid_to(), Some(10_001));
     }
+}
+
+#[test]
+fn resolve_both_valid_splits_validity_at_split_at() {
+    let (k, clock, _store) = mk_kernel();
+    let a = assert_k(&k, "alice", "env", 1, "source_code");
+    let mut cr = ContradictionRequest::new(Subject::new("bob"), a);
+    cr.counter_props.insert("env".into(), Value::Int(2));
+    cr.evidence = vec![ev("bob-observation")];
+    let cc = k.contradict(cr).unwrap();
+    clock.tick(1);
+    let a_pre = k.get(Subject::new("alice"), &a).unwrap();
+    let b_pre = k.get(Subject::new("bob"), &cc.counter).unwrap();
+    let split = 20_000;
+
+    let out = k
+        .resolve_conflict(ConflictResolutionRequest {
+            context: Subject::new("bob").into(),
+            conflict: cc.conflict,
+            decision: ConflictResolution::ResolvedBothValid,
+            rationale: "env was 1 before the migration, 2 after".into(),
+            replacement: None,
+            split_at: Some(split),
+        })
+        .unwrap();
+
+    // Coexistence demotes nobody — no epistemic effects at all.
+    assert!(out.effects.is_empty());
+    let a_ko = k.get(Subject::new("alice"), &a).unwrap();
+    let b_ko = k.get(Subject::new("bob"), &cc.counter).unwrap();
+    assert_eq!(a_ko.epistemic_status(), a_pre.epistemic_status());
+    assert_eq!(b_ko.epistemic_status(), b_pre.epistemic_status());
+    // Partition along the valid-time axis: A until split, B from split.
+    assert_eq!(a_ko.valid_to(), Some(split));
+    assert_eq!(b_ko.valid_from(), Some(split));
+    // A's own temporal start is preserved — only the shared boundary moves.
+    assert_eq!(a_ko.valid_from(), a_pre.valid_from());
+    assert_eq!(b_ko.valid_to(), b_pre.valid_to());
+    // The Conflict KO records the decision, rationale, and split instant.
+    let conflict = k.get(Subject::new("bob"), &cc.conflict).unwrap();
+    assert_eq!(
+        conflict.extensions.get("resolution"),
+        Some(&Value::Text("resolved_both_valid".into()))
+    );
+    assert_eq!(
+        conflict.extensions.get("resolution_split_at"),
+        Some(&Value::Int(split as i64))
+    );
+}
+
+#[test]
+fn resolve_both_valid_without_split_is_bare_coexistence() {
+    let (k, _clock, _store) = mk_kernel();
+    let a = assert_k(&k, "alice", "env", 1, "source_code");
+    let mut cr = ContradictionRequest::new(Subject::new("bob"), a);
+    cr.counter_props.insert("env".into(), Value::Int(2));
+    cr.evidence = vec![ev("bob-observation")];
+    let cc = k.contradict(cr).unwrap();
+
+    let out = k
+        .resolve_conflict(ConflictResolutionRequest {
+            context: Subject::new("bob").into(),
+            conflict: cc.conflict,
+            decision: ConflictResolution::ResolvedBothValid,
+            rationale: "different environments".into(),
+            replacement: None,
+            split_at: None,
+        })
+        .unwrap();
+
+    assert!(out.effects.is_empty());
+    // No partition — validity intervals untouched.
+    let a_ko = k.get(Subject::new("alice"), &a).unwrap();
+    let b_ko = k.get(Subject::new("bob"), &cc.counter).unwrap();
+    assert_eq!(a_ko.valid_to(), None);
+    assert_eq!(b_ko.valid_from(), Some(10_000)); // contradict stamps its own valid_from
+    // The Conflict KO records the coexistence decision without a split.
+    let conflict = k.get(Subject::new("bob"), &cc.conflict).unwrap();
+    assert_eq!(
+        conflict.extensions.get("resolution"),
+        Some(&Value::Text("resolved_both_valid".into()))
+    );
+    assert!(conflict.extensions.get("resolution_split_at").is_none());
+}
+
+#[test]
+fn resolve_split_at_rejects_inverted_intervals_and_other_decisions() {
+    let (k, clock, _store) = mk_kernel();
+    let a = assert_k(&k, "alice", "env", 1, "source_code");
+    let mut cr = ContradictionRequest::new(Subject::new("bob"), a);
+    cr.counter_props.insert("env".into(), Value::Int(2));
+    cr.evidence = vec![ev("bob-observation")];
+    let cc = k.contradict(cr).unwrap();
+
+    // split_at is only meaningful for ResolvedBothValid.
+    let err = k
+        .resolve_conflict(ConflictResolutionRequest {
+            context: Subject::new("bob").into(),
+            conflict: cc.conflict,
+            decision: ConflictResolution::ResolvedAPreferred,
+            rationale: "a wins".into(),
+            replacement: None,
+            split_at: Some(20_000),
+        })
+        .unwrap_err();
+    assert!(matches!(err, KError::InvalidObject(_)));
+
+    // An inverted partition (before A's valid_from) is rejected and leaves
+    // the conflict unresolved.
+    clock.tick(1);
+    let err = k
+        .resolve_conflict(ConflictResolutionRequest {
+            context: Subject::new("bob").into(),
+            conflict: cc.conflict,
+            decision: ConflictResolution::ResolvedBothValid,
+            rationale: "wrong split".into(),
+            replacement: None,
+            split_at: Some(9_000), // before A's valid_from (10_000)
+        })
+        .unwrap_err();
+    assert!(matches!(err, KError::InvalidObject(_)));
+    let conflict = k.get(Subject::new("bob"), &cc.conflict).unwrap();
+    assert_eq!(
+        conflict.extensions.get("resolution"),
+        Some(&Value::Text("unresolved".into()))
+    );
+    // The failed attempt touched neither claim's interval.
+    let a_ko = k.get(Subject::new("alice"), &a).unwrap();
+    assert_eq!(a_ko.valid_to(), None);
+}
+
+#[test]
+fn verify_stamps_the_verify_commit_journal_seq() {
+    let (k, clock, _store) = mk_kernel();
+    let f = assert_k(&k, "alice", "env", 1, "source_code");
+    // Unverified KOs carry no verified_event.
+    assert_eq!(
+        k.get(Subject::new("alice"), &f).unwrap().verified_event(),
+        None
+    );
+    clock.tick(1);
+
+    let mut req = VerificationRequest::new(Subject::new("alice"), f);
+    req.evidence = vec![ev("ci-run-1")];
+    k.verify_knowledge(req).unwrap();
+
+    let ko = k.get(Subject::new("alice"), &f).unwrap();
+    let seq = ko.verified_event().expect("verify commit seq stamped");
+    // The stamp names the verify op's final journal commit.
+    assert_eq!(seq, k.journal_head().unwrap().0);
+    let events = k.journal().unwrap();
+    let event = events
+        .iter()
+        .find(|e| e.seq == seq)
+        .expect("event at stamped seq");
+    assert_eq!(event.koid, f);
+    assert_eq!(event.actor, "alice");
+
+    // Re-verifying moves the stamp to the latest verify commit.
+    clock.tick(1);
+    let mut req = VerificationRequest::new(Subject::new("bob"), f);
+    req.evidence = vec![ev("ci-run-2")];
+    k.verify_knowledge(req).unwrap();
+    let ko = k.get(Subject::new("alice"), &f).unwrap();
+    let seq2 = ko.verified_event().expect("re-verify commit seq stamped");
+    assert!(seq2 > seq);
+    assert_eq!(seq2, k.journal_head().unwrap().0);
+    let events = k.journal().unwrap();
+    let event = events
+        .iter()
+        .find(|e| e.seq == seq2)
+        .expect("event at re-stamped seq");
+    assert_eq!(event.koid, f);
+    assert_eq!(event.actor, "bob");
 }
 
 // ---- Knowledge Continuity scenario (review #15) ------------------------------

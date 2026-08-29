@@ -3231,13 +3231,13 @@ Fourth reviewer round (`AIKOQL_PR1_Updated_Code_Functionality_Review.md`). Verdi
 | P2-4 | Independent confirmations | Confirmations are keyed by `verifier \| evidence` in `verification_keys` — same verifier + same evidence adds nothing; a distinct verifier adds one. | `verify_bumps_confirmations_and_never_lowers_score` (seeded via the semantic verify op) |
 | P2-6 | Strict evidence decode on epistemic-critical reads | `trace` reads through `strict_evidence()`: a malformed evidence entry is a surface error, never silently skipped. | `mcp_stdio` k3 trace section |
 | P2-7 | Trace source status | Each trace source reports `ok` / `not_found` / `not_visible` instead of collapsing failures. | `mcp_stdio` k3 trace section |
+| P2-1 | A/B-preferred semantics are a recorded selection | Done 2026-08-29: enum + resolve arms document the semantics — the preferred claim stands as current truth, the loser is transitioned to Contradicted with the mandatory rationale; a recorded decision, never a strength ranking. | `resolve_both_valid_without_split_is_bare_coexistence` pins the coexistence contract |
+| P2-2 | Both-valid temporal partition | Done 2026-08-29: `split_at` on `ConflictResolutionRequest` (both-valid only, else `InvalidObject`) partitions the claims along the valid-time axis — A closes at the instant, B opens there, both stay current, `resolution_split_at` recorded on the Conflict KO; inverted partitions are rejected before either claim is written. | `resolve_both_valid_splits_validity_at_split_at`, `resolve_split_at_rejects_inverted_intervals_and_other_decisions` |
+| P2-5 | `last_verified` tied to the verification event | Done 2026-08-29: `verified_event` kernel-managed extension holds the journal seq of the verify op's final commit (single-writer under the pipe lock); typed accessor pairs with `last_verified` (wall-clock). | `verify_stamps_the_verify_commit_journal_seq` |
 
 ### Deferred (accepted as documented)
 
-- **P2-1 (`ResolvedAPreferred`/`ResolvedBPreferred` explicit semantics)** — the two decisions currently resolve to their selected claim with the standard supersession of the loser; per-decision documented semantics (preference ordering vs. plain selection) is a v0.3+ conflict-model refinement, tracked in `knowledge-invariants.md` C1.
-- **P2-2 (`ResolvedBothValid` scope/temporal semantics)** — both-valid resolution keeps both claims current; scope/temporally-partitioned validity is future work (the valid-time model T1–T3 gives it the substrate).
-- **P2-5 (`last_verified` tied to the verification event)** — `last_verified` is a timestamp today; linking it to the verification event (evidence trail of the verify op) is a provenance refinement once the event graph lands.
-- **P2-8 (generic extension maps becoming a semantic type-system)** — accepted as a real architectural observation, not a merge blocker: the kernel-managed keys are now enumerated in one public const (`KERNEL_MANAGED_EXTENSIONS`), which is the typed-struct migration's starting point.
+- **P2-8 (generic extension maps becoming a semantic type-system)** — accepted as a real architectural observation, not a merge blocker: the kernel-managed keys are enumerated in one public const (`KERNEL_MANAGED_EXTENSIONS`), which is the typed-struct migration's starting point. Deferred 2026-08-29 after P2-1/2/5 shipped: the migration is a large mechanical rewrite with no behavioral gain; the enumeration stays complete (incl. `verified_event`) as its launch pad.
 
 ### Reviewer test cases → tests
 
@@ -3770,10 +3770,10 @@ The last uninstrumented §53 stage is now measured. `tests/e2e_answer_quality.rs
 | Remote TCP + TLS/mTLS | Feasible (~1 week, rustls on the listener) but reviewer-sanctioned post-MVP deferral; loopback + proxy-TLS contract ships now | Keep deferred |
 | Read replicas + Raft consensus | **Not feasible short-term** — blocked on the deferred Storage Kernel Split; a consensus protocol is a multi-PR, ~1 month effort | Future |
 | Native storage engine | ~6 months, replaces redb | Future, largest effort |
-| `use crate::*` prelude cleanup | Feasible now (mechanical), "not a merge blocker" | Hygiene commit any time |
+| `use crate::*` prelude cleanup | **DONE 2026-08-29** — all 21 modules that globbed the crate root now carry explicit `use crate::{...}` lists (cargo check clean, rustfmt clean); the main.rs prelude block stays as a re-export hub, nothing imports it via `use crate::*` anymore | Shipped |
 | HLD §57 PR-I multimodal query surface | Needs AIKOQL syntax design (§36: "designed later") + parser/runtime; 1–2 weeks | Post-launch |
 | P2-1/P2-2/P2-5/P2-8 kernel refinements | Small, any time; tracked in knowledge-invariants.md | Accepted deferrals |
 
 ### Next implementation
 
-Compliance evidence packs shipped 2026-08-29 (see item 12). The remaining feasible in-scope items are small: the P2-1/P2-2/P2-5/P2-8 kernel refinements (tracked in knowledge-invariants.md) and the mechanical `use crate::*` prelude cleanup. Everything else stays per its verdict above (Cloud KMS user-deferred, Remote TCP reviewer-deferred, Raft/native storage future, PR-I post-launch).
+The last two feasible in-scope items shipped 2026-08-29: the P2-1/P2-2/P2-5 kernel refinements (P2-8 deferred; both tracked in knowledge-invariants.md — constraints C5/C6) and the `use crate::*` prelude cleanup (21 modules now import explicitly from the main.rs prelude block). Everything else stays per its verdict above (Cloud KMS user-deferred, Remote TCP reviewer-deferred, Raft/native storage future, PR-I post-launch).

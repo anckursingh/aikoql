@@ -134,7 +134,11 @@ impl Drop for McpClient {
 
 fn tmp_db(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("aikoql_w31oss_{}_{}.redb", name, std::process::id()));
+    p.push(format!(
+        "aikoql_w31oss_{}_{}.redb",
+        name,
+        std::process::id()
+    ));
     let _ = std::fs::remove_file(&p);
     p
 }
@@ -148,7 +152,10 @@ fn w31_oss_001_time_to_value_flow() {
         if done {
             completed += 1;
         }
-        report.push_str(&format!("{name:<23} | {:<4} | {t}\n", if done { "yes" } else { "NO" }));
+        report.push_str(&format!(
+            "{name:<23} | {:<4} | {t}\n",
+            if done { "yes" } else { "NO" }
+        ));
     };
 
     // 1. install — the released-binary path the quickstart's 5-second
@@ -159,7 +166,12 @@ fn w31_oss_001_time_to_value_flow() {
     exe.push("../../../../target/debug/aikoql-mcp");
     #[cfg(windows)]
     exe.set_extension("exe");
-    leg(&mut report, "install (binary present)", exe.exists(), t0.elapsed().as_micros());
+    leg(
+        &mut report,
+        "install (binary present)",
+        exe.exists(),
+        t0.elapsed().as_micros(),
+    );
 
     // 2. start — spawn the server, MCP initialize handshake.
     let t0 = Instant::now();
@@ -185,7 +197,12 @@ fn w31_oss_001_time_to_value_flow() {
     );
     let koid1 = n1["koid"].as_str().unwrap().to_string();
     let ok = n1["version"].as_u64() == Some(1);
-    leg(&mut report, "ingest (remember)", ok, t0.elapsed().as_micros());
+    leg(
+        &mut report,
+        "ingest (remember)",
+        ok,
+        t0.elapsed().as_micros(),
+    );
 
     // 4. query — recall finds it.
     let t0 = Instant::now();
@@ -275,29 +292,35 @@ fn w31_oss_001_time_to_value_flow() {
     leg(
         &mut report,
         "knowledge-backed agent",
-        sess["session"]["agent_id"].as_str() == Some("hello-agent") && hits3.contains(&koid3.as_str()),
+        sess["session"]["agent_id"].as_str() == Some("hello-agent")
+            && hits3.contains(&koid3.as_str()),
         t0.elapsed().as_micros(),
     );
 
     // 7. debug failure — the quickstart's audit tools: why does this KO
     // say what it says, and what is its lineage?
     let t0 = Instant::now();
-    let ex = c.call_tool(
-        "explain",
-        json!({"subject": "fresh-dev", "koid": koid1}),
-    );
-    let tr = c.call_tool(
-        "trace",
-        json!({"subject": "fresh-dev", "koid": koid1}),
-    );
+    let ex = c.call_tool("explain", json!({"subject": "fresh-dev", "koid": koid1}));
+    let tr = c.call_tool("trace", json!({"subject": "fresh-dev", "koid": koid1}));
     let ok = ex["event_refs"]
         .as_array()
         .map(|a| !a.is_empty())
         .unwrap_or(false)
-        && tr["versions"].as_array().map(|a| a.len() >= 1).unwrap_or(false);
-    leg(&mut report, "debug (explain + trace)", ok, t0.elapsed().as_micros());
+        && tr["versions"]
+            .as_array()
+            .map(|a| a.len() >= 1)
+            .unwrap_or(false);
+    leg(
+        &mut report,
+        "debug (explain + trace)",
+        ok,
+        t0.elapsed().as_micros(),
+    );
 
-    println!("\n[W31-OSS-001] fresh-developer seven-task flow:\n{}", report);
+    println!(
+        "\n[W31-OSS-001] fresh-developer seven-task flow:\n{}",
+        report
+    );
     assert_eq!(
         completed, 7,
         "time-to-value completion rate {}/7 — a mandated task failed",
@@ -313,7 +336,10 @@ fn w31_oss_002_onboarding_artifact_laws() {
     let readme = root.join("README.md");
     let quickstart = root.join("QUICKSTART.md");
     let examples = root.join("examples");
-    assert!(readme.exists(), "README.md missing — mandated onboarding artifact");
+    assert!(
+        readme.exists(),
+        "README.md missing — mandated onboarding artifact"
+    );
     assert!(
         quickstart.exists(),
         "QUICKSTART.md missing — mandated onboarding artifact"
@@ -332,8 +358,14 @@ fn w31_oss_002_onboarding_artifact_laws() {
     // README must lead to the other two artifacts — it is the entry
     // point, not a dead end.
     let readme_text = std::fs::read_to_string(&readme).unwrap().to_lowercase();
-    assert!(readme_text.contains("quickstart.md"), "README never points at the quickstart");
-    assert!(readme_text.contains("examples"), "README never points at the examples");
+    assert!(
+        readme_text.contains("quickstart.md"),
+        "README never points at the quickstart"
+    );
+    assert!(
+        readme_text.contains("examples"),
+        "README never points at the examples"
+    );
 
     // The quickstart must literally cover each of the seven mandated
     // tasks — a task a fresh developer cannot map to a quickstart

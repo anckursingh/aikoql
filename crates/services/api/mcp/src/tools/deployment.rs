@@ -1,10 +1,12 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
-
 use crate::helpers::*;
 use crate::session::*;
+use crate::{
+    json, knowledge_runtime, value_to_string, Action, GraphEngineApi, Kernel, KnowledgeContext,
+    KnowledgeObject, Metadata, Origin, RelateRequest, RememberRequest, Value, J, KOID,
+};
 pub(crate) static PROGRAM_CACHE: std::sync::LazyLock<knowledge_runtime::ProgramCache> =
     std::sync::LazyLock::new(knowledge_runtime::ProgramCache::new);
 

@@ -271,6 +271,33 @@ a missing authority fails closed with `InvalidObject`, never ranks as 0.
 - Verified: `tests/transactions.rs`
   (`contradict_stamps_origin_derived_authority_by_default`).
 
+**C5. `ResolvedBothValid` partitions validity atomically or not at all
+(review P2-2, shipped 2026-08-29).**
+A `split_at` instant (both-valid only — any other decision carrying one is
+`InvalidObject`) closes claim A's interval at the instant and opens claim
+B's there, preserving each claim's other bound and leaving both epistemic
+statuses untouched. Both new intervals are validated before either claim is
+written, so an inverted split leaves the claims unmodified; the Conflict KO
+records `resolution_split_at`.
+- Enforced at: `ops.rs` (`partition_validity_locked` — validate-both-then-
+  write under the pipe lock).
+- Verified: `tests/transactions.rs`
+  (`resolve_both_valid_splits_validity_at_split_at`,
+  `resolve_both_valid_without_split_is_bare_coexistence`,
+  `resolve_split_at_rejects_inverted_intervals_and_other_decisions`).
+
+**C6. A verification names its journal event (review P2-5, shipped
+2026-08-29).**
+Every `verify_knowledge` commit stamps the kernel-managed `verified_event`
+extension with the journal seq of the verify op's final commit — the event
+that carries the confidence bump, whose koid and actor identify the
+verification in the audit journal. Callers cannot forge the link:
+`verified_event` is in `KERNEL_MANAGED_EXTENSIONS`.
+- Enforced at: `ops.rs` (`verify_knowledge` — `journal_head + 1` under the
+  single-writer pipe lock).
+- Verified: `tests/transactions.rs`
+  (`verify_stamps_the_verify_commit_journal_seq`).
+
 ## Experience
 
 **X1. Expired, invalidated, or superseded experiences are never returned.**

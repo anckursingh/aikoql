@@ -2089,7 +2089,12 @@ fn m_evp1_evidence_pack_bundles_compliance_evidence() {
         assert!(pack["journal_seq"].as_u64().unwrap() >= 3);
         assert!(pack["object_inventory"]["total"].as_u64().unwrap() >= 3);
         // Fresh remembers land as Draft (kernel default lifecycle).
-        assert!(pack["object_inventory"]["by_state"]["draft"].as_u64().unwrap() >= 3);
+        assert!(
+            pack["object_inventory"]["by_state"]["draft"]
+                .as_u64()
+                .unwrap()
+                >= 3
+        );
         // PII filtering config (MRFC-0070 A7 substrate): the detector
         // capability statement plus the known-limits honesty note.
         assert_eq!(pack["pii_filtering"]["active"], true);
@@ -2097,14 +2102,20 @@ fn m_evp1_evidence_pack_bundles_compliance_evidence() {
         assert!(kinds.iter().any(|k| k == "API_KEY"));
         assert!(kinds.iter().any(|k| k == "EMAIL"));
         assert!(kinds.iter().any(|k| k == "CREDIT_CARD"));
-        assert!(!pack["pii_filtering"]["known_limits"].as_str().unwrap().is_empty());
+        assert!(!pack["pii_filtering"]["known_limits"]
+            .as_str()
+            .unwrap()
+            .is_empty());
         // Retention records: 2 stamped windows — one live, one
         // expired-on-arrival; purge coverage stated honestly (counted,
         // deletion is caller-side — no kernel purge op exists).
         assert_eq!(pack["retention"]["retained_objects"].as_u64().unwrap(), 2);
         assert_eq!(pack["retention"]["live_windows"].as_u64().unwrap(), 1);
         assert_eq!(pack["retention"]["expired"].as_u64().unwrap(), 1);
-        assert!(!pack["retention"]["purge_coverage"].as_str().unwrap().is_empty());
+        assert!(!pack["retention"]["purge_coverage"]
+            .as_str()
+            .unwrap()
+            .is_empty());
         // Encryption substrate: fresh store, no field crypto → grade C.
         assert_eq!(pack["encryption"]["compliance_grade"], "C");
     }
@@ -2115,7 +2126,10 @@ fn m_evp1_evidence_pack_bundles_compliance_evidence() {
         json!({"name": "evidence_pack", "arguments": {"framework": "pci"}}),
     );
     assert_eq!(err.get("isError").and_then(|b| b.as_bool()), Some(true));
-    assert!(err["content"][0]["text"].as_str().unwrap().contains("framework"));
+    assert!(err["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("framework"));
 
     let _ = std::fs::remove_file(&db);
 }

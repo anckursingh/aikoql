@@ -1,7 +1,7 @@
 //! Audit logging + tool-call detail rendering (A7 Agent Gateway).
 //! Extracted from main.rs (R7 modularization). No behavior changes.
 
-use crate::*;
+use crate::{json, Write, J};
 pub(crate) fn tool_detail(name: &str, args: &J) -> String {
     let s = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or("");
     match name {

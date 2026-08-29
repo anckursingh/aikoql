@@ -403,6 +403,10 @@ pub struct ConflictResolutionRequest {
     pub rationale: String,
     /// Required for `ResolvedReplaced`.
     pub replacement: Option<KOID>,
+    /// P2-2: epoch-millis validity partition, valid only with
+    /// `ResolvedBothValid`. Claim A's interval closes at `split_at` and
+    /// claim B's opens there; both stay current.
+    pub split_at: Option<u64>,
 }
 
 /// What a resolution decision did to the claims.
@@ -788,6 +792,16 @@ impl Kernel {
             confidence_to_value(&new_conf),
         );
         append_evidence(&mut extensions, &req.evidence);
+        // P2-5: link the verification to its journal event. The final
+        // remember below will commit with seq journal_head+1 — valid because
+        // commits are single-writer and this op holds `pipe`.
+        // ponytail: single-writer journal assumption; if commits ever fan
+        // out, take the seq from remember_locked's result instead.
+        let verify_seq = self.journal_head()?.0 + 1;
+        extensions.insert(
+            KnowledgeObject::EXT_VERIFIED_EVENT.into(),
+            Value::Int(verify_seq as i64),
+        );
         let rr = RememberRequest {
             context: ctx.clone(),
             koid: Some(req.koid),
@@ -1417,6 +1431,13 @@ impl Kernel {
             // replacement is meaningless (re-checked under the lock).
             self.validate_successor(&req.context, replacement)?;
         }
+        // P2-2: a temporal partition is only meaningful for coexistence —
+        // any other decision carries its own validity policy.
+        if req.split_at.is_some() && req.decision != ConflictResolution::ResolvedBothValid {
+            return Err(KError::InvalidObject(
+                "split_at is only valid with resolved_both_valid".into(),
+            ));
+        }
         let ctx = req.context.clone();
         let mut pipe = self.pipe.lock().unwrap();
         let conflict = self
@@ -1446,6 +1467,8 @@ impl Kernel {
         let mut sweep_completed = true;
         let mut sweep_failed: Vec<InvalidationFailure> = Vec::new();
         match req.decision {
+            // P2-1: recorded selection of A as current truth — the loser is
+            // demoted with the rationale, never silently dropped.
             ConflictResolution::ResolvedAPreferred => {
                 self.transition_claim_if_legal(
                     &mut pipe,
@@ -1457,6 +1480,7 @@ impl Kernel {
                     &mut effects,
                 )?;
             }
+            // P2-1: mirror of A-preferred — B stands, A is demoted.
             ConflictResolution::ResolvedBPreferred => {
                 self.transition_claim_if_legal(
                     &mut pipe,
@@ -1468,7 +1492,15 @@ impl Kernel {
                     &mut effects,
                 )?;
             }
-            ConflictResolution::ResolvedBothValid => {}
+            // P2-1/P2-2: coexistence — neither claim is demoted. With a
+            // split_at instant the validity intervals are partitioned along
+            // the valid-time axis so "both valid" is queryable; without one
+            // the resolution is a bare statement that both stand.
+            ConflictResolution::ResolvedBothValid => {
+                if let Some(split) = req.split_at {
+                    self.partition_validity_locked(&mut pipe, &ctx, claim_a, claim_b, split)?;
+                }
+            }
             ConflictResolution::ResolvedReplaced => {
                 let replacement = req.replacement.expect("preflighted above");
                 // Re-check the replacement under the lock (a concurrent op
@@ -1526,6 +1558,9 @@ impl Kernel {
         if let Some(r) = req.replacement {
             extensions.insert("replacement".into(), Value::Text(r.to_hex()));
         }
+        if let Some(split) = req.split_at {
+            extensions.insert("resolution_split_at".into(), Value::Int(split as i64));
+        }
         let rr = RememberRequest {
             context: ctx.clone(),
             koid: Some(req.conflict),
@@ -1550,6 +1585,50 @@ impl Kernel {
             completed: sweep_completed,
             failed: sweep_failed,
         })
+    }
+
+    /// P2-2: partition the two claims along the valid-time axis — A's
+    /// interval closes at `split_at` (its own valid_from preserved), B's
+    /// opens there (its own valid_to preserved). No epistemic transition:
+    /// coexistence is made queryable, not demoted. Caller holds the pipe
+    /// lock. Both new intervals are validated before either is written, so
+    /// an inverted split leaves the claims untouched.
+    fn partition_validity_locked(
+        &self,
+        pipe: &mut Pipeline,
+        ctx: &KnowledgeContext,
+        claim_a: KOID,
+        claim_b: KOID,
+        split_at: u64,
+    ) -> KResult<()> {
+        let head_a = self.head_object(&claim_a)?.ok_or(KError::NotFound(claim_a))?;
+        let head_b = self.head_object(&claim_b)?.ok_or(KError::NotFound(claim_b))?;
+        let mut ko_a = head_a.clone();
+        ko_a.set_valid_time(head_a.valid_from(), Some(split_at))?;
+        let mut ko_b = head_b.clone();
+        ko_b.set_valid_time(Some(split_at), head_b.valid_to())?;
+
+        for ko in [ko_a, ko_b] {
+            self.remember_locked(
+                pipe,
+                &RememberRequest {
+                    context: ctx.clone(),
+                    koid: Some(ko.koid),
+                    expected_version: Some(ko.version),
+                    idempotency_key: None,
+                    metadata: ko.metadata.clone(),
+                    properties: ko.properties.clone(),
+                    semantic: None,
+                    relationships: ko.relationships.clone(),
+                    security: None,
+                    extensions: ko.extensions,
+                    origin: Origin::System,
+                    note: Some(format!("validity partition at {split_at}")),
+                    referential_policy: ReferentialPolicy::default(),
+                },
+            )?;
+        }
+        Ok(())
     }
 
     /// Resolve by the recorded authority of each assertion. Higher authority
@@ -1597,6 +1676,7 @@ impl Kernel {
             decision,
             rationale,
             replacement: None,
+            split_at: None,
         })
     }
 

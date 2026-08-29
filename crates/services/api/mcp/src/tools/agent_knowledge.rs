@@ -1,7 +1,11 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
+use crate::{
+    discover_ontology, json, Arc, ExtensionMap, HashMap, Kernel, KnowledgeContext, KnowledgeObject,
+    LifecycleState, Metadata, Mutex, Origin, ReferentialPolicy, RememberRequest,
+    SecurityDescriptor, Subject, Value, J, KOID, ONTOLOGY_TYPE,
+};
 use std::sync::LazyLock;
 
 use crate::session::*;

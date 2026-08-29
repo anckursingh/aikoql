@@ -46,8 +46,10 @@ pub(crate) struct HttpSession {
 }
 
 // pub(crate) re-exports: this block is the crate prelude. Extracted modules
-// (R7) rely on `use crate::*` to see these; api_rest/knowledge_runtime rely on
-// `use super::*` — both work because these are re-exports, not private uses.
+// (R7) import from it explicitly — every module carries its own
+// `use crate::{...}` list (prelude cleanup, 2026-08-29); api_rest and
+// knowledge_runtime use `use super::*` — both work because these are
+// re-exports, not private uses.
 pub(crate) use aikoql_graph::*;
 pub(crate) use aikoql_kernel::ir::*;
 pub(crate) use aikoql_kernel::knowledge::ontology::{

@@ -1,8 +1,7 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
-
+use crate::{json, Kernel, LifecycleState, Ordering, Subject, ACTIVE_CONNECTIONS, J, SERVER_START};
 pub(crate) fn tool_metrics(k: &Kernel) -> Result<J, String> {
     let (seq, _audit) = k.journal_head().map_err(|e| e.to_string())?;
     let heads = k.scan_heads().map_err(|e| e.to_string())?;
@@ -320,7 +319,9 @@ pub(crate) fn tool_evidence_pack(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(|f| f.as_str())
         .unwrap_or("gdpr");
     if framework != "gdpr" && framework != "hipaa" {
-        return Err(format!("unsupported framework: {framework} (supported: gdpr, hipaa)"));
+        return Err(format!(
+            "unsupported framework: {framework} (supported: gdpr, hipaa)"
+        ));
     }
 
     // Audit chain + object inventory (audit_report substrate).

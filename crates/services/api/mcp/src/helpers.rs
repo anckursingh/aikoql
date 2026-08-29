@@ -1,7 +1,10 @@
 //! JSON↔kernel conversion helpers shared by every tool module.
 //! Extracted from main.rs (R7 modularization). No behavior changes.
 
-use crate::*;
+use crate::{
+    json, Action, Direction, Evidence, EvidenceMethod, ExtensionMap, Fusion, KnowledgeEvent,
+    KnowledgeObject, LifecycleState, Origin, PropertyMap, SemanticBlock, Value, J, KOID,
+};
 pub(crate) fn koid_of(args: &J) -> Result<KOID, String> {
     let hex = args
         .get("koid")

@@ -1,9 +1,8 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
-
 use crate::session::*;
+use crate::{json, Kernel, KnowledgeContext, Value, J, KOID};
 pub(crate) fn tool_document_ingest(k: &Kernel, args: &J, db_path: &str) -> Result<J, String> {
     let filename = args
         .get("filename")

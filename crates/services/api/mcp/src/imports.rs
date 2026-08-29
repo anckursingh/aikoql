@@ -3,8 +3,11 @@
 //! through commit failures — a failed row still exited 0 and a changed row
 //! could never update (remember replays the original commit on a key hit).
 
-use crate::*;
-
+use crate::{
+    engine, fnv1a64, ExtensionMap, ForgetMode, HashMap, HashSet, KResult, Kernel, KnowledgeContext,
+    KnowledgeObject, Lifecycle, LifecycleState, Metadata, Origin, ReferentialPolicy,
+    RelationshipRef, RememberRequest, SecurityDescriptor, Subject, Value, KOID,
+};
 /// Fresh default for `--run-id`: unique per invocation. Deliberately
 /// non-cryptographic — the key only scopes idempotency within one database.
 pub(crate) fn fresh_run_id() -> String {

@@ -1,10 +1,16 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
-
 use crate::helpers::*;
 use crate::session::*;
+use crate::{
+    info_span, json, AssertionRequest, ConfidenceContext, ConflictResolution,
+    ConflictResolutionRequest, ContradictionRequest, ConversationMessage, DeriveRequest, Direction,
+    ExperienceRequest, ForgetMode, GraphEngineApi, InvalidationRequest, Kernel, MergeRequest,
+    MergeStrategy, Metadata, ObservationRequest, RelateRequest, RelationshipRef, RememberRequest,
+    SplitRequest, SummarizeConversationRequest, SupersedeRequest, TraverseQuery,
+    VerificationRequest, J, KOID,
+};
 pub(crate) fn tool_relate(k: &Kernel, args: &J) -> Result<J, String> {
     let from = args
         .get("from")
@@ -571,6 +577,9 @@ pub(crate) fn tool_resolve_conflict(k: &Kernel, args: &J) -> Result<J, String> {
         Some(hex) => Some(KOID::from_hex(hex).map_err(|e| e.to_string())?),
         None => None,
     };
+    // P2-2: epoch-millis validity partition for resolved_both_valid — the
+    // kernel validates it against the decision (error, never ignored).
+    let split_at = args.get("split_at").and_then(|s| s.as_u64());
     let out = k
         .resolve_conflict(ConflictResolutionRequest {
             context: subject_of(args).into(),
@@ -578,6 +587,7 @@ pub(crate) fn tool_resolve_conflict(k: &Kernel, args: &J) -> Result<J, String> {
             decision,
             rationale: rationale.into(),
             replacement,
+            split_at,
         })
         .map_err(|e| e.to_string())?;
     Ok(json!({
