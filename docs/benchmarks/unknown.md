@@ -109,3 +109,36 @@ narrative must not state these as facts.
   call each; change-rule: conv 3 statements vs aikoql 4, one
   callsite each). The spec's time columns are only measurable with
   real developers on a real project — not faked here.
+
+## Wave 3.1 cost unknowns (W31-COST-001)
+
+- **All rates are declared conventions, not measurements**: LLM
+  pricing (G11/G12 convention), $0.02/M embedding, $100/component/
+  100k infra, $0.0005/query retrieval, $0 agent/tool. The comparison
+  is as good as its rate table; real provider pricing would move the
+  embedding terms (the corpus-scale embedding passes dominate the
+  baselines' embed row).
+
+## Wave 3.1 memory-compression unknowns (W31-MEM-002)
+
+- **Answer quality with a live generator is unmeasured here**: the
+  mechanical echo cannot prefer one memory's contents over
+  another's; the primary metric is correct-tasks-per-token on
+  delivered units, not generation quality per treatment.
+- **Summarized-memory retention is a property of the verbatim op**:
+  the §38/39 summarizer extracts, it does not compress or
+  rephrase — a compressing summarizer (LLM) stays out of substrate
+  scope, so "compression" here means structural memory, not shorter
+  prose.
+
+## Wave 3.1 scale unknowns (W31-SCALE-001)
+
+- **The 1M row is a pointer, not a run**: `benchmarks/benches/scale.rs`
+  (criterion, ~4GB at 1M) is asserted to exist and carry its knob;
+  the 1M numbers themselves are not measured in CI.
+- **Latencies are debug-build**: the per-probe p50/p95 above are
+  unoptimized-test-profile numbers; production latencies belong to
+  the release criterion bench (R14), which this test points at.
+- **"KO" means retrieval-index records here**: the synthetic unit is
+  an entity+fact+relation candidate (the IR surface), not a kernel
+  KO — declared in the test header so the row's unit is exact.

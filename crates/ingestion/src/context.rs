@@ -342,6 +342,17 @@ pub fn compile_context_semantic_with(
             .then_with(|| a.name.cmp(&b.name))
     });
 
+    // Name → ranked score index. The fact and relation loops resolve
+    // entity anchors by name; a linear scan per candidate was O(n²) and
+    // SCALE-001's 100K-unit world measured it (retrieval work must not
+    // grow quadratically). `or_insert` on the score-sorted list keeps the
+    // highest-scoring duplicate (the old `.find()` semantics: the first —
+    // and therefore highest — ranked entity with that name).
+    let mut ent_score: HashMap<&str, f32> = HashMap::with_capacity(entities.len());
+    for e in &entities {
+        ent_score.entry(e.name.as_str()).or_insert(e.score);
+    }
+
     // Score facts by statement overlap with task
     // R8: injected instructions ("ignore previous instructions…") never enter
     // the package from untrusted content. Only an explicit Trusted tag
@@ -370,13 +381,7 @@ pub fn compile_context_semantic_with(
             let entity_boost: f32 = f
                 .entities
                 .iter()
-                .map(|en| {
-                    entities
-                        .iter()
-                        .find(|e| e.name == *en)
-                        .map(|e| e.score * 0.3)
-                        .unwrap_or(0.0)
-                })
+                .map(|en| ent_score.get(en.as_str()).copied().unwrap_or(0.0) * 0.3)
                 .sum();
             // P0 (G12 measurement): entity relevance is a GATE, not a
             // bonus. A fact attached to entities enters the package only
@@ -443,16 +448,8 @@ pub fn compile_context_semantic_with(
         .iter()
         .filter(|r| !stale.contains(&format!("r:{}|{}|{}", r.subject, r.predicate, r.object)))
         .map(|r| {
-            let subj_score = entities
-                .iter()
-                .find(|e| e.name == r.subject)
-                .map(|e| e.score)
-                .unwrap_or(0.0);
-            let obj_score = entities
-                .iter()
-                .find(|e| e.name == r.object)
-                .map(|e| e.score)
-                .unwrap_or(0.0);
+            let subj_score = ent_score.get(r.subject.as_str()).copied().unwrap_or(0.0);
+            let obj_score = ent_score.get(r.object.as_str()).copied().unwrap_or(0.0);
             let pred_score = keyword_score(&r.predicate.to_lowercase(), &task_words);
             let score = subj_score.max(obj_score) + pred_score * 0.5;
 

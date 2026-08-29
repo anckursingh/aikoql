@@ -15,14 +15,21 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use aikoql_ingestion::{
-    compile_context, compile_context_with_validity, render_context_markdown, KnowledgeIr,
-    MockEmbeddingProvider, RetrievalStatus,
+    compile_context, compile_context_with_validity, merge_knowledge_ir, render_context_markdown,
+    KnowledgeIr, MockEmbeddingProvider, RetrievalStatus,
 };
 use aikoql_kernel::*;
 
-use super::trackb::{docs as trackb_docs, market_docs, Doc, Question, MARKET_QUESTIONS, QUESTIONS};
+use super::trackb::{
+    corpus as trackb_corpus, docs as trackb_docs, market_docs, Doc, Question, MARKET_QUESTIONS,
+    QUESTIONS,
+};
 use super::trackb31::MARKET_QUESTIONS_31;
-use super::trackb31_docs::market_docs_31;
+use super::trackb31_docs::{
+    market_docs_31, mem_docs_day1, mem_docs_day30, mem_docs_day60, mem_docs_day7, mem_docs_day90,
+    MEM_CAP_100, MEM_CAP_200, MEM_CAP_500, MEM_CAP_900, MEM_DEPENDS, MEM_FAILOVER, MEM_FTP,
+    MEM_KEYRING, MEM_SEV1_A, MEM_SEV1_B, MEM_THRESH_V1, MEM_THRESH_V2,
+};
 use super::{rank, tokens, CorpusChunk};
 
 pub const CLASSES: [&str; 12] = [
@@ -404,4 +411,270 @@ pub fn union_questions() -> Vec<&'static Question> {
         .chain(MARKET_QUESTIONS.iter())
         .chain(MARKET_QUESTIONS_31.iter())
         .collect()
+}
+
+// ── the MEM scenario world (shared by MEM-001 / MEM-002) ──────────────────
+
+/// The evolving knowledge base: kernel claims (with per-day supersession
+/// lineage), the accumulated doc set, and the accumulated RAG chunks.
+pub struct MemWorld {
+    pub k: Kernel,
+    pub claims: Vec<(KOID, &'static str)>,
+    pub ftp: KOID,
+    pub cap: KOID,
+    pub thresh: KOID,
+    pub docs: Vec<Doc>,
+    pub chunks: Vec<CorpusChunk<'static>>,
+}
+
+impl MemWorld {
+    /// Day-1 state: capacity, keyring (the important fact), ftp (deleted
+    /// day 90), threshold (corrected day 30).
+    pub fn new() -> Self {
+        let (k, _clock) = mk();
+        let cap = assert_claim(
+            &k,
+            "Claim",
+            props(&[("capacity", "100")]),
+            "deployment_observed",
+            "kb-cap-v1",
+        );
+        let keyring = assert_claim(
+            &k,
+            "Claim",
+            props(&[("rotation", "90 days")]),
+            "organization_policy",
+            "kb-keyring",
+        );
+        let ftp = assert_claim(
+            &k,
+            "Claim",
+            props(&[("serves", "legacy clients")]),
+            "untrusted_external",
+            "kb-ops-ftp",
+        );
+        let thresh = assert_claim(
+            &k,
+            "Claim",
+            props(&[("percent", "10")]),
+            "deployment_observed",
+            "kb-threshold-v1",
+        );
+        Self {
+            claims: vec![
+                (cap, MEM_CAP_100),
+                (keyring, MEM_KEYRING),
+                (ftp, MEM_FTP),
+                (thresh, MEM_THRESH_V1),
+            ],
+            k,
+            ftp,
+            cap,
+            thresh,
+            docs: Vec::new(),
+            chunks: Vec::new(),
+        }
+    }
+
+    /// Apply day-N's kernel ops (none for day 1) and doc additions, then
+    /// return (merged IR for the day, the kernel-computed stale set).
+    /// Day 90 drops the retired ftp doc from the current doc set and adds
+    /// the tombstone's boundary key — deletion enters the same contract as
+    /// supersession (the statement must not be presented as current).
+    pub fn advance(&mut self, day: usize) -> (KnowledgeIr, HashSet<String>) {
+        match day {
+            7 => {
+                self.cap = supersede_claim(
+                    &self.k,
+                    self.cap,
+                    props(&[("capacity", "200")]),
+                    "capacity upgrade",
+                    "kb-cap-v2",
+                );
+                let failover = assert_claim(
+                    &self.k,
+                    "Claim",
+                    props(&[("function", "failover")]),
+                    "architecture_decision",
+                    "kb-failover",
+                );
+                let depends = assert_claim(
+                    &self.k,
+                    "Claim",
+                    props(&[("depends_on", "Region")]),
+                    "architecture_decision",
+                    "kb-failover",
+                );
+                self.claims.push((self.cap, MEM_CAP_200));
+                self.claims.push((failover, MEM_FAILOVER));
+                self.claims.push((depends, MEM_DEPENDS));
+            }
+            30 => {
+                self.cap = supersede_claim(
+                    &self.k,
+                    self.cap,
+                    props(&[("capacity", "500")]),
+                    "capacity upgrade",
+                    "kb-cap-v3",
+                );
+                self.thresh = supersede_claim(
+                    &self.k,
+                    self.thresh,
+                    props(&[("percent", "15")]),
+                    "correction",
+                    "kb-threshold-v2",
+                );
+                self.claims.push((self.cap, MEM_CAP_500));
+                self.claims.push((self.thresh, MEM_THRESH_V2));
+            }
+            60 => {
+                // Contradiction: two live claims, neither superseded.
+                let sev1a = assert_claim(
+                    &self.k,
+                    "Claim",
+                    props(&[("pages", "primary on-call")]),
+                    "documentation",
+                    "kb-sev1",
+                );
+                let sev1b = assert_claim(
+                    &self.k,
+                    "Claim",
+                    props(&[("pages", "whole team")]),
+                    "documentation",
+                    "kb-sev1-rev",
+                );
+                self.claims.push((sev1a, MEM_SEV1_A));
+                self.claims.push((sev1b, MEM_SEV1_B));
+            }
+            90 => {
+                self.cap = supersede_claim(
+                    &self.k,
+                    self.cap,
+                    props(&[("capacity", "900")]),
+                    "capacity upgrade",
+                    "kb-cap-v4",
+                );
+                self.claims.push((self.cap, MEM_CAP_900));
+                self.k
+                    .forget(
+                        alice(),
+                        &self.ftp,
+                        ForgetMode::Tombstone,
+                        None,
+                        Some("retired".into()),
+                    )
+                    .unwrap();
+            }
+            _ => {}
+        }
+        let day_docs = match day {
+            1 => mem_docs_day1(),
+            7 => mem_docs_day7(),
+            30 => mem_docs_day30(),
+            60 => mem_docs_day60(),
+            _ => mem_docs_day90(),
+        };
+        self.chunks.extend(trackb_corpus(&day_docs));
+        self.docs.extend(day_docs);
+        if day == 90 {
+            self.docs.retain(|d| d.id != "kb-ops-ftp");
+        }
+        let mut stale = kernel_stale(&self.k, &self.claims);
+        if day == 90 {
+            stale.insert(format!("f:{MEM_FTP}"));
+        }
+        let irs: Vec<KnowledgeIr> = self.docs.iter().map(|d| d.ir.clone()).collect();
+        (merge_knowledge_ir(&irs), stale)
+    }
+}
+
+// ── the MEM battery (shared by MEM-001 / MEM-002) ─────────────────────────
+
+#[derive(Clone, Copy)]
+pub enum MemExpect {
+    Answer(&'static [&'static str]),
+    Refuse,
+}
+
+/// The six questions per day, with per-day expectations: the capacity
+/// supersession lane, the contradiction lane (unknown until day 60, then
+/// BOTH live claims), the relationship lane (unknown until day 7), the
+/// important-fact retention lane, the deletion lane (answerable until the
+/// day-90 deletion), and the correction lane.
+pub fn mem_day_battery(day: usize) -> Vec<(&'static str, MemExpect)> {
+    vec![
+        (
+            "What is the region capacity?",
+            MemExpect::Answer(match day {
+                1 => &[MEM_CAP_100],
+                7 => &[MEM_CAP_200],
+                30 | 60 => &[MEM_CAP_500],
+                _ => &[MEM_CAP_900],
+            }),
+        ),
+        (
+            "Who does the Sev1Runbook page?",
+            if day < 60 {
+                MemExpect::Refuse
+            } else {
+                MemExpect::Answer(&[MEM_SEV1_A, MEM_SEV1_B])
+            },
+        ),
+        (
+            "What does DbFailover depend on?",
+            if day == 1 {
+                MemExpect::Refuse
+            } else {
+                MemExpect::Answer(&[MEM_DEPENDS])
+            },
+        ),
+        (
+            "How often does the ProdKeyRing rotate?",
+            MemExpect::Answer(&[MEM_KEYRING]),
+        ),
+        (
+            "Does LegacyFtp serve legacy clients?",
+            if day == 90 {
+                MemExpect::Refuse
+            } else {
+                MemExpect::Answer(&[MEM_FTP])
+            },
+        ),
+        (
+            "What is the alert threshold?",
+            if day <= 7 {
+                MemExpect::Answer(&[MEM_THRESH_V1])
+            } else {
+                MemExpect::Answer(&[MEM_THRESH_V2])
+            },
+        ),
+    ]
+}
+
+pub fn mem_probe(text: &'static str) -> Question {
+    Question {
+        text,
+        kind: "factual",
+        class: "MEM",
+        units: ["", ""],
+        gt: super::trackb::g("none", "none", "none", "current", "documentation", "none"),
+    }
+}
+
+/// Drop the oldest part of the transcript until it fits the token budget
+/// (a real agent's bounded context window). ponytail: no word-boundary
+/// alignment — payloads are whole sentences and the judge is token-based.
+pub fn truncate_oldest(text: &str) -> String {
+    if text.len() / 4 <= BUDGET {
+        return text.to_string();
+    }
+    let mut cut = text.len() - BUDGET * 4;
+    while cut < text.len() && !text.is_char_boundary(cut) {
+        cut += 1;
+    }
+    if cut < text.len() {
+        text[cut..].to_string()
+    } else {
+        String::new()
+    }
 }

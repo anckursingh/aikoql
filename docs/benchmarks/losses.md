@@ -128,3 +128,53 @@ per plan §29 — never dropped, never spun.
   insert successor, scrub transcript). The app-owned moat is the
   capabilities the conventional stack must build, not the marginal
   cost of one rule change — measured, not hidden.
+
+## Wave 3.1 cost losses (W31-COST-001)
+
+- **The universal "cheaper" claim is DENIED by the acceptance gate**:
+  aikoql wins 10/12 declared classes; in W2 and W7 both baselines
+  score 0 successes, so cost/success is n/a there and the claim
+  "cheaper everywhere" cannot be made. The correct scoped claim:
+  cheaper in every class with a comparable success denominator.
+- **AIKOQL's failure rate is not zero**: 18.9% (28/148 tasks miss the
+  frozen judge's win-zone 2) — lowest of the three, but a universal
+  accuracy claim would be false too.
+
+## Wave 3.1 memory-compression losses (W31-MEM-002)
+
+- **Summarized memory is the most expensive to hold**: 1871 tokens —
+  6.2× the raw transcript's bounded 300 and 8× the structured view's
+  232 — for the same 5/6 task success. Verbatim extraction preserves
+  facts but compresses nothing; its primary metric (2.7/1000) is
+  9.6× below structured.
+- **Raw history loses exactly the early facts**: oldest-first
+  truncation drops the day-1 fact set (1/4 retained) and the day-60
+  conflict pair — the baseline has no retention signal.
+
+## Wave 3.1 scale losses (W31-SCALE-001)
+
+- **ID-style names flood partial-prefix credit** (measured, then
+  designed out): with `Customer0..CustomerN` naming, every entity
+  shared the ≥4-char "customer" prefix, every probe ranked all 100k
+  of them at 0.495, the RET-003 tie-group retraction rendered the
+  whole ambiguous group as ~3000 unbudgeted tokens per payload, and
+  tier judges passed only vacuously (the right fact was in the
+  flood). Real corpora with numbered ID families (Service66, S66…) hit
+  this same wall — the partial-prefix credit needs a cap or an ID-
+  pattern exemption; the synthetic world was renamed to letter tokens
+  so the scale question could be measured in isolation.
+- **The ambiguity render is unbudgeted**: `ambiguous_entities` renders
+  outside the token budget by design (honesty over truncation), so a
+  pathological tie group can produce a multi-thousand-token payload.
+  Bounded only by the tie-group size, not the budget.
+- **Predicate-keyword probes saturate the relation section**: "what
+  is the sla of the service X depends on" matches every `depends_on`
+  relation (predicate keyword → 0.5 each), so the section packs to
+  budget (~500 tokens) with the correct row first. Bounded and
+  correct-first, but 10× the tokens the answer needs.
+- **O(n²) entity lookups found at 100k** (this test exposed it): the
+  fact/relation loops resolved anchors with a linear scan per
+  candidate — ~8×10⁹ compares at the 100k scale, real quadratic
+  retrieval work. Fixed with a name→score index in `context.rs`
+  (semantics preserved: highest-scoring duplicate wins). The fix is a
+  production change carried by the measured near-linear curve above.

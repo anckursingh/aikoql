@@ -45,305 +45,33 @@
 
 mod common;
 
-use std::collections::HashSet;
-
-use aikoql_ingestion::{merge_knowledge_ir, KnowledgeIr, MockEmbeddingProvider};
+use aikoql_ingestion::MockEmbeddingProvider;
 use aikoql_kernel::*;
-use common::trackb::{corpus, Doc, Question};
-use common::trackb31_docs::{
-    mem_docs_day1, mem_docs_day30, mem_docs_day60, mem_docs_day7, mem_docs_day90, MEM_CAP_100,
-    MEM_CAP_200, MEM_CAP_500, MEM_CAP_900, MEM_DEPENDS, MEM_FAILOVER, MEM_FTP, MEM_KEYRING,
-    MEM_SEV1_A, MEM_SEV1_B, MEM_THRESH_V1, MEM_THRESH_V2,
-};
+use common::trackb31_docs::MEM_KEYRING;
 #[cfg(feature = "answer_gen")]
 use common::wave31_sim::generate;
 use common::wave31_sim::{
-    agent_policy, aikoql_context_with_validity, alice, assert_claim, kernel_stale, mk, payload_has,
-    props, rag_context, supersede_claim, AgentOutcome, BUDGET,
+    agent_policy, aikoql_context_with_validity, alice, mem_day_battery, mem_probe, payload_has,
+    rag_context, truncate_oldest, AgentOutcome, MemExpect, MemWorld,
 };
-use common::CorpusChunk;
 
-// ── the world ─────────────────────────────────────────────────────────────
-
-/// The evolving knowledge base: kernel claims (with per-day supersession
-/// lineage), the accumulated doc set, and the accumulated RAG chunks.
-struct MemWorld {
-    k: Kernel,
-    claims: Vec<(KOID, &'static str)>,
-    ftp: KOID,
-    cap: KOID,
-    thresh: KOID,
-    docs: Vec<Doc>,
-    chunks: Vec<CorpusChunk<'static>>,
-}
-
-impl MemWorld {
-    /// Day-1 state: capacity, keyring (the important fact), ftp (deleted
-    /// day 90), threshold (corrected day 30).
-    fn new() -> Self {
-        let (k, _clock) = mk();
-        let cap = assert_claim(
-            &k,
-            "Claim",
-            props(&[("capacity", "100")]),
-            "deployment_observed",
-            "kb-cap-v1",
-        );
-        let keyring = assert_claim(
-            &k,
-            "Claim",
-            props(&[("rotation", "90 days")]),
-            "organization_policy",
-            "kb-keyring",
-        );
-        let ftp = assert_claim(
-            &k,
-            "Claim",
-            props(&[("serves", "legacy clients")]),
-            "untrusted_external",
-            "kb-ops-ftp",
-        );
-        let thresh = assert_claim(
-            &k,
-            "Claim",
-            props(&[("percent", "10")]),
-            "deployment_observed",
-            "kb-threshold-v1",
-        );
-        Self {
-            claims: vec![
-                (cap, MEM_CAP_100),
-                (keyring, MEM_KEYRING),
-                (ftp, MEM_FTP),
-                (thresh, MEM_THRESH_V1),
-            ],
-            k,
-            ftp,
-            cap,
-            thresh,
-            docs: Vec::new(),
-            chunks: Vec::new(),
-        }
-    }
-
-    /// Apply day-N's kernel ops (none for day 1) and doc additions, then
-    /// return (merged IR for the day, the kernel-computed stale set).
-    /// Day 90 drops the retired ftp doc from the current doc set and adds
-    /// the tombstone's boundary key — deletion enters the same contract as
-    /// supersession (the statement must not be presented as current).
-    fn advance(&mut self, day: usize) -> (KnowledgeIr, HashSet<String>) {
-        match day {
-            7 => {
-                self.cap = supersede_claim(
-                    &self.k,
-                    self.cap,
-                    props(&[("capacity", "200")]),
-                    "capacity upgrade",
-                    "kb-cap-v2",
-                );
-                let failover = assert_claim(
-                    &self.k,
-                    "Claim",
-                    props(&[("function", "failover")]),
-                    "architecture_decision",
-                    "kb-failover",
-                );
-                let depends = assert_claim(
-                    &self.k,
-                    "Claim",
-                    props(&[("depends_on", "Region")]),
-                    "architecture_decision",
-                    "kb-failover",
-                );
-                self.claims.push((self.cap, MEM_CAP_200));
-                self.claims.push((failover, MEM_FAILOVER));
-                self.claims.push((depends, MEM_DEPENDS));
-            }
-            30 => {
-                self.cap = supersede_claim(
-                    &self.k,
-                    self.cap,
-                    props(&[("capacity", "500")]),
-                    "capacity upgrade",
-                    "kb-cap-v3",
-                );
-                self.thresh = supersede_claim(
-                    &self.k,
-                    self.thresh,
-                    props(&[("percent", "15")]),
-                    "correction",
-                    "kb-threshold-v2",
-                );
-                self.claims.push((self.cap, MEM_CAP_500));
-                self.claims.push((self.thresh, MEM_THRESH_V2));
-            }
-            60 => {
-                // Contradiction: two live claims, neither superseded.
-                let sev1a = assert_claim(
-                    &self.k,
-                    "Claim",
-                    props(&[("pages", "primary on-call")]),
-                    "documentation",
-                    "kb-sev1",
-                );
-                let sev1b = assert_claim(
-                    &self.k,
-                    "Claim",
-                    props(&[("pages", "whole team")]),
-                    "documentation",
-                    "kb-sev1-rev",
-                );
-                self.claims.push((sev1a, MEM_SEV1_A));
-                self.claims.push((sev1b, MEM_SEV1_B));
-            }
-            90 => {
-                self.cap = supersede_claim(
-                    &self.k,
-                    self.cap,
-                    props(&[("capacity", "900")]),
-                    "capacity upgrade",
-                    "kb-cap-v4",
-                );
-                self.claims.push((self.cap, MEM_CAP_900));
-                self.k
-                    .forget(
-                        alice(),
-                        &self.ftp,
-                        ForgetMode::Tombstone,
-                        None,
-                        Some("retired".into()),
-                    )
-                    .unwrap();
-            }
-            _ => {}
-        }
-        let day_docs = match day {
-            1 => mem_docs_day1(),
-            7 => mem_docs_day7(),
-            30 => mem_docs_day30(),
-            60 => mem_docs_day60(),
-            _ => mem_docs_day90(),
-        };
-        self.chunks.extend(corpus(&day_docs));
-        self.docs.extend(day_docs);
-        if day == 90 {
-            self.docs.retain(|d| d.id != "kb-ops-ftp");
-        }
-        let mut stale = kernel_stale(&self.k, &self.claims);
-        if day == 90 {
-            stale.insert(format!("f:{MEM_FTP}"));
-        }
-        let irs: Vec<KnowledgeIr> = self.docs.iter().map(|d| d.ir.clone()).collect();
-        (merge_knowledge_ir(&irs), stale)
-    }
-}
-
-// ── the battery ───────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy)]
-enum Expect {
-    Answer(&'static [&'static str]),
-    Refuse,
-}
-
-/// The six questions per day, with per-day expectations: the capacity
-/// supersession lane, the contradiction lane (unknown until day 60, then
-/// BOTH live claims), the relationship lane (unknown until day 7), the
-/// important-fact retention lane, the deletion lane (answerable until the
-/// day-90 deletion), and the correction lane.
-fn day_battery(day: usize) -> Vec<(&'static str, Expect)> {
-    vec![
-        (
-            "What is the region capacity?",
-            Expect::Answer(match day {
-                1 => &[MEM_CAP_100],
-                7 => &[MEM_CAP_200],
-                30 | 60 => &[MEM_CAP_500],
-                _ => &[MEM_CAP_900],
-            }),
-        ),
-        (
-            "Who does the Sev1Runbook page?",
-            if day < 60 {
-                Expect::Refuse
-            } else {
-                Expect::Answer(&[MEM_SEV1_A, MEM_SEV1_B])
-            },
-        ),
-        (
-            "What does DbFailover depend on?",
-            if day == 1 {
-                Expect::Refuse
-            } else {
-                Expect::Answer(&[MEM_DEPENDS])
-            },
-        ),
-        (
-            "How often does the ProdKeyRing rotate?",
-            Expect::Answer(&[MEM_KEYRING]),
-        ),
-        (
-            "Does LegacyFtp serve legacy clients?",
-            if day == 90 {
-                Expect::Refuse
-            } else {
-                Expect::Answer(&[MEM_FTP])
-            },
-        ),
-        (
-            "What is the alert threshold?",
-            if day <= 7 {
-                Expect::Answer(&[MEM_THRESH_V1])
-            } else {
-                Expect::Answer(&[MEM_THRESH_V2])
-            },
-        ),
-    ]
-}
-
-fn probe(text: &'static str) -> Question {
-    Question {
-        text,
-        kind: "factual",
-        class: "MEM",
-        units: ["", ""],
-        gt: common::trackb::g("none", "none", "none", "current", "documentation", "none"),
-    }
-}
+// ── the judge ─────────────────────────────────────────────────────────────
 
 /// Task success: the outcome lands where the day expects it. The citation
 /// requirement applies to AIKOQL only — its render carries source tags,
 /// while the mechanical RAG proxy packs bare chunk text (the G11
 /// convention), so demanding a "kb" token there would rig the baseline on
 /// an artifact. Evidence retention is printed as its own column.
-fn judge(outcome: &AgentOutcome, expect: &Expect, cite: bool) -> bool {
+fn judge(outcome: &AgentOutcome, expect: &MemExpect, cite: bool) -> bool {
     match expect {
-        Expect::Refuse => matches!(outcome, AgentOutcome::Refuse(_)),
-        Expect::Answer(units) => match outcome {
+        MemExpect::Refuse => matches!(outcome, AgentOutcome::Refuse(_)),
+        MemExpect::Answer(units) => match outcome {
             AgentOutcome::Answer(payload) => {
                 units.iter().all(|u| payload_has(payload, u))
                     && (!cite || payload_has(payload, "kb"))
             }
             AgentOutcome::Refuse(_) => false,
         },
-    }
-}
-
-/// Drop the oldest part of the transcript until it fits the token budget
-/// (a real agent's bounded context window). ponytail: no word-boundary
-/// alignment — payloads are whole sentences and the judge is token-based.
-fn truncate_oldest(text: &str) -> String {
-    if text.len() / 4 <= BUDGET {
-        return text.to_string();
-    }
-    let mut cut = text.len() - BUDGET * 4;
-    while cut < text.len() && !text.is_char_boundary(cut) {
-        cut += 1;
-    }
-    if cut < text.len() {
-        text[cut..].to_string()
-    } else {
-        String::new()
     }
 }
 
@@ -368,10 +96,10 @@ fn w31_mem_001_longitudinal_agent() {
         // The day's stale statements (the f: keys) — the stale-memory
         // counter's universe, derived from the kernel, never hardcoded.
         let stale_stmts: Vec<&str> = stale.iter().filter_map(|s| s.strip_prefix("f:")).collect();
-        let battery = day_battery(day);
+        let battery = mem_day_battery(day);
 
         for (qi, (text, expect)) in battery.iter().enumerate() {
-            let q = probe(text);
+            let q = mem_probe(text);
 
             // ── AIKOQL ────────────────────────────────────────────────────
             let a_out = agent_policy(&q, &aikoql_context_with_validity(&q, &merged, &stale));
@@ -542,8 +270,8 @@ fn w31_mem_001_llm_leg() {
     for day in [1usize, 7, 30, 60, 90] {
         let (merged, stale) = w.advance(day);
         let stale_stmts: Vec<&str> = stale.iter().filter_map(|s| s.strip_prefix("f:")).collect();
-        for (text, expect) in day_battery(day) {
-            let q = probe(text);
+        for (text, expect) in mem_day_battery(day) {
+            let q = mem_probe(text);
             for (name, ctx, hits, stales, rows) in [
                 (
                     "aikoql",
@@ -570,8 +298,8 @@ fn w31_mem_001_llm_leg() {
                         if let Some(answer) = generate(&endpoint, &model, SYSTEM, &prompt) {
                             *rows += 1;
                             let units: Vec<&str> = match expect {
-                                Expect::Answer(units) => units.to_vec(),
-                                Expect::Refuse => vec![],
+                                MemExpect::Answer(units) => units.to_vec(),
+                                MemExpect::Refuse => vec![],
                             };
                             let hit = units.iter().filter(|u| payload_has(&answer, u)).count();
                             if units.is_empty() || hit == units.len() {
