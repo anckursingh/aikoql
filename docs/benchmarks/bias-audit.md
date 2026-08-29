@@ -61,7 +61,7 @@ judgment half.
 - Frozen `units_hit` judge, win-zone contract, applied identically to
   all treatments. Verdicts are computed from measured tables by
   classifiers pinned BEFORE measurement (COMP strong-fit/regression
-  bounds, COST's cheaper-claim gate, NEG's win/loss law) — never
+  bounds, COST's cost-claim gate, NEG's win/loss law) — never
   reclassified after the fact.
 - Wins, parity, losses, and unknown rows are all kept. A claim gate
   that refuses to record losses is the primary rigging vector; it does

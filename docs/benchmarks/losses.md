@@ -131,11 +131,12 @@ per plan §29 — never dropped, never spun.
 
 ## Wave 3.1 cost losses (W31-COST-001)
 
-- **The universal "cheaper" claim is DENIED by the acceptance gate**:
-  aikoql wins 10/12 declared classes; in W2 and W7 both baselines
-  score 0 successes, so cost/success is n/a there and the claim
-  "cheaper everywhere" cannot be made. The correct scoped claim:
-  cheaper in every class with a comparable success denominator.
+- **The universal cost-leadership claim is DENIED by the acceptance
+  gate**: aikoql wins 10/12 declared classes; in W2 and W7 both
+  baselines score 0 successes, so cost/success is n/a there and a
+  cost-leadership-everywhere claim cannot be made. The correct scoped
+  claim: lower cost in every class with a comparable success
+  denominator.
 - **AIKOQL's failure rate is not zero**: 18.9% (28/148 tasks miss the
   frozen judge's win-zone 2) — lowest of the three, but a universal
   accuracy claim would be false too.

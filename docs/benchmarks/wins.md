@@ -299,8 +299,8 @@ all 12 workload classes), frozen judge, declared rates:
 | rag | $0.53170 | 75/148 | $0.00709 | 49.3% | — |
 
 - AIKOQL cost per success is 5.2× below rag and 6.1× below graph-rag
-  on the totals; aikoql is strictly cheaper in 10/12 classes (the two
-  exceptions: baselines with 0 successes → n/a, see losses).
+  on the totals; aikoql's cost is strictly lower in 10/12 classes (the
+  two exceptions: baselines with 0 successes → n/a, see losses).
 - Composition: llm $0.15594 + infra $0.00015 + retrieval/embed/agent
   $0. The kernel's deterministic index pays one component and no
   per-query retrieval — the infra term carries the compute (the
