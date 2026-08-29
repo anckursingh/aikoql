@@ -155,6 +155,33 @@ authoritative answers, repeatable advantage on the W7 class. Verdict:
   `AIKOQL_ANSWER_MODEL`) — same chain with a live generator, and the
   generation-retry surface the deterministic slice structurally lacks.
 
+### Real-LLM leg (llama3.1 via ollama, 50 tasks × 5 reps, 2026-08-29)
+
+Same chain, live generator. The first run was discarded: the endpoint
+was the bare ollama host, which 405s the chat API — 500/500 generation
+failures (the endpoint fix is in the test; the discard is recorded,
+not hidden).
+
+| Column | AIKOQL agent | RAG agent |
+|---|---|---|
+| Task success (win-zone) | 182/500 | 163/500 |
+| Grounded answers (cite sources) | 43/210 | 0/250 |
+| Unsupported tokens in answers | 3212 | 5452 |
+| Generation retries | 0 | 0 |
+| W11 false-confidence | 5/30 | 30/30 |
+| W7 advantage per rep | 3/5 × 5 reps | 0/5 × 5 reps |
+
+- The live generator is the weak point of both chains — 2-unit win-zone
+  success is a high bar for llama3.1's free generations; the advantage
+  (182 vs 163) is evidence delivery, and W7 repeats 3/5 in all five
+  reps vs RAG 0.
+- Aikoql's refusals hold with a live generator: the W11 traps refuse
+  25/30 (the 5 are the false-confidence rows); RAG has no refusal
+  surface and answers all 30.
+- Unsupported tokens: 3212 vs 5452 — the real generator emits
+  unsupported tokens on both treatments; aikoql's packs are leaner and
+  grounded.
+
 ## Wave 3.1 evidence-to-decision + temporal answer (W31-DEC-001 / W31-TEMP-001)
 
 Predefined acceptance (written before first measurement): DEC-001's five

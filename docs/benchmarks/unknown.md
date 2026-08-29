@@ -58,6 +58,9 @@ narrative must not state these as facts.
   agent answered with a healthy non-empty pack 25 of 30 times — fewer
   than RAG (30/30, it has no refusal surface), but each one is a trap
   delivered. UNK-001 (#164) is the formal measurement of these rates.
+  (Pre-gate number, kept as the historical baseline: the coverage gate
+  re-measured the deterministic battery at 3/15, and the live-LLM leg
+  measured 5/30 with a real generator — wins.md W31-REAL-001.)
 - **Retrieval retries are structurally 0** in the mechanical slice:
   `compile_context` is deterministic, so a re-query returns the same
   package; the SemanticFallback status (and its refusal arm) only
@@ -88,7 +91,9 @@ narrative must not state these as facts.
 
 - **Unsupported-assertion with a live generator is unmeasured here**:
   the deterministic echo is 0 by construction; the real rate is the
-  gated LLM leg's column (REAL-001).
+  gated LLM leg's column (REAL-001) — measured 2026-08-29 with
+  llama3.1: 3212 unsupported tokens (aikoql) vs 5452 (rag), both
+  non-zero; a live generator hallucinates on both chains.
 - **Closing the last 3/15 false-confidence traps needs semantics**:
   the three surviving traps and the two frozen Wave 3 pins sit at the
   same lexical tie (half the content tokens unexplained, same
