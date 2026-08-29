@@ -175,15 +175,19 @@ per plan §29 — never dropped, never spun.
 ## Wave 3.1 scale losses (W31-SCALE-001)
 
 - **ID-style names flood partial-prefix credit** (measured, then
-  designed out): with `Customer0..CustomerN` naming, every entity
-  shared the ≥4-char "customer" prefix, every probe ranked all 100k
-  of them at 0.495, the RET-003 tie-group retraction rendered the
-  whole ambiguous group as ~3000 unbudgeted tokens per payload, and
-  tier judges passed only vacuously (the right fact was in the
-  flood). Real corpora with numbered ID families (Service66, S66…) hit
-  this same wall — the partial-prefix credit needs a cap or an ID-
-  pattern exemption; the synthetic world was renamed to letter tokens
-  so the scale question could be measured in isolation.
+  fixed): with `Customer0..CustomerN` naming, every entity shared the
+  ≥4-char "customer" prefix, every probe ranked all 100k of them at
+  0.495, the RET-003 tie-group retraction rendered the whole
+  ambiguous group as ~3000 unbudgeted tokens per payload, and tier
+  judges passed only vacuously (the right fact was in the flood).
+  Fixed 2026-08-29 with an ID-pattern exemption in `keyword_score`:
+  an ID-style token (letters then digits) takes partial credit only
+  when the shared prefix gets past its letters — measured on the
+  1000-entity custNNNN world (`w31_scale_002`): member probe
+  3041 → 32 tokens, 999 → 0 ambiguous siblings, family-only probe
+  refuses. The scale fixture keeps its letter names: the isolated-
+  scale row is frozen as measured, and the ID-family row is pinned by
+  its own test.
 - **The ambiguity render is unbudgeted**: `ambiguous_entities` renders
   outside the token budget by design (honesty over truncation), so a
   pathological tie group can produce a multi-thousand-token payload.

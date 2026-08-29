@@ -277,3 +277,96 @@ fn w31_scale_001_knowledge_complexity_scaling() {
          (default 100k, 1M needs ~4GB), kernel-op level p50/p95/p99"
     );
 }
+
+/// W31-SCALE-001 follow-up (gap item 11): the ID-family flood. Names
+/// like "cust0042" share their letter prefix across the whole family,
+/// so the partial-prefix credit ranked every sibling for any probe —
+/// measured with Customer0..CustomerN names: all 100k entities tied,
+/// the RET-003 tie-group retraction rendered the whole group as
+/// thousands of unbudgeted tokens (losses.md). The fix: an ID-style
+/// token (letters then digits) earns no partial credit — the digits
+/// carry the identity, so a word matching only the letters names no
+/// member. Exact matches still rank; the asked member's fact must lead
+/// the pack with no ambiguity group, and a family-only probe must
+/// refuse (nothing ranks, entity-only → healthy empty).
+#[test]
+fn w31_scale_002_id_family_flood() {
+    let n = 1000usize;
+    let evd = evd();
+    let mut entities = Vec::with_capacity(n);
+    let mut facts = Vec::with_capacity(n);
+    for k in 0..n {
+        let name = format!("cust{k:04}");
+        entities.push(EntityCandidate {
+            name: name.clone(),
+            type_hint: Some("Customer".into()),
+            mentions: vec![name.clone()],
+            confidence: 0.9,
+            evidence: evd.clone(),
+        });
+        facts.push(FactCandidate {
+            statement: format!("{name} tier is {}", tier(k)),
+            entities: vec![name],
+            confidence: 0.9,
+            evidence: evd.clone(),
+            snippet: None,
+        });
+    }
+    let ir = KnowledgeIr {
+        entities,
+        relations: vec![],
+        facts,
+        events: vec![],
+        temporal: vec![],
+        document_id: Some("scale-synth-id".into()),
+        source_revision: None,
+        content_trust: None,
+        page_count: 1,
+        extractor: "scale-synth-id".into(),
+    };
+
+    let pkg = compile_context("What is the tier of cust0042?", &ir, BUDGET);
+    let payload = render_context_markdown(&pkg);
+    eprintln!(
+        "[W31-SCALE-002 member-probe] tokens={} entities={} facts={} ambiguous={}",
+        payload.len() / 4,
+        pkg.entities.len(),
+        pkg.facts.len(),
+        pkg.ambiguous_entities.len(),
+    );
+    assert!(payload_has(&payload, "gold"), "the member's tier must pack");
+    assert!(
+        pkg.facts
+            .first()
+            .map(|f| f.statement.contains("cust0042"))
+            == Some(true),
+        "the asked member's fact must lead the pack"
+    );
+    assert!(
+        pkg.ambiguous_entities.is_empty(),
+        "no family-wide tie group: {} siblings retracted as ambiguous",
+        pkg.ambiguous_entities.len()
+    );
+    assert!(
+        payload.len() / 4 <= 400,
+        "payload must stay bounded: {} tokens",
+        payload.len() / 4
+    );
+
+    // The family-only probe names no member: nothing ranks once the
+    // partial credit dies, and the pack refuses rather than flood.
+    let pkg2 = compile_context("What is the tier of cust?", &ir, BUDGET);
+    let payload2 = render_context_markdown(&pkg2);
+    eprintln!(
+        "[W31-SCALE-002 family-probe] tokens={} entities={} facts={} ambiguous={}",
+        payload2.len() / 4,
+        pkg2.entities.len(),
+        pkg2.facts.len(),
+        pkg2.ambiguous_entities.len(),
+    );
+    assert!(
+        payload2.trim().is_empty(),
+        "family-only probe must refuse: {} tokens",
+        payload2.len() / 4
+    );
+}

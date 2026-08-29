@@ -374,8 +374,10 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
     - Root-cause fix riding the gate: `ident_parts` dropped the camelCase boundary capital (`"AlertThreshold"` → `["Alert","hreshold"]`) so suffix parts never matched — "What is the alert threshold?" refused every day of the 90-day MEM run until fixed. Pinned by `wave31_mem` 30/30.
     - Test: `wave31_unk::w31_unk_001_four_state_epistemic_boundary` (asserts the four behaviors, prints the battery rates).
 
-11. **Partial-prefix credit flood** (W31-SCALE-001, losses.md) — ⬜ OPEN (TDD item, 2026-08-29)
-    - The ≥4-char partial-prefix rule makes ID-family names (`Service66`, `Customer0..N`) co-rank every sibling at 0.495, flooding the entity section and triggering unbudgeted ambiguous renders. Real corpora with numbered ID families hit this wall; the scale fixture was renamed to dodge it. Planned: cap or ID-pattern exemption in `keyword_score` + re-measurement.
+11. **Partial-prefix credit flood** (W31-SCALE-001, losses.md) — ✅ DONE 2026-08-29 (ID-pattern exemption in `keyword_score`)
+    - The ≥4-char partial-prefix rule made ID-family names (`Service66`, `Customer0..N`) co-rank every sibling at 0.495, flooding the entity section and triggering unbudgeted ambiguous renders. Fixed: an ID-style token (letters then digits, e.g. `cust0042`) takes partial credit only when the shared prefix gets PAST its letters — the digits carry the identity, so a prefix that stops inside the letter family (`cust` → every `custNNNN` sibling) scores nothing. Exact matches still rank; the letters still count when the word outruns them (`architecture` → `archv3` — the frozen w3_temp_001 pin's only credit for ArchV3, kept green).
+    - Measured (`w31_scale_002`, 1000-entity custNNNN world): member probe 3041 → 32 tokens, 999 → 0 ambiguous siblings; family-only probe refuses (empty pack). Frozen Wave 3 pin green (w3_temp 7/7).
+    - Test: `wave31_scale::w31_scale_002_id_family_flood`.
 
 12. **Cluster-level precision trimming** (W1/W9, losses.md) — ⬜ OPEN
     - W1 control costs 185 vs 70 tokens, W9 policy 349 vs 248 for identical scores — entity clusters pack whole. Planned: cap or trim cluster members below a relevance floor.

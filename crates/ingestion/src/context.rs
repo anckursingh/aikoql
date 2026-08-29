@@ -925,6 +925,28 @@ fn explains(text: &str, word: &str) -> bool {
         })
 }
 
+/// "cust0042"-style tokens: letters then digits, nothing else. The
+/// digits carry the identity — a word sharing only the letter prefix
+/// names the whole family, not a member (the W31-SCALE-001 flood:
+/// every CustomerN sibling ranked on the shared "customer" prefix).
+fn is_id_token(chunk: &str) -> bool {
+    let mut letters = false;
+    let mut digits = false;
+    for c in chunk.chars() {
+        if c.is_ascii_digit() {
+            digits = true;
+        } else if c.is_alphabetic() {
+            if digits {
+                return false; // digit before a letter — not the ID shape
+            }
+            letters = true;
+        } else {
+            return false;
+        }
+    }
+    letters && digits
+}
+
 /// Score a text against task keywords. Each exact token match adds 1.0,
 /// partial (shared-prefix ≥4 chars) match adds 0.3.
 fn keyword_score(text: &str, task_words: &[&str]) -> f32 {
@@ -940,13 +962,28 @@ fn keyword_score(text: &str, task_words: &[&str]) -> f32 {
             // Stopword chunks ("a", "of") share no 4-char prefix, so they stop
             // handing every mention fake lexical credit — which had drowned
             // the semantic-only recall path (lexical was never 0).
+            // ID-style tokens take partial credit only if the match gets
+            // past their letters: the digits carry the identity, so a
+            // prefix that stops inside the letter family ("cust" → every
+            // "custNNNN" sibling) ranked the whole family and the RET-003
+            // tie-group rendered thousands of unbudgeted tokens
+            // (W31-SCALE-002 baseline: 3041 tokens, 999 names). But the
+            // letters still count when the word outruns them
+            // ("architecture" → "archv3" — w3_temp_001's only credit for
+            // ArchV3), so skip only when the shared prefix covers all of
+            // the chunk's letters.
             for chunk in text.split_whitespace() {
-                let shared = chunk
-                    .to_lowercase()
+                let cl = chunk.to_lowercase();
+                let shared = cl
                     .chars()
                     .zip(word.chars())
                     .take_while(|(a, b)| a == b)
                     .count();
+                if is_id_token(&cl)
+                    && shared >= cl.chars().take_while(|c| c.is_alphabetic()).count()
+                {
+                    continue;
+                }
                 if shared >= 4 {
                     score += 0.3;
                     break;
