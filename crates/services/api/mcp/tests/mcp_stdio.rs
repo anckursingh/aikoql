@@ -2047,6 +2047,80 @@ fn m_ret1_remember_tool_retention_expiry() {
 }
 
 #[test]
+fn m_evp1_evidence_pack_bundles_compliance_evidence() {
+    // MRFC-0020 Phase 4 acceptance (IMPLEMENTATION-PLAN "Next
+    // implementation"): one auditor export bundles the audit chain, the
+    // object inventory, the PII-filtering config, the retention records,
+    // and the encryption compliance report. Golden dataset: the m_ret1
+    // retention shapes — an expired-on-arrival window (retention_ms 0,
+    // valid_to == its own write instant, expired under the half-open
+    // interval), a live one-day window, and a permanent control.
+    let db = tmp_db("evidence_pack");
+    let mut c = McpClient::start(&db);
+
+    c.call_tool(
+        "remember",
+        json!({
+            "subject": "alice",
+            "type_name": "chat_note",
+            "properties": {"text": "the wifi password is hunter2"},
+            "retention_ms": 0
+        }),
+    );
+    c.call_tool(
+        "remember",
+        json!({
+            "subject": "alice",
+            "type_name": "chat_note",
+            "properties": {"text": "alice prefers tea"},
+            "retention_ms": 86_400_000
+        }),
+    );
+    c.call_tool(
+        "remember",
+        json!({"subject": "alice", "type_name": "chat_note", "properties": {"text": "permanent"}}),
+    );
+
+    for framework in ["gdpr", "hipaa"] {
+        let pack = c.call_tool("evidence_pack", json!({"framework": framework}));
+        assert_eq!(pack["framework"], framework);
+        // Audit chain + inventory (audit_report substrate).
+        assert!(!pack["audit_chain"].as_str().unwrap().is_empty());
+        assert!(pack["journal_seq"].as_u64().unwrap() >= 3);
+        assert!(pack["object_inventory"]["total"].as_u64().unwrap() >= 3);
+        // Fresh remembers land as Draft (kernel default lifecycle).
+        assert!(pack["object_inventory"]["by_state"]["draft"].as_u64().unwrap() >= 3);
+        // PII filtering config (MRFC-0070 A7 substrate): the detector
+        // capability statement plus the known-limits honesty note.
+        assert_eq!(pack["pii_filtering"]["active"], true);
+        let kinds = pack["pii_filtering"]["detector_kinds"].as_array().unwrap();
+        assert!(kinds.iter().any(|k| k == "API_KEY"));
+        assert!(kinds.iter().any(|k| k == "EMAIL"));
+        assert!(kinds.iter().any(|k| k == "CREDIT_CARD"));
+        assert!(!pack["pii_filtering"]["known_limits"].as_str().unwrap().is_empty());
+        // Retention records: 2 stamped windows — one live, one
+        // expired-on-arrival; purge coverage stated honestly (counted,
+        // deletion is caller-side — no kernel purge op exists).
+        assert_eq!(pack["retention"]["retained_objects"].as_u64().unwrap(), 2);
+        assert_eq!(pack["retention"]["live_windows"].as_u64().unwrap(), 1);
+        assert_eq!(pack["retention"]["expired"].as_u64().unwrap(), 1);
+        assert!(!pack["retention"]["purge_coverage"].as_str().unwrap().is_empty());
+        // Encryption substrate: fresh store, no field crypto → grade C.
+        assert_eq!(pack["encryption"]["compliance_grade"], "C");
+    }
+
+    // Unknown framework is refused, not silently relabelled.
+    let err = c.request(
+        "tools/call",
+        json!({"name": "evidence_pack", "arguments": {"framework": "pci"}}),
+    );
+    assert_eq!(err.get("isError").and_then(|b| b.as_bool()), Some(true));
+    assert!(err["content"][0]["text"].as_str().unwrap().contains("framework"));
+
+    let _ = std::fs::remove_file(&db);
+}
+
+#[test]
 fn m_sum1_summarize_conversation_tool() {
     // §38–39 acceptance: a conversation is summarized into the seven
     // buckets; every item traces to speaker + message range + timestamp.

@@ -41,6 +41,7 @@ pub(crate) fn check_capability(
         ("deploy_benchmark", &["developer"]),
         ("audit_report", &["auditor"]),
         ("compliance_report", &["auditor"]),
+        ("evidence_pack", &["auditor"]),
         ("verify_knowledge", &["verifier"]),
         ("invalidate", &["operator"]),
         ("resolve_conflict", &["arbiter"]),

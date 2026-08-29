@@ -394,8 +394,10 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
     - AwsKms, AzureKeyVault, GcpKeyManager — KeyManager trait impls with env-var key loading
     - Full SDK integration (aws-sdk-kms, azure_security_keyvault) deferred
 
-12. **Compliance Evidence Packs** (MRFC-0020 Phase 4)
-    - GDPR, HIPAA, PCI DSS report templates — not implemented
+12. **Compliance Evidence Packs** (MRFC-0020 Phase 4) — ✅ DONE 2026-08-29
+    - `evidence_pack` MCP tool (`gdpr`/`hipaa` framework arg, auditor role) + `GET /api/v1/evidence/{framework}`: one exportable report bundling the audit chain hash + journal seq, the full object inventory by state, the PII-filtering detector config (ALL_KINDS, R8.1 known limits travel with the pack), the retention records (kernel `retention_summary()` — retained/live/expired horizons), and the encryption compliance report.
+    - Honest rows shipped with the pack, not hidden: purge coverage is counted-eligibility only (the kernel has no purge op), and the pack asserts nothing about PCI DSS — `pci` is refused as unsupported rather than silently relabelled.
+    - Test: `m_evp1_evidence_pack_bundles_compliance_evidence` (golden dataset = m_ret1 retention shapes; both frameworks asserted; unsupported framework refusal pinned).
 
 13. **Read Replicas + Raft** (IMPLEMENTATION-PLAN Phase 4)
     - Multi-node consensus, read replicas — no code
@@ -3763,7 +3765,7 @@ The last uninstrumented §53 stage is now measured. `tests/e2e_answer_quality.rs
 | Item | Feasibility | Verdict |
 | --- | --- | --- |
 | §53 end-to-end stage | **DONE** | PR-R instrument shipped; live run = one command once Ollama responds |
-| Compliance evidence packs (GDPR, HIPAA) | High — existing audit chain + inventory tool (Phase 5) + PII filtering (A7) assemble into an exportable pack; ~2 weeks | **Next implementation candidate** |
+| Compliance evidence packs (GDPR, HIPAA) | **DONE 2026-08-29** — `evidence_pack` tool + REST route assemble the audit chain, object inventory, PII-filtering config, retention records, and encryption report into one exportable pack (m_evp1); purge coverage stated honestly (no kernel purge op) | Shipped |
 | Cloud KMS providers (AWS, Azure, GCP) | ~1 week, but user-deferred | Leave for future |
 | Remote TCP + TLS/mTLS | Feasible (~1 week, rustls on the listener) but reviewer-sanctioned post-MVP deferral; loopback + proxy-TLS contract ships now | Keep deferred |
 | Read replicas + Raft consensus | **Not feasible short-term** — blocked on the deferred Storage Kernel Split; a consensus protocol is a multi-PR, ~1 month effort | Future |
@@ -3774,4 +3776,4 @@ The last uninstrumented §53 stage is now measured. `tests/e2e_answer_quality.rs
 
 ### Next implementation
 
-Compliance evidence packs — the highest-leverage feasible post-MVP feature now that every §53/§60 stage is instrumented: bundle the audit chain, object inventory, PII-filtering config, and retention/purge records into exportable GDPR/HIPAA evidence reports (the existing Phase-5 audit tool and A7 audit trail are the substrate). Cloud KMS stays deferred per user decision.
+Compliance evidence packs shipped 2026-08-29 (see item 12). The remaining feasible in-scope items are small: the P2-1/P2-2/P2-5/P2-8 kernel refinements (tracked in knowledge-invariants.md) and the mechanical `use crate::*` prelude cleanup. Everything else stays per its verdict above (Cloud KMS user-deferred, Remote TCP reviewer-deferred, Raft/native storage future, PR-I post-launch).

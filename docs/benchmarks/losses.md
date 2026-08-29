@@ -236,6 +236,21 @@ per plan §29 — never dropped, never spun.
 - The single-source row is NOT a loss (32 vs 38 tokens — see wins.md,
   a 2-token noise margin).
 
+## Wave 3.1 compliance evidence (W31-EVP-001)
+
+- **The evidence pack counts purge eligibility but nothing purges**: the
+  kernel has no purge op — `evidence_pack` reports expired retention
+  horizons as purge-eligible and states that physical deletion is
+  caller-side. Honest row shipped inside the pack, not implied away.
+- **PCI DSS is refused, not templated**: the pack accepts `gdpr` and
+  `hipaa` only; an auditor asking for `pci` gets an unsupported-framework
+  error rather than a relabelled report.
+- **PII filtering evidence carries its own known limits (R8.1)**: the
+  detector config list ships with the statement that pattern-based
+  detection catches known formats only — it does not decode encoded
+  text or reassemble split secrets. The pack asserts filtering
+  capability, never filtering completeness.
+
 ## Wave 3.1 impact measurement caveat (W31-IMPACT-001)
 
 - **Prefix-colliding names inflate ranking**: the deliberate morphology

@@ -369,6 +369,20 @@ pub struct ComplianceReport {
     pub field_crypto_summary: Option<ComplianceSummary>,
 }
 
+/// MRFC-0020 Phase 4: retention evidence for the compliance evidence pack.
+/// Counts of heads carrying a kernel-stamped `valid_to` horizon
+/// (`remember_retained`), split by expiry against the kernel clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetentionSummary {
+    /// Heads carrying EXT_VALID_TO — objects under declarative retention.
+    pub retained_objects: usize,
+    /// Horizons still in the future (live retention windows).
+    pub live_windows: usize,
+    /// Horizons at or past the kernel clock — purge-eligible under the
+    /// half-open validity interval.
+    pub expired: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Remembered {
     pub koid: KOID,
@@ -765,6 +779,33 @@ impl Kernel {
             policy_types: pol_types,
             field_crypto_summary: summary.transpose().unwrap_or(None),
         })
+    }
+
+    /// Retention evidence (MRFC-0020 Phase 4): count the kernel-stamped
+    /// `valid_to` horizons across all heads, split by expiry. Reads heads
+    /// raw (no ACL) — this is auditor evidence, gated at the tool layer.
+    pub fn retention_summary(&self) -> KResult<RetentionSummary> {
+        let now = self.clock_now();
+        let mut summary = RetentionSummary {
+            retained_objects: 0,
+            live_windows: 0,
+            expired: 0,
+        };
+        for (koid, _version, _ts, _state) in self.scan_heads()? {
+            let Some(ko) = self.head_object(&koid)? else {
+                continue;
+            };
+            let Some(valid_to) = ko.valid_to() else {
+                continue;
+            };
+            summary.retained_objects += 1;
+            if valid_to > now {
+                summary.live_windows += 1;
+            } else {
+                summary.expired += 1;
+            }
+        }
+        Ok(summary)
     }
 
     pub fn new_koid(&self) -> KOID {

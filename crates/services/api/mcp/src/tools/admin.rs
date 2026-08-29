@@ -305,3 +305,62 @@ pub(crate) fn tool_compliance_report(k: &Kernel) -> Result<J, String> {
         "compliance_grade": if report.encryption_enabled && report.policies_registered > 0 { "A" } else { "C" },
     }))
 }
+
+/// MRFC-0020 Phase 4 (IMPLEMENTATION-PLAN "Next implementation"): one
+/// auditor export bundling the audit chain, the object inventory, the
+/// PII-filtering config, the retention records, and the encryption
+/// compliance report. Both frameworks carry the same bundle — the auditor
+/// maps sections to clauses; the framework tag only labels the report.
+/// Honest rows: purge coverage is counted-eligibility only (no kernel
+/// purge op exists), and the PII detector's R8.1 known limits travel
+/// with the pack rather than being implied away.
+pub(crate) fn tool_evidence_pack(k: &Kernel, args: &J) -> Result<J, String> {
+    let framework = args
+        .get("framework")
+        .and_then(|f| f.as_str())
+        .unwrap_or("gdpr");
+    if framework != "gdpr" && framework != "hipaa" {
+        return Err(format!("unsupported framework: {framework} (supported: gdpr, hipaa)"));
+    }
+
+    // Audit chain + object inventory (audit_report substrate).
+    let (seq, audit) = k.journal_head().map_err(|e| e.to_string())?;
+    let heads = k.scan_heads().map_err(|e| e.to_string())?;
+    let mut by_state: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for (_, _, _, s) in &heads {
+        *by_state.entry(s.to_string()).or_insert(0) += 1;
+    }
+
+    // Retention records (kernel-stamped valid_to horizons).
+    let retention = k.retention_summary().map_err(|e| e.to_string())?;
+
+    // Encryption compliance (existing report, same shape as its own tool).
+    let encryption = tool_compliance_report(k)?;
+
+    Ok(json!({
+        "framework": framework,
+        "audit_chain": audit.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
+        "journal_seq": seq,
+        "object_inventory": {
+            "total": heads.len(),
+            "by_state": by_state,
+        },
+        "pii_filtering": {
+            "active": true,
+            "detector_kinds": aikoql_ingestion::ALL_KINDS
+                .iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>(),
+            // R8.1: pattern-based detection catches known formats only —
+            // the known limits travel with the evidence, not implied away.
+            "known_limits": "pattern-based detection catches known formats only; it does not decode URL-encoded or base64-encoded text or reassemble secrets split across lines (MRFC-0070 A7, R8.1)",
+        },
+        "retention": {
+            "retained_objects": retention.retained_objects,
+            "live_windows": retention.live_windows,
+            "expired": retention.expired,
+            "purge_coverage": "expired objects are counted and purge-eligible; physical deletion is caller-side — the kernel has no purge op (MRFC-0020 Phase 4 honest row)",
+        },
+        "encryption": encryption,
+    }))
+}

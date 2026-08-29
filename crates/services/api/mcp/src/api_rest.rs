@@ -92,6 +92,13 @@ fn route_inner(
             need_auth()?;
             tool_compliance_report(k)
         }
+        ("GET", p) if p.starts_with("/api/v1/evidence/") => {
+            need_auth()?;
+            tool_evidence_pack(
+                k,
+                &json!({"framework": p.trim_start_matches("/api/v1/evidence/")}),
+            )
+        }
         ("GET", "/api/v1/list-programs") => {
             need_auth()?;
             tool_list_programs(k, &args())

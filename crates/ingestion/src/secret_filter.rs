@@ -41,6 +41,23 @@ pub enum SecretKind {
     GenericToken,
 }
 
+/// The full detector inventory — the PII-filtering configuration the
+/// compliance evidence pack reports (MRFC-0020 Phase 4). Single source of
+/// truth; the pack tool maps this, it does not keep its own list.
+pub const ALL_KINDS: &[SecretKind] = &[
+    SecretKind::ApiKey,
+    SecretKind::BearerToken,
+    SecretKind::JwtToken,
+    SecretKind::AwsKey,
+    SecretKind::PrivateKey,
+    SecretKind::Password,
+    SecretKind::Email,
+    SecretKind::CreditCard,
+    SecretKind::Ssn,
+    SecretKind::ConnectionString,
+    SecretKind::GenericToken,
+];
+
 impl SecretKind {
     pub fn as_str(&self) -> &str {
         match self {
