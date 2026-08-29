@@ -39,10 +39,28 @@ per plan §29 — never dropped, never spun.
 
 ## Token cost on control-class questions
 
-- W1 control: 185 tokens vs RAG 70; W9 policy: 349 vs 248 — entity
+- W1 control: 185 tokens vs RAG 70; W9 policy: 354 vs 298 — entity
   clusters pack whole. AikoQL over-delivers on simple questions; the
-  budget pin (≤300) is the only brake, and cluster-level precision
-  trimming is unimplemented (open item, not hidden).
+  budget pin (≤300) is the only brake.
+- Cluster-level precision trimming (item 12, measured 2026-08-29):
+  the RELATION channel shipped — relations pack only above half the
+  top relation's score (W31-CLUSTER-002). Measured on the W31-COMP
+  battery: W1-lookup 243→221, W1-oncall 340→304, W4 depth-2 360→309
+  tokens per probe; battery totals 33548→32709 with an identical
+  252/296 units (0 units moved, cost $0.0139→$0.0138). Not always
+  smaller: the Q0 depth-2 probe stays at 258 — the freed budget
+  refills with exempt entity-connected facts, so the floor buys
+  precision (cluster edges out of the relation section), not a
+  guaranteed token cut.
+- The FACTS channel is a measured NEGATIVE RESULT: the declared floor
+  (half the top fact, absolute 1.4, statement-score ≥1.0 exempt)
+  broke the frozen W1 full-parity assert — the W1 secondary unit "An
+  SLA breach earns customers a 10 percent service credit." (Q17,
+  score ~1.2) sits INSIDE the W9 noise band (1.165–1.33), so no
+  lexical threshold separates answer units from cluster noise; any
+  floor that drops the noise drops the unit. Reverted; the W9
+  fact-driven over-pack (354 vs 298) remains open with the measured
+  reason, not hidden.
 
 ## Drift sensitivity
 

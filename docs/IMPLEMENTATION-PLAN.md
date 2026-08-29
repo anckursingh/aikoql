@@ -379,8 +379,11 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
     - Measured (`w31_scale_002`, 1000-entity custNNNN world): member probe 3041 → 32 tokens, 999 → 0 ambiguous siblings; family-only probe refuses (empty pack). Frozen Wave 3 pin green (w3_temp 7/7).
     - Test: `wave31_scale::w31_scale_002_id_family_flood`.
 
-12. **Cluster-level precision trimming** (W1/W9, losses.md) — ⬜ OPEN
-    - W1 control costs 185 vs 70 tokens, W9 policy 349 vs 248 for identical scores — entity clusters pack whole. Planned: cap or trim cluster members below a relevance floor.
+12. **Cluster-level precision trimming** (W1/W9, losses.md) — ✅ DONE 2026-08-29 (relation channel) + measured negative result (fact channel)
+    - W1 control costs 185 vs 70 tokens, W9 policy 349 vs 248 for identical scores — entity clusters pack whole. Resolution, measured 2026-08-29 (W31-CLUSTER-002):
+    - **Relation floor shipped**: relations pack only above half the top relation's score — tail cluster edges (the W1-lookup 0.715 DutyManager edges, the W1-oncall 1.1 escalates/conflicts edges, the W4-hop 0.315 depends_on tail) no longer pack. Lexical compiles only; the semantic path keeps its own SEMANTIC_MIN floor.
+    - **Fact floor reverted — negative result, recorded in losses.md**: the declared design (half the top fact, absolute 1.4, statement-score ≥1.0 exempt) broke the frozen W31-COMP-001 W1 full-parity assert — the W1 secondary unit "An SLA breach earns customers a 10 percent service credit." (Q17, ~1.2) sits inside the W9 noise band (1.165–1.33), so no lexical threshold separates units from noise. The W9 fact-driven over-pack stays open with the reason documented, not hidden.
+    - Test: `wave31_cluster::w31_cluster_002_relevance_floor` (noise-relation absence + unit integrity + depth-2 top-relation pin); regression: frozen wave3_market_reality 7/7, wave31_comparison (W1 full parity restored), wave31_scale, full suite.
 
 ### Tier 3 — Operational Gaps
 

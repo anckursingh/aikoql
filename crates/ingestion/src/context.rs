@@ -713,6 +713,27 @@ pub fn compile_context_semantic_with(
         });
     }
 
+    // Relation relevance floor (plan item 12, W31-CLUSTER-002): relations
+    // pack only above half the top relation's score. Below the band they
+    // are cluster edges, not answers — the W1-lookup pack carried two
+    // 0.715 DutyManager edges and the W4-hop pack four 0.315 depends_on
+    // edges under a 1.9-unit relation. The facts channel has no floor:
+    // measured 2026-08-29, a fact floor cannot separate W9 cluster noise
+    // (1.165–1.33) from W1 secondary units ("An SLA breach earns customers
+    // a 10 percent service credit." at ~1.2 — the W31-COMP-001 Q17 unit
+    // that the floor broke): the unit sits inside the noise band, so any
+    // threshold either keeps the noise or drops the unit. Negative result
+    // recorded in losses.md (W31-CLUSTER-002), not hidden.
+    // Lexical compiles only: the semantic path carries its own
+    // SEMANTIC_MIN floor. Sub-band relations break without setting
+    // trimmed — a relevance decision, not a budget casualty (the
+    // honest-note contract stays for real trims).
+    let rel_floor = relations
+        .iter()
+        .find(|r| r.score > 0.0)
+        .map(|r| r.score * 0.5)
+        .unwrap_or(0.0);
+
     for f in &facts {
         if f.score <= 0.0 {
             break;
@@ -738,6 +759,9 @@ pub fn compile_context_semantic_with(
 
     for r in &relations {
         if r.score <= 0.0 {
+            break;
+        }
+        if semantic.is_none() && r.score < rel_floor {
             break;
         }
         if !seen_relations.insert((r.subject.as_str(), r.predicate.as_str(), r.object.as_str())) {
