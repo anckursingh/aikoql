@@ -5,6 +5,9 @@
 //! the Wave 3 frozen judge), rolled up per workload class. The frozen
 //! holdout gets exactly one pass (w31_comp_002), printed, never asserted
 //! here — its numbers are pinned into the evidence docs.
+//! The per-task measurement lives in common/wave31_sim::measure_task —
+//! shared with wave31_repro.rs so the REPRO-001 reproduction executes
+//! the same code it claims to reproduce.
 //!
 //! Predefined acceptance (spec COMP-001 — declared BEFORE first
 //! measurement, spec §4 TDD order; thresholds are never adjusted to fit
@@ -26,107 +29,15 @@
 mod common;
 
 use std::collections::{BTreeMap, HashSet};
-use std::time::Instant;
 
-use aikoql_ingestion::{
-    compile_context, merge_knowledge_ir, render_context_markdown, KnowledgeIr,
-    MockEmbeddingProvider,
-};
-use common::trackb::{assert_integrity, corpus, units_hit, Doc, Question};
+use aikoql_ingestion::{merge_knowledge_ir, KnowledgeIr, MockEmbeddingProvider};
+use common::trackb::{assert_integrity, corpus, Doc, Question};
 use common::trackb_holdout::{holdout_docs, HOLDOUT_QUESTIONS};
-use common::wave31_sim::{
-    entity_chunk_index, graph_expand, pack_budgeted, rank_positions, union_docs, union_questions,
-};
-
-/// Token budget all treatments must respect (len/4 estimate — the G12
-/// convention, same value `knowledge_bench.rs` and Wave 3 use).
-const BUDGET: usize = 300;
-
-/// G11 cost convention (comparative_chatbot_bench.rs) — identical so the
-/// two benches' cost rows stay comparable.
-const INPUT_PRICE_PER_M: f32 = 0.15;
-const OUTPUT_PRICE_PER_M: f32 = 0.60;
-const ANSWER_TOKENS: usize = 100;
+use common::wave31_sim::{cost, entity_chunk_index, measure_task, union_docs, union_questions};
 
 /// Predefined acceptance thresholds (written before first measurement).
 const MIN_STRONG_FIT: usize = 1;
 const MAX_REGRESSION_UNITS: isize = 2;
-
-/// One task, three treatments, one judge.
-#[derive(Default)]
-struct TaskRow {
-    /// Win-zone units per treatment (0..2, unknown-probe inverted).
-    a: usize,
-    g: usize,
-    r: usize,
-    /// Delivered tokens per treatment (len/4).
-    at: usize,
-    gt: usize,
-    rt: usize,
-    /// Elapsed micros per treatment.
-    am: u128,
-    gm: u128,
-    rm: u128,
-    /// Payload cites at least one corpus doc id (groundedness proxy).
-    ag: bool,
-    gg: bool,
-    rg: bool,
-}
-
-fn measure_task(
-    q: &Question,
-    corpus: &[common::CorpusChunk],
-    index: &[(String, Vec<usize>)],
-    merged: &KnowledgeIr,
-    provider: &MockEmbeddingProvider,
-    doc_ids: &HashSet<&str>,
-) -> TaskRow {
-    let invert = q.kind == "unknown-probe";
-    let judge = |payload: &str| {
-        let (h, _) = units_hit(payload, q);
-        if invert {
-            2 - h
-        } else {
-            h
-        }
-    };
-    // Doc ids tokenize at '-', so a citation shows up as the id's first
-    // token ("kb-payments" → "kb") — G11's convention, generalized.
-    let cites = |payload: &str| {
-        common::tokens(payload)
-            .iter()
-            .any(|t| doc_ids.contains(t.as_str()))
-    };
-
-    let mut row = TaskRow::default();
-
-    let t0 = Instant::now();
-    let pkg = compile_context(q.text, merged, BUDGET);
-    let aikoql = render_context_markdown(&pkg);
-    row.am = t0.elapsed().as_micros();
-    row.a = judge(&aikoql);
-    row.at = aikoql.len() / 4;
-    row.ag = cites(&aikoql);
-
-    let t0 = Instant::now();
-    let graph = pack_budgeted(
-        &graph_expand(&rank_positions(corpus, q.text, provider), corpus, index),
-        corpus,
-    );
-    row.gm = t0.elapsed().as_micros();
-    row.g = judge(&graph);
-    row.gt = graph.len() / 4;
-    row.gg = cites(&graph);
-
-    let t0 = Instant::now();
-    let rag = pack_budgeted(&rank_positions(corpus, q.text, provider), corpus);
-    row.rm = t0.elapsed().as_micros();
-    row.r = judge(&rag);
-    row.rt = rag.len() / 4;
-    row.rg = cites(&rag);
-
-    row
-}
 
 #[derive(Default, Clone, Copy)]
 struct Class {
@@ -146,11 +57,6 @@ struct Totals {
     grounded: [usize; 3],
     tokens: [usize; 3],
     micros: [Vec<u128>; 3],
-}
-
-fn cost(tokens: usize, queries: usize) -> f32 {
-    tokens as f32 / 1e6 * INPUT_PRICE_PER_M
-        + (queries * ANSWER_TOKENS) as f32 / 1e6 * OUTPUT_PRICE_PER_M
 }
 
 /// p50/p95 of sorted micros (nearest-rank).

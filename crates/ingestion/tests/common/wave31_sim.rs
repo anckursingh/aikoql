@@ -21,8 +21,8 @@ use aikoql_ingestion::{
 use aikoql_kernel::*;
 
 use super::trackb::{
-    corpus as trackb_corpus, docs as trackb_docs, market_docs, Doc, Question, MARKET_QUESTIONS,
-    QUESTIONS,
+    corpus as trackb_corpus, docs as trackb_docs, market_docs, units_hit, Doc, Question,
+    MARKET_QUESTIONS, QUESTIONS,
 };
 use super::trackb31::MARKET_QUESTIONS_31;
 use super::trackb31_docs::{
@@ -677,4 +677,84 @@ pub fn truncate_oldest(text: &str) -> String {
     } else {
         String::new()
     }
+}
+
+// ── the W31-COMP-001 three-way measurement (shared with REPRO-001) ───────
+
+/// One task, three treatments, one judge.
+#[derive(Default)]
+pub struct TaskRow {
+    /// Win-zone units per treatment (0..2, unknown-probe inverted).
+    pub a: usize,
+    pub g: usize,
+    pub r: usize,
+    /// Delivered tokens per treatment (len/4).
+    pub at: usize,
+    pub gt: usize,
+    pub rt: usize,
+    /// Elapsed micros per treatment.
+    pub am: u128,
+    pub gm: u128,
+    pub rm: u128,
+    /// Payload cites at least one corpus doc id (groundedness proxy).
+    pub ag: bool,
+    pub gg: bool,
+    pub rg: bool,
+}
+
+/// The frozen three-way measurement: AIKOQL compile+render vs Graph-RAG
+/// expansion vs RAG top-k packing, all budget-bounded and judged by
+/// `units_hit` (unknown-probe inverted). Lives here — not in the COMP
+/// test — so the REPRO-001 re-run executes the *same* code a clean
+/// reproduction would (a re-implemented measurement can drift).
+pub fn measure_task(
+    q: &Question,
+    corpus: &[CorpusChunk],
+    index: &[(String, Vec<usize>)],
+    merged: &KnowledgeIr,
+    provider: &MockEmbeddingProvider,
+    doc_ids: &HashSet<&str>,
+) -> TaskRow {
+    let invert = q.kind == "unknown-probe";
+    let judge = |payload: &str| {
+        let (h, _) = units_hit(payload, q);
+        if invert {
+            2 - h
+        } else {
+            h
+        }
+    };
+    // Doc ids tokenize at '-', so a citation shows up as the id's first
+    // token ("kb-payments" → "kb") — G11's convention, generalized.
+    let cites =
+        |payload: &str| tokens(payload).iter().any(|t| doc_ids.contains(t.as_str()));
+
+    let mut row = TaskRow::default();
+
+    let t0 = Instant::now();
+    let pkg = compile_context(q.text, merged, BUDGET);
+    let aikoql = render_context_markdown(&pkg);
+    row.am = t0.elapsed().as_micros();
+    row.a = judge(&aikoql);
+    row.at = aikoql.len() / 4;
+    row.ag = cites(&aikoql);
+
+    let t0 = Instant::now();
+    let graph = pack_budgeted(
+        &graph_expand(&rank_positions(corpus, q.text, provider), corpus, index),
+        corpus,
+    );
+    row.gm = t0.elapsed().as_micros();
+    row.g = judge(&graph);
+    row.gt = graph.len() / 4;
+    row.gg = cites(&graph);
+
+    let t0 = Instant::now();
+    let rag = pack_budgeted(&rank_positions(corpus, q.text, provider), corpus);
+    row.rm = t0.elapsed().as_micros();
+    row.r = judge(&rag);
+    row.rt = rag.len() / 4;
+    row.rg = cites(&rag);
+
+    row
 }
