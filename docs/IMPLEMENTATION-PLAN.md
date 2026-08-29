@@ -368,9 +368,11 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
    - [x] Studio Document Explorer: upload → ingest → compile with 7-section results UI
    - [x] Playwright E2E test covering full workflow
 
-10. **Unknown-probe false confidence** (W3-UNK-001 / W11, losses.md) — ⬜ OPEN (TDD item, 2026-08-29)
-    - W3-UNK-001 measured 5/5 trap facts packed on an absent answer; the Unknown→Refuse boundary holds only at the exact-token gate. Vocabulary-overlap traps pack non-empty via weak entity boosts.
-    - This is the caveat on the "Unknown-aware AI" public claim (public-claims.md). Planned: gate-side fix + re-measurement; pinned evidence rows updated honestly, old row kept as historical.
+10. **Unknown-probe false confidence** (W3-UNK-001 / W11, losses.md) — ✅ DONE 2026-08-29 (epistemic coverage gate in `compile_context`)
+    - Gate (lexical-only compiles): when ranked evidence fails to explain MORE than half the question's content tokens — explanation = `token_match` or the ≥4-char shared-prefix inflection band covering ≥2/3 of the word — AND no fact is content-anchored by ≥2 exact tokens, the package is emptied (agent refuses). Escapes: why-scoped entity anchor (bench Q0), entity-only candidate surface (RET-003), the ≥2 exact-token anchor (G12 cell facts).
+    - Measured: false-confidence 13/15 → **3/15** (rag 15/15); all four behavioral states green; MEM-001 30/30. The half boundary is strict (empty only when unexplained > half): the tie zone holds two frozen Wave 3 pins whose packs are asserted ("How is rollback done?", "What do deploys require?") and three W11 traps lexically indistinguishable from them — the gate's honest ceiling, kept in losses/unknown, not hidden.
+    - Root-cause fix riding the gate: `ident_parts` dropped the camelCase boundary capital (`"AlertThreshold"` → `["Alert","hreshold"]`) so suffix parts never matched — "What is the alert threshold?" refused every day of the 90-day MEM run until fixed. Pinned by `wave31_mem` 30/30.
+    - Test: `wave31_unk::w31_unk_001_four_state_epistemic_boundary` (asserts the four behaviors, prints the battery rates).
 
 11. **Partial-prefix credit flood** (W31-SCALE-001, losses.md) — ⬜ OPEN (TDD item, 2026-08-29)
     - The ≥4-char partial-prefix rule makes ID-family names (`Service66`, `Customer0..N`) co-rank every sibling at 0.495, flooding the entity section and triggering unbudgeted ambiguous renders. Real corpora with numbered ID families hit this wall; the scale fixture was renamed to dodge it. Planned: cap or ID-pattern exemption in `keyword_score` + re-measurement.

@@ -42,8 +42,10 @@ fn w31_real_001_llm_leg() {
         );
         return;
     };
+    // ollama's chat API lives at /api/chat; the bare host answers 405
+    // (the pre-fix run measured 500/500 generation failures against it).
     let endpoint = std::env::var("AIKOQL_ANSWER_ENDPOINT")
-        .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+        .unwrap_or_else(|_| "http://127.0.0.1:11434/api/chat".to_string());
 
     let provider = MockEmbeddingProvider::new();
     let docs = union_docs();

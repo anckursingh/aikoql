@@ -68,6 +68,65 @@ fn probe(text: &'static str) -> Question {
     }
 }
 
+/// Diagnostic (test-side, not a gate): question content tokens — the
+/// kernel's len≥3 + non-stopword filter — that appear in no packed
+/// evidence, split on non-alphanumerics and camelCase boundaries (the
+/// kernel's ident_parts convention, duplicated minimally so the
+/// diagnostic reads the same way the kernel matches).
+fn unexplained(pkg: &aikoql_ingestion::ContextPackage, q: &str) -> (usize, usize, Vec<String>) {
+    const STOP: &[&str] = &[
+        "the", "and", "for", "are", "was", "were", "who", "what", "when", "where", "which",
+        "how", "does", "did", "that", "this", "with", "from", "into",
+    ];
+    fn hit(word: &str, text: &str) -> bool {
+        text.split(|c: char| !c.is_alphanumeric())
+            .flat_map(|chunk| {
+                // camelCase part split (the kernel's ident_parts)
+                let chars: Vec<(usize, char)> = chunk.char_indices().collect();
+                let mut parts = Vec::new();
+                let mut start = 0usize;
+                for i in 0..chars.len() {
+                    let (off, c) = chars[i];
+                    let prev = if i > 0 { chars[i - 1].1 } else { c };
+                    if c.is_uppercase() && i > 0 && (prev.is_lowercase() || prev.is_numeric()) {
+                        if off > start {
+                            parts.push(&chunk[start..off]);
+                        }
+                        start = off;
+                    }
+                }
+                if start < chunk.len() {
+                    parts.push(&chunk[start..]);
+                }
+                parts.push(chunk);
+                parts
+            })
+            .any(|part| part.to_lowercase() == word)
+    }
+    let words: Vec<String> = q
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 3 && !STOP.contains(w))
+        .map(str::to_string)
+        .collect();
+    let mut unex = Vec::new();
+    for w in &words {
+        let found = pkg.facts.iter().any(|f| hit(w, &f.statement))
+            || pkg
+                .entities
+                .iter()
+                .any(|e| hit(w, &e.name) || e.mentions.iter().any(|m| hit(w, m)))
+            || pkg
+                .relations
+                .iter()
+                .any(|r| hit(w, &r.subject) || hit(w, &r.predicate) || hit(w, &r.object));
+        if !found {
+            unex.push(w.clone());
+        }
+    }
+    (unex.len(), words.len(), unex)
+}
+
 // ── W31-UNK-001 ───────────────────────────────────────────────────────────
 
 #[test]
@@ -274,6 +333,33 @@ fn w31_unk_001_four_state_epistemic_boundary() {
         .collect();
     let (mut a_fc, mut r_fc) = (0usize, 0usize);
     for q in &probes {
+        // Diagnostic: what the trap pack carries, and how much of the
+        // question the packed evidence explains. Measurement enrichment,
+        // never a gate.
+        let pkg = compile_context_with_validity(
+            q.text,
+            &union_merged,
+            BUDGET,
+            None,
+            &std::collections::HashSet::new(),
+        );
+        let (unex_n, total_n, unex) = unexplained(&pkg, q.text);
+        eprintln!(
+            "[W31-UNK-001 diag] \"{}\" — facts={} entities={} rels={} top_fact=\"{}\" unexplained={}/{} {:?}",
+            q.text,
+            pkg.facts.len(),
+            pkg.entities.len(),
+            pkg.relations.len(),
+            pkg.facts.first().map(|f| f.statement.as_str()).unwrap_or("(none)"),
+            unex_n,
+            total_n,
+            unex
+        );
+        if q.text.contains("rollback") {
+            for f in &pkg.facts {
+                eprintln!("[W31-UNK-001 diag]   packed fact: \"{}\"", f.statement);
+            }
+        }
         if matches!(
             agent_policy(q, &aikoql_context(q, &union_merged)),
             AgentOutcome::Answer(_)

@@ -95,22 +95,33 @@ Measured: **9 Strong Fit classes, 0 regressions, control parity**.
 
 | Class | AIKOQL | Graph-RAG | RAG | Δ |
 |---|---|---|---|---|
-| W3 synthesis | 20/24 | 7/24 | 7/24 | +13 |
+| W3 synthesis | 18/24 | 7/24 | 7/24 | +11 |
 | W4 multi-hop | 24/26 | 15/26 | 14/26 | +10 |
-| W5 temporal | 31/32 | 25/32 | 24/32 | +7 |
-| W7 provenance | 20/20 | 3/20 | 3/20 | +17 |
-| W10 planning | 18/20 | 12/20 | 9/20 | +9 |
-| W11 unknown | 23/30 | 21/30 | 21/30 | +2 |
-| W12 longitudinal | 18/20 | 10/20 | 10/20 | +8 |
+| W5 temporal | 30/32 | 25/32 | 24/32 | +6 |
+| W7 provenance | 18/20 | 3/20 | 3/20 | +15 |
+| W10 planning | 20/20 | 12/20 | 9/20 | +11 |
+| W11 unknown | 26/30 | 21/30 | 21/30 | +5 |
+| W12 longitudinal | 16/20 | 10/20 | 10/20 | +6 |
 | W6 contradiction | 27/30 | 27/30 | 26/30 | +1 |
-| W9 policy | 21/24 | 20/24 | 19/24 | +2 |
+| W9 policy | 22/24 | 20/24 | 19/24 | +3 |
 
-- Totals: AIKOQL 258/296 units vs Graph-RAG 191 vs RAG 181; grounded
-  143/258 vs 0/191 vs 0/181 (only AIKOQL's payload cites sources).
+- Totals: AIKOQL 253/296 units vs Graph-RAG 191 vs RAG 181; grounded
+  119/253 vs 0/191 vs 0/181 (only AIKOQL's payload cites sources;
+  correct refusals are ungrounded by construction).
+- Re-measured 2026-08-29 after the epistemic coverage gate shipped
+  (gap item 10): 258 → 253 units. The gate converts vocabulary-overlap
+  packs into correct refusals — W11 unknown improves 23 → 26 (the
+  traps now refuse) and W2 semantic drops 8 → 4 (zero-overlap probes
+  correctly refuse); the ident_parts root-cause fix rides along
+  (+2 W10, +1 W9). Against that: −2 W3, −1 W5, −2 W7, −2 W12 where
+  half-unexplained packs were emptied (rows in losses.md). All nine
+  Strong Fit classes hold, 0 regressions, control parity — the verdict
+  is recomputed by the test, never hand-edited.
 - W7 is the structural win: the doc-id unit is only deliverable by a
   payload that cites its sources — raw chunks carry no citation.
-- Holdout (Northwind, scored once): AIKOQL 39/48 vs Graph-RAG 39/48 vs
-  RAG 38/48; grounded 22/39 vs 0/39 vs 0/38.
+- Holdout (Northwind, scored once): AIKOQL 38/48 vs Graph-RAG 39/48 vs
+  RAG 38/48; grounded 20/38 vs 0/39 vs 0/38 (one W10 planning unit
+  emptied by the gate, re-measured 2026-08-29).
 - Tests: `wave31_comparison::w31_comp_001_three_way_comparison`,
   `wave31_comparison::w31_comp_002_holdout_evaluation`.
 
@@ -244,13 +255,29 @@ individually — no aggregate. Verdict: **all four landed**.
 Measured rates over frozen batteries (the spec says "measure" — no
 threshold is invented):
 
-- false-confidence: aikoql 13/15 vs rag 15/15 on the union-corpus
-  unknown-probe battery (W11);
+- false-confidence: aikoql **3/15** vs rag 15/15 on the union-corpus
+  unknown-probe battery (W11) — down from the pre-gate 13/15;
 - incorrect-current: aikoql 0/3 (asserted) vs rag 3/3 on the temporal
   battery — RAG delivers the superseded claims as current (scenario
   pin asserted, W3-CONF-001 convention);
 - unsupported-assertion: aikoql 0 by construction (deterministic
   echo) — the real rate is the gated LLM leg's (REAL-001).
+
+The drop is the epistemic coverage gate (production change, TDD item
+10): on lexical-only compiles, when ranked evidence fails to explain
+more than half the question's content tokens — `token_match` or the
+≥4-char shared-prefix inflection band covering ≥2/3 of the word —
+and no fact is content-anchored by ≥2 exact tokens, the package is
+emptied and the agent refuses. The remaining 3/15 are the gate's
+honest lexical ceiling: they sit in the exact tie zone that also
+holds two frozen Wave 3 pins whose packs are asserted ("How is
+rollback done?", "What do deploys require?") — the ties are
+lexically indistinguishable (semantics-only separation, see
+losses.md / unknown.md). A root-cause fix rode the gate: `ident_parts`
+dropped the camelCase boundary capital (`"AlertThreshold"` →
+`["Alert","hreshold"]`), so suffix parts never matched — MEM-001's
+"What is the alert threshold?" refused all 90 days until fixed (30/30
+pinned).
 
 Historical preservation held: the retired claim is still readable
 with valid_to stamped; its successor is current. Test:
@@ -294,14 +321,19 @@ all 12 workload classes), frozen judge, declared rates:
 
 | Treatment | Cost | Success | Cost/success | Failure rate | Tokens/success |
 |---|---|---|---|---|---|
-| aikoql | $0.16208 | 120/148 | $0.00135 | 18.9% | 299 |
+| aikoql | $0.16035 | 121/148 | $0.00133 | 18.2% | 277 |
 | graph-rag | $0.68078 | 82/148 | $0.00830 | 44.6% | — |
 | rag | $0.53170 | 75/148 | $0.00709 | 49.3% | — |
 
-- AIKOQL cost per success is 5.2× below rag and 6.1× below graph-rag
+- AIKOQL cost per success is 5.3× below rag and 6.2× below graph-rag
   on the totals; aikoql's cost is strictly lower in 10/12 classes (the
   two exceptions: baselines with 0 successes → n/a, see losses).
-- Composition: llm $0.15594 + infra $0.00015 + retrieval/embed/agent
+- Re-measured 2026-08-29 after the gate: $0.16208/120 → $0.16035/121
+  (the gate's correct refusals net +1 task success, failure rate
+  18.9% → 18.2%). Verdict unchanged: cost strictly lower in 10/12
+  classes, the universal cost-leadership claim stays denied by the
+  acceptance gate.
+- Composition: llm $0.01235 + infra $0.14800 + embed/retrieval/agent
   $0. The kernel's deterministic index pays one component and no
   per-query retrieval — the infra term carries the compute (the
   product claim, declared in the test header).

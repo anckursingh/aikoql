@@ -360,6 +360,10 @@ pub fn compile_context_semantic_with(
     // fail closed. The pattern is re-detected here (pure function of the
     // statement), so no per-fact flag needs to persist in the IR.
     let trusted = matches!(ir.content_trust, Some(aikoql_kernel::ContentTrust::Trusted));
+    // Content-anchored overlap ceiling over all facts — the epistemic
+    // coverage gate's escape (see below): any fact sharing ≥2 content
+    // tokens with the task keeps the package.
+    let mut max_overlap: usize = 0;
     let mut facts: Vec<RankedFact> = ir
         .facts
         .iter()
@@ -404,6 +408,9 @@ pub fn compile_context_semantic_with(
                 .filter(|w| w.len() >= 3 && !STOPWORDS.contains(w))
                 .filter(|w| token_match(&stmt_lower, w))
                 .count();
+            if exact_overlap > max_overlap {
+                max_overlap = exact_overlap;
+            }
             let gated = anchored && entity_boost <= 0.0 && exact_overlap < 2;
             let score = if gated {
                 0.0
@@ -483,6 +490,138 @@ pub fn compile_context_semantic_with(
                 (&a.subject, &a.predicate, &a.object).cmp(&(&b.subject, &b.predicate, &b.object))
             })
     });
+
+    // Epistemic coverage gate (UNK-001 follow-up): an authoritative
+    // package must explain the question. W3-UNK-001 measured 5/5 and
+    // W31-UNK-001 13/15 vocabulary-overlap traps answered with authority —
+    // "Who is the security officer?" packed SecurityReview facts because
+    // one question word is an entity-name part, though the answer is
+    // absent. When the ranked evidence (in score order, bounded by the
+    // same budget walk the pack uses) fails to explain more than half of
+    // the question's content tokens, AND no fact is content-anchored by
+    // ≥2 shared tokens (the exact-token escape — cell facts like
+    // "Cost: $0.15" under a "G12 cost" question), the question is
+    // unknown: the package is emptied and the agent refuses.
+    //
+    // The half boundary is STRICT (empty only when unexplained > half):
+    // measured on the tie zone, where exactly half the content tokens are
+    // unexplained. Five probes sit there — two frozen Wave 3 pins whose
+    // packs are asserted ("How is rollback done?" 'done', "What do
+    // deploys require?" 'require' — both answered by ranked facts) and
+    // three W11 traps ("rollback procedure for failed deploys" 2/4,
+    // "customers export their data" 2/4, "security officer" 1/2). The
+    // ties are lexically indistinguishable — "security" grounds via
+    // SecurityReview exactly as "rollback" grounds via RollbackProcedure;
+    // only semantics separates answer from trap. The lexical gate cannot
+    // see it, so the boundary resolves in favor of the frozen pins and
+    // the false-confidence battery measures 3/15 (13/15 pre-gate, RAG
+    // 15/15) — the honest remaining rate, documented in the evidence
+    // docs, not hidden by a threshold that breaks Wave 3 asserts.
+    //
+    // Explanation = exact token_match, or the inflection band of
+    // [`explains`] (shared prefix ≥4 covering ≥2/3 of the question
+    // word): "validation"/"validates" and "ship"/"shipped" explain,
+    // "rollback"/"rolled" and "procedure"/"process" do not — exact-only
+    // emptied genuine packages whose words ranked evidence purely by
+    // prefix credit (the 4 lib-test failures), the shorter-side ratio
+    // re-admitted the W11 rollback trap via "rolls back the canary"
+    // (measured 1/15), and the ≥5 floor over-refused the W1 control
+    // question "When did RefundAutomation ship?" (measured 26/28).
+    //
+    // Scope: lexical-only compiles. A semantic-fused compile is exempt —
+    // a symptom-described task ("fix the endpoint resolution bug")
+    // shares no tokens with its fix location by construction, and
+    // lexical coverage cannot judge semantic relevance (§34-36
+    // semantic_fallback contract). The semantic path keeps its own
+    // epistemic instrument (SEMANTIC_MIN floor).
+    if semantic.is_none() {
+        let content_tokens: Vec<&str> = task_words
+            .iter()
+            .copied()
+            .filter(|w| w.len() >= 3 && !STOPWORDS.contains(w))
+            .collect();
+        let mut unexplained: usize = 0;
+        if !content_tokens.is_empty() {
+            'tokens: for w in &content_tokens {
+                let mut cum = 0usize;
+                for e in entities.iter().take_while(|e| e.score > 0.0) {
+                    if explains(&e.name, w)
+                        || e.mentions.iter().any(|m| explains(m, w))
+                    {
+                        continue 'tokens;
+                    }
+                    cum += est_tokens(&e.name)
+                        + e.mentions.iter().map(|m| est_tokens(m)).sum::<usize>();
+                    if token_budget != 0 && cum > token_budget {
+                        break;
+                    }
+                }
+                for f in facts.iter().take_while(|f| f.score > 0.0) {
+                    if explains(&f.statement, w) {
+                        continue 'tokens;
+                    }
+                    cum += est_tokens(&f.statement);
+                    if token_budget != 0 && cum > token_budget {
+                        break;
+                    }
+                }
+                for r in relations.iter().take_while(|r| r.score > 0.0) {
+                    let triple = format!("{} {} {}", r.subject, r.predicate, r.object);
+                    if explains(&triple, w) {
+                        continue 'tokens;
+                    }
+                    cum += est_tokens(&triple);
+                    if token_budget != 0 && cum > token_budget {
+                        break;
+                    }
+                }
+                unexplained += 1;
+            }
+        }
+        // Entity-anchor escape (measured on the §52 bench Q0 regression),
+        // scoped to why-questions: "Why does the PaymentService stop
+        // charging…" names a ranked entity (whole-chunk equality —
+        // "paymentservice" == "PaymentService"; deliberately NOT ident
+        // parts, which would let "api" anchor ApiGateway) whose ranked
+        // relation IS the causal answer — the question's paraphrase
+        // vocabulary never appears verbatim, the walk does the answering.
+        // Attribute questions get no anchor: "When does the ProPlan
+        // price increase?" chunk-matches ProPlan (renewal relations and
+        // all) but no relation answers the asked attribute — measured
+        // 2/15 without the why-scope (ProPlan + ArchV2 end-of-life).
+        let why_q = task.to_lowercase().split_whitespace().any(|w| w == "why");
+        let anchored_q = why_q
+            && entities.iter().take_while(|e| e.score > 0.0).any(|e| {
+                content_tokens.iter().any(|w| {
+                    e.name.to_lowercase() == *w
+                        && relations
+                            .iter()
+                            .take_while(|r| r.score > 0.0)
+                            .any(|r| r.subject == e.name || r.object == e.name)
+                })
+            });
+        // Entity-only packages are a candidate surface, not an answer:
+        // with no ranked fact and no ranked relation they can assert
+        // nothing, so the false-confidence instrument has nothing to
+        // suppress. RET-003 (certified pin) requires "What is Apple's
+        // revenue?" to surface its three Apple candidates for
+        // disambiguation rather than refuse — and every W11 trap that
+        // packs evidence carries at least one ranked fact.
+        let entity_only = !facts.iter().any(|f| f.score > 0.0)
+            && !relations.iter().any(|r| r.score > 0.0);
+        if !anchored_q
+            && !entity_only
+            && !content_tokens.is_empty()
+            && max_overlap < 2
+            && unexplained * 2 > content_tokens.len()
+        {
+            // Unknown: the pack must not masquerade as evidence.
+            return ContextPackage {
+                status: RetrievalStatus::Healthy,
+                ..Default::default()
+            };
+        }
+    }
 
     // Pack and trim to token budget. Duplicates (same entity extracted from
     // two sections, repeated statement, repeated edge) are dropped at pack
@@ -737,7 +876,14 @@ fn ident_parts(chunk: &str) -> Vec<&str> {
             if off > start {
                 parts.push(&chunk[start..off]);
             }
-            start = off + c.len_utf8();
+            // A camelCase capital is the first char of the NEXT part —
+            // skip only true separators ("foo-bar" → ["foo","bar"], not
+            // "AlertThreshold" → ["Alert","hreshold"]).
+            start = if c.is_alphanumeric() {
+                off
+            } else {
+                off + c.len_utf8()
+            };
         }
     }
     if start < chunk.len() {
@@ -754,6 +900,29 @@ fn token_match(text: &str, word: &str) -> bool {
     text.split_whitespace().any(|chunk| {
         chunk.to_lowercase() == word || ident_parts(chunk).iter().any(|p| p.to_lowercase() == word)
     })
+}
+
+/// Coverage-gate explanation: exact token_match, or a shared prefix of
+/// ≥4 chars covering ≥2/3 of the QUESTION word — the inflection band.
+/// Word-fraction is the separator the shorter-side ratio and the bare
+/// ≥4/≥5 floors each got one side of: genuine stems are fully consumed
+/// ("ship"/"shipped" 4/4, "delete"/"deletes" 6/6, "validation"/
+/// "validates" 7/10), while the W11 trap pairs share a prefix that is
+/// only half the question word ("rollback"/"rolled" 4/8 — the "back"
+/// is unaccounted — and "procedure"/"process" 4/9). Both directions
+/// measured: a ≥4-shared prefix covering <2/3 of the word is a
+/// different word.
+fn explains(text: &str, word: &str) -> bool {
+    token_match(text, word)
+        || text.split_whitespace().any(|chunk| {
+            let cl = chunk.to_lowercase();
+            let shared = cl
+                .chars()
+                .zip(word.chars())
+                .take_while(|(a, b)| a == b)
+                .count();
+            shared >= 4 && shared * 3 >= word.len() * 2
+        })
 }
 
 /// Score a text against task keywords. Each exact token match adds 1.0,

@@ -89,6 +89,14 @@ narrative must not state these as facts.
 - **Unsupported-assertion with a live generator is unmeasured here**:
   the deterministic echo is 0 by construction; the real rate is the
   gated LLM leg's column (REAL-001).
+- **Closing the last 3/15 false-confidence traps needs semantics**:
+  the three surviving traps and the two frozen Wave 3 pins sit at the
+  same lexical tie (half the content tokens unexplained, same
+  entity-name grounding shape). A semantic signal (real embeddings or
+  an LLM judge over the ranked pack) could separate them, but the
+  substrate's lexical-only compile cannot — the gate is at its
+  ceiling, and any claim of "zero false confidence" would be false
+  today. Unmeasured: the rate a semantic-fused compile would reach.
 - **Baseline evidence retention is n/a**: the chunk-text proxy
   carries no doc ids (G11 convention), so scoring it would rig the
   baseline on an artifact — printed n/a, not measured.

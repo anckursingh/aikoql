@@ -63,6 +63,16 @@ per plan §29 — never dropped, never spun.
 
 ## Wave 3.1 comparison losses (W31-COMP-001)
 
+- **The gate costs 5 units on the 296-unit battery** (258 → 253,
+  re-measured 2026-08-29): −4 W2 semantic (8 → 4 — zero-overlap
+  probes now correctly refuse), −2 W3 synthesis, −1 W5 temporal,
+  −2 W7 provenance, −2 W12 longitudinal (packages judged more-than-
+  half unexplained were emptied) — offset by +3 W11 unknown (traps
+  now refuse correctly), +2 W10, +1 W9 (ident_parts fix). Net −5;
+  every Strong Fit class holds and the verdict is recomputed by the
+  test. The emptied rows are the honest cost of refusing: the gate
+  trades units the frozen judge would have credited for evidence
+  that did not actually explain the question.
 - **Tokens on parity classes**: W8 personal — AIKOQL 297 vs RAG 71
   tokens for the identical 20/20 score. The compiler packs the entity
   neighborhood, not just the answer chunks; cost AIKOQL $0.0143 vs RAG
@@ -95,11 +105,20 @@ per plan §29 — never dropped, never spun.
 
 ## Wave 3.1 epistemic/longitudinal losses (W31-UNK-001 / W31-MEM-001)
 
-- **False-confidence is not zero**: aikoql answered 13/15 unknown
-  probes with an authoritative pack (rag 15/15) — the W11 trap docs
-  still pack non-empty. The Unknown→Refuse boundary holds only when
-  the exact-token gate yields an empty pack; vocabulary-overlap traps
-  remain the known gap (same row as the W11 Good-Fit entry above).
+- **False-confidence is not zero — 3/15 remains at the gate's lexical
+  ceiling** (pre-gate 13/15, rag 15/15): the epistemic coverage gate
+  emptied 10 of 13 traps, but three sit in the exact tie zone (half
+  the content tokens unexplained) that also holds two frozen Wave 3
+  pins whose packs are asserted — "How is rollback done?" and "What do
+  deploys require?" must PACK, while "rollback procedure for failed
+  deploys" (2/4), "customers export their data" (2/4) and "security
+  officer" (1/2) must EMPTY. The ties are lexically indistinguishable:
+  "security" grounds via `SecurityReview` exactly as "rollback"
+  grounds via `RollbackProcedure`; only semantics separates answer
+  from trap, and the lexical gate cannot see it. The strict boundary
+  (empty only when unexplained > half) keeps every frozen assert
+  green; a `>=` boundary would reach 0/15 but break the two Wave 3
+  pins. Measured both ways; shipped the pins-favoring rule.
 - **Conversation history collapses under stale weight**: 25/30 task
   success and 24/30 answers carrying stale statements at day 90 —
   the budget keeps the oldest chunks, which are exactly the
@@ -137,8 +156,9 @@ per plan §29 — never dropped, never spun.
   cost-leadership-everywhere claim cannot be made. The correct scoped
   claim: lower cost in every class with a comparable success
   denominator.
-- **AIKOQL's failure rate is not zero**: 18.9% (28/148 tasks miss the
-  frozen judge's win-zone 2) — lowest of the three, but a universal
+- **AIKOQL's failure rate is not zero**: 18.2% (27/148 tasks miss the
+  frozen judge's win-zone 2, re-measured 2026-08-29 after the gate;
+  pre-gate 18.9% / 28) — lowest of the three, but a universal
   accuracy claim would be false too.
 
 ## Wave 3.1 memory-compression losses (W31-MEM-002)
