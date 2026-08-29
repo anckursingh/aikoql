@@ -371,3 +371,26 @@ probes × 3 reps per scale, debug build:
   margin — no claim rests on it**; the other three mandated scenarios
   are honest no-advantage rows (parity.md). Recorded because the law
   says win, not because it matters.
+
+## Wave 3.1 end-to-end debuggability (W31-DEBUG-001)
+
+Six injected failure classes, six root causes identified using normal
+AIKOQL observability only (compiled ContextPackage per-item evidence,
+`kernel.get`, corpus text search — nothing test-private):
+
+| Injected failure | Root cause identified | Ops |
+|---|---|---|
+| wrong source | packed fact's evidence doc ≠ doc its text lives in | 2 |
+| stale source | kernel claim disagrees with current corpus doc | 2 |
+| wrong relationship | packed relation contradicts its own evidence doc | 2 |
+| missing evidence | packed fact carries no source doc | 1 |
+| conflicting evidence | two packed facts, different docs, disagree | 1 |
+| incorrect context | packed fact shares no meaningful token with task | 2 |
+
+- The deterministic Wave 3 kernel-state experiment diagnosed 5/5
+  injected failures; this validates the *application-level* path — the
+  diagnosis runs on the same surface an app developer sees.
+- Diagnosis cost: 1–2 observability operations per root cause; the
+  provenance carried on every packed fact (`RankedFact.evidence`) is
+  what makes wrong-source/stale-source/conflict diagnosable at all.
+- Test: `wave31_debug::w31_debug_001_end_to_end_debuggability`.
