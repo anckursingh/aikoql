@@ -178,3 +178,17 @@ per plan §29 — never dropped, never spun.
   retrieval work. Fixed with a name→score index in `context.rs`
   (semantics preserved: highest-scoring duplicate wins). The fix is a
   production change carried by the measured near-linear curve above.
+
+## Wave 3.1 falsification losses (W31-NEG-001)
+
+- **Latency on trivial workloads**: on the three no-advantage
+  falsification rows (exact lookup, doc Q&A, small corpus) the kernel
+  spends 3.5–6× the plain keyword scan's wall time (299 vs 84 µs,
+  438 vs 79 µs, 265 vs 57 µs) for identical delivery. The compile +
+  pack machinery is pure overhead when the answer is a grep away.
+- **Token overhead on trivial workloads**: 52 vs 33, 54 vs 30, 35 vs
+  18 tokens for the same 2/2 units — the pack carries structure the
+  question never asked for. Recorded so the simple-workload rows can
+  never be spun into an efficiency claim.
+- The single-source row is NOT a loss (32 vs 38 tokens — see wins.md,
+  a 2-token noise margin).

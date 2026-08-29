@@ -47,3 +47,24 @@ Source: `w3_win_001_workload_classification` table output.
   not bench artifacts.
 - W8 personal: 20/20 all treatments, but AIKOQL spends 297 tokens vs
   RAG's 71 for the same score (see losses.md — the efficiency row).
+
+## Wave 3.1 — mandatory falsification (W31-NEG-001)
+
+The spec's four mandated adversarial scenarios, kernel vs the plain
+keyword-scan baseline (same frozen judge, same 300-token budget,
+verdicts computed by the pinned law — never reclassified):
+
+| Scenario | AIKOQL units | Plain units | AIKOQL tok | Plain tok | Verdict |
+|---|---|---|---|---|---|
+| simple exact lookup | 2/2 | 2/2 | 52 | 33 | no-advantage |
+| simple document Q&A | 2/2 | 2/2 | 54 | 30 | no-advantage |
+| small corpus (2 docs) | 2/2 | 2/2 | 35 | 18 | no-advantage |
+| single-source query | 2/2 | 2/2 | 32 | 38 | win (noise, see wins.md) |
+
+- Three of the four mandated scenarios deliver **no advantage**: the
+  kernel ties the plain scan on delivery while spending more tokens
+  (1.6–1.9×) and 3.5–6× the latency (see losses.md). On trivial
+  workloads the machinery buys nothing — recorded, not hidden.
+- These rows scope the claims: no universal "better than everything"
+  statement survives this table, and none is made.
+- Test: `wave31_neg::w31_neg_001_mandatory_falsification`.

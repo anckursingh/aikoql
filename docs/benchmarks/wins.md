@@ -361,3 +361,13 @@ probes × 3 reps per scale, debug build:
   `AIKOQL_BENCH_SCALE`, default 100k, 1M ≈ 4GB) — the test asserts
   the pointer exists so the 1M row cannot rot silently.
 - Test: `wave31_scale::w31_scale_001_knowledge_complexity_scaling`.
+
+## Wave 3.1 falsification wins (W31-NEG-001)
+
+- **Single-source query packs 32 vs the plain scan's 38 tokens** at
+  equal 2/2 delivery — the kernel serves exactly the fact; the plain
+  baseline packs the whole doc chunk. Classified "win" by the pinned
+  law (equal units, no more tokens). **This is a 2-token noise
+  margin — no claim rests on it**; the other three mandated scenarios
+  are honest no-advantage rows (parity.md). Recorded because the law
+  says win, not because it matters.
