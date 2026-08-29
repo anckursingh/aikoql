@@ -142,3 +142,16 @@ narrative must not state these as facts.
 - **"KO" means retrieval-index records here**: the synthetic unit is
   an entity+fact+relation candidate (the IR surface), not a kernel
   KO — declared in the test header so the row's unit is exact.
+
+## Wave 3.1 OSS time-to-value unknown (W31-OSS-001)
+
+- **Human time-to-value is unmeasured**: the baseline bounds only the
+  mechanical floor (≈1.4 s of tool legs, 0 s install via released
+  binary, 12m49s from-source debug build). A real human-time target
+  needs a real fresh developer; none was available, so no wall-clock
+  target is set — the spec's rule (targets from baseline, never
+  invented) forbids picking one anyway.
+- **The flow's ingest leg is `remember`, not `document_ingest`**: the
+  doc-pipeline path (D1–D9) has its own evidence surface (TP3, the
+  Studio Documents panel); this measurement covers the knowledge-CRUD
+  agent flow only.

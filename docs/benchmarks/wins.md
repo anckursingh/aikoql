@@ -424,3 +424,31 @@ header BEFORE measurement (spec §4):
 - A touched entity's own knowledge survives its neighbor's change: T3
   still answers Beacon's sla after losing the incoming edge.
 - Test: `wave31_impact::w31_impact_001_knowledge_change_propagation`.
+
+## Wave 3.1 OSS time-to-value (W31-OSS-001)
+
+Fresh-developer contract — README + quickstart + examples only, then
+the seven mandated tasks. Mechanical legs driven over the real MCP
+binary exactly as the quickstart describes:
+
+| Task | Done |
+|---|---|
+| install (released binary) | yes |
+| start | yes |
+| ingest | yes |
+| query | yes |
+| add second source | yes |
+| knowledge-backed agent | yes |
+| debug (explain + trace) | yes |
+
+- Completion 7/7, whole mechanical flow 1.37 s (debug profile);
+  details and the baseline table in oss-time-to-value.md.
+- The measurement caught three real onboarding failures and each was
+  closed: README.md missing (created), examples/ missing
+  (`hello-agent.ts` created, tool names pinned to the registry),
+  MCP rate limit undocumented (config section added to QUICKSTART).
+  Support interventions after the fixes: 0.
+- Pinned law (`w31_oss_002`): the artifacts exist at the mandated
+  paths, the README leads to the other two, the quickstart covers
+  all seven tasks, the example uses tools the server actually has.
+- Test: `wave31_oss` (crates/services/api/mcp).

@@ -143,6 +143,14 @@ Environment variables:
 - `AIKOQL_DB`, `AIKOQL_LISTEN`, `AIKOQL_METRICS_ADDR` — override TOML settings.
 - `AIKOQL_PASSPHRASE` — KMS passphrase for encryption (if enabled).
 
+MCP calls are rate-limited by default (120 calls/min, per PRR-4). A
+busy agent loop hits that fast — raise it in config:
+
+```toml
+[rate_limit]
+max_calls_per_minute = 100000
+```
+
 ## Encryption (MRFC-0020)
 
 Encryption at rest is built-in but optional. To enable:
