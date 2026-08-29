@@ -327,7 +327,7 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
 4. **ABI Stability** (MRFC-0011 §9) — ✅ IMPLEMENTED
    - [x] `kernel.abi_version()`, `OfflineProof`, `prove_export()`
 
-5. **Constraint Engine** (MRFC-0060) — 🟡 IN PROGRESS (~90% implemented, Phase C1-C9 complete)
+5. **Constraint Engine** (MRFC-0060) — ✅ IMPLEMENTED (2026-08-09, Phases C1–C9 + gap-filling; see MRFC-0060-phase-c3..c9 docs)
    - **Phase C1+C2+C3+C4+C5+C6+C7+C8+C9 complete.** Schema validation includes property type checking, nullable/required enforcement, uniqueness constraints, cardinality + OntologyRegistry wiring, domain constraints (Range/Pattern/Length/Enum/Format), check constraints with expression evaluator, transaction-aware constraints, constraint dependency graph, connector pushdown capability framework, constraint inference engine, and programmable constraints (Arith + If expressions).
    - [x] Property type system — `Schema.properties: Vec<SchemaProperty>` with value_type + required + nullable
    - [x] `Value::type_check()` — validates Text/Int/Float/Bool/Null/Bytes/List/Map against declared type
@@ -367,6 +367,16 @@ Analysis of all docs/ (MRFC-0001 through MRFC-0020, VISION, current plan) agains
    - [x] MCP tools: `document_ingest`, `document_list`, `document_status`, `document_compile`
    - [x] Studio Document Explorer: upload → ingest → compile with 7-section results UI
    - [x] Playwright E2E test covering full workflow
+
+10. **Unknown-probe false confidence** (W3-UNK-001 / W11, losses.md) — ⬜ OPEN (TDD item, 2026-08-29)
+    - W3-UNK-001 measured 5/5 trap facts packed on an absent answer; the Unknown→Refuse boundary holds only at the exact-token gate. Vocabulary-overlap traps pack non-empty via weak entity boosts.
+    - This is the caveat on the "Unknown-aware AI" public claim (public-claims.md). Planned: gate-side fix + re-measurement; pinned evidence rows updated honestly, old row kept as historical.
+
+11. **Partial-prefix credit flood** (W31-SCALE-001, losses.md) — ⬜ OPEN (TDD item, 2026-08-29)
+    - The ≥4-char partial-prefix rule makes ID-family names (`Service66`, `Customer0..N`) co-rank every sibling at 0.495, flooding the entity section and triggering unbudgeted ambiguous renders. Real corpora with numbered ID families hit this wall; the scale fixture was renamed to dodge it. Planned: cap or ID-pattern exemption in `keyword_score` + re-measurement.
+
+12. **Cluster-level precision trimming** (W1/W9, losses.md) — ⬜ OPEN
+    - W1 control costs 185 vs 70 tokens, W9 policy 349 vs 248 for identical scores — entity clusters pack whole. Planned: cap or trim cluster members below a relevance floor.
 
 ### Tier 3 — Operational Gaps
 
