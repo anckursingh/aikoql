@@ -59,8 +59,38 @@ services:
       - neo4j_data:/data
     profiles: [full]
 
+  # Optional: ClickHouse + StarRocks for the Wave 5 knowledge-analytics vs
+  # OLAP comparative harness (docs/benchmarks/knowledge-analytics/, test
+  # crates/ingestion/tests/wave5_olap.rs). Dev-machine profile — StarRocks
+  # allin1 wants ≥8GB RAM, too heavy for CI runners; the harness skips
+  # honestly when an engine is unreachable.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    # Dev-only: pin the default user's password instead of the image's
+    # generated random one (an empty string still triggers generation —
+    # the entrypoint checks `-n`). The harness sends it as a URL param.
+    environment:
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-aikoql-dev-only}
+    ports:
+      - "8123:8123"   # HTTP query interface (the harness's transport)
+      - "9000:9000"   # native TCP (unused by the harness)
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    profiles: [olap]
+
+  starrocks:
+    image: starrocks/allin1-ubuntu:3.3-latest
+    ports:
+      - "9030:9030"   # FE MySQL-protocol query port (the harness's transport)
+      - "8030:8030"   # FE HTTP
+    volumes:
+      - starrocks_data:/data
+    profiles: [olap]
+
 volumes:
   aikoql_data:
   postgres_data:
   neo4j_data:
   mongo_data:
+  clickhouse_data:
+  starrocks_data:
