@@ -519,6 +519,76 @@ Mechanical readout: `node scripts/certify.js` → `artifacts/qa-wave3-{report,re
 
 ---
 
+## 12. Wave 5 certification matrix — Knowledge Analytics vs OLAP (2026-08-30)
+
+QA-lead mapping of `AIKOQL_Wave5_Knowledge_Analytics_vs_OLAP_TDD_Test_Plan.md` (P0 tests W5-KA-001..008 + W5-OLAP-001..004, gates W5-G01..G12) against current coverage. Status: ✅ covered · ⛔ NOT_IMPLEMENTED (honest — no stub tests; plan §23 "missing capabilities must fail honestly"). Wave 5's claim under test: *knowledge-native execution (traversal, derivation, conflict resolution, historical reconstruction) answers the plan's knowledge-analytics questions correctly with measured application complexity, and the OLAP boundary is discovered honestly — ClickHouse is not built into AIKOQL until a measured benchmark proves the need* (plan §7, §26, §28).
+
+### 12.1 Per-ID mapping
+
+| ID | Pri | Gate | Status | Coverage / TDD item |
+| --- | --- | --- | --- | --- |
+| W5-KA-001 Multi-hop dependency | P0 | W5-G03/G04/G05 | ✅ | `w5_ka_001_multi_hop_dependency_analysis` (ingestion `wave5_ka.rs`) — 6-hop chain via kernel traverse: 6/6 hops, 0 false, 0 missed, ~391µs, 12 app LOC vs mechanical RAG 2/5 chain chunks + 1 false chunk. **Real RED → production fix:** the graph-engine traverse fast path collected outbound edges for `Direction::Inbound` queries (direction fall-through) and hardcoded every hit's `direction` to Outbound — inbound impact walks now return only inbound edges with the true crossed direction (`crates/engines/graph/src/lib.rs`) |
+| W5-KA-002 Temporal knowledge | P0 | W5-G03 | ✅ pointer | Closed by W31-TEMP-001 / W3-TEMP-001 (`wave31_decision.rs`, TESTING-PLAN §11.1) — not duplicated (plan §3) |
+| W5-KA-003 Provenance-aware risk | P0 | W5-G03 | ✅ | `w5_ka_003_provenance_aware_risk_classification` (ingestion) — first-class Derivation record (HOW/BY WHOM/WHEN/FROM WHAT/WHY), DERIVED_FROM edges on both premises, premise superseded → derived classification swept, superseded evidence reachable via lineage; ~375µs. Pin — K3/K4 held |
+| W5-KA-004 Conflicting evidence | P0 | W5-G03 | ✅ | `w5_ka_004_conflicting_evidence_policy_override` (ingestion) — CRM(ACTIVE, doc=3) vs Fraud(BLOCKED, code=7) → conflict KO symmetric until resolution, policy captured as organization_policy(=9) knowledge, `resolve_conflict_by_authority` → ResolvedBPreferred, effective state BLOCKED, loser Contradicted + fully traceable. Pin — P2-1 semantics held; test-side note: currency = epistemic status (Contradicted), not valid_to |
+| W5-KA-005 Unknown / insufficient evidence | P0 | W5-G03 | ✅ pointer | Closed by W31-UNK-001 / W3-UNK-001 (`wave31_unk.rs`, TESTING-PLAN §11.1) — not duplicated (plan §3) |
+| W5-KA-006 Evidence-backed aggregate | P0 | W5-G03/G06 | ✅ | `w5_ka_006_evidence_backed_aggregate` (ingestion) — 5-customer count over independent sources + temporal validity: answer 1 (~296µs, 13 app LOC). No COUNT op added to the substrate — the plan's build-vs-buy rule (§7) held; the app-side loop IS the measured complexity. Pins: evidence dedup (P2-3), same-(verifier, evidence) confirmation counted once (P2-4), superseded claim excluded |
+| W5-KA-007 Change impact | P0 | W5-G03 | ✅ pointer | Closed by W31-IMPACT-001 (`wave31_impact.rs`) — not duplicated (plan §3) |
+| W5-KA-008 Historical reconstruction | P0 | W5-G03 | ✅ | `w5_ka_008_historical_reconstruction_as_of` (ingestion) — 3 generations via ManualClock: t=500 ACTIVE(crm), t=1500 SUSPENDED(billing), t=2500 ACTIVE(audit); cross-generation `valid_at` walk + `get_as_of` in-place version separation (pre-confirmation version does not see later evidence); ~330µs, 13 app LOC. Pin — K2 held |
+| W5-AGENT-001 Minimal evidence context | P0 | W5-G03 | ✅ pointer | Covered by the Context Compiler (MRFC-0070) + §36 `ContextPackage.status` instrumentation + G12 comparative cost bench (`comparative_cost_bench`) |
+| W5-OLAP-001 Large aggregation | P0 | W5-G01/G02 | ⛔ NOT_IMPLEMENTED | No ClickHouse/StarRocks adapter exists; plan §7 forbids building one into AIKOQL before a measured benchmark proves knowledge-native execution requires it. Next step: plan §4 docker-compose harness + Phase C adapters (external to the substrate) |
+| W5-OLAP-002 Time-series analytics | P0 | W5-G01/G02 | ⛔ NOT_IMPLEMENTED | Same as W5-OLAP-001 (shared harness) |
+| W5-OLAP-003 High-cardinality GROUP BY | P0 | W5-G01/G02 | ⛔ NOT_IMPLEMENTED | Same as W5-OLAP-001 (shared harness) |
+| W5-OLAP-004 Large multi-table join | P0 | W5-G01/G02 | ⛔ NOT_IMPLEMENTED | Same as W5-OLAP-001 (shared harness) |
+| W5 build-vs-buy §7 | P0 | W5-G06 | ⚠️ partial | Application-owned complexity measured per knowledge leg (12–14 LOC each); the OLAP-side application complexity comparison is blocked on W5-G01 (honest) |
+
+### 12.2 P1/P2 summary (plan §9–§20)
+
+| Item | Status | Note |
+| --- | --- | --- |
+| §9 Materialized knowledge | ⛔ NOT_IMPLEMENTED | Deliberate — the plan orders it after the Phase A benchmark |
+| §10 Incremental knowledge update | ✅ pointer | `incremental_diff_ingest` + FRESH-001 (TESTING-PLAN §10.1 Suite H) |
+| §11 Scale by knowledge complexity | ✅ pointer | W31-SCALE-002 ID-family flood fix + scale bench (`wave31_scale.rs`) |
+| §12 Agent concurrency | ✅ pointer | QA2 Suite A (`qa2_concurrency.rs`) |
+| §13/§14 Federation / pushdown | ⛔ NOT_IMPLEMENTED | Out of substrate until the OLAP harness exists (plan §23 Phase C) |
+| §15 Cross-system provenance | ⛔ NOT_IMPLEMENTED | Blocked on federation |
+| §16 Cost per successful investigation | ⚠️ partial | Per-task µs measured (296–391µs); token-cost per investigation pending the OLAP leg |
+| §17 Operational complexity | ✅ pointer | PRR-1..8 (production review) |
+| §18 Failure semantics | ✅ pointer | QA2 Suite D fault injection (`qa2_fault.rs`) |
+| §19 Mandatory OLAP losses | ⛔ NOT_IMPLEMENTED | Requires the OLAP harness |
+| §20 Knowledge crossover curve | ⛔ NOT_IMPLEMENTED | Requires the OLAP harness |
+
+### 12.3 Wave 5 gate readout (W5-G01..G12)
+
+| Gate | Requirement | Verdict |
+| --- | --- | --- |
+| W5-G01 | Conventional OLAP baseline reproducible | ⛔ NOT MET — harness not built (honest; no stub) |
+| W5-G02 | ClickHouse/StarRocks configurations documented | ⛔ NOT MET — blocked on G01 |
+| W5-G03 | AIKOQL correctness has no regression | ✅ — 5/5 new tests green + full workspace regression (incl. the one real production fix) |
+| W5-G04 | ≥3 knowledge workload classes evaluated | ✅ — traversal, provenance/derivation, conflict, aggregate, historical reconstruction (5 classes) |
+| W5-G05 | ≥1 repeatable AIKOQL Strong-Fit workload | ✅ — KA-001: 6/6 vs RAG 2/5 + 1 false, deterministic, LLM-free, committed |
+| W5-G06 | Build-vs-buy uses application-owned complexity | ⚠️ partial — knowledge-side LOC measured; OLAP-side blocked on G01 |
+| W5-G07 | Cost measured per successful task/investigation | ⚠️ partial — µs per task measured; full cost pending OLAP leg |
+| W5-G08 | Negative OLAP evidence preserved | ⏸ n/a until the harness exists |
+| W5-G09 | Federation result reproducible | ⛔ NOT MET — federation not implemented (§13/§14) |
+| W5-G10 | No unsupported "AIKOQL replaces ClickHouse" claim | ✅ — evidence docs assert only the measured knowledge-native margins; OLAP rows stay honest |
+| W5-G11 | Independent reproduction completed | ⏸ n/a — no external reproduction requested yet |
+| W5-G12 | Wave 2 + Wave 3 + Wave 3.1 regression remains GO | ✅ — full workspace suite green; certify.js chain intact |
+
+Overall: **knowledge side GREEN (P0 KA suite complete), OLAP/federation side honestly NOT_IMPLEMENTED** — the plan's own §26/§28 position (boundary-discovery benchmark first; no ClickHouse build). Evidence artifacts: `docs/benchmarks/knowledge-analytics/` (README + wins/parity/losses/unknown).
+
+### 12.4 TDD execution order (plan §23) — status
+
+1. Phase A RED — done: 5 new KA tests written (`crates/ingestion/tests/wave5_ka.rs`); KA-002/005/007 pointer rows; OLAP-001..004 honest NOT_IMPLEMENTED rows. Two REDs: (a) KA-001 → real production bug (traverse direction fall-through) → root-cause fix in the graph engine → GREEN; (b) KA-004 → test-side currency predicate (Contradicted marks currency, not valid_to) → GREEN.
+2. Phase B minimum knowledge execution — done by pinning: ENTITY/TRAVERSE/TEMPORAL_FILTER/EVIDENCE_FILTER/AUTHORITY/CONFLICT_RESOLVE/PROVENANCE_TRACE/IMPACT/CONTEXT_COMPILE all already exist (K1–K5 + Wave 2/3/3.1); no new substrate ops required.
+3. Phase C comparative harness — NOT STARTED (requires ClickHouse/StarRocks infra, external to the substrate).
+4. Phase D GREEN — done for the KA rows (RED → fix → GREEN → full regression → evidence).
+5. Phase E optimization — n/a until Phase C.
+
+Each item: failing test → red → root-cause fix → green → regression → registry flip → commit (NO push).
+
+---
+
 ## Appendix — Existing instruments that serve the suites
 
 | Instrument | What it measures | Serves |
