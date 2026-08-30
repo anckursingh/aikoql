@@ -90,7 +90,7 @@ pub fn action_requests() -> Vec<Question> {
     ]
     .iter()
     .map(|text| Question {
-        text: *text,
+        text,
         kind: "action-request",
         class: "SIM",
         units: ["", ""],
@@ -726,8 +726,7 @@ pub fn measure_task(
     };
     // Doc ids tokenize at '-', so a citation shows up as the id's first
     // token ("kb-payments" → "kb") — G11's convention, generalized.
-    let cites =
-        |payload: &str| tokens(payload).iter().any(|t| doc_ids.contains(t.as_str()));
+    let cites = |payload: &str| tokens(payload).iter().any(|t| doc_ids.contains(t.as_str()));
 
     let mut row = TaskRow::default();
 

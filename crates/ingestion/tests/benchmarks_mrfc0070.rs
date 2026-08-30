@@ -227,8 +227,10 @@ use crate::auth::{AuthProvider, Identity};
         eprintln!("  Task: 'add a constraint validation rule'");
         eprintln!("  Top-3 entities: {:?}", top_entities);
 
-        let has_constraint = top_entities.contains(&"ConstraintEngine");
-        let has_transaction = top_entities.contains(&"TransactionEngine");
+        // Entity names now carry their document form ("The ConstraintEngine",
+        // not a normalized stem) — match on containment, not exact equality.
+        let has_constraint = top_entities.iter().any(|e| e.contains("ConstraintEngine"));
+        let has_transaction = top_entities.iter().any(|e| e.contains("TransactionEngine"));
         assert!(
             has_constraint || has_transaction,
             "at least one core entity should rank top-3"

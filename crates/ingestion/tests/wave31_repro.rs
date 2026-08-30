@@ -111,13 +111,19 @@ fn w31_repro_001_clean_environment_reproduction() {
         .values()
         .filter(|(a, r, m)| a > r && *a as f64 / *m as f64 >= 0.75)
         .count();
-    assert!(strong >= 1, "no Strong Fit class — COMP-001 conclusion not reproduced");
+    assert!(
+        strong >= 1,
+        "no Strong Fit class — COMP-001 conclusion not reproduced"
+    );
     let w1 = class.get("W1").copied().unwrap_or_default();
     assert_eq!(
         (w1.0, w1.1),
         (w1.2, w1.2),
         "W1 control parity broken: aikoql {}/{} rag {}/{}",
-        w1.0, w1.2, w1.1, w1.2
+        w1.0,
+        w1.2,
+        w1.1,
+        w1.2
     );
     let worst = class
         .values()

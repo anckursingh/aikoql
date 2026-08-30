@@ -31,8 +31,8 @@ mod common;
 use std::time::Instant;
 
 use aikoql_ingestion::{
-    compile_context, merge_knowledge_ir, render_context_markdown, EntityCandidate,
-    Evidence, FactCandidate, KnowledgeIr,
+    compile_context, merge_knowledge_ir, render_context_markdown, EntityCandidate, Evidence,
+    FactCandidate, KnowledgeIr,
 };
 use common::trackb::{assert_integrity, g, units_hit, Doc, Question};
 use common::wave31_sim::{cost, BUDGET};
@@ -118,7 +118,14 @@ fn scenarios() -> Vec<Scenario> {
                 kind: "lookup",
                 class: "W1",
                 units: ["100", "units"],
-                gt: g("none", "kb-ops", "none", "current", "deployment_observed", "none"),
+                gt: g(
+                    "none",
+                    "kb-ops",
+                    "none",
+                    "current",
+                    "deployment_observed",
+                    "none",
+                ),
             },
         },
         // 2. Simple document Q&A — a direct question over one prose doc.
@@ -192,7 +199,14 @@ fn scenarios() -> Vec<Scenario> {
                 kind: "lookup",
                 class: "W1",
                 units: ["42", "everything"],
-                gt: g("none", "kb-tiny-a", "none", "current", "documentation", "none"),
+                gt: g(
+                    "none",
+                    "kb-tiny-a",
+                    "none",
+                    "current",
+                    "documentation",
+                    "none",
+                ),
             },
         },
         // 4. Single-source query — the answer lives in one source of five;
@@ -218,7 +232,11 @@ fn scenarios() -> Vec<Scenario> {
                     &["The payroll runs on Fridays."],
                     KnowledgeIr {
                         entities: vec![entity("payroll", "system", "payroll", "kb-src-2")],
-                        facts: vec![fact("The payroll runs on Fridays.", &["payroll"], "kb-src-2")],
+                        facts: vec![fact(
+                            "The payroll runs on Fridays.",
+                            &["payroll"],
+                            "kb-src-2",
+                        )],
                         ..KnowledgeIr::default()
                     },
                 ),
@@ -318,7 +336,11 @@ fn w31_neg_001_mandatory_falsification() {
 
     // Coverage: exactly the mandated four, nothing dropped, nothing added.
     let keys: Vec<&str> = scs.iter().map(|s| s.key).collect();
-    assert_eq!(keys, MANDATED.to_vec(), "scenario set must match the mandated four");
+    assert_eq!(
+        keys,
+        MANDATED.to_vec(),
+        "scenario set must match the mandated four"
+    );
 
     let mut table = String::from(
         "scenario        | aikoql units | plain units | aikoql tok | plain tok | aikoql µs | plain µs | verdict\n",
@@ -326,9 +348,10 @@ fn w31_neg_001_mandatory_falsification() {
     table.push_str("----------------|--------------|-------------|------------|-----------|-----------|----------|----------------\n");
 
     for sc in &scs {
-        assert_integrity(&sc.docs, &merge_knowledge_ir(
-            &sc.docs.iter().map(|d| d.ir.clone()).collect::<Vec<_>>(),
-        ));
+        assert_integrity(
+            &sc.docs,
+            &merge_knowledge_ir(&sc.docs.iter().map(|d| d.ir.clone()).collect::<Vec<_>>()),
+        );
         let corpus = common::trackb::corpus(&sc.docs);
         let merged = merge_knowledge_ir(&sc.docs.iter().map(|d| d.ir.clone()).collect::<Vec<_>>());
 
@@ -358,11 +381,19 @@ fn w31_neg_001_mandatory_falsification() {
                 a_units > p_units || (a_units == p_units && a_tok <= p_tok),
                 "{}: win requires strictly more units, or equal units with no more tokens \
                  (a={}/{}, p={}/{})",
-                sc.key, a_units, a_tok, p_units, p_tok
+                sc.key,
+                a_units,
+                a_tok,
+                p_units,
+                p_tok
             );
         }
         if verdict == "loss" {
-            assert!(a_units < p_units, "{}: loss requires strictly fewer units", sc.key);
+            assert!(
+                a_units < p_units,
+                "{}: loss requires strictly fewer units",
+                sc.key
+            );
         }
 
         table.push_str(&format!(

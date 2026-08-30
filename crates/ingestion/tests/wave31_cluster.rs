@@ -68,7 +68,10 @@ fn rollback_ir() -> KnowledgeIr {
             ent("Deploy", "Process", &["deploy"]),
         ],
         facts: vec![
-            fac("The rollback procedure is to redeploy the previous version.", &["RollbackProcedure"]),
+            fac(
+                "The rollback procedure is to redeploy the previous version.",
+                &["RollbackProcedure"],
+            ),
             fac("Rollback is immediate.", &["RollbackProcedure"]),
             fac("Rollback is scheduled.", &["RollbackProcedure"]),
             fac("Old deploys used blue-green switching.", &["Deploy"]),
@@ -114,11 +117,17 @@ fn dump(label: &str, probe: &str, ir: &KnowledgeIr) {
     for e in &pkg.entities {
         eprintln!(
             "[W31-CLUSTER {label}] entity name={} score={} type={:?} mentions={}",
-            e.name, e.score, e.type_hint, e.mentions.len()
+            e.name,
+            e.score,
+            e.type_hint,
+            e.mentions.len()
         );
     }
     for f in &pkg.facts {
-        eprintln!("[W31-CLUSTER {label}] fact score={} stmt={}", f.score, f.statement);
+        eprintln!(
+            "[W31-CLUSTER {label}] fact score={} stmt={}",
+            f.score, f.statement
+        );
     }
     for r in &pkg.relations {
         eprintln!(
@@ -147,7 +156,11 @@ fn w31_cluster_001_baseline_composition() {
     ] {
         dump(label, probe, &merged);
     }
-    dump("w3-unk-known", "What is the rollback procedure?", &rollback_ir());
+    dump(
+        "w3-unk-known",
+        "What is the rollback procedure?",
+        &rollback_ir(),
+    );
     dump("w3-unk-conflict", "How is rollback done?", &rollback_ir());
     dump(
         "w3-temp",
@@ -226,7 +239,11 @@ fn w31_cluster_002_relevance_floor() {
     for p in &probes {
         let pkg = compile_context(p.text, &merged, BUDGET);
         let payload = render_context_markdown(&pkg);
-        eprintln!("[W31-CLUSTER-002] \"{}\" tokens={}", p.text, payload.len() / 4);
+        eprintln!(
+            "[W31-CLUSTER-002] \"{}\" tokens={}",
+            p.text,
+            payload.len() / 4
+        );
         for u in p.units {
             assert!(
                 payload_has(&payload, u),
@@ -236,9 +253,9 @@ fn w31_cluster_002_relevance_floor() {
         }
         for (s, pr, o) in p.noise_rels {
             assert!(
-                !pkg.relations.iter().any(|r| {
-                    r.subject == *s && r.predicate == *pr && r.object == *o
-                }),
+                !pkg.relations
+                    .iter()
+                    .any(|r| { r.subject == *s && r.predicate == *pr && r.object == *o }),
                 "\"{}\": noise relation packed: {s} {pr} {o}\n{payload}",
                 p.text
             );

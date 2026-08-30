@@ -336,10 +336,7 @@ fn w31_scale_002_id_family_flood() {
     );
     assert!(payload_has(&payload, "gold"), "the member's tier must pack");
     assert!(
-        pkg.facts
-            .first()
-            .map(|f| f.statement.contains("cust0042"))
-            == Some(true),
+        pkg.facts.first().map(|f| f.statement.contains("cust0042")) == Some(true),
         "the asked member's fact must lead the pack"
     );
     assert!(

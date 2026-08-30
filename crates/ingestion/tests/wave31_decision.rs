@@ -77,7 +77,7 @@ fn decide(q: &Question, pkg: &ContextPackage) -> AgentOutcome {
     let mut out = String::from("Decision: ");
     for (i, f) in policy.iter().enumerate() {
         if i > 0 {
-            out.push_str(" ");
+            out.push(' ');
         }
         out.push_str(&f.statement);
         out.push('.');

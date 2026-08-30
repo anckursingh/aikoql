@@ -939,13 +939,13 @@ fn resolve_both_valid_without_split_is_bare_coexistence() {
     let b_ko = k.get(Subject::new("bob"), &cc.counter).unwrap();
     assert_eq!(a_ko.valid_to(), None);
     assert_eq!(b_ko.valid_from(), Some(10_000)); // contradict stamps its own valid_from
-    // The Conflict KO records the coexistence decision without a split.
+                                                 // The Conflict KO records the coexistence decision without a split.
     let conflict = k.get(Subject::new("bob"), &cc.conflict).unwrap();
     assert_eq!(
         conflict.extensions.get("resolution"),
         Some(&Value::Text("resolved_both_valid".into()))
     );
-    assert!(conflict.extensions.get("resolution_split_at").is_none());
+    assert!(!conflict.extensions.contains_key("resolution_split_at"));
 }
 
 #[test]

@@ -27,6 +27,7 @@
 //! - context tokens flat for the capacity question from day 7 to day 90
 //!   (the world changes three more times; zero token growth),
 //! - conversation-history tokens non-decreasing.
+//!
 //! RAG/history run for the comparison table (measured, printed; no
 //! thresholds invented — the spec says "compare"), with the W3-CONF-001
 //! scenario pin: RAG must deliver stale memory on ≥1 day. Success is

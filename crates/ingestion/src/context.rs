@@ -545,9 +545,7 @@ pub fn compile_context_semantic_with(
             'tokens: for w in &content_tokens {
                 let mut cum = 0usize;
                 for e in entities.iter().take_while(|e| e.score > 0.0) {
-                    if explains(&e.name, w)
-                        || e.mentions.iter().any(|m| explains(m, w))
-                    {
+                    if explains(&e.name, w) || e.mentions.iter().any(|m| explains(m, w)) {
                         continue 'tokens;
                     }
                     cum += est_tokens(&e.name)
@@ -607,8 +605,8 @@ pub fn compile_context_semantic_with(
         // revenue?" to surface its three Apple candidates for
         // disambiguation rather than refuse — and every W11 trap that
         // packs evidence carries at least one ranked fact.
-        let entity_only = !facts.iter().any(|f| f.score > 0.0)
-            && !relations.iter().any(|r| r.score > 0.0);
+        let entity_only =
+            !facts.iter().any(|f| f.score > 0.0) && !relations.iter().any(|r| r.score > 0.0);
         if !anchored_q
             && !entity_only
             && !content_tokens.is_empty()

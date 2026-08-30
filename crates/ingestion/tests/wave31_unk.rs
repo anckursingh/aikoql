@@ -75,8 +75,8 @@ fn probe(text: &'static str) -> Question {
 /// diagnostic reads the same way the kernel matches).
 fn unexplained(pkg: &aikoql_ingestion::ContextPackage, q: &str) -> (usize, usize, Vec<String>) {
     const STOP: &[&str] = &[
-        "the", "and", "for", "are", "was", "were", "who", "what", "when", "where", "which",
-        "how", "does", "did", "that", "this", "with", "from", "into",
+        "the", "and", "for", "are", "was", "were", "who", "what", "when", "where", "which", "how",
+        "does", "did", "that", "this", "with", "from", "into",
     ];
     fn hit(word: &str, text: &str) -> bool {
         text.split(|c: char| !c.is_alphanumeric())

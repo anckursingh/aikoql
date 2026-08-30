@@ -2,9 +2,12 @@
 
 use crate::session::*;
 use crate::{
-    error, info, json, thread, warn, Arc, AtomicU64, BufRead, BufReader, HashSet, Kernel, Mutex,
-    Ordering, RedbEngine, SystemClock, TcpListener, TcpStream, J, PROTOCOL_VERSION,
+    error, info, thread, warn, Arc, AtomicU64, BufRead, BufReader, HashSet, Kernel, Mutex,
+    Ordering, TcpListener, TcpStream, J, PROTOCOL_VERSION,
 };
+// Test-only (the stdio client below) — unused in the bin target.
+#[cfg(test)]
+use crate::{json, RedbEngine, SystemClock};
 
 use crate::dispatcher::*;
 use crate::protocol::*;

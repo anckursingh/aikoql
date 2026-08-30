@@ -8,25 +8,20 @@
 //! measured and printed (not thresholded — debug-build µs are noise).
 //!
 //! Injected root causes and the deterministic diagnosis contract:
-//! - wrong-source:        the packed fact's evidence doc is not the doc
-//!                        its statement text actually lives in;
-//! - stale-source:        the kernel's current claim disagrees with the
-//!                        current corpus doc (never re-ingested);
-//! - wrong-relationship:  the packed relation contradicts its own
-//!                        evidence doc's text;
-//! - missing-evidence:    a packed fact carries no provenance at all;
-//! - conflicting-evidence: two packed facts cite different docs and
-//!                        disagree on the value token;
-//! - incorrect-context:   a packed fact shares no meaningful token with
-//!                        the task (it rode in on a wrong entity anchor).
+//! - wrong-source: the packed fact's evidence doc is not the doc its statement text actually lives in;
+//! - stale-source: the kernel's current claim disagrees with the current corpus doc (never re-ingested);
+//! - wrong-relationship: the packed relation contradicts its own evidence doc's text;
+//! - missing-evidence: a packed fact carries no provenance at all;
+//! - conflicting-evidence: two packed facts cite different docs and disagree on the value token;
+//! - incorrect-context: a packed fact shares no meaningful token with the task (it rode in on a wrong entity anchor).
 
 mod common;
 
 use std::time::Instant;
 
 use aikoql_ingestion::{
-    compile_context, merge_knowledge_ir, EntityCandidate, Evidence, FactCandidate,
-    KnowledgeIr, RelationCandidate,
+    compile_context, merge_knowledge_ir, EntityCandidate, Evidence, FactCandidate, KnowledgeIr,
+    RelationCandidate,
 };
 use common::trackb::{assert_integrity, corpus, Doc};
 use common::wave31_sim::{alice, assert_claim, mk, props, BUDGET};
@@ -219,11 +214,7 @@ fn w31_debug_001_end_to_end_debuggability() {
                 &["ServiceA depends on ServiceC."],
                 KnowledgeIr {
                     entities: vec![entity("ServiceA", "service", "ServiceA", "kb-a")],
-                    facts: vec![fact(
-                        "ServiceA depends on ServiceC.",
-                        &["ServiceA"],
-                        "kb-a",
-                    )],
+                    facts: vec![fact("ServiceA depends on ServiceC.", &["ServiceA"], "kb-a")],
                     ..KnowledgeIr::default()
                 },
             ),
@@ -247,9 +238,10 @@ fn w31_debug_001_end_to_end_debuggability() {
                 },
             ),
         ];
-        assert_integrity(&docs, &merge_knowledge_ir(
-            &docs.iter().map(|d| d.ir.clone()).collect::<Vec<_>>(),
-        ));
+        assert_integrity(
+            &docs,
+            &merge_knowledge_ir(&docs.iter().map(|d| d.ir.clone()).collect::<Vec<_>>()),
+        );
         let corpus = corpus(&docs);
         let merged = merge_knowledge_ir(&docs.iter().map(|d| d.ir.clone()).collect::<Vec<_>>());
         let (cause, ops, t) = {
@@ -262,7 +254,10 @@ fn w31_debug_001_end_to_end_debuggability() {
                 .iter()
                 .find(|r| r.subject == "ServiceA" && r.object == "ServiceB")
                 .expect("wrong relation must pack");
-            let backing = find_doc(&corpus, &format!("{} no longer depends on {}", bad.subject, bad.object));
+            let backing = find_doc(
+                &corpus,
+                &format!("{} no longer depends on {}", bad.subject, bad.object),
+            );
             ops += 1;
             let cause = if backing.contains(&"kb-b") {
                 "wrong-relationship"
@@ -300,11 +295,7 @@ fn w31_debug_001_end_to_end_debuggability() {
                 .iter()
                 .find(|f| f.statement.contains("capacity"))
                 .expect("capacity fact must pack");
-            let cause = if f
-                .evidence
-                .as_ref()
-                .map_or(true, |e| e.document_id.is_none())
-            {
+            let cause = if f.evidence.as_ref().is_none_or(|e| e.document_id.is_none()) {
                 "missing-evidence"
             } else {
                 "not-identified"
@@ -317,7 +308,7 @@ fn w31_debug_001_end_to_end_debuggability() {
 
     // ── S5 conflicting-evidence ──────────────────────────────────────────
     {
-        let docs = vec![
+        let docs = [
             doc(
                 "kb-ops",
                 &["The deployment capacity is 100 units."],

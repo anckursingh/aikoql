@@ -43,11 +43,18 @@ fn w31_bias_001_benchmark_bias_audit() {
     );
 
     let dev_qs = union_questions();
-    assert!(dev_qs.len() >= 100, "union corpus has {} tasks, need ≥100", dev_qs.len());
+    assert!(
+        dev_qs.len() >= 100,
+        "union corpus has {} tasks, need ≥100",
+        dev_qs.len()
+    );
 
     // (1) + (2) — per-question leakage laws, over union AND holdout tasks.
     let hold_qs: Vec<&Question> = HOLDOUT_QUESTIONS.iter().collect();
-    for (set, qs) in [("union", dev_qs.as_slice()), ("holdout", hold_qs.as_slice())] {
+    for (set, qs) in [
+        ("union", dev_qs.as_slice()),
+        ("holdout", hold_qs.as_slice()),
+    ] {
         for q in qs {
             let q_toks = common::tokens(q.text);
             for unit in q.units {

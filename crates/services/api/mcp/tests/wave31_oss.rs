@@ -308,7 +308,7 @@ fn w31_oss_001_time_to_value_flow() {
         .unwrap_or(false)
         && tr["versions"]
             .as_array()
-            .map(|a| a.len() >= 1)
+            .map(|a| !a.is_empty())
             .unwrap_or(false);
     leg(
         &mut report,

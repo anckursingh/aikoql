@@ -1601,8 +1601,12 @@ impl Kernel {
         claim_b: KOID,
         split_at: u64,
     ) -> KResult<()> {
-        let head_a = self.head_object(&claim_a)?.ok_or(KError::NotFound(claim_a))?;
-        let head_b = self.head_object(&claim_b)?.ok_or(KError::NotFound(claim_b))?;
+        let head_a = self
+            .head_object(&claim_a)?
+            .ok_or(KError::NotFound(claim_a))?;
+        let head_b = self
+            .head_object(&claim_b)?
+            .ok_or(KError::NotFound(claim_b))?;
         let mut ko_a = head_a.clone();
         ko_a.set_valid_time(head_a.valid_from(), Some(split_at))?;
         let mut ko_b = head_b.clone();

@@ -133,7 +133,9 @@ fn world(target: &'static str) -> Vec<Doc> {
 
 /// Structure fingerprint of a package — what the change can touch:
 /// entity names, relation triples, fact statements.
-fn fp(p: &ContextPackage) -> (Vec<String>, Vec<(String, String, String)>, Vec<String>) {
+type PackageFingerprint = (Vec<String>, Vec<(String, String, String)>, Vec<String>);
+
+fn fp(p: &ContextPackage) -> PackageFingerprint {
     let mut es: Vec<String> = p.entities.iter().map(|e| e.name.clone()).collect();
     let mut rs: Vec<(String, String, String)> = p
         .relations
@@ -174,12 +176,20 @@ fn w31_impact_001_knowledge_change_propagation() {
     let rels_diff = merged_v1
         .relations
         .iter()
-        .filter(|f| !merged_v2.relations.iter().any(|g| g.subject == f.subject && g.object == f.object && g.predicate == f.predicate))
+        .filter(|f| {
+            !merged_v2.relations.iter().any(|g| {
+                g.subject == f.subject && g.object == f.object && g.predicate == f.predicate
+            })
+        })
         .count()
         + merged_v2
             .relations
             .iter()
-            .filter(|f| !merged_v1.relations.iter().any(|g| g.subject == f.subject && g.object == f.object && g.predicate == f.predicate))
+            .filter(|f| {
+                !merged_v1.relations.iter().any(|g| {
+                    g.subject == f.subject && g.object == f.object && g.predicate == f.predicate
+                })
+            })
             .count();
     assert_eq!(facts_diff, 2, "one dependency fact replaced");
     assert_eq!(rels_diff, 2, "one dependency edge replaced");
@@ -223,7 +233,10 @@ fn w31_impact_001_knowledge_change_propagation() {
                 let r2 = render_context_markdown(&p2).to_lowercase();
                 assert!(r1.contains("beacon"), "T1 pre must answer Beacon");
                 assert!(r2.contains("cobalt"), "T1 post must answer Cobalt");
-                assert!(!r2.contains("beacon"), "T1 post must not name the old target");
+                assert!(
+                    !r2.contains("beacon"),
+                    "T1 post must not name the old target"
+                );
             }
             "T2" => {
                 // The relationship-boost re-routes: Beacon was the boosted
@@ -244,13 +257,19 @@ fn w31_impact_001_knowledge_change_propagation() {
                 assert!(r1.contains("99.9"), "T2 pre must deliver Beacon's sla");
                 assert!(!r1.contains("99.5"), "T2 pre must not deliver Cobalt's sla");
                 assert!(r2.contains("99.5"), "T2 post must deliver Cobalt's sla");
-                assert!(!r2.contains("99.9"), "T2 post must not still deliver Beacon's sla");
+                assert!(
+                    !r2.contains("99.9"),
+                    "T2 post must not still deliver Beacon's sla"
+                );
             }
             "T3" => {
                 // Context loses the incoming edge; Beacon's OWN fact
                 // survives.
                 assert!(old_edge, "T3 pre packs Beacon's incoming edge");
-                assert!(!f2.1.iter().any(|(s, _, _)| s == "Aurora"), "T3 post drops the re-targeted edge");
+                assert!(
+                    !f2.1.iter().any(|(s, _, _)| s == "Aurora"),
+                    "T3 post drops the re-targeted edge"
+                );
                 let r2 = render_context_markdown(&p2).to_lowercase();
                 assert!(r2.contains("99.9"), "T3 post still answers Beacon's sla — neighbor change must not corrupt own facts");
             }
@@ -290,7 +309,10 @@ fn w31_impact_001_knowledge_change_propagation() {
             stale += 1;
         }
     }
-    assert_eq!(stale, 0, "post-change packages still carry the old dependency");
+    assert_eq!(
+        stale, 0,
+        "post-change packages still carry the old dependency"
+    );
 
     println!(
         "\n[W31-IMPACT-001] dependency change Beacon → Cobalt:\n{}",
