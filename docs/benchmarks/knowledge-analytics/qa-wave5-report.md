@@ -54,6 +54,11 @@ Test-side (the engines caught these — the harness was wrong, not them):
 7. Spot combos violated generator coupling (device pins service/region/err:
    e.g. device 0 forces err 1; device 123 forces service 3, not 7).
 8. p95 prose "475 for every service" → service+460 (lat ≡ service mod 20).
+9. ClickHouse measured NOT_MEASURED (unreachable) while opted in: the probe
+   swallowed `http://localhost:8123` (URL scheme) with `.ok()?` → silent
+   skip beside a live engine. Fix: strict opt-in — probe accepts the
+   `http://` prefix, and env-set-but-unreachable now FAILS the test; skips
+   remain only when the env var is genuinely unset (honest row).
 
 ## 4. Honest rows (kept)
 

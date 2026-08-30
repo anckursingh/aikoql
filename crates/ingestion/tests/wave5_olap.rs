@@ -23,13 +23,14 @@
 //!   customers 100K (id, tier id%3, region id%5)
 //!   devices 1M (device_id, customer_id = n%100000)
 //!
-//! Opt-in env (unset → engine skipped with an honest row, like the
-//! connector harness):
+//! Opt-in env — STRICT: unset → engine skipped with an honest NOT_MEASURED
+//! row; set but unreachable → the test FAILS (an opted-in measurement never
+//! silently degrades to a skip):
 //!   AIKOQL_TEST_CH_HTTP = "127.0.0.1:8123"
 //!   AIKOQL_TEST_SR_ADDR = "127.0.0.1:9030"
 //! Services: `docker compose --profile olap up -d clickhouse starrocks`.
-//! StarRocks allin1 needs ≥8GB Docker memory; the harness stays honest
-//! when it cannot run (results recorded NOT_MEASURED, never invented).
+//! StarRocks allin1 needs ≥8GB Docker memory; when not opted in (CI),
+//! results are recorded NOT_MEASURED, never invented.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -48,14 +49,29 @@ struct Ch {
 }
 
 impl Ch {
+    /// Strict opt-in: env unset → None (honest skip). Env set but the
+    /// engine unreachable → panic. An opted-in measurement must never
+    /// silently degrade to NOT_MEASURED.
     fn probe() -> Option<Ch> {
-        let addr = std::env::var("AIKOQL_TEST_CH_HTTP").ok()?;
-        let addrs: Vec<_> = addr.to_socket_addrs().ok()?.collect();
-        if TcpStream::connect_timeout(&addrs[0], Duration::from_secs(2)).is_err() {
-            println!("[W5-OLAP] clickhouse: configured at {addr} but unreachable — NOT_MEASURED");
+        let Ok(addr) = std::env::var("AIKOQL_TEST_CH_HTTP") else {
             return None;
+        };
+        // Accept both "127.0.0.1:8123" and "http://127.0.0.1:8123" — the
+        // var is named *_HTTP, so URLs will be passed.
+        let addr = addr.strip_prefix("http://").unwrap_or(&addr);
+        let addrs: Vec<_> = addr
+            .to_socket_addrs()
+            .unwrap_or_else(|e| panic!("AIKOQL_TEST_CH_HTTP={addr} set but unparsable: {e}"))
+            .collect();
+        if TcpStream::connect_timeout(&addrs[0], Duration::from_secs(2)).is_err() {
+            panic!(
+                "AIKOQL_TEST_CH_HTTP={addr} set but unreachable — opt-in is strict, \
+                 no silent NOT_MEASURED. Start: docker compose --profile olap up -d clickhouse"
+            );
         }
-        Some(Ch { addr })
+        Some(Ch {
+            addr: addr.to_string(),
+        })
     }
 
     /// POST a statement, return the TSV body (or panic with the engine's
@@ -129,21 +145,26 @@ fn sr_connect() -> mysql::Conn {
     mysql::Conn::new(opts).expect("starrocks connect")
 }
 
+/// Strict opt-in like [`Ch::probe`]: env unset → false (honest skip);
+/// set but unreachable → panic, never a silent NOT_MEASURED.
 fn sr_probe() -> bool {
     let Some(addr) = std::env::var("AIKOQL_TEST_SR_ADDR").ok() else {
         return false;
     };
     let Ok(mut addrs) = addr.to_socket_addrs() else {
-        return false;
+        panic!("AIKOQL_TEST_SR_ADDR={addr} set but unparsable");
     };
     let reachable = addrs
         .next()
         .map(|a| TcpStream::connect_timeout(&a, Duration::from_secs(2)).is_ok())
         .unwrap_or(false);
     if !reachable {
-        println!("[W5-OLAP] starrocks: configured at {addr} but unreachable — NOT_MEASURED");
+        panic!(
+            "AIKOQL_TEST_SR_ADDR={addr} set but unreachable — opt-in is strict, \
+             no silent NOT_MEASURED. Start: docker compose --profile olap up -d starrocks"
+        );
     }
-    reachable
+    true
 }
 
 fn sr_cell(v: &mysql::Value) -> String {
@@ -413,7 +434,7 @@ fn w5_olap_001_large_aggregation() {
         assert_eq!(seen_total, total, "clickhouse grand total");
         println!("  clickhouse: total {total} | {ms}ms (min of 3) | CORRECT");
     } else {
-        println!("  clickhouse: NOT_MEASURED (unreachable)");
+        println!("  clickhouse: NOT_MEASURED (not opted in)");
     }
     if want_sr {
         let mut conn = sr_connect();
@@ -435,7 +456,7 @@ fn w5_olap_001_large_aggregation() {
         assert_eq!(seen_total, total, "starrocks grand total");
         println!("  starrocks: total {total} | {ms}ms (min of 3) | CORRECT");
     } else {
-        println!("  starrocks: NOT_MEASURED (unreachable)");
+        println!("  starrocks: NOT_MEASURED (not opted in)");
     }
     println!("  aikoql: NOT_MEASURED — no columnar scan path; §7 build-vs-buy says delegate (redb row-at-a-time on 10M rows is a structural loss, plan §19)");
 }
@@ -499,7 +520,7 @@ fn w5_olap_002_time_series() {
             "  clickhouse: p95 latency/service: {ms}ms | exact p95 = service+460 × 20 | CORRECT"
         );
     } else {
-        println!("  clickhouse: NOT_MEASURED (unreachable)");
+        println!("  clickhouse: NOT_MEASURED (not opted in)");
     }
     if want_sr {
         let mut conn = sr_connect();
@@ -552,7 +573,7 @@ fn w5_olap_002_time_series() {
         }
         println!("  starrocks: p95 latency/service: {ms}ms | approx p95 = service+460 ±10 × 20 | CORRECT (approx contract)");
     } else {
-        println!("  starrocks: NOT_MEASURED (unreachable)");
+        println!("  starrocks: NOT_MEASURED (not opted in)");
     }
     println!("  note: events/minute measured as events/day — minute not stored in the loaded schema (honest scope row, dataset.md)");
 }
@@ -607,7 +628,7 @@ fn w5_olap_003_high_cardinality_group_by() {
             rows.len()
         );
     } else {
-        println!("  clickhouse: NOT_MEASURED (unreachable)");
+        println!("  clickhouse: NOT_MEASURED (not opted in)");
     }
     if want_sr {
         let mut conn = sr_connect();
@@ -644,7 +665,7 @@ fn w5_olap_003_high_cardinality_group_by() {
             rows.len()
         );
     } else {
-        println!("  starrocks: NOT_MEASURED (unreachable)");
+        println!("  starrocks: NOT_MEASURED (not opted in)");
     }
     println!("  aikoql: NOT_MEASURED — OLAP baseline side of the boundary (plan §4: do not claim superiority here)");
 }
@@ -688,7 +709,7 @@ fn w5_olap_004_multi_table_join() {
         }
         println!("  clickhouse: device join: {ms}ms/{ms2}ms | 1M matched, spots CORRECT");
     } else {
-        println!("  clickhouse: NOT_MEASURED (unreachable)");
+        println!("  clickhouse: NOT_MEASURED (not opted in)");
     }
     if want_sr {
         let mut conn = sr_connect();
@@ -723,6 +744,6 @@ fn w5_olap_004_multi_table_join() {
         }
         println!("  starrocks: device join: {ms}ms/{ms2}ms | 1M matched, spots CORRECT");
     } else {
-        println!("  starrocks: NOT_MEASURED (unreachable)");
+        println!("  starrocks: NOT_MEASURED (not opted in)");
     }
 }
