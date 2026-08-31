@@ -597,8 +597,8 @@ QA-lead mapping of `docs/MRFC-KSE-001-Storage-Engine-TDD.md` (phases KSE-1..20, 
 
 | Phase | Content | Status | Evidence |
 | --- | --- | --- | --- |
-| KSE-1 | Storage contract conformance (KSE-001..006) | 🔨 | `crates/storage/aikoql/tests/conformance.rs` — the six KSE asserts run identically against AikoqlStorageEngine + MemoryEngine (reference) + RedbEngine: get, missing key, sorted prefix scan, atomic batch, empty batch, put/delete conflict semantics |
-| KSE-2 | AIKOQL key semantics (KSE-010..017) | ⛔ | version ordering, current head, historical read, tombstone, idempotency, relo/reli/type index behavior |
+| KSE-1 | Storage contract conformance (KSE-001..006) | ✅ | `crates/storage/aikoql/tests/conformance.rs` — the six KSE asserts run identically against AikoqlStorageEngine + MemoryEngine (reference) + RedbEngine: get, missing key, sorted prefix scan, atomic batch, empty batch, put/delete conflict semantics. KSE-006 pins the shared put-before-del invariant (del wins; last put wins). RED (7/7 aikoql failures, 12/12 reference passes) → GREEN (19/19) |
+| KSE-2 | AIKOQL key semantics (KSE-010..017) | ✅ | `crates/storage/aikoql/tests/kse2_key_semantics.rs` — real kernel over the new engine, asserted at kernel AND raw-key-layout level (ko/head/tomb/idem/relo/reli/type). First run 7/8: the one RED was a test-side assumption (tomb/ is Erase-only; Tombstone mode commits a Deleted version) — no engine gap. 8/8 green incl. full reopen replay |
 | KSE-3 | Record envelope (KSE-020..023) | ⛔ | encode/decode round trip, corrupt payload, truncated record, unsupported format version |
 | KSE-4 | Block abstraction (KSE-030..033) | ⛔ | sorted key directory, point lookup, prefix range |
 | KSE-5 | Knowledge locality (KSE-040) | ⛔ | KO+facts+relations+provenance read amplification vs redb/RocksDB |
