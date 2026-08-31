@@ -21,28 +21,21 @@
 //! Timing runs are DEBUG-build indicative numbers — no timing assertions
 //! (they would flake); the gate is the equality pin + the report file.
 
+mod common;
+
 use aikoql_kernel::knowledge::kom::Value;
-use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
 use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_kernel::transaction::kernel::ManualClock;
 use aikoql_kernel::{Direction, Kernel, Metadata, RelationshipRef, RememberRequest, Subject};
 use aikoql_storage::AikoqlStorageEngine;
+use common::{percentiles, tmp, CountingEngine, LogicalCounts};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 const N_KOS: usize = 100;
 const REPS: usize = 20;
 const SALT: u64 = 0xC0FFEE;
-
-fn tmp(tag: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!("aikoql_kse5_unit_{}_{}", tag, std::process::id()));
-    let _ = std::fs::remove_file(&p);
-    let _ = std::fs::remove_dir_all(&p);
-    p
-}
 
 fn alice() -> Subject {
     Subject::new("alice")
@@ -54,82 +47,6 @@ fn meta() -> Metadata {
         tenant: None,
         schema_version: 1,
         tags: vec![],
-    }
-}
-
-/// Pass-through engine that counts every kernel→engine request.
-struct CountingEngine {
-    inner: Arc<dyn StorageEngine>,
-    gets: AtomicU64,
-    scan_calls: AtomicU64,
-    scan_pairs: AtomicU64,
-    bytes_returned: AtomicU64,
-    write_batches: AtomicU64,
-    puts: AtomicU64,
-    dels: AtomicU64,
-}
-
-impl CountingEngine {
-    fn new(inner: Arc<dyn StorageEngine>) -> Arc<Self> {
-        Arc::new(CountingEngine {
-            inner,
-            gets: AtomicU64::new(0),
-            scan_calls: AtomicU64::new(0),
-            scan_pairs: AtomicU64::new(0),
-            bytes_returned: AtomicU64::new(0),
-            write_batches: AtomicU64::new(0),
-            puts: AtomicU64::new(0),
-            dels: AtomicU64::new(0),
-        })
-    }
-}
-
-impl StorageEngine for CountingEngine {
-    fn get(&self, key: &[u8]) -> aikoql_kernel::KResult<Option<Vec<u8>>> {
-        self.gets.fetch_add(1, Ordering::Relaxed);
-        let v = self.inner.get(key)?;
-        if let Some(v) = &v {
-            self.bytes_returned
-                .fetch_add(v.len() as u64, Ordering::Relaxed);
-        }
-        Ok(v)
-    }
-
-    fn scan(&self, prefix: &[u8]) -> aikoql_kernel::KResult<Vec<(Vec<u8>, Vec<u8>)>> {
-        self.scan_calls.fetch_add(1, Ordering::Relaxed);
-        let rows = self.inner.scan(prefix)?;
-        self.scan_pairs
-            .fetch_add(rows.len() as u64, Ordering::Relaxed);
-        let bytes: u64 = rows.iter().map(|(k, v)| (k.len() + v.len()) as u64).sum();
-        self.bytes_returned.fetch_add(bytes, Ordering::Relaxed);
-        Ok(rows)
-    }
-
-    fn write_batch(&self, batch: &WriteBatch) -> aikoql_kernel::KResult<()> {
-        self.write_batches.fetch_add(1, Ordering::Relaxed);
-        self.puts
-            .fetch_add(batch.puts.len() as u64, Ordering::Relaxed);
-        self.dels
-            .fetch_add(batch.dels.len() as u64, Ordering::Relaxed);
-        self.inner.write_batch(batch)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct LogicalCounts {
-    gets: u64,
-    scans: u64,
-    pairs: u64,
-    bytes: u64,
-}
-
-impl std::fmt::Display for LogicalCounts {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} gets + {} scans ({} pairs, {} B returned)",
-            self.gets, self.scans, self.pairs, self.bytes
-        )
     }
 }
 
@@ -191,12 +108,6 @@ fn retrieval(k: &Kernel, koid: &aikoql_kernel::KOID) {
     let _ = k.inbound_edges(koid, None).unwrap();
 }
 
-fn percentiles(mut xs: Vec<u128>) -> (u128, u128, u128) {
-    xs.sort_unstable();
-    let p = |q: f64| xs[((xs.len() - 1) as f64 * q).round() as usize];
-    (p(0.50), p(0.95), p(0.99))
-}
-
 /// Time `REPS` retrievals over every KO; returns the sorted samples.
 fn time_retrievals(k: &Kernel, koids: &[aikoql_kernel::KOID]) -> Vec<u128> {
     let mut samples = Vec::with_capacity(koids.len() * REPS);
@@ -216,19 +127,9 @@ fn per_retrieval_counts(
     k: &Kernel,
     koid: &aikoql_kernel::KOID,
 ) -> LogicalCounts {
-    let before = LogicalCounts {
-        gets: counting.gets.load(Ordering::Relaxed),
-        scans: counting.scan_calls.load(Ordering::Relaxed),
-        pairs: counting.scan_pairs.load(Ordering::Relaxed),
-        bytes: counting.bytes_returned.load(Ordering::Relaxed),
-    };
+    let before = LogicalCounts::snapshot(counting);
     retrieval(k, koid);
-    LogicalCounts {
-        gets: counting.gets.load(Ordering::Relaxed) - before.gets,
-        scans: counting.scan_calls.load(Ordering::Relaxed) - before.scans,
-        pairs: counting.scan_pairs.load(Ordering::Relaxed) - before.pairs,
-        bytes: counting.bytes_returned.load(Ordering::Relaxed) - before.bytes,
-    }
+    LogicalCounts::snapshot(counting).delta(before)
 }
 
 /// Measure the AikoqlStorageEngine backend. Returns (measurement, report
@@ -239,11 +140,7 @@ fn measure_aikoql(p: &Path, counting: Arc<CountingEngine>) -> Measurement {
     let koids = seed(&k);
     let per_retrieval = per_retrieval_counts(&counting, &k, &koids[0]);
     let (p50, p95, p99) = percentiles(time_retrievals(&k, &koids));
-    let writes = (
-        counting.write_batches.load(Ordering::Relaxed),
-        counting.puts.load(Ordering::Relaxed),
-        counting.dels.load(Ordering::Relaxed),
-    );
+    let writes = LogicalCounts::writes(&counting);
     // Live bytes = the whole map, summed from a full scan.
     let live_bytes: u64 = counting
         .inner
@@ -279,11 +176,7 @@ fn measure_redb(p: &Path, counting: Arc<CountingEngine>) -> Measurement {
     let koids = seed(&k);
     let per_retrieval = per_retrieval_counts(&counting, &k, &koids[0]);
     let (p50, p95, p99) = percentiles(time_retrievals(&k, &koids));
-    let writes = (
-        counting.write_batches.load(Ordering::Relaxed),
-        counting.puts.load(Ordering::Relaxed),
-        counting.dels.load(Ordering::Relaxed),
-    );
+    let writes = LogicalCounts::writes(&counting);
     drop((koids, k, clock, counting)); // release the redb lock before stats
     let db = redb::Database::open(p).unwrap();
     let stats = db.begin_write().unwrap().stats().unwrap();
@@ -309,11 +202,7 @@ fn measure_rocksdb(p: &Path, counting: Arc<CountingEngine>) -> Measurement {
     let koids = seed(&k);
     let per_retrieval = per_retrieval_counts(&counting, &k, &koids[0]);
     let (p50, p95, p99) = percentiles(time_retrievals(&k, &koids));
-    let writes = (
-        counting.write_batches.load(Ordering::Relaxed),
-        counting.puts.load(Ordering::Relaxed),
-        counting.dels.load(Ordering::Relaxed),
-    );
+    let writes = LogicalCounts::writes(&counting);
     drop((koids, k, clock, counting));
     let store_bytes: u64 = std::fs::read_dir(p)
         .unwrap()

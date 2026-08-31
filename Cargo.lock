@@ -287,6 +287,8 @@ name = "aikoql-storage"
 version = "0.1.18"
 dependencies = [
  "aikoql-kernel",
+ "aikoql-rocksdb",
+ "redb",
 ]
 
 [[package]]
