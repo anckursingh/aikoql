@@ -586,7 +586,7 @@ mod tests {
         Evidence {
             document_id: Some("doc.pdf".into()),
             page: Some(1),
-            bbox_text: None,
+            source: None,
             extractor: "mock".into(),
             model: Some("mock-v1".into()),
             confidence: 0.85,
@@ -1001,7 +1001,15 @@ mod tests {
         let ev = Evidence {
             document_id: Some("doc.pdf".into()),
             page: Some(3),
-            bbox_text: Some("(10,20,100,30)".into()),
+            source: Some(crate::source::EvidenceSource::Region {
+                bbox: crate::ast::BoundingBox {
+                    page: 3,
+                    x: 10.0,
+                    y: 20.0,
+                    width: 100.0,
+                    height: 30.0,
+                },
+            }),
             extractor: "mock".into(),
             model: Some("mock-v1".into()),
             confidence: 0.85,
@@ -1020,7 +1028,18 @@ mod tests {
 
         let m = &result.matched[0];
         assert_eq!(m.evidence[0].page, Some(3));
-        assert_eq!(m.evidence[0].bbox_text.as_deref(), Some("(10,20,100,30)"));
+        assert_eq!(
+            m.evidence[0].source,
+            Some(crate::source::EvidenceSource::Region {
+                bbox: crate::ast::BoundingBox {
+                    page: 3,
+                    x: 10.0,
+                    y: 20.0,
+                    width: 100.0,
+                    height: 30.0,
+                },
+            })
+        );
     }
 
     // ── VectorEntityResolver tests ──

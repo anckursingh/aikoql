@@ -33,6 +33,13 @@ fn token_name(t: &Token) -> String {
         Token::Relationships => "RELATIONSHIPS".into(),
         Token::Commit => "COMMIT".into(),
         Token::Explain => "EXPLAIN".into(),
+        Token::AsOf => "AS_OF".into(),
+        Token::Between => "BETWEEN".into(),
+        Token::Historical => "HISTORICAL".into(),
+        Token::Epistemic => "EPISTEMIC".into(),
+        Token::Source => "SOURCE".into(),
+        Token::Limit => "LIMIT".into(),
+        Token::Offset => "OFFSET".into(),
         Token::Eq => "==".into(),
         Token::Neq => "!=".into(),
         Token::Lt => "<".into(),
@@ -148,6 +155,11 @@ impl Parser {
         let mut preds = Vec::new();
         let mut sim = None;
         let mut trav = None;
+        let mut temporal = None;
+        let mut epistemic = None;
+        let mut provenance = None;
+        let mut limit = None;
+        let mut offset = None;
         loop {
             match &self.current {
                 Token::Where | Token::And | Token::Or => {
@@ -171,6 +183,50 @@ impl Parser {
                         relation: self.expect_ident("relation name")?,
                     });
                 }
+                Token::AsOf | Token::Between | Token::Historical => {
+                    if temporal.is_some() {
+                        return Err(unexpected(&self.current, self.line, self.col)
+                            .with_hint("duplicate temporal clause"));
+                    }
+                    temporal = Some(self.parse_temporal_clause()?);
+                }
+                Token::Epistemic => {
+                    if epistemic.is_some() {
+                        return Err(unexpected(&self.current, self.line, self.col)
+                            .with_hint("duplicate epistemic clause"));
+                    }
+                    self.advance();
+                    let mut allowed = vec![self.expect_ident("epistemic status")?];
+                    while let Token::Comma = self.current {
+                        self.advance();
+                        allowed.push(self.expect_ident("epistemic status")?);
+                    }
+                    epistemic = Some(EpistemicClause { allowed });
+                }
+                Token::Source => {
+                    if provenance.is_some() {
+                        return Err(unexpected(&self.current, self.line, self.col)
+                            .with_hint("duplicate provenance clause"));
+                    }
+                    self.advance();
+                    provenance = Some(self.expect_string()?);
+                }
+                Token::Limit => {
+                    if limit.is_some() {
+                        return Err(unexpected(&self.current, self.line, self.col)
+                            .with_hint("duplicate limit clause"));
+                    }
+                    self.advance();
+                    limit = Some(self.parse_nonneg_int("LIMIT count")?);
+                    if let Token::Offset = self.current {
+                        self.advance();
+                        offset = Some(self.parse_nonneg_int("OFFSET count")?);
+                    }
+                }
+                Token::Offset => {
+                    return Err(unexpected(&self.current, self.line, self.col)
+                        .with_hint("OFFSET requires LIMIT"));
+                }
                 Token::Return => {
                     self.advance();
                     return Ok(MatchStatement {
@@ -178,6 +234,11 @@ impl Parser {
                         predicates: preds,
                         similarity: sim,
                         traverse: trav,
+                        temporal,
+                        epistemic,
+                        provenance,
+                        limit,
+                        offset,
                         projection: self.parse_projection()?,
                     });
                 }
@@ -185,10 +246,89 @@ impl Parser {
                     return Err(eof_err(self.line, self.col).with_hint("add RETURN clause"))
                 }
                 _ => {
-                    return Err(unexpected(&self.current, self.line, self.col)
-                        .with_hint("expected WHERE, SIMILAR, TRAVERSE, or RETURN"))
+                    return Err(unexpected(&self.current, self.line, self.col).with_hint(
+                        "expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, SOURCE, LIMIT, or RETURN",
+                    ))
                 }
             }
+        }
+    }
+
+    /// v0.3 K2: `AS_OF <time>` | `BETWEEN <time> AND <time>` | `HISTORICAL`.
+    fn parse_temporal_clause(&mut self) -> Result<TemporalClause, ParseError> {
+        match self.current {
+            Token::AsOf => {
+                self.advance();
+                Ok(TemporalClause::AsOf(self.parse_time_millis()?))
+            }
+            Token::Between => {
+                self.advance();
+                let from = self.parse_time_millis()?;
+                self.expect(Token::And)?;
+                let to = self.parse_time_millis()?;
+                if from >= to {
+                    return Err(diagnostics::invalid_temporal_range(self.line, self.col));
+                }
+                Ok(TemporalClause::Between { from, to })
+            }
+            Token::Historical => {
+                self.advance();
+                Ok(TemporalClause::Historical)
+            }
+            _ => unreachable!("parse_temporal_clause called on non-temporal token"),
+        }
+    }
+
+    /// A time argument: epoch millis (`Number`, integer) or an ISO instant
+    /// string `"YYYY-MM-DD"` / `"YYYY-MM-DDTHH:MM:SS"` (UTC).
+    fn parse_time_millis(&mut self) -> Result<u64, ParseError> {
+        match &self.current {
+            Token::Number(n) => {
+                let n = *n;
+                self.advance();
+                if n < 0.0 || n.fract() != 0.0 || n >= 9_007_199_254_740_992.0 {
+                    return Err(expected_err(
+                        "epoch millis (non-negative integer)",
+                        &Token::Number(n),
+                        self.line,
+                        self.col,
+                    ));
+                }
+                Ok(n as u64)
+            }
+            Token::StringLit(s) => {
+                let s = s.clone();
+                self.advance();
+                iso_to_millis(&s).ok_or_else(|| {
+                    expected_err(
+                        "ISO instant \"YYYY-MM-DD\" or \"YYYY-MM-DDTHH:MM:SS\" (UTC)",
+                        &Token::StringLit(s),
+                        self.line,
+                        self.col,
+                    )
+                })
+            }
+            _ => Err(expected_err(
+                "time (epoch millis or ISO string)",
+                &self.current,
+                self.line,
+                self.col,
+            )),
+        }
+    }
+
+    /// A pagination count: whole, non-negative `Number`.
+    fn parse_nonneg_int(&mut self, desc: &str) -> Result<usize, ParseError> {
+        match &self.current {
+            Token::Number(n) => {
+                let n = *n;
+                self.advance();
+                if n < 0.0 || n.fract() != 0.0 || n > usize::MAX as f64 {
+                    return Err(expected_err(desc, &Token::Number(n), self.line, self.col));
+                }
+                Ok(n as usize)
+            }
+            _ => Err(expected_err(desc, &self.current, self.line, self.col)),
         }
     }
 
@@ -456,6 +596,72 @@ impl Parser {
     }
 }
 
+// ---------------------------------------------------------------------------
+// v0.3 K2: ISO instant parsing (UTC) — "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM:SS"
+// ---------------------------------------------------------------------------
+
+/// Parse an ISO date/instant (UTC) to epoch millis. Strict: no fractional
+/// seconds, no timezone suffixes; years 1970–9999.
+fn iso_to_millis(s: &str) -> Option<u64> {
+    let (date, time) = match s.split_once('T') {
+        Some((d, t)) => (d, Some(t)),
+        None => (s, None),
+    };
+    let mut it = date.split('-');
+    let y: i64 = it.next()?.parse().ok()?;
+    let m: u32 = it.next()?.parse().ok()?;
+    let d: u32 = it.next()?.parse().ok()?;
+    if it.next().is_some()
+        || !(1970..=9999).contains(&y)
+        || !(1..=12).contains(&m)
+        || d == 0
+        || d > days_in_month(y, m)
+    {
+        return None;
+    }
+    let days = days_from_civil(y, m, d);
+    let (h, min, sec) = match time {
+        None => (0u64, 0u64, 0u64),
+        Some(t) => {
+            let mut it = t.split(':');
+            let h: u64 = it.next()?.parse().ok()?;
+            let min: u64 = it.next()?.parse().ok()?;
+            let sec: u64 = it.next()?.parse().ok()?;
+            if it.next().is_some() || h > 23 || min > 59 || sec > 59 {
+                return None;
+            }
+            (h, min, sec)
+        }
+    };
+    Some((days as u64) * 86_400_000 + h * 3_600_000 + min * 60_000 + sec * 1_000)
+}
+
+/// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm).
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let mp = (m as i64 + 9) % 12; // Mar = 0, ..., Feb = 11
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146_097 + doe - 719_468
+}
+
+fn days_in_month(y: i64, m: u32) -> u32 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,5 +807,199 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    // ---- v0.3 K2: temporal + epistemic clauses ----
+
+    fn parse_match(source: &str) -> MatchStatement {
+        match Parser::new(source).parse_statement().unwrap() {
+            Statement::Match(m) => m,
+            other => panic!("expected Match, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_match_as_of_epoch_millis() {
+        let m = parse_match("MATCH Person AS_OF 1735689600000 RETURN *");
+        assert_eq!(m.temporal, Some(TemporalClause::AsOf(1_735_689_600_000)));
+        assert_eq!(m.epistemic, None);
+    }
+
+    #[test]
+    fn parse_match_as_of_iso_date() {
+        let m = parse_match("MATCH Person AS_OF \"2026-01-01\" RETURN *");
+        assert_eq!(m.temporal, Some(TemporalClause::AsOf(1_767_225_600_000)));
+    }
+
+    #[test]
+    fn parse_match_as_of_iso_instant() {
+        let m = parse_match("MATCH Person AS_OF \"2026-08-19T12:30:45\" RETURN *");
+        assert_eq!(m.temporal, Some(TemporalClause::AsOf(1_787_142_645_000)));
+    }
+
+    #[test]
+    fn parse_match_between() {
+        let m = parse_match("MATCH Person BETWEEN 1000 AND 2000 RETURN *");
+        assert_eq!(
+            m.temporal,
+            Some(TemporalClause::Between {
+                from: 1_000,
+                to: 2_000,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_match_between_rejects_non_increasing_range() {
+        let e = Parser::new("MATCH Person BETWEEN 2000 AND 1000 RETURN *")
+            .parse_statement()
+            .unwrap_err();
+        assert_eq!(e.code, diagnostics::Code::InvalidTemporalRange);
+    }
+
+    #[test]
+    fn parse_match_historical() {
+        let m = parse_match("MATCH Person HISTORICAL RETURN *");
+        assert_eq!(m.temporal, Some(TemporalClause::Historical));
+    }
+
+    #[test]
+    fn parse_match_epistemic_filter() {
+        let m = parse_match("MATCH Fact EPISTEMIC verified, asserted RETURN *");
+        assert_eq!(
+            m.epistemic,
+            Some(EpistemicClause {
+                allowed: vec!["verified".into(), "asserted".into()],
+            })
+        );
+    }
+
+    #[test]
+    fn parse_match_duplicate_temporal_is_rejected() {
+        assert!(Parser::new("MATCH Person AS_OF 1000 AS_OF 2000 RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn parse_match_source_clause() {
+        let m = parse_match("MATCH Fact SOURCE \"sec-filing\" RETURN *");
+        assert_eq!(m.provenance, Some("sec-filing".into()));
+    }
+
+    #[test]
+    fn parse_match_source_composes_with_temporal() {
+        let m = parse_match("MATCH Fact AS_OF 1000 SOURCE \"sec-filing\" RETURN *");
+        assert_eq!(m.temporal, Some(TemporalClause::AsOf(1_000)));
+        assert_eq!(m.provenance, Some("sec-filing".into()));
+    }
+
+    #[test]
+    fn parse_match_source_requires_string() {
+        assert!(Parser::new("MATCH Fact SOURCE 42 RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn parse_match_duplicate_source_is_rejected() {
+        assert!(Parser::new("MATCH Fact SOURCE \"a\" SOURCE \"b\" RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn parse_match_limit() {
+        let m = parse_match("MATCH Fact LIMIT 5 RETURN *");
+        assert_eq!(m.limit, Some(5));
+        assert_eq!(m.offset, None);
+    }
+
+    #[test]
+    fn parse_match_limit_offset() {
+        let m = parse_match("MATCH Fact LIMIT 5 OFFSET 10 RETURN *");
+        assert_eq!(m.limit, Some(5));
+        assert_eq!(m.offset, Some(10));
+    }
+
+    #[test]
+    fn parse_match_offset_without_limit_is_rejected() {
+        assert!(Parser::new("MATCH Fact OFFSET 10 RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn parse_match_duplicate_limit_is_rejected() {
+        assert!(Parser::new("MATCH Fact LIMIT 5 LIMIT 6 RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn parse_match_limit_rejects_negative_and_fractional() {
+        assert!(Parser::new("MATCH Fact LIMIT -1 RETURN *")
+            .parse_statement()
+            .is_err());
+        assert!(Parser::new("MATCH Fact LIMIT 2.5 RETURN *")
+            .parse_statement()
+            .is_err());
+        assert!(Parser::new("MATCH Fact LIMIT \"5\" RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn parse_match_limit_composes_with_source() {
+        let m = parse_match("MATCH Fact SOURCE \"a.md\" LIMIT 3 OFFSET 1 RETURN *");
+        assert_eq!(m.provenance, Some("a.md".into()));
+        assert_eq!(m.limit, Some(3));
+        assert_eq!(m.offset, Some(1));
+    }
+
+    #[test]
+    fn parse_match_temporal_before_where() {
+        // Clause order is free — temporal before WHERE parses fine.
+        let m = parse_match("MATCH Person AS_OF 1000 WHERE company == \"Visa\" RETURN *");
+        assert_eq!(m.temporal, Some(TemporalClause::AsOf(1_000)));
+        assert_eq!(m.predicates.len(), 1);
+    }
+
+    #[test]
+    fn parse_time_millis_rejects_bad_iso() {
+        for bad in [
+            "MATCH X AS_OF \"2026-13-01\" RETURN *",          // month 13
+            "MATCH X AS_OF \"2026-02-30\" RETURN *",          // Feb 30
+            "MATCH X AS_OF \"1969-01-01\" RETURN *",          // pre-epoch
+            "MATCH X AS_OF \"2026-01-01T25:00:00\" RETURN *", // hour 25
+            "MATCH X AS_OF \"2026-01-01T12:00\" RETURN *",    // missing seconds
+            "MATCH X AS_OF \"2026-01-01T12:00:00.5\" RETURN *", // fractional seconds
+        ] {
+            assert!(
+                Parser::new(bad).parse_statement().is_err(),
+                "expected rejection: {}",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn parse_time_millis_rejects_fractional_epoch() {
+        assert!(Parser::new("MATCH X AS_OF 12.5 RETURN *")
+            .parse_statement()
+            .is_err());
+    }
+
+    #[test]
+    fn iso_to_millis_known_dates() {
+        assert_eq!(iso_to_millis("1970-01-01"), Some(0));
+        assert_eq!(iso_to_millis("1970-01-02"), Some(86_400_000));
+        assert_eq!(iso_to_millis("2000-01-01"), Some(946_684_800_000));
+        // 2000 is a leap year — Feb 29 exists.
+        assert_eq!(iso_to_millis("2000-03-01"), Some(951_868_800_000));
+        // 2100 is NOT a leap year (century rule).
+        assert_eq!(iso_to_millis("2100-03-01"), Some(4_107_542_400_000));
+        assert_eq!(iso_to_millis("2000-02-30"), None);
+        assert_eq!(iso_to_millis("not-a-date"), None);
     }
 }

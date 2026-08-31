@@ -8,6 +8,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# CodeQL actions/missing-workflow-permissions: benchmark only reads the repo
+# (artifact upload/download does not need contents: write).
+permissions:
+  contents: read
+
 jobs:
   benchmark:
     name: Run Benchmarks + Regression Check

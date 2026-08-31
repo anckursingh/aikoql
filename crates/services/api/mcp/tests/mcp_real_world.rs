@@ -12,6 +12,8 @@ use serde_json::{json, Value as J};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 
+use aikoql_ingestion::{EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate};
+
 struct McpClient {
     child: Child,
     stdin: std::process::ChildStdin,
@@ -146,6 +148,11 @@ impl McpClient {
 impl Drop for McpClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        // Wait for the process to fully exit: the child holds the redb
+        // exclusive flock, and a respawn on the same db before the OS tears
+        // it down fails to open and dies before responding (EOF flake under
+        // parallel load).
+        let _ = self.child.wait();
     }
 }
 
@@ -227,11 +234,11 @@ fn real_world_agent_workflow() {
             "subject": "admin", "type_name": "Employee", "text": "engineering lead", "k": 5
         }),
     );
-    assert!(found["results"].as_array().unwrap().len() >= 1);
+    assert!(!found["results"].as_array().unwrap().is_empty());
 
     // ── Phase 5: Aikoql Query ────────────────────────────────────────────
 
-    let query = format!("MATCH Employee WHERE dept == \"Engineering\" RETURN *");
+    let query = "MATCH Employee WHERE dept == \"Engineering\" RETURN *".to_string();
     let results = c.call("aikoql", &json!({"query": query, "subject": "admin"}));
     assert!(results["results"].as_array().unwrap().len() >= 2);
 
@@ -257,7 +264,7 @@ fn real_world_agent_workflow() {
 
     // List programs.
     let programs = c.call("list_programs", &json!({"subject": "admin"}));
-    assert!(programs["programs"].as_array().unwrap().len() >= 1);
+    assert!(!programs["programs"].as_array().unwrap().is_empty());
 
     // ── Phase 7: Policy-as-KO ────────────────────────────────────────────
 
@@ -310,7 +317,7 @@ fn real_world_agent_workflow() {
 
     let audit = c.call("audit_report", &json!({}));
     assert!(audit["total_objects"].as_u64().unwrap() >= 4);
-    assert!(audit["audit_chain"].as_str().unwrap().len() > 0);
+    assert!(!audit["audit_chain"].as_str().unwrap().is_empty());
 
     // ── Phase 10: ABI Version ────────────────────────────────────────────
 
@@ -413,6 +420,808 @@ fn real_world_agent_workflow() {
     let _ = std::fs::remove_file(&db);
 }
 
+/// §51 Critical End-to-End Scenario (chatbot suite, certification G5):
+/// deterministic scripted replay over the real MCP surface with mechanical
+/// judges (PR-R pattern — the script is the "LLM", asserts are the judges).
+///
+/// Scenario beats: initial conversation → durable memories with provenance
+/// and scope → later recall ("AWS") → authoritative org update supersedes
+/// the preference ("Azure", with supersession evidence) → "Deploy it." runs
+/// the Program-as-KO pipeline (identity → permissions → policy → execute →
+/// postconditions → episode).
+#[test]
+fn critical_e2e_scenario_51_chatbot_memory() {
+    let db = std::env::temp_dir().join(format!("mcp-s51-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&db);
+    let mut c = McpClient::start(db.to_str().unwrap());
+    c.session_init("chatbot-user", "acme");
+
+    // ── §51.1 Initial conversation → three durable memories ───────────────
+    // Evidence-backed user statements enter as assertions (evidence is
+    // mandatory there and stamped by the kernel); plain identity data uses
+    // remember. Both must survive round-trip with provenance intact.
+    let style = c.call(
+        "assert_knowledge",
+        &json!({
+            "subject": "chatbot-user", "type_name": "UserPreference", "tenant": "acme",
+            "properties": {"topic": "response style", "value": "concise"},
+            "authority": "human_approved",
+            "evidence": [{"source_artifact": "chat-message-1", "method": "human_provided"}]
+        }),
+    );
+    assert_eq!(style["version"], 1);
+
+    let acct = c.call(
+        "remember",
+        &json!({
+            "subject": "chatbot-user", "type_name": "AccountInfo", "tenant": "acme",
+            "properties": {"account": "ACME-123"},
+            "origin": "human"
+        }),
+    );
+    assert_eq!(acct["version"], 1);
+
+    let aws = c.call("assert_knowledge", &json!({
+        "subject": "chatbot-user", "type_name": "DeploymentPreference", "tenant": "acme",
+        "properties": {"account": "ACME-123", "cloud": "AWS"},
+        "authority": "human_approved",
+        "evidence": [{"source_artifact": "chat-message-3", "method": "human_provided", "confidence": 0.95}]
+    }));
+    let aws_koid = aws["koid"].as_str().unwrap().to_string();
+
+    // Memory carries provenance + scope to the query boundary.
+    let aws_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &aws_koid}),
+    );
+    assert_eq!(aws_ko["type_name"], "DeploymentPreference");
+    assert_eq!(aws_ko["properties"]["cloud"], "AWS");
+    assert_eq!(aws_ko["extensions"]["authority"], "human_approved");
+    assert_eq!(
+        aws_ko["extensions"]["scope"], "session",
+        "the kernel stamps an explicit scope for agent-mediated claims: {aws_ko}"
+    );
+    assert_eq!(aws_ko["extensions"]["epistemic_status"], "asserted");
+    assert!(
+        aws_ko["extensions"]["evidence"]
+            .to_string()
+            .contains("chat-message-3"),
+        "provenance evidence must survive to the query boundary: {}",
+        aws_ko["extensions"]["evidence"]
+    );
+
+    // ── §51.2 Later conversation: recall with correct provenance/scope ────
+    // "What do you know about my deployment setup?" → the remembered AWS.
+    let recall = c.call(
+        "aikoql",
+        &json!({
+            "subject": "chatbot-user",
+            "query": "MATCH DeploymentPreference WHERE account == \"ACME-123\" RETURN *"
+        }),
+    );
+    let clouds: Vec<String> = recall["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["properties"]["cloud"].as_str().map(String::from))
+        .collect();
+    assert!(
+        clouds.contains(&"AWS".to_string()),
+        "recall must return the remembered deployment preference: {clouds:?}"
+    );
+
+    // ── §51.3 Authoritative org update supersedes the preference ──────────
+    // Ingest the organization directive as an assertion carrying
+    // organization_policy authority, then supersede the user preference
+    // with it.
+    let directive = c.call("assert_knowledge", &json!({
+        "subject": "chatbot-user", "type_name": "DeploymentDirective", "tenant": "acme",
+        "properties": {"account": "ACME-123", "cloud": "Azure"},
+        "authority": "organization_policy",
+        "evidence": [{"source_artifact": "org-policy-v2", "method": "human_provided", "confidence": 1.0}],
+        "note": "ACME-123 must now deploy on Azure"
+    }));
+    let directive_koid = directive["koid"].as_str().unwrap().to_string();
+    let directive_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &directive_koid}),
+    );
+    assert_eq!(
+        directive_ko["extensions"]["authority"], "organization_policy",
+        "the org directive must carry organization-policy authority: {directive_ko}"
+    );
+
+    let sup = c.call("supersede", &json!({
+        "subject": "chatbot-user",
+        "old": &aws_koid,
+        "superseded_by": &directive_koid,
+        "reason": "Organization policy supersedes the previous preference: ACME-123 must deploy on Azure",
+        "evidence": [{"source_artifact": "org-policy-v2", "method": "human_provided"}]
+    }));
+    assert_eq!(sup["new"], directive_koid);
+
+    // The old preference is temporally closed, still readable, and links to
+    // its successor — the supersession explanation is durable knowledge.
+    let aws_after = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &aws_koid}),
+    );
+    assert_eq!(
+        aws_after["properties"]["cloud"], "AWS",
+        "superseded knowledge stays readable (temporal)"
+    );
+    assert_eq!(aws_after["extensions"]["epistemic_status"], "superseded");
+    assert!(
+        aws_after["relationships"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["target"] == directive_koid),
+        "superseded preference must link to its successor: {}",
+        aws_after["relationships"]
+    );
+    assert!(
+        aws_after["extensions"]["epistemic_history"]
+            .to_string()
+            .contains("Organization policy supersedes"),
+        "supersession reason must be recorded: {}",
+        aws_after["extensions"]["epistemic_history"]
+    );
+    assert!(
+        aws_after["extensions"]["evidence"]
+            .to_string()
+            .contains("org-policy-v2"),
+        "supersession evidence must append to the old claim, never disappear"
+    );
+
+    // "Where should I deploy now?" → the org directive, with org authority.
+    let now = c.call(
+        "aikoql",
+        &json!({
+            "subject": "chatbot-user",
+            "query": "MATCH DeploymentDirective WHERE account == \"ACME-123\" RETURN *"
+        }),
+    );
+    let targets: Vec<String> = now["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["properties"]["cloud"].as_str().map(String::from))
+        .collect();
+    assert!(
+        targets.contains(&"Azure".to_string()),
+        "current deployment target must be Azure: {targets:?}"
+    );
+
+    // ── §51.4 "Deploy it." — the Program-as-KO action pipeline ────────────
+    // Resolve Program-as-KO: the deployment program reads the current
+    // directive from knowledge (no hardcoded target).
+    let prog = c.call(
+        "deploy_program",
+        &json!({
+            "subject": "chatbot-user",
+            "name": "DeployToCloud",
+            "body": "MATCH DeploymentDirective WHERE account == \"ACME-123\" RETURN *",
+            "language": "aikoql"
+        }),
+    );
+    let prog_koid = prog["koid"].as_str().unwrap().to_string();
+    let prog_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &prog_koid}),
+    );
+    assert_eq!(prog_ko["type_name"], "aikoql:program");
+
+    // Check permissions + policy: Allow for the bot principal, deny for
+    // anyone else (the approval gate where a human would be asked).
+    c.call(
+        "deploy_policy",
+        &json!({
+            "subject": "chatbot-user", "name": "BotMayDeploy", "effect": "Allow",
+            "principal": "chatbot-user", "action": "Write", "resource_type": "DeploymentDirective"
+        }),
+    );
+    let allow = c.call(
+        "evaluate_policies",
+        &json!({
+            "subject": "chatbot-user", "principal": "chatbot-user",
+            "action": "Write", "resource_type": "DeploymentDirective"
+        }),
+    );
+    assert_eq!(
+        allow["allowed"], true,
+        "deploy policy must allow the bot: {allow}"
+    );
+    let deny = c.call(
+        "evaluate_policies",
+        &json!({
+            "subject": "chatbot-user", "principal": "other-bot",
+            "action": "Write", "resource_type": "DeploymentDirective"
+        }),
+    );
+    assert_eq!(
+        deny["allowed"], false,
+        "non-authorized principal must be denied: {deny}"
+    );
+
+    // Execute under the caller's identity.
+    let exec = c.call(
+        "execute_program",
+        &json!({
+            "subject": "chatbot-user", "roles": ["chatbot-user"], "koid": &prog_koid
+        }),
+    );
+    assert_eq!(
+        exec["count"], 1,
+        "program must resolve exactly one deployment target: {exec}"
+    );
+    assert_eq!(
+        exec["results"][0]["properties"]["cloud"], "Azure",
+        "postcondition: the executed deployment targets the org-mandated cloud"
+    );
+
+    // Record the episode: goal → action → outcome, with preconditions.
+    let ep = c.call(
+        "record_experience",
+        &json!({
+            "subject": "chatbot-user",
+            "goal": "Deploy ACME-123",
+            "action": "execute DeployToCloud",
+            "outcome": "success",
+            "preconditions": ["policy BotMayDeploy allowed"],
+            "lesson": "deployment target resolved from the org directive",
+            "evidence": [{"source_artifact": "exec-run-1", "method": "runtime_observation"}]
+        }),
+    );
+    let ep_koid = ep["koid"].as_str().unwrap().to_string();
+    let ep_ko = c.call("get", &json!({"subject": "chatbot-user", "koid": &ep_koid}));
+    assert_eq!(ep_ko["type_name"], "aikoql:experience");
+    assert_eq!(ep_ko["properties"]["actor"], "chatbot-user");
+    assert_eq!(ep_ko["properties"]["goal"], "Deploy ACME-123");
+    assert_eq!(ep_ko["properties"]["outcome"], "success");
+    assert_eq!(
+        ep_ko["properties"]["preconditions"][0],
+        "policy BotMayDeploy allowed"
+    );
+
+    let _ = std::fs::remove_file(&db);
+}
+
+/// G6 — Chatbot Memory Certification Scenarios (TP-3b): scripted replay of
+/// the chatbot suite's conversation-level scenarios — §8 CHAT-MEM-001..005
+/// (same-session, cross-session, restart persistence, explicit remember,
+/// ephemeral non-conversion), §9 CLASS-001..005 (fact/preference/episode/
+/// procedure/program classification), §11 PERS-001..004 (behavior change,
+/// explainability, conflict resolution, scope confinement) — over the real
+/// MCP surface with mechanical judges (PR-R pattern).
+#[test]
+fn chatbot_memory_certification_scenarios() {
+    let db = std::env::temp_dir().join(format!("mcp-cmem-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&db);
+    let mut c = McpClient::start(db.to_str().unwrap());
+    c.session_init("chatbot-user", "acme");
+
+    // ── §8 CHAT-MEM-001: same-session preference recall ────────────────────
+    // "I prefer responses in English." → an asserted UserPreference.
+    let lang = c.call(
+        "assert_knowledge",
+        &json!({
+            "subject": "chatbot-user", "type_name": "UserPreference", "tenant": "acme",
+            "properties": {"topic": "preferred language", "value": "English"},
+            "authority": "human_approved",
+            "evidence": [{"source_artifact": "chat-msg-lang", "method": "human_provided"}]
+        }),
+    );
+    assert_eq!(lang["version"], 1);
+    let recall_lang = c.call(
+        "aikoql",
+        &json!({
+            "subject": "chatbot-user",
+            "query": "MATCH UserPreference WHERE topic == \"preferred language\" RETURN *"
+        }),
+    );
+    let lang_values: Vec<String> = recall_lang["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["properties"]["value"].as_str().map(String::from))
+        .collect();
+    assert!(
+        lang_values.contains(&"English".to_string()),
+        "CHAT-MEM-001: same-session preference must be recallable: {lang_values:?}"
+    );
+
+    // ── CHAT-MEM-002: cross-session recall ─────────────────────────────────
+    // "I prefer concise answers." → remembered in conversation 1 …
+    c.call(
+        "assert_knowledge",
+        &json!({
+            "subject": "chatbot-user", "type_name": "UserPreference", "tenant": "acme",
+            "properties": {"topic": "response style", "value": "concise"},
+            "authority": "human_approved",
+            "evidence": [{"source_artifact": "chat-msg-style", "method": "human_provided", "confidence": 0.9}]
+        }),
+    );
+    // … available again in conversation 2 (fresh session, same identity).
+    c.session_init("chatbot-user", "acme");
+    let recall_style = c.call(
+        "aikoql",
+        &json!({
+            "subject": "chatbot-user",
+            "query": "MATCH UserPreference WHERE topic == \"response style\" RETURN *"
+        }),
+    );
+    let style_values: Vec<String> = recall_style["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["properties"]["value"].as_str().map(String::from))
+        .collect();
+    assert!(
+        style_values.contains(&"concise".to_string()),
+        "CHAT-MEM-002: cross-session recall must find the preference: {style_values:?}"
+    );
+
+    // ── CHAT-MEM-003: persistence across server restart ────────────────────
+    // Kill the server, reopen the same database, ask again.
+    drop(c);
+    let mut c = McpClient::start(db.to_str().unwrap());
+    c.session_init("chatbot-user", "acme");
+    let after_restart = c.call(
+        "aikoql",
+        &json!({
+            "subject": "chatbot-user",
+            "query": "MATCH UserPreference RETURN *"
+        }),
+    );
+    let after_restart_values: Vec<String> = after_restart["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["properties"]["value"].as_str().map(String::from))
+        .collect();
+    assert!(
+        after_restart_values.contains(&"English".to_string())
+            && after_restart_values.contains(&"concise".to_string()),
+        "CHAT-MEM-003: preferences must survive a full restart: {after_restart_values:?}"
+    );
+
+    // ── CHAT-MEM-004: explicit "Remember that …" → durable candidate ───────
+    // "Remember that my preferred deployment environment is AWS."
+    let aws = c.call("assert_knowledge", &json!({
+        "subject": "chatbot-user", "type_name": "DeploymentPreference", "tenant": "acme",
+        "properties": {"account": "ACME-123", "cloud": "AWS"},
+        "authority": "human_approved",
+        "evidence": [{"source_artifact": "chat-msg-4", "method": "human_provided", "confidence": 0.95}]
+    }));
+    let aws_koid = aws["koid"].as_str().unwrap().to_string();
+    let aws_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &aws_koid}),
+    );
+    assert_eq!(aws_ko["extensions"]["authority"], "human_approved");
+    assert_eq!(aws_ko["extensions"]["epistemic_status"], "asserted");
+    assert!(
+        aws_ko["extensions"]["evidence"]
+            .to_string()
+            .contains("chat-msg-4"),
+        "CHAT-MEM-004: explicit remember must keep its evidence: {}",
+        aws_ko["extensions"]["evidence"]
+    );
+
+    // ── CHAT-MEM-005: ephemeral statements are NOT auto-converted ──────────
+    // "I am currently testing this on AWS." → an observation (status
+    // "observed", non-assertive channel) — classification is the chatbot's
+    // job; the substrate must not silently promote it to a preference.
+    let obs = c.call(
+        "observe",
+        &json!({
+            "subject": "chatbot-user", "type_name": "UserStatement", "tenant": "acme",
+            "properties": {"environment": "AWS", "stage": "testing"},
+            "evidence": [{"source_artifact": "chat-msg-5", "method": "human_provided"}]
+        }),
+    );
+    let obs_koid = obs["koid"].as_str().unwrap().to_string();
+    let obs_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &obs_koid}),
+    );
+    assert_eq!(
+        obs_ko["extensions"]["epistemic_status"], "observed",
+        "ephemeral statement must be stamped observed, not asserted: {obs_ko}"
+    );
+    let prefs_after_ephemeral = c.call(
+        "aikoql",
+        &json!({"subject": "chatbot-user", "query": "MATCH UserPreference RETURN *"}),
+    );
+    let pref_blobs: Vec<String> = prefs_after_ephemeral["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["properties"].to_string())
+        .collect();
+    assert!(
+        !pref_blobs.iter().any(|p| p.contains("testing")),
+        "CHAT-MEM-005: the ephemeral statement must not become a preference: {pref_blobs:?}"
+    );
+
+    // ── §9 CLASS: classification into memory types ─────────────────────────
+    // CLASS-001: "My company is ACME." → semantic fact.
+    let fact = c.call(
+        "assert_knowledge",
+        &json!({
+            "subject": "chatbot-user", "type_name": "SemanticFact", "tenant": "acme",
+            "properties": {"subject": "user company", "predicate": "is", "object": "ACME"},
+            "authority": "human_approved",
+            "evidence": [{"source_artifact": "chat-msg-6", "method": "human_provided"}]
+        }),
+    );
+    let fact_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": fact["koid"].as_str().unwrap()}),
+    );
+    assert_eq!(fact_ko["type_name"], "SemanticFact");
+    assert_eq!(fact_ko["properties"]["object"], "ACME");
+
+    // CLASS-002: preference → UserPreference KO (the concise one, §8).
+    let style_ko = c.call(
+        "aikoql",
+        &json!({"subject": "chatbot-user", "query": "MATCH UserPreference WHERE topic == \"response style\" RETURN *"}),
+    );
+    let style_koid = style_ko["results"][0]["koid"].as_str().unwrap().to_string();
+    let style_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &style_koid}),
+    );
+    assert_eq!(style_ko["type_name"], "UserPreference");
+
+    // CLASS-003: "Yesterday I deployed ACME-123." → episodic memory.
+    let ep = c.call(
+        "record_experience",
+        &json!({
+            "subject": "chatbot-user",
+            "goal": "Deploy ACME-123 yesterday",
+            "action": "ran the deployment pipeline",
+            "outcome": "success",
+            "preconditions": [],
+            "evidence": [{"source_artifact": "chat-msg-7", "method": "human_provided"}]
+        }),
+    );
+    let ep_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": ep["koid"].as_str().unwrap()}),
+    );
+    assert_eq!(ep_ko["type_name"], "aikoql:experience");
+
+    // CLASS-004: "To reset an account: …" → procedural memory. Procedural
+    // knowledge is an experience KO carrying reuse_conditions (there is no
+    // separate aikoql:procedure type).
+    let proc = c.call(
+        "record_experience",
+        &json!({
+            "subject": "chatbot-user",
+            "goal": "Reset an account",
+            "action": "verify identity, then reset password",
+            "outcome": "account reset",
+            "preconditions": ["user verified identity"],
+            "lesson": "always verify identity before resetting",
+            "reuse_conditions": ["account reset request"],
+            "evidence": [{"source_artifact": "chat-msg-8", "method": "human_provided"}]
+        }),
+    );
+    let proc_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": proc["koid"].as_str().unwrap()}),
+    );
+    assert_eq!(proc_ko["type_name"], "aikoql:experience");
+    assert!(
+        proc_ko["properties"]["reuse_conditions"]
+            .to_string()
+            .contains("account reset request"),
+        "CLASS-004: procedural memory must carry reuse_conditions: {}",
+        proc_ko["properties"]["reuse_conditions"]
+    );
+
+    // CLASS-005: "Run ResetAccount." → Program-as-KO.
+    let prog = c.call(
+        "deploy_program",
+        &json!({
+            "subject": "chatbot-user", "name": "ResetAccount",
+            "body": "MATCH AccountInfo WHERE account == \"ACME-123\" RETURN *",
+            "language": "aikoql"
+        }),
+    );
+    let prog_ko = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": prog["koid"].as_str().unwrap()}),
+    );
+    assert_eq!(prog_ko["type_name"], "aikoql:program");
+
+    // ── §11 PERS-001/002: behavior + explainability ────────────────────────
+    // PERS-001: the preference that changes behavior is durable knowledge.
+    // PERS-002: "Why do you answer concisely?" → provenance names the user
+    // statement, the confidence, and the evidence chain.
+    let prov = c.call(
+        "provenance",
+        &json!({"subject": "chatbot-user", "koid": &style_koid}),
+    );
+    let prov_md = prov["provenance"].as_str().unwrap();
+    assert!(
+        prov_md.contains("chat-msg-style"),
+        "PERS-002: provenance must name the source chat message: {prov_md}"
+    );
+    assert!(
+        prov_md.contains("Confidence:"),
+        "PERS-002: provenance must carry the confidence: {prov_md}"
+    );
+
+    // ── PERS-003: conflict resolution keeps history ────────────────────────
+    // "Actually I prefer detailed answers now." → supersede, not overwrite.
+    let detailed = c.call("assert_knowledge", &json!({
+        "subject": "chatbot-user", "type_name": "UserPreference", "tenant": "acme",
+        "properties": {"topic": "response style", "value": "detailed"},
+        "authority": "human_approved",
+        "evidence": [{"source_artifact": "chat-msg-9", "method": "human_provided", "confidence": 1.0}]
+    }));
+    let detailed_koid = detailed["koid"].as_str().unwrap().to_string();
+    c.call(
+        "supersede",
+        &json!({
+            "subject": "chatbot-user",
+            "old": &style_koid,
+            "superseded_by": &detailed_koid,
+            "reason": "user now prefers detailed answers",
+            "evidence": [{"source_artifact": "chat-msg-9", "method": "human_provided"}]
+        }),
+    );
+    // The old preference is closed but readable — history is never lost.
+    let old_style = c.call(
+        "get",
+        &json!({"subject": "chatbot-user", "koid": &style_koid}),
+    );
+    assert_eq!(old_style["properties"]["value"], "concise");
+    assert_eq!(old_style["extensions"]["epistemic_status"], "superseded");
+    // Current-truth recall returns only the new preference.
+    let current = c.call(
+        "aikoql",
+        &json!({"subject": "chatbot-user", "query": "MATCH UserPreference WHERE topic == \"response style\" RETURN *"}),
+    );
+    let current_values: Vec<String> = current["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["properties"]["value"].as_str().map(String::from))
+        .collect();
+    assert!(
+        current_values.contains(&"detailed".to_string())
+            && !current_values.contains(&"concise".to_string()),
+        "PERS-003: current-truth recall must return only the new preference: {current_values:?}"
+    );
+
+    // ── PERS-004: user scope confinement ───────────────────────────────────
+    // Another user in the same tenant must see neither the preference nor
+    // the point object; a user preference never widens to org scope.
+    c.session_init("other-user", "acme");
+    let leak = c.call("aikoql", &json!({"query": "MATCH UserPreference RETURN *"}));
+    assert_eq!(
+        leak["results"].as_array().unwrap().len(),
+        0,
+        "PERS-004: another user's recall must not leak this user's preferences: {leak}"
+    );
+    let foreign = c.call_raw("get", &json!({"koid": &style_koid}));
+    let foreign_text = foreign["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        foreign["result"]["isError"] == true && foreign_text.contains("ACCESS_DENIED"),
+        "PERS-004: another user's point read must be denied: {foreign}"
+    );
+
+    let _ = std::fs::remove_file(&db);
+}
+
+/// G7 — CTX differential scenarios (TP-3c): the same context-compilation
+/// question over the real MCP surface under different permissions (CTX-001),
+/// different temporal states (CTX-002), and post-update knowledge (CTX-003).
+/// CTX-MIN-001..003 (1000-KO minimization, no irrelevant forwarding, dedup)
+/// are pure-compiler tests in aikoql-ingestion's context::tests.
+#[test]
+fn ctx_differential_scenarios() {
+    let db = std::env::temp_dir().join(format!("mcp-ctx-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&db);
+    let mut c = McpClient::start(db.to_str().unwrap());
+    c.session_init("alice", "acme");
+
+    // Knowledge snapshot v1 — the same ir_json shape ingest-dir produces.
+    let v1 = KnowledgeIr {
+        entities: vec![
+            EntityCandidate {
+                name: "PaymentService".into(),
+                type_hint: Some("Struct".into()),
+                mentions: vec!["processes payments".into()],
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            },
+            EntityCandidate {
+                name: "Ledger".into(),
+                type_hint: Some("Struct".into()),
+                mentions: vec!["payment ledger".into()],
+                confidence: 0.8,
+                evidence: Evidence::default(),
+            },
+        ],
+        facts: vec![FactCandidate {
+            snippet: None,
+            statement: "payments flow through Stripe".into(),
+            entities: vec![],
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        }],
+        ..Default::default()
+    };
+    let doc = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {"ir_json": serde_json::to_string(&v1).unwrap()},
+            "origin": "system"
+        }),
+    );
+    let doc_koid = doc["koid"].as_str().unwrap().to_string();
+
+    // ── CTX-001: same question, two users, different permissions ──────────
+    // Alice (owner) compiles the payments context…
+    let alice_ctx = c.call(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments"}),
+    );
+    let alice_names: Vec<&str> = alice_ctx["package"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert!(
+        alice_names.contains(&"PaymentService"),
+        "the owner must get the payment context: {alice_ctx}"
+    );
+    // §36: a disabled/absent semantic index must be detectable in the
+    // response — this harness has no embedding provider wired, so the
+    // compile must say so instead of silently degrading.
+    assert_eq!(
+        alice_ctx["semantic"],
+        json!(false),
+        "semantic availability must be reported: {alice_ctx}"
+    );
+
+    // …Bob (same tenant, no grant) gets no context at all — the context
+    // compilation layer is permission-differential, not just content-differential.
+    c.session_init("bob", "acme");
+    let bob_ctx = c.call_raw(
+        "compile_context",
+        &json!({"koid": &doc_koid, "task": "process payments"}),
+    );
+    let bob_text = bob_ctx["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        bob_ctx["result"]["isError"] == true && bob_text.contains("ACCESS_DENIED"),
+        "CTX-001: a user without permission must get no context: {bob_ctx}"
+    );
+
+    // ── CTX-002: same question at two times — temporal state ──────────────
+    // A fresh run experience (1s TTL) enters the context for the refund task…
+    c.session_init("alice", "acme");
+    c.call(
+        "record_experience",
+        &json!({
+            "subject": "alice",
+            "goal": "process payments refund",
+            "action": "refund via payment service",
+            "outcome": "success",
+            "preconditions": [],
+            "ttl_seconds": 1,
+            "evidence": [{"source_artifact": "exec-run-2", "method": "runtime_observation"}]
+        }),
+    );
+    let ctx_t0 = c.call(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments refund"}),
+    );
+    assert!(
+        !ctx_t0["experiences"].as_array().unwrap().is_empty(),
+        "t0: the fresh experience must be in the context: {ctx_t0}"
+    );
+    // …and drops out once its temporal window closes. Same question, same
+    // knowledge — only time has passed, so only the temporal state differs.
+    std::thread::sleep(std::time::Duration::from_millis(2200));
+    let ctx_t1 = c.call(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments refund"}),
+    );
+    assert!(
+        ctx_t1["experiences"].as_array().unwrap().is_empty(),
+        "CTX-002: the expired experience must drop out of the context: {ctx_t1}"
+    );
+
+    // ── CTX-003: same question after a knowledge update ───────────────────
+    // The snapshot moves to v2: internal ledger replaces Stripe.
+    let v2 = KnowledgeIr {
+        entities: vec![
+            EntityCandidate {
+                name: "PaymentService".into(),
+                type_hint: Some("Struct".into()),
+                mentions: vec!["processes payments".into()],
+                confidence: 0.9,
+                evidence: Evidence::default(),
+            },
+            EntityCandidate {
+                name: "InternalLedger".into(),
+                type_hint: Some("Struct".into()),
+                mentions: vec!["internal payment ledger".into()],
+                confidence: 0.8,
+                evidence: Evidence::default(),
+            },
+        ],
+        facts: vec![FactCandidate {
+            snippet: None,
+            statement: "payments flow through the internal ledger".into(),
+            entities: vec![],
+            confidence: 0.9,
+            evidence: Evidence::default(),
+        }],
+        relations: vec![RelationCandidate {
+            subject: "PaymentService".into(),
+            predicate: "depends_on".into(),
+            object: "InternalLedger".into(),
+            confidence: 0.8,
+            evidence: Evidence::default(),
+        }],
+        ..Default::default()
+    };
+    let upd = c.call(
+        "remember",
+        &json!({
+            "subject": "alice", "koid": &doc_koid, "expected_version": 1,
+            "type_name": "KnowledgeSnapshot", "tenant": "acme",
+            "properties": {"ir_json": serde_json::to_string(&v2).unwrap()},
+            "origin": "system"
+        }),
+    );
+    assert_eq!(upd["version"], 2);
+
+    let after = c.call(
+        "compile_context",
+        &json!({"subject": "alice", "koid": &doc_koid, "task": "process payments"}),
+    );
+    let fact_strs: Vec<&str> = after["package"]["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["statement"].as_str())
+        .collect();
+    assert!(
+        fact_strs.iter().any(|s| s.contains("internal ledger")),
+        "CTX-003: the updated context must carry the new fact: {after}"
+    );
+    assert!(
+        !fact_strs.iter().any(|s| s.contains("Stripe")),
+        "CTX-003: the replaced fact must not linger in the context: {fact_strs:?}"
+    );
+    let after_names: Vec<&str> = after["package"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["name"].as_str())
+        .collect();
+    assert!(
+        after_names.contains(&"InternalLedger"),
+        "CTX-003: the new entity must enter the context: {after_names:?}"
+    );
+
+    let _ = std::fs::remove_file(&db);
+}
+
 #[test]
 fn mcp_ping_and_tools_list() {
     let db = std::env::temp_dir().join(format!("mcp-ping-{}.redb", std::process::id()));
@@ -476,6 +1285,147 @@ fn mcp_idempotency_guarantee() {
         }),
     );
     assert_eq!(r2["koid"].as_str().unwrap(), koid1);
+
+    let _ = std::fs::remove_file(&db);
+}
+
+#[test]
+fn mvp_rec_002_backup_destroy_restore_round_trip() {
+    // MVP-QA-001 MVP-REC-002: backup → destroy → restore yields equivalent
+    // knowledge — same KOID resolvable with the same content, and the
+    // backup is listable.
+    let db = std::env::temp_dir().join(format!("mcp-recv-{}.redb", std::process::id()));
+    let _ = std::fs::remove_file(&db);
+
+    // Phase 1: build knowledge.
+    let mut c = McpClient::start(db.to_str().unwrap());
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note", "tenant": "acme",
+            "properties": {"body": "quarterly revenue reached 42M", "memo": "rec002"}
+        }),
+    );
+    let koid = note["koid"].as_str().unwrap().to_string();
+
+    // MVP-QA-001 REC-002 equivalence legs (2026-08-25): relations,
+    // provenance (evidence + assertion instant) and temporal state
+    // (supersession) must all survive backup → destroy → restore.
+    let asserted = c.call(
+        "assert_knowledge",
+        &json!({
+            "subject": "admin", "type_name": "Policy",
+            "properties": {"text": "retention is 30 days"},
+            "authority": "architecture_decision",
+            "evidence": [{"source_artifact": "runbook.md", "method": "doc_extraction"}],
+            "valid_from": 1000
+        }),
+    );
+    let asserted_koid = asserted["koid"].as_str().unwrap().to_string();
+
+    let rel = c.call(
+        "relate",
+        &json!({
+            "subject": "admin", "from": &koid, "to": &asserted_koid,
+            "rel_type": "derived_from"
+        }),
+    );
+    assert!(rel["koid"].as_str().is_some());
+
+    let successor = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note", "tenant": "acme",
+            "properties": {"body": "quarterly revenue reached 45M", "memo": "rec002-v2"}
+        }),
+    );
+    let successor_koid = successor["koid"].as_str().unwrap().to_string();
+    let sup = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin",
+            "old": &koid,
+            "superseded_by": &successor_koid,
+            "reason": "correction: 45M",
+            "evidence": [{"source_artifact": "finance.md", "method": "human_provided"}]
+        }),
+    );
+    assert_eq!(sup["new"], successor_koid);
+
+    // Phase 2: verified backup + it must be listable.
+    let backup = c.call("backup", &json!({"subject": "admin"}));
+    assert_eq!(backup["verified"], true, "backup must verify: {backup}");
+    let backup_dir = backup["backup"].as_str().unwrap().to_string();
+
+    let list = c.call("list_backups", &json!({"subject": "admin"}));
+    let names: Vec<&str> = list["backups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["name"].as_str())
+        .collect();
+    assert!(
+        names.iter().any(|n| backup_dir.ends_with(n)),
+        "backup must appear in list_backups, got {names:?}"
+    );
+
+    // Phase 3: destroy — kill the server, delete the database file (give
+    // the killed process a moment to release the handle on Windows).
+    drop(c);
+    let mut removed = false;
+    for _ in 0..20 {
+        if std::fs::remove_file(&db).is_ok() {
+            removed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    assert!(removed, "destroy: database file must be removable");
+
+    // Phase 4: fresh server on the same path (empty DB), then restore.
+    let mut c = McpClient::start(db.to_str().unwrap());
+    let restored = c.call(
+        "restore",
+        &json!({"subject": "admin", "backup": &backup_dir}),
+    );
+    assert_eq!(
+        restored["restored"], true,
+        "restore must succeed: {restored}"
+    );
+
+    // Phase 5: the restored file lands on reopen — restart the server.
+    drop(c);
+    let mut c = McpClient::start(db.to_str().unwrap());
+
+    // Phase 6: equivalent knowledge — same KOID, same content.
+    let fetched = c.call("get", &json!({"koid": &koid, "subject": "admin"}));
+    assert_eq!(fetched["type_name"], "note");
+    assert_eq!(
+        fetched["properties"]["body"],
+        "quarterly revenue reached 42M"
+    );
+
+    // Relations survive: note → Policy derived_from.
+    let rels = fetched["relationships"].as_array().unwrap();
+    assert!(
+        rels.iter().any(|r| r["target"] == asserted_koid),
+        "relation to asserted policy must survive restore: {fetched}"
+    );
+
+    // Temporal state survives: the supersession mark + successor link.
+    assert_eq!(fetched["extensions"]["epistemic_status"], "superseded");
+    assert!(
+        rels.iter().any(|r| r["target"] == successor_koid),
+        "supersession link must survive restore"
+    );
+
+    // Provenance survives: evidence list + assertion instant on the asserted KO.
+    let restored_asserted = c.call("get", &json!({"koid": &asserted_koid, "subject": "admin"}));
+    let evidence = restored_asserted["extensions"]["evidence"]
+        .as_array()
+        .unwrap();
+    assert!(!evidence.is_empty(), "evidence must survive restore");
+    assert_eq!(restored_asserted["extensions"]["valid_from"], 1000);
 
     let _ = std::fs::remove_file(&db);
 }

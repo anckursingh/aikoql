@@ -108,13 +108,13 @@ fn normalize_name(name: &str) -> String {
 }
 
 /// Produce an evidence trail linking each entity to its source(s).
-pub fn evidence_trail(ir: &KnowledgeIr, source_label: &str) -> Vec<Evidence> {
+pub fn evidence_trail(ir: &KnowledgeIr, _source_label: &str) -> Vec<Evidence> {
     let mut trail = Vec::new();
     for entity in &ir.entities {
         trail.push(Evidence {
             document_id: ir.document_id.clone(),
             page: None,
-            bbox_text: Some(format!("{}: {}", source_label, entity.name)),
+            source: None,
             extractor: ir.extractor.clone(),
             model: Some("multi-source".into()),
             confidence: entity.confidence,
@@ -228,6 +228,7 @@ mod tests {
     #[test]
     fn merge_dedups_duplicate_facts() {
         let fact = FactCandidate {
+            snippet: None,
             statement: "The system uses MVCC".into(),
             entities: vec![],
             confidence: 0.7,

@@ -31,11 +31,31 @@ pub struct MongoConnector {
 
 impl MongoConnector {
     pub fn connect(uri: &str, database: &str) -> Result<Self, String> {
+        Self::connect_with_timeout(uri, database, None)
+    }
+
+    /// Connect with an optional timeout (CON-005): the driver's default
+    /// server selection waits 30s — `--timeout-ms` must bound it.
+    pub fn connect_with_timeout(
+        uri: &str,
+        database: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<Self, String> {
         let rt = Runtime::new().map_err(|e| format!("tokio runtime: {}", e))?;
-        let client = rt
-            .block_on(async { Client::with_uri_str(uri).await })
-            .map_err(|e| format!("MongoDB connection failed: {}", e))?;
-        let db = client.database(database);
+        // Client construction needs a tokio reactor context (mongodb 3.8) —
+        // parse + with_options stay inside block_on.
+        let (client, db) = rt.block_on(async {
+            let mut opts = mongodb::options::ClientOptions::parse(uri)
+                .await
+                .map_err(|e| format!("MongoDB connection failed: {}", e))?;
+            if let Some(ms) = timeout_ms {
+                opts.server_selection_timeout = Some(std::time::Duration::from_millis(ms));
+            }
+            let client = Client::with_options(opts)
+                .map_err(|e| format!("MongoDB connection failed: {}", e))?;
+            let db = client.database(database);
+            Ok::<_, String>((client, db))
+        })?;
         Ok(MongoConnector { rt, client, db })
     }
 
@@ -115,7 +135,10 @@ impl MongoConnector {
                         relationships: vec![],
                         event_refs: vec![],
                         security: SecurityDescriptor {
-                            owner: "mongodb-importer".into(),
+                            // Must equal the runner subject "mongo-importer" —
+                            // a mismatch makes every commit ACCESS_DENIED and
+                            // the whole import a silent no-op (item 2 lesson).
+                            owner: "mongo-importer".into(),
                             acl: vec![],
                             classification: None,
                         },
@@ -146,6 +169,8 @@ fn document_to_ko(doc: &Document, collection: &str) -> (PropertyMap, KOID) {
             props.insert(key.clone(), bson_to_value(value));
         }
     }
+    // ponytail: the fallback key is non-deterministic across re-imports, but
+    // it cannot occur in practice — MongoDB always assigns _id on insert.
     let pk = vec![id_str.unwrap_or_else(|| format!("{}:{}", collection, props.len()))];
     (props, deterministic_koid(collection, &pk))
 }
@@ -230,7 +255,10 @@ mod tests {
     #[test]
     fn bson_scalars_to_value() {
         assert_eq!(bson_to_value(&Bson::Int32(42)), Value::Int(42));
-        assert_eq!(bson_to_value(&Bson::Double(3.14)), Value::Float(3.14));
+        assert_eq!(
+            bson_to_value(&Bson::Double(std::f64::consts::PI)),
+            Value::Float(std::f64::consts::PI)
+        );
         assert_eq!(
             bson_to_value(&Bson::String("hi".into())),
             Value::Text("hi".into())

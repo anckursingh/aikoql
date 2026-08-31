@@ -17,9 +17,12 @@
 //! and require explicit validation before execution.
 
 use crate::ast::{AstNode, BlockType, DocumentAst};
+use crate::boundary::{KnowledgeBoundaryDetector, RuleBoundaryDetector};
+use crate::fragment::KnowledgeFragment;
 use crate::ir::{
     EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate, SemanticAnalyzer,
 };
+use crate::source::{SourceSpan, VisualAssetRef};
 
 // ---------------------------------------------------------------------------
 // Classification
@@ -142,7 +145,7 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                         sections.push(s);
                     }
                     current_section = Some(Section {
-                        heading: node.text.clone(),
+                        heading: node.text.clone().unwrap_or_default(),
                         level: *level,
                         paragraphs: Vec::new(),
                         list_items: Vec::new(),
@@ -152,7 +155,7 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                 BlockType::Title => {
                     if current_section.is_none() {
                         current_section = Some(Section {
-                            heading: node.text.clone(),
+                            heading: node.text.clone().unwrap_or_default(),
                             level: 0,
                             paragraphs: Vec::new(),
                             list_items: Vec::new(),
@@ -161,15 +164,16 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                     } else {
                         // Title in body — treat as paragraph
                         if let Some(ref mut s) = current_section {
-                            if !node.text.trim().is_empty() {
-                                s.paragraphs.push(node.text.clone());
+                            let t = node.text.as_deref().unwrap_or_default();
+                            if !t.trim().is_empty() {
+                                s.paragraphs.push(t.to_string());
                             }
                         }
                     }
                 }
                 BlockType::Paragraph => {
                     if let Some(ref mut s) = current_section {
-                        let t = node.text.trim();
+                        let t = node.text.as_deref().unwrap_or_default().trim();
                         if !t.is_empty() {
                             s.paragraphs.push(t.to_string());
                         }
@@ -179,7 +183,7 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                     // Recurse into list children for list items
                     for child in &node.children {
                         if matches!(child.block_type, BlockType::ListItem) {
-                            let t = child.text.trim();
+                            let t = child.text.as_deref().unwrap_or_default().trim();
                             if !t.is_empty() {
                                 if let Some(ref mut s) = current_section {
                                     s.list_items.push(t.to_string());
@@ -190,7 +194,7 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                 }
                 BlockType::ListItem => {
                     if let Some(ref mut s) = current_section {
-                        let t = node.text.trim();
+                        let t = node.text.as_deref().unwrap_or_default().trim();
                         if !t.is_empty() {
                             s.list_items.push(t.to_string());
                         }
@@ -201,17 +205,37 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
                         // Try to detect language from first line or leave as ""
                         let lang = node
                             .text
+                            .as_deref()
+                            .unwrap_or_default()
                             .lines()
                             .next()
                             .filter(|l| !l.contains(' '))
                             .unwrap_or("");
-                        s.code_blocks.push((lang.to_string(), node.text.clone()));
+                        s.code_blocks
+                            .push((lang.to_string(), node.text.clone().unwrap_or_default()));
+                    }
+                }
+                BlockType::Diagram | BlockType::Chart | BlockType::Formula | BlockType::Image => {
+                    // Visual content flows through the fragment leg (PR-F),
+                    // not section text — keep it out of paragraph facts.
+                    // Exception (MVP-EXT-001): the markdown path never
+                    // attaches visual payloads, and the fragment leg emits no
+                    // text facts — an asset-less figure's caption/alt text
+                    // would be lost by both legs. Payload-less nodes keep
+                    // their text as paragraph evidence.
+                    if node.payload.is_none() {
+                        if let Some(ref mut s) = current_section {
+                            let t = node.text.as_deref().unwrap_or_default().trim();
+                            if !t.is_empty() {
+                                s.paragraphs.push(t.to_string());
+                            }
+                        }
                     }
                 }
                 _ => {
                     // Other block types — collect text into current section
                     if let Some(ref mut s) = current_section {
-                        let t = node.text.trim();
+                        let t = node.text.as_deref().unwrap_or_default().trim();
                         if !t.is_empty() {
                             s.paragraphs.push(t.to_string());
                         }
@@ -232,6 +256,47 @@ fn parse_sections(ast: &DocumentAst) -> Vec<Section> {
 // ---------------------------------------------------------------------------
 // Classifier
 // ---------------------------------------------------------------------------
+
+/// Bullet facts for a section. Definitional (`**term**`) bullets are claims
+/// at the section's confidence; plain bullets are furniture — dropped
+/// wholesale they evicted measured carriers from the pack fold (G10,
+/// 2026-08-24), but MVP-EXT-001 requires every meaningful source segment to
+/// stay addressable. Emit plain bullets at reduced confidence so the
+/// confidence-ranked fold keeps its measured order while the evidence
+/// surface stays resolvable back to the source.
+fn push_bullet_facts(
+    ir: &mut KnowledgeIr,
+    section: &Section,
+    extractor: &str,
+    document_id: &Option<String>,
+    confidence: f32,
+) {
+    for item in &section.list_items {
+        let clean = item.trim();
+        if clean.len() <= 10 {
+            continue;
+        }
+        let conf = if clean.contains("**") {
+            confidence
+        } else {
+            confidence.min(0.5)
+        };
+        ir.facts.push(FactCandidate {
+            snippet: None,
+            statement: clean.to_string(),
+            entities: vec![section.heading.clone()],
+            confidence: conf,
+            evidence: Evidence {
+                document_id: document_id.clone(),
+                page: Some(1),
+                source: None,
+                extractor: extractor.into(),
+                model: Some("markdown-v1".into()),
+                confidence: conf,
+            },
+        });
+    }
+}
 
 /// Classify a heading + body into a `SectionKind`.
 ///
@@ -397,7 +462,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
         "markdown-compiler"
     }
 
-    fn analyze(&self, ast: &DocumentAst) -> KnowledgeIr {
+    fn analyze(&self, ast: &DocumentAst, _fragments: &[KnowledgeFragment]) -> KnowledgeIr {
         let extractor = self.name().to_string();
         let sections = parse_sections(ast);
         let mut ir = KnowledgeIr {
@@ -424,7 +489,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                         evidence: Evidence {
                             document_id: self.document_id.clone(),
                             page: Some(1),
-                            bbox_text: Some(section.heading.clone()),
+                            source: None,
                             extractor: extractor.clone(),
                             model: Some("markdown-v1".into()),
                             confidence: self.confidence,
@@ -432,22 +497,23 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     });
 
                     // Facts from paragraphs under this entity
+                    let fact_confidence = if injection_warning.is_some() {
+                        0.3
+                    } else {
+                        self.confidence
+                    };
                     for para in &section.paragraphs {
                         let clean = para.trim();
                         if clean.len() > 10 {
-                            let fact_confidence = if injection_warning.is_some() {
-                                0.3
-                            } else {
-                                self.confidence
-                            };
                             ir.facts.push(FactCandidate {
+                                snippet: None,
                                 statement: clean.to_string(),
                                 entities: vec![section.heading.clone()],
                                 confidence: fact_confidence,
                                 evidence: Evidence {
                                     document_id: self.document_id.clone(),
                                     page: Some(1),
-                                    bbox_text: Some(section.heading.clone()),
+                                    source: None,
                                     extractor: extractor.clone(),
                                     model: Some("markdown-v1".into()),
                                     confidence: fact_confidence,
@@ -455,18 +521,32 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                             });
                         }
                     }
+                    // Definitional bullets under an entity section are claims
+                    // about it too (G10 T16: the "G12 reference rates
+                    // ($0.15/1M input)" bullet never entered the IR). Plain
+                    // bullets stay addressable at reduced confidence
+                    // (MVP-EXT-001). Untrusted injected bullets are
+                    // re-detected at compile time (R8).
+                    push_bullet_facts(
+                        &mut ir,
+                        section,
+                        &extractor,
+                        &self.document_id,
+                        fact_confidence,
+                    );
                 }
 
                 SectionKind::Rule => {
                     for item in &section.list_items {
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: item.clone(),
                             entities: vec![section.heading.clone()],
                             confidence: self.confidence,
                             evidence: Evidence {
                                 document_id: self.document_id.clone(),
                                 page: Some(1),
-                                bbox_text: Some(section.heading.clone()),
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("markdown-v1".into()),
                                 confidence: self.confidence,
@@ -477,13 +557,14 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     for para in &section.paragraphs {
                         if para.len() > 10 {
                             ir.facts.push(FactCandidate {
+                                snippet: None,
                                 statement: para.clone(),
                                 entities: vec![section.heading.clone()],
                                 confidence: self.confidence,
                                 evidence: Evidence {
                                     document_id: self.document_id.clone(),
                                     page: Some(1),
-                                    bbox_text: Some(section.heading.clone()),
+                                    source: None,
                                     extractor: extractor.clone(),
                                     model: Some("markdown-v1".into()),
                                     confidence: self.confidence,
@@ -501,13 +582,14 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                         let injected = detect_instruction_injection(item).is_some();
                         let conf = if injected { 0.1 } else { self.confidence };
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: item.clone(),
                             entities: vec![section.heading.clone()],
                             confidence: conf,
                             evidence: Evidence {
                                 document_id: self.document_id.clone(),
                                 page: Some(1),
-                                bbox_text: Some(section.heading.clone()),
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("markdown-v1".into()),
                                 confidence: conf,
@@ -526,7 +608,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                         evidence: Evidence {
                             document_id: self.document_id.clone(),
                             page: Some(1),
-                            bbox_text: Some(section.heading.clone()),
+                            source: None,
                             extractor: extractor.clone(),
                             model: Some("markdown-v1".into()),
                             confidence: self.confidence,
@@ -534,13 +616,14 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                     });
                     // ADR-style: extract context, options, selected, rationale
                     ir.facts.push(FactCandidate {
+                        snippet: None,
                         statement: format!("Decision: {}", section.heading),
                         entities: vec!["ADR".into()],
                         confidence: self.confidence,
                         evidence: Evidence {
                             document_id: self.document_id.clone(),
                             page: Some(1),
-                            bbox_text: Some(section.heading.clone()),
+                            source: None,
                             extractor: extractor.clone(),
                             model: Some("markdown-v1".into()),
                             confidence: self.confidence,
@@ -564,13 +647,14 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                             "ADR Detail"
                         };
                         ir.facts.push(FactCandidate {
+                            snippet: None,
                             statement: format!("{}: {}", label, para),
                             entities: vec!["ADR".into(), section.heading.clone()],
                             confidence: self.confidence,
                             evidence: Evidence {
                                 document_id: self.document_id.clone(),
                                 page: Some(1),
-                                bbox_text: Some(section.heading.clone()),
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("markdown-v1".into()),
                                 confidence: self.confidence,
@@ -582,37 +666,118 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                 SectionKind::Artifact { language } => {
                     for (lang, code) in &section.code_blocks {
                         let actual_lang = if lang.is_empty() { &language } else { lang };
+                        // Short fences are knowledge themselves (G10 T17:
+                        // the AGENT-005 `text` fence's "→ validate
+                        // preconditions" chain is the answer) — fold the
+                        // fence lines into the label fact so they rank and
+                        // pack with it. Long fences (e.g. the §52 table
+                        // dump) stay label-only: their bulk would make the
+                        // fact un-packable.
+                        // ponytail: ≤400 chars, single-space line join —
+                        // long lines in a short fence yield a big fact too.
+                        let mut statement = format!(
+                            "Code artifact ({}) under '{}'",
+                            actual_lang, section.heading
+                        );
+                        if code.chars().count() <= 400 {
+                            let lines: Vec<&str> = code
+                                .lines()
+                                .map(str::trim)
+                                .filter(|l| !l.is_empty())
+                                .collect();
+                            if !lines.is_empty() {
+                                statement.push_str(": ");
+                                statement.push_str(&lines.join(" "));
+                            }
+                        }
                         ir.facts.push(FactCandidate {
-                            statement: format!(
-                                "Code artifact ({}) under '{}'",
-                                actual_lang, section.heading
-                            ),
+                            snippet: None,
+                            statement,
                             entities: vec![section.heading.clone()],
                             confidence: self.confidence,
                             evidence: Evidence {
                                 document_id: self.document_id.clone(),
                                 page: Some(1),
-                                bbox_text: Some(code.lines().next().unwrap_or("").to_string()),
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("markdown-v1".into()),
                                 confidence: self.confidence,
                             },
                         });
                     }
+                    // A code fence does not make definitional bullets
+                    // un-factual — the §52 "**Input tokens / Latency /
+                    // Cost** — … ($0.15/1M input)" bullet sits next to a
+                    // `text` fence and was lost entirely (G10 T16). Plain
+                    // bullets stay addressable at reduced confidence
+                    // (MVP-EXT-001); untrusted injected bullets are
+                    // re-detected at compile time (R8).
+                    push_bullet_facts(
+                        &mut ir,
+                        section,
+                        &extractor,
+                        &self.document_id,
+                        self.confidence,
+                    );
+                    // MVP-EXT-002: prose under a fenced section must stay
+                    // retrievable. Emit paragraphs at furniture confidence
+                    // so the pack-fold ranking keeps its measured order
+                    // (full-confidence emission measured negative —
+                    // "Not yet measured" lines evicted T17's carriers,
+                    // 2026-08-24).
+                    for para in &section.paragraphs {
+                        let clean = para.trim();
+                        if clean.len() <= 10 {
+                            continue;
+                        }
+                        let conf = self.confidence.min(0.5);
+                        ir.facts.push(FactCandidate {
+                            snippet: None,
+                            statement: clean.to_string(),
+                            entities: vec![section.heading.clone()],
+                            confidence: conf,
+                            evidence: Evidence {
+                                document_id: self.document_id.clone(),
+                                page: Some(1),
+                                source: None,
+                                extractor: extractor.clone(),
+                                model: Some("markdown-v1".into()),
+                                confidence: conf,
+                            },
+                        });
+                    }
                 }
 
                 SectionKind::Claim => {
+                    // Definitional bullets (**Term** — definition) in a claim
+                    // section are claims too — dropping them silently loses
+                    // facts that live only as such bullets (G10 T16: the
+                    // "**Input tokens / Latency / Cost** — … G12 reference
+                    // rates ($0.15/1M input)" bullet never entered the IR).
+                    // Plain bullets stay addressable at reduced confidence
+                    // (MVP-EXT-001); the G10 pack-budget measurement that
+                    // dropped them wholesale is preserved by the confidence
+                    // floor in push_bullet_facts. Untrusted injected bullets
+                    // are re-detected at compile time (R8).
+                    push_bullet_facts(
+                        &mut ir,
+                        section,
+                        &extractor,
+                        &self.document_id,
+                        self.confidence,
+                    );
                     for para in &section.paragraphs {
                         let clean = para.trim();
                         if clean.len() > 5 {
                             ir.facts.push(FactCandidate {
+                                snippet: None,
                                 statement: clean.to_string(),
                                 entities: vec![section.heading.clone()],
                                 confidence: self.confidence,
                                 evidence: Evidence {
                                     document_id: self.document_id.clone(),
                                     page: Some(1),
-                                    bbox_text: Some(section.heading.clone()),
+                                    source: None,
                                     extractor: extractor.clone(),
                                     model: Some("markdown-v1".into()),
                                     confidence: self.confidence,
@@ -645,7 +810,7 @@ impl SemanticAnalyzer for MarkdownSemanticAnalyzer {
                             evidence: Evidence {
                                 document_id: self.document_id.clone(),
                                 page: Some(1),
-                                bbox_text: Some(para.clone()),
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("markdown-v1".into()),
                                 confidence: self.confidence * 0.8,
@@ -723,8 +888,17 @@ fn extract_markdown_links(text: &str) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 /// Parse Markdown text directly into a `DocumentAst` with proper
-/// `# Heading`, `- list`, and `` ``` `` code-fence recognition.
-fn markdown_text_to_ast(content: &str) -> DocumentAst {
+/// `# Heading`, `- list`, `` ``` `` code-fence, and standalone `![alt](src)`
+/// image recognition. Image paths resolve against `base_dir`; `None` leaves
+/// images asset-less (the alt text still lands in the node). When `asset_dir`
+/// is given, extracted assets are persisted content-addressed (PR-F wiring).
+/// PR-F: visual fences (mermaid/diagram/math) emit typed nodes, and a
+/// classification pass attaches payloads + re-types captioned images.
+fn markdown_text_to_ast(
+    content: &str,
+    base_dir: Option<&std::path::Path>,
+    asset_dir: Option<&std::path::Path>,
+) -> DocumentAst {
     let lines: Vec<&str> = content.lines().collect();
     let mut nodes: Vec<AstNode> = Vec::new();
     let mut i = 0;
@@ -736,6 +910,22 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
 
         // Blank line → paragraph boundary, skip
         if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        // Standalone image: ![alt](path) — the asset is content-addressed
+        // (DoD rows 5/12). Inline images mid-paragraph stay raw text.
+        if let Some((alt, src)) = parse_image_syntax(trimmed) {
+            nodes.push(AstNode {
+                block_type: BlockType::Image,
+                text: Some(alt),
+                children: vec![],
+                bbox: None,
+                confidence: None,
+                asset: image_asset(&src, base_dir, asset_dir),
+                ..Default::default()
+            });
             i += 1;
             continue;
         }
@@ -762,19 +952,31 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                 code_lines.push(lines[i]);
                 i += 1;
             }
-            // First line is language hint; rest is code
-            let header = if lang.is_empty() {
-                String::new()
-            } else {
-                format!("{}\n", lang)
+            // PR-F (HLD §11/§13): visual fences are typed content, not code.
+            // Mermaid/diagram specs become Diagram nodes (arrow chains → graph),
+            // math fences become Formula nodes; everything else stays Code.
+            let (block_type, text) = match lang.to_lowercase().as_str() {
+                "mermaid" | "diagram" | "flowchart" | "graphviz" => {
+                    (BlockType::Diagram, code_lines.join("\n"))
+                }
+                "math" | "latex" | "tex" => (BlockType::Formula, code_lines.join("\n")),
+                _ => {
+                    // First line is language hint; rest is code
+                    let header = if lang.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}\n", lang)
+                    };
+                    (BlockType::Code, header + &code_lines.join("\n"))
+                }
             };
-            let code_text = header + &code_lines.join("\n");
             nodes.push(AstNode {
-                block_type: BlockType::Code,
-                text: code_text,
+                block_type,
+                text: Some(text),
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -786,10 +988,11 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             let text = text.trim_end_matches('#').trim();
             nodes.push(AstNode {
                 block_type: BlockType::Heading { level: level as u8 },
-                text: text.to_string(),
+                text: Some(text.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             i += 1;
             continue;
@@ -802,10 +1005,11 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                 let level = if next_trimmed.starts_with('=') { 1 } else { 2 };
                 nodes.push(AstNode {
                     block_type: BlockType::Heading { level },
-                    text: trimmed.to_string(),
+                    text: Some(trimmed.to_string()),
                     children: vec![],
                     bbox: None,
                     confidence: None,
+                    ..Default::default()
                 });
                 i += 2;
                 continue;
@@ -818,10 +1022,11 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             let item_text = trimmed[prefix_len..].trim().to_string();
             let mut list_items: Vec<AstNode> = vec![AstNode {
                 block_type: BlockType::ListItem,
-                text: item_text,
+                text: Some(item_text),
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             }];
             i += 1;
             // Collect continuation items
@@ -835,19 +1040,21 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
                     let pl = md_list_prefix_len(next);
                     list_items.push(AstNode {
                         block_type: BlockType::ListItem,
-                        text: next[pl..].trim().to_string(),
+                        text: Some(next[pl..].trim().to_string()),
                         children: vec![],
                         bbox: None,
                         confidence: None,
+                        ..Default::default()
                     });
                     i += 1;
                 } else {
                     // Continuation line (indented paragraph of current list item)
                     if let Some(last) = list_items.last_mut() {
-                        if !last.text.ends_with('\n') {
-                            last.text.push('\n');
+                        let last_text = last.text.get_or_insert_with(String::new);
+                        if !last_text.ends_with('\n') {
+                            last_text.push('\n');
                         }
-                        last.text.push_str(next);
+                        last_text.push_str(next);
                     }
                     i += 1;
                 }
@@ -855,10 +1062,11 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             let ordered = trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
             nodes.push(AstNode {
                 block_type: BlockType::List { ordered },
-                text: String::new(),
+                text: None,
                 children: list_items,
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -886,10 +1094,11 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             }
             nodes.push(AstNode {
                 block_type: BlockType::Paragraph,
-                text: q_lines.join("\n"),
+                text: Some(q_lines.join("\n")),
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -898,6 +1107,73 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
         if is_horizontal_rule(trimmed) {
             i += 1;
             continue;
+        }
+
+        // GFM pipe table: header row + |---|---| delimiter row. The Table
+        // node carries a TablePayload, so the existing fragment leg
+        // (boundary emit_block → FragmentContent::Table → cell-cited facts
+        // with row-phrase anchors, ir.rs) picks it up untouched — the same
+        // pipeline PDF tables already use. The table itself leaves section
+        // paragraphs (parse_sections skips Table nodes), so section-level
+        // classification is unaffected.
+        if trimmed.starts_with('|') {
+            let header_cells = split_table_row(trimmed);
+            if i + 1 < len {
+                let sep_cells = split_table_row(lines[i + 1].trim());
+                if !header_cells.is_empty()
+                    && sep_cells.len() == header_cells.len()
+                    && sep_cells.iter().all(|c| is_table_separator_cell(c))
+                {
+                    let mut rows: Vec<Vec<String>> = vec![header_cells];
+                    i += 2; // header + separator
+                    while i < len && lines[i].trim().starts_with('|') {
+                        let cells = split_table_row(lines[i].trim());
+                        if cells.len() != rows[0].len() {
+                            break;
+                        }
+                        rows.push(cells);
+                        i += 1;
+                    }
+                    let children: Vec<AstNode> = rows
+                        .into_iter()
+                        .map(|cells| AstNode {
+                            block_type: BlockType::TableRow,
+                            text: None,
+                            children: cells
+                                .into_iter()
+                                .map(|c| AstNode {
+                                    block_type: BlockType::TableCell {
+                                        row_span: 1,
+                                        col_span: 1,
+                                    },
+                                    text: Some(c),
+                                    children: vec![],
+                                    bbox: None,
+                                    confidence: Some(1.0),
+                                    ..Default::default()
+                                })
+                                .collect(),
+                            bbox: None,
+                            confidence: None,
+                            ..Default::default()
+                        })
+                        .collect();
+                    let mut table = AstNode {
+                        block_type: BlockType::Table,
+                        text: None,
+                        children,
+                        bbox: None,
+                        confidence: Some(1.0),
+                        ..Default::default()
+                    };
+                    table.payload = crate::ast::table_payload_from_node(&table)
+                        .map(crate::ast::AstPayload::Table);
+                    nodes.push(table);
+                    continue;
+                }
+            }
+            // Not a table — fall through to paragraph (stray pipe lines
+            // keep their current paragraph behavior).
         }
 
         // Default: paragraph — collect lines until blank line or next block element
@@ -919,26 +1195,152 @@ fn markdown_text_to_ast(content: &str) -> DocumentAst {
             para_lines.push(next);
             i += 1;
         }
-        nodes.push(AstNode {
-            block_type: BlockType::Paragraph,
-            text: para_lines.join("\n"),
-            children: vec![],
-            bbox: None,
-            confidence: None,
-        });
+        let para_text = para_lines.join("\n");
+        if para_text.contains("![") {
+            // PR-F: inline images split the paragraph into text segments
+            // around asset-backed Image nodes (HLD §13).
+            for (segment, image) in split_inline_images(&para_text) {
+                let segment = segment.trim().to_string();
+                if !segment.is_empty() {
+                    nodes.push(AstNode {
+                        block_type: BlockType::Paragraph,
+                        text: Some(segment),
+                        children: vec![],
+                        bbox: None,
+                        confidence: None,
+                        ..Default::default()
+                    });
+                }
+                if let Some((alt, src)) = image {
+                    nodes.push(AstNode {
+                        block_type: BlockType::Image,
+                        text: Some(alt),
+                        children: vec![],
+                        bbox: None,
+                        confidence: None,
+                        asset: image_asset(&src, base_dir, asset_dir),
+                        ..Default::default()
+                    });
+                }
+            }
+        } else {
+            nodes.push(AstNode {
+                block_type: BlockType::Paragraph,
+                text: Some(para_text),
+                children: vec![],
+                bbox: None,
+                confidence: None,
+                ..Default::default()
+            });
+        }
     }
 
-    DocumentAst {
+    let mut ast = DocumentAst {
         page_count: 1,
         pages: vec![AstNode {
             block_type: BlockType::Unknown,
-            text: String::new(),
+            text: None,
             children: nodes,
             bbox: None,
             confidence: None,
+            ..Default::default()
         }],
         source_type: "markdown-native".into(),
+        document_id: None,
+    };
+    // PR-F: classification pass — visual nodes gain payloads, captioned
+    // images are re-typed (chart/diagram/formula). With persisted assets,
+    // Screenshot/ScannedText images also get an OCR fill (§33). PR-O: the
+    // analyzer set is VLM-backed when the vlm feature + env are present,
+    // mock otherwise.
+    let dir_str = asset_dir.map(|d| d.to_string_lossy());
+    let analyzers = crate::visual::pipeline_analyzers(dir_str.as_deref());
+    crate::visual::classify_visuals_with_analyzers(
+        &mut ast,
+        dir_str.as_deref(),
+        Some(&crate::ocr::TesseractCli::new()),
+        &analyzers,
+    );
+    ast
+}
+
+/// `![alt](path)` → (alt, path). Whole-line images only — inline images in
+/// prose are split out by `split_inline_images` instead.
+fn parse_image_syntax(line: &str) -> Option<(String, String)> {
+    let rest = line.strip_prefix("![")?;
+    let close = rest.find("](")?;
+    let tail = &rest[close + 2..];
+    let end = tail.find(')')?;
+    if !tail[end + 1..].trim().is_empty() {
+        return None; // trailing text → not a standalone image
     }
+    Some((rest[..close].to_string(), tail[..end].to_string()))
+}
+
+/// Split prose on inline `![alt](src)` occurrences into (text, image?)
+/// segments. Text segments may be empty (image at line start/end). Image
+/// syntax with a missing `](` or `)` leaves the rest as one text segment.
+/// ponytail: linear scan, no nesting — src containing `)` truncates.
+fn split_inline_images(text: &str) -> Vec<(String, Option<(String, String)>)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    loop {
+        let Some(start) = rest.find("![") else {
+            out.push((rest.to_string(), None));
+            break;
+        };
+        let Some(close) = rest[start + 2..].find("](") else {
+            out.push((rest.to_string(), None));
+            break;
+        };
+        let close = start + 2 + close;
+        let Some(end) = rest[close + 2..].find(')') else {
+            out.push((rest.to_string(), None));
+            break;
+        };
+        let end = close + 2 + end;
+        out.push((
+            rest[..start].to_string(),
+            Some((
+                rest[start + 2..close].to_string(),
+                rest[close + 2..end].to_string(),
+            )),
+        ));
+        rest = &rest[end + 1..];
+    }
+    out
+}
+
+/// Populate a `VisualAssetRef` for an image path resolved against `base_dir`.
+/// Fail-soft: missing/unreadable files leave the node asset-less — the AST
+/// never hard-fails on asset extraction. A store failure only skips
+/// persistence; the in-memory reference still carries the hash.
+fn image_asset(
+    src: &str,
+    base_dir: Option<&std::path::Path>,
+    asset_dir: Option<&std::path::Path>,
+) -> Option<VisualAssetRef> {
+    let path = base_dir
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(src);
+    let bytes = std::fs::read(&path).ok()?;
+    let hash = crate::asset_store::content_hash(&bytes);
+    if let Some(dir) = asset_dir {
+        let _ = crate::asset_store::store_asset(&dir.to_string_lossy(), &bytes);
+    }
+    Some(VisualAssetRef {
+        asset_id: hash.clone(),
+        mime_type: crate::asset_store::mime_from_extension(src),
+        content_hash: hash,
+        source: SourceSpan {
+            document_id: None,
+            page: 1,
+            start_offset: None,
+            end_offset: None,
+            bbox: None,
+            node_id: None,
+        },
+    })
 }
 
 fn atx_heading_level(line: &str) -> Option<usize> {
@@ -1007,6 +1409,21 @@ fn md_list_prefix_len(line: &str) -> usize {
     }
 }
 
+/// Split a GFM pipe row into trimmed cells: `| a | b |` → ["a", "b"].
+/// ponytail: no `\|` escape handling — docs tables don't use escaped pipes.
+fn split_table_row(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let trimmed = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let trimmed = trimmed.strip_suffix('|').unwrap_or(trimmed);
+    trimmed.split('|').map(|c| c.trim().to_string()).collect()
+}
+
+/// GFM delimiter cell: `---`, `:---`, `---:`, `:---:` (at least one dash).
+fn is_table_separator_cell(cell: &str) -> bool {
+    let inner = cell.trim().trim_matches(':');
+    !inner.is_empty() && inner.chars().all(|c| c == '-')
+}
+
 fn is_horizontal_rule(line: &str) -> bool {
     let clean: String = line.chars().filter(|c| !c.is_whitespace()).collect();
     if clean.len() < 3 {
@@ -1026,10 +1443,20 @@ fn is_horizontal_rule(line: &str) -> bool {
 pub fn compile_markdown_file(
     path: &str,
     document_id: Option<String>,
+    asset_dir: Option<&str>,
 ) -> Result<KnowledgeIr, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("read markdown '{}': {}", path, e))?;
-    compile_markdown_string(&content, document_id)
+    // Images resolve relative to the document's directory (PR-B asset
+    // preservation); the string variant has no base dir and stays asset-less.
+    // `asset_dir` persists extracted assets content-addressed (PR-F).
+    let mut ast = markdown_text_to_ast(
+        &content,
+        std::path::Path::new(path).parent(),
+        asset_dir.map(std::path::Path::new),
+    );
+    ast.document_id = document_id.clone();
+    Ok(compile_markdown_ast(&ast, document_id))
 }
 
 /// Compile a Markdown string into KnowledgeIr using native Markdown parsing.
@@ -1037,14 +1464,205 @@ pub fn compile_markdown_string(
     content: &str,
     document_id: Option<String>,
 ) -> Result<KnowledgeIr, String> {
-    let ast = markdown_text_to_ast(content);
-    let analyzer = MarkdownSemanticAnalyzer::new(document_id);
-    Ok(analyzer.analyze(&ast))
+    let mut ast = markdown_text_to_ast(content, None, None);
+    ast.document_id = document_id.clone();
+    Ok(compile_markdown_ast(&ast, document_id))
+}
+
+/// PR-F (HLD §57): the section leg classifies ADRs/rules/entities; the
+/// fragment leg carries visual knowledge (diagram nodes/edges, chart/formula/
+/// image facts) that section parsing skips. Merged with statement/triple
+/// dedup.
+fn compile_markdown_ast(ast: &DocumentAst, document_id: Option<String>) -> KnowledgeIr {
+    let section_ir = MarkdownSemanticAnalyzer::new(document_id.clone()).analyze(ast, &[]);
+    let fragments = RuleBoundaryDetector.detect(ast).unwrap_or_default();
+    let mut fragment_ir = crate::ir::MockSemanticAnalyzer::new().analyze(ast, &fragments);
+    if let Some(id) = &document_id {
+        stamp_document_id(&mut fragment_ir, id);
+    }
+    crate::merge::merge_knowledge_ir(&[section_ir, fragment_ir])
+}
+
+/// The fragment leg builds candidates with `document_id: None`; stamp it so
+/// the merge dedupes by (document, name) instead of splitting shared names.
+fn stamp_document_id(ir: &mut KnowledgeIr, id: &str) {
+    ir.document_id = Some(id.to_string());
+    for e in &mut ir.entities {
+        e.evidence.document_id = Some(id.to_string());
+    }
+    for f in &mut ir.facts {
+        f.evidence.document_id = Some(id.to_string());
+    }
+    for r in &mut ir.relations {
+        r.evidence.document_id = Some(id.to_string());
+    }
+    for t in &mut ir.temporal {
+        t.evidence.document_id = Some(id.to_string());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::AstPayload;
+
+    // ── PR-F: visual fences, classification, asset persistence ──
+
+    #[test]
+    fn diagram_fence_becomes_diagram_with_graph_payload() {
+        let md = "```mermaid\nClient -> Gateway --> Ledger\n```";
+        let ast = markdown_text_to_ast(md, None, None);
+        let node = &ast.pages[0].children[0];
+        assert_eq!(node.block_type, BlockType::Diagram);
+        assert!(
+            !node.text.as_deref().unwrap_or_default().contains("mermaid"),
+            "lang header must not leak into the diagram text"
+        );
+        match &node.payload {
+            Some(AstPayload::Diagram(d)) => {
+                assert_eq!(d.nodes.len(), 3);
+                assert_eq!(d.edges.len(), 2);
+                assert_eq!(d.edges[0].source, "client");
+                assert_eq!(d.edges[1].target, "ledger");
+            }
+            other => panic!("expected diagram payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn math_fence_becomes_formula_with_plain_text() {
+        let md = "```math\nF = B * R\n```";
+        let ast = markdown_text_to_ast(md, None, None);
+        let node = &ast.pages[0].children[0];
+        assert_eq!(node.block_type, BlockType::Formula);
+        match &node.payload {
+            Some(AstPayload::Formula(f)) => {
+                assert_eq!(f.plain_text.as_deref(), Some("F = B * R"));
+                assert!(f.latex.is_none(), "no latex markers → latex stays empty");
+            }
+            other => panic!("expected formula payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn code_fence_stays_code_with_language_header() {
+        let md = "```rust\nfn main() {}\n```";
+        let ast = markdown_text_to_ast(md, None, None);
+        let node = &ast.pages[0].children[0];
+        assert_eq!(node.block_type, BlockType::Code);
+        assert!(node
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("rust\n"));
+    }
+
+    // ── P1: GFM pipe tables → Table nodes with payload → cell-cited facts ──
+
+    #[test]
+    fn pipe_table_becomes_table_node_with_payload() {
+        let md = "| Item | Qty |\n|---|---:|\n| Acme Widget | 10 |\n";
+        let ast = markdown_text_to_ast(md, None, None);
+        let node = &ast.pages[0].children[0];
+        assert_eq!(node.block_type, BlockType::Table);
+        match &node.payload {
+            Some(AstPayload::Table(t)) => {
+                assert_eq!(t.headers.len(), 2);
+                assert_eq!(t.headers[0].text, "Item");
+                assert_eq!(t.rows.len(), 1);
+                assert_eq!(t.cells.len(), 2);
+                assert_eq!(t.cells[1].text, "10");
+                assert!(matches!(
+                    t.cells[1].value,
+                    Some(crate::ast::ScalarValue::Integer(10))
+                ));
+            }
+            other => panic!("expected table payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pipe_table_cell_facts_reach_ir_with_row_anchors() {
+        let md = "## Pricing\n\n| Item | Qty |\n|---|---|\n| Acme Widget | 10 |\n";
+        let ir = compile_markdown_string(md, Some("doc.md".into())).unwrap();
+        let cell_facts: Vec<&FactCandidate> = ir
+            .facts
+            .iter()
+            .filter(|f| {
+                matches!(
+                    &f.evidence.source,
+                    Some(crate::source::EvidenceSource::TableCell { .. })
+                )
+            })
+            .collect();
+        assert_eq!(cell_facts.len(), 2, "one fact per non-empty cell");
+        assert!(cell_facts
+            .iter()
+            .any(|f| f.statement == "Item: Acme Widget"));
+        assert!(cell_facts.iter().any(|f| f.statement == "Qty: 10"));
+        // Anchoring: the row's capitalized phrase is an entity and attached
+        // to both facts — the entity gate must apply to cell facts.
+        assert!(ir.entities.iter().any(|e| e.name == "Acme Widget"));
+        assert!(cell_facts
+            .iter()
+            .all(|f| f.entities.iter().any(|e| e == "Acme Widget")));
+        // Row text stays verbatim as the snippet (rendered facts stay verifiable).
+        assert!(cell_facts
+            .iter()
+            .any(|f| f.snippet.as_deref() == Some("Acme Widget | 10")));
+    }
+
+    #[test]
+    fn pipe_line_without_separator_stays_paragraph() {
+        let md = "| not a table\n\nnext";
+        let ast = markdown_text_to_ast(md, None, None);
+        assert!(matches!(
+            ast.pages[0].children[0].block_type,
+            BlockType::Paragraph
+        ));
+    }
+
+    #[test]
+    fn pipe_table_stops_at_blank_line() {
+        let md = "| A |\n|---|\n| 1 |\n\nAfter table.";
+        let ast = markdown_text_to_ast(md, None, None);
+        assert_eq!(ast.pages[0].children.len(), 2);
+        assert_eq!(ast.pages[0].children[0].block_type, BlockType::Table);
+        assert_eq!(ast.pages[0].children[1].block_type, BlockType::Paragraph);
+    }
+
+    #[test]
+    fn image_with_chart_caption_retypes_and_persists_asset() {
+        let dir = std::env::temp_dir().join("aikoql-md-chart-caption-test");
+        let assets = dir.join("assets");
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("fees.png");
+        std::fs::write(&img, b"\x89PNG chart bytes").unwrap();
+
+        let md = "![fees](fees.png)\n\nChart 1: Fee structure";
+        let ast = markdown_text_to_ast(md, Some(&dir), Some(&assets));
+
+        let chart = &ast.pages[0].children[0];
+        assert_eq!(chart.block_type, BlockType::Chart);
+        match &chart.payload {
+            Some(AstPayload::Chart(c)) => {
+                assert_eq!(c.title.as_deref(), Some("Chart 1: Fee structure"));
+            }
+            other => panic!("expected chart payload, got {:?}", other),
+        }
+
+        // The asset reference survives re-typing and was persisted by hash.
+        let hash = crate::asset_store::content_hash(b"\x89PNG chart bytes");
+        let asset = chart.asset.as_ref().expect("asset survives re-typing");
+        assert_eq!(asset.content_hash, hash);
+        assert_eq!(
+            std::fs::read(assets.join(format!("{}.bin", hash))).unwrap(),
+            b"\x89PNG chart bytes",
+            "asset persisted content-addressed"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn classifier_detects_rules_from_deontic_markers() {
@@ -1129,6 +1747,82 @@ mod tests {
         assert!(links.contains(&"architecture".to_string()));
     }
 
+    // ── PR-B: image preservation (DoD rows 5, 12) ──
+
+    #[test]
+    fn standalone_image_becomes_node_with_content_addressed_asset() {
+        let dir = std::env::temp_dir().join("aikoql-md-image-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("logo.png");
+        std::fs::write(&img, b"\x89PNG fake bytes").unwrap();
+
+        let md = "# Doc\n\n![Logo](logo.png)\n\nBody text.";
+        let ast = markdown_text_to_ast(md, Some(&dir), None);
+        let image = ast.pages[0]
+            .children
+            .iter()
+            .find(|n| n.block_type == BlockType::Image)
+            .expect("image node");
+        assert_eq!(image.text.as_deref(), Some("Logo"));
+        let asset = image.asset.as_ref().expect("populated asset");
+        assert_eq!(asset.mime_type, "image/png");
+        assert_eq!(
+            asset.content_hash,
+            crate::asset_store::content_hash(b"\x89PNG fake bytes")
+        );
+        assert_eq!(asset.asset_id, asset.content_hash);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_image_fails_soft() {
+        let md = "![Missing](does-not-exist.png)";
+        let ast = markdown_text_to_ast(md, None, None);
+        let image = ast.pages[0]
+            .children
+            .iter()
+            .find(|n| n.block_type == BlockType::Image)
+            .expect("image node");
+        assert!(image.asset.is_none(), "missing file → asset-less node");
+        assert_eq!(image.text.as_deref(), Some("Missing"));
+    }
+
+    #[test]
+    fn inline_image_splits_paragraph_into_image_node() {
+        let md = "See ![x](y.png) for details.";
+        let ast = markdown_text_to_ast(md, None, None);
+        let nodes = &ast.pages[0].children;
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[0].block_type, BlockType::Paragraph);
+        assert_eq!(nodes[0].text.as_deref(), Some("See"));
+        assert_eq!(nodes[1].block_type, BlockType::Image);
+        assert_eq!(nodes[1].text.as_deref(), Some("x"));
+        assert_eq!(nodes[2].block_type, BlockType::Paragraph);
+        assert_eq!(nodes[2].text.as_deref(), Some("for details."));
+    }
+
+    #[test]
+    fn split_inline_images_handles_multiple_and_edges() {
+        let segs = split_inline_images("a ![x](1.png) b ![y](2.png)");
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0], ("a ".into(), Some(("x".into(), "1.png".into()))));
+        assert_eq!(segs[1], (" b ".into(), Some(("y".into(), "2.png".into()))));
+        assert_eq!(segs[2], ("".into(), None));
+
+        // Image at line start, no text after.
+        let segs = split_inline_images("![lead](l.png)");
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0], ("".into(), Some(("lead".into(), "l.png".into()))));
+        assert_eq!(segs[1], ("".into(), None));
+
+        // Unbalanced syntax → one text segment, nothing lost.
+        let segs = split_inline_images("broken ![x](no-close");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].0, "broken ![x](no-close");
+        assert_eq!(segs[0].1, None);
+    }
+
     #[test]
     fn compile_markdown_string_produces_entities_and_facts() {
         let md = r#"# aikoql
@@ -1160,6 +1854,53 @@ Run `cargo build` to compile.
             .iter()
             .any(|f| f.statement.contains("must be atomic"));
         assert!(has_rule, "should contain deontic fact");
+    }
+
+    #[test]
+    fn claim_sections_emit_list_items_as_facts() {
+        // G10 T16: a plain bullet in a claim section (no deontic/imperative
+        // markers) is a fact — the "G12 reference rates ($0.15/1M input)"
+        // bullet must enter the IR, not vanish with the section's kind.
+        let md = r#"# Suite
+
+## Metrics
+
+- **Input tokens / Latency / Cost** — measured per treatment; cost uses
+  the G12 reference rates ($0.15/1M input, $0.60/1M output) so the column
+  stays comparable across runs.
+"#;
+        let ir = compile_markdown_string(md, Some("suite.md".into())).unwrap();
+        let bullet = ir
+            .facts
+            .iter()
+            .any(|f| f.statement.contains("$0.15/1M input"));
+        assert!(bullet, "claim-section list items must become facts");
+    }
+
+    #[test]
+    fn short_fence_lines_fold_into_artifact_fact() {
+        // G10 T17: the AGENT-005 chain lives in a `text` fence — a short
+        // fence's lines fold into the label fact so the chain's tokens can
+        // be retrieved (long fences stay label-only so their bulk doesn't
+        // make the fact un-packable).
+        let md = r#"# Plan
+
+## Safe execution
+
+```text
+discover program
+→ validate preconditions
+→ execute
+```
+"#;
+        let ir = compile_markdown_string(md, Some("plan.md".into())).unwrap();
+        let chain = ir
+            .facts
+            .iter()
+            .find(|f| f.statement.contains("validate preconditions"))
+            .expect("short fence lines should enter the artifact fact");
+        assert!(chain.statement.contains("discover program"));
+        assert!(chain.statement.contains("→ execute"));
     }
 
     #[test]

@@ -10,7 +10,8 @@
 use crate::knowledge::kom::Value;
 use crate::security::audit::{KeyAuditLog, KeyEvent, KeyEventKind};
 use crate::security::crypto::Crypto;
-use crate::security::envelope::Envelope;
+use crate::security::envelope::{Envelope, WrappedDek};
+use crate::security::hkdf::{self, DOMAIN_FIELD};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, RwLock};
 
@@ -81,6 +82,11 @@ impl FieldCrypto {
         self
     }
 
+    /// All wrapped DEKs known to the envelope (for persistence).
+    pub fn wrapped_deks(&self) -> Vec<WrappedDek> {
+        self.envelope.wrapped_deks()
+    }
+
     /// Generate a compliance summary for audit reporting (MRFC-0020 Phase 4).
     pub fn compliance_summary(&self) -> Result<ComplianceSummary, String> {
         // justified: RwLock poison is unrecoverable
@@ -109,8 +115,10 @@ impl FieldCrypto {
         if policy.is_empty() {
             return Ok(0);
         }
-        // ponytail: derive field-level key from tenant DEK (HKDF in prod).
-        let key = self.envelope.tenant_key(tenant)?;
+        // The field key is a domain-separated subkey of the tenant DEK —
+        // the DEK itself never encrypts data directly.
+        let dek = self.envelope.tenant_key(tenant)?;
+        let key = hkdf::domain_sep(&dek, DOMAIN_FIELD);
         let mut count = 0usize;
 
         for field_name in &policy.fields {
@@ -154,7 +162,8 @@ impl FieldCrypto {
         if policy.is_empty() {
             return Ok(0);
         }
-        let key = self.envelope.tenant_key(tenant)?;
+        let dek = self.envelope.tenant_key(tenant)?;
+        let key = hkdf::domain_sep(&dek, DOMAIN_FIELD);
         let mut count = 0usize;
 
         for field_name in &policy.fields {
@@ -498,7 +507,7 @@ mod tests {
             Value::Int(-42),
             Value::Int(0),
             Value::Int(i64::MAX),
-            Value::Float(3.14),
+            Value::Float(std::f64::consts::PI),
             Value::Float(-0.5),
             Value::Text("hello".into()),
             Value::Text("".into()),

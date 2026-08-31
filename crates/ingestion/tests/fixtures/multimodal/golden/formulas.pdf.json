@@ -1,0 +1,395 @@
+{
+  "ast": {
+    "document_id": null,
+    "page_count": 1,
+    "pages": [
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": {
+              "Heading": {
+                "level": 2
+              }
+            },
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Equation 1: E = mc^2"
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Paragraph",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Energy equals mass times light speed squared."
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": {
+              "Heading": {
+                "level": 2
+              }
+            },
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Equation 2: F = B * R"
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      }
+    ],
+    "source_type": "native"
+  },
+  "compilation": {
+    "commit_plan": {
+      "actions": [],
+      "document_id": null,
+      "stats": {
+        "creates": 0,
+        "needs_review": 0,
+        "skips": 0,
+        "total_actions": 0,
+        "total_conflicts": 0,
+        "updates": 0
+      }
+    },
+    "embedded_chunks": [
+      {
+        "chunk": {
+          "char_count": 66,
+          "chunk_id": "unknown/chunk-0000",
+          "entity_mentions": [],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 0,
+            "chunk_index": 0,
+            "end_page": 1,
+            "start_page": 1
+          },
+          "structure": {
+            "heading_path": [
+              "Equation 1: E = mc^2"
+            ],
+            "section_chunk_index": 0,
+            "section_title": "Equation 1: E = mc^2",
+            "source_type": "text"
+          },
+          "text": "Equation 1: E = mc^2\nEnergy equals mass times light speed squared."
+        },
+        "embedding": [
+          0.0980580672621727,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.1961161345243454,
+          0.0980580672621727,
+          0.2941741943359375,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.2941741943359375,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0980580672621727,
+          0.1961161345243454,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1961161345243454,
+          0.2941741943359375,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.1961161345243454,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0980580672621727,
+          0.2941741943359375,
+          0.0980580672621727,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0,
+          0.0980580672621727,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.1961161345243454,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.1961161345243454,
+          0.0,
+          0.0980580672621727,
+          0.0,
+          0.0
+        ],
+        "embedding_provider": "mock-char-ngram"
+      }
+    ],
+    "evidence_trail": {
+      "document_id": null,
+      "nodes": [
+        {
+          "entities": [],
+          "phase": "D5-ontology",
+          "source": [],
+          "step": "Discovered 0 classes, 0 properties, 0 relationships"
+        },
+        {
+          "entities": [],
+          "phase": "D6-resolution",
+          "source": [],
+          "step": "Resolved 0 entities: 0 matched, 0 ambiguous, 0 unmatched"
+        },
+        {
+          "entities": [],
+          "phase": "D7-reconcile",
+          "source": [],
+          "step": "Reconciled: 0 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+        }
+      ]
+    },
+    "fragments": [
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Energy equals mass times light speed squared."
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "Equation 1: E = mc^2"
+          ],
+          "neighboring_fragments": [],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b1",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      }
+    ],
+    "ir": {
+      "content_trust": null,
+      "document_id": null,
+      "entities": [],
+      "events": [],
+      "extractor": "mock",
+      "facts": [],
+      "page_count": 1,
+      "relations": [],
+      "source_revision": null,
+      "temporal": []
+    },
+    "ontology": {
+      "classes": [],
+      "document_id": null,
+      "method": "ir-discovery-mock",
+      "properties": [],
+      "relationships": []
+    },
+    "resolution": {
+      "ambiguous": [],
+      "matched": [],
+      "stats": {
+        "ambiguous_count": 0,
+        "average_confidence": 0.0,
+        "matched_count": 0,
+        "total_entities": 0,
+        "unmatched_count": 0
+      },
+      "unmatched": []
+    },
+    "secret_findings": [],
+    "stats": {
+      "phases": [
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D3-ast"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D4-fragments"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D4-ir"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D5-ontology"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D6-resolution"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D7-reconcile"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D8-projection"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D8-visual-index"
+        }
+      ],
+      "total_us": 0
+    },
+    "visual_index": []
+  },
+  "document": {
+    "ocr_stats": {
+      "average_confidence": 0.0,
+      "pages_ocr_attempted": 0,
+      "pages_ocr_failed": 0,
+      "pages_ocr_succeeded": 0
+    },
+    "page_count": 1,
+    "pages": [
+      {
+        "char_count": 90,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 1,
+        "source": "native",
+        "text": "Equation 1: E = mc^2\n\nEnergy equals mass times light speed squared.\n\nEquation 2: F = B * R"
+      }
+    ],
+    "total_chars": 90
+  }
+}

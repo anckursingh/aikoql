@@ -1,0 +1,67 @@
+{
+  "wave": 5,
+  "phase": "C",
+  "date": "2026-08-30",
+  "harness": "crates/ingestion/tests/wave5_olap.rs",
+  "environment": {
+    "clickhouse": "clickhouse/clickhouse-server:24.8-alpine (docker compose --profile olap)",
+    "starrocks": "starrocks/allin1-ubuntu:3.3-latest (docker compose --profile olap)",
+    "build": "debug",
+    "measurement": "min of 3, warm cache",
+    "transport": "loopback",
+    "note": "reproducibility/correctness instrument — not a cross-engine performance contest"
+  },
+  "dataset": {
+    "txn_rows": 10000000,
+    "events_rows": 1000000,
+    "customers_rows": 100000,
+    "devices_rows": 1000000,
+    "generator": "deterministic, row index n (numbers(N) / seed cross join)",
+    "load_ms": { "clickhouse": 576, "starrocks": 14705 }
+  },
+  "tasks": [
+    {
+      "id": "W5-OLAP-001",
+      "task": "large aggregation (10M rows -> 100k groups)",
+      "clickhouse_ms": 311,
+      "starrocks_ms": 562,
+      "aikoql": "NOT_MEASURED",
+      "check": "grand total 4995000000 CORRECT"
+    },
+    {
+      "id": "W5-OLAP-002",
+      "task": "time-series (1M events: buckets / errs / p95)",
+      "clickhouse_ms": [14, 12, 22],
+      "starrocks_ms": [48, 62, 135],
+      "aikoql": "NOT_MEASURED",
+      "check": "240 buckets, 10000 errs all service 0, p95 = service+460 CORRECT"
+    },
+    {
+      "id": "W5-OLAP-003",
+      "task": "high-cardinality GROUP BY (1M rows -> 12k combos)",
+      "clickhouse_ms": 80,
+      "starrocks_ms": 232,
+      "aikoql": "NOT_MEASURED",
+      "check": "12000 combos, 1M total CORRECT"
+    },
+    {
+      "id": "W5-OLAP-004",
+      "task": "multi-table join (10M⋈100k tier, 1M⋈1M device)",
+      "clickhouse_ms": [196, 453],
+      "starrocks_ms": [136, 60],
+      "aikoql": "NOT_MEASURED",
+      "check": "3 tiers + 1M device matches CORRECT"
+    }
+  ],
+  "gates": {
+    "W5-G01": "MET — baseline reproducible (deterministic dataset + Rust ground truth)",
+    "W5-G02": "MET — configurations documented (compose profile olap + env vars)",
+    "W5-G08": "MET — negative OLAP evidence preserved (losses.md)"
+  },
+  "honest_rows": [
+    "AIKOQL NOT_MEASURED on all OLAP tasks — no columnar scan path (structural; losses.md)",
+    "SR p95 via percentile_approx — ±10 tolerance contract, honestly labeled",
+    "events/minute measured as events/day — minute not stored in the loaded schema",
+    "env opt-in STRICT: unset = honest skip row; set but unreachable = test FAILS — an opted-in measurement never silently degrades"
+  ]
+}

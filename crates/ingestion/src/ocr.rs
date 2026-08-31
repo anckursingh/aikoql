@@ -407,7 +407,8 @@ fn rasterize_with(
 
 /// Process a PDF that may have scanned pages.
 ///
-/// 1. Uses existing native text extraction (via `native_pages` from pdf_extract).
+/// 1. Uses existing native text extraction (via `native_pages` from lopdf's
+///    per-page `extract_text_chunks`).
 /// 2. For pages with insufficient native text, rasterizes + OCRs via the provider.
 /// 3. Returns a merged page list with source tags and confidence scores.
 /// 4. Returns OCR statistics for status derivation.
@@ -475,6 +476,7 @@ pub fn ocr_pdf_pages_with(
                         char_count: page.char_count,
                         source: "native".into(),
                         ocr_confidence: None,
+                        images: page.images.clone(),
                     });
                     continue;
                 }
@@ -502,6 +504,7 @@ pub fn ocr_pdf_pages_with(
                             char_count,
                             source: "ocr".into(),
                             ocr_confidence: Some(avg_conf),
+                            images: page.images.clone(),
                         });
                     } else {
                         // OCR produced nothing — keep native page.
@@ -511,6 +514,7 @@ pub fn ocr_pdf_pages_with(
                             char_count: page.char_count,
                             source: "native".into(),
                             ocr_confidence: None,
+                            images: page.images.clone(),
                         });
                     }
                 }
@@ -526,6 +530,7 @@ pub fn ocr_pdf_pages_with(
                         char_count: page.char_count,
                         source: "native".into(),
                         ocr_confidence: None,
+                        images: page.images.clone(),
                     });
                 }
             }
@@ -544,6 +549,7 @@ pub fn ocr_pdf_pages_with(
                 char_count: page.char_count,
                 source: "native".into(),
                 ocr_confidence: None,
+                images: page.images.clone(),
             });
         }
     }

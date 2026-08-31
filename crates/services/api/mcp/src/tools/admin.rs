@@ -1,8 +1,7 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
-
+use crate::{json, Kernel, LifecycleState, Ordering, Subject, ACTIVE_CONNECTIONS, J, SERVER_START};
 pub(crate) fn tool_metrics(k: &Kernel) -> Result<J, String> {
     let (seq, _audit) = k.journal_head().map_err(|e| e.to_string())?;
     let heads = k.scan_heads().map_err(|e| e.to_string())?;
@@ -70,10 +69,7 @@ pub(crate) fn tool_verify_backup(args: &J) -> Result<J, String> {
         .get("backup")
         .and_then(|b| b.as_str())
         .ok_or("missing argument: backup")?;
-    let data_path = format!("{}/data.redb", backup);
-    if !std::path::Path::new(&data_path).exists() {
-        return Err(format!("backup data file not found: {}", data_path));
-    }
+    let data_path = backup_data_file(backup)?;
     let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
@@ -145,10 +141,11 @@ pub(crate) fn tool_backup(k: &Kernel, db_path: &str) -> Result<J, String> {
     };
     std::fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
 
-    // Copy the database file — use filename from source for multi-file db support.
+    // Snapshot the store through the kernel — the live file is region-locked
+    // on Windows, so a file-level copy cannot read it (os error 33).
     let src_file = src.file_name().ok_or("invalid db path: no filename")?;
     let dest_path = backup_dir.join(src_file);
-    std::fs::copy(src, &dest_path).map_err(|e| e.to_string())?;
+    k.backup_store_to(&dest_path).map_err(|e| e.to_string())?;
 
     // Record source metadata.
     let (seq, _audit) = k.journal_head().map_err(|e| e.to_string())?;
@@ -172,15 +169,7 @@ pub(crate) fn tool_backup(k: &Kernel, db_path: &str) -> Result<J, String> {
 
 /// Open a backup file in a throwaway kernel and check basic integrity.
 pub(crate) fn verify_backup_file(path: &str, expected_seq: u64, expected_objects: usize) -> bool {
-    let engine = match RedbEngine::open(path) {
-        Ok(e) => e,
-        Err(_) => return false,
-    };
-    let k = match Kernel::open(
-        std::sync::Arc::new(engine),
-        std::sync::Arc::new(SystemClock),
-        0,
-    ) {
+    let k = match crate::engine::open_kernel_auto(path) {
         Ok(k) => k,
         Err(_) => return false,
     };
@@ -195,7 +184,33 @@ pub(crate) fn verify_backup_file(path: &str, expected_seq: u64, expected_objects
     seq == expected_seq && count == expected_objects
 }
 
-pub(crate) fn tool_restore(args: &J, current_db: &str) -> Result<J, String> {
+/// The data file inside a backup dir. tool_backup stores it under the source
+/// db's filename (meta.json "source") — never a hard-coded data.redb.
+fn backup_data_file(backup: &str) -> Result<String, String> {
+    let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
+        .map_err(|e| format!("not a valid backup: {}", e))?;
+    let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
+    if let Some(f) = meta
+        .get("source")
+        .and_then(|s| s.as_str())
+        .and_then(|s| std::path::Path::new(s).file_name())
+    {
+        let p = format!("{}/{}", backup, f.to_string_lossy());
+        if std::path::Path::new(&p).exists() {
+            return Ok(p);
+        }
+    }
+    // Fallback: any redb file in the backup dir.
+    std::fs::read_dir(backup)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("redb"))
+        .map(|p| p.to_string_lossy().to_string())
+        .ok_or_else(|| "backup data file missing".into())
+}
+
+pub(crate) fn tool_restore(k: &Kernel, args: &J) -> Result<J, String> {
     let backup = args
         .get("backup")
         .and_then(|b| b.as_str())
@@ -203,10 +218,14 @@ pub(crate) fn tool_restore(args: &J, current_db: &str) -> Result<J, String> {
     let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
-    if !std::path::Path::new(&format!("{}/data.redb", backup)).exists() {
-        return Err("backup data file missing".into());
-    }
-    std::fs::copy(format!("{}/data.redb", backup), current_db).map_err(|e| e.to_string())?;
+    let data_file = backup_data_file(backup)?;
+    // Engine-level restore: the live file cannot be overwritten while the
+    // server holds it open (region lock), so rows are swapped through the
+    // kernel in one atomic batch.
+    // ponytail: in-memory derived state is stale until restart — restart
+    // the server after restore (TESTING-PLAN §9.4 REC-002).
+    k.restore_store_from(std::path::Path::new(&data_file))
+        .map_err(|e| e.to_string())?;
     // Report PITR recovery point from backup metadata.
     let pitr_seq = meta.get("journal_seq").and_then(|v| v.as_u64());
     let pitr_ts = meta.get("timestamp").and_then(|v| v.as_u64());
@@ -220,13 +239,17 @@ pub(crate) fn tool_restore(args: &J, current_db: &str) -> Result<J, String> {
     }))
 }
 
-pub(crate) fn tool_list_backups() -> Result<J, String> {
+pub(crate) fn tool_list_backups(db_path: &str) -> Result<J, String> {
+    // Backups land next to the db file, not in the server's CWD.
+    let dir = std::path::Path::new(db_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
     let mut backups = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(".") {
+    if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.ends_with(".backup.") {
-                let meta_path = format!("{}/meta.json", name);
+            if name.contains(".backup.") {
+                let meta_path = format!("{}/meta.json", dir.join(&name).display());
                 if let Ok(meta_str) = std::fs::read_to_string(&meta_path) {
                     if let Ok(meta) = serde_json::from_str::<J>(&meta_str) {
                         backups.push(json!({"name": name, "meta": meta}));
@@ -279,5 +302,66 @@ pub(crate) fn tool_compliance_report(k: &Kernel) -> Result<J, String> {
         "tenant_keys": summary.map(|s| s.tenant_keys).unwrap_or(0),
         "audit_events": audit_counts,
         "compliance_grade": if report.encryption_enabled && report.policies_registered > 0 { "A" } else { "C" },
+    }))
+}
+
+/// MRFC-0020 Phase 4 (IMPLEMENTATION-PLAN "Next implementation"): one
+/// auditor export bundling the audit chain, the object inventory, the
+/// PII-filtering config, the retention records, and the encryption
+/// compliance report. Both frameworks carry the same bundle — the auditor
+/// maps sections to clauses; the framework tag only labels the report.
+/// Honest rows: purge coverage is counted-eligibility only (no kernel
+/// purge op exists), and the PII detector's R8.1 known limits travel
+/// with the pack rather than being implied away.
+pub(crate) fn tool_evidence_pack(k: &Kernel, args: &J) -> Result<J, String> {
+    let framework = args
+        .get("framework")
+        .and_then(|f| f.as_str())
+        .unwrap_or("gdpr");
+    if framework != "gdpr" && framework != "hipaa" {
+        return Err(format!(
+            "unsupported framework: {framework} (supported: gdpr, hipaa)"
+        ));
+    }
+
+    // Audit chain + object inventory (audit_report substrate).
+    let (seq, audit) = k.journal_head().map_err(|e| e.to_string())?;
+    let heads = k.scan_heads().map_err(|e| e.to_string())?;
+    let mut by_state: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for (_, _, _, s) in &heads {
+        *by_state.entry(s.to_string()).or_insert(0) += 1;
+    }
+
+    // Retention records (kernel-stamped valid_to horizons).
+    let retention = k.retention_summary().map_err(|e| e.to_string())?;
+
+    // Encryption compliance (existing report, same shape as its own tool).
+    let encryption = tool_compliance_report(k)?;
+
+    Ok(json!({
+        "framework": framework,
+        "audit_chain": audit.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(""),
+        "journal_seq": seq,
+        "object_inventory": {
+            "total": heads.len(),
+            "by_state": by_state,
+        },
+        "pii_filtering": {
+            "active": true,
+            "detector_kinds": aikoql_ingestion::ALL_KINDS
+                .iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>(),
+            // R8.1: pattern-based detection catches known formats only —
+            // the known limits travel with the evidence, not implied away.
+            "known_limits": "pattern-based detection catches known formats only; it does not decode URL-encoded or base64-encoded text or reassemble secrets split across lines (MRFC-0070 A7, R8.1)",
+        },
+        "retention": {
+            "retained_objects": retention.retained_objects,
+            "live_windows": retention.live_windows,
+            "expired": retention.expired,
+            "purge_coverage": "expired objects are counted and purge-eligible; physical deletion is caller-side — the kernel has no purge op (MRFC-0020 Phase 4 honest row)",
+        },
+        "encryption": encryption,
     }))
 }

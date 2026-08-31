@@ -1,7 +1,6 @@
 //! Extracted verbatim from server.rs (PRR-7). No behavior changes.
 
-use crate::*;
-
+use crate::{json, Write, J};
 /// JSON-RPC call result: `Ok(value)` is a result payload, `Err((code,
 /// message))` is a JSON-RPC error. (Moved here from server.rs, PRR-7.)
 pub(crate) type ToolResult = Result<J, (i64, String)>;

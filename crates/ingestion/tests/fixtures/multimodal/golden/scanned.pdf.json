@@ -1,0 +1,436 @@
+{
+  "ast": {
+    "document_id": null,
+    "page_count": 1,
+    "pages": [
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": {
+              "Heading": {
+                "level": 2
+              }
+            },
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Scan of original invoice 2024"
+          },
+          {
+            "asset": {
+              "asset_id": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
+              "content_hash": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
+              "mime_type": "image/jpeg",
+              "source": {
+                "bbox": null,
+                "document_id": null,
+                "end_offset": null,
+                "node_id": null,
+                "page": 1,
+                "start_offset": null
+              }
+            },
+            "bbox": null,
+            "block_type": "Image",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": null
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      }
+    ],
+    "source_type": "native"
+  },
+  "compilation": {
+    "commit_plan": {
+      "actions": [],
+      "document_id": null,
+      "stats": {
+        "creates": 0,
+        "needs_review": 0,
+        "skips": 0,
+        "total_actions": 0,
+        "total_conflicts": 0,
+        "updates": 0
+      }
+    },
+    "embedded_chunks": [],
+    "evidence_trail": {
+      "document_id": null,
+      "nodes": [
+        {
+          "entities": [],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-image-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "step": "Extracted 1 fact from document structure"
+        },
+        {
+          "entities": [],
+          "phase": "D5-ontology",
+          "source": [],
+          "step": "Discovered 0 classes, 0 properties, 0 relationships"
+        },
+        {
+          "entities": [],
+          "phase": "D6-resolution",
+          "source": [],
+          "step": "Resolved 0 entities: 0 matched, 0 ambiguous, 0 unmatched"
+        },
+        {
+          "entities": [],
+          "phase": "D7-reconcile",
+          "source": [],
+          "step": "Reconciled: 0 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+        }
+      ]
+    },
+    "fragments": [
+      {
+        "confidence": 1.0,
+        "content": {
+          "Image": {
+            "asset": {
+              "asset_id": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
+              "content_hash": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
+              "mime_type": "image/jpeg",
+              "source": {
+                "bbox": null,
+                "document_id": null,
+                "end_offset": null,
+                "node_id": null,
+                "page": 1,
+                "start_offset": null
+              }
+            },
+            "caption": null,
+            "detected_objects": [],
+            "model": null,
+            "ocr_model": null,
+            "ocr_text": null,
+            "visual_embedding": null
+          }
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "Scan of original invoice 2024"
+          ],
+          "neighboring_fragments": [],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b1",
+        "modality": "Image",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      }
+    ],
+    "ir": {
+      "content_trust": null,
+      "document_id": null,
+      "entities": [],
+      "events": [],
+      "extractor": "mock",
+      "facts": [
+        {
+          "confidence": 0.8500000238418579,
+          "entities": [],
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-image-v1",
+            "page": 1,
+            "source": null
+          },
+          "statement": "Image: asset c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1"
+        }
+      ],
+      "page_count": 1,
+      "relations": [],
+      "source_revision": null,
+      "temporal": []
+    },
+    "ontology": {
+      "classes": [],
+      "document_id": null,
+      "method": "ir-discovery-mock",
+      "properties": [],
+      "relationships": []
+    },
+    "resolution": {
+      "ambiguous": [],
+      "matched": [],
+      "stats": {
+        "ambiguous_count": 0,
+        "average_confidence": 0.0,
+        "matched_count": 0,
+        "total_entities": 0,
+        "unmatched_count": 0
+      },
+      "unmatched": []
+    },
+    "secret_findings": [],
+    "stats": {
+      "phases": [
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D3-ast"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D4-fragments"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D4-ir"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D5-ontology"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D6-resolution"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D7-reconcile"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D8-projection"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 1,
+          "phase": "D8-visual-index"
+        }
+      ],
+      "total_us": 0
+    },
+    "visual_index": [
+      {
+        "asset_id": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
+        "bbox": null,
+        "document_id": "",
+        "embedding": [
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.21081851422786713,
+          0.0,
+          0.21081851422786713,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.21081851422786713,
+          0.21081851422786713,
+          0.21081851422786713,
+          0.10540925711393356,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.21081851422786713,
+          0.21081851422786713,
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.21081851422786713,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.21081851422786713,
+          0.10540925711393356,
+          0.0,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.21081851422786713,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.21081851422786713,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.21081851422786713,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.0,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.10540925711393356,
+          0.0,
+          0.10540925711393356,
+          0.0,
+          0.10540925711393356
+        ],
+        "fragment_ids": [
+          "frag-p1-b1"
+        ],
+        "page": 1,
+        "semantic_caption": null
+      }
+    ]
+  },
+  "document": {
+    "ocr_stats": {
+      "average_confidence": 0.0,
+      "pages_ocr_attempted": 0,
+      "pages_ocr_failed": 0,
+      "pages_ocr_succeeded": 0
+    },
+    "page_count": 1,
+    "pages": [
+      {
+        "char_count": 29,
+        "images": [
+          {
+            "asset": {
+              "asset_id": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
+              "content_hash": "c0401042573439f7681087f53fd9d4d8ed935e8530fca8571ad395b5521b5cf1",
+              "mime_type": "image/jpeg",
+              "source": {
+                "bbox": null,
+                "document_id": null,
+                "end_offset": null,
+                "node_id": null,
+                "page": 1,
+                "start_offset": null
+              }
+            },
+            "bbox": null
+          }
+        ],
+        "ocr_confidence": null,
+        "page_number": 1,
+        "source": "native",
+        "text": "Scan of original invoice 2024"
+      }
+    ],
+    "total_chars": 29
+  }
+}

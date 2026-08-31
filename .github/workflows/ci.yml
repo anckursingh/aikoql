@@ -10,6 +10,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
+# CodeQL actions/missing-workflow-permissions: CI only reads the repo.
+permissions:
+  contents: read
+
 jobs:
   check:
     name: Check + Test (Windows)
@@ -22,8 +26,23 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace -- -D warnings
       - run: cargo check --workspace
+      # Windows debug-builds the full workspace incl. the Wave 5 OLAP
+      # harness's test-only client deps (clickhouse/mysql) — the step
+      # exceeded its 15-minute budget (13m41s even before Wave 5).
       - run: cargo test --workspace -- --skip load_encryption_overhead
-        timeout-minutes: 15
+        timeout-minutes: 30
+      # DoD 19 (HLD §52/§53): golden PDF suite with visible per-stage
+      # metrics — extraction/fragmentation/semantic/provenance/retrieval.
+      - run: cargo test -p aikoql-ingestion --test multimodal_golden -- --nocapture
+      # PR-G (HLD §60): rule-baseline retrieval-quality matrix
+      # (Recall@K/MRR/NDCG) — the pinned baseline future analyzer variants
+      # are compared against.
+      - run: cargo test -p aikoql-ingestion --test retrieval_quality -- --nocapture
+      # PR-Q (HLD §53/§60): semantic-extraction quality — entity/relation
+      # precision/recall + fact accuracy over the golden suite, judged
+      # against hand-authored ground truth. The last two §60 decision
+      # metrics (fact + relation extraction quality) now have instruments.
+      - run: cargo test -p aikoql-ingestion --test semantic_extraction_quality -- --nocapture
 
   test-linux:
     name: Test (Linux)
@@ -75,6 +94,25 @@ jobs:
           echo "container never became healthy — last logs:"
           docker logs aikoql-test 2>&1 | tail -30
           exit 1
+      # R1/R3 (review round 3): a non-loopback bind must fail closed — the
+      # image default binds 127.0.0.1; this asserts the guard, not just the
+      # default.
+      - name: R1 fail-closed — non-loopback --listen is rejected
+        run: |
+          set +e
+          out=$(docker run --rm --entrypoint aikoql -e AIKOQL_TCP_TOKEN=ci:ci:admin \
+            aikoql:test serve /data/aikoql.redb --listen 0.0.0.0:9090 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          [ "$rc" -eq 2 ] || { echo "expected exit 2, got $rc"; exit 1; }
+          echo "$out" | grep -q "non-loopback"
+      # MVP-DEP-003 (TESTING-PLAN §9.4 item 10): volume-backed restart
+      # preserves knowledge — container A writes a KO on a named volume,
+      # container B (fresh container, same volume) resolves the same KOID
+      # with the same content. Asserts the /data container contract.
+      - name: DEP-003 — volume-backed restart preserves knowledge
+        run: node scripts/e2e-volume-restart.js
 
   build-release:
     name: Build Release (Linux)
@@ -88,6 +126,145 @@ jobs:
         with:
           name: aikoql-linux
           path: target/release/aikoql-mcp
+
+  # R7 (review round 3): the npm tarball was never smoke-tested in CI — pack
+  # it, install it into a clean prefix, and drive a full MCP round-trip
+  # through the wrapper. AIKOQL_BINARY makes the wrapper run the artifact
+  # built by build-release instead of downloading a GitHub Release that does
+  # not exist yet for a PR's version.
+  npm-tarball-smoke:
+    name: npm tarball smoke (Linux)
+    runs-on: ubuntu-latest
+    needs: build-release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: aikoql-linux
+          path: bin
+      - name: Pack, clean install, MCP round-trip
+        run: |
+          set -euo pipefail
+          chmod +x bin/aikoql-mcp
+          export AIKOQL_BINARY="$GITHUB_WORKSPACE/bin/aikoql-mcp"
+          tarball=$(cd npm-publish && npm pack --silent)
+          tmp=$(mktemp -d)
+          cd "$tmp"
+          npm init -y >/dev/null 2>&1
+          npm install "$GITHUB_WORKSPACE/npm-publish/$tarball" --no-audit --no-fund >/dev/null
+          "$tmp/node_modules/.bin/aikoql-mcp" --version
+          node "$GITHUB_WORKSPACE/npm-publish/smoke-mcp.js" "$tmp/node_modules/.bin/aikoql-mcp"
+
+  # E2E dogfood gate (reviewer MVP gate): ingest the checked-out repo, answer
+  # the 10 continuity questions over the real MCP surface, then RESTART the
+  # server on the same db and assert the data survives — the six-item gate
+  # (Install → Start → Ingest → Search → Retrieve → Restart → Data survives)
+  # runs on every CI, not just manually before a release.
+  e2e-dogfood:
+    name: E2E dogfood — ingest, query, restart (Linux)
+    runs-on: ubuntu-latest
+    needs: build-release
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: aikoql-linux
+          path: bin
+      - name: Ingest → dogfood → restart
+        run: |
+          set -euo pipefail
+          chmod +x bin/aikoql-mcp
+          DB=dogfood.redb
+          # crates/ yields the Struct entities the gate asserts, without
+          # pulling build artifacts into the corpus. No model is installed
+          # here — ingestion degrades to lexical (PRR-3, no downloads).
+          # ingest-dir prints "  KOID: <hex>" on stdout; awk '{print $3}' is
+          # empty on that line ($1="KOID:", $2=<hex>) — extract by pattern.
+          KOID=$(bin/aikoql-mcp ingest-dir crates "$DB" | sed -n 's/^ *KOID: *//p' | head -1)
+          [ -n "$KOID" ] || { echo "ingest-dir printed no KOID"; exit 1; }
+          node scripts/e2e-dogfood.js bin/aikoql-mcp "$DB" "$KOID"
+          node scripts/e2e-restart.js bin/aikoql-mcp "$DB"
+
+  # MVP-QA-001 GATE-04 (§9.3 decision: connectors ARE in MVP scope): the
+  # connector certification suite runs against real databases as GitHub
+  # Actions services — the testcontainers equivalent in CI. The tests
+  # env-gate (AIKOQL_TEST_* set here; unset → skip with notice), so the
+  # Windows check job stays green without services.
+  connectors:
+    name: Connector certification — live pg/pgvector/mongo/neo4j
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      pg:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: aikoql
+          POSTGRES_PASSWORD: aikoql-ci
+          POSTGRES_DB: knowledge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aikoql"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit()'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/aikoql-ci
+        ports:
+          - 7474:7474
+          - 7687:7687
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p aikoql-ci 'RETURN 1'"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p aikoql-mcp --test connector_certification -- --nocapture
+        env:
+          AIKOQL_TEST_PG_DSN: host=localhost port=5432 user=aikoql password=aikoql-ci dbname=knowledge
+          AIKOQL_TEST_PGVECTOR_DSN: host=localhost port=5432 user=aikoql password=aikoql-ci dbname=knowledge
+          AIKOQL_TEST_MONGO_URI: mongodb://localhost:27017
+          AIKOQL_TEST_MONGO_DB: knowledge
+          AIKOQL_TEST_NEO4J_URI: http://localhost:7474
+          AIKOQL_TEST_NEO4J_USER: neo4j
+          AIKOQL_TEST_NEO4J_PASSWORD: aikoql-ci
+
+  # MVP-QA-001 §23: certification artifacts must always match the §9.1
+  # registry — --self-test pins the decision logic, --check regenerates and
+  # fails on stale artifacts (e.g. a registry edit without re-running the
+  # runner). The gate stays NO-GO while connector rows are open (§9.3
+  # decision: connectors are in MVP scope — this job asserts the artifacts
+  # say so).
+  certification-artifacts:
+    name: Certification artifacts (§23)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/certify.js --self-test
+      - run: node scripts/certify.js --check
 
   dependency-dag:
     name: Verify Dependency DAG

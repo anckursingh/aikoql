@@ -1,10 +1,12 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
-
 use crate::helpers::*;
 use crate::session::*;
+use crate::{
+    json, knowledge_runtime, value_to_string, Action, GraphEngineApi, Kernel, KnowledgeContext,
+    KnowledgeObject, Metadata, Origin, RelateRequest, RememberRequest, Value, J, KOID,
+};
 pub(crate) static PROGRAM_CACHE: std::sync::LazyLock<knowledge_runtime::ProgramCache> =
     std::sync::LazyLock::new(knowledge_runtime::ProgramCache::new);
 
@@ -288,6 +290,23 @@ pub(crate) fn tool_execute_program(k: &Kernel, args: &J) -> Result<J, String> {
     // The program KO itself must be readable by the caller.
     let exec_subject = subject.clone();
 
+    // PRG-007: optional execution_id makes execution exactly-once. The result
+    // is snapshotted to an aikoql:execution record keyed by
+    // `execute-program-{koid}-{execution_id}`; replays return the stored
+    // result without re-running the program (safe retry).
+    let idem_key = args
+        .get("execution_id")
+        .and_then(|v| v.as_str())
+        .map(|id| format!("execute-program-{hex}-{id}"));
+    if let Some(key) = idem_key.as_deref() {
+        if let Some((rec_koid, _, _)) = k.resolve_idempotency(key).map_err(|e| e.to_string())? {
+            let rec = k
+                .get(KnowledgeContext::from(subject.clone()), &rec_koid)
+                .map_err(|e| e.to_string())?;
+            return stored_execution_result(&rec);
+        }
+    }
+
     // Load program KO, substitute params, compile, execute.
     let ko = k
         .get(KnowledgeContext::from(subject.clone()), &koid)
@@ -316,17 +335,64 @@ pub(crate) fn tool_execute_program(k: &Kernel, args: &J) -> Result<J, String> {
     .map_err(|e| format!("compile: {}", e))?;
     let optimized = aikoql_compiler::planner::Planner::optimize(&plan);
     let result = aikoql_runtime::Interpreter::execute(k, &optimized).map_err(|e| e.to_string())?;
-    match result {
-        aikoql_runtime::RowSet::Objects(kos) => Ok(json!({
+    let result = match result {
+        aikoql_runtime::RowSet::Objects(kos) => json!({
             "results": kos.iter().map(|ko| json!({
                 "koid": ko.koid.to_hex(), "type_name": ko.metadata.type_name, "version": ko.version,
                 "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
             })).collect::<Vec<_>>(), "count": kos.len()
-        })),
-        aikoql_runtime::RowSet::Scored(scored) => Ok(json!({
+        }),
+        aikoql_runtime::RowSet::Scored(scored) => json!({
             "results": scored.iter().map(|(koid, score, tn, ver)| json!({"koid": koid.to_hex(), "score": score, "type_name": tn, "version": ver})).collect::<Vec<_>>(), "count": scored.len()
-        })),
-        other => Ok(json!({"results": [], "debug": format!("{:?}", other)})),
+        }),
+        other => json!({"results": [], "debug": format!("{:?}", other)}),
+    };
+    if let Some(key) = idem_key {
+        // Snapshot the result to an execution record; the idempotency key
+        // makes the write exactly-once. Read the record back so a concurrent
+        // caller with the same key returns the winner's result, not its own.
+        let mut req = RememberRequest::create(
+            subject.clone(),
+            Metadata {
+                type_name: "aikoql:execution".into(),
+                tenant: subject.tenant.clone(),
+                schema_version: 1,
+                tags: vec![],
+            },
+        );
+        req.properties
+            .insert("program".into(), Value::Text(hex.to_string()));
+        req.properties.insert(
+            "params".into(),
+            Value::Text(
+                json!(params
+                    .iter()
+                    .map(|(pk, pv)| (pk.clone(), value_to_json(pv)))
+                    .collect::<serde_json::Map<_, _>>())
+                .to_string(),
+            ),
+        );
+        req.properties
+            .insert("result".into(), Value::Text(result.to_string()));
+        req.origin = Origin::Reason;
+        req.note = Some(format!("execute_program {hex}"));
+        req.idempotency_key = Some(key.to_string());
+        let remembered = k.remember(req).map_err(|e| e.to_string())?;
+        let rec = k
+            .get(KnowledgeContext::from(subject.clone()), &remembered.koid)
+            .map_err(|e| e.to_string())?;
+        return stored_execution_result(&rec);
+    }
+    Ok(result)
+}
+
+/// PRG-007: the stored result of an idempotent program execution.
+fn stored_execution_result(rec: &KnowledgeObject) -> Result<J, String> {
+    match rec.properties.get("result") {
+        Some(Value::Text(s)) => {
+            serde_json::from_str(s).map_err(|e| format!("stored execution result is corrupt: {e}"))
+        }
+        _ => Err("execution record has no result property".into()),
     }
 }
 

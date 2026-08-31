@@ -15,22 +15,36 @@ use crate::ocr::BlockBbox;
 use crate::DocumentModel;
 
 /// Classification of a structural block in a document.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum BlockType {
     Title,
-    Heading { level: u8 },
+    Heading {
+        level: u8,
+    },
     Paragraph,
-    List { ordered: bool },
+    List {
+        ordered: bool,
+    },
     ListItem,
     Table,
     TableRow,
-    TableCell { row_span: u32, col_span: u32 },
+    TableCell {
+        row_span: u32,
+        col_span: u32,
+    },
     Image,
+    /// Multimodal variants (HLD §7): a chart is not merely an image, a
+    /// diagram carries graph-like semantics, a figure is an arbitrary visual.
+    Figure,
+    Chart,
+    Diagram,
+    Formula,
     Caption,
     Header,
     Footer,
     Footnote,
     Code,
+    #[default]
     Unknown,
 }
 
@@ -46,14 +60,354 @@ pub struct BoundingBox {
 
 /// A node in the document AST. Recursive: a Section contains Headings,
 /// Paragraphs, Tables; a Table contains TableRows; etc.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct AstNode {
     pub block_type: BlockType,
-    pub text: String,
+    /// Text representation if available. `None` = none (page containers,
+    /// structured nodes, visual-only nodes whose representation lives in
+    /// `asset`/`payload`). HLD §7 migration lands with PR-B — every `.text`
+    /// consumer switches together; `#[serde(default)]` keeps legacy JSON
+    /// (plain string `text` key) deserializing as `Some(_)`.
+    #[serde(default)]
+    pub text: Option<String>,
     #[serde(default)]
     pub children: Vec<AstNode>,
     pub bbox: Option<BoundingBox>,
     pub confidence: Option<f32>,
+    /// Stable node identity for provenance links (`SourceSpan.node_id`,
+    /// `EvidenceSource::TableCell`). Assigned by producers; the boundary
+    /// detector currently derives position-based fragment ids instead.
+    #[serde(default)]
+    pub node_id: Option<String>,
+    /// Original visual asset for Figure/Chart/Diagram/Image nodes.
+    #[serde(default)]
+    pub asset: Option<crate::source::VisualAssetRef>,
+    /// Typed structured payload for Table/Chart/Diagram/Formula nodes.
+    #[serde(default)]
+    pub payload: Option<AstPayload>,
+}
+
+// ---------------------------------------------------------------------------
+// Canonical multimodal payloads (HLD §9–13)
+// ---------------------------------------------------------------------------
+
+/// Typed structured content attached to multimodal AST nodes. The original
+/// text/visual representation always stays available alongside the payload —
+/// interpretation is derived from the source, never substituted for it.
+// ponytail: AST nodes are transient per-document; boxing a payload variant
+// saves bytes on a structure that lives seconds. Box if payloads get cached.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub enum AstPayload {
+    Table(TablePayload),
+    Chart(ChartPayload),
+    Diagram(DiagramPayload),
+    Formula(FormulaPayload),
+    Image(ImagePayload),
+}
+
+/// Typed scalar for table cells. The original cell text stays available.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ScalarValue {
+    Text(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+    Date(String),
+    Currency { amount: f64, currency: String },
+}
+
+/// Structured table — row/column relationships are knowledge, not text soup.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TablePayload {
+    pub headers: Vec<TableHeader>,
+    pub rows: Vec<TableRow>,
+    pub cells: Vec<TableCell>,
+    #[serde(default)]
+    pub footnotes: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TableHeader {
+    pub id: String,
+    pub text: String,
+    pub level: u8,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TableRow {
+    pub id: String,
+    pub index: usize,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TableCell {
+    pub id: String,
+    pub row_id: String,
+    pub column_id: String,
+    pub text: String,
+    #[serde(default)]
+    pub value: Option<ScalarValue>,
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+    pub confidence: f32,
+}
+
+/// Chart: visual evidence + structured interpretation.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ChartPayload {
+    pub chart_type: ChartType,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Content-addressed asset backing the chart (PR-F): survives image →
+    /// chart re-typing so chart facts can cite their visual source.
+    #[serde(default)]
+    pub asset: Option<crate::source::VisualAssetRef>,
+    #[serde(default)]
+    pub x_axis: Option<Axis>,
+    #[serde(default)]
+    pub y_axis: Option<Axis>,
+    #[serde(default)]
+    pub series: Vec<ChartSeries>,
+    /// Extracted data table, when a chart parser recovers one (PR-F).
+    #[serde(default)]
+    pub extracted_data: Option<TablePayload>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ChartType {
+    Bar,
+    Line,
+    Pie,
+    Scatter,
+    Area,
+    Histogram,
+    Combo,
+    Unknown,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Axis {
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ChartSeries {
+    pub name: String,
+    #[serde(default)]
+    pub values: Vec<ChartPoint>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ChartPoint {
+    pub x: String,
+    pub y: f64,
+    pub confidence: f32,
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+}
+
+/// Diagram: nodes + edges — naturally maps to knowledge relationships.
+/// The visual diagram remains evidence; the extracted graph becomes knowledge.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DiagramPayload {
+    #[serde(default)]
+    pub nodes: Vec<DiagramNode>,
+    #[serde(default)]
+    pub edges: Vec<DiagramEdge>,
+    /// Content-addressed asset backing the diagram (PR-O): lets the visual
+    /// index rank diagrams like images/charts. `None` for text-sourced
+    /// diagrams (mermaid fences — the source is already text).
+    #[serde(default)]
+    pub asset: Option<crate::source::VisualAssetRef>,
+    /// Analyzer that produced this payload (DoD row 11: model versions
+    /// persisted). `None` = the mock specialist; a VLM-backed analyzer
+    /// stamps its own model id.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DiagramNode {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub node_type: Option<String>,
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+    pub confidence: f32,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DiagramEdge {
+    pub source: String,
+    pub target: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    pub confidence: f32,
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+}
+
+/// Formula: keep the mathematical representation, not just OCR text.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct FormulaPayload {
+    #[serde(default)]
+    pub latex: Option<String>,
+    #[serde(default)]
+    pub mathml: Option<String>,
+    #[serde(default)]
+    pub plain_text: Option<String>,
+}
+
+/// Image: multiple representations. A generated caption is a projection,
+/// never the canonical content.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ImagePayload {
+    pub asset: crate::source::VisualAssetRef,
+    #[serde(default)]
+    pub ocr_text: Option<String>,
+    /// Provider/model that produced `ocr_text` (DoD row 14: model versions
+    /// persisted — e.g. "tesseract-cli").
+    #[serde(default)]
+    pub ocr_model: Option<String>,
+    #[serde(default)]
+    pub caption: Option<String>,
+    #[serde(default)]
+    pub detected_objects: Vec<DetectedObject>,
+    #[serde(default)]
+    pub visual_embedding: Option<Vec<f32>>,
+    /// Analyzer that produced this payload (DoD row 11: model versions
+    /// persisted). `None` = the mock specialist; a VLM-backed analyzer
+    /// stamps its own model id.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Object detected inside a visual asset (PR-F visual analysis).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DetectedObject {
+    pub label: String,
+    pub confidence: f32,
+    #[serde(default)]
+    pub bbox: Option<BoundingBox>,
+}
+
+// ---------------------------------------------------------------------------
+// Payload construction from existing AST structure
+// ---------------------------------------------------------------------------
+
+/// Convert a Table AST node (Table → TableRow → TableCell) into a structured
+/// TablePayload. First row becomes single-level headers; remaining rows map
+/// cells to header columns. Returns `None` for non-table nodes.
+pub fn table_payload_from_node(node: &AstNode) -> Option<TablePayload> {
+    if node.block_type != BlockType::Table || node.children.is_empty() {
+        return None;
+    }
+
+    let mut headers: Vec<TableHeader> = Vec::new();
+    let mut rows: Vec<TableRow> = Vec::new();
+    let mut cells: Vec<TableCell> = Vec::new();
+
+    for (row_idx, row_node) in node.children.iter().enumerate() {
+        if row_node.block_type != BlockType::TableRow {
+            continue;
+        }
+        let row_id = format!("r{}", row_idx);
+
+        if row_idx == 0 {
+            for (col_idx, cell_node) in row_node.children.iter().enumerate() {
+                headers.push(TableHeader {
+                    id: format!("h{}", col_idx),
+                    text: cell_node.text.clone().unwrap_or_default(),
+                    level: 1,
+                    parent_id: None,
+                });
+            }
+            continue;
+        }
+
+        rows.push(TableRow {
+            id: row_id.clone(),
+            index: row_idx,
+        });
+
+        for (col_idx, cell_node) in row_node.children.iter().enumerate() {
+            let column_id = headers
+                .get(col_idx)
+                .map(|h| h.id.clone())
+                .unwrap_or_else(|| format!("c{}", col_idx));
+            let confidence = cell_node.confidence.unwrap_or(1.0);
+            cells.push(TableCell {
+                id: format!("{}-{}", row_id, col_idx),
+                row_id: row_id.clone(),
+                column_id,
+                text: cell_node.text.clone().unwrap_or_default(),
+                value: parse_scalar_value(cell_node.text.as_deref().unwrap_or_default()),
+                bbox: cell_node.bbox.clone(),
+                confidence,
+            });
+        }
+    }
+
+    Some(TablePayload {
+        headers,
+        rows,
+        cells,
+        footnotes: Vec::new(),
+    })
+}
+
+/// Best-effort typed scalar for a table cell. The original text is always
+/// preserved on `TableCell.text` — this is an interpretation, not a rewrite.
+fn parse_scalar_value(text: &str) -> Option<ScalarValue> {
+    let t = text.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if let Ok(i) = t.parse::<i64>() {
+        return Some(ScalarValue::Integer(i));
+    }
+    if t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("false") {
+        return Some(ScalarValue::Boolean(t.eq_ignore_ascii_case("true")));
+    }
+    // Currency: symbol prefix + parseable amount.
+    for symbol in ["$", "€", "£", "₹"] {
+        if let Some(rest) = t.strip_prefix(symbol) {
+            if let Ok(amount) = rest.trim().replace(',', "").parse::<f64>() {
+                return Some(ScalarValue::Currency {
+                    amount,
+                    currency: symbol.to_string(),
+                });
+            }
+        }
+    }
+    // Date: YYYY-MM-DD.
+    let digits_only: Vec<&str> = t.split('-').collect();
+    if digits_only.len() == 3
+        && digits_only[0].len() == 4
+        && digits_only[0].chars().all(|c| c.is_ascii_digit())
+        && digits_only[1].len() == 2
+        && digits_only[2].len() == 2
+        && digits_only[1..]
+            .iter()
+            .all(|p| p.chars().all(|c| c.is_ascii_digit()))
+    {
+        return Some(ScalarValue::Date(t.to_string()));
+    }
+    if let Ok(f) = t.parse::<f64>() {
+        return Some(ScalarValue::Float(f));
+    }
+    None
 }
 
 /// Provider-independent document structure produced by physical analysis.
@@ -64,6 +418,10 @@ pub struct DocumentAst {
     pub page_count: u32,
     /// Provenance: "native", "ocr", or "mixed".
     pub source_type: String,
+    /// Stable document identity (file path, hash, or external id). Populated
+    /// by extractors/adapters; PR-C derives fragment-id prefixes from it.
+    #[serde(default)]
+    pub document_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -78,13 +436,17 @@ pub fn document_model_to_ast(doc: &DocumentModel) -> DocumentAst {
     let mut pages = Vec::with_capacity(doc.pages.len());
 
     for page in &doc.pages {
-        let blocks = classify_blocks(&page.text, page.page_number);
+        let mut blocks = classify_blocks(&page.text, page.page_number);
+        // PR-F: extracted visual assets enter the canonical AST as Image
+        // nodes (HLD §29/§30) — classification runs later in the pipeline.
+        blocks.extend(image_nodes(&page.images));
         pages.push(AstNode {
             block_type: BlockType::Unknown, // page container
-            text: String::new(),
+            text: None,
             children: blocks,
             bbox: None,
             confidence: page.ocr_confidence,
+            ..Default::default()
         });
     }
 
@@ -94,7 +456,26 @@ pub fn document_model_to_ast(doc: &DocumentModel) -> DocumentAst {
         page_count: doc.page_count,
         pages,
         source_type,
+        document_id: None,
     }
+}
+
+/// PR-F: `DocumentImage`s become asset-backed `Image` nodes. Caption
+/// association for extracted assets (text-side "Figure 1: …" markers) is a
+/// future seam — position matching, not available in the mock tier.
+fn image_nodes(images: &[crate::DocumentImage]) -> Vec<AstNode> {
+    images
+        .iter()
+        .map(|img| AstNode {
+            block_type: BlockType::Image,
+            text: None,
+            children: vec![],
+            bbox: img.bbox.clone(),
+            confidence: None,
+            asset: Some(img.asset.clone()),
+            ..Default::default()
+        })
+        .collect()
 }
 
 fn determine_source_type(doc: &DocumentModel) -> String {
@@ -154,10 +535,11 @@ fn classify_blocks(text: &str, _page: u32) -> Vec<AstNode> {
             flush_list(&mut list_buffer, &mut nodes);
             nodes.push(AstNode {
                 block_type: BlockType::Code,
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -178,10 +560,11 @@ fn classify_blocks(text: &str, _page: u32) -> Vec<AstNode> {
             // Let detect_figures post-pass handle this.
             nodes.push(AstNode {
                 block_type: BlockType::Paragraph,
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -201,10 +584,11 @@ fn classify_blocks(text: &str, _page: u32) -> Vec<AstNode> {
         // ── Default: paragraph ──
         nodes.push(AstNode {
             block_type: BlockType::Paragraph,
-            text: trimmed.to_string(),
+            text: Some(trimmed.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         });
     }
 
@@ -244,16 +628,17 @@ fn flush_list(buffer: &mut Vec<AstNode>, out: &mut Vec<AstNode>) {
     let items = std::mem::take(buffer);
     let ordered = items.first().is_some_and(|item| {
         // Ordered if the first item starts with a digit followed by "." or ")"
-        let t = item.text.trim();
+        let t = item.text.as_deref().unwrap_or_default().trim();
         t.chars().next().is_some_and(|c| c.is_ascii_digit())
             && t.chars().nth(1).is_some_and(|c| c == '.' || c == ')')
     });
     out.push(AstNode {
         block_type: BlockType::List { ordered },
-        text: String::new(),
+        text: None,
         children: items,
         bbox: None,
         confidence: None,
+        ..Default::default()
     });
 }
 
@@ -263,6 +648,29 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
     let first = lines[0].trim();
     if first.is_empty() {
         return None;
+    }
+
+    // ATX markdown headings "# ".."###### " — emitted by the DOCX/HTML
+    // structural parsers (HLD §30/§31 dialect). The marker stays in the
+    // stored text, matching the numeric-prefix headings below.
+    if first.starts_with('#') {
+        let hashes = first.chars().take_while(|c| *c == '#').count();
+        if (1..=6).contains(&hashes)
+            && first[hashes..].starts_with(' ')
+            && !first[hashes..].trim().is_empty()
+            && first.len() < 150
+        {
+            return Some(AstNode {
+                block_type: BlockType::Heading {
+                    level: hashes as u8,
+                },
+                text: Some(text.to_string()),
+                children: vec![],
+                bbox: None,
+                confidence: None,
+                ..Default::default()
+            });
+        }
     }
 
     // Numeric prefix: "1.", "1.1", "1.1.1", "Section 1", "Chapter 2"
@@ -275,10 +683,11 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
         let level = dots.clamp(1, 3); // "1." → 1 dot → level 1; "1.1.1" → 3 dots → level 3
         return Some(AstNode {
             block_type: BlockType::Heading { level },
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         });
     }
 
@@ -294,10 +703,11 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
                 block_type: BlockType::Heading {
                     level: *default_level,
                 },
-                text: text.to_string(),
+                text: Some(text.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
         }
     }
@@ -326,10 +736,11 @@ fn try_heading(lines: &[&str], text: &str) -> Option<AstNode> {
 
         return Some(AstNode {
             block_type: BlockType::Heading { level },
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         });
     }
 
@@ -399,10 +810,11 @@ fn build_list_items(lines: &[&str], _text: &str) -> AstNode {
     // ponytail: single block only, multi-paragraph list items deferred
     AstNode {
         block_type: BlockType::ListItem,
-        text: lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" "),
+        text: Some(lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ")),
         children: vec![],
         bbox: None,
         confidence: None,
+        ..Default::default()
     }
 }
 
@@ -469,29 +881,36 @@ fn build_table_node(lines: &[&str], _text: &str) -> AstNode {
                     row_span: 1,
                     col_span: 1,
                 },
-                text: c.to_string(),
+                text: Some(c.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             })
             .collect();
 
         rows.push(AstNode {
             block_type: BlockType::TableRow,
-            text: String::new(),
+            text: None,
             children: cell_nodes,
             bbox: None,
             confidence: None,
+            ..Default::default()
         });
     }
 
-    AstNode {
+    let table = AstNode {
         block_type: BlockType::Table,
-        text: String::new(),
+        text: None,
         children: rows,
         bbox: None,
         confidence: None,
-    }
+        ..Default::default()
+    };
+    // Attach the typed payload so the canonical AST self-describes the table
+    // (HLD §9 — a table must remain a table, not text soup).
+    let payload = table_payload_from_node(&table).map(AstPayload::Table);
+    AstNode { payload, ..table }
 }
 
 /// Mode (most frequent value) of a usize slice.
@@ -553,10 +972,11 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
             flush_list(&mut list_buffer, &mut nodes);
             nodes.push(AstNode {
                 block_type: BlockType::Code,
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             });
             continue;
         }
@@ -593,7 +1013,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
             {
                 nodes.push(AstNode {
                     block_type: BlockType::Header,
-                    text: trimmed.to_string(),
+                    text: Some(trimmed.to_string()),
                     children: vec![],
                     bbox: Some(BoundingBox {
                         page,
@@ -603,6 +1023,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
                         height: h.height as f32,
                     }),
                     confidence: Some(h.avg_confidence),
+                    ..Default::default()
                 });
                 continue;
             }
@@ -610,7 +1031,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
             if h.top > 2500 && h.height < 50 {
                 nodes.push(AstNode {
                     block_type: BlockType::Footer,
-                    text: trimmed.to_string(),
+                    text: Some(trimmed.to_string()),
                     children: vec![],
                     bbox: Some(BoundingBox {
                         page,
@@ -620,6 +1041,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
                         height: h.height as f32,
                     }),
                     confidence: Some(h.avg_confidence),
+                    ..Default::default()
                 });
                 continue;
             }
@@ -633,7 +1055,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
             let h = hint.unwrap();
             nodes.push(AstNode {
                 block_type: BlockType::Title,
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: Some(BoundingBox {
                     page,
@@ -643,6 +1065,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
                     height: h.height as f32,
                 }),
                 confidence: Some(h.avg_confidence),
+                ..Default::default()
             });
             continue;
         }
@@ -656,7 +1079,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
             let level = heading_level_from_text(first);
             nodes.push(AstNode {
                 block_type: BlockType::Heading { level },
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: Some(BoundingBox {
                     page,
@@ -666,6 +1089,7 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
                     height: h.height as f32,
                 }),
                 confidence: Some(h.avg_confidence),
+                ..Default::default()
             });
             continue;
         }
@@ -674,10 +1098,11 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
         if parse_figure_marker(trimmed).is_some() {
             let mut para = AstNode {
                 block_type: BlockType::Paragraph,
-                text: trimmed.to_string(),
+                text: Some(trimmed.to_string()),
                 children: vec![],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             };
             if let Some(hint) = hint {
                 para.bbox = Some(BoundingBox {
@@ -730,10 +1155,11 @@ pub fn classify_blocks_enriched(text: &str, page: u32, bboxes: &[BlockBbox]) -> 
         // ── Default: paragraph ──
         let mut para = AstNode {
             block_type: BlockType::Paragraph,
-            text: trimmed.to_string(),
+            text: Some(trimmed.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         };
         if let Some(hint) = hint {
             para.bbox = Some(BoundingBox {
@@ -823,7 +1249,7 @@ fn merge_list_continuations(nodes: Vec<AstNode>) -> Vec<AstNode> {
 fn is_continuation_paragraph(node: &AstNode) -> bool {
     // A paragraph is a continuation if it doesn't look like a new structural
     // element: no list markers, no heading patterns, no figure markers.
-    let t = node.text.trim();
+    let t = node.text.as_deref().unwrap_or_default().trim();
     if t.is_empty() {
         return false;
     }
@@ -893,7 +1319,7 @@ fn detect_figures(nodes: Vec<AstNode>) -> Vec<AstNode> {
         let node = &nodes[i];
 
         if node.block_type == BlockType::Paragraph {
-            if let Some(_fig_num) = parse_figure_marker(&node.text) {
+            if let Some(_fig_num) = parse_figure_marker(node.text.as_deref().unwrap_or_default()) {
                 let caption =
                     if i + 1 < nodes.len() && nodes[i + 1].block_type == BlockType::Paragraph {
                         i += 1;
@@ -904,14 +1330,16 @@ fn detect_figures(nodes: Vec<AstNode>) -> Vec<AstNode> {
                             children: vec![],
                             bbox: cap.bbox.clone(),
                             confidence: cap.confidence,
+                            ..Default::default()
                         }
                     } else {
                         AstNode {
                             block_type: BlockType::Caption,
-                            text: String::new(),
+                            text: None,
                             children: vec![],
                             bbox: None,
                             confidence: None,
+                            ..Default::default()
                         }
                     };
 
@@ -921,6 +1349,7 @@ fn detect_figures(nodes: Vec<AstNode>) -> Vec<AstNode> {
                     children: vec![caption],
                     bbox: node.bbox.clone(),
                     confidence: node.confidence,
+                    ..Default::default()
                 });
                 i += 1;
                 continue;
@@ -933,7 +1362,9 @@ fn detect_figures(nodes: Vec<AstNode>) -> Vec<AstNode> {
     out
 }
 
-fn parse_figure_marker(text: &str) -> Option<String> {
+/// pub(crate): the PDF vector-graphics extraction (lib.rs, PR-N) reuses it
+/// to decide whether a page's drawings back a marked figure/chart.
+pub(crate) fn parse_figure_marker(text: &str) -> Option<String> {
     let t = text.trim();
     for prefix in &["Figure ", "Fig. ", "Fig "] {
         if let Some(rest) = t.strip_prefix(prefix) {
@@ -962,14 +1393,16 @@ pub fn document_model_to_ast_enriched(
             .get(i)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-        let blocks = classify_blocks_enriched(&page.text, page.page_number, page_bboxes);
+        let mut blocks = classify_blocks_enriched(&page.text, page.page_number, page_bboxes);
+        blocks.extend(image_nodes(&page.images));
 
         pages.push(AstNode {
             block_type: BlockType::Unknown,
-            text: String::new(),
+            text: None,
             children: blocks,
             bbox: None,
             confidence: page.ocr_confidence,
+            ..Default::default()
         });
     }
 
@@ -979,6 +1412,7 @@ pub fn document_model_to_ast_enriched(
         page_count: doc.page_count,
         pages,
         source_type,
+        document_id: None,
     }
 }
 
@@ -998,6 +1432,7 @@ mod tests {
             text: text.to_string(),
             source: "native".into(),
             ocr_confidence: None,
+            images: vec![],
         }
     }
 
@@ -1024,6 +1459,33 @@ mod tests {
     }
 
     #[test]
+    fn atx_markdown_headings_classify_with_levels() {
+        // DOCX/HTML structural parsers emit ATX headings (HLD §30/§31).
+        // The plain paragraph is two lines — single short lines are
+        // headings under the title-case heuristic, so one line would not
+        // prove paragraph fall-through.
+        let dm = doc(vec![page(
+            "# Overview\n\n## Details\n\n### Deep\n\nPlain paragraph.\nWith a second line.",
+        )]);
+        let ast = document_model_to_ast(&dm);
+        let blocks = &ast.pages[0].children;
+        let headings: Vec<u8> = blocks
+            .iter()
+            .filter_map(|n| match &n.block_type {
+                BlockType::Heading { level } => Some(*level),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(headings, vec![1, 2, 3], "ATX levels map to heading levels");
+        assert!(
+            blocks
+                .iter()
+                .any(|n| matches!(n.block_type, BlockType::Paragraph)),
+            "plain paragraph stays a paragraph"
+        );
+    }
+
+    #[test]
     fn adapter_sets_source_type_ocr_when_all_pages_ocrd() {
         let mut dm = doc(vec![PageModel {
             page_number: 1,
@@ -1031,6 +1493,7 @@ mod tests {
             text: "OCR text".into(),
             source: "ocr".into(),
             ocr_confidence: Some(88.0),
+            images: vec![],
         }]);
         dm.ocr_stats = Some(crate::OcrStats {
             pages_ocr_attempted: 1,
@@ -1051,6 +1514,7 @@ mod tests {
                 text: "Native text".into(),
                 source: "native".into(),
                 ocr_confidence: None,
+                images: vec![],
             },
             PageModel {
                 page_number: 2,
@@ -1058,6 +1522,7 @@ mod tests {
                 text: "OCR text".into(),
                 source: "ocr".into(),
                 ocr_confidence: Some(85.0),
+                images: vec![],
             },
         ]);
         dm.ocr_stats = Some(crate::OcrStats {
@@ -1086,7 +1551,11 @@ mod tests {
         let blocks = classify_blocks("1. Introduction", 1);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].block_type, BlockType::Heading { level: 1 });
-        assert!(blocks[0].text.contains("Introduction"));
+        assert!(blocks[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Introduction"));
     }
 
     #[test]
@@ -1173,13 +1642,25 @@ mod tests {
 
         // Heading
         assert!(matches!(blocks[0].block_type, BlockType::Heading { .. }));
-        assert!(blocks[0].text.contains("Payment Terms"));
+        assert!(blocks[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Payment Terms"));
 
         // Paragraphs
         assert_eq!(blocks[1].block_type, BlockType::Paragraph);
-        assert!(blocks[1].text.contains("30 days"));
+        assert!(blocks[1]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("30 days"));
         assert_eq!(blocks[2].block_type, BlockType::Paragraph);
-        assert!(blocks[2].text.contains("1.5%"));
+        assert!(blocks[2]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("1.5%"));
 
         // Table
         assert_eq!(blocks[3].block_type, BlockType::Table);
@@ -1187,7 +1668,10 @@ mod tests {
                                                  // First row (header)
         assert_eq!(blocks[3].children[0].block_type, BlockType::TableRow);
         assert_eq!(blocks[3].children[0].children.len(), 4);
-        assert_eq!(blocks[3].children[0].children[0].text, "Item");
+        assert_eq!(
+            blocks[3].children[0].children[0].text.as_deref(),
+            Some("Item")
+        );
     }
 
     // ── Code block ──
@@ -1214,27 +1698,31 @@ mod tests {
         let ast = DocumentAst {
             page_count: 1,
             source_type: "native".into(),
+            document_id: None,
             pages: vec![AstNode {
                 block_type: BlockType::Unknown,
-                text: String::new(),
+                text: None,
                 children: vec![
                     AstNode {
                         block_type: BlockType::Heading { level: 1 },
-                        text: "Title".into(),
+                        text: Some("Title".into()),
                         children: vec![],
                         bbox: None,
                         confidence: None,
+                        ..Default::default()
                     },
                     AstNode {
                         block_type: BlockType::Paragraph,
-                        text: "Body text.".into(),
+                        text: Some("Body text.".into()),
                         children: vec![],
                         bbox: None,
                         confidence: None,
+                        ..Default::default()
                     },
                 ],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             }],
         };
 
@@ -1275,7 +1763,11 @@ mod tests {
         assert_eq!(blocks.len(), 3);
         assert_eq!(blocks[0].block_type, BlockType::Paragraph);
         assert!(matches!(blocks[1].block_type, BlockType::Heading { .. }));
-        assert!(blocks[1].text.contains("PAYMENT TERMS"));
+        assert!(blocks[1]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("PAYMENT TERMS"));
         assert_eq!(blocks[2].block_type, BlockType::Paragraph);
     }
 
@@ -1290,7 +1782,11 @@ mod tests {
         let blocks = classify_blocks_enriched(text, 1, &bboxes);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].block_type, BlockType::Title);
-        assert!(blocks[0].text.contains("INVOICE"));
+        assert!(blocks[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("INVOICE"));
         assert_eq!(blocks[1].block_type, BlockType::Paragraph);
     }
 
@@ -1304,7 +1800,11 @@ mod tests {
         let blocks = classify_blocks_enriched(text, 1, &bboxes);
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].block_type, BlockType::Header);
-        assert!(blocks[0].text.contains("Page 1"));
+        assert!(blocks[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Page 1"));
         assert_eq!(blocks[1].block_type, BlockType::Paragraph);
     }
 
@@ -1319,7 +1819,11 @@ mod tests {
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].block_type, BlockType::Paragraph);
         assert_eq!(blocks[1].block_type, BlockType::Footer);
-        assert!(blocks[1].text.contains("Confidential"));
+        assert!(blocks[1]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Confidential"));
     }
 
     #[test]
@@ -1366,7 +1870,11 @@ mod tests {
         assert_eq!(item1.block_type, BlockType::ListItem);
         assert_eq!(item1.children.len(), 1);
         assert_eq!(item1.children[0].block_type, BlockType::Paragraph);
-        assert!(item1.children[0].text.contains("Continuation"));
+        assert!(item1.children[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Continuation"));
 
         let item2 = &blocks[0].children[1];
         assert_eq!(item2.block_type, BlockType::ListItem);
@@ -1419,10 +1927,14 @@ mod tests {
             .iter()
             .find(|b| b.block_type == BlockType::Image)
             .unwrap();
-        assert!(fig.text.contains("Figure 1"));
+        assert!(fig.text.as_deref().unwrap_or_default().contains("Figure 1"));
         assert_eq!(fig.children.len(), 1);
         assert_eq!(fig.children[0].block_type, BlockType::Caption);
-        assert!(fig.children[0].text.contains("diagram caption"));
+        assert!(fig.children[0]
+            .text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("diagram caption"));
     }
 
     #[test]
@@ -1434,7 +1946,7 @@ mod tests {
             .iter()
             .find(|b| b.block_type == BlockType::Image)
             .unwrap();
-        assert!(fig.text.contains("Fig. 2"));
+        assert!(fig.text.as_deref().unwrap_or_default().contains("Fig. 2"));
         assert_eq!(fig.children[0].block_type, BlockType::Caption);
     }
 
@@ -1451,6 +1963,39 @@ mod tests {
         assert_eq!(blocks[2].block_type, BlockType::Paragraph);
     }
 
+    #[test]
+    fn adapter_emits_image_nodes_from_page_images() {
+        // PR-F: extracted visual assets (pdf/docx) become asset-backed
+        // Image nodes appended after the text blocks.
+        let mut p = page("Body text.");
+        p.images = vec![crate::DocumentImage {
+            asset: crate::VisualAssetRef {
+                asset_id: "h".into(),
+                mime_type: "image/png".into(),
+                content_hash: "h".into(),
+                source: crate::SourceSpan {
+                    document_id: None,
+                    page: 1,
+                    start_offset: None,
+                    end_offset: None,
+                    bbox: None,
+                    node_id: None,
+                },
+            },
+            bbox: None,
+        }];
+        let dm = doc(vec![p]);
+        let ast = document_model_to_ast(&dm);
+
+        let image = ast.pages[0]
+            .children
+            .iter()
+            .find(|n| n.block_type == BlockType::Image)
+            .expect("image node from page.images");
+        assert_eq!(image.asset.as_ref().unwrap().content_hash, "h");
+        assert_eq!(image.text, None, "extracted assets carry no text yet");
+    }
+
     // ── Enriched adapter end-to-end ──
 
     #[test]
@@ -1461,6 +2006,7 @@ mod tests {
             text: "INVOICE\n\nPayment terms here.\n\nFigure 1: Diagram\n\nDiagram description.\n\nTotal: $100.00".into(),
             source: "ocr".into(),
             ocr_confidence: Some(88.0),
+            images: vec![],
         }]);
 
         // Provide bboxes: title-sized first block, smaller rest.

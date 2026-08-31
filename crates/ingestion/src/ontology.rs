@@ -171,20 +171,33 @@ pub fn discover_ontology_from_ir(ir: &KnowledgeIr) -> OntologyProposal {
 
     // ── Facts → Property proposals ──
     for fact in &ir.facts {
+        // Connector-bridge schema facts are structured ("{label}.{container}.
+        // {field} : {type} ...") — parse them directly into typed proposals.
+        // The date/number text heuristics below only mine prose and would
+        // both miss real schema fields and emit noise (e.g. "date" matches).
+        if fact.evidence.extractor.starts_with("connector-bridge/") {
+            if let Some((field, value_type, required)) =
+                parse_connector_schema_fact(&fact.statement)
+            {
+                upsert_property(
+                    &mut proposal.properties,
+                    &field,
+                    &fact_class(ir, fact),
+                    &value_type,
+                    required,
+                    fact.confidence,
+                    vec![fact.evidence.clone()],
+                );
+            }
+            continue;
+        }
+
         // If the fact statement contains a date-like pattern, propose a DateTime property.
         if has_date_pattern(&fact.statement) {
-            let class_name = fact
-                .entities
-                .first()
-                .map(|e| class_name_for_entity(&ir.entities, e))
-                .unwrap_or_else(|| Some("Document".into()))
-                .unwrap_or_else(|| "Document".into());
-
-            let prop_name = infer_date_property_name(&fact.statement);
             upsert_property(
                 &mut proposal.properties,
-                &prop_name,
-                &class_name,
+                &infer_date_property_name(&fact.statement),
+                &fact_class(ir, fact),
                 "DateTime",
                 false,
                 fact.confidence,
@@ -194,18 +207,11 @@ pub fn discover_ontology_from_ir(ir: &KnowledgeIr) -> OntologyProposal {
 
         // If the statement mentions a numeric value, propose Int/Float property.
         if has_numeric_pattern(&fact.statement) {
-            let class_name = fact
-                .entities
-                .first()
-                .map(|e| class_name_for_entity(&ir.entities, e))
-                .unwrap_or_else(|| Some("Document".into()))
-                .unwrap_or_else(|| "Document".into());
-
             let (prop_name, value_type) = infer_numeric_property(&fact.statement);
             upsert_property(
                 &mut proposal.properties,
                 &prop_name,
-                &class_name,
+                &fact_class(ir, fact),
                 &value_type,
                 false,
                 fact.confidence,
@@ -258,6 +264,71 @@ fn class_name_for_entity(entities: &[crate::EntityCandidate], entity_name: &str)
         .find(|e| e.name == entity_name)
         .and_then(|e| e.type_hint.clone())
         .or_else(|| Some(to_class_name(entity_name)))
+}
+
+/// The class a fact's first entity maps to (or "Document").
+fn fact_class(ir: &KnowledgeIr, fact: &crate::ir::FactCandidate) -> String {
+    fact.entities
+        .first()
+        .map(|e| class_name_for_entity(&ir.entities, e))
+        .unwrap_or_else(|| Some("Document".into()))
+        .unwrap_or_else(|| "Document".into())
+}
+
+/// Parse a connector-bridge fact statement (connector_bridge.rs shapes):
+///   "{label}.{container}.{field} : {type} NOT NULL PK"
+///   "{label}.{container}.{field} is the primary key (type: {t}, nullable: {b})"
+///   "{label}.{container}.{field} has a unique constraint (type: {t})"
+/// Returns (field, aikoql value type, required). The field is everything after
+/// the first two dot-segments, so dotted nested field names survive.
+/// ponytail: container names containing dots (legal in mongo) mis-split; move
+/// to structured bridge facts if that matters.
+fn parse_connector_schema_fact(statement: &str) -> Option<(String, String, bool)> {
+    let field_end = statement
+        .find(" : ")
+        .or_else(|| statement.find(" is the primary key"))
+        .or_else(|| statement.find(" has a unique constraint"))?;
+    let field = statement[..field_end]
+        .split('.')
+        .skip(2)
+        .collect::<Vec<_>>()
+        .join(".");
+    if field.is_empty() {
+        return None;
+    }
+    let rest = &statement[field_end..];
+    let data_type = if let Some(stripped) = rest.strip_prefix(" : ") {
+        stripped.split_whitespace().next().unwrap_or("")
+    } else {
+        rest.find("type: ")
+            .and_then(|i| rest[i + 6..].split(',').next())
+            .unwrap_or("")
+            .trim()
+    };
+    let value_type = connector_type_to_value_type(data_type);
+    let required = statement.contains("NOT NULL") || statement.contains("nullable: false");
+    Some((field, value_type.to_string(), required))
+}
+
+/// Map a connector data type to an aikoql value type.
+fn connector_type_to_value_type(data_type: &str) -> &'static str {
+    let t = data_type.to_lowercase();
+    if t.contains("date") || t.contains("time") || t.contains("timestamp") {
+        "DateTime"
+    } else if t.contains("bool") {
+        "Bool"
+    } else if t.contains("int") || t.contains("serial") {
+        "Int"
+    } else if t.contains("float")
+        || t.contains("double")
+        || t.contains("decimal")
+        || t.contains("numeric")
+        || t.contains("real")
+    {
+        "Float"
+    } else {
+        "Text"
+    }
 }
 
 /// Infer a parent class from the class name.
@@ -511,7 +582,7 @@ mod tests {
         Evidence {
             document_id: Some("test-doc.pdf".into()),
             page: Some(page),
-            bbox_text: None,
+            source: None,
             extractor: "mock".into(),
             model: Some("mock-v1".into()),
             confidence: 0.85,
@@ -526,6 +597,80 @@ mod tests {
             extractor: "mock".into(),
             ..Default::default()
         }
+    }
+
+    // ── Connector-bridge schema facts → typed property proposals (ONT-001) ──
+
+    #[test]
+    fn connector_schema_fact_parses_field_type_required() {
+        assert_eq!(
+            parse_connector_schema_fact("db.users.name : text NOT NULL "),
+            Some(("name".into(), "Text".into(), true))
+        );
+        assert_eq!(
+            parse_connector_schema_fact("db.users.age : integer nullable "),
+            Some(("age".into(), "Int".into(), false))
+        );
+        assert_eq!(
+            parse_connector_schema_fact(
+                "db.items.id is the primary key (type: uuid, nullable: false)"
+            ),
+            Some(("id".into(), "Text".into(), true))
+        );
+        assert_eq!(
+            parse_connector_schema_fact("db.users.email has a unique constraint (type: varchar)"),
+            Some(("email".into(), "Text".into(), false))
+        );
+        assert_eq!(
+            parse_connector_schema_fact("db.p.profile.city : bson nullable "),
+            Some(("profile.city".into(), "Text".into(), false))
+        );
+        assert_eq!(
+            parse_connector_schema_fact("plain prose without a colon"),
+            None
+        );
+    }
+
+    #[test]
+    fn connector_bridge_ir_yields_typed_property_proposals() {
+        let meta = crate::connector_bridge::discover_connector_schema(
+            "postgres",
+            "db",
+            &[(
+                "users",
+                &[
+                    ("id", "integer", true, false, true),
+                    ("name", "text", false, false, false),
+                    ("born", "date", false, true, false),
+                ],
+            )],
+            &[],
+        );
+        let ir = crate::connector_bridge::connector_metadata_to_ir(&meta);
+        let proposal = discover_ontology_from_ir(&ir);
+        assert!(
+            proposal.properties.iter().any(|p| {
+                p.name == "name" && p.value_type == "Text" && p.class_name == "postgresTable"
+            }),
+            "text column must propose a Text property: {:?}",
+            proposal.properties
+        );
+        assert!(
+            proposal
+                .properties
+                .iter()
+                .any(|p| p.name == "id" && p.value_type == "Int" && p.required),
+            "pk column must propose a required Int property: {:?}",
+            proposal.properties
+        );
+        assert!(
+            proposal
+                .properties
+                .iter()
+                .any(|p| p.name == "born" && p.value_type == "DateTime" && !p.required),
+            "date column must propose an optional DateTime property: {:?}",
+            proposal.properties
+        );
     }
 
     // ── Class proposals from entities ──
@@ -738,6 +883,7 @@ mod tests {
                 evidence: evidence(1),
             }],
             facts: vec![FactCandidate {
+                snippet: None,
                 statement: "Invoice date is January 2024".into(),
                 entities: vec!["Invoice #1".into()],
                 confidence: 0.8,
@@ -771,6 +917,7 @@ mod tests {
                 evidence: evidence(1),
             }],
             facts: vec![FactCandidate {
+                snippet: None,
                 statement: "Acme Corporation Reports Record Revenue of 50 million".into(),
                 entities: vec!["Acme Corp".into()],
                 confidence: 0.8,
@@ -863,6 +1010,7 @@ mod tests {
                 evidence: evidence(1),
             }],
             facts: vec![FactCandidate {
+                snippet: None,
                 statement: "Invoice date January 2024".into(),
                 entities: vec!["Invoice #1".into()],
                 confidence: 0.8,
@@ -1011,7 +1159,15 @@ mod tests {
         let ev = Evidence {
             document_id: Some("doc.pdf".into()),
             page: Some(3),
-            bbox_text: Some("(100,200,300,40)".into()),
+            source: Some(crate::source::EvidenceSource::Region {
+                bbox: crate::ast::BoundingBox {
+                    page: 3,
+                    x: 100.0,
+                    y: 200.0,
+                    width: 300.0,
+                    height: 40.0,
+                },
+            }),
             extractor: "mock".into(),
             model: Some("mock-v1".into()),
             confidence: 0.85,
@@ -1028,6 +1184,17 @@ mod tests {
         let proposal = discover_ontology_from_ir(&ir);
         let class_ev = &proposal.classes[0].evidence[0];
         assert_eq!(class_ev.page, Some(3));
-        assert_eq!(class_ev.bbox_text.as_deref(), Some("(100,200,300,40)"));
+        assert_eq!(
+            class_ev.source,
+            Some(crate::source::EvidenceSource::Region {
+                bbox: crate::ast::BoundingBox {
+                    page: 3,
+                    x: 100.0,
+                    y: 200.0,
+                    width: 300.0,
+                    height: 40.0,
+                },
+            })
+        );
     }
 }

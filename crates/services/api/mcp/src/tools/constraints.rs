@@ -1,10 +1,11 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
-
 use crate::helpers::*;
 use crate::session::*;
+use crate::{
+    json, Kernel, KnowledgeContext, Origin, ReferentialPolicy, RememberRequest, Value, J, KOID,
+};
 pub(crate) fn tool_decide(k: &Kernel, args: &J) -> Result<J, String> {
     let koid_hex = args
         .get("koid")

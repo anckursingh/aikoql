@@ -177,8 +177,9 @@ fn decode_kdf_params(buf: &[u8; 9]) -> (u32, u32, u8) {
 
 /// Build a v2 envelope: `version || kdf_id || kdf_params || salt || aead_id || nonce || ct || tag`.
 fn encrypt_v2_envelope(key: &[u8; MASTER_KEY_LEN], passphrase: &str) -> Result<Vec<u8>, String> {
-    let mut salt = [0u8; SALT_LEN];
-    rand::thread_rng().fill_bytes(&mut salt);
+    // Review P0-4/CodeQL: fill directly from the CSPRNG — a zero-init literal
+    // that is then overwritten still reads as a hard-coded salt to scanners.
+    let salt: [u8; SALT_LEN] = rand::random();
 
     let derived = derive_key_argon2id(
         passphrase,
@@ -648,8 +649,9 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn make_v1_envelope(key: &[u8; 32], passphrase: &str) -> Vec<u8> {
-        let mut salt = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut salt);
+        // CodeQL: fill directly from the CSPRNG (zero-init + fill still reads
+        // as a hard-coded salt).
+        let salt: [u8; 16] = rand::random();
         let derived = derive_key_v1(passphrase, &salt);
         let wrapped = xor_unwrap(&derived, key);
         let mut buf = Vec::with_capacity(48);
@@ -761,7 +763,7 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("aikoql-test-kms-corr-{}", std::process::id()));
         // Write 50 bytes of garbage (not 48 for v1, not 88 for v2).
-        fs::write(&tmp, &[0u8; 50]).unwrap();
+        fs::write(&tmp, [0u8; 50]).unwrap();
         let kms = LocalKms::new(tmp.to_str().unwrap());
         let err = kms.master_key("pw").unwrap_err();
         assert!(err.contains("corrupted"), "got: {}", err);

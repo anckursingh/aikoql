@@ -13,6 +13,7 @@
 
 use crate::knowledge::kom::{KError, KResult};
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::RwLock;
 
 /// An atomic unit of work against the engine.
@@ -69,6 +70,67 @@ pub trait StorageEngine: Send + Sync {
     /// Default: none — kernel enforces all constraints in-process.
     fn constraint_capabilities(&self) -> ConstraintCapabilities {
         ConstraintCapabilities::default()
+    }
+    /// REC-002: copy every row into a fresh durable database at `dest`.
+    ///
+    /// Reads through this engine's own handle — the live file may be
+    /// region-locked (Windows redb), so a file-level copy cannot work.
+    /// Default copies via scan/write_batch; encrypting wrappers override to
+    /// delegate to their inner engine so ciphertext moves verbatim.
+    /// QA2-PROP-001: the copy is FAITHFUL — `dest` equals the source
+    /// afterward. Rows that survived in `dest` from a previous snapshot are
+    /// deleted (reusing a snapshot path must replace, never merge states —
+    /// a merge resurrects deleted versions on restore). Symmetric with
+    /// `restore_from`.
+    /// ponytail: O(n) full scan, no streaming; fine at MVP store sizes.
+    fn snapshot_to(&self, dest: &Path) -> KResult<()> {
+        let out = crate::storage::store_redb::RedbEngine::open(dest)?;
+        let rows = self.scan(b"")?;
+        let src_keys: std::collections::HashSet<Vec<u8>> =
+            rows.iter().map(|(k, _)| k.clone()).collect();
+        let mut batch = WriteBatch::new();
+        // puts apply before dels, so keys present in the snapshot must not
+        // also be deleted — only stale dest keys are.
+        for (k, _) in out.scan(b"")? {
+            if !src_keys.contains(&k) {
+                batch.del(k);
+            }
+        }
+        for (k, v) in rows {
+            batch.put(k, v);
+        }
+        out.write_batch(&batch)
+    }
+    /// REC-002: replace this engine's contents with the database at `src`
+    /// (point-in-time restore) in one atomic write batch. Rows are copied
+    /// verbatim — encrypting wrappers delegate to their inner engine so
+    /// already-encrypted rows are never re-encrypted.
+    /// ponytail: O(n) full scan + single batch; readers see old-or-new, never
+    /// a mix.
+    fn restore_from(&self, src: &Path) -> KResult<()> {
+        if !src.is_file() {
+            return Err(KError::Store(format!(
+                "restore source is not a file: {}",
+                src.display()
+            )));
+        }
+        let snapshot = crate::storage::store_redb::RedbEngine::open(src)?;
+        let rows = snapshot.scan(b"")?;
+        let mut batch = WriteBatch::new();
+        // write_batch applies puts before dels, so keys present in the
+        // snapshot must not also be deleted — only live keys absent from the
+        // snapshot are.
+        let src_keys: std::collections::HashSet<Vec<u8>> =
+            rows.iter().map(|(k, _)| k.clone()).collect();
+        for (k, _) in self.scan(b"")? {
+            if !src_keys.contains(&k) {
+                batch.del(k);
+            }
+        }
+        for (k, v) in rows {
+            batch.put(k, v);
+        }
+        self.write_batch(&batch)
     }
 }
 

@@ -1,0 +1,970 @@
+{
+  "ast": {
+    "document_id": null,
+    "page_count": 2,
+    "pages": [
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": {
+              "Heading": {
+                "level": 1
+              }
+            },
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "1. Overview"
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Paragraph",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Acme Corporation publishes quarterly reports."
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Paragraph",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Prepared by Globex Industries."
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      },
+      {
+        "asset": null,
+        "bbox": null,
+        "block_type": "Unknown",
+        "children": [
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": {
+              "Heading": {
+                "level": 1
+              }
+            },
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "1. Financials"
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Paragraph",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Revenue reached $10M for Q3 2025."
+          },
+          {
+            "asset": null,
+            "bbox": null,
+            "block_type": "Paragraph",
+            "children": [],
+            "confidence": null,
+            "node_id": null,
+            "payload": null,
+            "text": "Cash position remains healthy."
+          }
+        ],
+        "confidence": null,
+        "node_id": null,
+        "payload": null,
+        "text": null
+      }
+    ],
+    "source_type": "native"
+  },
+  "compilation": {
+    "commit_plan": {
+      "actions": [
+        {
+          "CreateKO": {
+            "class_name": "Organization",
+            "entity_name": "Acme Corporation",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "fiscal_quarter",
+                "DateTime"
+              ],
+              [
+                "type",
+                "Organization"
+              ]
+            ]
+          }
+        },
+        {
+          "CreateKO": {
+            "class_name": "Organization",
+            "entity_name": "Globex Industries",
+            "evidence": [
+              {
+                "confidence": 0.8500000238418579,
+                "document_id": null,
+                "extractor": "mock",
+                "model": "mock-v1",
+                "page": 1,
+                "source": null
+              }
+            ],
+            "properties": [
+              [
+                "fiscal_quarter",
+                "DateTime"
+              ],
+              [
+                "type",
+                "Organization"
+              ]
+            ]
+          }
+        }
+      ],
+      "document_id": null,
+      "stats": {
+        "creates": 2,
+        "needs_review": 0,
+        "skips": 0,
+        "total_actions": 2,
+        "total_conflicts": 0,
+        "updates": 0
+      }
+    },
+    "embedded_chunks": [
+      {
+        "chunk": {
+          "char_count": 88,
+          "chunk_id": "unknown/chunk-0000",
+          "entity_mentions": [
+            "Acme Corporation",
+            "Globex Industries"
+          ],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 1,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 0,
+            "chunk_index": 0,
+            "end_page": 1,
+            "start_page": 1
+          },
+          "structure": {
+            "heading_path": [
+              "1. Overview"
+            ],
+            "section_chunk_index": 0,
+            "section_title": "1. Overview",
+            "source_type": "text"
+          },
+          "text": "1. Overview\nAcme Corporation publishes quarterly reports.\nPrepared by Globex Industries."
+        },
+        "embedding": [
+          0.08111070841550827,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.0,
+          0.0,
+          0.16222141683101654,
+          0.16222141683101654,
+          0.08111070841550827,
+          0.16222141683101654,
+          0.08111070841550827,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.16222141683101654,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08111070841550827,
+          0.16222141683101654,
+          0.08111070841550827,
+          0.0,
+          0.0,
+          0.16222141683101654,
+          0.0,
+          0.16222141683101654,
+          0.0,
+          0.0,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.16222141683101654,
+          0.08111070841550827,
+          0.0,
+          0.0,
+          0.16222141683101654,
+          0.0,
+          0.0,
+          0.08111070841550827,
+          0.16222141683101654,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.0,
+          0.0,
+          0.2433321326971054,
+          0.16222141683101654,
+          0.08111070841550827,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.0,
+          0.0,
+          0.08111070841550827,
+          0.16222141683101654,
+          0.0,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.2433321326971054,
+          0.08111070841550827,
+          0.16222141683101654,
+          0.3244428336620331,
+          0.16222141683101654,
+          0.0,
+          0.0,
+          0.08111070841550827,
+          0.2433321326971054,
+          0.08111070841550827,
+          0.16222141683101654,
+          0.0,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.0,
+          0.0,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.16222141683101654,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.0,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.0,
+          0.0,
+          0.08111070841550827,
+          0.0,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.08111070841550827,
+          0.0
+        ],
+        "embedding_provider": "mock-char-ngram"
+      },
+      {
+        "chunk": {
+          "char_count": 78,
+          "chunk_id": "unknown/chunk-0001",
+          "entity_mentions": [],
+          "evidence": [
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 2,
+              "source": null
+            },
+            {
+              "confidence": 1.0,
+              "document_id": null,
+              "extractor": "rule_boundary",
+              "model": null,
+              "page": 2,
+              "source": null
+            }
+          ],
+          "position": {
+            "char_offset": 88,
+            "chunk_index": 1,
+            "end_page": 2,
+            "start_page": 2
+          },
+          "structure": {
+            "heading_path": [
+              "1. Financials"
+            ],
+            "section_chunk_index": 0,
+            "section_title": "1. Financials",
+            "source_type": "text"
+          },
+          "text": "1. Financials\nRevenue reached $10M for Q3 2025.\nCash position remains healthy."
+        },
+        "embedding": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.18107150495052338,
+          0.09053575247526169,
+          0.0,
+          0.18107150495052338,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.18107150495052338,
+          0.0,
+          0.27160724997520447,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.18107150495052338,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169,
+          0.18107150495052338,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.27160724997520447,
+          0.0,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.27160724997520447,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.27160724997520447,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.18107150495052338,
+          0.18107150495052338,
+          0.18107150495052338,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.0,
+          0.0,
+          0.0,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169,
+          0.18107150495052338,
+          0.09053575247526169,
+          0.0,
+          0.09053575247526169
+        ],
+        "embedding_provider": "mock-char-ngram"
+      }
+    ],
+    "evidence_trail": {
+      "document_id": null,
+      "nodes": [
+        {
+          "entities": [
+            "Acme Corporation",
+            "Globex Industries"
+          ],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "step": "Extracted 2 entities from document text"
+        },
+        {
+          "entities": [],
+          "phase": "D4-semantic-ir",
+          "source": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "step": "Found 1 temporal assertion"
+        },
+        {
+          "entities": [],
+          "phase": "D5-ontology",
+          "source": [],
+          "step": "Discovered 1 class, 1 property, 0 relationships"
+        },
+        {
+          "entities": [
+            "Acme Corporation",
+            "Globex Industries"
+          ],
+          "phase": "D6-resolution",
+          "source": [],
+          "step": "Resolved 2 entities: 0 matched, 0 ambiguous, 2 unmatched"
+        },
+        {
+          "entities": [
+            "Acme Corporation",
+            "Globex Industries"
+          ],
+          "phase": "D7-reconcile",
+          "source": [],
+          "step": "Reconciled: 2 creates, 0 updates, 0 skips, 0 need review, 0 conflicts"
+        }
+      ]
+    },
+    "fragments": [
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Acme Corporation publishes quarterly reports."
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Overview"
+          ],
+          "neighboring_fragments": [
+            "frag-p1-b2"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b1",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Prepared by Globex Industries."
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Overview"
+          ],
+          "neighboring_fragments": [
+            "frag-p1-b1",
+            "frag-p2-b1"
+          ],
+          "page": 1,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 1,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p1-b2",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 1,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Revenue reached $10M for Q3 2025."
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Financials"
+          ],
+          "neighboring_fragments": [
+            "frag-p1-b2",
+            "frag-p2-b2"
+          ],
+          "page": 2,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 2,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p2-b1",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 2,
+          "start_offset": null
+        }
+      },
+      {
+        "confidence": 1.0,
+        "content": {
+          "Text": "Cash position remains healthy."
+        },
+        "context": {
+          "document_id": null,
+          "heading_path": [
+            "1. Financials"
+          ],
+          "neighboring_fragments": [
+            "frag-p2-b1"
+          ],
+          "page": 2,
+          "parent_fragment": null
+        },
+        "evidence": [
+          {
+            "confidence": 1.0,
+            "document_id": null,
+            "extractor": "rule_boundary",
+            "model": null,
+            "page": 2,
+            "source": null
+          }
+        ],
+        "fragment_id": "frag-p2-b2",
+        "modality": "Text",
+        "source": {
+          "bbox": null,
+          "document_id": null,
+          "end_offset": null,
+          "node_id": null,
+          "page": 2,
+          "start_offset": null
+        }
+      }
+    ],
+    "ir": {
+      "content_trust": null,
+      "document_id": null,
+      "entities": [
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Acme Corporation publishes quarterly reports."
+          ],
+          "name": "Acme Corporation",
+          "type_hint": "Organization"
+        },
+        {
+          "confidence": 0.8500000238418579,
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 1,
+            "source": null
+          },
+          "mentions": [
+            "Prepared by Globex Industries."
+          ],
+          "name": "Globex Industries",
+          "type_hint": "Organization"
+        }
+      ],
+      "events": [],
+      "extractor": "mock",
+      "facts": [],
+      "page_count": 2,
+      "relations": [],
+      "source_revision": null,
+      "temporal": [
+        {
+          "confidence": 0.8500000238418579,
+          "end_time": "2025-09-30T23:59:59Z",
+          "evidence": {
+            "confidence": 0.8500000238418579,
+            "document_id": null,
+            "extractor": "mock",
+            "model": "mock-v1",
+            "page": 2,
+            "source": null
+          },
+          "start_time": "2025-07-01T00:00:00Z",
+          "text": "Q3 2025"
+        }
+      ]
+    },
+    "ontology": {
+      "classes": [
+        {
+          "confidence": 0.8500000238418579,
+          "description": "Discovered from entity 'Acme Corporation'",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            },
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "name": "Organization",
+          "parent": "Organization",
+          "signal_count": 2
+        }
+      ],
+      "document_id": null,
+      "method": "ir-discovery-mock",
+      "properties": [
+        {
+          "class_name": "Organization",
+          "confidence": 0.8500000238418579,
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 2,
+              "source": null
+            }
+          ],
+          "name": "fiscal_quarter",
+          "required": false,
+          "value_type": "DateTime"
+        }
+      ],
+      "relationships": []
+    },
+    "resolution": {
+      "ambiguous": [],
+      "matched": [],
+      "stats": {
+        "ambiguous_count": 0,
+        "average_confidence": 0.0,
+        "matched_count": 0,
+        "total_entities": 2,
+        "unmatched_count": 2
+      },
+      "unmatched": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Acme Corporation",
+          "entity_type": "Organization",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "entity_name": "Globex Industries",
+          "entity_type": "Organization",
+          "evidence": [
+            {
+              "confidence": 0.8500000238418579,
+              "document_id": null,
+              "extractor": "mock",
+              "model": "mock-v1",
+              "page": 1,
+              "source": null
+            }
+          ],
+          "matched_koid": null,
+          "needs_creation": true
+        }
+      ]
+    },
+    "secret_findings": [],
+    "stats": {
+      "phases": [
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D3-ast"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 4,
+          "phase": "D4-fragments"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 3,
+          "phase": "D4-ir"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D5-ontology"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D6-resolution"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D7-reconcile"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 2,
+          "phase": "D8-projection"
+        },
+        {
+          "duration_us": 0,
+          "item_count": 0,
+          "phase": "D8-visual-index"
+        }
+      ],
+      "total_us": 0
+    },
+    "visual_index": []
+  },
+  "document": {
+    "ocr_stats": {
+      "average_confidence": 0.0,
+      "pages_ocr_attempted": 0,
+      "pages_ocr_failed": 0,
+      "pages_ocr_succeeded": 0
+    },
+    "page_count": 2,
+    "pages": [
+      {
+        "char_count": 90,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 1,
+        "source": "native",
+        "text": "1. Overview\n\nAcme Corporation publishes quarterly reports.\n\nPrepared by Globex Industries."
+      },
+      {
+        "char_count": 80,
+        "images": [],
+        "ocr_confidence": null,
+        "page_number": 2,
+        "source": "native",
+        "text": "1. Financials\n\nRevenue reached $10M for Q3 2025.\n\nCash position remains healthy."
+      }
+    ],
+    "total_chars": 170
+  }
+}

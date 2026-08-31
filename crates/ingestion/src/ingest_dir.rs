@@ -58,6 +58,10 @@ const SKIP_FILES: &[&str] = &[
 /// File extensions that map to language compilers.
 const MARKDOWN_EXTS: &[&str] = &["md", "mdx"];
 const RUST_EXTS: &[&str] = &["rs"];
+const PY_EXTS: &[&str] = &["py", "pyi"];
+const TS_EXTS: &[&str] = &["ts", "js", "mjs", "cjs"];
+const TSX_EXTS: &[&str] = &["tsx", "jsx"];
+const JVM_EXTS: &[&str] = &["java"];
 
 /// Text-like extensions that get basic entity extraction (file → entity,
 /// first doc-comment line → fact).
@@ -68,16 +72,7 @@ const TEXT_EXTS: &[&str] = &[
     "yml",
     "xml",
     "csv",
-    "ts",
-    "tsx",
-    "js",
-    "jsx",
-    "mjs",
-    "cjs",
-    "py",
-    "pyi",
     "go",
-    "java",
     "kt",
     "kts",
     "c",
@@ -202,6 +197,27 @@ pub fn parallel_ingest_directory(root: &str) -> Result<IngestResult, String> {
     finalize_ingest_result(irs, stats, root)
 }
 
+/// Get the current HEAD SHA from git. Returns empty string on failure.
+///
+/// Best-effort repo metadata — a git failure (missing git, not-a-repo, dirty
+/// worktree) yields empty provenance, which callers treat as absent; not
+/// fatal to ingestion.
+pub(crate) fn current_head_sha(root: &Path) -> String {
+    Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
+}
+
 /// Shared result finalization for both sequential and parallel ingestion.
 fn finalize_ingest_result(
     irs: Vec<KnowledgeIr>,
@@ -214,11 +230,15 @@ fn finalize_ingest_result(
 
     let mut merged = merge_knowledge_ir(&irs);
     merged.document_id = Some(format!("ingest-dir:{}", root));
+    // KB-009 versioned manifest: stamp the git revision the scan reflects.
+    let head = current_head_sha(Path::new(root));
+    merged.source_revision = (!head.is_empty()).then_some(head);
     merged.extractor = "ingest-dir".into();
     merged.page_count = stats.files_processed;
 
     // Attach summary stats as facts
     merged.facts.push(FactCandidate {
+        snippet: None,
         statement: format!(
             "Directory '{}' contained {} files ({} skipped: {} dirs, {} binary/lockfile). {} entities, {} relations, {} facts extracted.",
             root,
@@ -235,7 +255,7 @@ fn finalize_ingest_result(
         evidence: Evidence {
             document_id: merged.document_id.clone(),
             page: None,
-            bbox_text: None,
+            source: None,
             extractor: "ingest-dir".into(),
             model: None,
             confidence: 1.0,
@@ -391,12 +411,28 @@ pub fn compile_file(path: &Path) -> Option<KnowledgeIr> {
         crate::markdown::compile_markdown_file(
             &path.to_string_lossy(),
             Some(path.to_string_lossy().to_string()),
+            None,
         )
         .ok()
         .filter(|ir| !ir.entities.is_empty())
         .or_else(|| Some(file_as_entity(path)))
     } else if RUST_EXTS.contains(&ext.as_str()) {
         crate::code::compile_rust_file(&path.to_string_lossy())
+            .ok()
+            .filter(|ir| !ir.entities.is_empty())
+            .or_else(|| Some(file_as_entity(path)))
+    } else if PY_EXTS.contains(&ext.as_str()) {
+        crate::code_tree_sitter::compile_python_file(&path.to_string_lossy())
+            .ok()
+            .filter(|ir| !ir.entities.is_empty())
+            .or_else(|| Some(file_as_entity(path)))
+    } else if TS_EXTS.contains(&ext.as_str()) || TSX_EXTS.contains(&ext.as_str()) {
+        crate::code_tree_sitter::compile_ts_file(&path.to_string_lossy())
+            .ok()
+            .filter(|ir| !ir.entities.is_empty())
+            .or_else(|| Some(file_as_entity(path)))
+    } else if JVM_EXTS.contains(&ext.as_str()) {
+        crate::code_tree_sitter::compile_java_file(&path.to_string_lossy())
             .ok()
             .filter(|ir| !ir.entities.is_empty())
             .or_else(|| Some(file_as_entity(path)))
@@ -451,6 +487,7 @@ fn file_as_entity(path: &Path) -> KnowledgeIr {
         page_count: 1,
         extractor: "ingest-dir".into(),
         content_trust: None,
+        source_revision: None,
     }
 }
 
@@ -478,6 +515,7 @@ fn text_file_ir(path: &Path) -> KnowledgeIr {
                 trimmed.to_string()
             };
             facts.push(FactCandidate {
+                snippet: None,
                 statement: format!("File '{}': {}", name, fact_line),
                 entities: vec![name.clone()],
                 confidence: 0.5,
@@ -503,6 +541,7 @@ fn text_file_ir(path: &Path) -> KnowledgeIr {
         page_count: 1,
         extractor: "ingest-dir".into(),
         content_trust: None,
+        source_revision: None,
     }
 }
 
@@ -549,7 +588,7 @@ fn file_evidence(name: &str) -> Evidence {
     Evidence {
         document_id: Some(name.to_string()),
         page: None,
-        bbox_text: None,
+        source: None,
         extractor: "ingest-dir".into(),
         model: None,
         confidence: 1.0,
@@ -834,6 +873,10 @@ mod tests {
         fs::write(tmp.join("Cargo.toml"), "[package]\nname = \"test\"\n").unwrap();
         // Write a file in skipped dir
         fs::write(tmp.join("node_modules/pkg.js"), "module.exports = {};").unwrap();
+        // Write generated artifacts (lockfiles — the KB-008 "where
+        // detectable" policy: excluded, never enter the IR as knowledge)
+        fs::write(tmp.join("Cargo.lock"), "# This file is autogenerated\n").unwrap();
+        fs::write(tmp.join("package-lock.json"), "{\"lockfileVersion\": 3}").unwrap();
         // Write a binary file
         let mut bin = std::fs::File::create(tmp.join("icon.png")).unwrap();
         bin.write_all(&[0x89, b'P', b'N', b'G', 0, 0, 0]).unwrap();
@@ -863,6 +906,11 @@ mod tests {
             assert!(
                 !ent.name.contains("png"),
                 "png should be skipped: {}",
+                ent.name
+            );
+            assert!(
+                !ent.name.contains("Cargo.lock") && !ent.name.contains("package-lock"),
+                "generated lockfile should be skipped: {}",
                 ent.name
             );
         }
@@ -933,7 +981,7 @@ mod tests {
         fs::write(tmp.join("hello.txt"), "hello world").unwrap();
         assert!(!is_binary_file(&tmp.join("hello.txt")));
         // binary file
-        fs::write(tmp.join("data.bin"), &[0u8, 1, 2, 3]).unwrap();
+        fs::write(tmp.join("data.bin"), [0u8, 1, 2, 3]).unwrap();
         assert!(is_binary_file(&tmp.join("data.bin")));
         let _ = fs::remove_dir_all(&tmp);
     }

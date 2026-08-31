@@ -8,9 +8,26 @@
 
 use crate::security::audit::{KeyAuditLog, KeyEvent, KeyEventKind};
 use crate::security::crypto::{Crypto, CryptoProvider};
+use crate::security::hkdf::{self, DOMAIN_DEK_WRAP};
 use crate::security::kms::KeyManager;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+
+/// Storage key under which wrapped DEKs are persisted (inside the store;
+/// the wrapped form is KEK-encrypted and safe to sit beside the data).
+pub const DEKS_STORAGE_KEY: &[u8] = b"__encryption__/deks";
+
+/// Storage key under which the crypto-version metadata record lives. Written
+/// on first open and verified on every later open — an unknown record fails
+/// closed instead of silently guessing key material (review P2-14).
+pub const CRYPTO_META_KEY: &[u8] = b"__encryption__/meta";
+
+/// Current crypto metadata record. The domain labels are the compatibility
+/// contract: v1 wraps DEKs with HKDF-SHA256 under `aikoql/dek-wrap/v1`, the
+/// store under `aikoql/store/v1`, and fields under `aikoql/field/v1`. Any
+/// future change bumps this record and migrates through explicit versioning.
+pub const CRYPTO_META_V1: &[u8] = b"aikoql/crypto/v1 kdf=argon2id-v1 \
+wrap=hkdf-sha256/dek-wrap/v1 store=hkdf-sha256/store/v1 field=hkdf-sha256/field/v1";
 
 /// A wrapped DEK: the DEK itself encrypted by the KEK.
 #[derive(Clone, Debug)]
@@ -78,9 +95,11 @@ impl Envelope {
         let kek = *self.kek.read().unwrap();
         // justified: RwLock poison is unrecoverable
         let kek_id = *self.kek_id.read().unwrap();
-        // The DEK is "wrapped" by encrypting it with the KEK.
-        // AAD = tenant name binds this DEK to the tenant.
-        let wrapped_key = self.crypto.encrypt(&kek, &dek, tenant.as_bytes())?;
+        // The DEK is "wrapped" by encrypting it with a domain-separated
+        // subkey of the KEK (never the KEK itself — the KEK never encrypts
+        // data directly). AAD = tenant name binds this DEK to the tenant.
+        let wrap_key = hkdf::domain_sep(&kek, DOMAIN_DEK_WRAP);
+        let wrapped_key = self.crypto.encrypt(&wrap_key, &dek, tenant.as_bytes())?;
         let wrapped = WrappedDek {
             tenant: tenant.to_string(),
             kek_id,
@@ -109,16 +128,24 @@ impl Envelope {
     pub fn load_dek(&self, wrapped: &WrappedDek) -> Result<[u8; 32], String> {
         // justified: RwLock poison is unrecoverable
         let kek = *self.kek.read().unwrap();
+        let wrap_key = hkdf::domain_sep(&kek, DOMAIN_DEK_WRAP);
         let dek_bytes =
             self.crypto
-                .decrypt(&kek, &wrapped.wrapped_key, wrapped.tenant.as_bytes())?;
+                .decrypt(&wrap_key, &wrapped.wrapped_key, wrapped.tenant.as_bytes())?;
         let mut dek = [0u8; 32];
         dek.copy_from_slice(&dek_bytes);
+        // justified: RwLock poison is unrecoverable
         self.deks
             .write()
-            // justified: RwLock poison is unrecoverable
             .unwrap()
             .insert(wrapped.tenant.clone(), dek);
+        // Keep the wrapped copy so a later wrapped_deks() persist round-trips
+        // everything ever loaded (otherwise re-persisting writes an empty list).
+        // justified: RwLock poison is unrecoverable
+        self.wrapped_deks
+            .write()
+            .unwrap()
+            .insert(wrapped.tenant.clone(), wrapped.clone());
         Ok(dek)
     }
 
@@ -131,6 +158,55 @@ impl Envelope {
             .values()
             .cloned()
             .collect()
+    }
+
+    /// Encode wrapped DEKs for storage. Layout: u32 count, then per DEK:
+    /// u16 tenant-len || tenant || u64 kek_id || u32 wrapped-len || wrapped.
+    pub fn encode_wrapped_deks(deks: &[WrappedDek]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(64 * deks.len());
+        out.extend_from_slice(&(deks.len() as u32).to_le_bytes());
+        for d in deks {
+            out.extend_from_slice(&(d.tenant.len() as u16).to_le_bytes());
+            out.extend_from_slice(d.tenant.as_bytes());
+            out.extend_from_slice(&d.kek_id.to_le_bytes());
+            out.extend_from_slice(&(d.wrapped_key.len() as u32).to_le_bytes());
+            out.extend_from_slice(&d.wrapped_key);
+        }
+        out
+    }
+
+    /// Decode wrapped DEKs written by [`Self::encode_wrapped_deks`].
+    /// Returns an error on any truncation/overflow — callers must fail closed.
+    pub fn decode_wrapped_deks(bytes: &[u8]) -> Result<Vec<WrappedDek>, String> {
+        let mut out = Vec::new();
+        let mut pos = 0usize;
+        let take = |pos: &mut usize, n: usize| -> Result<&[u8], String> {
+            if *pos > bytes.len() || bytes.len() - *pos < n {
+                return Err("wrapped DEKs: truncated".into());
+            }
+            let s = &bytes[*pos..*pos + n];
+            *pos += n;
+            Ok(s)
+        };
+        let (count_b, _) = take(&mut pos, 4)?.split_at(4);
+        let count = u32::from_le_bytes(count_b.try_into().unwrap()) as usize;
+        for _ in 0..count {
+            let (tlen_b, _) = take(&mut pos, 2)?.split_at(2);
+            let tlen = u16::from_le_bytes(tlen_b.try_into().unwrap()) as usize;
+            let tenant = String::from_utf8(take(&mut pos, tlen)?.to_vec())
+                .map_err(|_| "wrapped DEKs: bad tenant utf8")?;
+            let (kek_b, _) = take(&mut pos, 8)?.split_at(8);
+            let kek_id = u64::from_le_bytes(kek_b.try_into().unwrap());
+            let (wlen_b, _) = take(&mut pos, 4)?.split_at(4);
+            let wlen = u32::from_le_bytes(wlen_b.try_into().unwrap()) as usize;
+            let wrapped_key = take(&mut pos, wlen)?.to_vec();
+            out.push(WrappedDek {
+                tenant,
+                kek_id,
+                wrapped_key,
+            });
+        }
+        Ok(out)
     }
 
     /// Rotate the KEK: re-wrap all DEKs with the new KEK.
@@ -149,14 +225,16 @@ impl Envelope {
         let mut new_wrapped = HashMap::new();
         // justified: RwLock poison is unrecoverable
         for (tenant, wrapped) in self.wrapped_deks.read().unwrap().iter() {
-            // Decrypt DEK with old KEK.
+            // Decrypt DEK with the old wrap key.
+            let old_wrap_key = hkdf::domain_sep(&old_kek, DOMAIN_DEK_WRAP);
             let dek_bytes =
                 self.crypto
-                    .decrypt(&old_kek, &wrapped.wrapped_key, tenant.as_bytes())?;
-            // Re-encrypt DEK with new KEK.
-            let new_wrapped_key = self
-                .crypto
-                .encrypt(&new_kek, &dek_bytes, tenant.as_bytes())?;
+                    .decrypt(&old_wrap_key, &wrapped.wrapped_key, tenant.as_bytes())?;
+            // Re-encrypt DEK with the new wrap key.
+            let new_wrap_key = hkdf::domain_sep(&new_kek, DOMAIN_DEK_WRAP);
+            let new_wrapped_key =
+                self.crypto
+                    .encrypt(&new_wrap_key, &dek_bytes, tenant.as_bytes())?;
             new_wrapped.insert(
                 tenant.clone(),
                 WrappedDek {

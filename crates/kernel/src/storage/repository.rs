@@ -344,6 +344,13 @@ impl KnowledgeRepository {
         batch.put(rel_in_key(dst, rel_type, src), vec![]);
     }
 
+    /// Remove both outbound and inbound index entries for one edge.
+    /// Idempotent: deleting an absent key is a no-op at the KV level.
+    pub fn del_rel_index(&self, batch: &mut WriteBatch, src: &KOID, rel_type: &str, dst: &KOID) {
+        batch.del(rel_out_key(src, rel_type, dst));
+        batch.del(rel_in_key(dst, rel_type, src));
+    }
+
     /// Scan outbound edges from `src`, optionally filtered by `rel_type`.
     /// Returns `(rel_type, target_koid)` pairs in key order.
     pub fn scan_outbound(
@@ -418,6 +425,35 @@ impl KnowledgeRepository {
     }
 
     // -----------------------------------------------------------------------
+    // Schemas (REC-002: persisted so backup/restore preserves constraints)
+    // -----------------------------------------------------------------------
+
+    /// Reserved key prefix for schema rows. ASCII — cannot collide with
+    /// hash-keyed object rows or the other reserved ASCII markers.
+    pub const K_SCHEMA_PREFIX: &[u8] = b"sys/schema/";
+
+    pub fn put_schema_row(&self, batch: &mut WriteBatch, type_name: &str, bytes: &[u8]) {
+        let mut key = Vec::with_capacity(Self::K_SCHEMA_PREFIX.len() + type_name.len());
+        key.extend_from_slice(Self::K_SCHEMA_PREFIX);
+        key.extend_from_slice(type_name.as_bytes());
+        batch.put(key, bytes.to_vec());
+    }
+
+    /// All persisted schema rows as (type_name, encoded bytes), key order.
+    pub fn schema_rows(&self) -> KResult<Vec<(String, Vec<u8>)>> {
+        let mut out = Vec::new();
+        for (k, v) in self.engine().scan(Self::K_SCHEMA_PREFIX)? {
+            if k.len() <= Self::K_SCHEMA_PREFIX.len() {
+                continue;
+            }
+            let name = String::from_utf8(k[Self::K_SCHEMA_PREFIX.len()..].to_vec())
+                .map_err(|_| KError::Codec("schema row key bad utf-8".into()))?;
+            out.push((name, v));
+        }
+        Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
     // Journal
     // -----------------------------------------------------------------------
 
@@ -457,7 +493,7 @@ impl KnowledgeRepository {
             }
         }
         let res = match self.engine().get(&obj_key(koid, commit_ts))? {
-            Some(b) => Some(codec::decode_ko(&b)?),
+            Some(b) => Some(codec::decode_ko_wire(&b)?),
             None => None,
         };
         if let Some(ko) = &res {
@@ -495,7 +531,7 @@ impl KnowledgeRepository {
             let mut ts = [0u8; 8];
             ts.copy_from_slice(ts_bytes);
             if u64::from_be_bytes(ts) <= snap_ts {
-                return Ok(Some(codec::decode_ko(v)?));
+                return Ok(Some(codec::decode_ko_wire(v)?));
             }
         }
         Ok(None)
@@ -508,7 +544,7 @@ impl KnowledgeRepository {
         commit_ts: u64,
         ko: &KnowledgeObject,
     ) {
-        batch.put(obj_key(koid, commit_ts), codec::encode_ko(ko));
+        batch.put(obj_key(koid, commit_ts), codec::encode_ko_wire(ko));
         if let Some(c) = &self.cache {
             c.delete_object(koid, commit_ts);
         }
@@ -563,7 +599,7 @@ impl KnowledgeRepository {
             let ts_bytes = &k[k.len() - 8..];
             let mut ts = [0u8; 8];
             ts.copy_from_slice(ts_bytes);
-            out.push((u64::from_be_bytes(ts), codec::decode_ko(&v)?));
+            out.push((u64::from_be_bytes(ts), codec::decode_ko_wire(&v)?));
         }
         Ok(out)
     }

@@ -1,10 +1,11 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
-
 use crate::helpers::*;
 use crate::session::*;
+use crate::{
+    json, EvalContradictionQuery, EvalRecallQuery, EvalStalenessQuery, HashSet, Kernel, J, KOID,
+};
 pub(crate) fn tool_eval_recall(k: &Kernel, args: &J) -> Result<J, String> {
     let expected: HashSet<KOID> = args
         .get("expected")

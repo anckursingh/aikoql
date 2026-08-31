@@ -98,7 +98,7 @@ fn t01_create_persists_all_blocks_and_emits_created() {
     let r = k.remember(req).unwrap();
     assert_eq!(r.version, 1);
 
-    let ko = k.get(&alice(), &r.koid).unwrap();
+    let ko = k.get(alice(), &r.koid).unwrap();
     assert_eq!(ko.version, 1);
     assert_eq!(ko.properties.get("revenue"), Some(&Value::Int(1_000_000)));
     assert_eq!(
@@ -199,11 +199,10 @@ fn t06f_resolve_idempotency_then_update_replaces_content() {
     let r2 = k.remember(stale).unwrap();
     assert_eq!(r2.version, r1.version);
     assert!(
-        k.get(&alice(), &r1.koid)
+        !k.get(alice(), &r1.koid)
             .unwrap()
             .properties
-            .get("body")
-            .is_none(),
+            .contains_key("body"),
         "replay must not overwrite content"
     );
 
@@ -217,7 +216,7 @@ fn t06f_resolve_idempotency_then_update_replaces_content() {
         .insert("body".into(), Value::Text("new".into()));
     let r3 = k.remember(upd).unwrap();
     assert_eq!(r3.version, r1.version + 1);
-    let ko = k.get(&alice(), &koid).unwrap();
+    let ko = k.get(alice(), &koid).unwrap();
     assert_eq!(ko.properties.get("body"), Some(&Value::Text("new".into())));
 }
 
@@ -254,7 +253,7 @@ fn t06c_strict_referential_policy_accepts_existing_target() {
     });
     let r = k.remember(req).unwrap();
     assert_eq!(r.version, 1);
-    let ko = k.get(&alice(), &r.koid).unwrap();
+    let ko = k.get(alice(), &r.koid).unwrap();
     assert_eq!(ko.relationships.len(), 1);
 }
 
@@ -279,7 +278,8 @@ fn t06d_permissive_policy_allows_dangling_ref() {
 #[test]
 fn t06e_registered_schema_rejects_missing_required_property() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("fact", 1).require("title"));
+    k.register_schema(Schema::new("fact", 1).require("title"))
+        .unwrap();
     let req = RememberRequest::create(alice(), meta("fact"));
     assert!(matches!(
         k.remember(req).unwrap_err(),
@@ -290,7 +290,7 @@ fn t06e_registered_schema_rejects_missing_required_property() {
 #[test]
 fn t06f_registered_schema_rejects_version_mismatch() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("fact", 2));
+    k.register_schema(Schema::new("fact", 2)).unwrap();
     let req = RememberRequest::create(alice(), meta("fact"));
     assert!(matches!(
         k.remember(req).unwrap_err(),
@@ -301,7 +301,8 @@ fn t06f_registered_schema_rejects_version_mismatch() {
 #[test]
 fn t06g_registered_schema_accepts_conforming_object() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("fact", 1).require("title"));
+    k.register_schema(Schema::new("fact", 1).require("title"))
+        .unwrap();
     let mut req = RememberRequest::create(alice(), meta("fact"));
     req.properties
         .insert("title".into(), Value::Text("ok".into()));
@@ -312,7 +313,8 @@ fn t06g_registered_schema_accepts_conforming_object() {
 #[test]
 fn t06h_unregistered_type_is_not_validated() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("claim", 1).require("title"));
+    k.register_schema(Schema::new("claim", 1).require("title"))
+        .unwrap();
     // "fact" is not registered, so remember succeeds without required props.
     let req = RememberRequest::create(alice(), meta("fact"));
     let r = k.remember(req).unwrap();
@@ -322,7 +324,8 @@ fn t06h_unregistered_type_is_not_validated() {
 #[test]
 fn t06i_registered_closed_schema_rejects_unknown_core_field() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("fact", 1).require("title").allow("title"));
+    k.register_schema(Schema::new("fact", 1).require("title").allow("title"))
+        .unwrap();
     let mut req = RememberRequest::create(alice(), meta("fact"));
     req.properties
         .insert("title".into(), Value::Text("ok".into()));
@@ -360,8 +363,8 @@ fn t06j_transact_creates_multiple_objects_atomically() {
     assert_eq!(res[1].version, 1);
     assert_eq!(k.journal().unwrap().len(), 2);
     // both heads are readable
-    assert!(k.get(&alice(), &res[0].koid).is_ok());
-    assert!(k.get(&alice(), &res[1].koid).is_ok());
+    assert!(k.get(alice(), &res[0].koid).is_ok());
+    assert!(k.get(alice(), &res[1].koid).is_ok());
 }
 
 #[test]
@@ -408,7 +411,7 @@ fn t06l_transact_strict_referential_allows_intra_batch_targets() {
         .unwrap();
     assert_eq!(res.len(), 2);
     // child exists and its relationship target exists
-    assert!(k.get(&alice(), &res[1].koid).is_ok());
+    assert!(k.get(alice(), &res[1].koid).is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +427,7 @@ fn t07_lifecycle_matrix_all_25_pairs() {
         for to in states {
             let id = create_fact(&k, &alice(), "fact");
             drive_to(&k, &alice(), &id, from);
-            let res = k.evolve(&alice(), &id, to, Origin::System, None, None);
+            let res = k.evolve(alice(), &id, to, Origin::System, None, None);
             if from.can_transition(to) {
                 assert!(res.is_ok(), "{} -> {} must succeed", from, to);
             } else {
@@ -445,7 +448,7 @@ fn t08_evolve_emits_lifecycle_changed_with_actor_and_note() {
     let id = create_fact(&k, &alice(), "fact");
     let e = k
         .evolve(
-            &alice(),
+            alice(),
             &id,
             LifecycleState::Active,
             Origin::Human,
@@ -471,7 +474,7 @@ fn t09_forget_tombstone_marks_deleted_but_retains_lineage() {
     let id = create_fact(&k, &alice(), "fact");
     let f = k
         .forget(
-            &alice(),
+            alice(),
             &id,
             ForgetMode::Tombstone,
             None,
@@ -479,13 +482,19 @@ fn t09_forget_tombstone_marks_deleted_but_retains_lineage() {
         )
         .unwrap();
     assert_eq!(f.version, 2);
-    let ko = k.get(&alice(), &id).unwrap();
+    let ko = k.get(alice(), &id).unwrap();
     assert_eq!(ko.lifecycle.state, LifecycleState::Deleted);
     // lineage retained: both versions still traceable
-    let lineage = k.trace(&alice(), &id).unwrap();
+    let lineage = k.trace(alice(), &id).unwrap();
     assert_eq!(lineage.versions.len(), 2);
     assert_eq!(lineage.events.len(), 2);
-    assert_eq!(lineage.events[1].kind, EventKind::Forgotten);
+    // RET-CHAT-002/003: retained audit metadata follows policy — the
+    // Forgotten event names the actor, the reason note, and when.
+    let forgotten = &lineage.events[1];
+    assert_eq!(forgotten.kind, EventKind::Forgotten);
+    assert_eq!(forgotten.actor, "alice");
+    assert_eq!(forgotten.note.as_deref(), Some("gdpr-req-1"));
+    assert!(forgotten.commit_ts >= lineage.events[0].commit_ts);
 }
 
 #[test]
@@ -493,18 +502,77 @@ fn t10_forget_erase_removes_versions_but_keeps_proof_possible() {
     let (k, _c) = mk();
     let victim = create_fact(&k, &alice(), "secret");
     let witness = create_fact(&k, &alice(), "fact");
-    k.forget(&alice(), &victim, ForgetMode::Erase, None, None)
+    k.forget(alice(), &victim, ForgetMode::Erase, None, None)
         .unwrap();
 
-    assert!(matches!(k.get(&alice(), &victim), Err(KError::NotFound(_))));
+    assert!(matches!(k.get(alice(), &victim), Err(KError::NotFound(_))));
     // journal retained (3 events: 2 creates + 1 forgotten)
     assert_eq!(k.journal().unwrap().len(), 3);
     // audit chain over the whole journal still verifies, via tombstone stub
-    let proof = k.prove(&alice(), &witness).unwrap();
+    let proof = k.prove(alice(), &witness).unwrap();
     assert!(
         proof.chain_valid,
         "chain must remain valid after legal erasure"
     );
+}
+
+// ---------------------------------------------------------------------------
+// MVP-QA-001 MVP-KO-003: delete a KO; no dangling relationship is exposed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mvp_ko_003_deleted_endpoint_is_not_exposed_by_traversal() {
+    let (k, _c) = mk();
+    let b = create_fact(&k, &alice(), "dst_doc");
+    let mut req = RememberRequest::create(alice(), meta("src_doc"));
+    req.relationships.push(RelationshipRef {
+        rel_type: "cites".into(),
+        target: b,
+        direction: Direction::Outbound,
+    });
+    let _a = k.remember(req).unwrap().koid;
+
+    let plan = aikoql_compiler::parser::compile_with_subject(
+        "MATCH src_doc TRAVERSE cites RETURN *",
+        "alice",
+    )
+    .unwrap();
+
+    // Sanity: the relationship resolves while B is live.
+    let live = aikoql_runtime::Interpreter::execute(&k, &plan).unwrap();
+    match live {
+        aikoql_runtime::RowSet::Traversal(hits) => {
+            assert!(hits.iter().any(|(koid, _rt, _d)| *koid == b));
+        }
+        other => panic!("expected traversal rowset, got {other:?}"),
+    }
+
+    // Delete B (tombstone).
+    k.forget(
+        alice(),
+        &b,
+        ForgetMode::Tombstone,
+        None,
+        Some("gdpr".into()),
+    )
+    .unwrap();
+    assert_eq!(
+        k.get(alice(), &b).unwrap().lifecycle.state,
+        LifecycleState::Deleted
+    );
+
+    // MVP-KO-003: the deleted KO is not exposed as a dangling relationship
+    // endpoint through traversal.
+    let after = aikoql_runtime::Interpreter::execute(&k, &plan).unwrap();
+    match after {
+        aikoql_runtime::RowSet::Traversal(hits) => {
+            assert!(
+                !hits.iter().any(|(koid, _rt, _d)| *koid == b),
+                "tombstoned endpoint must not appear in traversal results"
+            );
+        }
+        other => panic!("expected traversal rowset, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -606,10 +674,10 @@ fn t13_snapshot_reads_are_stable_under_concurrent_commits() {
     req.properties.insert("v".into(), Value::Int(2));
     k.remember(req).unwrap();
 
-    let old = k.get_at(&alice(), &id, snap).unwrap();
+    let old = k.get_at(alice(), &id, snap).unwrap();
     assert_eq!(old.version, 1);
     assert_eq!(old.properties.get("v"), None);
-    let new = k.get(&alice(), &id).unwrap();
+    let new = k.get(alice(), &id).unwrap();
     assert_eq!(new.version, 2);
     assert_eq!(new.properties.get("v"), Some(&Value::Int(2)));
 }
@@ -623,7 +691,7 @@ fn t14_trace_returns_full_lineage() {
     let (k, _c) = mk();
     let id = create_fact(&k, &alice(), "fact");
     k.evolve(
-        &alice(),
+        alice(),
         &id,
         LifecycleState::Active,
         Origin::Human,
@@ -634,7 +702,7 @@ fn t14_trace_returns_full_lineage() {
     k.remember(RememberRequest::update(alice(), id, meta("fact")))
         .unwrap();
 
-    let lin = k.trace(&alice(), &id).unwrap();
+    let lin = k.trace(alice(), &id).unwrap();
     assert_eq!(lin.versions.len(), 3);
     assert_eq!(lin.events.len(), 3);
     assert_eq!(
@@ -668,12 +736,45 @@ fn t15_explain_answers_why_believed() {
     let claim = k.remember(req).unwrap().koid;
     drive_to(&k, &alice(), &claim, LifecycleState::Verified);
 
-    let ex = k.explain(&alice(), &claim, None).unwrap();
+    let ex = k.explain(alice(), &claim, None).unwrap();
     assert_eq!(ex.source.as_deref(), Some("sec-10k-filing"));
     assert_eq!(ex.confidence, Some(0.99));
     assert!(ex.verified);
     assert_eq!(ex.evidence, vec![("supported-by".to_string(), evidence_id)]);
     assert!(!ex.event_refs.is_empty());
+}
+
+// §33 memory explainability — explain/trace answer what, why, where, when.
+#[test]
+fn t15b_explain_answers_what_why_where_when() {
+    let (k, _c) = mk();
+    let mut req = AssertionRequest::new(alice(), "preference");
+    req.properties
+        .insert("prefers".into(), Value::Text("concise".into()));
+    req.authority = Some("human_approved".into());
+    req.evidence = vec![Evidence::new("src/prefs.md", EvidenceMethod::HumanProvided)];
+    let id = k.assert_knowledge(req).unwrap().koid;
+
+    // what: the stated value, as committed
+    let ko = k.get(alice(), &id).unwrap();
+    assert_eq!(
+        ko.properties.get("prefers"),
+        Some(&Value::Text("concise".into()))
+    );
+    // why: source + confidence from the evidence trail
+    let ex = k.explain(alice(), &id, None).unwrap();
+    assert_eq!(ex.source.as_deref(), Some("src/prefs.md"));
+    assert!(ex.confidence.is_some());
+    // still valid (never deleted) + who can access (owner)
+    assert_ne!(ko.lifecycle.state, LifecycleState::Deleted);
+    assert_eq!(ko.security.owner, "alice");
+    // where: the artifact (same trail) — when: the commit timestamp
+    let tr = k.trace(alice(), &id).unwrap();
+    assert_eq!(tr.versions.len(), 1);
+    let when = tr.versions[0].commit_ts;
+    assert!(when > 0);
+    assert_eq!(tr.events.len(), 1);
+    assert_eq!(tr.events[0].commit_ts, when);
 }
 
 // ---------------------------------------------------------------------------
@@ -686,7 +787,7 @@ fn t16_prove_valid_chain() {
     let a = create_fact(&k, &alice(), "fact");
     let b = create_fact(&k, &alice(), "fact");
     k.evolve(
-        &alice(),
+        alice(),
         &a,
         LifecycleState::Active,
         Origin::System,
@@ -697,7 +798,7 @@ fn t16_prove_valid_chain() {
     k.remember(RememberRequest::update(alice(), b, meta("fact")))
         .unwrap();
 
-    let proof = k.prove(&alice(), &a).unwrap();
+    let proof = k.prove(alice(), &a).unwrap();
     assert!(proof.chain_valid);
     assert_eq!(proof.events, 4);
     let (seq, audit) = k.journal_head().unwrap();
@@ -720,7 +821,7 @@ fn t17_prove_detects_tampered_event() {
     b.put(ke_store_key(1), codec::encode_ke(&ke));
     store.write_batch(&b).unwrap();
 
-    let proof = k.prove(&alice(), &id).unwrap();
+    let proof = k.prove(alice(), &id).unwrap();
     assert!(
         !proof.chain_valid,
         "tampered event must break the audit chain"
@@ -741,7 +842,7 @@ fn t18_prove_detects_tampered_object_payload() {
     b.put(key, bytes);
     store.write_batch(&b).unwrap();
 
-    let proof = k.prove(&alice(), &id).unwrap();
+    let proof = k.prove(alice(), &id).unwrap();
     assert!(!proof.chain_valid, "tampered payload must be detected");
 }
 
@@ -755,7 +856,7 @@ fn t18b_prove_with_signing_key_verifies_signatures() {
     k.remember(RememberRequest::update(alice(), id, meta("fact")))
         .unwrap();
 
-    let proof = k.prove(&alice(), &id).unwrap();
+    let proof = k.prove(alice(), &id).unwrap();
     assert!(proof.chain_valid);
     assert!(proof.signatures_verified);
     // every event carries a signature
@@ -783,7 +884,7 @@ fn t18c_prove_detects_tampered_signature() {
     b.put(ke_store_key(1), codec::encode_ke(&ke));
     store.write_batch(&b).unwrap();
 
-    let proof = k.prove(&alice(), &id).unwrap();
+    let proof = k.prove(alice(), &id).unwrap();
     assert!(!proof.signatures_verified, "bad signature must be detected");
 }
 
@@ -924,7 +1025,7 @@ fn t23_notify_delivers_commits_in_order_with_filter() {
         .unwrap();
 
     k.evolve(
-        &alice(),
+        alice(),
         &a,
         LifecycleState::Active,
         Origin::System,
@@ -954,7 +1055,7 @@ fn t24_deterministic_replay_produces_identical_journal() {
     fn script(k: &Kernel) {
         let a = create_fact(k, &alice(), "fact");
         k.evolve(
-            &alice(),
+            alice(),
             &a,
             LifecycleState::Active,
             Origin::Human,
@@ -966,7 +1067,7 @@ fn t24_deterministic_replay_produces_identical_journal() {
         req.properties.insert("n".into(), Value::Int(7));
         k.remember(req).unwrap();
         let _b = create_fact(k, &alice(), "note");
-        k.forget(&alice(), &a, ForgetMode::Tombstone, None, None)
+        k.forget(alice(), &a, ForgetMode::Tombstone, None, None)
             .unwrap();
     }
     let (k1, _c1) = mk();
@@ -981,8 +1082,8 @@ fn t24_deterministic_replay_produces_identical_journal() {
     );
     assert_eq!(j1.len(), 5);
     // byte-identical encodings too
-    let b1: Vec<u8> = j1.iter().flat_map(|e| codec::encode_ke(e)).collect();
-    let b2: Vec<u8> = j2.iter().flat_map(|e| codec::encode_ke(e)).collect();
+    let b1: Vec<u8> = j1.iter().flat_map(codec::encode_ke).collect();
+    let b2: Vec<u8> = j2.iter().flat_map(codec::encode_ke).collect();
     assert_eq!(b1, b2);
 }
 
@@ -1025,6 +1126,105 @@ fn t25_concurrent_creators_get_unique_koids_and_gapless_journal() {
     }
 }
 
+// DB-004: mixed readers/writers — writes serialize on the pipe lock and
+// heads move forward atomically, so a reader racing the writers must only
+// ever observe complete committed KOs (no torn state, no version
+// regression) and every write must land exactly once.
+#[test]
+fn t25b_concurrent_readers_and_writers_see_only_committed_state() {
+    let (k, _clock) = mk();
+    let k = Arc::new(k);
+    // Seed hot KO: version 1, n = -1 (the only non-writer value).
+    let mut seed = RememberRequest::create(alice(), meta("fact"));
+    seed.properties.insert("n".into(), Value::Int(-1));
+    let hot = k.remember(seed).unwrap().koid;
+
+    const WRITERS: usize = 4;
+    const UPDATES: usize = 40;
+    let mut handles = Vec::new();
+    for t in 0..WRITERS {
+        let k = k.clone();
+        handles.push(std::thread::spawn(move || {
+            for i in 0..UPDATES {
+                // Half the load is fresh KOs, half is hot-KO updates.
+                if i % 2 == 0 {
+                    let s = Subject::new(&format!("w{}-{}", t, i));
+                    k.remember(RememberRequest::create(s, meta("fact")))
+                        .unwrap();
+                } else {
+                    let mut req = RememberRequest::update(alice(), hot, meta("fact"));
+                    req.properties
+                        .insert("n".into(), Value::Int((t * 1000 + i) as i64));
+                    k.remember(req).unwrap();
+                }
+            }
+        }));
+    }
+    // Readers watch the hot KO through the whole storm.
+    for r in 0..3 {
+        let k = k.clone();
+        handles.push(std::thread::spawn(move || {
+            let mut last_v = 0u64;
+            for _ in 0..200 {
+                let ko = k.get(alice(), &hot).unwrap();
+                let v = ko.version;
+                assert!(v >= last_v, "reader {r}: version regressed {v} < {last_v}");
+                last_v = v;
+                match ko.properties.get("n") {
+                    // Every observed n is a value a writer committed — a
+                    // torn read would surface a mixed/none value.
+                    Some(Value::Int(n)) => assert!(
+                        *n == -1 || (0..(WRITERS * 1000) as i64).contains(n),
+                        "reader {r}: torn value {n}"
+                    ),
+                    other => panic!("reader {r}: hot KO lost its n: {other:?}"),
+                }
+            }
+        }));
+    }
+    for h in handles {
+        h.join().unwrap();
+    }
+    // Every write landed exactly once: 1 seed + WRITERS×UPDATES entries,
+    // gapless sequence, and the hot KO ends at 1 + (WRITERS×UPDATES/2).
+    let journal = k.journal().unwrap();
+    assert_eq!(journal.len(), 1 + WRITERS * UPDATES);
+    for (i, ke) in journal.iter().enumerate() {
+        assert_eq!(ke.seq, (i + 1) as u64);
+    }
+    let hot_ko = k.get(alice(), &hot).unwrap();
+    assert_eq!(hot_ko.version, (1 + WRITERS * UPDATES / 2) as u64);
+}
+
+// §42 cache correctness — a warmed read cache must never serve a stale head
+// after an update, and must drop the KO after deletion.
+#[test]
+fn t35_cache_never_serves_stale_heads() {
+    let clock = Arc::new(ManualClock::new(10_000));
+    let k = Kernel::open(Arc::new(MemoryEngine::new()), clock, 0xC0FFEE)
+        .unwrap()
+        .with_cache(64);
+    let id = create_fact(&k, &alice(), "fact");
+    let _ = k.get(alice(), &id).unwrap(); // warm the cache
+
+    let mut req = RememberRequest::update(alice(), id, meta("fact"));
+    req.properties.insert("v".into(), Value::Int(2));
+    k.remember(req).unwrap();
+
+    let ko = k.get(alice(), &id).unwrap();
+    assert_eq!(ko.version, 2, "cache served the stale head");
+    assert_eq!(ko.properties.get("v"), Some(&Value::Int(2)));
+
+    k.forget(alice(), &id, ForgetMode::Tombstone, None, None)
+        .unwrap();
+    let ko = k.get(alice(), &id).unwrap();
+    assert_eq!(
+        ko.lifecycle.state,
+        LifecycleState::Deleted,
+        "cache served a pre-deletion head"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // kernel reopen (journal recovery)
 // ---------------------------------------------------------------------------
@@ -1049,7 +1249,7 @@ fn t26_reopen_recovers_journal_head_and_continues_chain() {
     // chain continues unbroken after reopen
     k2.remember(RememberRequest::update(alice(), id, meta("fact")))
         .unwrap();
-    let proof = k2.prove(&alice(), &id).unwrap();
+    let proof = k2.prove(alice(), &id).unwrap();
     assert!(proof.chain_valid);
     assert_eq!(proof.events, 2);
 }
@@ -1061,7 +1261,8 @@ fn t26_reopen_recovers_journal_head_and_continues_chain() {
 #[test]
 fn t06m_unique_constraint_prevents_duplicate() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("User"));
     r1.properties
         .insert("email".into(), Value::Text("dup@b.com".into()));
@@ -1078,7 +1279,8 @@ fn t06m_unique_constraint_prevents_duplicate() {
 #[test]
 fn t06n_composite_unique_enforced() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Org", 1).unique(&["tenant", "slug"], UniquenessScope::Type));
+    k.register_schema(Schema::new("Org", 1).unique(&["tenant", "slug"], UniquenessScope::Type))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Org"));
     r1.properties
         .insert("tenant".into(), Value::Text("t1".into()));
@@ -1106,7 +1308,8 @@ fn t06n_composite_unique_enforced() {
 #[test]
 fn t06o_unique_update_same_value_does_not_conflict_with_self() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique(&["name"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique(&["name"], UniquenessScope::Type))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("User"));
     r1.properties
         .insert("name".into(), Value::Text("Alice".into()));
@@ -1824,7 +2027,8 @@ fn t06y_transact_range_check_within_batch() {
 #[test]
 fn t06z_deferred_unique_intra_batch_conflict() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type))
+        .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta("User"));
     r1.properties
@@ -1848,7 +2052,8 @@ fn t06z_deferred_unique_intra_batch_conflict() {
 #[test]
 fn t06za_deferred_unique_storage_conflict() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type))
+        .unwrap();
 
     // Commit one first
     let mut r1 = RememberRequest::create(alice(), meta("User"));
@@ -1882,7 +2087,8 @@ fn t06zb_deferred_check_constraint_in_transact() {
                     right: Box::new(CheckExpression::Property("start_date".into())),
                 },
             ),
-    );
+    )
+    .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta("Event"));
     r1.properties
@@ -1900,7 +2106,8 @@ fn t06zb_deferred_check_constraint_in_transact() {
 #[test]
 fn t06zc_deferred_unique_passes_when_no_conflict() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique_deferred(&["email"], UniquenessScope::Type))
+        .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta("User"));
     r1.properties
@@ -1922,7 +2129,8 @@ fn t06zc_deferred_unique_passes_when_no_conflict() {
 #[test]
 fn t06zd_immediate_unique_still_fails_fast_in_transact() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type))
+        .unwrap();
 
     // Commit one first
     let mut r1 = RememberRequest::create(alice(), meta("User"));
@@ -1963,7 +2171,8 @@ fn t06ze_write_set_filters_unaffected_check_constraints() {
                     right: Box::new(CheckExpression::Property("start_date".into())),
                 },
             ),
-    );
+    )
+    .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta("Event"));
     r1.properties
@@ -1999,7 +2208,8 @@ fn t06zf_update_no_property_change_skim_passes() {
             left: Box::new(CheckExpression::Property("name".into())),
             right: Box::new(CheckExpression::Literal(Value::Text("".into()))),
         },
-    ));
+    ))
+    .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties
@@ -2065,7 +2275,8 @@ fn t06zg_check_pushdown_skips_kernel_evaluation() {
             left: Box::new(CheckExpression::Property("qty".into())),
             right: Box::new(CheckExpression::Literal(Value::Int(0))),
         },
-    ));
+    ))
+    .unwrap();
 
     // qty=-5 violates qty > 0, but kernel trusts backend → write succeeds.
     let mut r = RememberRequest::create(alice(), meta("Item"));
@@ -2089,7 +2300,8 @@ fn t06zh_default_capabilities_still_enforce() {
             left: Box::new(CheckExpression::Property("qty".into())),
             right: Box::new(CheckExpression::Literal(Value::Int(0))),
         },
-    ));
+    ))
+    .unwrap();
 
     let mut r = RememberRequest::create(alice(), meta("Item"));
     r.properties.insert("qty".into(), Value::Int(-5));
@@ -2112,7 +2324,8 @@ fn t06zi_not_null_pushdown_skips_required_check() {
     let clock = Arc::new(ManualClock::new(1000));
     let k = Kernel::open(engine, clock.clone(), 42).unwrap();
 
-    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"));
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
 
     // Missing required "name" — kernel trusts backend's NOT NULL enforcement.
     let r = RememberRequest::create(alice(), meta("Item"));
@@ -2136,7 +2349,8 @@ fn t06zj_unique_pushdown_skips_immediate_uniqueness_in_transact() {
     let clock = Arc::new(ManualClock::new(1000));
     let k = Kernel::open(engine, clock.clone(), 42).unwrap();
 
-    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type));
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Type))
+        .unwrap();
 
     // First object with email X.
     let mut r1 = RememberRequest::create(alice(), meta("User"));
@@ -2163,7 +2377,8 @@ fn t06zj_unique_pushdown_skips_immediate_uniqueness_in_transact() {
 #[test]
 fn t06zk_inference_discovers_uniqueness_candidate() {
     let (k, _clock) = mk();
-    k.register_schema(Schema::new("User", 1).property("email", "Text"));
+    k.register_schema(Schema::new("User", 1).property("email", "Text"))
+        .unwrap();
 
     // Create 3 users with distinct emails.
     let mut r1 = RememberRequest::create(alice(), meta("User"));
@@ -2196,7 +2411,8 @@ fn t06zk_inference_discovers_uniqueness_candidate() {
 fn t06zl_inference_never_auto_enforces() {
     // AC-18: inferred constraints must never auto-promote to ENFORCED.
     let (k, _clock) = mk();
-    k.register_schema(Schema::new("Item", 1).property("value", "Int"));
+    k.register_schema(Schema::new("Item", 1).property("value", "Int"))
+        .unwrap();
 
     // Create items with duplicate values (would violate UNIQUE).
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
@@ -2248,7 +2464,7 @@ fn t06zm_arithmetic_check_constraint_enforced() {
                 )),
             },
         );
-    k.register_schema(schema);
+    k.register_schema(schema).unwrap();
 
     // Valid: total == price * quantity
     let mut r1 = RememberRequest::create(alice(), meta("Order"));
@@ -2291,7 +2507,7 @@ fn t06zn_conditional_if_constraint() {
                 Box::new(CheckExpression::Literal(Value::Bool(true))),
             ),
         );
-    k.register_schema(schema);
+    k.register_schema(schema).unwrap();
 
     // Active with email → ok
     let mut r1 = RememberRequest::create(alice(), meta("User"));
@@ -2331,7 +2547,8 @@ fn meta_tenant(t: &str, tenant: &str) -> Metadata {
 #[test]
 fn t06zo_tenant_scoped_unique_allows_same_value_different_tenants() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Tenant));
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Tenant))
+        .unwrap();
 
     // t1 owns email
     let mut r1 = RememberRequest::create(alice(), meta_tenant("User", "t1"));
@@ -2349,7 +2566,8 @@ fn t06zo_tenant_scoped_unique_allows_same_value_different_tenants() {
 #[test]
 fn t06zp_tenant_scoped_unique_rejects_same_tenant() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Tenant));
+    k.register_schema(Schema::new("User", 1).unique(&["email"], UniquenessScope::Tenant))
+        .unwrap();
 
     let mut r1 = RememberRequest::create(alice(), meta_tenant("User", "t1"));
     r1.properties
@@ -2367,8 +2585,10 @@ fn t06zp_tenant_scoped_unique_rejects_same_tenant() {
 #[test]
 fn t06zq_global_unique_rejects_across_types() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Alpha", 1).unique(&["code"], UniquenessScope::Global));
-    k.register_schema(Schema::new("Beta", 1).unique(&["code"], UniquenessScope::Global));
+    k.register_schema(Schema::new("Alpha", 1).unique(&["code"], UniquenessScope::Global))
+        .unwrap();
+    k.register_schema(Schema::new("Beta", 1).unique(&["code"], UniquenessScope::Global))
+        .unwrap();
 
     // Alpha owns code
     let mut r1 = RememberRequest::create(alice(), meta("Alpha"));
@@ -2390,7 +2610,8 @@ fn t06zq_global_unique_rejects_across_types() {
 fn t06zr_migration_detects_violations() {
     let (k, _c) = mk();
     // Register relaxed schema v1: no constraints on price
-    k.register_schema(Schema::new("Item", 1).property("price", "Int"));
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties.insert("price".into(), Value::Int(-5));
     assert!(k.remember(r1).is_ok());
@@ -2413,7 +2634,8 @@ fn t06zr_migration_detects_violations() {
 #[test]
 fn t06zs_migration_passes_clean_data() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Item", 1).property("price", "Int"));
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"))
+        .unwrap();
     let mut r1 = RememberRequest::create(alice(), meta("Item"));
     r1.properties.insert("price".into(), Value::Int(42));
     assert!(k.remember(r1).is_ok());
@@ -2431,12 +2653,163 @@ fn t06zs_migration_passes_clean_data() {
     assert!(violations.is_empty());
 }
 
+#[test]
+fn t06zt_schema_bump_preserves_existing_knowledge_and_versions() {
+    // EVO-003 slice: after a v1 -> v2 schema bump, existing knowledge stays
+    // interpretable with its own version stamp, v2 writes coexist, and a
+    // v1-stamped write is rejected deterministically (no silent coercion).
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"))
+        .unwrap();
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties.insert("price".into(), Value::Int(42));
+    let id1 = k.remember(r1).unwrap().koid;
+
+    // migrate: v2 adds a check constraint; existing data is clean
+    let v2 = Schema::new("Item", 2).property("price", "Int").check(
+        "price_non_negative",
+        CheckExpression::Compare {
+            op: CompareOp::Gte,
+            left: Box::new(CheckExpression::Property("price".into())),
+            right: Box::new(CheckExpression::Literal(Value::Int(0))),
+        },
+    );
+    assert!(k
+        .validate_schema_migration(&alice(), &v2)
+        .unwrap()
+        .is_empty());
+    k.register_schema(v2).unwrap();
+
+    // semantics preserved: the v1 KO is still readable, still stamped v1
+    let ko1 = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko1.metadata.schema_version, 1);
+    assert_eq!(ko1.properties.get("price"), Some(&Value::Int(42)));
+
+    // v2-stamped writes coexist alongside v1 data
+    let mut r2 = RememberRequest::create(alice(), meta("Item"));
+    r2.metadata.schema_version = 2;
+    r2.properties.insert("price".into(), Value::Int(10));
+    let id2 = k.remember(r2).unwrap().koid;
+    assert_eq!(k.get(alice(), &id2).unwrap().metadata.schema_version, 2);
+    assert_eq!(
+        k.get(alice(), &id2).unwrap().properties.get("price"),
+        Some(&Value::Int(10))
+    );
+
+    // a v1-stamped write against the active v2 schema fails deterministically
+    let mut r3 = RememberRequest::create(alice(), meta("Item"));
+    r3.properties.insert("price".into(), Value::Int(10));
+    assert!(matches!(
+        k.remember(r3).unwrap_err(),
+        KError::InvalidSchema(_)
+    ));
+}
+
+#[test]
+fn t06zw_ontology_evolution_keeps_existing_knowledge_interpretable() {
+    // ONT-004 slice: ontology enforcement is write-time only — replacing the
+    // registry with a stricter version never breaks reads of existing KOs,
+    // while new writes get the new rules.
+    use std::collections::BTreeMap;
+    let (k, _c) = mk();
+
+    let classes = || {
+        let mut c = BTreeMap::new();
+        c.insert(
+            "Person".into(),
+            ClassDef {
+                name: "Person".into(),
+                parent: None,
+                description: None,
+            },
+        );
+        c.insert(
+            "Organization".into(),
+            ClassDef {
+                name: "Organization".into(),
+                parent: None,
+                description: None,
+            },
+        );
+        c
+    };
+    let works_at = |cardinality: Option<Cardinality>| {
+        let mut r = BTreeMap::new();
+        r.insert(
+            "worksAt".into(),
+            RelDef {
+                name: "worksAt".into(),
+                domain: Some("Person".into()),
+                range: Some("Organization".into()),
+                cardinality,
+                max_count: None,
+            },
+        );
+        r
+    };
+    let ontology = |version: &str, rels: BTreeMap<String, RelDef>| OntologyDef {
+        namespace: "test".into(),
+        version: version.into(),
+        classes: classes(),
+        relationships: rels,
+        property_defs: BTreeMap::new(),
+        mappings: vec![],
+    };
+
+    // v1: worksAt unconstrained (many-to-one allowed)
+    k.register_ontology(
+        OntologyRegistry::new(ontology("1", works_at(None))).expect("valid ontology"),
+    );
+    let org = k
+        .remember(RememberRequest::create(alice(), meta("Organization")))
+        .unwrap();
+    let mut p1 = RememberRequest::create(alice(), meta("Person"));
+    p1.referential_policy = ReferentialPolicy::Enforced;
+    p1.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: org.koid,
+        direction: Direction::Outbound,
+    });
+    let pid = k.remember(p1).unwrap().koid;
+
+    // evolve: v2 tightens worksAt to 1:1 (registry replaces v1)
+    k.register_ontology(
+        OntologyRegistry::new(ontology("2", works_at(Some(Cardinality::OneToOne))))
+            .expect("valid ontology"),
+    );
+
+    // existing knowledge remains interpretable: still readable, unchanged
+    let ko = k.get(alice(), &pid).unwrap();
+    assert_eq!(ko.metadata.type_name, "Person");
+    assert!(
+        ko.relationships
+            .iter()
+            .any(|r| r.rel_type == "worksAt" && r.target == org.koid),
+        "relationship written under v1 must survive the ontology bump"
+    );
+
+    // new writes are bound by the v2 rules: second Person -> worksAt -> Org
+    // violates 1:1 cardinality
+    let mut p2 = RememberRequest::create(alice(), meta("Person"));
+    p2.referential_policy = ReferentialPolicy::Enforced;
+    p2.relationships.push(RelationshipRef {
+        rel_type: "worksAt".into(),
+        target: org.koid,
+        direction: Direction::Outbound,
+    });
+    assert!(
+        k.remember(p2).is_err(),
+        "v2 cardinality must bind new writes"
+    );
+}
+
 // ── AC-17: provenance-required properties ──
 
 #[test]
 fn t06zu_provenance_required_rejects_missing_source() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Fact", 1).provenance_required_property("claim", "Text"));
+    k.register_schema(Schema::new("Fact", 1).provenance_required_property("claim", "Text"))
+        .unwrap();
     // No semantic source → rejected
     let mut r = RememberRequest::create(alice(), meta("Fact"));
     r.properties
@@ -2448,7 +2821,8 @@ fn t06zu_provenance_required_rejects_missing_source() {
 #[test]
 fn t06zv_provenance_required_accepts_sourced() {
     let (k, _c) = mk();
-    k.register_schema(Schema::new("Fact", 1).provenance_required_property("claim", "Text"));
+    k.register_schema(Schema::new("Fact", 1).provenance_required_property("claim", "Text"))
+        .unwrap();
     let mut r = RememberRequest::create(alice(), meta("Fact"));
     r.properties
         .insert("claim".into(), Value::Text("sky is blue".into()));
@@ -2530,13 +2904,13 @@ fn t29_anonymous_and_unauthorised_access_denied() {
 
     // Empty-name subject (unauthenticated) cannot read.
     assert!(
-        k.get(&Subject::new(""), &created.koid).is_err(),
+        k.get(Subject::new(""), &created.koid).is_err(),
         "anonymous read must be denied"
     );
 
     // Different user with no grant cannot read.
     assert!(
-        k.get(&Subject::new("eve"), &created.koid).is_err(),
+        k.get(Subject::new("eve"), &created.koid).is_err(),
         "unauthorised read must be denied"
     );
 }
@@ -2600,12 +2974,12 @@ fn t31_scoped_owner_still_confined_cross_tenant() {
 
     // alice scoped to acme is still the owner — but tenant confinement
     // is checked first, so the read and trace are denied.
-    let err = k.get(&acme(), &ko.koid).unwrap_err();
+    let err = k.get(acme(), &ko.koid).unwrap_err();
     assert!(matches!(err, KError::AccessDenied { .. }));
-    assert!(k.trace(&acme(), &ko.koid).is_err());
+    assert!(k.trace(acme(), &ko.koid).is_err());
 
     // Same subject scoped to the matching tenant reads fine.
-    assert!(k.get(&alice().in_tenant("beta"), &ko.koid).is_ok());
+    assert!(k.get(alice().in_tenant("beta"), &ko.koid).is_ok());
 }
 
 #[test]
@@ -2616,8 +2990,80 @@ fn t32_untenanted_objects_visible_to_scoped_subjects() {
         .unwrap()
         .koid;
     // No tenant on the object — not confined, visible to any scoped subject.
-    assert!(k.get(&acme(), &ko).is_ok());
+    assert!(k.get(acme(), &ko).is_ok());
     assert_eq!(k.scan_by_type(&acme(), "fact").unwrap().len(), 1);
+}
+
+// §30/31 — multi-agent scenario: two agents share organization knowledge
+// (untenanted + ACL grant) while agent-private memory stays confined.
+#[test]
+fn t34_agents_share_org_knowledge_keep_private_memory() {
+    let k = mk().0;
+    let support = alice().in_tenant("support");
+    let sales = Subject::new("bob").in_tenant("sales");
+
+    // Org knowledge: no tenant, owner alice, bob granted read.
+    let mut org = RememberRequest::create(alice(), meta("org_policy"));
+    org.security = Some(SecurityDescriptor {
+        owner: "alice".into(),
+        acl: vec![AclEntry {
+            principal: "bob".into(),
+            action: Action::Read,
+            effect: Effect::Allow,
+        }],
+        classification: None,
+    });
+    org.properties
+        .insert("policy".into(), Value::Text("SLA 4h".into()));
+    let org_id = k.remember(org).unwrap().koid;
+
+    // Agent-private memory, one KO per agent tenant.
+    let mut a_priv = RememberRequest::create(alice(), meta_tenant("support_note", "support"));
+    a_priv
+        .properties
+        .insert("t".into(), Value::Text("A secret".into()));
+    let a_id = k.remember(a_priv).unwrap().koid;
+    let mut b_priv =
+        RememberRequest::create(Subject::new("bob"), meta_tenant("sales_note", "sales"));
+    b_priv
+        .properties
+        .insert("t".into(), Value::Text("B secret".into()));
+    let b_id = k.remember(b_priv).unwrap().koid;
+
+    // Shared authoritative knowledge: both agents read the org KO.
+    assert_eq!(
+        k.get(&support, &org_id).unwrap().properties.get("policy"),
+        Some(&Value::Text("SLA 4h".into()))
+    );
+    assert!(k.get(&sales, &org_id).is_ok());
+
+    // Private memory stays confined: each agent sees only their own.
+    assert!(k.get(&support, &a_id).is_ok());
+    assert!(k.get(&sales, &b_id).is_ok());
+    assert!(matches!(
+        k.get(&sales, &a_id),
+        Err(KError::AccessDenied { .. })
+    ));
+    assert!(matches!(
+        k.get(&support, &b_id),
+        Err(KError::AccessDenied { .. })
+    ));
+    assert!(matches!(
+        k.remember(RememberRequest::update(
+            sales.clone(),
+            a_id,
+            meta_tenant("support_note", "support")
+        )),
+        Err(KError::AccessDenied { .. })
+    ));
+
+    // Scans: each agent's view = own tenant + shared org; never the other's.
+    assert_eq!(k.scan_by_type(&support, "support_note").unwrap().len(), 1);
+    assert_eq!(k.scan_by_type(&sales, "support_note").unwrap().len(), 0);
+    assert_eq!(k.scan_by_type(&support, "sales_note").unwrap().len(), 0);
+    assert_eq!(k.scan_by_type(&sales, "sales_note").unwrap().len(), 1);
+    assert_eq!(k.scan_by_type(&support, "org_policy").unwrap().len(), 1);
+    assert_eq!(k.scan_by_type(&sales, "org_policy").unwrap().len(), 1);
 }
 
 #[test]
@@ -2698,4 +3144,500 @@ fn t35_find_similar_respects_tenant_scope() {
         "beta's object must not leak into acme's recall"
     );
     assert_eq!(res[0].ko.koid, acme_ko);
+}
+
+// ── EVO-003: apply/migrate op + wire format versioning ──
+
+#[test]
+fn t06zx_apply_migration_renames_property_and_bumps_version() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("sword".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2).required_property("label", "Text"),
+        transforms: vec![PropertyTransform::Rename {
+            from: "name".into(),
+            to: "label".into(),
+        }],
+    };
+    let report = k.apply_schema_migration(&alice(), &mig).unwrap();
+    assert_eq!(report.scanned, 1);
+    assert_eq!(report.migrated, 1);
+    assert_eq!(report.already_at_target, 0);
+
+    let ko = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko.metadata.schema_version, 2);
+    assert_eq!(
+        ko.properties.get("label"),
+        Some(&Value::Text("sword".into()))
+    );
+    assert!(!ko.properties.contains_key("name"));
+}
+
+#[test]
+fn t06zy_apply_migration_set_default_fills_existing() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties.insert("name".into(), Value::Text("a".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+    let mut r2 = RememberRequest::create(alice(), meta("Item"));
+    r2.properties.insert("name".into(), Value::Text("b".into()));
+    r2.properties
+        .insert("grade".into(), Value::Text("premium".into()));
+    let id2 = k.remember(r2).unwrap().koid;
+
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2)
+            .required_property("name", "Text")
+            .required_property("grade", "Text"),
+        transforms: vec![PropertyTransform::SetDefault {
+            property: "grade".into(),
+            value: Value::Text("standard".into()),
+        }],
+    };
+    let report = k.apply_schema_migration(&alice(), &mig).unwrap();
+    assert_eq!(report.migrated, 2);
+
+    let ko1 = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko1.metadata.schema_version, 2);
+    assert_eq!(
+        ko1.properties.get("grade"),
+        Some(&Value::Text("standard".into()))
+    );
+    // existing value untouched
+    let ko2 = k.get(alice(), &id2).unwrap();
+    assert_eq!(
+        ko2.properties.get("grade"),
+        Some(&Value::Text("premium".into()))
+    );
+}
+
+#[test]
+fn t06zz_apply_migration_is_idempotent() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("sword".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2).required_property("label", "Text"),
+        transforms: vec![PropertyTransform::Rename {
+            from: "name".into(),
+            to: "label".into(),
+        }],
+    };
+    assert_eq!(
+        k.apply_schema_migration(&alice(), &mig).unwrap().migrated,
+        1
+    );
+    let v_after_first = k.get(alice(), &id1).unwrap().version;
+
+    // re-apply the identical migration: pure no-op, no version churn
+    let report = k.apply_schema_migration(&alice(), &mig).unwrap();
+    assert_eq!(report.scanned, 1);
+    assert_eq!(report.migrated, 0);
+    assert_eq!(report.already_at_target, 1);
+    let ko = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko.version, v_after_first);
+    assert_eq!(
+        ko.properties.get("label"),
+        Some(&Value::Text("sword".into()))
+    );
+}
+
+#[test]
+fn t06zza_apply_migration_rejects_unauthorized_targets() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("alices".into()));
+    k.remember(r1).unwrap();
+    let mut r2 = RememberRequest::create(Subject::new("bob"), meta("Item"));
+    r2.properties
+        .insert("name".into(), Value::Text("bobs".into()));
+    k.remember(r2).unwrap();
+
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2)
+            .required_property("name", "Text")
+            .property("grade", "Text"),
+        transforms: vec![],
+    };
+    // fail-closed: alice cannot migrate bob's KO -> whole op denied
+    assert!(matches!(
+        k.apply_schema_migration(&alice(), &mig).unwrap_err(),
+        KError::AccessDenied { .. }
+    ));
+    // schema rolled back: a v1-stamped write still validates
+    let mut r3 = RememberRequest::create(alice(), meta("Item"));
+    r3.properties.insert("name".into(), Value::Text("c".into()));
+    assert!(k.remember(r3).is_ok());
+}
+
+#[test]
+fn t06zzb_apply_migration_fails_clean_on_violation() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).property("price", "Int"))
+        .unwrap();
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties.insert("price".into(), Value::Int(-5));
+    let id1 = k.remember(r1).unwrap().koid;
+
+    // v2 adds a check the existing data violates
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2).property("price", "Int").check(
+            "price_non_negative",
+            CheckExpression::Compare {
+                op: CompareOp::Gte,
+                left: Box::new(CheckExpression::Property("price".into())),
+                right: Box::new(CheckExpression::Literal(Value::Int(0))),
+            },
+        ),
+        transforms: vec![],
+    };
+    assert!(k.apply_schema_migration(&alice(), &mig).is_err());
+    // nothing changed: KO still v1-stamped at its original version
+    let ko = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko.metadata.schema_version, 1);
+    assert_eq!(ko.version, 1);
+    // schema NOT registered: v1-stamped writes still validate
+    let mut r2 = RememberRequest::create(alice(), meta("Item"));
+    r2.properties.insert("price".into(), Value::Int(7));
+    assert!(k.remember(r2).is_ok());
+}
+
+#[test]
+fn t06zzc_apply_migration_rename_source_missing_fails() {
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1).required_property("name", "Text"))
+        .unwrap();
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("sword".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 2).required_property("label", "Text"),
+        transforms: vec![PropertyTransform::Rename {
+            from: "nickname".into(), // does not exist on the KO
+            to: "label".into(),
+        }],
+    };
+    assert!(matches!(
+        k.apply_schema_migration(&alice(), &mig).unwrap_err(),
+        KError::InvalidObject(_)
+    ));
+    let ko = k.get(alice(), &id1).unwrap();
+    assert_eq!(ko.metadata.schema_version, 1);
+}
+
+#[test]
+fn t06zzd_apply_migration_enforces_version_gate() {
+    // non-sequential version jump is rejected
+    let (k, _c) = mk();
+    k.register_schema(Schema::new("Item", 1)).unwrap();
+    let mig = SchemaMigration {
+        schema: Schema::new("Item", 3),
+        transforms: vec![],
+    };
+    assert!(matches!(
+        k.apply_schema_migration(&alice(), &mig).unwrap_err(),
+        KError::InvalidSchema(_)
+    ));
+
+    // no registered schema at all is rejected
+    let (k2, _c2) = mk();
+    let mig2 = SchemaMigration {
+        schema: Schema::new("Fresh", 2),
+        transforms: vec![],
+    };
+    assert!(matches!(
+        k2.apply_schema_migration(&alice(), &mig2).unwrap_err(),
+        KError::InvalidSchema(_)
+    ));
+}
+
+#[test]
+fn t06zze_legacy_object_bytes_remain_readable() {
+    // EVO-003 wire slice: stores written before the wire envelope existed
+    // (legacy unversioned bytes) must stay readable forever.
+    let (k, store, clock) = mk_with_store();
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("old".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+    let ko1 = k.get(alice(), &id1).unwrap();
+
+    // rewrite the stored object version with LEGACY (unversioned) bytes
+    let legacy = codec::encode_ko(&ko1);
+    let mut batch = WriteBatch::new();
+    batch.put(obj_store_key(&id1, ko1.commit_ts), legacy);
+    store.write_batch(&batch).unwrap();
+
+    // a fresh kernel over the same store still decodes the legacy bytes
+    drop(k);
+    let k2 = Kernel::open(store, clock, 0xC0FFEE).unwrap();
+    let ko2 = k2.get(alice(), &id1).unwrap();
+    assert_eq!(ko2.koid, id1);
+    assert_eq!(ko2.properties.get("name"), Some(&Value::Text("old".into())));
+}
+
+#[test]
+fn t06zzf_stored_object_bytes_use_wire_envelope() {
+    let (k, store, _c) = mk_with_store();
+    let mut r1 = RememberRequest::create(alice(), meta("Item"));
+    r1.properties
+        .insert("name".into(), Value::Text("new".into()));
+    let id1 = k.remember(r1).unwrap().koid;
+    let ko1 = k.get(alice(), &id1).unwrap();
+
+    let raw = store
+        .get(&obj_store_key(&id1, ko1.commit_ts))
+        .unwrap()
+        .unwrap();
+    assert_eq!(&raw[..8], codec::WIRE_HEADER_V1);
+    assert!(codec::decode_ko_wire(&raw).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// G13 / RET-CHAT-001: declarative retention — automatic expiry by policy
+// ---------------------------------------------------------------------------
+
+fn match_object_koids(k: &Kernel, query: &str) -> Vec<KOID> {
+    let plan = aikoql_compiler::parser::compile_with_subject(query, "alice").unwrap();
+    match aikoql_runtime::Interpreter::execute(k, &plan).unwrap() {
+        aikoql_runtime::RowSet::Objects(kos) => kos.into_iter().map(|ko| ko.koid).collect(),
+        other => panic!("expected object rowset, got {other:?}"),
+    }
+}
+
+#[test]
+fn t_ret1_retention_stamps_horizon_and_expires_retrieval() {
+    let (k, clock) = mk();
+    let mut req = RememberRequest::create(alice(), meta("temp_note"));
+    req.properties
+        .insert("v".into(), Value::Text("ephemeral".into()));
+    let r = k.remember_retained(req, 5_000).unwrap();
+
+    // kernel-stamped horizon: now (10_000) + retention_ms
+    let head = k.get(alice(), &r.koid).unwrap();
+    assert_eq!(
+        head.extensions.get(KnowledgeObject::EXT_VALID_TO),
+        Some(&Value::Int(15_000))
+    );
+
+    // live at default time: relational scan and similarity recall
+    assert_eq!(
+        match_object_koids(&k, "MATCH temp_note RETURN *"),
+        vec![r.koid]
+    );
+    assert_eq!(
+        k.find_similar(SimilarityQuery {
+            context: alice().into(),
+            filter: None,
+            text: Some("ephemeral".into()),
+            vector: None,
+            embedding_model: None,
+            k: 5,
+            fusion: Fusion::TextOnly,
+        })
+        .unwrap()
+        .len(),
+        1
+    );
+
+    // past the horizon: default-time retrieval drops it everywhere
+    clock.tick(5_001);
+    assert!(match_object_koids(&k, "MATCH temp_note RETURN *").is_empty());
+    assert!(k
+        .find_similar(SimilarityQuery {
+            context: alice().into(),
+            filter: None,
+            text: Some("ephemeral".into()),
+            vector: None,
+            embedding_model: None,
+            k: 5,
+            fusion: Fusion::TextOnly,
+        })
+        .unwrap()
+        .is_empty());
+
+    // historical evidence survives (RET-CHAT-003): get + AS_OF
+    assert!(k.get(alice(), &r.koid).is_ok());
+    assert_eq!(
+        match_object_koids(&k, "MATCH temp_note AS_OF 12000 RETURN *"),
+        vec![r.koid]
+    );
+}
+
+#[test]
+fn t_ret2_retention_overflow_is_rejected() {
+    let (k, _c) = mk();
+    let req = RememberRequest::create(alice(), meta("temp_note"));
+    assert!(matches!(
+        k.remember_retained(req, u64::MAX).unwrap_err(),
+        KError::InvalidObject(_)
+    ));
+}
+
+#[test]
+fn t_ret3_retention_update_refreshes_horizon() {
+    let (k, clock) = mk();
+    let mut req = RememberRequest::create(alice(), meta("temp_note"));
+    req.properties.insert("v".into(), Value::Text("one".into()));
+    let r = k.remember_retained(req, 5_000).unwrap();
+    clock.tick(4_000);
+
+    let mut up = RememberRequest::update(alice(), r.koid, meta("temp_note"));
+    up.properties.insert("v".into(), Value::Text("two".into()));
+    let r2 = k.remember_retained(up, 5_000).unwrap();
+
+    // horizon re-stamped from the new now (14_000), not carried forward
+    let head = k.get(alice(), &r.koid).unwrap();
+    assert_eq!(
+        head.extensions.get(KnowledgeObject::EXT_VALID_TO),
+        Some(&Value::Int(19_000))
+    );
+    assert_eq!(r2.version, 2);
+
+    // still live inside the refreshed horizon, gone beyond it
+    assert_eq!(
+        match_object_koids(&k, "MATCH temp_note RETURN *"),
+        vec![r.koid]
+    );
+    clock.tick(6_000);
+    assert!(match_object_koids(&k, "MATCH temp_note RETURN *").is_empty());
+}
+
+#[test]
+fn t_ret4_retention_never_inverts_valid_interval() {
+    let (k, _c) = mk();
+    let mut req = RememberRequest::create(alice(), meta("temp_note"));
+    req.extensions
+        .insert(KnowledgeObject::EXT_VALID_FROM.into(), Value::Int(16_000));
+    assert!(matches!(
+        k.remember_retained(req, 5_000).unwrap_err(),
+        KError::InvalidObject(_)
+    ));
+}
+
+#[test]
+fn t_ret5_zero_retention_expires_immediately_but_stays_in_lineage() {
+    let (k, _c) = mk();
+    let mut req = RememberRequest::create(alice(), meta("temp_note"));
+    req.properties
+        .insert("v".into(), Value::Text("gone".into()));
+    let r = k.remember_retained(req, 0).unwrap();
+
+    // zero-duration interval: valid nowhere at default time
+    assert!(match_object_koids(&k, "MATCH temp_note RETURN *").is_empty());
+
+    // but the knowledge is not erased — lineage and audit keep it
+    assert_eq!(k.get(alice(), &r.koid).unwrap().koid, r.koid);
+    assert_eq!(k.trace(alice(), &r.koid).unwrap().versions.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// QL-006: provenance filter (SOURCE clause) — end to end
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t_ql6_source_filters_by_evidence_artifact() {
+    let (k, _c) = mk();
+    // Evidence minted through derive(): remember() rejects EXT_EVIDENCE as
+    // kernel-managed (P0-1 — callers cannot forge a provenance trail).
+    let mut d1 = DeriveRequest::new(alice(), "fact");
+    d1.properties.insert("v".into(), Value::Int(1));
+    d1.evidence = vec![Evidence::new(
+        "sec-filing.pdf",
+        EvidenceMethod::DocExtraction,
+    )];
+    let koid1 = k.derive(d1).unwrap().koid;
+
+    let mut d2 = DeriveRequest::new(alice(), "fact");
+    d2.properties.insert("v".into(), Value::Int(2));
+    d2.evidence = vec![Evidence::new(
+        "meeting-notes.md",
+        EvidenceMethod::DocExtraction,
+    )];
+    let koid2 = k.derive(d2).unwrap().koid;
+
+    // SOURCE retains exactly the KOs whose evidence trail names the artifact.
+    assert_eq!(
+        match_object_koids(&k, r#"MATCH fact SOURCE "sec-filing.pdf" RETURN *"#),
+        vec![koid1]
+    );
+    assert_eq!(
+        match_object_koids(&k, r#"MATCH fact SOURCE "meeting-notes.md" RETURN *"#),
+        vec![koid2]
+    );
+    // Exact match only — a prefix is not a hit.
+    assert!(match_object_koids(&k, r#"MATCH fact SOURCE "sec-filing" RETURN *"#).is_empty());
+    // No matching artifact → empty, not an error.
+    assert!(match_object_koids(&k, r#"MATCH fact SOURCE "nope.md" RETURN *"#).is_empty());
+    // Unfiltered matches see both.
+    assert_eq!(match_object_koids(&k, "MATCH fact RETURN *").len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// EXE-006: LIMIT/OFFSET pagination — end to end
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t_exe6_limit_offset_paginates_without_duplicates_or_skips() {
+    let (k, _c) = mk();
+    for v in 0..5 {
+        let mut req = RememberRequest::create(alice(), meta("fact"));
+        req.properties.insert("v".into(), Value::Int(v));
+        k.remember(req).unwrap();
+    }
+
+    let vals = |query: &str| -> Vec<i64> {
+        let plan = aikoql_compiler::parser::compile_with_subject(query, "alice").unwrap();
+        match aikoql_runtime::Interpreter::execute(&k, &plan).unwrap() {
+            aikoql_runtime::RowSet::Objects(kos) => kos
+                .into_iter()
+                .map(|ko| match ko.properties.get("v") {
+                    Some(Value::Int(v)) => *v,
+                    other => panic!("unexpected row: {:?}", other),
+                })
+                .collect(),
+            other => panic!("expected object rowset, got {other:?}"),
+        }
+    };
+
+    let full = vals("MATCH fact RETURN *");
+    assert_eq!(full.len(), 5, "unpaged sees all five facts");
+
+    // Same order as unpaged, no duplicates, no skips: pages of 2.
+    let p1 = vals("MATCH fact LIMIT 2 RETURN *");
+    let p2 = vals("MATCH fact LIMIT 2 OFFSET 2 RETURN *");
+    let p3 = vals("MATCH fact LIMIT 2 OFFSET 4 RETURN *");
+    assert_eq!(p1, full[..2], "page 1 is the unpaged prefix");
+    assert_eq!(p2, full[2..4], "page 2 continues without overlap");
+    assert_eq!(p3, full[4..], "last page is the partial tail");
+    let mut union = p1.clone();
+    union.extend(p2.iter().chain(p3.iter()));
+    assert_eq!(union, full, "pages union == full result, same order");
+
+    // Boundary behavior.
+    assert!(vals("MATCH fact LIMIT 0 RETURN *").is_empty());
+    assert!(vals("MATCH fact LIMIT 5 OFFSET 5 RETURN *").is_empty());
+    assert_eq!(
+        vals("MATCH fact LIMIT 5 OFFSET 3 RETURN *"),
+        full[3..],
+        "offset into the middle"
+    );
 }

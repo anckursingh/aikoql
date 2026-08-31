@@ -29,6 +29,16 @@ pub enum Token {
     Relationships,
     Commit,
     Explain,
+    // v0.3 K2: temporal + epistemic query operators
+    AsOf,
+    Between,
+    Historical,
+    Epistemic,
+    // QL-006: provenance filter (SOURCE "artifact")
+    Source,
+    // EXE-006: pagination (LIMIT n [OFFSET m])
+    Limit,
+    Offset,
     // Symbols
     Eq,     // ==
     Neq,    // !=
@@ -153,6 +163,13 @@ impl Lexer {
             "RELATIONSHIPS" => Token::Relationships,
             "COMMIT" => Token::Commit,
             "EXPLAIN" => Token::Explain,
+            "AS_OF" => Token::AsOf,
+            "BETWEEN" => Token::Between,
+            "HISTORICAL" => Token::Historical,
+            "EPISTEMIC" => Token::Epistemic,
+            "SOURCE" => Token::Source,
+            "LIMIT" => Token::Limit,
+            "OFFSET" => Token::Offset,
             _ => Token::Ident(s),
         }
     }

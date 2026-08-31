@@ -2,10 +2,15 @@
 //! and the metrics listener.
 //! Extracted from main.rs (R7 modularization). No behavior changes.
 
-use crate::*;
-
 use crate::helpers::*;
 use crate::tools::*;
+use crate::{
+    api_rest, error, graph_ui, info, json, studio, thread, Arc, Direction, ExtensionMap,
+    GraphEngineApi, HashMap, HashSet, HttpSession, Instant, Kernel, KnowledgeContext,
+    KnowledgeObject, LifecycleState, Metadata, Mutex, OntologyRegistry, Origin, PropertyMap, Read,
+    ReferentialPolicy, RememberRequest, SchemaRegistry, Subject, TcpListener, TcpStream,
+    TraverseQuery, Value, Write, J, KOID, SERVER_START,
+};
 pub(crate) fn serve_metrics(
     kernel: Arc<Kernel>,
     ontology: Arc<OntologyRegistry>,

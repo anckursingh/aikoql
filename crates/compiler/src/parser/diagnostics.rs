@@ -28,6 +28,8 @@ pub enum Code {
     InvalidOperator = 1013,
     /// Conflicting clauses (e.g., both SCAN and TRAVERSE).
     ConflictingClauses = 1014,
+    /// v0.3 K2: invalid temporal range (BETWEEN requires from < to).
+    InvalidTemporalRange = 1015,
 
     // ---- Semantic errors (1030–1049) ----
     /// Referenced entity type is not registered.
@@ -53,6 +55,7 @@ impl Code {
             Code::UnexpectedEof => "unexpected end of input",
             Code::InvalidOperator => "invalid comparison operator",
             Code::ConflictingClauses => "conflicting clauses in query",
+            Code::InvalidTemporalRange => "invalid temporal range",
             Code::UnknownType => "unknown entity type",
             Code::UnknownProperty => "unknown property on entity",
             Code::TypeMismatch => "type mismatch in expression",
@@ -152,6 +155,15 @@ pub fn conflicting_clauses(a: &str, b: &str, line: usize, col: usize) -> Diagnos
     Diagnostic::new(
         Code::ConflictingClauses,
         format!("cannot use both '{}' and '{}'", a, b),
+        line,
+        col,
+    )
+}
+
+pub fn invalid_temporal_range(line: usize, col: usize) -> Diagnostic {
+    Diagnostic::new(
+        Code::InvalidTemporalRange,
+        "BETWEEN requires a strictly increasing range (from < to)",
         line,
         col,
     )

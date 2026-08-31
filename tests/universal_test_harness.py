@@ -793,7 +793,10 @@ Examples:
                 print("Build it first: cargo build --release -p aikoql-mcp")
                 sys.exit(1)
 
-            db_path = tempfile.mktemp(suffix=".redb", prefix="aikoql_test_")
+            # CodeQL py/insecure-temporary-file: mkstemp creates the file with
+            # 0600 perms and a non-guessable name (mktemp is predictable).
+            fd, db_path = tempfile.mkstemp(suffix=".redb", prefix="aikoql_test_")
+            os.close(fd)
             server_mgr = ServerManager(args.server_binary, db_path, args.host, args.port, args.http_port)
             if not server_mgr.start():
                 sys.exit(1)

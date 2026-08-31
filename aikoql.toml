@@ -28,16 +28,25 @@ path = "./aikoql.redb"
 # tcp_tokens = ["mytoken:acme:admin"]
 
 [encryption]
-# Enable encryption at rest (MRFC-0020). Requires a key file.
-# NOTE: encryption-at-rest is not wired into serve yet — setting enabled=true
-# is rejected at startup.
+# Enable encryption at rest (MRFC-0020). Whole-store values are encrypted with
+# the master key; field-level policies encrypt the listed properties per type
+# with per-tenant DEKs (see [encryption.policies]).
+# First run: `aikoql keygen ./aikoql.key` (passphrase from AIKOQL_PASSPHRASE,
+# else generated and printed once — save it). Wrong/missing passphrase fails
+# the open; an encrypted database never silently opens as plaintext.
 enabled = false
 
-# Path to the master key file for the LocalKMS.
+# Path to the master key file for the LocalKMS (v2 envelope, 88 bytes).
 # key_path = "./aikoql.key"
 
-# Passphrase for the LocalKMS key derivation (or set AIKOQL_PASSPHRASE env var).
+# Passphrase for the LocalKMS key derivation (or set AIKOQL_PASSPHRASE env var,
+# which wins). Never commit a real passphrase.
 # passphrase = "change-me-in-production"
+
+# Field-level encryption policies: type_name → properties encrypted on
+# remember and decrypted on get. Unknown types are simply never matched.
+# [encryption.policies]
+# employee = ["salary", "ssn"]
 
 [rate_limit]
 # Enforced: 60s window — per connection on MCP tools/call (TCP + stdio) and

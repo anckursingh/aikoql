@@ -41,6 +41,23 @@ pub enum SecretKind {
     GenericToken,
 }
 
+/// The full detector inventory — the PII-filtering configuration the
+/// compliance evidence pack reports (MRFC-0020 Phase 4). Single source of
+/// truth; the pack tool maps this, it does not keep its own list.
+pub const ALL_KINDS: &[SecretKind] = &[
+    SecretKind::ApiKey,
+    SecretKind::BearerToken,
+    SecretKind::JwtToken,
+    SecretKind::AwsKey,
+    SecretKind::PrivateKey,
+    SecretKind::Password,
+    SecretKind::Email,
+    SecretKind::CreditCard,
+    SecretKind::Ssn,
+    SecretKind::ConnectionString,
+    SecretKind::GenericToken,
+];
+
 impl SecretKind {
     pub fn as_str(&self) -> &str {
         match self {
@@ -90,15 +107,77 @@ pub fn filter_secrets(ir: &KnowledgeIr) -> (KnowledgeIr, Vec<SecretFinding>) {
         }
     }
 
-    // Scan fact statements
+    // Scan fact statements and their evidence snippets (SEC-004). The whole
+    // field is replaced, not marker-prefixed: a prefixed statement still
+    // embeds the raw value, and the snippet is raw source text.
     for fact in &mut redacted.facts {
         if let Some(kind) = detect_secret(&fact.statement) {
-            let _original = fact.statement.clone();
-            fact.statement = format!("[REDACTED:{}] {}", kind.as_str(), fact.statement);
+            fact.statement = format!("[REDACTED:{}]", kind.as_str());
             findings.push(SecretFinding {
                 kind,
                 location: "fact.statement".to_string(),
                 redacted: fact.statement.clone(),
+            });
+        }
+        if let Some(snippet) = &fact.snippet {
+            if let Some(kind) = detect_secret(snippet) {
+                fact.snippet = Some(format!("[REDACTED:{}]", kind.as_str()));
+                findings.push(SecretFinding {
+                    kind,
+                    location: "fact.snippet".to_string(),
+                    redacted: fact.snippet.clone().unwrap_or_default(),
+                });
+            }
+        }
+    }
+
+    // Same boundary for the remaining rendered fields: relation endpoints,
+    // event descriptions/triggers, temporal text.
+    for rel in &mut redacted.relations {
+        if let Some(kind) = detect_secret(&rel.subject) {
+            rel.subject = format!("[REDACTED:{}]", kind.as_str());
+            findings.push(SecretFinding {
+                kind,
+                location: "relation.subject".to_string(),
+                redacted: rel.subject.clone(),
+            });
+        }
+        if let Some(kind) = detect_secret(&rel.object) {
+            rel.object = format!("[REDACTED:{}]", kind.as_str());
+            findings.push(SecretFinding {
+                kind,
+                location: "relation.object".to_string(),
+                redacted: rel.object.clone(),
+            });
+        }
+    }
+    for ev in &mut redacted.events {
+        if let Some(kind) = detect_secret(&ev.description) {
+            ev.description = format!("[REDACTED:{}]", kind.as_str());
+            findings.push(SecretFinding {
+                kind,
+                location: "event.description".to_string(),
+                redacted: ev.description.clone(),
+            });
+        }
+        if let Some(trigger) = &ev.trigger {
+            if let Some(kind) = detect_secret(trigger) {
+                ev.trigger = Some(format!("[REDACTED:{}]", kind.as_str()));
+                findings.push(SecretFinding {
+                    kind,
+                    location: "event.trigger".to_string(),
+                    redacted: ev.trigger.clone().unwrap_or_default(),
+                });
+            }
+        }
+    }
+    for t in &mut redacted.temporal {
+        if let Some(kind) = detect_secret(&t.text) {
+            t.text = format!("[REDACTED:{}]", kind.as_str());
+            findings.push(SecretFinding {
+                kind,
+                location: "temporal.text".to_string(),
+                redacted: t.text.clone(),
             });
         }
     }
@@ -367,6 +446,7 @@ mod tests {
     fn redacts_jwt_in_facts() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8s".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -383,6 +463,7 @@ mod tests {
     fn redacts_connection_string() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "Server=prod-db.example.com;Password=superSecret123;Database=mydb"
                     .into(),
                 entities: vec![],
@@ -417,6 +498,7 @@ mod tests {
     fn redacts_aws_key() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -438,6 +520,7 @@ mod tests {
         assert!(encoded.len() > 50);
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: encoded.into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -454,6 +537,7 @@ mod tests {
     fn short_base64_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "aGVsbG8=".into(), // base64("hello") — only 8 chars
                 entities: vec![],
                 confidence: 0.5,
@@ -470,6 +554,7 @@ mod tests {
     fn multi_line_private_key_is_redacted() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -486,6 +571,7 @@ mod tests {
     fn bearer_in_prose_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "Bearer of good news to the entire team".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -504,6 +590,7 @@ mod tests {
     fn api_key_in_prose_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "the api-key is not a secret here".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -522,6 +609,7 @@ mod tests {
     fn github_pat_is_redacted() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "github_pat_11ABCDEFG1234567890abcdefghijklmnopqrstuv".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -538,6 +626,7 @@ mod tests {
     fn clean_uuid_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "550e8400-e29b-41d4-a716-446655440000".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -554,6 +643,7 @@ mod tests {
     fn credit_card_with_spaces_is_redacted() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "4111 1111 1111 1111".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -572,6 +662,7 @@ mod tests {
     fn assert_redacted_as(statement: &str, kind: SecretKind) {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: statement.into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -676,6 +767,7 @@ mod tests {
     fn sha256_hex_hash_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement:
                     "sha256: a3f5c8d2e1b6490f7a6c5d4e3b2a1908f7e6d5c4b3a29182736455463728190a"
                         .into(),
@@ -697,6 +789,7 @@ mod tests {
     fn disk_word_passes_through() {
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "the disk-usage metrics report is ready".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -719,6 +812,7 @@ mod tests {
         // passes through. Document-level filtering is the primary defense.
         let ir = KnowledgeIr {
             facts: vec![crate::FactCandidate {
+                snippet: None,
                 statement: "contact admin%40example.com".into(),
                 entities: vec![],
                 confidence: 0.5,

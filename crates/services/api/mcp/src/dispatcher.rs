@@ -1,10 +1,13 @@
 //! Extracted verbatim from server.rs (PRR-7). No behavior changes.
 
-use crate::*;
-
+use crate::audit::*;
 use crate::helpers::*;
 use crate::session::*;
 use crate::tools::*;
+use crate::{
+    error, info_span, json, warn, Arc, EventFilter, EventKind, HashSet, Kernel, Mutex, Write, J,
+    KOID, PROTOCOL_VERSION,
+};
 
 use crate::protocol::*;
 use crate::tool_registry::*;
@@ -13,7 +16,7 @@ pub(crate) fn handle_message(
     k: &Kernel,
     sub_ids: &mut HashSet<String>,
     stdout: &Arc<Mutex<impl Write + Send + 'static>>,
-    rate_limit: &mut crate::rate_limiter::RateLimiter,
+    rate_limit: &Mutex<crate::rate_limiter::RateLimiter>,
     db_path: &Arc<String>,
     session: &mut McpSession,
     msg: J,
@@ -21,11 +24,39 @@ pub(crate) fn handle_message(
     let id = msg.get("id").cloned();
     let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
 
-    // PRR-4: rate limiting from the [rate_limit] config section — 60s window,
-    // per connection (see rate_limiter.rs for the process-local scope note).
+    // PRR-4 + R5 (review round 3): ONE rate limiter, shared process-wide
+    // (authz.rs used to keep a second, hidden 120/min limiter — R9 deletes
+    // it). The key is the principal, so parallel connections from one
+    // principal share one budget; stdio (the OS user IS the principal) gets
+    // one key.
     if method == "tools/call" {
-        if let Err(max) = rate_limit.check("_connection") {
-            warn!(limit = %max, "rate limit exceeded");
+        let params = msg.get("params").cloned().unwrap_or(J::Null);
+        let name = params
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
+        let key = match session.trust_mode {
+            TrustMode::Tcp => format!(
+                "{}:{}",
+                session.agent_id,
+                session.tenant.as_deref().unwrap_or("")
+            ),
+            TrustMode::Stdio => "_stdio".to_string(),
+        };
+        let mut limiter = rate_limit.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        if let Err(max) = limiter.check(&key) {
+            drop(limiter);
+            warn!(limit = %max, %key, "rate limit exceeded");
+            // R5: keep the denied call on the audit trail (previously logged
+            // by the tool_registry limiter).
+            audit_log(
+                db_path,
+                &session.agent_id,
+                &name,
+                "denied:rate",
+                &format!("rate limit exceeded (max {max} calls/min)"),
+            );
             let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
             if let Some(id) = id {
                 write_frame(

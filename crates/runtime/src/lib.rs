@@ -10,7 +10,7 @@
 use aikoql_kernel::ir::*;
 use aikoql_kernel::knowledge::kom::*;
 use aikoql_kernel::knowledge::scoring::{cosine, jaccard, ko_text, tokenize};
-use aikoql_kernel::transaction::kernel::{Kernel, Subject};
+use aikoql_kernel::transaction::kernel::{Kernel, KnowledgeContext, Subject};
 use std::cmp::Ordering;
 
 // ---------------------------------------------------------------------------
@@ -31,6 +31,13 @@ fn compare_values(a: Option<&Value>, b: Option<&Value>) -> Option<Ordering> {
         (Value::Bool(ab), Value::Bool(bb)) => Some(ab.cmp(bb)),
         _ => None, // type mismatch
     }
+}
+
+/// EXE-006: apply LIMIT/OFFSET over a deterministic row order — skip
+/// `offset` rows, then keep at most `limit`. Preserves relative order, so
+/// pages concatenated in query order reconstruct the unpaged rowset.
+fn skip_take<T>(v: Vec<T>, offset: usize, limit: usize) -> Vec<T> {
+    v.into_iter().skip(offset).take(limit).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +96,9 @@ pub struct Interpreter {
     cached_subject: Option<Subject>,
     /// The previous scored result, stored for Fuse to combine with the current.
     prev_scored: Option<Vec<(KOID, f32, String, u64)>>,
+    /// v0.3 K2: temporal plans own their time semantics (AS_OF/BETWEEN/
+    /// HISTORICAL), so the Scan arm skips its default "valid now" filter.
+    temporal_mode: bool,
 }
 
 impl Interpreter {
@@ -98,6 +108,10 @@ impl Interpreter {
             cached_objects: None,
             cached_subject: None,
             prev_scored: None,
+            temporal_mode: plan
+                .operators
+                .iter()
+                .any(|op| matches!(op, IrOp::Temporal { .. })),
         };
         let mut rows = RowSet::Objects(Vec::new());
         for op in &plan.operators {
@@ -138,7 +152,14 @@ impl Interpreter {
                     Some(t) => subj.in_tenant(t),
                     None => subj,
                 };
-                let kos = kernel.scan_by_type(&subj, type_name)?;
+                let mut kos = kernel.scan_by_type(&subj, type_name)?;
+                // v0.3 K2: default MATCH answers with current truth — facts
+                // not valid at "now" stay out of relational results. Temporal
+                // plans (AS_OF/BETWEEN/HISTORICAL) handle time themselves.
+                if !self.temporal_mode {
+                    let now = kernel.clock_now();
+                    kos.retain(|ko| ko.valid_at(now));
+                }
                 self.cached_objects = Some(kos.clone());
                 self.cached_subject = Some(subj);
                 Ok(RowSet::Objects(kos))
@@ -200,6 +221,23 @@ impl Interpreter {
                         .map_err(|e| KError::InvalidObject(format!("invalid koid: {}", e)))?]
                 };
 
+                // MVP-KO-003: an edge target whose KO is gone (Erase) or
+                // tombstoned (Delete) is a dangling endpoint — traversal must
+                // not expose it as a live relationship result.
+                // ponytail: per-edge get; join against a liveness snapshot if
+                // deep traversals become a perf hotspot.
+                let endpoint_live = |target: &KOID| -> bool {
+                    let ctx = self
+                        .cached_subject
+                        .clone()
+                        .map(KnowledgeContext::new)
+                        .unwrap_or_else(|| KnowledgeContext::new(Subject::new("system")));
+                    matches!(
+                        kernel.get(ctx, target),
+                        Ok(ko) if ko.lifecycle.state != LifecycleState::Deleted
+                    )
+                };
+
                 let mut results = Vec::new();
                 let mut visited = std::collections::HashSet::new();
                 let mut queue: std::collections::VecDeque<(KOID, usize)> =
@@ -211,7 +249,7 @@ impl Interpreter {
                     }
                     if let Ok(edges) = kernel.outbound_edges(start, rel_type.as_deref()) {
                         for (rt, target) in &edges {
-                            if visited.insert(*target) {
+                            if visited.insert(*target) && endpoint_live(target) {
                                 results.push((*target, rt.clone(), 1usize));
                                 if *depth > 1 {
                                     queue.push_back((*target, 1));
@@ -227,7 +265,7 @@ impl Interpreter {
                     }
                     if let Ok(next_edges) = kernel.outbound_edges(&cur, rel_type.as_deref()) {
                         for (rt, target) in next_edges {
-                            if visited.insert(target) {
+                            if visited.insert(target) && endpoint_live(&target) {
                                 results.push((target, rt.clone(), d + 1));
                                 queue.push_back((target, d + 1));
                             }
@@ -316,6 +354,100 @@ impl Interpreter {
                 };
                 let fused = Self::fuse_scored(&prev, &current, mode);
                 Ok(RowSet::Scored(fused))
+            }
+            IrOp::Temporal { op } => {
+                let kos = match input {
+                    RowSet::Objects(kos) => kos,
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "Temporal requires Object input".into(),
+                        ))
+                    }
+                };
+                let subj = self.cached_subject.clone().ok_or_else(|| {
+                    KError::InvalidQuery("Temporal requires a Scan subject".into())
+                })?;
+                let out = match op {
+                    // Transaction-time reconstruction: the version committed
+                    // at/before `at`. Rows that did not exist yet (or were
+                    // already tombstones) are dropped.
+                    TemporalOp::AsOf(at) => {
+                        let mut out = Vec::new();
+                        for ko in &kos {
+                            if let Some(v) = kernel.get_as_of(&subj, &ko.koid, *at)? {
+                                if v.lifecycle.state != LifecycleState::Deleted {
+                                    out.push(v);
+                                }
+                            }
+                        }
+                        out
+                    }
+                    // Valid-time overlap with [from, to): half-open. None
+                    // bounds are unbounded (None valid_from = -inf, None
+                    // valid_to = +inf) — `0` is NOT the semantic representation
+                    // of the unbounded past (review P0-2).
+                    TemporalOp::Between { from, to } => kos
+                        .into_iter()
+                        .filter(|ko| {
+                            ko.valid_from().map(|vf| vf < *to).unwrap_or(true)
+                                && ko.valid_to().map(|t| t > *from).unwrap_or(true)
+                        })
+                        .collect(),
+                    // Historical reconstruction: every committed version of
+                    // every scanned KOID, ascending commit order.
+                    TemporalOp::Historical => {
+                        let mut out = Vec::new();
+                        for ko in &kos {
+                            for (_ts, v) in kernel.history(&subj, &ko.koid)? {
+                                out.push(v);
+                            }
+                        }
+                        out
+                    }
+                };
+                self.cached_objects = Some(out.clone());
+                Ok(RowSet::Objects(out))
+            }
+            IrOp::EpistemicFilter { allowed } => {
+                let kos = match input {
+                    RowSet::Objects(kos) => kos,
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "EpistemicFilter requires Object input".into(),
+                        ))
+                    }
+                };
+                let out: Vec<KnowledgeObject> = kos
+                    .into_iter()
+                    .filter(|ko| allowed.iter().any(|s| s == ko.epistemic_status().as_str()))
+                    .collect();
+                self.cached_objects = Some(out.clone());
+                Ok(RowSet::Objects(out))
+            }
+            IrOp::ProvenanceFilter { source } => {
+                let kos = match input {
+                    RowSet::Objects(kos) => kos,
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "ProvenanceFilter requires Object input".into(),
+                        ))
+                    }
+                };
+                let out: Vec<KnowledgeObject> = kos
+                    .into_iter()
+                    .filter(|ko| ko.evidence().iter().any(|e| e.source_artifact == *source))
+                    .collect();
+                self.cached_objects = Some(out.clone());
+                Ok(RowSet::Objects(out))
+            }
+            IrOp::Limit { limit, offset } => {
+                // EXE-006: trims whatever rowset shape arrives (Objects,
+                // Scored, Traversal) — pagination is shape-agnostic.
+                Ok(match input {
+                    RowSet::Objects(kos) => RowSet::Objects(skip_take(kos, *offset, *limit)),
+                    RowSet::Scored(s) => RowSet::Scored(skip_take(s, *offset, *limit)),
+                    RowSet::Traversal(t) => RowSet::Traversal(skip_take(t, *offset, *limit)),
+                })
             }
             IrOp::Project { fields } => {
                 let mut kos = match input {
@@ -534,7 +666,10 @@ impl Default for Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aikoql_kernel::{ManualClock, MemoryEngine, Metadata, RememberRequest, SemanticBlock};
+    use aikoql_kernel::{
+        Clock, DeriveRequest, Evidence, EvidenceMethod, ManualClock, MemoryEngine, Metadata,
+        RememberRequest, SemanticBlock,
+    };
     use std::sync::Arc;
 
     fn mk() -> Kernel {
@@ -1083,5 +1218,364 @@ mod tests {
             }
             _ => panic!("expected Scored"),
         }
+    }
+
+    // ---- v0.3 K2: temporal + epistemic operators ----
+
+    fn mk_with_clock() -> (Kernel, Arc<ManualClock>) {
+        let clock = Arc::new(ManualClock::new(20_000));
+        let k = Kernel::open(Arc::new(MemoryEngine::new()), clock.clone(), 0xCAFE).unwrap();
+        (k, clock)
+    }
+
+    fn fact_with_validity(
+        k: &Kernel,
+        clock: &ManualClock,
+        who: &str,
+        prop: &str,
+        v: i64,
+        valid: Option<(u64, u64)>,
+    ) -> KOID {
+        let (from, to) = match valid {
+            Some((f, t)) => (Some(f), Some(t)),
+            None => (None, None),
+        };
+        fact_with_open_validity(k, clock, who, prop, v, from, to)
+    }
+
+    /// Fact with independently-optional bounds: None valid_from = -inf,
+    /// None valid_to = +inf (never `0`-as-unbounded — review P0-2).
+    /// `valid_to` is kernel-managed (review P0-1): the bound is closed by
+    /// the privileged Superseded transition at the closing instant
+    /// (`close_valid_time` collapses future starts to a zero-duration
+    /// interval — the fixture only uses `from <= to`).
+    fn fact_with_open_validity(
+        k: &Kernel,
+        clock: &ManualClock,
+        who: &str,
+        prop: &str,
+        v: i64,
+        from: Option<u64>,
+        to: Option<u64>,
+    ) -> KOID {
+        let mut ext = ExtensionMap::new();
+        if let Some(f) = from {
+            ext.insert("valid_from".into(), Value::Int(f as i64));
+        }
+        let mut props = PropertyMap::new();
+        props.insert(prop.into(), Value::Int(v));
+        let id = k
+            .remember(RememberRequest {
+                context: Subject::new(who).into(),
+                koid: None,
+                expected_version: Some(0),
+                idempotency_key: None,
+                metadata: Metadata {
+                    type_name: "fact".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+                properties: props,
+                semantic: None,
+                relationships: vec![],
+                security: None,
+                extensions: ext,
+                origin: Origin::Human,
+                note: None,
+                referential_policy: ReferentialPolicy::default(),
+            })
+            .unwrap()
+            .koid;
+        if let Some(t) = to {
+            // The close is stamped at instant `t`; restore the fixture clock
+            // afterwards so `now` (default-scan filtering) stays untouched.
+            let now = clock.millis();
+            clock.set(t);
+            k.admin_transition_epistemic(
+                Subject::new(who),
+                &id,
+                EpistemicStatus::Superseded,
+                Origin::System,
+                None,
+                None,
+                Some("test fixture: close validity".into()),
+            )
+            .unwrap();
+            clock.set(now);
+        }
+        id
+    }
+
+    fn update_val(k: &Kernel, who: &str, id: KOID, expected: u64, prop: &str, v: i64) {
+        let mut props = PropertyMap::new();
+        props.insert(prop.into(), Value::Int(v));
+        k.remember(RememberRequest {
+            context: Subject::new(who).into(),
+            koid: Some(id),
+            expected_version: Some(expected),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "fact".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: ExtensionMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap();
+    }
+
+    fn scan_plan() -> IrPlan {
+        IrPlan::new(vec![IrOp::Scan {
+            type_name: "fact".into(),
+            subject: "alice".into(),
+            roles: vec![],
+            tenant: None,
+        }])
+    }
+
+    fn objects(result: RowSet) -> Vec<KnowledgeObject> {
+        match result {
+            RowSet::Objects(kos) => kos,
+            other => panic!("expected Objects, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn default_match_excludes_facts_not_valid_now() {
+        let (k, clock) = mk_with_clock(); // now = 20_000
+        fact_with_validity(&k, &clock, "alice", "a", 1, None); // timeless: included
+        fact_with_validity(&k, &clock, "alice", "b", 2, Some((30_000, 40_000))); // future: excluded
+        fact_with_validity(&k, &clock, "alice", "c", 3, Some((0, 10_000))); // expired: excluded
+        fact_with_validity(&k, &clock, "alice", "d", 4, Some((10_000, 30_000))); // valid now
+
+        let kos = objects(Interpreter::execute(&k, &scan_plan()).unwrap());
+        assert_eq!(kos.len(), 2, "timeless and currently-valid facts only");
+        let vals: Vec<i64> = kos
+            .iter()
+            .map(
+                |ko| match ko.properties.get("a").or(ko.properties.get("d")) {
+                    Some(Value::Int(v)) => *v,
+                    other => panic!("unexpected row: {:?}", other),
+                },
+            )
+            .collect();
+        assert_eq!(vals, vec![1, 4]);
+    }
+
+    #[test]
+    fn as_of_reconstructs_committed_versions() {
+        let (k, clock) = mk_with_clock();
+        let id = fact_with_validity(&k, &clock, "alice", "a", 1, None); // v1 at 20_000
+        clock.tick(10_000);
+        update_val(&k, "alice", id, 1, "a", 2); // v2 at 30_000
+
+        let as_of = |t: u64| {
+            let mut plan = scan_plan();
+            plan.operators.push(IrOp::Temporal {
+                op: TemporalOp::AsOf(t),
+            });
+            objects(Interpreter::execute(&k, &plan).unwrap())
+        };
+
+        // Between the commits: v1.
+        let mid = as_of(25_000);
+        assert_eq!(mid.len(), 1);
+        assert_eq!(mid[0].version, 1);
+        assert_eq!(mid[0].properties.get("a"), Some(&Value::Int(1)));
+        // After the second commit: v2.
+        let late = as_of(35_000);
+        assert_eq!(late[0].version, 2);
+        // Before creation: nothing.
+        assert!(as_of(5_000).is_empty());
+    }
+
+    #[test]
+    fn between_uses_valid_time_overlap_semantics() {
+        let (k, clock) = mk_with_clock();
+        fact_with_validity(&k, &clock, "alice", "a", 1, Some((25_000, 35_000))); // overlaps first window
+        fact_with_validity(&k, &clock, "alice", "b", 2, None); // timeless: any window
+        fact_with_validity(&k, &clock, "alice", "c", 3, Some((0, 10_000))); // long expired
+
+        let between = |from: u64, to: u64| {
+            let mut plan = scan_plan();
+            plan.operators.push(IrOp::Temporal {
+                op: TemporalOp::Between { from, to },
+            });
+            objects(Interpreter::execute(&k, &plan).unwrap())
+        };
+
+        // [30_000, 40_000): a overlaps, timeless included, c excluded.
+        let rows = between(30_000, 40_000);
+        assert_eq!(rows.len(), 2);
+        // [35_000, 40_000): half-open — a's valid_to == from, excluded.
+        assert_eq!(between(35_000, 40_000).len(), 1);
+        // [5_000, 10_000): a not yet valid; c overlaps (valid at 9_999) →
+        // included with the timeless fact.
+        assert_eq!(between(5_000, 10_000).len(), 2);
+    }
+
+    #[test]
+    fn between_boundary_matrix_and_unbounded_sides() {
+        // Review P0-2/P1-6: a fact valid on [1000, 2000) against the full
+        // window matrix, with independently-unbounded sides.
+        let (k, clock) = mk_with_clock();
+        fact_with_validity(&k, &clock, "alice", "windowed", 1, Some((1_000, 2_000)));
+        // valid on (-inf, 1000): valid_to only.
+        fact_with_open_validity(&k, &clock, "alice", "past_only", 2, None, Some(1_000));
+        // valid on [2000, +inf): valid_from only.
+        fact_with_open_validity(&k, &clock, "alice", "future_only", 3, Some(2_000), None);
+        // timeless: both bounds None.
+        fact_with_validity(&k, &clock, "alice", "timeless", 4, None);
+
+        let between = |from: u64, to: u64| {
+            let mut plan = scan_plan();
+            plan.operators.push(IrOp::Temporal {
+                op: TemporalOp::Between { from, to },
+            });
+            let mut vals: Vec<i64> = objects(Interpreter::execute(&k, &plan).unwrap())
+                .iter()
+                .filter_map(|ko| match ko.properties.iter().next() {
+                    Some((_, Value::Int(v))) => Some(*v),
+                    _ => None,
+                })
+                .collect();
+            vals.sort();
+            vals
+        };
+
+        // [0, 1000): windowed [1000, 2000) only TOUCHES at 1000 — half-open,
+        // so excluded; past_only overlaps; timeless included.
+        assert_eq!(between(0, 1_000), vec![2, 4]);
+        // [1000, 2000): the windowed fact's home window.
+        assert_eq!(between(1_000, 2_000), vec![1, 4]);
+        // [2000, 3000): windowed touches at 2000 — excluded; future_only
+        // included.
+        assert_eq!(between(2_000, 3_000), vec![3, 4]);
+        // A window spanning everything sees all four facts.
+        assert_eq!(between(0, 5_000), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn historical_enumerates_all_versions_ascending() {
+        let (k, clock) = mk_with_clock();
+        let id = fact_with_validity(&k, &clock, "alice", "a", 1, None);
+        clock.tick(10_000);
+        update_val(&k, "alice", id, 1, "a", 2);
+        clock.tick(10_000);
+        update_val(&k, "alice", id, 2, "a", 3);
+
+        let mut plan = scan_plan();
+        plan.operators.push(IrOp::Temporal {
+            op: TemporalOp::Historical,
+        });
+        let kos = objects(Interpreter::execute(&k, &plan).unwrap());
+        assert_eq!(kos.len(), 3, "one row per committed version");
+        let versions: Vec<u64> = kos.iter().map(|ko| ko.version).collect();
+        assert_eq!(versions, vec![1, 2, 3], "ascending commit order");
+    }
+
+    #[test]
+    fn epistemic_filter_selects_by_status() {
+        let (k, clock) = mk_with_clock();
+        let id = fact_with_validity(&k, &clock, "alice", "a", 1, None);
+        fact_with_validity(&k, &clock, "alice", "b", 2, None);
+        k.admin_transition_epistemic(
+            Subject::new("alice"),
+            &id,
+            EpistemicStatus::Verified,
+            Origin::Human,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let mut plan = scan_plan();
+        plan.operators.push(IrOp::EpistemicFilter {
+            allowed: vec!["verified".into()],
+        });
+        let kos = objects(Interpreter::execute(&k, &plan).unwrap());
+        assert_eq!(kos.len(), 1);
+        assert_eq!(kos[0].epistemic_status(), EpistemicStatus::Verified);
+    }
+
+    #[test]
+    fn provenance_filter_keeps_kos_by_source_artifact() {
+        let (k, _clock) = mk_with_clock();
+        let mut d1 = DeriveRequest::new(Subject::new("alice"), "fact");
+        d1.evidence = vec![Evidence::new(
+            "sec-filing.pdf",
+            EvidenceMethod::DocExtraction,
+        )];
+        k.derive(d1).unwrap();
+        let mut d2 = DeriveRequest::new(Subject::new("alice"), "fact");
+        d2.evidence = vec![Evidence::new(
+            "meeting-notes.md",
+            EvidenceMethod::DocExtraction,
+        )];
+        k.derive(d2).unwrap();
+        // a bare remember()d fact carries no evidence → always dropped
+        fact_with_validity(&k, &_clock, "alice", "plain", 3, None);
+
+        let run = |source: &str| {
+            let mut plan = scan_plan();
+            plan.operators.push(IrOp::ProvenanceFilter {
+                source: source.into(),
+            });
+            objects(Interpreter::execute(&k, &plan).unwrap())
+        };
+
+        assert_eq!(run("sec-filing.pdf").len(), 1);
+        assert_eq!(
+            run("sec-filing.pdf")[0].evidence()[0].source_artifact,
+            "sec-filing.pdf"
+        );
+        assert_eq!(run("meeting-notes.md").len(), 1);
+        // exact match: prefix and absent artifacts yield nothing
+        assert!(run("sec-filing").is_empty());
+        assert!(run("nope.md").is_empty());
+    }
+
+    #[test]
+    fn limit_offset_paginates_deterministic_order() {
+        let (k, clock) = mk_with_clock();
+        for v in 1..=5 {
+            fact_with_validity(&k, &clock, "alice", "v", v, None);
+        }
+
+        let page = |limit: usize, offset: usize| {
+            let mut plan = scan_plan();
+            plan.operators.push(IrOp::Limit { limit, offset });
+            objects(Interpreter::execute(&k, &plan).unwrap())
+                .into_iter()
+                .map(|ko| match ko.properties.get("v") {
+                    Some(Value::Int(v)) => *v,
+                    other => panic!("unexpected row: {:?}", other),
+                })
+                .collect::<Vec<i64>>()
+        };
+
+        let full = page(100, 0);
+        assert_eq!(full.len(), 5, "unpaged sees everything");
+        let p1 = page(2, 0);
+        let p2 = page(2, 2);
+        let p3 = page(2, 4);
+        // pages are disjoint and their union reconstructs the full order
+        let mut union = p1.clone();
+        union.extend(p2.iter().chain(p3.iter()));
+        assert_eq!(union, full, "pages union == full, same order");
+        // boundary behavior
+        assert!(page(0, 0).is_empty(), "LIMIT 0 is empty, not an error");
+        assert!(page(10, 6).is_empty(), "offset past the end is empty");
+        assert_eq!(page(3, 3).len(), 2, "last partial page");
     }
 }

@@ -98,7 +98,8 @@ impl EmbeddingProvider for MockEmbeddingProvider {
 }
 
 /// Embed text using character n-gram hashing into a fixed-size vector.
-fn char_ngram_embed(text: &str, dims: usize) -> Vec<f32> {
+/// pub(crate): the mock multimodal provider (HLD §23) shares the text channel.
+pub(crate) fn char_ngram_embed(text: &str, dims: usize) -> Vec<f32> {
     let mut vec = vec![0.0f32; dims];
     let trimmed = text.trim();
     // Need at least 2 meaningful characters for trigrams.

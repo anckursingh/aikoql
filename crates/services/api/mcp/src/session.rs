@@ -2,8 +2,7 @@
 //! Extracted from main.rs (R7 modularization). PRR-2 added the TCP trust
 //! mode + token table.
 
-use crate::*;
-
+use crate::{json, HashMap, Subject, J};
 /// Where a session's identity comes from (PRR-2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TrustMode {
@@ -266,11 +265,13 @@ mod tests {
 
     #[test]
     fn forced_injection_overrides_identity() {
-        let mut s = McpSession::default();
-        s.trust_mode = TrustMode::Tcp;
-        s.agent_id = "tcp-agent".into();
-        s.tenant = Some("acme".into());
-        s.roles = vec!["viewer".into()];
+        let mut s = McpSession {
+            trust_mode: TrustMode::Tcp,
+            agent_id: "tcp-agent".into(),
+            tenant: Some("acme".into()),
+            roles: vec!["viewer".into()],
+            ..Default::default()
+        };
         let args = json!({"subject": "mallory", "roles": ["admin"], "tenant": "other", "x": 1});
         let f = inject_session_forced(&args, &s);
         assert_eq!(f["subject"], "tcp-agent");
@@ -289,8 +290,10 @@ mod tests {
 
     #[test]
     fn tcp_session_init_rejects_client_agent_id() {
-        let mut s = McpSession::default();
-        s.trust_mode = TrustMode::Tcp;
+        let mut s = McpSession {
+            trust_mode: TrustMode::Tcp,
+            ..Default::default()
+        };
         // The auth gate sets this on successful token verify (see
         // handle_tcp_client); mirror that flow here.
         s.agent_id = "tcp-agent".into();

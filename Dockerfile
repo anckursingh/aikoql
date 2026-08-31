@@ -44,9 +44,14 @@ ENTRYPOINT ["aikoql"]
 # is needed (an exec-form CMD with ${...} is NOT expanded by Docker, and a
 # sh -c CMD here would run `aikoql sh -c ...` — double invocation).
 # Unset AIKOQL_TCP_TOKEN -> no tokens -> TCP listener refuses (fail-closed).
+# R1/R3 (review round 3): loopback-only plaintext TCP — the server rejects
+# non-loopback binds fail-closed (see validate_listen), so the container
+# binds 127.0.0.1. Remote access is post-MVP: terminate TLS at a sidecar
+# proxy that shares the container's network namespace (the loopback bind is
+# reachable there), or use the stdio/npm path.
 # Container contract: everything mutable lives under the /data volume —
 # redb file, memory dir, and the local embedding model store (PRR-3 installs
 # there via `docker exec aikoql aikoql model install`; the image itself stays
 # stateless, no model baked in). CLI args win over aikoql.toml, so the paths
 # below are authoritative in the container.
-CMD ["serve", "/data/aikoql.redb", "--listen", "0.0.0.0:9090", "--metrics-addr", "0.0.0.0:9091", "--model-dir", "/data/models"]
+CMD ["serve", "/data/aikoql.redb", "--listen", "127.0.0.1:9090", "--metrics-addr", "127.0.0.1:9091", "--model-dir", "/data/models"]

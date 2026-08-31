@@ -1,0 +1,184 @@
+{
+  "spec": "MVP-QA-003A (docs/qa/WAVE3-1-TDD-TEST-SPECIFICATION.md)",
+  "branch": "feature/mvp-launch",
+  "evaluation_contract": {
+    "judge": "units_hit token containment, unknown-probe inverted (2 - hits)",
+    "budget_tokens": 300,
+    "treatments": ["aikoql", "graph-rag", "rag"],
+    "dev_tasks": 148,
+    "holdout_tasks": 24,
+    "holdout_passes": 1,
+    "model": "none (mechanical slice; mock embeddings)"
+  },
+  "tests": [
+    {
+      "id": "W31-MKT-001",
+      "priority": "P0",
+      "name": "Market corpus integrity",
+      "status": "pass",
+      "verdict": "148 union tasks, 12 classes W1-W12, 55 docs, 24-task frozen holdout; corpus version pinned in docs/market/corpus-version.md v1.0",
+      "evidence": "docs/market/corpus-version.md, docs/market/task-taxonomy.md",
+      "commit": "c47b1cd"
+    },
+    {
+      "id": "W31-COMP-001",
+      "priority": "P0",
+      "name": "Three-way comparison",
+      "status": "pass",
+      "verdict": "AIKOQL 258/296 units vs graph-rag 191 vs rag 181; strong-fit classes 9; worst regression 0; W1 control 28/28 parity across all three",
+      "evidence": "docs/benchmarks/wins.md, docs/benchmarks/parity.md, docs/benchmarks/methodology.md",
+      "commit": "c47b1cd"
+    },
+    {
+      "id": "W31-REAL-001",
+      "priority": "P0",
+      "name": "Real LLM agent validation",
+      "status": "pass",
+      "verdict": "Deterministic agent-chain sim green; real-LLM leg env-gated, prints totals, asserts no scoring (per spec: no score threshold may live in a dev assertion)",
+      "evidence": "docs/benchmarks/unknown.md",
+      "commit": "1e6929e"
+    },
+    {
+      "id": "W31-DEC-001",
+      "priority": "P0",
+      "name": "Evidence-to-decision correctness",
+      "status": "pass",
+      "verdict": "Conflict/contradiction decision scenarios green on the frozen judge",
+      "evidence": "docs/benchmarks/wins.md",
+      "commit": "07cd0a4"
+    },
+    {
+      "id": "W31-TEMP-001",
+      "priority": "P0",
+      "name": "Temporal agent correctness",
+      "status": "pass",
+      "verdict": "Historical-vs-current scenarios green; temporal-policy boundary honored",
+      "evidence": "docs/benchmarks/wins.md",
+      "commit": "07cd0a4"
+    },
+    {
+      "id": "W31-UNK-001",
+      "priority": "P0",
+      "name": "Epistemic boundary",
+      "status": "pass",
+      "verdict": "Unknown-probe inversion holds: silence scores; false-confidence rows kept honestly",
+      "evidence": "docs/benchmarks/wins.md, docs/benchmarks/losses.md",
+      "commit": "d57b075"
+    },
+    {
+      "id": "W31-MEM-001",
+      "priority": "P0",
+      "name": "Longitudinal agent validation",
+      "status": "pass",
+      "verdict": "Longitudinal agent scenario green (see also P1 MEM-002)",
+      "evidence": "docs/benchmarks/wins.md",
+      "commit": "d57b075"
+    },
+    {
+      "id": "W31-DEV-001",
+      "priority": "P0",
+      "name": "Correct build-vs-buy methodology",
+      "status": "pass",
+      "verdict": "Two equivalent apps, application-owned LOC per capability, engine-internal LOC excluded by construction; moat asserted per row",
+      "evidence": "docs/market/build-vs-buy.md",
+      "commit": "a274aae"
+    },
+    {
+      "id": "W31-COST-001",
+      "priority": "P0",
+      "name": "Cost per successful task",
+      "status": "pass",
+      "verdict": "AIKOQL cost/success 5.2x below rag, 6.1x below graph-rag; lower cost in 10/12 classes; universal cost-leadership claim DENIED by the acceptance gate (2 classes n/a)",
+      "evidence": "docs/benchmarks/wins.md, docs/benchmarks/losses.md",
+      "commit": "4fdac83"
+    },
+    {
+      "id": "W31-REPRO-001",
+      "priority": "P0",
+      "name": "Reproducibility",
+      "status": "pass",
+      "verdict": "Two passes identical on all mechanical columns; direction and conclusion assertions green; frozen recipe in reproduction.md",
+      "evidence": "docs/benchmarks/reproduction.md",
+      "commit": "a657e7f"
+    },
+    {
+      "id": "W31-BIAS-001",
+      "priority": "P0",
+      "name": "Benchmark bias audit",
+      "status": "pass",
+      "verdict": "Zero unit-in-question leaks, zero doc-id leaks, dev/holdout disjoint, W1 control + NEG scenarios present; constructible-to-favor: yes, with mandated counter-measures",
+      "evidence": "docs/benchmarks/bias-audit.md",
+      "commit": "96f99ac"
+    },
+    {
+      "id": "W31-NEG-001",
+      "priority": "P0",
+      "name": "Negative evidence",
+      "status": "pass",
+      "verdict": "4 mandated adversarial scenarios: 3 no-advantage rows kept, 1 single-source win recorded as 2-token noise margin; pinned win/loss law never reclassified",
+      "evidence": "docs/benchmarks/parity.md, docs/benchmarks/losses.md",
+      "commit": "2d5b193"
+    },
+    {
+      "id": "W31-REG-001",
+      "priority": "P0",
+      "name": "Full regression",
+      "status": "pass",
+      "verdict": "Full workspace run (--workspace --no-fail-fast): exit 0, zero failed suites, zero failure lines (10 suite-result blocks scanned at tail; every crate green). certify.js chain: MVP GO, Wave 2 GO, Wave 3 GO, artifacts up to date",
+      "evidence": "artifacts/ (13 certified artifacts), workspace run log (2026-08-29)",
+      "commit": "66c6546"
+    },
+    {
+      "id": "W31-MEM-002",
+      "priority": "P1",
+      "name": "Memory compression",
+      "status": "pass",
+      "verdict": "Raw history vs summarized vs AIKOQL structured memory: correct-task-per-retained-token primary metric green",
+      "evidence": "docs/benchmarks/wins.md",
+      "commit": "4fdac83"
+    },
+    {
+      "id": "W31-DEBUG-001",
+      "priority": "P1",
+      "name": "End-to-end debuggability",
+      "status": "pass",
+      "verdict": "6 injected failure classes, 6 root causes identified with app-level observability only, 1-2 ops each",
+      "evidence": "docs/benchmarks/wins.md",
+      "commit": "77fce58"
+    },
+    {
+      "id": "W31-IMPACT-001",
+      "priority": "P1",
+      "name": "Knowledge change propagation",
+      "status": "pass",
+      "verdict": "Dependency change B->C: precision 1.0, recall 1.0, false/missed propagation 0, stale answers 0; blast radius exactly the changed records",
+      "evidence": "docs/benchmarks/wins.md, docs/benchmarks/losses.md",
+      "commit": "a6e1338"
+    },
+    {
+      "id": "W31-SCALE-001",
+      "priority": "P1",
+      "name": "Knowledge complexity scaling",
+      "status": "pass",
+      "verdict": "100k-unit world: near-linear curve measured; O(n^2) entity lookup found and fixed (context.rs index, semantics-preserving); 1M row is a criterion-bench pointer, not a run",
+      "evidence": "docs/benchmarks/losses.md, docs/benchmarks/unknown.md",
+      "commit": "4fdac83"
+    },
+    {
+      "id": "W31-OSS-001",
+      "priority": "P1",
+      "name": "OSS time-to-value",
+      "status": "pass",
+      "verdict": "7/7 mandated tasks over the real MCP binary; three onboarding failures found and closed (README, examples/, rate-limit doc); support interventions 0; human wall-clock target not set (no fresh developer) — recorded as unknown",
+      "evidence": "docs/benchmarks/oss-time-to-value.md, docs/benchmarks/unknown.md",
+      "commit": "78e62f7"
+    }
+  ],
+  "certification_chain": {
+    "mvp": "GO",
+    "wave2": "GO",
+    "wave3": "GO",
+    "wave31_p0": "13/13 pass",
+    "wave31_p1": "5/5 pass"
+  }
+}

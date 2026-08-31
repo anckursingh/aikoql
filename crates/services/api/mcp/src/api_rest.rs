@@ -78,7 +78,7 @@ fn route_inner(
         ("GET", "/api/v1/abi-version") => tool_abi_version(k),
         ("GET", "/api/v1/metrics-info") => tool_metrics(k),
         ("GET", "/api/v1/audit") => tool_audit_report(k),
-        ("GET", "/api/v1/backups") => tool_list_backups(),
+        ("GET", "/api/v1/backups") => tool_list_backups(db_path),
         ("POST", "/api/v1/discover-ontology") => tool_discover_ontology(k),
 
         ("GET", p) if p.starts_with("/api/v1/schema") => {
@@ -91,6 +91,13 @@ fn route_inner(
         ("GET", "/api/v1/compliance") => {
             need_auth()?;
             tool_compliance_report(k)
+        }
+        ("GET", p) if p.starts_with("/api/v1/evidence/") => {
+            need_auth()?;
+            tool_evidence_pack(
+                k,
+                &json!({"framework": p.trim_start_matches("/api/v1/evidence/")}),
+            )
         }
         ("GET", "/api/v1/list-programs") => {
             need_auth()?;
@@ -297,7 +304,7 @@ fn route_inner(
             tool_document_compile(k, &args(), db_path)
         }
         ("POST", "/api/v1/backup") => tool_backup(k, db_path),
-        ("POST", "/api/v1/restore") => tool_restore(&args(), db_path),
+        ("POST", "/api/v1/restore") => tool_restore(k, &args()),
         ("POST", "/api/v1/verify-backup") => tool_verify_backup(&args()),
         ("POST", "/api/v1/eval/recall") => {
             need_auth()?;
@@ -452,6 +459,30 @@ fn with_principal(
     a
 }
 
+fn openapi_spec() -> Result<J, String> {
+    Ok(json!({
+        "openapi": "3.0.3",
+        "info": {"title": "Aikoql API", "version": "1.0.0"},
+        "servers": [{"url": "/api/v1"}],
+        "paths": {
+            "/remember": {"post": {"summary": "Create/update KO"}},
+            "/get/{koid}": {"get": {"summary": "Fetch KO by KOID"}},
+            "/find-similar": {"post": {"summary": "Hybrid search"}},
+            "/aikoql": {"post": {"summary": "Execute aikoql"}},
+            "/relate": {"post": {"summary": "Create relationship"}},
+            "/traverse": {"post": {"summary": "Walk graph"}},
+            "/reason": {"post": {"summary": "Class B: reason"}},
+            "/infer": {"post": {"summary": "Class B: infer"}},
+            "/predict": {"post": {"summary": "Class B: predict"}},
+            "/backup": {"post": {"summary": "Create backup"}},
+            "/restore": {"post": {"summary": "PITR restore"}},
+            "/schema": {"get": {"summary": "Schema discovery"}},
+            "/graph": {"get": {"summary": "Graph data"}},
+            "/openapi.json": {"get": {"summary": "This spec"}},
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,28 +513,4 @@ mod tests {
         let a = with_principal(json!({"subject": "hacker"}), Some("bogus"), &sessions);
         assert_eq!(a["subject"], "hacker");
     }
-}
-
-fn openapi_spec() -> Result<J, String> {
-    Ok(json!({
-        "openapi": "3.0.3",
-        "info": {"title": "Aikoql API", "version": "1.0.0"},
-        "servers": [{"url": "/api/v1"}],
-        "paths": {
-            "/remember": {"post": {"summary": "Create/update KO"}},
-            "/get/{koid}": {"get": {"summary": "Fetch KO by KOID"}},
-            "/find-similar": {"post": {"summary": "Hybrid search"}},
-            "/aikoql": {"post": {"summary": "Execute aikoql"}},
-            "/relate": {"post": {"summary": "Create relationship"}},
-            "/traverse": {"post": {"summary": "Walk graph"}},
-            "/reason": {"post": {"summary": "Class B: reason"}},
-            "/infer": {"post": {"summary": "Class B: infer"}},
-            "/predict": {"post": {"summary": "Class B: predict"}},
-            "/backup": {"post": {"summary": "Create backup"}},
-            "/restore": {"post": {"summary": "PITR restore"}},
-            "/schema": {"get": {"summary": "Schema discovery"}},
-            "/graph": {"get": {"summary": "Graph data"}},
-            "/openapi.json": {"get": {"summary": "This spec"}},
-        }
-    }))
 }

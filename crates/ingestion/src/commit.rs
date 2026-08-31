@@ -665,7 +665,7 @@ mod tests {
         Evidence {
             document_id: Some("doc-001".into()),
             page: Some(1),
-            bbox_text: None,
+            source: None,
             extractor: "mock".into(),
             model: Some("mock-v1".into()),
             confidence: 0.85,
@@ -684,6 +684,7 @@ mod tests {
 
     fn fact(statement: &str, entities: Vec<&str>) -> FactCandidate {
         FactCandidate {
+            snippet: None,
             statement: statement.into(),
             entities: entities.into_iter().map(|s| s.into()).collect(),
             confidence: 0.85,

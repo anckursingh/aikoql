@@ -164,6 +164,7 @@ mod tests {
 
     fn make_fact(statement: &str, entities: &[&str], confidence: f32) -> FactCandidate {
         FactCandidate {
+            snippet: None,
             statement: statement.to_string(),
             entities: entities.iter().map(|s| s.to_string()).collect(),
             confidence,

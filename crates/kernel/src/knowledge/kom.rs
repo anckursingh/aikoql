@@ -124,18 +124,20 @@ impl fmt::Display for KOID {
     }
 }
 
-/// Monotonic, seedable KOID generator. Deterministic given the same salt and
-/// clock sequence — a hard requirement for conformance replay (MRFC-0011 §11).
+/// Monotonic, seedable KOID generator. Deterministic given the same id-space
+/// seed and clock sequence — a hard requirement for conformance replay
+/// (MRFC-0011 §11). The seed is an ID-space namespace, not cryptographic
+/// material (CodeQL FP: the old `salt` name tripped the hardcoded-value sink).
 pub struct IdGen {
-    salt: u64,
+    id_seed: u64,
     last_ms: u64,
     counter: u32,
 }
 
 impl IdGen {
-    pub fn new(salt: u64) -> Self {
+    pub fn new(id_seed: u64) -> Self {
         IdGen {
-            salt,
+            id_seed,
             last_ms: 0,
             counter: 0,
         }
@@ -153,7 +155,7 @@ impl IdGen {
         let mut b = [0u8; KOID_LEN];
         b[0..6].copy_from_slice(&ms.to_be_bytes()[2..8]);
         b[6..10].copy_from_slice(&self.counter.to_be_bytes());
-        b[10..16].copy_from_slice(&self.salt.to_be_bytes()[2..8]);
+        b[10..16].copy_from_slice(&self.id_seed.to_be_bytes()[2..8]);
         KOID(b)
     }
 }
@@ -354,6 +356,8 @@ pub enum EventKind {
     LifecycleChanged,
     ClaimAsserted,
     Audit,
+    /// v0.3 K1: epistemic status transition (audit-trailed, like lifecycle).
+    EpistemicChanged,
 }
 
 impl EventKind {
@@ -365,6 +369,7 @@ impl EventKind {
             EventKind::LifecycleChanged => 3,
             EventKind::ClaimAsserted => 4,
             EventKind::Audit => 5,
+            EventKind::EpistemicChanged => 6,
         }
     }
     pub fn from_tag(t: u8) -> Option<Self> {
@@ -375,6 +380,7 @@ impl EventKind {
             3 => Some(EventKind::LifecycleChanged),
             4 => Some(EventKind::ClaimAsserted),
             5 => Some(EventKind::Audit),
+            6 => Some(EventKind::EpistemicChanged),
             _ => None,
         }
     }
@@ -813,6 +819,648 @@ impl KnowledgeObject {
             Value::Text(ct.as_str().into()),
         );
     }
+
+    // ---- v0.3 K1: Epistemic status helpers (stored in extensions) ----
+
+    /// Extension key for `EpistemicStatus` value.
+    pub const EXT_EPISTEMIC_STATUS: &str = "epistemic_status";
+    /// Extension key for the append-only status transition history.
+    pub const EXT_EPISTEMIC_HISTORY: &str = "epistemic_history";
+
+    /// Current epistemic status. The explicit extension wins; legacy KOs
+    /// (written before v0.3 K1) fall back to their lifecycle state:
+    /// Verified → Verified, Extracted → Extracted, everything else → Observed.
+    pub fn epistemic_status(&self) -> EpistemicStatus {
+        self.extensions
+            .get(Self::EXT_EPISTEMIC_STATUS)
+            .and_then(|v| match v {
+                Value::Text(s) => EpistemicStatus::from_str(s),
+                _ => None,
+            })
+            .unwrap_or(match self.lifecycle.state {
+                LifecycleState::Verified => EpistemicStatus::Verified,
+                LifecycleState::Extracted => EpistemicStatus::Extracted,
+                _ => EpistemicStatus::Observed,
+            })
+    }
+
+    /// Set the epistemic status extension. Low-level — no transition
+    /// validation; kernel `transition_epistemic` is the enforced path.
+    pub fn set_epistemic_status(&mut self, s: EpistemicStatus) {
+        self.extensions.insert(
+            Self::EXT_EPISTEMIC_STATUS.into(),
+            Value::Text(s.as_str().into()),
+        );
+    }
+
+    /// Append a transition record to the history extension (append-only:
+    /// existing entries are never modified or removed).
+    pub fn push_epistemic_history(
+        &mut self,
+        from: EpistemicStatus,
+        to: EpistemicStatus,
+        at_millis: u64,
+        by: &str,
+        reason: Option<&str>,
+    ) {
+        let mut entry = BTreeMap::new();
+        entry.insert("from".into(), Value::Text(from.as_str().into()));
+        entry.insert("to".into(), Value::Text(to.as_str().into()));
+        entry.insert("at".into(), Value::Int(at_millis as i64));
+        entry.insert("by".into(), Value::Text(by.into()));
+        if let Some(r) = reason {
+            entry.insert("reason".into(), Value::Text(r.into()));
+        }
+        match self.extensions.get_mut(Self::EXT_EPISTEMIC_HISTORY) {
+            Some(Value::List(l)) => l.push(Value::Map(entry)),
+            _ => {
+                self.extensions.insert(
+                    Self::EXT_EPISTEMIC_HISTORY.into(),
+                    Value::List(vec![Value::Map(entry)]),
+                );
+            }
+        }
+    }
+
+    // ---- v0.3 K1: Evidence helpers (canonical extension encoding) ----
+
+    /// Extension key for the canonical evidence list (R12 immutable prefix).
+    pub const EXT_EVIDENCE: &str = "evidence";
+    /// Extension key for the append-only lifecycle transition history.
+    pub const EXT_LIFECYCLE_HISTORY: &str = "lifecycle_history";
+
+    /// Decode the canonical evidence list. A missing/unrecognized extension
+    /// or malformed entries yield empty/skipped records — legacy KOs stored
+    /// evidence as flat `evidence_*` properties and are not decoded here.
+    pub fn evidence(&self) -> Vec<crate::knowledge::evidence::Evidence> {
+        use crate::knowledge::evidence::{Evidence, EvidenceMethod};
+        match self.extensions.get(Self::EXT_EVIDENCE) {
+            Some(Value::List(items)) => items
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Map(m) => {
+                        let source_artifact = match m.get("source_artifact") {
+                            Some(Value::Text(s)) => s.clone(),
+                            _ => return None,
+                        };
+                        let method = match m.get("method").and_then(|x| match x {
+                            Value::Text(s) => EvidenceMethod::from_str(s),
+                            _ => None,
+                        }) {
+                            Some(method) => method,
+                            None => return None,
+                        };
+                        let mut ev = Evidence::new(source_artifact, method);
+                        if let Some(Value::Text(l)) = m.get("location") {
+                            ev = ev.with_location(l.clone());
+                        }
+                        if let Some(Value::Text(r)) = m.get("revision") {
+                            ev = ev.with_revision(r.clone());
+                        }
+                        if let Some(Value::Float(c)) = m.get("confidence") {
+                            ev = ev.with_confidence(*c as f32);
+                        }
+                        Some(ev)
+                    }
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Strict variant of `evidence()` for epistemic-critical reads (review
+    /// P2-6): a present-but-malformed evidence entry is an error, not a
+    /// silent drop — verify/derive/trace must never build on evidence they
+    /// half-understand. Absent evidence decodes to an empty trail.
+    pub fn strict_evidence(&self) -> KResult<Vec<crate::knowledge::evidence::Evidence>> {
+        use crate::knowledge::evidence::{Evidence, EvidenceMethod};
+        match self.extensions.get(Self::EXT_EVIDENCE) {
+            None => Ok(Vec::new()),
+            Some(Value::List(items)) => {
+                let mut out = Vec::with_capacity(items.len());
+                for (i, v) in items.iter().enumerate() {
+                    let m = match v {
+                        Value::Map(m) => m,
+                        other => {
+                            return Err(KError::Codec(format!(
+                                "evidence entry {i} is {other:?}, expected a map"
+                            )));
+                        }
+                    };
+                    let source_artifact = match m.get("source_artifact") {
+                        Some(Value::Text(s)) => s.clone(),
+                        _ => {
+                            return Err(KError::Codec(format!(
+                                "evidence entry {i} is missing source_artifact"
+                            )));
+                        }
+                    };
+                    let method = match m.get("method").and_then(|x| match x {
+                        Value::Text(s) => EvidenceMethod::from_str(s),
+                        _ => None,
+                    }) {
+                        Some(method) => method,
+                        None => {
+                            return Err(KError::Codec(format!(
+                                "evidence entry {i} has an unknown method"
+                            )));
+                        }
+                    };
+                    let mut ev = Evidence::new(source_artifact, method);
+                    if let Some(Value::Text(l)) = m.get("location") {
+                        ev = ev.with_location(l.clone());
+                    }
+                    if let Some(Value::Text(r)) = m.get("revision") {
+                        ev = ev.with_revision(r.clone());
+                    }
+                    if let Some(Value::Float(c)) = m.get("confidence") {
+                        ev = ev.with_confidence(*c as f32);
+                    }
+                    out.push(ev);
+                }
+                Ok(out)
+            }
+            // Legacy non-list evidence is not canonical (see evidence()) —
+            // strict readers refuse it rather than guess.
+            Some(other) => Err(KError::Codec(format!(
+                "evidence extension is {other:?}, expected a list"
+            ))),
+        }
+    }
+
+    /// Canonical extension value for an evidence trail (v0.3 K1) — public so
+    /// ingestion and other producers construct the exact same encoding.
+    pub fn evidence_value(evs: &[crate::knowledge::evidence::Evidence]) -> Value {
+        Value::List(evs.iter().map(evidence_to_value).collect())
+    }
+
+    /// Replace the evidence trail with its canonical encoding. Deterministic
+    /// (BTreeMap ordering) — the R12 append-only check compares raw values.
+    pub fn set_evidence(&mut self, evs: Vec<crate::knowledge::evidence::Evidence>) {
+        self.extensions
+            .insert(Self::EXT_EVIDENCE.into(), Self::evidence_value(&evs));
+    }
+
+    /// Append one evidence record; exact duplicates are skipped.
+    pub fn add_evidence(&mut self, ev: crate::knowledge::evidence::Evidence) {
+        let encoded = evidence_to_value(&ev);
+        match self.extensions.get_mut(Self::EXT_EVIDENCE) {
+            Some(Value::List(l)) => {
+                if !l.contains(&encoded) {
+                    l.push(encoded);
+                }
+            }
+            _ => {
+                self.extensions
+                    .insert(Self::EXT_EVIDENCE.into(), Value::List(vec![encoded]));
+            }
+        }
+    }
+
+    /// Append a lifecycle transition record — transitions create evidence,
+    /// mirroring `push_epistemic_history`.
+    pub fn push_lifecycle_history(
+        &mut self,
+        from: LifecycleState,
+        to: LifecycleState,
+        at_millis: u64,
+        by: &str,
+        reason: Option<&str>,
+    ) {
+        let mut entry = BTreeMap::new();
+        entry.insert("from".into(), Value::Text(from.to_string()));
+        entry.insert("to".into(), Value::Text(to.to_string()));
+        entry.insert("at".into(), Value::Int(at_millis as i64));
+        entry.insert("by".into(), Value::Text(by.into()));
+        if let Some(r) = reason {
+            entry.insert("reason".into(), Value::Text(r.into()));
+        }
+        match self.extensions.get_mut(Self::EXT_LIFECYCLE_HISTORY) {
+            Some(Value::List(l)) => l.push(Value::Map(entry)),
+            _ => {
+                self.extensions.insert(
+                    Self::EXT_LIFECYCLE_HISTORY.into(),
+                    Value::List(vec![Value::Map(entry)]),
+                );
+            }
+        }
+    }
+
+    // ---- v0.3 K2: Valid-time helpers (stored in extensions) ----
+
+    /// Extension key for valid_from (epoch millis; absent = unbounded past).
+    pub const EXT_VALID_FROM: &str = "valid_from";
+    /// Extension key for valid_to (epoch millis; absent = unbounded future).
+    pub const EXT_VALID_TO: &str = "valid_to";
+
+    /// Start of the validity interval, epoch millis. None = unbounded past.
+    /// Distinct from commit_ts (transaction time) and from `observed_at` —
+    /// this is when the knowledge is true in the world (K2 adversarial test:
+    /// timeless sentences must not create timeless truth).
+    pub fn valid_from(&self) -> Option<u64> {
+        match self.extensions.get(Self::EXT_VALID_FROM) {
+            Some(Value::Int(v)) if *v >= 0 => Some(*v as u64),
+            _ => None,
+        }
+    }
+
+    /// End of the validity interval (exclusive), epoch millis. None = open.
+    pub fn valid_to(&self) -> Option<u64> {
+        match self.extensions.get(Self::EXT_VALID_TO) {
+            Some(Value::Int(v)) if *v >= 0 => Some(*v as u64),
+            _ => None,
+        }
+    }
+
+    /// Set the [valid_from, valid_to) interval; None clears a bound.
+    /// Rejects an inverted interval (review P1-1): with both bounds set the
+    /// kernel invariant is `valid_from <= valid_to`. Equality is a legal
+    /// zero-duration interval — a claim closed at its own assertion instant,
+    /// or a future fact invalidated before it ever became valid — and reads
+    /// as valid_at nothing, which is exactly the intended policy.
+    pub fn set_valid_time(&mut self, from: Option<u64>, to: Option<u64>) -> KResult<()> {
+        if let (Some(f), Some(t)) = (from, to) {
+            if f > t {
+                return Err(KError::InvalidObject(format!(
+                    "valid interval must satisfy valid_from <= valid_to (got {f} > {t})"
+                )));
+            }
+        }
+        match from {
+            Some(f) => {
+                self.extensions
+                    .insert(Self::EXT_VALID_FROM.into(), Value::Int(f as i64));
+            }
+            None => {
+                self.extensions.remove(Self::EXT_VALID_FROM);
+            }
+        }
+        match to {
+            Some(t) => {
+                self.extensions
+                    .insert(Self::EXT_VALID_TO.into(), Value::Int(t as i64));
+            }
+            None => {
+                self.extensions.remove(Self::EXT_VALID_TO);
+            }
+        }
+        Ok(())
+    }
+
+    /// Close an open validity interval at `at` (review P1-1 future-fact
+    /// policy). A fact whose valid_from lies in the future (now < valid_from)
+    /// must not gain valid_to < valid_from: that would invert the interval.
+    /// Such an invalidation collapses to a zero-duration interval
+    /// [valid_from, valid_from) — it was never valid, and it never becomes
+    /// valid. No-op when the interval already has an end.
+    pub fn close_valid_time(&mut self, at: u64) -> KResult<()> {
+        if self.valid_to().is_some() {
+            return Ok(());
+        }
+        let from = self.valid_from();
+        let to = from.map_or(at, |f| f.max(at));
+        self.set_valid_time(from, Some(to))
+    }
+
+    /// True when `at_millis` falls inside the validity interval. Half-open
+    /// [valid_from, valid_to); an absent bound is unbounded on that side.
+    pub fn valid_at(&self, at_millis: u64) -> bool {
+        self.valid_from().map(|f| f <= at_millis).unwrap_or(true)
+            && self.valid_to().map(|t| t > at_millis).unwrap_or(true)
+    }
+
+    /// Extension key for the verify-commit link (P2-5): the journal seq of
+    /// the verify op's final commit — the event that carries the confidence
+    /// bump this key lives beside. Kernel-managed (set by verify_knowledge,
+    /// never by remember()).
+    pub const EXT_VERIFIED_EVENT: &str = "verified_event";
+
+    /// Journal seq of the most recent verify commit for this KO; None when
+    /// never verified. Pairs with `last_verified` (the wall-clock instant) —
+    /// this is the durable event in the audit journal that records it.
+    pub fn verified_event(&self) -> Option<u64> {
+        match self.extensions.get(Self::EXT_VERIFIED_EVENT) {
+            Some(Value::Int(v)) if *v >= 0 => Some(*v as u64),
+            _ => None,
+        }
+    }
+
+    // ---- v0.3 K3: Derivation & confidence context (stored in extensions) ----
+
+    /// Extension key for the Derivation record (Map; absent = asserted).
+    pub const EXT_DERIVATION: &str = "derivation";
+    /// Extension key for the ConfidenceContext record (Map).
+    pub const EXT_CONFIDENCE: &str = "confidence";
+
+    /// The first-class derivation record, if this KO was derived from others.
+    /// Answers WHY (reason) / FROM WHAT (sources) / DERIVED HOW (operation,
+    /// model) / BY WHOM (actor) / WHEN (timestamp) — a bare DERIVED_FROM
+    /// edge is not enough (reviewer H4).
+    pub fn derivation(&self) -> Option<Derivation> {
+        self.extensions
+            .get(Self::EXT_DERIVATION)
+            .and_then(derivation_from_value)
+    }
+
+    /// Attach (or replace) the derivation record.
+    pub fn set_derivation(&mut self, d: &Derivation) {
+        self.extensions
+            .insert(Self::EXT_DERIVATION.into(), derivation_to_value(d));
+    }
+
+    /// The confidence context, if set: score, independent confirmations,
+    /// and when it was last verified.
+    pub fn confidence_context(&self) -> Option<ConfidenceContext> {
+        self.extensions
+            .get(Self::EXT_CONFIDENCE)
+            .and_then(confidence_from_value)
+    }
+
+    /// Attach (or replace) the confidence context.
+    pub fn set_confidence_context(&mut self, c: &ConfidenceContext) {
+        self.extensions
+            .insert(Self::EXT_CONFIDENCE.into(), confidence_to_value(c));
+    }
+
+    // ---- v0.3 K4: Invalidation stamp (stored in extensions) ----
+
+    /// Extension key for the Invalidation record (Map: at/actor/reason).
+    /// Stamped when knowledge stops being supported — either directly
+    /// (`invalidate` op) or by dependency propagation (a premise was
+    /// superseded/invalidated). Distinct from Superseded/Contradicted:
+    /// this records WHY support vanished, not just the resulting state.
+    pub const EXT_INVALIDATION: &str = "invalidation";
+
+    /// The invalidation record, if this KO's support was withdrawn.
+    pub fn invalidation(&self) -> Option<Invalidation> {
+        self.extensions
+            .get(Self::EXT_INVALIDATION)
+            .and_then(invalidation_from_value)
+    }
+
+    /// Attach (or replace) the invalidation record.
+    pub fn set_invalidated(&mut self, at: u64, actor: &str, reason: &str) {
+        let mut m = PropertyMap::new();
+        m.insert("at".into(), Value::Int(at as i64));
+        m.insert("actor".into(), Value::Text(actor.into()));
+        m.insert("reason".into(), Value::Text(reason.into()));
+        self.extensions
+            .insert(Self::EXT_INVALIDATION.into(), Value::Map(m));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v0.3 K3: Derivation structure & confidence context model.
+// Extension-backed (same locked pattern as K1/K2 state). KOIDs are encoded
+// as hex Text; timestamp is epoch millis Int.
+// ---------------------------------------------------------------------------
+
+/// First-class derivation record: how this KO came to be.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Derivation {
+    /// The derivation operation (rule_fired, inference, merge, extraction…).
+    pub operation: String,
+    /// Who (or which agent) performed the derivation.
+    pub actor: String,
+    /// The model used, if the derivation was model-assisted.
+    pub model: Option<String>,
+    /// Epoch millis when the derivation happened.
+    pub timestamp: u64,
+    /// Premise KOs this object was derived from.
+    pub sources: Vec<KOID>,
+    /// Human-readable justification (the WHY).
+    pub reason: Option<String>,
+}
+
+pub fn derivation_to_value(d: &Derivation) -> Value {
+    let mut m = BTreeMap::new();
+    m.insert("operation".into(), Value::Text(d.operation.clone()));
+    m.insert("actor".into(), Value::Text(d.actor.clone()));
+    if let Some(model) = &d.model {
+        m.insert("model".into(), Value::Text(model.clone()));
+    }
+    m.insert("timestamp".into(), Value::Int(d.timestamp as i64));
+    m.insert(
+        "sources".into(),
+        Value::List(d.sources.iter().map(|s| Value::Text(s.to_hex())).collect()),
+    );
+    if let Some(r) = &d.reason {
+        m.insert("reason".into(), Value::Text(r.clone()));
+    }
+    Value::Map(m)
+}
+
+fn derivation_from_value(v: &Value) -> Option<Derivation> {
+    let m = match v {
+        Value::Map(m) => m,
+        _ => return None,
+    };
+    let operation = match m.get("operation") {
+        Some(Value::Text(s)) => s.clone(),
+        _ => return None,
+    };
+    let actor = match m.get("actor") {
+        Some(Value::Text(s)) => s.clone(),
+        _ => return None,
+    };
+    let timestamp = match m.get("timestamp") {
+        Some(Value::Int(t)) if *t >= 0 => *t as u64,
+        _ => return None,
+    };
+    let sources = match m.get("sources") {
+        Some(Value::List(l)) => {
+            let mut srcs = Vec::new();
+            for item in l {
+                match item {
+                    Value::Text(s) => match KOID::from_hex(s) {
+                        Ok(k) => srcs.push(k),
+                        Err(_) => return None,
+                    },
+                    _ => return None,
+                }
+            }
+            srcs
+        }
+        _ => return None,
+    };
+    Some(Derivation {
+        operation,
+        actor,
+        model: match m.get("model") {
+            Some(Value::Text(s)) => Some(s.clone()),
+            _ => None,
+        },
+        timestamp,
+        sources,
+        reason: match m.get("reason") {
+            Some(Value::Text(s)) => Some(s.clone()),
+            _ => None,
+        },
+    })
+}
+
+/// Confidence context model: how much the system trusts a KO, and why.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConfidenceContext {
+    /// Aggregate confidence score (0.0–1.0).
+    pub score: f32,
+    /// Number of independent confirmations (review P2-4: distinct
+    /// verifier+evidence keys only — re-verifying with the same evidence
+    /// does not inflate the count).
+    pub confirmations: u32,
+    /// Epoch millis of the last verification, if any.
+    pub last_verified: Option<u64>,
+    /// Persisted confirmation keys backing `confirmations` (hash-like
+    /// verifier|artifact|method|location|revision strings; absent = legacy
+    /// record predating keyed confirmations).
+    pub verification_keys: Vec<String>,
+}
+
+impl Default for ConfidenceContext {
+    fn default() -> Self {
+        ConfidenceContext {
+            score: 0.0,
+            confirmations: 0,
+            last_verified: None,
+            verification_keys: Vec::new(),
+        }
+    }
+}
+
+impl ConfidenceContext {
+    /// The model boundary (review P1-7): every kernel construction site goes
+    /// through here, so a NaN/±∞/out-of-range score is rejected up front —
+    /// never clamped silently, never persisted.
+    pub fn new(score: f32, confirmations: u32, last_verified: Option<u64>) -> KResult<Self> {
+        if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+            return Err(KError::InvalidObject(format!(
+                "confidence score must be finite and within [0,1], got {score}"
+            )));
+        }
+        Ok(ConfidenceContext {
+            score,
+            confirmations,
+            last_verified,
+            verification_keys: Vec::new(),
+        })
+    }
+}
+
+pub fn confidence_to_value(c: &ConfidenceContext) -> Value {
+    let mut m = BTreeMap::new();
+    m.insert("score".into(), Value::Float(c.score as f64));
+    m.insert("confirmations".into(), Value::Int(c.confirmations as i64));
+    if let Some(v) = c.last_verified {
+        m.insert("last_verified".into(), Value::Int(v as i64));
+    }
+    if !c.verification_keys.is_empty() {
+        m.insert(
+            "verification_keys".into(),
+            Value::List(
+                c.verification_keys
+                    .iter()
+                    .map(|k| Value::Text(k.clone()))
+                    .collect(),
+            ),
+        );
+    }
+    Value::Map(m)
+}
+
+fn confidence_from_value(v: &Value) -> Option<ConfidenceContext> {
+    let m = match v {
+        Value::Map(m) => m,
+        _ => return None,
+    };
+    let score = match m.get("score") {
+        Some(Value::Float(f)) => *f as f32,
+        Some(Value::Int(i)) => *i as f32,
+        _ => return None,
+    };
+    // Reject a corrupt/non-finite score on decode too — it must not
+    // roundtrip or feed ranking (review P1-7/P2-6).
+    if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+        return None;
+    }
+    let confirmations = match m.get("confirmations") {
+        Some(Value::Int(i)) if *i >= 0 => *i as u32,
+        _ => return None,
+    };
+    let verification_keys = match m.get("verification_keys") {
+        Some(Value::List(list)) => list
+            .iter()
+            .filter_map(|x| match x {
+                Value::Text(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        // Legacy records predate keyed confirmations (review P2-4 migration
+        // note: their confirmations count is accepted as-is; the first new
+        // verification adds its key and bumps by one).
+        _ => Vec::new(),
+    };
+    Some(ConfidenceContext {
+        score,
+        confirmations,
+        last_verified: match m.get("last_verified") {
+            Some(Value::Int(t)) if *t >= 0 => Some(*t as u64),
+            _ => None,
+        },
+        verification_keys,
+    })
+}
+
+/// v0.3 K4: record of knowledge losing its support — either directly
+/// (`invalidate` op) or propagated from an invalidated/superseded premise.
+/// Distinct from the epistemic state: this is the WHY, the status is the WHAT.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Invalidation {
+    /// Epoch millis when the support was withdrawn.
+    pub at: u64,
+    /// Who withdrew the support.
+    pub actor: String,
+    /// Why the support was withdrawn.
+    pub reason: String,
+}
+
+fn invalidation_from_value(v: &Value) -> Option<Invalidation> {
+    let m = match v {
+        Value::Map(m) => m,
+        _ => return None,
+    };
+    Some(Invalidation {
+        at: match m.get("at") {
+            Some(Value::Int(t)) if *t >= 0 => *t as u64,
+            _ => return None,
+        },
+        actor: match m.get("actor") {
+            Some(Value::Text(s)) => s.clone(),
+            _ => return None,
+        },
+        reason: match m.get("reason") {
+            Some(Value::Text(s)) => s.clone(),
+            _ => return None,
+        },
+    })
+}
+
+/// Canonical extension encoding of one evidence record (v0.3 K1).
+fn evidence_to_value(ev: &crate::knowledge::evidence::Evidence) -> Value {
+    let mut m = BTreeMap::new();
+    m.insert(
+        "source_artifact".into(),
+        Value::Text(ev.source_artifact.clone()),
+    );
+    m.insert("method".into(), Value::Text(ev.method.as_str().into()));
+    if let Some(l) = &ev.location {
+        m.insert("location".into(), Value::Text(l.clone()));
+    }
+    if let Some(r) = &ev.revision {
+        m.insert("revision".into(), Value::Text(r.clone()));
+    }
+    m.insert("confidence".into(), Value::Float(ev.confidence as f64));
+    Value::Map(m)
 }
 
 // ---- R8 ContentTrust: trust level for ingested content ----
@@ -847,6 +1495,105 @@ impl ContentTrust {
             "unknown" => Some(ContentTrust::Unknown),
             _ => None,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v0.3 K1: Epistemic status — how the system knows a KO is true.
+// Orthogonal to LifecycleState ("is it live?"); this is "how do we know?".
+// Stored in extensions under EXT_EPISTEMIC_STATUS (Text) with an append-only
+// transition history under EXT_EPISTEMIC_HISTORY (List of Maps).
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EpistemicStatus {
+    /// Observed in the world — the conservative default for new KOs.
+    Observed,
+    /// Mechanically extracted from an artifact (parser, extractor).
+    Extracted,
+    /// Asserted by an agent or human.
+    Asserted,
+    /// Derived by reasoning from other knowledge.
+    Inferred,
+    /// Independently verified.
+    Verified,
+    /// Contradicted by other evidence.
+    Contradicted,
+    /// Replaced by newer knowledge.
+    Superseded,
+}
+
+impl EpistemicStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EpistemicStatus::Observed => "observed",
+            EpistemicStatus::Extracted => "extracted",
+            EpistemicStatus::Asserted => "asserted",
+            EpistemicStatus::Inferred => "inferred",
+            EpistemicStatus::Verified => "verified",
+            EpistemicStatus::Contradicted => "contradicted",
+            EpistemicStatus::Superseded => "superseded",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "observed" => Some(EpistemicStatus::Observed),
+            "extracted" => Some(EpistemicStatus::Extracted),
+            "asserted" => Some(EpistemicStatus::Asserted),
+            "inferred" => Some(EpistemicStatus::Inferred),
+            "verified" => Some(EpistemicStatus::Verified),
+            "contradicted" => Some(EpistemicStatus::Contradicted),
+            "superseded" => Some(EpistemicStatus::Superseded),
+            _ => None,
+        }
+    }
+
+    /// Constrained transition table (review H5 — deliberately NOT the
+    /// review's illustrative linear chain: CONTRADICTED can hit any state
+    /// directly, and INFERRED is a derivation origin, not a pipeline stage).
+    /// Same-state transitions are rejected — every recorded transition must
+    /// change state.
+    pub fn can_transition(self, to: EpistemicStatus) -> bool {
+        use EpistemicStatus::*;
+        matches!(
+            (self, to),
+            (Observed, Extracted)
+                | (Observed, Asserted)
+                | (Observed, Verified)
+                | (Observed, Contradicted)
+                | (Observed, Superseded)
+                | (Extracted, Asserted)
+                | (Extracted, Verified)
+                | (Extracted, Contradicted)
+                | (Extracted, Superseded)
+                | (Asserted, Verified)
+                | (Asserted, Contradicted)
+                | (Asserted, Superseded)
+                | (Inferred, Verified)
+                | (Inferred, Contradicted)
+                | (Inferred, Superseded)
+                | (Verified, Contradicted)
+                | (Verified, Superseded)
+            // A contradicted fact may be re-asserted on stronger evidence.
+                | (Contradicted, Asserted)
+                | (Contradicted, Superseded)
+        )
+    }
+
+    /// Initial status for a create, by write origin.
+    pub fn for_origin(origin: &Origin) -> Self {
+        match origin {
+            Origin::Reason => EpistemicStatus::Inferred,
+            Origin::Human | Origin::Agent(_) => EpistemicStatus::Asserted,
+            Origin::System | Origin::SemanticEnrichment => EpistemicStatus::Observed,
+        }
+    }
+}
+
+impl fmt::Display for EpistemicStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 
@@ -925,12 +1672,31 @@ pub enum ConflictResolution {
     /// Conflict is under active review.
     UnderReview,
     /// Claim A takes precedence over Claim B.
+    ///
+    /// Semantics (P2-1): a recorded selection of A as the current truth —
+    /// B is transitioned to Contradicted with the mandatory rationale. It
+    /// is a decision with a justification, never a strength ranking or an
+    /// automatic win for the "stronger" side.
     ResolvedAPreferred,
     /// Claim B takes precedence over Claim A.
+    ///
+    /// Semantics (P2-1): the mirror of ResolvedAPreferred — A is
+    /// transitioned to Contradicted with the mandatory rationale.
     ResolvedBPreferred,
     /// Both claims are valid in different contexts/scopes.
+    ///
+    /// Semantics (P2-1): a coexistence claim — neither side is demoted.
+    /// `resolve_conflict` accepts an optional `split_at` instant that
+    /// partitions validity along the valid-time axis (claim A valid until
+    /// `split_at`, claim B valid from `split_at`), which is how "different
+    /// contexts" is made queryable. Without `split_at` the resolution is a
+    /// bare statement that both stand.
     ResolvedBothValid,
     /// Both claims rejected, replaced by a new claim.
+    ///
+    /// Semantics (P2-1): full supersession — both claims transition to
+    /// Superseded with SUPERSEDES edges to the replacement, and derived
+    /// dependents are swept for staleness.
     ResolvedReplaced,
 }
 
@@ -951,6 +1717,19 @@ impl ConflictResolution {
             self,
             ConflictResolution::Unresolved | ConflictResolution::UnderReview
         )
+    }
+
+    /// Parse the canonical wire form (as produced by `as_str`).
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "unresolved" => Some(ConflictResolution::Unresolved),
+            "under_review" => Some(ConflictResolution::UnderReview),
+            "resolved_a_preferred" => Some(ConflictResolution::ResolvedAPreferred),
+            "resolved_b_preferred" => Some(ConflictResolution::ResolvedBPreferred),
+            "resolved_both_valid" => Some(ConflictResolution::ResolvedBothValid),
+            "resolved_replaced" => Some(ConflictResolution::ResolvedReplaced),
+            _ => None,
+        }
     }
 }
 
@@ -1017,6 +1796,34 @@ pub struct Schema {
     pub unique_constraints: Vec<UniqueConstraint>,
     /// Cross-property check constraints (MRFC-0060 Phase C4).
     pub check_constraints: Vec<CheckConstraint>,
+}
+
+/// An atomic schema migration: a new schema plus per-object property
+/// transforms (EVO-003 apply/migrate op).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SchemaMigration {
+    pub schema: Schema,
+    pub transforms: Vec<PropertyTransform>,
+}
+
+/// One per-object property rewrite applied during a schema migration.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PropertyTransform {
+    /// Move a property's value to a new key. Fails the migration if absent.
+    Rename { from: String, to: String },
+    /// Fill a missing property with a fixed value (existing values untouched).
+    SetDefault { property: String, value: Value },
+}
+
+/// Outcome of `Kernel::apply_schema_migration`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MigrationReport {
+    /// Live objects of the type examined.
+    pub scanned: usize,
+    /// Objects rewritten to the target schema version.
+    pub migrated: usize,
+    /// Objects already stamped with the target version (skipped).
+    pub already_at_target: usize,
 }
 
 /// A typed property definition within a schema (MRFC-0060 Phase C1).
@@ -2208,6 +3015,11 @@ pub enum KError {
         from: LifecycleState,
         to: LifecycleState,
     },
+    /// v0.3 K1: illegal epistemic status transition.
+    InvalidEpistemic {
+        from: EpistemicStatus,
+        to: EpistemicStatus,
+    },
     NotFound(KOID),
     UnsupportedOperation(String),
     IndexLagExceeded,
@@ -2240,6 +3052,9 @@ impl fmt::Display for KError {
             }
             KError::InvalidState { from, to } => {
                 write!(f, "INVALID_STATE: {} -> {}", from, to)
+            }
+            KError::InvalidEpistemic { from, to } => {
+                write!(f, "INVALID_EPISTEMIC: {} -> {}", from, to)
             }
             KError::NotFound(k) => write!(f, "NOT_FOUND: {}", k),
             KError::UnsupportedOperation(m) => write!(f, "UNSUPPORTED_OPERATION: {}", m),
@@ -2536,7 +3351,7 @@ mod tests {
         assert_eq!(Value::Null.type_name(), "Null");
         assert_eq!(Value::Bool(true).type_name(), "Bool");
         assert_eq!(Value::Int(42).type_name(), "Int");
-        assert_eq!(Value::Float(3.14).type_name(), "Float");
+        assert_eq!(Value::Float(std::f64::consts::PI).type_name(), "Float");
         assert_eq!(Value::Text("hi".into()).type_name(), "Text");
         assert_eq!(Value::Bytes(vec![1, 2, 3]).type_name(), "Bytes");
         assert_eq!(Value::List(vec![]).type_name(), "List");
@@ -2558,7 +3373,7 @@ mod tests {
     fn type_check_passes_for_matching_types() {
         assert!(Value::Bool(true).type_check(&prop("flag", "Bool")).is_ok());
         assert!(Value::Int(42).type_check(&prop("count", "Int")).is_ok());
-        assert!(Value::Float(3.14)
+        assert!(Value::Float(std::f64::consts::PI)
             .type_check(&prop("score", "Float"))
             .is_ok());
         assert!(Value::Text("hi".into())

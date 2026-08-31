@@ -77,7 +77,8 @@ fn main() {
     }
 
     // relation_boost: production default (0.65) — probes must mirror prod.
-    let pkg = compile_context_semantic_with(task, &ir, 2500, Some(&semantic), weight, min, 0.65);
+    let pkg =
+        compile_context_semantic_with(task, &ir, 2500, Some(&semantic), weight, min, 0.65, None);
 
     println!(
         "task: {}\nweight={} min={} entities={}\n",
@@ -109,12 +110,10 @@ fn main() {
     let mut t_score = 0.0f32;
     let mut t_cos = 0.0f32;
     for (i, e) in pkg.entities.iter().enumerate() {
-        if e.name.contains(target) {
-            if rank.is_none() {
-                rank = Some(i + 1);
-                t_mentions = e.mentions.len();
-                t_score = e.score;
-            }
+        if e.name.contains(target) && rank.is_none() {
+            rank = Some(i + 1);
+            t_mentions = e.mentions.len();
+            t_score = e.score;
         }
     }
     for ent in &ir.entities {

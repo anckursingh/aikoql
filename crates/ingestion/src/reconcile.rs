@@ -46,14 +46,27 @@ pub struct ReconciliationReport {
     pub summary: String,
 }
 
+/// Match an entity's evidence source against a changed-file path.
+///
+/// Tolerates absolute vs repo-relative forms (git reports paths relative to
+/// the repo root; compilers record whatever path they were handed) by falling
+/// back to basename equality.
+pub fn source_matches(source: &str, changed: &str) -> bool {
+    if source.is_empty() {
+        return false;
+    }
+    let basename = std::path::Path::new(source)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(source);
+    source == changed || basename == changed || changed.ends_with(basename)
+}
+
 /// Reconcile a set of changed files against a KnowledgeIr.
 ///
 /// `changed_files` should be paths relative to the repo root (e.g., from `git diff --name-only`).
 /// `ir` is the merged KnowledgeIr from all compilers.
 pub fn reconcile(changed_files: &[String], ir: &KnowledgeIr) -> ReconciliationReport {
-    let file_set: std::collections::HashSet<&str> =
-        changed_files.iter().map(|s| s.as_str()).collect();
-
     // Build file → entity mapping from evidence paths
     // Each entity whose evidence.source matches a changed file is directly affected.
     let mut affected: Vec<AffectedEntity> = Vec::new();
@@ -61,15 +74,7 @@ pub fn reconcile(changed_files: &[String], ir: &KnowledgeIr) -> ReconciliationRe
 
     for entity in &ir.entities {
         let source = entity.evidence.document_id.as_deref().unwrap_or("");
-        let basename = std::path::Path::new(source)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(source);
-
-        let is_direct = (!source.is_empty())
-            && (file_set.contains(source)
-                || file_set.contains(basename)
-                || changed_files.iter().any(|f| f.ends_with(basename)));
+        let is_direct = changed_files.iter().any(|f| source_matches(source, f));
 
         if is_direct {
             let stale_facts: Vec<String> = ir
@@ -193,23 +198,11 @@ pub fn reconcile(changed_files: &[String], ir: &KnowledgeIr) -> ReconciliationRe
 /// Quick check: given changed file paths, which KnowledgeIr entities are stale?
 /// Returns entity names whose evidence source overlaps with the changed paths.
 pub fn stale_entities(changed_files: &[String], ir: &KnowledgeIr) -> Vec<String> {
-    let file_set: std::collections::HashSet<&str> =
-        changed_files.iter().map(|s| s.as_str()).collect();
-
     ir.entities
         .iter()
         .filter(|e| {
             let src = e.evidence.document_id.as_deref().unwrap_or("");
-            if src.is_empty() {
-                return false;
-            }
-            let bn = std::path::Path::new(src)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(src);
-            file_set.contains(src)
-                || file_set.contains(bn)
-                || changed_files.iter().any(|f| f.ends_with(bn))
+            changed_files.iter().any(|f| source_matches(src, f))
         })
         .map(|e| e.name.clone())
         .collect()
@@ -256,18 +249,21 @@ mod tests {
             ],
             facts: vec![
                 FactCandidate {
+                    snippet: None,
                     statement: "must use MVCC for all writes".into(),
                     entities: vec!["TransactionEngine".into()],
                     confidence: 0.9,
                     evidence: Evidence::default(),
                 },
                 FactCandidate {
+                    snippet: None,
                     statement: "constraints are validated at commit time".into(),
                     entities: vec!["ConstraintEngine".into()],
                     confidence: 0.85,
                     evidence: Evidence::default(),
                 },
                 FactCandidate {
+                    snippet: None,
                     statement: "AuthService supports OAuth2 and JWT".into(),
                     entities: vec!["AuthService".into()],
                     confidence: 0.7,

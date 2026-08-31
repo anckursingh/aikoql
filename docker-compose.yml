@@ -1,8 +1,8 @@
 # Aikoql — DEVELOPMENT-ONLY compose (MVP-007). Not for production:
 # dev-default passwords below, exposed DB ports, no secret manager.
 # Production: supply POSTGRES_PASSWORD / NEO4J_PASSWORD (and TCP_TOKEN) from a
-# secret manager, point at managed/private Postgres + Neo4j, drop the port
-# mappings. All secrets are overridable via environment variables.
+# secret manager, point at managed/private Postgres + Mongo + Neo4j, drop the
+# port mappings. All secrets are overridable via environment variables.
 version: "3.8"
 
 services:
@@ -20,17 +20,31 @@ services:
       - AIKOQL_TCP_TOKEN=${TCP_TOKEN:?TCP_TOKEN must be set (TOKEN[:TENANT[:ROLE1,ROLE2]])}
     restart: unless-stopped
 
-  # Optional: PostgreSQL provider for federated queries
+  # Optional: PostgreSQL + PGVector provider for federated queries
+  # (MVP-CON-001/004: pgvector/pgvector:pg16 is a drop-in superset of
+  # postgres:16-alpine with the vector extension preinstalled — one service
+  # covers both test IDs.)
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     ports:
-      - "5432:5432"
+      # Host 5433: a native Windows PostgreSQL often owns 5432 (dev boxes
+      # only; CI services use the job network, unaffected).
+      - "5433:5432"
     environment:
       POSTGRES_USER: aikoql
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aikoql-dev-only}
       POSTGRES_DB: knowledge
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    profiles: [full]
+
+  # Optional: MongoDB provider (MVP-CON-002)
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
     profiles: [full]
 
   # Optional: Neo4j provider for graph federation
@@ -45,7 +59,38 @@ services:
       - neo4j_data:/data
     profiles: [full]
 
+  # Optional: ClickHouse + StarRocks for the Wave 5 knowledge-analytics vs
+  # OLAP comparative harness (docs/benchmarks/knowledge-analytics/, test
+  # crates/ingestion/tests/wave5_olap.rs). Dev-machine profile — StarRocks
+  # allin1 wants ≥8GB RAM, too heavy for CI runners; the harness skips
+  # honestly when an engine is unreachable.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    # Dev-only: pin the default user's password instead of the image's
+    # generated random one (an empty string still triggers generation —
+    # the entrypoint checks `-n`). The harness sends it as a URL param.
+    environment:
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-aikoql-dev-only}
+    ports:
+      - "8123:8123"   # HTTP query interface (the harness's transport)
+      - "9000:9000"   # native TCP (unused by the harness)
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    profiles: [olap]
+
+  starrocks:
+    image: starrocks/allin1-ubuntu:3.3-latest
+    ports:
+      - "9030:9030"   # FE MySQL-protocol query port (the harness's transport)
+      - "8030:8030"   # FE HTTP
+    volumes:
+      - starrocks_data:/data
+    profiles: [olap]
+
 volumes:
   aikoql_data:
   postgres_data:
   neo4j_data:
+  mongo_data:
+  clickhouse_data:
+  starrocks_data:

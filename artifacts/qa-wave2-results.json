@@ -1,0 +1,469 @@
+{
+  "generated_by": "scripts/certify.js",
+  "summary": {
+    "p0": {
+      "pass": 45,
+      "total": 45,
+      "pct": 100
+    },
+    "p1": {
+      "pass": 14,
+      "total": 14,
+      "pct": 100
+    },
+    "sev": {
+      "sev1": 0,
+      "sev2": 0
+    },
+    "benchmarks": "pinned-baselines-present",
+    "final_decision": "GO"
+  },
+  "wave2_gates": {
+    "W2-01": "PASS",
+    "W2-02": "PASS",
+    "W2-03": "PASS",
+    "W2-04": "PASS",
+    "W2-05": "PASS",
+    "W2-06": "PASS",
+    "W2-07": "PASS",
+    "W2-08": "PASS",
+    "W2-09": "PASS",
+    "W2-10": "PASS",
+    "W2-11": "PASS"
+  },
+  "areas": {
+    "Concurrency": "PASS",
+    "Knowledge consistency": "PASS",
+    "Derived-state consistency": "PASS",
+    "Fault injection": "PASS",
+    "Schema evolution": "PASS",
+    "Retrieval": "PASS",
+    "Security": "PASS",
+    "Property tests": "PASS",
+    "Knowledge continuity": "PASS",
+    "Performance": "PASS"
+  },
+  "tests": [
+    {
+      "id": "QA2-CONC-001 Concurrent readers/writers",
+      "priority": "P0",
+      "gate": "W2-09",
+      "status": "pass",
+      "coverage": "`w2_conc_001_all_four_reader_shapes_see_only_committed_state` (ingestion) — writer storm (hot KO + ir_json snapshot restate) vs all four reader shapes: point get, h1→h2→h3 traversal, trace history (commit+version-ordered per snapshot), context compilation byte-identical per version; gapless journal"
+    },
+    {
+      "id": "QA2-CONC-002 Concurrent ingestion",
+      "priority": "P0",
+      "gate": "W2-09",
+      "status": "pass",
+      "coverage": "`w2_conc_002a` (kernel) — 4 threads sharing one idempotency key commit exactly once (1 shared + 4 distinct journal entries, version 1); `w2_conc_002b` (ingestion) — 4× parallel + 1 sequential ingest of the same corpus yield byte-identical IR (W2-11 determinism)"
+    },
+    {
+      "id": "QA2-CONC-003 Concurrent update/delete",
+      "priority": "P0",
+      "gate": "W2-09",
+      "status": "pass",
+      "coverage": "`w2_conc_003_concurrent_update_and_delete_never_hybrid` (kernel) — 30 rounds of OCC update-vs-Tombstone on version 1: exactly one wins, no hybrid state, audit chain valid"
+    },
+    {
+      "id": "QA2-CONC-004 Concurrent relationship mutation",
+      "priority": "P0",
+      "gate": "W2-09",
+      "status": "pass",
+      "coverage": "`w2_conc_004_concurrent_relationship_mutation_leaves_no_orphans` (kernel) — flip/create/delete-endpoint racing: every endpoint resolves to a live KO, deleted B leaves no references"
+    },
+    {
+      "id": "QA2-CONC-005 Concurrent temporal updates",
+      "priority": "P0",
+      "gate": "W2-09",
+      "status": "pass",
+      "coverage": "`w2_conc_005_concurrent_overlapping_temporal_updates_keep_one_head` (kernel) — 2×25 overlapping valid_from windows: one head, gapless journal, head stamp ∈ written set, monotone commit_ts"
+    },
+    {
+      "id": "QA2-CONC-006 Authorization during mutation",
+      "priority": "P0",
+      "gate": "W2-06",
+      "status": "pass",
+      "coverage": "`w2_conc_006_grant_revoke_during_mutation_never_leaks` (kernel) — 4 readers × 6 barrier-synchronized deny/allow flips: deny-phase Ok reads only below the deny commit, allow-phase only ≥ allow commit, errors AccessDenied-only"
+    },
+    {
+      "id": "QA2-KNOW-001 Conflicting evidence",
+      "priority": "P0",
+      "gate": "W2-05",
+      "status": "pass",
+      "coverage": "`e03_contradictions_between_similar_claims` + `epistemic.rs` + PROV-003 — both claims, provenance, temporal info retained; no silent collapse"
+    },
+    {
+      "id": "QA2-KNOW-002 Source authority",
+      "priority": "P1",
+      "gate": "W2-05",
+      "status": "pass",
+      "coverage": "`w2_know_002_source_authority_selects_current_truth` (qa2_knowledge.rs) — postgres claim (source_code=7) vs mongo counter (documentation=3): `resolve_conflict_by_authority` → A preferred, winner current, loser Contradicted but traceable (evidence + CONTRADICTS edge + conflict KO + history). No per-source-type priority config — the authority level IS the configured policy"
+    },
+    {
+      "id": "QA2-KNOW-003 Stale evidence",
+      "priority": "P0",
+      "gate": "W2-05",
+      "status": "pass",
+      "coverage": "`temporal.rs` valid_at/as_of + `e2e-k2-temporal.js` — current query returns valid current, history retrieves old"
+    },
+    {
+      "id": "QA2-KNOW-004 Correction propagation",
+      "priority": "P0",
+      "gate": "W2-05",
+      "status": "pass",
+      "coverage": "FRESH-001 (source→query visibility, superseded fact gone) + i11 (index propagation, zero lag)"
+    },
+    {
+      "id": "QA2-KNOW-005 Duplicate entity",
+      "priority": "P1",
+      "gate": "W2-05",
+      "status": "pass",
+      "coverage": "`multi_source_ontology.rs` config-driven identity + INC-003 rename identity — no uncontrolled duplicate canonical entities"
+    },
+    {
+      "id": "QA2-KNOW-006 Entity split",
+      "priority": "P1",
+      "gate": "W2-05",
+      "status": "pass",
+      "coverage": "`w2_know_006_entity_split_preserves_unrelated_relationships_and_provenance` (qa2_knowledge.rs) + `m_split_entity_over_mcp` (mcp_stdio.rs) — merged entity splits via `Kernel::split` / MCP `split_entity`: side A keeps KOID + version lineage and everything not moved; side B is a first-class derivation (DERIVED_FROM edge, derivation op `split`, inherited evidence trail + confidence); moved edges leave A's index (traversal proof); OCC stale version → VersionConflict; superseding A sweeps B (lineage continuity). Kernel-managed lineage edges (supersedes/derived_from/contradicts) are not movable"
+    },
+    {
+      "id": "QA2-KNOW-007 Relationship conflict",
+      "priority": "P0",
+      "gate": "W2-05",
+      "status": "pass",
+      "coverage": "`w2_know_007_relationship_conflict_preserved_resolved_by_policy_only` (qa2_knowledge.rs) — owns vs does_not_own claims both current with own data, Conflict KO unresolved (no implicit pick), equal-authority `resolve_conflict_by_authority` REFUSED (tie = explicit decision required), explicit `resolve_conflict` flips only the loser to Contradicted"
+    },
+    {
+      "id": "QA2-KNOW-008 Evidence/facts divergence",
+      "priority": "P0",
+      "gate": "W2-05",
+      "status": "pass",
+      "coverage": "`w2_know_008_failed_extraction_keeps_evidence_retrievable` (qa2_knowledge.rs) — document KO observed with evidence; fact commit without evidence rejected (InvalidObject); document + evidence trail retrievable; no partial fact (journal len 1)"
+    },
+    {
+      "id": "QA2-KNOW-009 Canonical vs index",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "i09 rebuild parity + i11 update propagation"
+    },
+    {
+      "id": "QA2-KNOW-010 Rebuild consistency",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "i09 delete+rebuild = identical results"
+    },
+    {
+      "id": "QA2-RET-001 Keyword flooding",
+      "priority": "P0",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "G12 q-00 hoover scenario + keyword hygiene + entity gate — irrelevant matches cannot consume the context budget"
+    },
+    {
+      "id": "QA2-RET-002 Zero lexical overlap",
+      "priority": "P1",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "semantic degrade fallback + G11 Track-B zero-overlap hop facts (D treatment)"
+    },
+    {
+      "id": "QA2-RET-003 Entity ambiguity",
+      "priority": "P1",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "`w2_ret_003_entity_ambiguity_never_silently_selects_one` (ingestion/tests/qa2_retrieval.rs) — all three Apple candidates rank EQUALLY (deterministic order, no arbitrary winner). **Production fix**: the pack loop silently broke at the entity cap mid-tie-group (tight budget → only alphabetically-first \"Apple Bank\" packed). Now: budget permitting, the whole tie group packs; when it cannot fit whole, NONE of the candidates is packed and the group is surfaced via new `ContextPackage.ambiguous_entities` (rendered as an \"Ambiguous Entities\" section) — explicit ambiguity, never an arbitrary pick, and the facts fold keeps its budget (no starvation regression)"
+    },
+    {
+      "id": "QA2-RET-004 Duplicate evidence",
+      "priority": "P0",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "pack-time dedup (`ctx_min_*`) — duplicates packed once"
+    },
+    {
+      "id": "QA2-RET-005 Conflicting evidence retrieval",
+      "priority": "P1",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "`w2_ret_005_conflicting_evidence_is_surfaced_not_hidden` (ingestion/tests/qa2_retrieval.rs) — both sides of \"Team A/B owns the deployment pipeline\" pack with their own provenance (policy-a.md / policy-b.md); the compiler never silently hides one side of a conflict (pin, green day one)"
+    },
+    {
+      "id": "QA2-RET-006 Stale knowledge suppression",
+      "priority": "P0",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "supersede keeps history, current-truth returns successor; RET-CHAT-001 expiry filter"
+    },
+    {
+      "id": "QA2-RET-007 Temporal retrieval",
+      "priority": "P1",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "`temporal.rs` valid_at + `e2e-k2-temporal.js` — historical evidence selected over current"
+    },
+    {
+      "id": "QA2-RET-008 Deep multi-hop",
+      "priority": "P1",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "`w2_ret_008_deep_multihop_chain_available_within_configured_limits` (kernel/tests/qa2_retrieval.rs) — 4-edge chain A→B→C→Team X→Amsterdam: depth-4 traversal reaches every hop (complete reasoning chain within the configured limit), depth-2 truncates cleanly to the prefix (no deep leak), rel-type filter composes with depth (pin, green day one — graph-engine BFS already depth-limited)"
+    },
+    {
+      "id": "QA2-RET-009 Pure prose retrieval",
+      "priority": "P0",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "MVP-EXT-002 artifact-section prose + CTX-004 evidence inclusion"
+    },
+    {
+      "id": "QA2-RET-010 Table retrieval",
+      "priority": "P0",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "G10 GFM pipe tables → TableCell-evidenced cell facts"
+    },
+    {
+      "id": "QA2-RET-011 Code retrieval",
+      "priority": "P1",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "G10 fence folds (code as evidence, never as executable) + SEC-006 program gate"
+    },
+    {
+      "id": "QA2-RET-012 Mixed source retrieval",
+      "priority": "P0",
+      "gate": "W2-07",
+      "status": "pass",
+      "coverage": "E2E-004 multi-source coherent query (pg+mongo+neo4j+docs in one result)"
+    },
+    {
+      "id": "QA2-FAULT-001..004 Crash before/after journal append/commit",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "d04/d04b deterministic crash at every commit boundary (`crash_writer`) — prefix survives, never a torn commit"
+    },
+    {
+      "id": "QA2-FAULT-005 Crash during index update",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "indexes are derived from canonical; d04 crash + i10 tombstone sweep on rebuild"
+    },
+    {
+      "id": "QA2-FAULT-006 Crash during ontology update",
+      "priority": "P0",
+      "gate": "W2-10",
+      "status": "pass",
+      "coverage": "schema rows written in one atomic batch (REC-002); corrupt row → open fails closed — crash = before or after, never partial"
+    },
+    {
+      "id": "QA2-FAULT-007 Connector failure mid-ingestion",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "CON-005 incomplete-run marker + CON-007 prune only on all-success — no partial logical commit"
+    },
+    {
+      "id": "QA2-FAULT-008 Backup failure",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "`w2_fault_008_backup_failure_leaves_live_knowledge_unaffected` (qa2_fault.rs) — backup onto a directory path and into a missing parent both fail; reads/journal/new writes unaffected; subsequent valid backup succeeds"
+    },
+    {
+      "id": "QA2-FAULT-009 Restore interruption",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "`w2_fault_009_interrupted_restore_never_exposed_as_valid` (qa2_fault.rs) — garbage, TRUNCATED snapshot, and directory sources all rejected with live state intact; valid restore then swaps atomically (post-snapshot KO gone after restart). **Production fix**: `RedbEngine::open` fail-closed via `catch_unwind` — redb asserts on truncated headers instead of erroring, which crashed the embedder before the fix"
+    },
+    {
+      "id": "QA2-SCHEMA-001 v1→v2",
+      "priority": "P0",
+      "gate": "W2-10",
+      "status": "pass",
+      "coverage": "t06zt (old data readable, v2 rules bind on new writes) + t06zw ontology evolution"
+    },
+    {
+      "id": "QA2-SCHEMA-002 v2→v3 additive + incompatible",
+      "priority": "P1",
+      "gate": "W2-10",
+      "status": "pass",
+      "coverage": "`w2_schema_002_v2_to_v3_chain_additive_then_incompatible` (qa2_schema.rs) — v1→v2 SetDefault additive, v2→v3 Rename incompatible, one append-only lineage per KO (trace 3 versions, chain_valid); incompatible change without a transform fails closed with every stamp untouched"
+    },
+    {
+      "id": "QA2-SCHEMA-003 Migration rollback",
+      "priority": "P0",
+      "gate": "W2-10",
+      "status": "pass",
+      "coverage": "t06zzb violation→nothing changed + REC-002 persisted rollback funnel"
+    },
+    {
+      "id": "QA2-SCHEMA-004 Old reader / new data",
+      "priority": "P1",
+      "gate": "W2-10",
+      "status": "pass",
+      "coverage": "t06zzd version gate rejects cleanly, never misinterprets"
+    },
+    {
+      "id": "QA2-SCHEMA-005 New reader / old data",
+      "priority": "P1",
+      "gate": "W2-10",
+      "status": "pass",
+      "coverage": "t06zze/t06zzf wire envelope — legacy bytes readable, magic stamped"
+    },
+    {
+      "id": "QA2-SCHEMA-006 Interrupted migration",
+      "priority": "P0",
+      "gate": "W2-10",
+      "status": "pass",
+      "coverage": "`w2_schema_006_migration_commits_schema_and_data_in_one_atomic_batch` + `w2_schema_006_failed_migration_commits_nothing` (qa2_schema.rs, CountingEngine batch counter) — **Production fix**: `apply_schema_migration` was `register_schema` + `transact` in TWO batches (kill between them = new schema row + old data, hybrid); now the schema row commits in the SAME engine batch as the data rows via internal `transact_with_schema_row`; a failed migration commits zero batches (no rollback writes)"
+    },
+    {
+      "id": "QA2-SCHEMA-007 Migration recovery",
+      "priority": "P0",
+      "gate": "W2-10",
+      "status": "pass",
+      "coverage": "`w2_schema_007_restart_reloads_registry_and_reapply_is_noop` (qa2_schema.rs) — reopen reloads the persisted registry (REC-002); re-applying the identical migration is a no-op (migrated 0, already_at_target N, no version churn); chain continues v2→v3 after restart; restart after a failed attempt resumes at the pre-state version"
+    },
+    {
+      "id": "QA2-SEC-001 Prompt injection in knowledge",
+      "priority": "P0",
+      "gate": "W2-06",
+      "status": "pass",
+      "coverage": "`qa2_security.rs` (kernel + ingestion) — injection text stored/retrieved byte-for-byte as data with origin-derived stamps; untrusted content excluded from the agent package (R8), Trusted content returned as an evidenced fact, never an unevidenced instruction — item 7"
+    },
+    {
+      "id": "QA2-SEC-002 Malicious provenance",
+      "priority": "P0",
+      "gate": "W2-06",
+      "status": "pass",
+      "coverage": "`qa2_security.rs` (kernel + ingestion) — text claiming \"authority=SYSTEM confidence=1.0\" cannot change stamped authority/confidence; `remember()` rejects all kernel-managed extension keys (authority/confidence/epistemic-status mint boundary); bogus authority strings rejected at assert parse — item 7"
+    },
+    {
+      "id": "QA2-SEC-003 Cross-tenant graph traversal",
+      "priority": "P0",
+      "gate": "W2-06",
+      "status": "pass",
+      "coverage": "t34 tenant isolation + R9 authorize() confinement — traversal cannot cross tenants"
+    },
+    {
+      "id": "QA2-SEC-004 Revocation during retrieval",
+      "priority": "P0",
+      "gate": "W2-06",
+      "status": "pass",
+      "coverage": "`revoked_experience_sharing_stops_matching` + item 1's CONC-006 (revoke racing mutation)"
+    },
+    {
+      "id": "QA2-SEC-005 Poisoned memory",
+      "priority": "P0",
+      "gate": "W2-05",
+      "status": "pass",
+      "coverage": "trust spine R5/R8 + epistemic guards — authority/trust policy enforceable over hostile memory"
+    },
+    {
+      "id": "QA2-SEC-006 Malicious program-as-KO",
+      "priority": "P0",
+      "gate": "W2-06",
+      "status": "pass",
+      "coverage": "PRG-003 invalid metadata rejected + PRG-004 unauthorized not selectable + denied execution"
+    },
+    {
+      "id": "QA2-SEC-007 Secret leakage through context",
+      "priority": "P0",
+      "gate": "W2-06",
+      "status": "pass",
+      "coverage": "MVP-SEC-004 whole-field redaction across all rendered IR fields"
+    },
+    {
+      "id": "QA2-PROP-001 Random KO lifecycle",
+      "priority": "P0",
+      "gate": "W2-11",
+      "status": "pass",
+      "coverage": "`qa2_prop.rs::w2_prop_001_random_ko_lifecycle_all_invariants_hold` (SEED 0xC0FFEE, 400 ops, snapshot/restore every 97th) — found real bugs: non-faithful `snapshot_to` (dest merge resurrected deleted versions) + kernel-managed edges dropped on update"
+    },
+    {
+      "id": "QA2-PROP-002 Random relationship ops",
+      "priority": "P0",
+      "gate": "W2-11",
+      "status": "pass",
+      "coverage": "`qa2_prop.rs::w2_prop_002_random_relationship_ops_no_orphan_endpoints` (SEED 0x05EC_0000, 300 ops, Strict) — found real bug: relationship index never removed unrelate'd edges (ghost edges in outbound_edges); now deleted in the commit batch"
+    },
+    {
+      "id": "QA2-PROP-003 Random temporal ops",
+      "priority": "P0",
+      "gate": "W2-11",
+      "status": "pass",
+      "coverage": "`qa2_prop.rs::w2_prop_003_random_temporal_ops_keep_temporal_invariants` (SEED 0x0BEEF, 300 ops, clock tick/op, supersede + retain) — pin: valid_from <= valid_to held by design (P1-1 check + close_valid_time clamp)"
+    },
+    {
+      "id": "QA2-PROP-004 Random query/mutation interleaving",
+      "priority": "P0",
+      "gate": "W2-11",
+      "status": "pass",
+      "coverage": "`qa2_prop.rs::w2_prop_004_random_query_mutation_interleaving_consistent` (SEED 0xDEAD, 200 rounds, poisoned transact) — pin: transact all-or-nothing held day one"
+    },
+    {
+      "id": "QA2-CONT-001 Full knowledge continuity",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "`qa2_continuity.rs::w2_cont_001_full_knowledge_continuity_chain` — one corpus through the full chain (ingest→incremental→restart (RedbEngine reopen)→IndexMaintainer rebuild→faithful backup/restore→schema migration→query) with an 8-dimension checkpoint (KO set/content/facts/relations/provenance/evidence/temporal/constraints/query pack/semantic search) after every leg; identity legs assert full checkpoint equality, the two delta legs assert their deltas explicitly — **Production fix**: incremental merge folded a re-parsed document's entities into their own stale copies, so merge's multi-source confidence boost double-counted the SAME document (0.75+0.75→1.0) — untouched entities drifted on every edit; re-parsed documents now replace their previous entities wholesale (FRESH-001 symmetry)"
+    },
+    {
+      "id": "QA2-DER-001 Canonical vs index",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "i09 rebuild parity"
+    },
+    {
+      "id": "QA2-DER-002 Canonical vs graph projection",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "`mvp_ko_003` traversal drops Deleted/Erased endpoints"
+    },
+    {
+      "id": "QA2-DER-003 Canonical vs vector projection",
+      "priority": "P1",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "`w2_der_003_stale_embedding_never_current_after_update` (qa2_derived.rs) — v1 embeds m1 [1,2,3], v2 m2 [9,8,7], v3 drops the block: head has no stale embedding, each historical version keeps exactly its own, audit chain valid"
+    },
+    {
+      "id": "QA2-DER-004 Stale cache",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "t35 cache never serves stale heads (warm cache → update → v2; forget → tombstone)"
+    },
+    {
+      "id": "QA2-DER-005 Rebuild everything",
+      "priority": "P0",
+      "gate": "W2-08",
+      "status": "pass",
+      "coverage": "i09/i10/i11 — rebuild parity, tombstone sweep, deterministic propagation"
+    },
+    {
+      "id": "QA2-PERF-001..003 Read/write/mixed load",
+      "priority": "P2",
+      "gate": "W2-11",
+      "status": "pass",
+      "coverage": "R14 scale bench (16 scenarios 100K–1M keys) + weekly regression CI (>20% alert) — correctness asserted alongside p50/p95/p99"
+    },
+    {
+      "id": "QA2-PERF-004 Large context compilation",
+      "priority": "P1",
+      "gate": "W2-11",
+      "status": "pass",
+      "coverage": "`ctx_min_*` budget tests + G12 delivered-token measurements — no token explosion"
+    }
+  ],
+  "blocking": []
+}

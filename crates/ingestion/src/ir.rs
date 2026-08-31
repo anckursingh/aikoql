@@ -13,9 +13,13 @@
 //! - `EventCandidate` — temporal event with participants
 //! - `TemporalAssertion` — time-bound claim
 //! - `KnowledgeIr` — container for all candidate types
-//! - `SemanticAnalyzer` — trait: `analyze(ast) → KnowledgeIr`
+//! - `SemanticAnalyzer` — trait: `analyze(ast, fragments) → KnowledgeIr`
 
 use crate::ast::{BlockType, DocumentAst};
+use crate::boundary::{KnowledgeBoundaryDetector, RuleBoundaryDetector};
+use crate::fragment::{FragmentContent, FragmentModality, KnowledgeFragment};
+use crate::source::EvidenceSource;
+use crate::visual::{MODEL_CHART, MODEL_DIAGRAM, MODEL_FORMULA, MODEL_IMAGE};
 use aikoql_kernel::ContentTrust;
 
 /// serde adapter for `ContentTrust` — the kernel crate is std-only (no
@@ -54,8 +58,12 @@ pub struct Evidence {
     pub document_id: Option<String>,
     /// Page number where the evidence was found (1-based).
     pub page: Option<u32>,
-    /// Bounding box on the page, if available.
-    pub bbox_text: Option<String>,
+    /// Typed evidence source (HLD §14): paragraph span, table cell, chart
+    /// point, region, or asset. `None` when the candidate derives from a
+    /// non-spatial source (merge, code index) — provenance then lives in
+    /// `document_id`/`extractor`.
+    #[serde(default)]
+    pub source: Option<EvidenceSource>,
     /// Name of the extractor that produced this candidate.
     pub extractor: String,
     /// Model or version identifier (e.g. "mock-v1", "gpt-4o").
@@ -69,7 +77,7 @@ impl Default for Evidence {
         Evidence {
             document_id: None,
             page: None,
-            bbox_text: None,
+            source: None,
             extractor: "unknown".into(),
             model: None,
             confidence: 0.0,
@@ -122,6 +130,13 @@ pub struct FactCandidate {
     pub confidence: f32,
     /// Provenance evidence.
     pub evidence: Evidence,
+    /// Verbatim source text backing the statement, stored when the
+    /// statement is a synthesis of the source (e.g. table cell facts join
+    /// header + cell, losing the row context) — a KO must never become a
+    /// lossy representation of its source. None when the statement itself
+    /// is the source text (headings, doc lines, titles).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
 }
 
 /// An event described in the document with temporal context.
@@ -174,6 +189,10 @@ pub struct KnowledgeIr {
     pub temporal: Vec<TemporalAssertion>,
     /// Source document identifier for all candidates.
     pub document_id: Option<String>,
+    /// Repository revision this IR was compiled from (git HEAD SHA for
+    /// ingest-dir). KB-009 versioned manifest: makes stored knowledge
+    /// version-addressable. `None` = not a git repo (or not stamped).
+    pub source_revision: Option<String>,
     /// Trust level of the ingested content (R8). `None` = not tagged —
     /// treated conservatively as untrusted. ingest-dir stamps `Trusted`
     /// (reviewed local repo); uploads are stamped `Untrusted` by
@@ -187,6 +206,19 @@ pub struct KnowledgeIr {
 }
 
 impl KnowledgeIr {
+    /// Drop candidates whose evidence pins them to a page outside `kept`
+    /// (HLD §45 incremental splice: unchanged pages keep their candidates,
+    /// changed/removed pages drop theirs). Candidates without a page
+    /// (document-level provenance) always survive.
+    pub fn retain_pages(&mut self, kept: &std::collections::HashSet<u32>) {
+        let keep = |e: &Evidence| e.page.is_none_or(|p| kept.contains(&p));
+        self.entities.retain(|c| keep(&c.evidence));
+        self.relations.retain(|c| keep(&c.evidence));
+        self.facts.retain(|c| keep(&c.evidence));
+        self.events.retain(|c| keep(&c.evidence));
+        self.temporal.retain(|c| keep(&c.evidence));
+    }
+
     /// True when no candidates of any kind were found.
     pub fn is_empty(&self) -> bool {
         self.entities.is_empty()
@@ -220,7 +252,13 @@ pub trait SemanticAnalyzer: Send + Sync {
     fn name(&self) -> &str;
 
     /// Analyze a document AST and produce structured knowledge candidates.
-    fn analyze(&self, ast: &DocumentAst) -> KnowledgeIr;
+    ///
+    /// `fragments` is the boundary stream for the same AST (HLD §57: the
+    /// semantic leg consumes fragments). Analyzers that need full node
+    /// structure (the markdown section classifier) may ignore it; when it
+    /// is empty — degraded boundary detection — analyzers should fall back
+    /// to the AST so semantic extraction never hard-fails.
+    fn analyze(&self, ast: &DocumentAst, fragments: &[KnowledgeFragment]) -> KnowledgeIr;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +299,19 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
         "mock"
     }
 
-    fn analyze(&self, ast: &DocumentAst) -> KnowledgeIr {
+    fn analyze(&self, ast: &DocumentAst, fragments: &[KnowledgeFragment]) -> KnowledgeIr {
+        if fragments.is_empty() {
+            // Degraded boundary detection: keep the AST fallback so a
+            // detector failure never empties the semantic IR.
+            return self.analyze_ast(ast);
+        }
+        self.analyze_fragments(ast, fragments)
+    }
+}
+
+impl MockSemanticAnalyzer {
+    /// AST fallback (pre-fragment behavior, kept for fail-soft parity).
+    fn analyze_ast(&self, ast: &DocumentAst) -> KnowledgeIr {
         let mut ir = KnowledgeIr {
             document_id: None,
             page_count: ast.page_count,
@@ -281,8 +331,8 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
                     let mentions: Vec<String> = page
                         .children
                         .iter()
-                        .filter(|c| c.text.contains(&entity_name))
-                        .map(|c| c.text.clone())
+                        .filter(|c| c.text.as_deref().unwrap_or_default().contains(&entity_name))
+                        .map(|c| c.text.clone().unwrap_or_default())
                         .collect();
                     ir.entities.push(EntityCandidate {
                         name: entity_name.clone(),
@@ -296,7 +346,7 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
                         evidence: Evidence {
                             document_id: None,
                             page: Some(page_num),
-                            bbox_text: None,
+                            source: None,
                             extractor: extractor.clone(),
                             model: Some("mock-v1".into()),
                             confidence: self.confidence,
@@ -310,16 +360,19 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
                 if matches!(child.block_type, BlockType::Heading { .. })
                     || matches!(child.block_type, BlockType::Title)
                 {
-                    let entities: Vec<String> = extract_capitalized_phrases(&child.text);
-                    if !child.text.is_empty() && !entities.is_empty() {
+                    let entities: Vec<String> =
+                        extract_capitalized_phrases(child.text.as_deref().unwrap_or_default());
+                    if !child.text.as_deref().unwrap_or_default().is_empty() && !entities.is_empty()
+                    {
                         ir.facts.push(FactCandidate {
-                            statement: child.text.clone(),
+                            snippet: None,
+                            statement: child.text.clone().unwrap_or_default(),
                             entities,
                             confidence: self.confidence,
                             evidence: Evidence {
                                 document_id: None,
                                 page: Some(page_num),
-                                bbox_text: None,
+                                source: None,
                                 extractor: extractor.clone(),
                                 model: Some("mock-v1".into()),
                                 confidence: self.confidence,
@@ -340,7 +393,7 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
                     evidence: Evidence {
                         document_id: None,
                         page: Some(page_num),
-                        bbox_text: None,
+                        source: None,
                         extractor: extractor.clone(),
                         model: Some("mock-v1".into()),
                         confidence: self.confidence,
@@ -381,11 +434,417 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
                                 evidence: Evidence {
                                     document_id: None,
                                     page: None,
-                                    bbox_text: None,
+                                    source: None,
                                     extractor: extractor.clone(),
                                     model: Some("mock-v1".into()),
                                     confidence: self.confidence * 0.7,
                                 },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        ir
+    }
+
+    /// Fragment-stream semantic interpretation (HLD §57): modality-aware
+    /// extraction — table cells become facts with cell-level provenance.
+    fn analyze_fragments(&self, ast: &DocumentAst, fragments: &[KnowledgeFragment]) -> KnowledgeIr {
+        let extractor: String = "mock".into();
+        let mut ir = KnowledgeIr {
+            document_id: None,
+            page_count: ast.page_count,
+            extractor: extractor.clone(),
+            ..Default::default()
+        };
+
+        // Entities + temporal: the same heuristics as the AST fallback,
+        // applied to each fragment's rendered text. Headings reach the
+        // semantic leg as fragment context, so both paths scan them.
+        // Visual fragments (PR-F) are skipped here: their rendered text is
+        // the visual payload, and the visual loop below owns those entities
+        // with typed (DiagramNode) evidence instead of generic mock-v1.
+        for frag in fragments {
+            let mut texts: Vec<String> = frag.context.heading_path.clone();
+            if !matches!(
+                frag.modality,
+                FragmentModality::Image
+                    | FragmentModality::Chart
+                    | FragmentModality::Diagram
+                    | FragmentModality::Formula
+            ) {
+                texts.push(crate::chunking::fragment_text(frag));
+            }
+            for text in &texts {
+                for entity_name in extract_capitalized_phrases(text) {
+                    if !ir.entities.iter().any(|e| e.name == entity_name) {
+                        let mentions: Vec<String> = fragments
+                            .iter()
+                            .map(crate::chunking::fragment_text)
+                            .filter(|t| t.contains(&entity_name))
+                            .collect();
+                        ir.entities.push(EntityCandidate {
+                            name: entity_name.clone(),
+                            type_hint: guess_type(&entity_name),
+                            mentions: if mentions.is_empty() {
+                                vec![entity_name.clone()]
+                            } else {
+                                mentions
+                            },
+                            confidence: self.confidence,
+                            evidence: fragment_evidence(frag, &extractor, self.confidence),
+                        });
+                    }
+                }
+                for date_match in extract_date_patterns(text) {
+                    let (start, end) = parse_iso_date(&date_match);
+                    ir.temporal.push(TemporalAssertion {
+                        text: date_match.clone(),
+                        start_time: start,
+                        end_time: end,
+                        confidence: self.confidence,
+                        evidence: fragment_evidence(frag, &extractor, self.confidence),
+                    });
+                }
+            }
+        }
+
+        // Heading facts: headings are context, not fragments — one fact per
+        // unique heading, matching the AST fallback's per-node behavior.
+        let mut seen_headings: Vec<&String> = Vec::new();
+        for frag in fragments {
+            for heading in &frag.context.heading_path {
+                let entities = extract_capitalized_phrases(heading);
+                if !heading.trim().is_empty()
+                    && !entities.is_empty()
+                    && !seen_headings.contains(&heading)
+                {
+                    seen_headings.push(heading);
+                    ir.facts.push(FactCandidate {
+                        snippet: None,
+                        statement: heading.clone(),
+                        entities,
+                        confidence: self.confidence,
+                        evidence: fragment_evidence(frag, &extractor, self.confidence),
+                    });
+                }
+            }
+        }
+
+        // Modality-aware: table cells are knowledge with cell-level
+        // provenance (HLD §14 differentiator). PR-I: hybrid modality merges
+        // nest content inside Mixed composites — walk them so nested tables
+        // keep contributing cell facts.
+        for frag in fragments {
+            let mut units: Vec<(&KnowledgeFragment, &FragmentContent)> = Vec::new();
+            content_units(frag, &mut units);
+            for (owner, content) in units {
+                let FragmentContent::Table(table) = content else {
+                    continue;
+                };
+                // Anchor cell facts to the row's label phrases (HLD §14:
+                // cell-level knowledge must be retrievable via its owning
+                // entity). The context compiler's entity gate requires a
+                // ranked entity for anchored facts — unanchored, every
+                // "Revenue:" cell fact from every fixture matches any
+                // revenue question corpus-wide (the G12 q-00 finding).
+                // ponytail: any capitalized phrase anywhere in the row is
+                // the anchor — a first-column convention is
+                // extractor-specific and breaks on rotated tables.
+                let mut row_phrases: std::collections::HashMap<&str, Vec<String>> =
+                    std::collections::HashMap::new();
+                let mut row_text: std::collections::HashMap<&str, String> =
+                    std::collections::HashMap::new();
+                for cell in &table.cells {
+                    row_phrases
+                        .entry(cell.row_id.as_str())
+                        .or_default()
+                        .extend(extract_capitalized_phrases(&cell.text));
+                    let t = cell.text.trim();
+                    if !t.is_empty() {
+                        row_text
+                            .entry(cell.row_id.as_str())
+                            .and_modify(|s| {
+                                s.push_str(" | ");
+                                s.push_str(t);
+                            })
+                            .or_insert_with(|| t.to_string());
+                    }
+                }
+                for cell in &table.cells {
+                    if cell.text.trim().is_empty() {
+                        continue;
+                    }
+                    let header = table
+                        .headers
+                        .iter()
+                        .find(|h| h.id == cell.column_id)
+                        .map(|h| h.text.as_str())
+                        .unwrap_or("");
+                    // Giant cells become one fact per sentence (G10 T8);
+                    // small cells stay single facts.
+                    let bodies = split_cell_bodies(&cell.text);
+                    let split = bodies.len() > 1;
+                    for body in bodies {
+                        let snippet = if split {
+                            // Per-sentence evidence: the row-level snippet
+                            // would repeat the whole row on every body.
+                            Some(body.clone())
+                        } else {
+                            // The "Header: cell" statement is a synthesis —
+                            // keep the row's verbatim text as the source so
+                            // the rendered fact stays verifiable.
+                            row_text.get(cell.row_id.as_str()).cloned()
+                        };
+                        ir.facts.push(FactCandidate {
+                            statement: if header.is_empty() {
+                                body.clone()
+                            } else {
+                                format!("{}: {}", header, body)
+                            },
+                            entities: row_phrases
+                                .get(cell.row_id.as_str())
+                                .cloned()
+                                .unwrap_or_default(),
+                            confidence: self.confidence * cell.confidence,
+                            snippet,
+                            evidence: Evidence {
+                                document_id: None,
+                                page: owner.context.page,
+                                source: Some(EvidenceSource::TableCell {
+                                    table_id: owner.fragment_id.clone(),
+                                    cell_id: format!("{}-{}", cell.row_id, cell.column_id),
+                                }),
+                                extractor: extractor.clone(),
+                                model: Some("mock-v1".into()),
+                                confidence: self.confidence,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
+        // PR-F: visual fragments → typed knowledge (HLD §10–§13). Diagram
+        // nodes/edges become entities/relations with diagram-level evidence;
+        // charts/formulas/images contribute facts carrying their model
+        // version (DoD row 11). PR-I: hybrid modality merges nest visual
+        // content inside Mixed composites — walk them so nested visuals keep
+        // contributing typed knowledge (evidence comes from the owning
+        // child, not the composite).
+        for frag in fragments {
+            let mut units: Vec<(&KnowledgeFragment, &FragmentContent)> = Vec::new();
+            content_units(frag, &mut units);
+            for (owner, content) in units {
+                match content {
+                    FragmentContent::Diagram(diagram) => {
+                        for node in &diagram.nodes {
+                            if ir.entities.iter().any(|e| e.name == node.label) {
+                                continue;
+                            }
+                            ir.entities.push(EntityCandidate {
+                                name: node.label.clone(),
+                                type_hint: Some("DiagramNode".into()),
+                                mentions: vec![node.label.clone()],
+                                confidence: self.confidence * node.confidence,
+                                evidence: Evidence {
+                                    document_id: None,
+                                    page: owner.context.page,
+                                    source: Some(EvidenceSource::DiagramNode {
+                                        diagram_id: owner.fragment_id.clone(),
+                                        node_id: node.id.clone(),
+                                    }),
+                                    extractor: extractor.clone(),
+                                    model: Some(
+                                        diagram
+                                            .model
+                                            .clone()
+                                            .unwrap_or_else(|| MODEL_DIAGRAM.into()),
+                                    ),
+                                    confidence: self.confidence * node.confidence,
+                                },
+                            });
+                        }
+                        for edge in &diagram.edges {
+                            let predicate =
+                                edge.label.clone().unwrap_or_else(|| "related_to".into());
+                            if ir.relations.iter().any(|r| {
+                                r.subject == edge.source
+                                    && r.object == edge.target
+                                    && r.predicate == predicate
+                            }) {
+                                continue;
+                            }
+                            ir.relations.push(RelationCandidate {
+                                subject: edge.source.clone(),
+                                object: edge.target.clone(),
+                                predicate,
+                                confidence: self.confidence * edge.confidence,
+                                evidence: Evidence {
+                                    document_id: None,
+                                    page: owner.context.page,
+                                    source: Some(EvidenceSource::DiagramEdge {
+                                        diagram_id: owner.fragment_id.clone(),
+                                        edge_id: format!("{}->{}", edge.source, edge.target),
+                                    }),
+                                    extractor: extractor.clone(),
+                                    model: Some(
+                                        diagram
+                                            .model
+                                            .clone()
+                                            .unwrap_or_else(|| MODEL_DIAGRAM.into()),
+                                    ),
+                                    confidence: self.confidence * edge.confidence,
+                                },
+                            });
+                        }
+                    }
+                    FragmentContent::Chart(chart) => {
+                        let title = chart
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| "Untitled chart".into());
+                        ir.facts.push(FactCandidate {
+                            snippet: None,
+                            statement: format!("Chart: {} ({:?})", title, chart.chart_type),
+                            // Anchor chart facts to the title's phrases so
+                            // they join the entity gate like cell facts —
+                            // unanchored, any title keyword hoovers corpus-
+                            // wide (G12 finding).
+                            entities: extract_capitalized_phrases(&title),
+                            confidence: self.confidence,
+                            evidence: Evidence {
+                                document_id: None,
+                                page: owner.context.page,
+                                source: owner
+                                    .source
+                                    .as_ref()
+                                    .and_then(|s| s.bbox.as_ref())
+                                    .map(|b| EvidenceSource::Region { bbox: b.clone() }),
+                                extractor: extractor.clone(),
+                                model: Some(MODEL_CHART.into()),
+                                confidence: self.confidence,
+                            },
+                        });
+                    }
+                    FragmentContent::Formula(formula) => {
+                        if let Some(text) =
+                            formula.plain_text.clone().or_else(|| formula.latex.clone())
+                        {
+                            ir.facts.push(FactCandidate {
+                                snippet: None,
+                                statement: format!("Formula: {}", text),
+                                entities: Vec::new(),
+                                confidence: self.confidence,
+                                evidence: Evidence {
+                                    document_id: None,
+                                    page: owner.context.page,
+                                    source: None,
+                                    extractor: extractor.clone(),
+                                    model: Some(MODEL_FORMULA.into()),
+                                    confidence: self.confidence,
+                                },
+                            });
+                        }
+                    }
+                    FragmentContent::Image(image) => {
+                        let caption = image
+                            .caption
+                            .clone()
+                            .unwrap_or_else(|| format!("asset {}", image.asset.content_hash));
+                        ir.facts.push(FactCandidate {
+                            snippet: None,
+                            statement: format!("Image: {}", caption),
+                            entities: Vec::new(),
+                            confidence: self.confidence,
+                            evidence: Evidence {
+                                document_id: None,
+                                page: owner.context.page,
+                                source: owner
+                                    .source
+                                    .as_ref()
+                                    .and_then(|s| s.bbox.as_ref())
+                                    .map(|b| EvidenceSource::Region { bbox: b.clone() }),
+                                extractor: extractor.clone(),
+                                model: Some(
+                                    image.model.clone().unwrap_or_else(|| MODEL_IMAGE.into()),
+                                ),
+                                confidence: self.confidence,
+                            },
+                        });
+                        // OCR fill (HLD §33): scanned text becomes knowledge with
+                        // the provider name as the model (DoD row 14).
+                        if let Some(ocr_text) = image.ocr_text.clone() {
+                            let snippet: String = ocr_text.chars().take(200).collect();
+                            ir.facts.push(FactCandidate {
+                                snippet: None,
+                                statement: format!("OCR text: {}", snippet),
+                                entities: Vec::new(),
+                                confidence: self.confidence,
+                                evidence: Evidence {
+                                    document_id: None,
+                                    page: owner.context.page,
+                                    source: owner
+                                        .source
+                                        .as_ref()
+                                        .and_then(|s| s.bbox.as_ref())
+                                        .map(|b| EvidenceSource::Region { bbox: b.clone() }),
+                                    extractor: extractor.clone(),
+                                    model: Some(
+                                        image
+                                            .ocr_model
+                                            .clone()
+                                            .unwrap_or_else(|| MODEL_IMAGE.into()),
+                                    ),
+                                    confidence: self.confidence,
+                                },
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Relations: co-occurring entity pairs within a text fragment.
+        // PR-I: hybrid modality merges nest Text inside Mixed composites —
+        // their co-occurrence relations must still be found, so walk the
+        // text units recursively (each unit keeps its own fragment for
+        // evidence provenance).
+        if ir.entities.len() >= 2 {
+            for frag in fragments {
+                let mut texts: Vec<(&KnowledgeFragment, &str)> = Vec::new();
+                text_units(frag, &mut texts);
+                for (owner, text) in texts {
+                    let entities_in: Vec<&String> = ir
+                        .entities
+                        .iter()
+                        .filter(|e| text.contains(&e.name))
+                        .map(|e| &e.name)
+                        .collect();
+                    for i in 0..entities_in.len() {
+                        for j in (i + 1)..entities_in.len() {
+                            let subj = entities_in[i].clone();
+                            let obj = entities_in[j].clone();
+                            if ir
+                                .relations
+                                .iter()
+                                .any(|r| r.subject == subj && r.object == obj)
+                            {
+                                continue;
+                            }
+                            ir.relations.push(RelationCandidate {
+                                subject: subj,
+                                predicate: "related_to".into(),
+                                object: obj,
+                                confidence: self.confidence * 0.7,
+                                evidence: fragment_evidence(
+                                    owner,
+                                    &extractor,
+                                    self.confidence * 0.7,
+                                ),
                             });
                         }
                     }
@@ -401,18 +860,106 @@ impl SemanticAnalyzer for MockSemanticAnalyzer {
 // Mock helpers — heuristic extraction
 // ---------------------------------------------------------------------------
 
+/// Text units inside a fragment, each with its owning fragment for evidence
+/// provenance: the fragment's own Text, plus every Text child of a Mixed
+/// composite (PR-I — hybrid modality merges nest captions/paragraphs inside
+/// Mixed fragments).
+fn text_units<'a>(frag: &'a KnowledgeFragment, out: &mut Vec<(&'a KnowledgeFragment, &'a str)>) {
+    match &frag.content {
+        FragmentContent::Text(text) => out.push((frag, text)),
+        FragmentContent::Mixed(children) => {
+            for child in children {
+                text_units(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Content units inside a fragment, each with its owning fragment for
+/// evidence provenance: Mixed composites recurse into their children; every
+/// other content is its own unit (PR-I — hybrid modality merges nest typed
+/// content inside Mixed fragments).
+fn content_units<'a>(
+    frag: &'a KnowledgeFragment,
+    out: &mut Vec<(&'a KnowledgeFragment, &'a FragmentContent)>,
+) {
+    match &frag.content {
+        FragmentContent::Mixed(children) => {
+            for child in children {
+                content_units(child, out);
+            }
+        }
+        other => out.push((frag, other)),
+    }
+}
+
+/// Evidence for a candidate derived from a fragment: page from fragment
+/// context, region from the fragment's bbox when one exists.
+fn fragment_evidence(frag: &KnowledgeFragment, extractor: &str, confidence: f32) -> Evidence {
+    Evidence {
+        document_id: None,
+        page: frag.context.page,
+        source: frag
+            .source
+            .as_ref()
+            .and_then(|s| s.bbox.clone())
+            .map(|b| EvidenceSource::Region { bbox: b }),
+        extractor: extractor.to_string(),
+        model: Some("mock-v1".into()),
+        confidence,
+    }
+}
+
 /// Walk all AST nodes and collect their text, one line per node.
 fn collect_text(nodes: &[crate::AstNode]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for node in nodes {
-        if !node.text.trim().is_empty() {
-            lines.push(node.text.clone());
+        if let Some(text) = &node.text {
+            if !text.trim().is_empty() {
+                lines.push(text.clone());
+            }
         }
         if !node.children.is_empty() {
             lines.push(collect_text(&node.children));
         }
     }
     lines.join("\n")
+}
+
+/// Split a giant table cell into sentence-sized fact bodies so a cell can
+/// rank and pack at small budgets instead of being permanently size-skipped
+/// (G10 T8: an est-816 notes cell can never enter a 500-token fold).
+/// Cells ≤ 800 chars return whole; longer cells split on ". " with
+/// sub-60-char heads merging forward into the next body.
+/// ponytail: naive dot-split — "e.g." mid-sentence fragments a body, but a
+/// fragment still carries its goldens and its verbatim snippet.
+fn split_cell_bodies(text: &str) -> Vec<String> {
+    const SPLIT_AT: usize = 800; // chars; smaller cells pack fine whole
+    const MIN_BODY: usize = 60; // chars; smaller heads merge forward
+    let text = text.trim();
+    if text.chars().count() <= SPLIT_AT {
+        return vec![text.to_string()];
+    }
+    let mut bodies: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut rest = text;
+    while let Some(pos) = rest.find(". ") {
+        cur.push_str(&rest[..pos + 1]); // keep the '.'
+        if cur.chars().count() >= MIN_BODY {
+            bodies.push(std::mem::take(&mut cur));
+        }
+        rest = rest[pos + 1..].trim_start();
+    }
+    cur.push_str(rest);
+    if !cur.trim().is_empty() {
+        bodies.push(cur);
+    }
+    if bodies.len() < 2 {
+        vec![text.to_string()]
+    } else {
+        bodies
+    }
 }
 
 /// Extract capitalized multi-word phrases (potential named entities).
@@ -725,7 +1272,10 @@ pub fn document_model_to_ir(
     analyzer: &dyn SemanticAnalyzer,
 ) -> KnowledgeIr {
     let ast = crate::document_model_to_ast(doc);
-    analyzer.analyze(&ast)
+    // Semantic leg (HLD §57): AST → fragments → IR. Fails soft — a degraded
+    // detector leaves the analyzer its AST fallback.
+    let fragments = RuleBoundaryDetector.detect(&ast).unwrap_or_default();
+    analyzer.analyze(&ast, &fragments)
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +1286,83 @@ pub fn document_model_to_ir(
 mod tests {
     use super::*;
     use crate::ast::{AstNode, BlockType, DocumentAst};
+    use crate::visual::{ChartAnalyzer, DiagramAnalyzer};
+
+    #[test]
+    fn split_cell_bodies_splits_only_monster_cells() {
+        // Short and mid cells stay whole (one body).
+        assert_eq!(split_cell_bodies("revenue: 3").len(), 1);
+        assert_eq!(split_cell_bodies(&"x".repeat(700)).len(), 1);
+        // A monster cell splits on ". " into bodies ≥ 60 chars.
+        let monster = format!(
+            "{}. {}. {}.",
+            "A".repeat(300),
+            "B".repeat(300),
+            "C".repeat(300)
+        );
+        let bodies = split_cell_bodies(&monster);
+        assert_eq!(
+            bodies.len(),
+            3,
+            "{:?}",
+            bodies.iter().map(String::len).collect::<Vec<_>>()
+        );
+        assert!(bodies.iter().all(|b| b.chars().count() >= 60));
+        // A giant cell with no ". " stays whole rather than fragmenting.
+        assert_eq!(split_cell_bodies(&"y".repeat(900)).len(), 1);
+    }
+
+    #[test]
+    fn retain_pages_keeps_kept_and_document_level_candidates() {
+        use std::collections::HashSet;
+
+        let mut ir = KnowledgeIr::default();
+        ir.entities.push(EntityCandidate {
+            name: "Kept Corp".into(),
+            type_hint: None,
+            mentions: vec![],
+            confidence: 1.0,
+            evidence: Evidence {
+                page: Some(1),
+                ..Default::default()
+            },
+        });
+        ir.entities.push(EntityCandidate {
+            name: "Dropped Corp".into(),
+            type_hint: None,
+            mentions: vec![],
+            confidence: 1.0,
+            evidence: Evidence {
+                page: Some(2),
+                ..Default::default()
+            },
+        });
+        ir.entities.push(EntityCandidate {
+            name: "Document Level".into(),
+            type_hint: None,
+            mentions: vec![],
+            confidence: 1.0,
+            evidence: Evidence {
+                page: None,
+                ..Default::default()
+            },
+        });
+        ir.facts.push(FactCandidate {
+            snippet: None,
+            statement: "dropped fact".into(),
+            evidence: Evidence {
+                page: Some(2),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        ir.retain_pages(&HashSet::from([1]));
+
+        let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["Kept Corp", "Document Level"]);
+        assert!(ir.facts.is_empty());
+    }
 
     fn make_ast(pages: Vec<Vec<AstNode>>) -> DocumentAst {
         let page_count = pages.len() as u32;
@@ -743,46 +1370,103 @@ mod tests {
             .into_iter()
             .map(|children| AstNode {
                 block_type: BlockType::Unknown,
-                text: String::new(),
+                text: None,
                 children,
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             })
             .collect();
         DocumentAst {
             pages,
             page_count,
             source_type: "native".into(),
+            document_id: None,
         }
     }
 
     fn paragraph(text: &str) -> AstNode {
         AstNode {
             block_type: BlockType::Paragraph,
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         }
     }
 
     fn heading(level: u8, text: &str) -> AstNode {
         AstNode {
             block_type: BlockType::Heading { level },
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
         }
     }
 
     fn title(text: &str) -> AstNode {
         AstNode {
             block_type: BlockType::Title,
-            text: text.to_string(),
+            text: Some(text.to_string()),
             children: vec![],
             bbox: None,
             confidence: None,
+            ..Default::default()
+        }
+    }
+
+    fn table_node() -> AstNode {
+        AstNode {
+            block_type: BlockType::Table,
+            text: None,
+            children: vec![],
+            bbox: None,
+            confidence: None,
+            payload: Some(crate::ast::AstPayload::Table(crate::ast::TablePayload {
+                headers: vec![
+                    crate::ast::TableHeader {
+                        id: "h0".into(),
+                        text: "Item".into(),
+                        level: 0,
+                        parent_id: None,
+                    },
+                    crate::ast::TableHeader {
+                        id: "h1".into(),
+                        text: "Qty".into(),
+                        level: 0,
+                        parent_id: None,
+                    },
+                ],
+                rows: vec![crate::ast::TableRow {
+                    id: "0".into(),
+                    index: 0,
+                }],
+                cells: vec![
+                    crate::ast::TableCell {
+                        id: "c0".into(),
+                        row_id: "0".into(),
+                        column_id: "h0".into(),
+                        text: "Acme Widget".into(),
+                        value: None,
+                        bbox: None,
+                        confidence: 1.0,
+                    },
+                    crate::ast::TableCell {
+                        id: "c1".into(),
+                        row_id: "0".into(),
+                        column_id: "h1".into(),
+                        text: "10".into(),
+                        value: None,
+                        bbox: None,
+                        confidence: 1.0,
+                    },
+                ],
+                footnotes: vec![],
+            })),
+            ..Default::default()
         }
     }
 
@@ -795,7 +1479,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"Acme Corporation"));
@@ -811,7 +1495,7 @@ mod tests {
         ]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let count = ir
             .entities
@@ -826,7 +1510,7 @@ mod tests {
         let ast = make_ast(vec![vec![paragraph("Widgets are great.")]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!(ir.entities.is_empty());
     }
@@ -838,7 +1522,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let org = ir.entities.iter().find(|e| e.name == "Acme Corp").unwrap();
         assert_eq!(org.type_hint.as_deref(), Some("Organization"));
@@ -857,9 +1541,9 @@ mod tests {
         ]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
-        assert!(ir.facts.len() >= 1);
+        assert!(!ir.facts.is_empty());
         let fact = &ir.facts[0];
         assert!(fact
             .statement
@@ -875,7 +1559,7 @@ mod tests {
         ]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let fact = ir
             .facts
@@ -893,7 +1577,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!(!ir.relations.is_empty());
         // All three entities should have relations between them.
@@ -915,7 +1599,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!(ir.relations.is_empty());
     }
@@ -929,7 +1613,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let texts: Vec<&str> = ir.temporal.iter().map(|t| t.text.as_str()).collect();
         assert!(
@@ -949,7 +1633,7 @@ mod tests {
         let ast = make_ast(vec![vec![paragraph("Effective date: 2024-06-15.")]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let iso = ir.temporal.iter().find(|t| t.text == "2024-06-15").unwrap();
         assert_eq!(iso.start_time.as_deref(), Some("2024-06-15T00:00:00Z"));
@@ -962,7 +1646,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let q3 = ir.temporal.iter().find(|t| t.text == "Q3 2025").unwrap();
         assert!(q3.start_time.as_deref().unwrap().starts_with("2025-07"));
@@ -974,7 +1658,7 @@ mod tests {
         let ast = make_ast(vec![vec![paragraph("Signed January 2024.")]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let t = &ir.temporal[0];
         assert_eq!(t.evidence.page, Some(1));
@@ -992,7 +1676,7 @@ mod tests {
         ]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let acme = ir
             .entities
@@ -1016,7 +1700,7 @@ mod tests {
         let ast = make_ast(vec![]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!(ir.is_empty());
         assert_eq!(ir.total_candidates(), 0);
@@ -1030,7 +1714,7 @@ mod tests {
         ]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!(ir.total_candidates() > 0);
         // Should have at least: 1 entity (Acme Corporation), 1 fact (heading), 1 temporal (January 2024)
@@ -1044,7 +1728,7 @@ mod tests {
         let ast = make_ast(vec![vec![paragraph("Test.")]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert_eq!(ir.extractor, "mock");
     }
@@ -1063,6 +1747,7 @@ mod tests {
                 char_count: 90,
                 source: "native".into(),
                 ocr_confidence: None,
+                images: vec![],
             }],
             total_chars: 90,
             ocr_stats: None,
@@ -1100,7 +1785,7 @@ mod tests {
         let ast = make_ast(vec![vec![paragraph("Acme Corporation is great.")]]);
 
         let analyzer = MockSemanticAnalyzer::with_confidence(0.42);
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         assert!((ir.entities[0].confidence - 0.42).abs() < 0.001);
         assert!((ir.entities[0].evidence.confidence - 0.42).abs() < 0.001);
@@ -1116,7 +1801,7 @@ mod tests {
         let analyzer: &dyn SemanticAnalyzer = &MockSemanticAnalyzer::new();
         assert_eq!(analyzer.name(), "mock");
 
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
         assert!(!ir.entities.is_empty());
     }
 
@@ -1126,7 +1811,7 @@ mod tests {
     fn empty_document_produces_empty_ir() {
         let ast = make_ast(vec![vec![]]);
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
         assert!(ir.is_empty());
     }
 
@@ -1137,7 +1822,7 @@ mod tests {
         )]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         // "The", "Fox" — single words should not be entities.
         // No capitalized multi-word phrases in this sentence.
@@ -1150,30 +1835,33 @@ mod tests {
             heading(1, "Vendors"),
             AstNode {
                 block_type: BlockType::List { ordered: false },
-                text: String::new(),
+                text: None,
                 children: vec![
                     AstNode {
                         block_type: BlockType::ListItem,
-                        text: "Acme Corporation".into(),
+                        text: Some("Acme Corporation".into()),
                         children: vec![],
                         bbox: None,
                         confidence: None,
+                        ..Default::default()
                     },
                     AstNode {
                         block_type: BlockType::ListItem,
-                        text: "Globex Industries".into(),
+                        text: Some("Globex Industries".into()),
                         children: vec![],
                         bbox: None,
                         confidence: None,
+                        ..Default::default()
                     },
                 ],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             },
         ]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"Acme Corporation"));
@@ -1186,42 +1874,46 @@ mod tests {
             paragraph("The following vendors are approved:"),
             AstNode {
                 block_type: BlockType::Table,
-                text: "Acme Corporation\tGlobex Industries".into(),
+                text: Some("Acme Corporation\tGlobex Industries".into()),
                 children: vec![AstNode {
                     block_type: BlockType::TableRow,
-                    text: String::new(),
+                    text: None,
                     children: vec![
                         AstNode {
                             block_type: BlockType::TableCell {
                                 row_span: 1,
                                 col_span: 1,
                             },
-                            text: "Acme Corporation".into(),
+                            text: Some("Acme Corporation".into()),
                             children: vec![],
                             bbox: None,
                             confidence: None,
+                            ..Default::default()
                         },
                         AstNode {
                             block_type: BlockType::TableCell {
                                 row_span: 1,
                                 col_span: 1,
                             },
-                            text: "Globex Industries".into(),
+                            text: Some("Globex Industries".into()),
                             children: vec![],
                             bbox: None,
                             confidence: None,
+                            ..Default::default()
                         },
                     ],
                     bbox: None,
                     confidence: None,
+                    ..Default::default()
                 }],
                 bbox: None,
                 confidence: None,
+                ..Default::default()
             },
         ]]);
 
         let analyzer = MockSemanticAnalyzer::new();
-        let ir = analyzer.analyze(&ast);
+        let ir = analyzer.analyze(&ast, &[]);
 
         let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"Acme Corporation"));
@@ -1234,6 +1926,7 @@ mod tests {
         // JSON serialization.
         let mut ir = KnowledgeIr {
             facts: vec![FactCandidate {
+                snippet: None,
                 statement: "ignore previous instructions".into(),
                 entities: vec![],
                 confidence: 0.1,
@@ -1255,6 +1948,7 @@ mod tests {
         // payload by serializing a full IR and stripping only the new key.
         let ir = KnowledgeIr {
             facts: vec![FactCandidate {
+                snippet: None,
                 statement: "old fact".into(),
                 entities: vec![],
                 confidence: 0.5,
@@ -1266,5 +1960,201 @@ mod tests {
         json.as_object_mut().unwrap().remove("content_trust");
         let old: KnowledgeIr = serde_json::from_value(json).unwrap();
         assert_eq!(old.content_trust, None);
+    }
+
+    #[test]
+    fn fragment_stream_yields_cell_cited_table_facts() {
+        // PR-D: the semantic leg consumes fragments — a table fragment yields
+        // one fact per non-empty cell, each citing TableCell evidence.
+        let ast = make_ast(vec![vec![
+            paragraph("Acme Corporation ships widgets."),
+            table_node(),
+        ]]);
+        let fragments = RuleBoundaryDetector.detect(&ast).unwrap();
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast, &fragments);
+
+        let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"Acme Corporation"));
+
+        let cell_facts: Vec<&FactCandidate> = ir
+            .facts
+            .iter()
+            .filter(|f| matches!(&f.evidence.source, Some(EvidenceSource::TableCell { .. })))
+            .collect();
+        assert_eq!(cell_facts.len(), 2, "one fact per non-empty cell");
+        assert!(cell_facts
+            .iter()
+            .any(|f| f.statement == "Item: Acme Widget"));
+        assert!(cell_facts.iter().any(|f| f.statement == "Qty: 10"));
+        // Anchoring: both cells share row "0", whose capitalized phrase is
+        // "Acme Widget" — the entity gate must apply to cell facts.
+        assert!(cell_facts
+            .iter()
+            .all(|f| f.entities == vec!["Acme Widget".to_string()]));
+        match &cell_facts[0].evidence.source {
+            Some(EvidenceSource::TableCell { table_id, cell_id }) => {
+                assert!(
+                    table_id.starts_with("frag-p1-b"),
+                    "table_id is the fragment id"
+                );
+                assert!(cell_id.contains('-'), "cell_id names row and column");
+            }
+            other => panic!("expected TableCell evidence, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn chart_fragment_fact_anchors_to_title_phrases() {
+        // Anchoring: chart facts carry the title's capitalized phrases so
+        // the entity gate applies — unanchored, chart statements hoover
+        // corpus-wide on shared keywords (the G12 finding).
+        let mut chart = AstNode {
+            block_type: BlockType::Chart,
+            text: Some("Bar chart: Acme Corp Sales".into()),
+            children: vec![],
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        };
+        chart.payload = crate::visual::MockChartAnalyzer
+            .analyze(&chart)
+            .map(crate::ast::AstPayload::Chart);
+        let ast = make_ast(vec![vec![chart]]);
+        let fragments = RuleBoundaryDetector.detect(&ast).unwrap();
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast, &fragments);
+
+        let chart_facts: Vec<&FactCandidate> = ir
+            .facts
+            .iter()
+            .filter(|f| f.statement.starts_with("Chart: "))
+            .collect();
+        assert_eq!(chart_facts.len(), 1);
+        // extract_capitalized_phrases emits 2–3 word sliding windows.
+        assert_eq!(
+            chart_facts[0].entities,
+            vec![
+                "Acme Corp".to_string(),
+                "Corp Sales".to_string(),
+                "Acme Corp Sales".to_string(),
+            ],
+            "chart fact anchors to the title's phrases"
+        );
+    }
+
+    #[test]
+    fn diagram_fragment_yields_graph_entities_and_relations() {
+        // PR-F: a diagram fragment's nodes/edges become entities/relations
+        // with DiagramNode/DiagramEdge evidence and the model version
+        // persisted (DoD row 11).
+        let mut diagram = AstNode {
+            block_type: BlockType::Diagram,
+            text: Some("Client -> Gateway --> Ledger".into()),
+            children: vec![],
+            bbox: None,
+            confidence: None,
+            ..Default::default()
+        };
+        diagram.payload = crate::visual::MockDiagramAnalyzer
+            .analyze(&diagram)
+            .map(crate::ast::AstPayload::Diagram);
+        let ast = make_ast(vec![vec![diagram]]);
+        let fragments = RuleBoundaryDetector.detect(&ast).unwrap();
+        let analyzer = MockSemanticAnalyzer::new();
+        let ir = analyzer.analyze(&ast, &fragments);
+
+        let names: Vec<&str> = ir.entities.iter().map(|e| e.name.as_str()).collect();
+        for expected in ["Client", "Gateway", "Ledger"] {
+            assert!(names.contains(&expected), "diagram node '{}'", expected);
+        }
+        let client = ir
+            .entities
+            .iter()
+            .find(|e| e.name == "Client")
+            .expect("Client entity");
+        match &client.evidence.source {
+            Some(EvidenceSource::DiagramNode {
+                diagram_id,
+                node_id,
+            }) => {
+                assert!(diagram_id.starts_with("frag-p1-b"));
+                assert_eq!(*node_id, "client");
+            }
+            other => panic!("expected DiagramNode evidence, got {:?}", other),
+        }
+        assert_eq!(client.evidence.model.as_deref(), Some("mock-diagram-v1"));
+
+        assert_eq!(ir.relations.len(), 2, "one relation per diagram edge");
+        let first = &ir.relations[0];
+        assert_eq!(first.subject, "client");
+        assert_eq!(first.object, "gateway");
+        assert_eq!(first.predicate, "related_to");
+        assert_eq!(
+            first.evidence.model.as_deref(),
+            Some("mock-diagram-v1"),
+            "model version persisted on relations"
+        );
+    }
+
+    #[test]
+    fn fragment_and_ast_paths_agree_on_entities() {
+        // Fail-soft parity: with a healthy detector both paths extract the
+        // same entities, so a degraded detector is invisible to callers.
+        let page_text = "1. Payment Terms\n\nAcme Corporation ships widgets.";
+        let dm = crate::DocumentModel {
+            page_count: 1,
+            pages: vec![crate::PageModel {
+                page_number: 1,
+                text: page_text.into(),
+                char_count: page_text.len(),
+                source: "native".into(),
+                ocr_confidence: None,
+                images: vec![],
+            }],
+            total_chars: page_text.len(),
+            ocr_stats: None,
+        };
+        let ast = crate::document_model_to_ast(&dm);
+        let fragments = RuleBoundaryDetector.detect(&ast).unwrap();
+        let analyzer = MockSemanticAnalyzer::new();
+
+        let from_ast = analyzer.analyze(&ast, &[]);
+        let from_fragments = analyzer.analyze(&ast, &fragments);
+
+        // The AST fallback concatenates blocks, so capitalized runs can span
+        // block boundaries ("Terms Acme" from heading + paragraph). The
+        // fragment path keeps blocks separate — cleaner, and never invents
+        // entities the AST path wouldn't find.
+        let ast_names: std::collections::BTreeSet<&str> =
+            from_ast.entities.iter().map(|e| e.name.as_str()).collect();
+        let frag_names: std::collections::BTreeSet<&str> = from_fragments
+            .entities
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert!(frag_names.contains("Acme Corporation"));
+        assert!(frag_names.contains("Payment Terms"));
+        assert!(!from_ast.facts.is_empty());
+        assert!(!from_fragments.facts.is_empty());
+        assert!(
+            frag_names.is_subset(&ast_names),
+            "fragment path must not invent entities: {:?} not subset of {:?}",
+            frag_names,
+            ast_names
+        );
+    }
+
+    #[test]
+    fn legacy_bbox_text_evidence_deserializes_to_typed_source() {
+        // PR-D: bbox_text is gone from the wire format; old payloads must
+        // still deserialize, dropping the legacy string key.
+        let legacy = r#"{"document_id":null,"page":1,"bbox_text":"(1,2,3,4)","extractor":"mock","model":null,"confidence":0.9}"#;
+        let ev: Evidence = serde_json::from_str(legacy).expect("legacy evidence deserializes");
+        assert_eq!(
+            ev.source, None,
+            "legacy bbox_text is dropped, not resurrected"
+        );
+        assert_eq!(ev.page, Some(1));
     }
 }

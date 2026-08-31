@@ -1,9 +1,9 @@
 //! Encryption acceptance tests — MRFC-0020 Phase 1 & Phase 3 gates.
 
 use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto, CryptoProvider};
-use aikoql_kernel::security::envelope::Envelope;
+use aikoql_kernel::security::envelope::{Envelope, DEKS_STORAGE_KEY};
 use aikoql_kernel::security::field_crypto::{EncryptionPolicy, FieldCrypto};
-use aikoql_kernel::security::kms::KeyManager;
+use aikoql_kernel::security::kms::{KeyManager, LocalKms};
 use aikoql_kernel::storage::encrypted::EncryptedStore;
 use aikoql_kernel::storage::store::{MemoryEngine, StorageEngine, WriteBatch};
 use aikoql_kernel::storage::store_redb::RedbEngine;
@@ -143,7 +143,8 @@ fn e05_field_level_encrypt_remember_decrypt_get() {
 
     let k = Kernel::open(store, clock, 0xBEEF)
         .unwrap()
-        .with_field_encryption(crypto, envelope);
+        .with_field_encryption(crypto, envelope)
+        .unwrap();
 
     // Mark "salary" and "ssn" as encrypted for type "employee".
     let policy = EncryptionPolicy::new(vec!["salary".to_string(), "ssn".to_string()]);
@@ -226,7 +227,8 @@ fn e06_field_encryption_without_policy_is_noop() {
     // Kernel with field encryption enabled, but no policy registered for this type.
     let k = Kernel::open(store, clock, 0xCAFE)
         .unwrap()
-        .with_field_encryption(crypto, envelope);
+        .with_field_encryption(crypto, envelope)
+        .unwrap();
 
     let alice = Subject::new("alice");
     let mut props = BTreeMap::new();
@@ -360,4 +362,179 @@ fn e08_encrypted_backup_restore() {
 
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&backup_path);
+}
+
+/// e09: DEKs persist through a full kernel restart (not just FieldCrypto).
+/// Without persistence each boot mints fresh DEKs and field ciphertext
+/// becomes undecryptable — data loss.
+#[test]
+fn e09_deks_persist_across_kernel_restart() {
+    let key_path = temp_path("e09-key");
+    let _ = std::fs::remove_file(&key_path);
+    let kms = LocalKms::new(&key_path);
+    let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+    let store: Arc<dyn StorageEngine> = Arc::new(MemoryEngine::new());
+    let clock = Arc::new(ManualClock::new(30_000));
+
+    let remembered = {
+        let envelope = Arc::new(Envelope::init(&kms, "pw", crypto.clone()).unwrap());
+        let k = Kernel::open(store.clone(), clock.clone(), 0xD00D)
+            .unwrap()
+            .with_field_encryption(crypto.clone(), envelope)
+            .unwrap();
+        k.set_encryption_policy(
+            "employee",
+            EncryptionPolicy::new(vec!["salary".to_string()]),
+        );
+        let alice = Subject::new("alice");
+        let mut props = BTreeMap::new();
+        props.insert("name".into(), Value::Text("Alice".into()));
+        props.insert("salary".into(), Value::Int(150000));
+        k.remember(RememberRequest {
+            context: (&alice).into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "employee".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: BTreeMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap()
+    };
+
+    // Fresh kernel over the same store: DEKs must load from the store.
+    {
+        let envelope = Arc::new(Envelope::init(&kms, "pw", crypto.clone()).unwrap());
+        let k = Kernel::open(store, clock, 0xD00D)
+            .unwrap()
+            .with_field_encryption(crypto, envelope)
+            .unwrap();
+        k.set_encryption_policy(
+            "employee",
+            EncryptionPolicy::new(vec!["salary".to_string()]),
+        );
+        let alice = Subject::new("alice");
+        let ko = k.get(&alice, &remembered.koid).unwrap();
+        assert_eq!(ko.properties.get("salary"), Some(&Value::Int(150000)));
+        assert_eq!(
+            ko.properties.get("name"),
+            Some(&Value::Text("Alice".into()))
+        );
+    }
+    let _ = std::fs::remove_file(&key_path);
+}
+
+/// e10: A corrupt DEK record fails the open — silently continuing would mint
+/// a fresh DEK for the tenant and orphan every field-encrypted value.
+#[test]
+fn e10_corrupt_dek_record_fails_closed() {
+    let store: Arc<dyn StorageEngine> = Arc::new(MemoryEngine::new());
+    let mut batch = WriteBatch::new();
+    batch.put(DEKS_STORAGE_KEY.to_vec(), vec![0xAB, 0xCD]); // truncated garbage
+    store.write_batch(&batch).unwrap();
+
+    let kms = MemKms::new();
+    let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+    let envelope = Arc::new(Envelope::init(&kms, "pw", crypto.clone()).unwrap());
+    let res = Kernel::open(store, Arc::new(ManualClock::new(40_000)), 0xE0E)
+        .unwrap()
+        .with_field_encryption(crypto, envelope);
+    assert!(res.is_err(), "corrupt DEK record must fail the open");
+}
+
+/// e11: The wrong passphrase never yields a key — LocalKms fails closed with
+/// an authentication error instead of deriving garbage (review P1-13).
+#[test]
+fn e11_wrong_passphrase_fails_closed() {
+    let key_path = temp_path("e11-key");
+    let _ = std::fs::remove_file(&key_path);
+    let kms = LocalKms::new(&key_path);
+    kms.master_key("correct-horse")
+        .expect("first use creates the key file");
+    // A restart re-reads the file: same path, fresh instance (the instance
+    // cache is per-process; a new process derives from the envelope again).
+    let kms2 = LocalKms::new(&key_path);
+    let err = kms2.master_key("wrong-passphrase").unwrap_err();
+    assert!(
+        err.contains("InvalidPassphrase") || err.contains("authentication"),
+        "expected a passphrase-authentication error, got: {}",
+        err
+    );
+    let _ = std::fs::remove_file(&key_path);
+}
+
+/// e12: An unknown crypto-meta version fails the open (review P2-14) — the
+/// key derivation scheme is versioned, and unknown versions are never guessed.
+#[test]
+fn e12_unknown_crypto_meta_version_fails_open() {
+    use aikoql_kernel::security::envelope::CRYPTO_META_KEY;
+    let store: Arc<dyn StorageEngine> = Arc::new(MemoryEngine::new());
+    let mut batch = WriteBatch::new();
+    batch.put(
+        CRYPTO_META_KEY.to_vec(),
+        b"aikoql/crypto/v99 kdf=future-widget".to_vec(),
+    );
+    store.write_batch(&batch).unwrap();
+
+    let kms = MemKms::new();
+    let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+    let envelope = Arc::new(Envelope::init(&kms, "pw", crypto.clone()).unwrap());
+    let res = Kernel::open(store, Arc::new(ManualClock::new(50_000)), 0xE12)
+        .unwrap()
+        .with_field_encryption(crypto, envelope);
+    assert!(
+        res.is_err(),
+        "unknown crypto-meta version must fail the open, not guess"
+    );
+}
+
+/// e13: Tampered field ciphertext fails closed — AEAD authentication rejects
+/// the modification; the kernel can never surface a phantom plaintext
+/// (review P1-13).
+#[test]
+fn e13_tampered_field_ciphertext_fails_closed() {
+    let kms = MemKms::new();
+    let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
+    let envelope = Arc::new(Envelope::init(&kms, "pw", crypto.clone()).unwrap());
+    let fc = FieldCrypto::new(crypto, envelope);
+    let policy = EncryptionPolicy::new(vec!["secret".to_string()]);
+
+    let mut props = BTreeMap::new();
+    props.insert("secret".into(), Value::Text("classified-data".into()));
+    fc.encrypt_fields("acme", "doc", &mut props, &policy)
+        .unwrap();
+
+    // Untampered: valid DEK decrypts back to the plaintext.
+    let mut clean = props.clone();
+    fc.decrypt_fields("acme", "doc", &mut clean, &policy)
+        .unwrap();
+    assert_eq!(
+        clean.get("secret"),
+        Some(&Value::Text("classified-data".into()))
+    );
+
+    // Flip one ciphertext byte: decryption must fail, never return garbage.
+    let mut tampered = props.clone();
+    if let Some(Value::Bytes(bytes)) = tampered.get_mut("secret") {
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0x01;
+    } else {
+        panic!("secret must be encrypted Bytes at rest");
+    }
+    assert!(
+        fc.decrypt_fields("acme", "doc", &mut tampered, &policy)
+            .is_err(),
+        "tampered ciphertext must fail AEAD authentication"
+    );
 }

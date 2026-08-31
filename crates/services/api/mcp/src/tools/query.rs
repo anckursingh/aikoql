@@ -1,10 +1,12 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::*;
-
 use crate::helpers::*;
 use crate::session::*;
+use crate::{
+    json, ExtensionMap, FuseMode, IrOp, IrPlan, KError, Kernel, Metadata, Ordering, Origin,
+    PropertyMap, ReferentialPolicy, RememberRequest, SimilarityQuery, Value, J, STREAM_ID,
+};
 pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
     let source = args
         .get("query")
@@ -68,7 +70,10 @@ pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
                 "koid": ko.koid.to_hex(),
                 "type_name": ko.metadata.type_name,
                 "version": ko.version,
-                "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+                "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
+                // v0.3 K1: epistemic metadata must survive the QL query
+                // boundary too — no silent drops.
+                "extensions": ko.extensions.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
             })).collect::<Vec<_>>()
         })),
         aikoql_runtime::RowSet::Scored(scored) => Ok(json!({
@@ -104,7 +109,10 @@ pub(crate) fn execute_stream_query(
             "koid": ko.koid.to_hex(),
             "type_name": ko.metadata.type_name,
             "version": ko.version,
-            "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+            "properties": ko.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
+            // v0.3 K1: epistemic metadata must survive the QL query
+            // boundary too — no silent drops.
+            "extensions": ko.extensions.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
         })).collect(),
         aikoql_runtime::RowSet::Scored(scored) => scored.iter().map(|(koid, score, tn, ver)| json!({
             "koid": koid.to_hex(),
@@ -230,9 +238,38 @@ pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
 }
 
 pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
-    let lin = k
-        .trace(subject_of(args), &koid_of(args)?)
-        .map_err(|e| e.to_string())?;
+    let koid = koid_of(args)?;
+    let subject = subject_of(args);
+    let lin = k.trace(subject.clone(), &koid).map_err(|e| e.to_string())?;
+    // v0.3 K3: lineage must answer WHY / FROM WHAT / DERIVED HOW / BY WHOM /
+    // WHEN / WITH WHICH EVIDENCE — a bare source pointer is insufficient
+    // (reviewer H4). The derivation record + confidence context live in the
+    // head's extensions; sources are resolved one level deep for readability.
+    let ko = k.get(subject.clone(), &koid).map_err(|e| e.to_string())?;
+    let derivation = ko.derivation().map(|d| {
+        json!({
+            "operation": d.operation,
+            "actor": d.actor,
+            "model": d.model,
+            "timestamp": d.timestamp,
+            "reason": d.reason,
+            "sources": d.sources.iter().map(|s| {
+                // Review P2-7: distinguish WHY a source cannot be resolved —
+                // deleted/never-existed vs exists-but-the-caller-cannot-read.
+                let (type_name, status) = match k.get(subject.clone(), s) {
+                    Ok(src) => (Some(src.metadata.type_name), "ok"),
+                    Err(KError::NotFound(_)) => (None, "not_found"),
+                    Err(KError::AccessDenied { .. }) => (None, "not_visible"),
+                    Err(_) => (None, "error"),
+                };
+                json!({
+                    "koid": s.to_hex(),
+                    "type_name": type_name,
+                    "status": status,
+                })
+            }).collect::<Vec<_>>()
+        })
+    });
     Ok(json!({
         "koid": lin.koid.to_hex(),
         "versions": lin.versions.iter().map(|v| json!({
@@ -240,7 +277,31 @@ pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
             "commit_ts": v.commit_ts,
             "state": v.state.to_string()
         })).collect::<Vec<_>>(),
-        "events": lin.events.iter().map(ke_json).collect::<Vec<_>>()
+        "events": lin.events.iter().map(ke_json).collect::<Vec<_>>(),
+        "derivation": derivation,
+        "confidence": ko.confidence_context().map(|c| json!({
+            "score": c.score,
+            "confirmations": c.confirmations,
+            "last_verified": c.last_verified
+        })),
+        // v0.3 K4: withdrawn support — when stamped, the trace answers
+        // INVALIDATED WHEN / BY WHOM / WHY.
+        "invalidation": ko.invalidation().map(|i| json!({
+            "at": i.at,
+            "actor": i.actor,
+            "reason": i.reason
+        })),
+        // Review P2-6: trace is an epistemic-critical read — malformed
+        // evidence is an error here, not a silent drop (QL rows keep the
+        // lenient decode for display).
+        "evidence": ko.strict_evidence().map_err(|e| e.to_string())?
+            .iter().map(|e| json!({
+            "source_artifact": e.source_artifact,
+            "location": e.location,
+            "revision": e.revision,
+            "method": e.method.as_str(),
+            "confidence": e.confidence
+        })).collect::<Vec<_>>()
     }))
 }
 

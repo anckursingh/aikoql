@@ -33,6 +33,11 @@ fn ident_str() -> impl Strategy<Value = String> {
         "relationships",
         "commit",
         "explain",
+        // v0.3 K2: temporal + epistemic keywords
+        "as_of",
+        "between",
+        "historical",
+        "epistemic",
         "true",
         "false",
         "null",

@@ -20,22 +20,30 @@
 use crate::embedding::EmbeddingProvider;
 use crate::event::EventManager;
 use crate::index::coordinator::IndexCoordinator;
+use crate::knowledge::authority::Authority;
 use crate::knowledge::codec::{self, Enc};
 use crate::knowledge::kom::*;
 use crate::knowledge::ontology::{Cardinality, OntologyRegistry};
+use crate::knowledge::scope::Scope;
 use crate::lifecycle::constraint::{ConstraintEvaluator, InferenceEngine};
 use crate::lifecycle::schema::SchemaRegistry;
 use crate::object::ObjectManager;
 use crate::relationship::RelationshipManager;
 use crate::security::auth::{AuthManager, POLICY_TYPE, ROLE_TYPE};
 use crate::security::crypto::Crypto;
-use crate::security::envelope::Envelope;
+use crate::security::envelope::{Envelope, CRYPTO_META_KEY, CRYPTO_META_V1, DEKS_STORAGE_KEY};
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
 use crate::security::tenant::TenantManager;
 use crate::storage::repository::KnowledgeRepository;
 use crate::storage::store::{ConstraintCapabilities, StorageEngine, WriteBatch};
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
+
+// v0.3 K4: knowledge transactions (observe/assert/verify/contradict/supersede/
+// merge/invalidate + conflict resolution). A child module so the ops share
+// kernel.rs's private fields (pipe/auth/clock) without widening their scope.
+mod ops;
+pub use ops::*;
 
 // ---------------------------------------------------------------------------
 // Clock & Hybrid Logical Clock (commit timestamps)
@@ -361,11 +369,70 @@ pub struct ComplianceReport {
     pub field_crypto_summary: Option<ComplianceSummary>,
 }
 
+/// MRFC-0020 Phase 4: retention evidence for the compliance evidence pack.
+/// Counts of heads carrying a kernel-stamped `valid_to` horizon
+/// (`remember_retained`), split by expiry against the kernel clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetentionSummary {
+    /// Heads carrying EXT_VALID_TO — objects under declarative retention.
+    pub retained_objects: usize,
+    /// Horizons still in the future (live retention windows).
+    pub live_windows: usize,
+    /// Horizons at or past the kernel clock — purge-eligible under the
+    /// half-open validity interval.
+    pub expired: usize,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Remembered {
     pub koid: KOID,
     pub version: u64,
     pub commit_ts: u64,
+}
+
+/// v0.3 K3: a first-class derivation request — the anti-CRUD-cosplay form of
+/// "create a KO that came from other KOs" (review H6: a bare write of a
+/// DERIVED_FROM edge is not a derivation).
+#[derive(Clone, Debug)]
+pub struct DeriveRequest {
+    pub context: KnowledgeContext,
+    /// Type of the derived KO.
+    pub type_name: String,
+    pub properties: PropertyMap,
+    /// Premise KOs — all must exist and be readable; each is wired as an
+    /// inbound DERIVED_FROM edge on the derived KO, so `outbound_edges(src,
+    /// "derived_from")` finds every dependent (K4 invalidation input).
+    pub sources: Vec<KOID>,
+    /// The derivation operation (rule_fired, inference, merge, extraction…).
+    pub operation: String,
+    /// Who (or which agent) performed the derivation.
+    pub actor: String,
+    /// The model used, if the derivation was model-assisted.
+    pub model: Option<String>,
+    /// Human-readable justification — the WHY.
+    pub reason: Option<String>,
+    /// Structured evidence trail (canonical Evidence extension).
+    pub evidence: Vec<crate::knowledge::evidence::Evidence>,
+    /// Confidence context override; None derives a baseline from the sources.
+    pub confidence: Option<ConfidenceContext>,
+}
+
+impl DeriveRequest {
+    pub fn new(context: impl Into<KnowledgeContext>, type_name: impl Into<String>) -> Self {
+        let ctx = context.into();
+        DeriveRequest {
+            context: ctx.clone(),
+            type_name: type_name.into(),
+            properties: PropertyMap::new(),
+            sources: Vec::new(),
+            operation: "derivation".into(),
+            actor: ctx.subject.name,
+            model: None,
+            reason: None,
+            evidence: Vec::new(),
+            confidence: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -374,6 +441,16 @@ pub struct Evolved {
     pub version: u64,
     pub commit_ts: u64,
     pub state: LifecycleState,
+}
+
+/// v0.3 K1: result of an epistemic status transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EpistemicChanged {
+    pub koid: KOID,
+    pub version: u64,
+    pub commit_ts: u64,
+    pub from: EpistemicStatus,
+    pub to: EpistemicStatus,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -505,13 +582,15 @@ pub use crate::knowledge::notify::{EventFilter, SubscriptionRecord};
 // Kernel
 // ---------------------------------------------------------------------------
 
-struct Pipeline {
+pub(crate) struct Pipeline {
     seq: u64,
     audit: [u8; 32],
 }
 
 pub struct Kernel {
     repo: Arc<KnowledgeRepository>,
+    /// Raw store handle for keys outside the repository (encryption DEKs).
+    store: Arc<dyn StorageEngine>,
     clock: Arc<dyn Clock>,
     hlc: Arc<Hlc>,
     idgen: Arc<Mutex<IdGen>>,
@@ -541,8 +620,14 @@ pub struct Kernel {
 impl Kernel {
     /// Open (or create) a kernel over `store`. Recovers the journal head so a
     /// restarted kernel continues the hash chain and sequence numbers.
-    pub fn open(store: Arc<dyn StorageEngine>, clock: Arc<dyn Clock>, salt: u64) -> KResult<Self> {
-        let repo = Arc::new(KnowledgeRepository::new(store));
+    /// `id_seed` namespaces this kernel's KOID id-space (encoded into every
+    /// KOID); it is not cryptographic material.
+    pub fn open(
+        store: Arc<dyn StorageEngine>,
+        clock: Arc<dyn Clock>,
+        id_seed: u64,
+    ) -> KResult<Self> {
+        let repo = Arc::new(KnowledgeRepository::new(store.clone()));
         // R9: one-time backfill of the type index for databases created before
         // it existed. Marker makes it a no-op on every subsequent open.
         if !repo.type_index_marker()? {
@@ -572,16 +657,26 @@ impl Kernel {
         let relationships = Arc::new(RelationshipManager::new(repo.clone()));
         let objects = Arc::new(ObjectManager::new(repo.clone()));
         let constraint_caps = repo.constraint_capabilities();
+        // REC-002: reload persisted schemas. Fail closed — a corrupt schema row
+        // must not silently drop constraints.
+        let schemas = Arc::new(RwLock::new(SchemaRegistry::new()));
+        for (type_name, bytes) in repo.schema_rows()? {
+            let schema = crate::knowledge::codec::decode_schema(&bytes).map_err(|e| {
+                KError::Store(format!("persisted schema '{}' corrupt: {}", type_name, e))
+            })?;
+            schemas.write().unwrap().register(schema);
+        }
         Ok(Kernel {
             repo,
+            store,
             clock,
             hlc: Arc::new(Hlc::starting_at(last_ts)),
-            idgen: Arc::new(Mutex::new(IdGen::new(salt))),
+            idgen: Arc::new(Mutex::new(IdGen::new(id_seed))),
             pipe: Arc::new(Mutex::new(Pipeline { seq, audit })),
             events: Arc::new(Mutex::new(events)),
             auth: Arc::new(RwLock::new(auth)),
             indexes: Arc::new(RwLock::new(Some(IndexCoordinator::new()))),
-            schemas: Arc::new(RwLock::new(SchemaRegistry::new())),
+            schemas,
             ontologies: Arc::new(RwLock::new(OntologyRegistry::empty())),
             constraint_eval: ConstraintEvaluator::new(),
             constraint_caps,
@@ -614,9 +709,42 @@ impl Kernel {
 
     /// Enable field-level encryption (MRFC-0020 Phase 3).
     /// Only effective when called on the originally opened kernel.
-    pub fn with_field_encryption(mut self, crypto: Arc<Crypto>, envelope: Arc<Envelope>) -> Self {
+    /// Loads persisted wrapped DEKs from the store. Fails closed on a corrupt
+    /// DEK record: continuing would mint a fresh DEK for the tenant and orphan
+    /// every field-encrypted value.
+    pub fn with_field_encryption(
+        mut self,
+        crypto: Arc<Crypto>,
+        envelope: Arc<Envelope>,
+    ) -> KResult<Self> {
+        // Crypto-version metadata: written on first open, verified on every
+        // later open. An unknown record fails closed — we never silently
+        // guess key material against a different crypto scheme.
+        if let Some(meta) = self.store.get(CRYPTO_META_KEY)? {
+            if meta != CRYPTO_META_V1 {
+                return Err(KError::Store(format!(
+                    "unsupported crypto metadata version: {:?}",
+                    String::from_utf8_lossy(&meta)
+                )));
+            }
+        } else {
+            let mut batch = WriteBatch::new();
+            batch.put(CRYPTO_META_KEY.to_vec(), CRYPTO_META_V1.to_vec());
+            self.store
+                .write_batch(&batch)
+                .map_err(|e| KError::Store(format!("crypto meta persist: {}", e)))?;
+        }
+        if let Some(raw) = self.store.get(DEKS_STORAGE_KEY)? {
+            let deks = Envelope::decode_wrapped_deks(&raw)
+                .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
+            for d in &deks {
+                envelope
+                    .load_dek(d)
+                    .map_err(|e| KError::Store(format!("DEK load: {}", e)))?;
+            }
+        }
         self.field_crypto = Some(Arc::new(FieldCrypto::new(crypto, envelope)));
-        self
+        Ok(self)
     }
 
     /// Register an encryption policy for a schema type. Fields listed in the
@@ -653,6 +781,33 @@ impl Kernel {
         })
     }
 
+    /// Retention evidence (MRFC-0020 Phase 4): count the kernel-stamped
+    /// `valid_to` horizons across all heads, split by expiry. Reads heads
+    /// raw (no ACL) — this is auditor evidence, gated at the tool layer.
+    pub fn retention_summary(&self) -> KResult<RetentionSummary> {
+        let now = self.clock_now();
+        let mut summary = RetentionSummary {
+            retained_objects: 0,
+            live_windows: 0,
+            expired: 0,
+        };
+        for (koid, _version, _ts, _state) in self.scan_heads()? {
+            let Some(ko) = self.head_object(&koid)? else {
+                continue;
+            };
+            let Some(valid_to) = ko.valid_to() else {
+                continue;
+            };
+            summary.retained_objects += 1;
+            if valid_to > now {
+                summary.live_windows += 1;
+            } else {
+                summary.expired += 1;
+            }
+        }
+        Ok(summary)
+    }
+
     pub fn new_koid(&self) -> KOID {
         self.idgen.lock().unwrap().next(self.clock.millis())
     }
@@ -667,6 +822,7 @@ impl Kernel {
     pub fn clone_handle(&self) -> Kernel {
         Kernel {
             repo: self.repo.clone(),
+            store: self.store.clone(),
             clock: self.clock.clone(),
             hlc: self.hlc.clone(),
             idgen: self.idgen.clone(),
@@ -714,9 +870,16 @@ impl Kernel {
     }
 
     /// Register a schema for automatic validation on `remember`.
-    /// Schemas are currently in-memory only (MRFC-0001 Increment-1).
-    pub fn register_schema(&self, schema: Schema) {
+    /// Persisted as a reserved row (REC-002) so backup/restore preserves
+    /// constraints. A store failure leaves the registry unchanged.
+    pub fn register_schema(&self, schema: Schema) -> KResult<()> {
+        let bytes = crate::knowledge::codec::encode_schema(&schema);
+        let mut batch = WriteBatch::new();
+        self.repo
+            .put_schema_row(&mut batch, &schema.type_name, &bytes);
+        self.repo.write_batch(&batch)?;
         self.schemas.write().unwrap().register(schema);
+        Ok(())
     }
 
     /// Register an ontology for relationship validation (MRFC-0060 Phase C3).
@@ -763,6 +926,139 @@ impl Kernel {
         Ok(violations)
     }
 
+    /// Apply a schema migration atomically (EVO-003 apply/migrate op).
+    ///
+    /// Every live object of `migration.schema.type_name` not yet stamped with
+    /// the target version is rewritten: property transforms are applied, the
+    /// `schema_version` stamp is bumped, and the batch commits through
+    /// `transact` (per-object authz via the existing write path, OCC on every
+    /// head, schema + constraint validation against the NEW schema). The
+    /// target schema row commits in the SAME engine batch as the data rows
+    /// (SCHEMA-006: no hybrid window); on any failure only the in-memory
+    /// registration is rolled back and nothing persists.
+    ///
+    /// Deterministic version gate: the new version must be prev+1, or — for an
+    /// identical re-apply (idempotent retry) — equal to prev with the exact
+    /// same schema. Warnings from constraint evaluation do not block; errors
+    /// do (pre-validated on the transformed view, because `transact` skips
+    /// check evaluation on empty write-sets).
+    pub fn apply_schema_migration(
+        &self,
+        subject: &Subject,
+        migration: &SchemaMigration,
+    ) -> KResult<MigrationReport> {
+        let new_schema = &migration.schema;
+        let prev = {
+            let schemas = self.schemas.read().unwrap();
+            match schemas.get(&new_schema.type_name) {
+                Some(s) => s.clone(),
+                None => {
+                    return Err(KError::InvalidSchema(format!(
+                        "no schema registered for type '{}' — register an initial schema before migrating",
+                        new_schema.type_name
+                    )));
+                }
+            }
+        };
+        let new_version = new_schema.schema_version;
+        if new_version != prev.schema_version + 1
+            && (new_version != prev.schema_version || *new_schema != prev)
+        {
+            return Err(KError::InvalidSchema(format!(
+                "schema migration for '{}' must bump version {} -> {}",
+                new_schema.type_name, prev.schema_version, new_version
+            )));
+        }
+
+        let heads = self.objects.scan_heads()?;
+        let mut ops = Vec::new();
+        let mut scanned = 0usize;
+        let mut already_at_target = 0usize;
+        for (hkoid, _version, _ts, state) in &heads {
+            if *state == LifecycleState::Deleted {
+                continue;
+            }
+            let Some(head) = self.objects.get(hkoid)? else {
+                continue;
+            };
+            if head.metadata.type_name != new_schema.type_name {
+                continue;
+            }
+            scanned += 1;
+            if head.metadata.schema_version == new_version {
+                already_at_target += 1;
+                continue;
+            }
+            let mut props = head.properties.clone();
+            for t in &migration.transforms {
+                match t {
+                    PropertyTransform::Rename { from, to } => match props.remove(from) {
+                        Some(v) => {
+                            props.insert(to.clone(), v);
+                        }
+                        None => {
+                            return Err(KError::InvalidObject(format!(
+                                "rename transform: property '{}' missing on {}",
+                                from, hkoid
+                            )));
+                        }
+                    },
+                    PropertyTransform::SetDefault { property, value } => {
+                        if !props.contains_key(property) {
+                            props.insert(property.clone(), value.clone());
+                        }
+                    }
+                }
+            }
+            // Pre-validate the transformed view against the new schema's
+            // constraints (check/domain) — transact skips these on empty
+            // write-sets, so a migration must evaluate them explicitly.
+            let result =
+                self.constraint_eval
+                    .evaluate_full(new_schema, &props, None, Some(*hkoid), None);
+            if !result.violations.is_empty() {
+                return Err(KError::InvalidSchema(format!(
+                    "schema migration of '{}' would violate constraints on {}: {}",
+                    new_schema.type_name, hkoid, result.violations[0].message
+                )));
+            }
+            let mut meta = head.metadata.clone();
+            meta.schema_version = new_version;
+            let mut req = RememberRequest::update(subject.clone(), *hkoid, meta);
+            req.expected_version = Some(head.version);
+            req.properties = props;
+            // preserve everything the migration does not touch
+            req.semantic = head.semantic.clone();
+            req.relationships = head.relationships.clone();
+            req.extensions = head.extensions.clone();
+            req.origin = head.lifecycle.origin.clone();
+            req.note = Some(format!(
+                "schema migration {} -> {}",
+                prev.schema_version, new_version
+            ));
+            ops.push(TransactionOp::new(subject.clone(), req));
+        }
+        let migrated = ops.len();
+
+        // Register the target schema in-memory first so `transact` validates
+        // the stamped KOs against it. The persisted row commits in the SAME
+        // engine batch as the data rows (SCHEMA-006): a kill mid-migration
+        // leaves valid pre OR post state, never a hybrid. On failure only
+        // the in-memory registry is restored — the persisted row was never
+        // written, so nothing to roll back. Transact's OCC re-check makes
+        // the pre-transact scan race-safe.
+        self.schemas.write().unwrap().register(new_schema.clone());
+        if let Err(e) = self.transact_with_schema_row(ops, Some(new_schema)) {
+            self.schemas.write().unwrap().register(prev);
+            return Err(e);
+        }
+        Ok(MigrationReport {
+            scanned,
+            migrated,
+            already_at_target,
+        })
+    }
+
     /// Version payload access for index maintenance (internal; bypasses ACL).
     #[doc(hidden)]
     pub fn raw_object_at(&self, koid: &KOID, commit_ts: u64) -> KResult<Option<KnowledgeObject>> {
@@ -771,7 +1067,7 @@ impl Kernel {
 
     // ---- internal read helpers -------------------------------------------
 
-    fn head_object(&self, koid: &KOID) -> KResult<Option<KnowledgeObject>> {
+    pub(crate) fn head_object(&self, koid: &KOID) -> KResult<Option<KnowledgeObject>> {
         self.objects.get(koid)
     }
 
@@ -900,6 +1196,7 @@ impl Kernel {
         actor: &str,
         note: Option<String>,
         idem: Option<&str>,
+        prev_rels: Option<&[RelationshipRef]>,
     ) -> KResult<(u64, u64)> {
         ko.validate()?;
         let commit_ts = self.hlc.now(self.clock.as_ref());
@@ -953,6 +1250,27 @@ impl Kernel {
             self.relationships
                 .write_index(&mut batch, &src, &rel.rel_type, &dst);
         }
+        // QA2-PROP-002: remove index entries for edges that were on the
+        // previous head but are absent from this version (unrelate). The
+        // removals land in the same batch as the commit, so the index and
+        // the head can never drift — across a crash or otherwise. The diff
+        // is a multiset subtraction: a removed-and-readded edge stays.
+        if let Some(prev) = prev_rels {
+            let mut removed: Vec<RelationshipRef> = prev.to_vec();
+            for rel in &ko.relationships {
+                if let Some(i) = removed.iter().position(|p| p == rel) {
+                    removed.swap_remove(i);
+                }
+            }
+            for rel in &removed {
+                let (src, dst) = match rel.direction {
+                    Direction::Outbound => (ko.koid, rel.target),
+                    Direction::Inbound => (rel.target, ko.koid),
+                };
+                self.relationships
+                    .delete_index(&mut batch, &src, &rel.rel_type, &dst);
+            }
+        }
         self.repo.put_head(
             &mut batch,
             &ko.koid,
@@ -983,8 +1301,109 @@ impl Kernel {
 
     // ---- remember (MRFC-0011 §6.1) -----------------------------------------
 
+    /// Extension keys owned by the kernel: epistemic status/history, lifecycle,
+    /// Extension keys owned by the kernel: epistemic status/history, lifecycle,
+    /// invalidation, evidence, derivation, confidence, verified_event,
+    /// valid_to, authority, scope, and content trust. Only the semantic
+    /// operations may write them — a caller supplying them to remember()
+    /// would forge epistemic state (review P0-1). `valid_from` is deliberately
+    /// absent: callers declare their own claim's temporal start (and may not
+    /// have written `valid_to`). Public so callers can strip these keys from a
+    /// read-modify-write update instead of being rejected. P2-8: this is the
+    /// complete enumeration — the typed-struct migration stays deferred, but
+    /// every managed key lands here.
+    pub const KERNEL_MANAGED_EXTENSIONS: &[&str] = &[
+        KnowledgeObject::EXT_EPISTEMIC_STATUS,
+        KnowledgeObject::EXT_EPISTEMIC_HISTORY,
+        KnowledgeObject::EXT_LIFECYCLE_HISTORY,
+        KnowledgeObject::EXT_INVALIDATION,
+        KnowledgeObject::EXT_EVIDENCE,
+        KnowledgeObject::EXT_DERIVATION,
+        KnowledgeObject::EXT_CONFIDENCE,
+        KnowledgeObject::EXT_VERIFIED_EVENT,
+        KnowledgeObject::EXT_VALID_TO,
+        KnowledgeObject::EXT_CONTENT_TRUST,
+        "authority",
+        "scope",
+    ];
+
+    /// Public entry point: the epistemic-metadata boundary. Kernel-managed
+    /// extension keys are rejected here so no external caller can mint a
+    /// Verified claim, a forged authority, or a fabricated evidence trail.
     pub fn remember(&self, req: RememberRequest) -> KResult<Remembered> {
+        for key in Self::KERNEL_MANAGED_EXTENSIONS {
+            if req.extensions.contains_key(*key) {
+                return Err(KError::InvalidObject(format!(
+                    "extension '{key}' is kernel-managed — set it via the semantic \
+                     operations (assert/verify/contradict/supersede/merge/invalidate/\
+                     derive), not remember()"
+                )));
+            }
+        }
+        self.remember_trusted(req)
+    }
+
+    /// Declarative retention (G13 / RET-CHAT-001): commit through the normal
+    /// write path with an automatic expiry horizon. The kernel computes
+    /// `valid_to = clock_now() + retention_ms` from its own clock, so callers
+    /// can never forge the stamp (P0-1: EXT_VALID_TO stays kernel-managed).
+    /// Updating an existing KO refreshes the horizon — the stamped value wins
+    /// the update carry-forward. Expired KOs stay readable via get/lineage
+    /// (RET-CHAT-003) but drop out of default-time retrieval.
+    pub fn remember_retained(
+        &self,
+        mut req: RememberRequest,
+        retention_ms: u64,
+    ) -> KResult<Remembered> {
+        let now = self.clock_now();
+        // Same checked arithmetic as record_experience (Review P1-6): a
+        // hostile u64::MAX retention must be rejected, not wrapped.
+        let valid_to = now
+            .checked_add(retention_ms)
+            .filter(|v| *v <= i64::MAX as u64)
+            .ok_or_else(|| {
+                KError::InvalidObject(
+                    "retention pushes valid_to past the representable epoch bound".into(),
+                )
+            })?;
+        // The effective interval must never invert (P1-1), on create too:
+        // remember_locked's inversion check only covers the update path.
+        if let Some(f) = req
+            .extensions
+            .get(KnowledgeObject::EXT_VALID_FROM)
+            .and_then(|v| match v {
+                Value::Int(i) if *i >= 0 => Some(*i as u64),
+                _ => None,
+            })
+        {
+            if f > valid_to {
+                return Err(KError::InvalidObject(format!(
+                    "valid interval must satisfy valid_from <= valid_to (got {f} > {valid_to})"
+                )));
+            }
+        }
+        req.extensions.insert(
+            KnowledgeObject::EXT_VALID_TO.into(),
+            Value::Int(valid_to as i64),
+        );
+        self.remember_trusted(req)
+    }
+
+    /// remember() without the managed-extension guard — for the semantic
+    /// operations (K4) that construct extension maps with kernel-owned keys
+    /// and commit through the same locked path.
+    fn remember_trusted(&self, req: RememberRequest) -> KResult<Remembered> {
         let mut pipe = self.pipe.lock().unwrap();
+        self.remember_locked(&mut pipe, &req)
+    }
+
+    /// remember() with the pipe lock already held — internal to composite
+    /// knowledge ops (K4) so multi-KO operations commit under one lock.
+    pub(crate) fn remember_locked(
+        &self,
+        pipe: &mut Pipeline,
+        req: &RememberRequest,
+    ) -> KResult<Remembered> {
         if let Some(k) = &req.idempotency_key {
             if let Some((koid, version, commit_ts)) = self.repo.get_idem(k)? {
                 return Ok(Remembered {
@@ -1013,17 +1432,131 @@ impl Kernel {
             });
         }
         let creating = head.is_none();
-        // MRFC-0060 Phase R12: provenance fields are immutable once written.
-        // Evidence, source_artifact, and revision extensions cannot be changed.
-        if !creating {
-            let head_ext = &head.as_ref().unwrap().extensions;
-            for key in &["evidence", "source_artifact", "revision"] {
-                if head_ext.contains_key(*key) && req.extensions.get(*key) != head_ext.get(*key) {
+        // v0.3 K1: prepare extensions so every committed KO carries explicit
+        // epistemic metadata, and updates never silently drop it.
+        let mut extensions = req.extensions.clone();
+        if creating {
+            // Stamp defaults for writes that declare none — the kernel, not
+            // the caller, owns the epistemic baseline.
+            if !extensions.contains_key(KnowledgeObject::EXT_EPISTEMIC_STATUS) {
+                extensions.insert(
+                    KnowledgeObject::EXT_EPISTEMIC_STATUS.into(),
+                    Value::Text(EpistemicStatus::for_origin(&req.origin).as_str().into()),
+                );
+            }
+            if !extensions.contains_key("authority") {
+                extensions.insert(
+                    "authority".into(),
+                    Value::Text(Authority::for_origin(&req.origin).as_str().into()),
+                );
+            }
+            if !extensions.contains_key("scope") {
+                extensions.insert(
+                    "scope".into(),
+                    Value::Text(Scope::for_origin(&req.origin).as_str().into()),
+                );
+            }
+        } else {
+            let head = head.as_ref().unwrap();
+            // Carry forward epistemic/provenance metadata the caller did not
+            // restate — updates used to replace the whole extension map.
+            for key in [
+                KnowledgeObject::EXT_EPISTEMIC_STATUS,
+                KnowledgeObject::EXT_EPISTEMIC_HISTORY,
+                KnowledgeObject::EXT_EVIDENCE,
+                KnowledgeObject::EXT_LIFECYCLE_HISTORY,
+                KnowledgeObject::EXT_CONTENT_TRUST,
+                KnowledgeObject::EXT_VALID_FROM,
+                KnowledgeObject::EXT_VALID_TO,
+                KnowledgeObject::EXT_DERIVATION,
+                KnowledgeObject::EXT_CONFIDENCE,
+                "authority",
+                "scope",
+            ] {
+                if !extensions.contains_key(key) {
+                    if let Some(v) = head.extensions.get(key) {
+                        extensions.insert(key.into(), v.clone());
+                    }
+                }
+            }
+            // Authority is monotonic-up on ordinary updates; a downgrade
+            // requires an admin (explicit escalation path).
+            let parse_rank = |v: &Value| match v {
+                Value::Text(s) => Authority::from_str(s).map(|a| a.rank()),
+                _ => None,
+            };
+            if let (Some(head_a), Some(req_a)) = (
+                head.extensions.get("authority").and_then(parse_rank),
+                extensions.get("authority").and_then(parse_rank),
+            ) {
+                if req_a < head_a && !req.context.subject.is_admin() {
+                    return Err(KError::InvalidObject(format!(
+                        "authority downgrade ({} -> {}) requires admin",
+                        head_a, req_a
+                    )));
+                }
+            }
+            // MRFC-0060 Phase R12: source_artifact/revision are immutable once
+            // written; evidence is append-only — the head's list must be a
+            // prefix of the request's (entries never change or vanish).
+            // P1-1 (review): the effective interval must never invert —
+            // valid_from <= valid_to, checked here so no caller or internal
+            // op can commit a KO whose interval runs backwards. Equality is
+            // legal: a claim superseded/invalidated at its own assertion
+            // instant (or a future fact closed before it became valid) has a
+            // zero-duration interval and is valid nowhere — by design.
+            let int_of = |v: &Value| match v {
+                Value::Int(i) if *i >= 0 => Some(*i as u64),
+                _ => None,
+            };
+            if let (Some(f), Some(t)) = (
+                extensions
+                    .get(KnowledgeObject::EXT_VALID_FROM)
+                    .and_then(int_of),
+                extensions
+                    .get(KnowledgeObject::EXT_VALID_TO)
+                    .and_then(int_of),
+            ) {
+                if f > t {
+                    return Err(KError::InvalidObject(format!(
+                        "valid interval must satisfy valid_from <= valid_to (got {f} > {t})"
+                    )));
+                }
+            }
+            // MRFC-0060 Phase R12: source_artifact/revision are immutable once
+            // written; evidence is append-only — the head's list must be a
+            // prefix of the request's (entries never change or vanish).
+            for key in &["source_artifact", "revision"] {
+                if head.extensions.contains_key(*key)
+                    && extensions.get(*key) != head.extensions.get(*key)
+                {
                     return Err(KError::InvalidObject(format!(
                         "provenance field '{}' is immutable — cannot be changed after creation",
                         key
                     )));
                 }
+            }
+            match head.extensions.get(KnowledgeObject::EXT_EVIDENCE) {
+                Some(Value::List(head_ev)) => match extensions.get(KnowledgeObject::EXT_EVIDENCE) {
+                    Some(Value::List(req_ev))
+                        if req_ev.len() >= head_ev.len()
+                            && req_ev[..head_ev.len()] == head_ev[..] => {}
+                    _ => {
+                        return Err(KError::InvalidObject(
+                                "provenance field 'evidence' is append-only — existing entries cannot be changed or removed"
+                                    .into(),
+                            ));
+                    }
+                },
+                // Legacy non-list evidence keeps the strict equality rule.
+                Some(other) if extensions.get(KnowledgeObject::EXT_EVIDENCE) == Some(other) => {}
+                Some(_) => {
+                    return Err(KError::InvalidObject(
+                        "provenance field 'evidence' is immutable — cannot be changed after creation"
+                            .into(),
+                    ));
+                }
+                None => {}
             }
         }
         // MRFC-0060 Phase C6: compute write-set for incremental constraint evaluation.
@@ -1083,7 +1616,28 @@ impl Kernel {
             metadata: req.metadata.clone(),
             properties: req.properties.clone(),
             semantic: req.semantic.clone(),
-            relationships: req.relationships.clone(),
+            relationships: if creating {
+                req.relationships.clone()
+            } else {
+                // Kernel-managed edges (written by derive/supersede/contradict)
+                // survive updates the caller did not restate — dropping them
+                // would break lineage BFS (DERIVED_FROM), supersession
+                // traversal, and conflict resolution. Symmetric with the
+                // extension carry-forward above. Caller-restated edges are
+                // replaced wholesale as before (remember() semantics).
+                let mut rels = req.relationships.clone();
+                let h = head.as_ref().unwrap();
+                for hr in &h.relationships {
+                    if (hr.rel_type == SUPERSEDES
+                        || hr.rel_type == DERIVED_FROM
+                        || hr.rel_type == CONTRADICTS)
+                        && !rels.contains(hr)
+                    {
+                        rels.push(hr.clone());
+                    }
+                }
+                rels
+            },
             event_refs: head
                 .as_ref()
                 .map(|h| h.event_refs.clone())
@@ -1097,7 +1651,7 @@ impl Kernel {
                     state: LifecycleState::Draft,
                     origin: req.origin.clone(),
                 }),
-            extensions: req.extensions.clone(),
+            extensions,
         };
         {
             let schemas = self.schemas.read().unwrap();
@@ -1216,8 +1770,24 @@ impl Kernel {
                 .get(&req.metadata.type_name)
             {
                 let tenant = req.context.tenant.as_deref().unwrap_or("default");
-                fc.encrypt_fields(tenant, &req.metadata.type_name, &mut ko.properties, policy)
+                let encrypted = fc
+                    .encrypt_fields(tenant, &req.metadata.type_name, &mut ko.properties, policy)
                     .map_err(|e| KError::Store(format!("field encrypt: {}", e)))?;
+                if encrypted > 0 {
+                    // Persist wrapped DEKs BEFORE the object commit: a crash in
+                    // between leaves an orphan DEK record (harmless); the
+                    // reverse would leave field ciphertext with no recoverable
+                    // key. ponytail: unconditional rewrite (tens of bytes);
+                    // dirty-tracking if this path gets hot.
+                    let mut batch = WriteBatch::new();
+                    batch.put(
+                        DEKS_STORAGE_KEY.to_vec(),
+                        Envelope::encode_wrapped_deks(&fc.wrapped_deks()),
+                    );
+                    self.store
+                        .write_batch(&batch)
+                        .map_err(|e| KError::Store(format!("DEK persist: {}", e)))?;
+                }
             }
         }
         // claims via Class B keep ClaimAsserted kind
@@ -1229,15 +1799,15 @@ impl Kernel {
         let is_auth_meta =
             req.metadata.type_name == ROLE_TYPE || req.metadata.type_name == POLICY_TYPE;
         let (commit_ts, _seq) = self.commit_version(
-            &mut pipe,
+            pipe,
             ko,
             kind,
             req.origin.clone(),
             &req.context.subject.name,
             req.note.clone(),
             req.idempotency_key.as_deref(),
+            head.as_ref().map(|h| h.relationships.as_slice()),
         )?;
-        drop(pipe);
         if is_auth_meta {
             self.refresh_auth_cache()?;
         }
@@ -1261,7 +1831,30 @@ impl Kernel {
     /// Idempotency keys inside transaction requests are not supported: a batch
     /// is already atomic and the caller can use an external idempotency token.
     pub fn transact(&self, ops: Vec<TransactionOp>) -> KResult<Vec<Remembered>> {
+        self.transact_with_schema_row(ops, None)
+    }
+
+    /// Internal: `transact` with an optional schema row folded into the same
+    /// commit batch (SCHEMA-006). The schema row must become durable in the
+    /// SAME engine batch as the data rows it validates — two batches leave a
+    /// kill window where the new schema row coexists with old-version data.
+    fn transact_with_schema_row(
+        &self,
+        ops: Vec<TransactionOp>,
+        schema_row: Option<&Schema>,
+    ) -> KResult<Vec<Remembered>> {
         if ops.is_empty() {
+            let Some(schema) = schema_row else {
+                return Ok(Vec::new());
+            };
+            // Idempotent re-apply with nothing left to migrate: persist the
+            // schema row alone so the persisted registry never lags the
+            // data stamps (all heads already at the target version).
+            let mut batch = WriteBatch::new();
+            let bytes = crate::knowledge::codec::encode_schema(schema);
+            self.repo
+                .put_schema_row(&mut batch, &schema.type_name, &bytes);
+            self.repo.write_batch(&batch)?;
             return Ok(Vec::new());
         }
         let mut pipe = self.pipe.lock().unwrap();
@@ -1659,6 +2252,11 @@ impl Kernel {
         let final_seq = start_seq + events.len() as u64;
         self.repo
             .put_journal(&mut batch, final_seq, prev_audit, commit_ts);
+        if let Some(schema) = schema_row {
+            let bytes = crate::knowledge::codec::encode_schema(schema);
+            self.repo
+                .put_schema_row(&mut batch, &schema.type_name, &bytes);
+        }
         self.repo.write_batch(&batch)?;
         pipe.seq = final_seq;
         pipe.audit = prev_audit;
@@ -1713,6 +2311,15 @@ impl Kernel {
             state: to,
             origin: origin.clone(),
         };
+        // v0.3 K1: lifecycle transitions create evidence — append to the
+        // append-only history before commit.
+        ko.push_lifecycle_history(
+            from,
+            to,
+            self.clock.millis(),
+            &ctx.subject.name,
+            note.as_deref(),
+        );
         let (commit_ts, _seq) = self.commit_version(
             &mut pipe,
             ko,
@@ -1721,12 +2328,136 @@ impl Kernel {
             &ctx.subject.name,
             note,
             None,
+            Some(&head.relationships),
         )?;
         Ok(Evolved {
             koid: *koid,
             version: cur_v + 1,
             commit_ts,
             state: to,
+        })
+    }
+
+    // ---- epistemic transitions (v0.3 K1) -----------------------------------
+
+    /// Move a KO's epistemic status under the constrained transition table.
+    /// Appends to the append-only history extension, bumps the version, and
+    /// lands an `EpistemicChanged` event in the audit chain. Transitions
+    /// create evidence: the history entry records from/to, wall-clock,
+    /// actor, and reason.
+    ///
+    /// Explicitly privileged epistemic transition (review P0-2). The
+    /// `admin_` prefix is the contract: this bypasses the semantic ops'
+    /// evidence validation, confidence accounting, and dependent sweeps, and
+    /// is therefore reserved for an embedder's own admin surface (or
+    /// multi-KO composite ops inside the crate, which use
+    /// `transition_epistemic_locked` directly). NOT exposed through any
+    /// protocol surface (MCP/REST/shell): agents must use the semantic ops
+    /// (`observe`, `assert_knowledge`, `verify_knowledge`, `contradict`,
+    /// `supersede`, `merge`, `invalidate`, `resolve_conflict`).
+    ///
+    /// v0.3 K2 supersession semantics: moving to `Superseded` ends the fact's
+    /// validity now (stamps `valid_to` when absent) and, when `superseded_by`
+    /// names the successor, records the `SUPERSEDES` edge on the superseded
+    /// KO. Supersession lives on the epistemic path — the review's own
+    /// doctrine keeps epistemic ("do we still hold this") orthogonal to
+    /// lifecycle ("is this record maintained").
+    pub fn admin_transition_epistemic(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: &KOID,
+        to: EpistemicStatus,
+        origin: Origin,
+        superseded_by: Option<KOID>,
+        expected_version: Option<u64>,
+        reason: Option<String>,
+    ) -> KResult<EpistemicChanged> {
+        let ctx = ctx.into();
+        let mut pipe = self.pipe.lock().unwrap();
+        self.transition_epistemic_locked(
+            &mut pipe,
+            &ctx,
+            koid,
+            to,
+            origin,
+            superseded_by,
+            expected_version,
+            reason,
+        )
+    }
+
+    /// admin_transition_epistemic() with the pipe lock already held — internal to
+    /// composite knowledge ops (K4).
+    pub(crate) fn transition_epistemic_locked(
+        &self,
+        pipe: &mut Pipeline,
+        ctx: &KnowledgeContext,
+        koid: &KOID,
+        to: EpistemicStatus,
+        origin: Origin,
+        superseded_by: Option<KOID>,
+        expected_version: Option<u64>,
+        reason: Option<String>,
+    ) -> KResult<EpistemicChanged> {
+        let head = self.head_object(koid)?.ok_or(KError::NotFound(*koid))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &head, Action::Write)?;
+        let from = head.epistemic_status();
+        if !from.can_transition(to) {
+            return Err(KError::InvalidEpistemic { from, to });
+        }
+        let cur_v = head.version;
+        let expected = expected_version.unwrap_or(cur_v);
+        if expected != cur_v {
+            return Err(KError::VersionConflict {
+                koid: *koid,
+                expected,
+                found: cur_v,
+            });
+        }
+        let at = self.clock.millis();
+        let mut ko = head.clone();
+        ko.version = cur_v + 1;
+        ko.set_epistemic_status(to);
+        if to == EpistemicStatus::Superseded {
+            ko.close_valid_time(at)?;
+            if let Some(target) = superseded_by {
+                if self.head_object(&target)?.is_none() {
+                    return Err(KError::InvalidObject(format!(
+                        "superseded_by target not found: {}",
+                        target.to_hex()
+                    )));
+                }
+                ko.relationships.push(RelationshipRef {
+                    rel_type: SUPERSEDES.into(),
+                    target,
+                    direction: Direction::Outbound,
+                });
+            }
+        } else if superseded_by.is_some() {
+            return Err(KError::InvalidObject(
+                "'superseded_by' requires a transition to 'superseded'".into(),
+            ));
+        }
+        ko.push_epistemic_history(from, to, at, &ctx.subject.name, reason.as_deref());
+        let (commit_ts, _seq) = self.commit_version(
+            pipe,
+            ko,
+            EventKind::EpistemicChanged,
+            origin,
+            &ctx.subject.name,
+            reason,
+            None,
+            Some(&head.relationships),
+        )?;
+        Ok(EpistemicChanged {
+            koid: *koid,
+            version: cur_v + 1,
+            commit_ts,
+            from,
+            to,
         })
     }
 
@@ -1772,6 +2503,7 @@ impl Kernel {
                     &ctx.subject.name,
                     note,
                     None,
+                    Some(&head.relationships),
                 )?;
                 Ok(Forgotten {
                     koid: *koid,
@@ -1895,17 +2627,185 @@ impl Kernel {
         Ok(ko)
     }
 
+    // ---- v0.3 K2: temporal reads -------------------------------------------
+
+    /// Current wall-clock millis from the kernel clock — "now" for valid-time
+    /// evaluation. Distinct from HLC commit timestamps.
+    pub fn clock_now(&self) -> u64 {
+        self.clock.millis()
+    }
+
+    /// Point-in-time (transaction-time) read: the version this kernel had
+    /// committed as of wall-clock `at_millis`. Packs to the HLC layout
+    /// (`millis << 16 | counter`) so the MVCC `<= snap` comparison selects
+    /// the newest version committed at or before that instant; `Ok(None)`
+    /// when the KO did not exist (or was not yet committed) by then.
+    pub fn get_as_of(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: &KOID,
+        at_millis: u64,
+    ) -> KResult<Option<KnowledgeObject>> {
+        let ctx = ctx.into();
+        let snap = at_millis.checked_shl(16).unwrap_or(u64::MAX);
+        let Some(ko) = self.object_at(koid, snap)? else {
+            return Ok(None);
+        };
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &ko, Action::Read)?;
+        Ok(Some(ko))
+    }
+
+    /// All committed versions of `koid` in ascending commit order —
+    /// historical reconstruction for the `HISTORICAL` query operator.
+    /// Tombstone (Deleted) versions are skipped; each version is
+    /// ACL-checked independently (a version's ACL may differ from the head).
+    pub fn history(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: &KOID,
+    ) -> KResult<Vec<(u64, KnowledgeObject)>> {
+        let ctx = ctx.into();
+        let mut out = Vec::new();
+        for (ts, ko) in self.objects.scan_versions(koid)? {
+            if ko.lifecycle.state == LifecycleState::Deleted {
+                continue;
+            }
+            if self
+                .auth
+                .read()
+                .unwrap()
+                .authorize(&ctx.subject, &ko, Action::Read)
+                .is_err()
+            {
+                continue;
+            }
+            out.push((ts, ko));
+        }
+        Ok(out)
+    }
+
+    // ---- v0.3 K3: derivation (anti-CRUD-cosplay, review H4/H6) ---------------
+
+    /// Derive a new KO from premise KOs. This is a real operation, not a
+    /// property write: every premise must exist and be readable; the derived
+    /// KO carries a first-class Derivation record (WHY / FROM WHAT / HOW /
+    /// BY WHOM / WHEN), inbound DERIVED_FROM edges to each source (so
+    /// `outbound_edges(src, "derived_from")` finds dependents), the canonical
+    /// evidence trail when supplied, and a confidence context (explicit or
+    /// baseline-derived from the sources — never silently full). Origin is
+    /// Reason, so the epistemic baseline is Inferred.
+    pub fn derive(&self, req: DeriveRequest) -> KResult<Remembered> {
+        let mut rels = Vec::with_capacity(req.sources.len());
+        let mut src_conf: Vec<f32> = Vec::new();
+        // Review P1-8 (Model B): a derivation with no explicit evidence
+        // inherits the sources' evidence trails — the derived claim is backed
+        // by the premises that produced it, and the Derivation record keeps
+        // who/how/why. Strict decode: a corrupt source trail is an error,
+        // not something to inherit silently (P2-6).
+        let mut inherited_evidence: Vec<crate::knowledge::evidence::Evidence> = Vec::new();
+        for s in &req.sources {
+            let src = self.head_object(s)?.ok_or(KError::NotFound(*s))?;
+            self.auth
+                .read()
+                .unwrap()
+                .authorize(&req.context.subject, &src, Action::Read)?;
+            rels.push(RelationshipRef {
+                rel_type: DERIVED_FROM.into(),
+                target: *s,
+                direction: Direction::Inbound,
+            });
+            if let Some(c) = src.confidence_context() {
+                src_conf.push(c.score);
+            }
+            if req.evidence.is_empty() {
+                inherited_evidence.extend(src.strict_evidence()?);
+            }
+        }
+        let at = self.clock_now();
+        let derivation = Derivation {
+            operation: req.operation,
+            actor: req.actor,
+            model: req.model,
+            timestamp: at,
+            sources: req.sources.clone(),
+            reason: req.reason.clone(),
+        };
+        // Review P1-7: a caller-supplied confidence override crosses the
+        // model boundary here — validated, never trusted.
+        let confidence = match req.confidence {
+            Some(c) => ConfidenceContext {
+                verification_keys: c.verification_keys,
+                ..ConfidenceContext::new(c.score, c.confirmations, c.last_verified)?
+            },
+            None => {
+                if src_conf.is_empty() {
+                    ConfidenceContext::new(0.0, 0, None).expect("0.0 is in range")
+                } else {
+                    ConfidenceContext::new(
+                        src_conf.iter().sum::<f32>() / src_conf.len() as f32,
+                        src_conf.len() as u32,
+                        None,
+                    )
+                    .expect("mean of in-range scores is in range")
+                }
+            }
+        };
+        let mut remember = RememberRequest::create(
+            req.context,
+            Metadata {
+                type_name: req.type_name,
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+        );
+        remember.properties = req.properties;
+        remember.relationships = rels;
+        remember.origin = Origin::Reason;
+        remember.note = req.reason.clone();
+        remember.extensions.insert(
+            KnowledgeObject::EXT_DERIVATION.into(),
+            derivation_to_value(&derivation),
+        );
+        remember.extensions.insert(
+            KnowledgeObject::EXT_CONFIDENCE.into(),
+            confidence_to_value(&confidence),
+        );
+        if !req.evidence.is_empty() {
+            remember.extensions.insert(
+                KnowledgeObject::EXT_EVIDENCE.into(),
+                KnowledgeObject::evidence_value(&req.evidence),
+            );
+        } else if !inherited_evidence.is_empty() {
+            remember.extensions.insert(
+                KnowledgeObject::EXT_EVIDENCE.into(),
+                KnowledgeObject::evidence_value(&inherited_evidence),
+            );
+        }
+        self.remember_trusted(remember)
+    }
+
     // ---- find_similar (MRFC-0011 §6.4) --------------------------------------
 
     pub fn find_similar(&self, q: SimilarityQuery) -> KResult<Vec<ScoredKO>> {
-        self.indexes
+        let results = self
+            .indexes
             .read()
             .unwrap()
             .as_ref()
             // justified: Kernel::open seeds Some(IndexCoordinator) (see open());
             // attach_indexes only swaps Some→Some
             .expect("kernel always has a coordinator")
-            .search(self, q)
+            .search(self, q)?;
+        // v0.3 K2 sibling of the QL Scan filter: similarity recall (vector +
+        // BM25 text) also answers with current truth — expired facts stay out
+        // of default-time results. Temporal (AS_OF) plans are scan-based and
+        // handle time themselves.
+        let now = self.clock_now();
+        Ok(results.into_iter().filter(|s| s.ko.valid_at(now)).collect())
     }
 
     /// Type-scoped text search via the IndexCoordinator (BM25 when maintainer
@@ -1954,6 +2854,17 @@ impl Kernel {
         subject: &Subject,
         type_name: &str,
     ) -> KResult<Vec<KnowledgeObject>> {
+        self.scan_by_type_filtered(subject, type_name, None)
+    }
+
+    /// Scan by type with an optional epistemic-status filter (v0.3 K1).
+    /// Legacy KOs answer via the fallback mapping, same as `epistemic_status()`.
+    pub fn scan_by_type_filtered(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        status: Option<EpistemicStatus>,
+    ) -> KResult<Vec<KnowledgeObject>> {
         let mut out = Vec::new();
         for koid in self.repo.scan_type(type_name)? {
             let Some(ko) = self.head_object(&koid)? else {
@@ -1964,6 +2875,11 @@ impl Kernel {
             }
             if ko.lifecycle.state == LifecycleState::Deleted {
                 continue;
+            }
+            if let Some(want) = status {
+                if ko.epistemic_status() != want {
+                    continue;
+                }
             }
             if self
                 .auth
@@ -2096,7 +3012,14 @@ impl Kernel {
             .authorize(&ctx.subject, &ko, Action::Read)?;
         let (source, confidence) = match &ko.semantic {
             Some(s) => (s.source.clone(), s.confidence),
-            None => (None, None),
+            // Semantic ops (assert/observe/supersede/verify) stamp evidence
+            // into the kernel-managed EXT_EVIDENCE extension, not `semantic`
+            // (P0-1). Surface its first record so provenance still answers
+            // "why is this known?" for asserted claims.
+            None => match ko.evidence().first() {
+                Some(e) => (Some(e.source_artifact.clone()), Some(e.confidence)),
+                None => (None, None),
+            },
         };
         Ok(Explanation {
             koid: *koid,
@@ -2250,6 +3173,20 @@ impl Kernel {
         }
     }
 
+    /// REC-002: write a durable snapshot of the store into a fresh database
+    /// file at `path` (live backup — works while the kernel holds the store).
+    pub fn backup_store_to(&self, path: &std::path::Path) -> KResult<()> {
+        self.store.snapshot_to(path)
+    }
+
+    /// REC-002: replace the store contents with the snapshot at `path`
+    /// (point-in-time restore). In-memory derived state (semantic status,
+    /// enrichment indexes) stays stale until the next kernel open — restart
+    /// after restore.
+    pub fn restore_store_from(&self, path: &std::path::Path) -> KResult<()> {
+        self.store.restore_from(path)
+    }
+
     // ---- Programs-as-KOs (MRFC-0030 Phase 7a) ----------------------------
 
     /// Deploy a Program KO. The program is aikoql stored as a Knowledge Object
@@ -2267,7 +3204,7 @@ impl Kernel {
         props.insert("body".into(), Value::Text(body.to_string()));
         props.insert("language".into(), Value::Text(language.to_string()));
         props.insert("version".into(), Value::Int(1));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -2312,7 +3249,7 @@ impl Kernel {
         let mut props = ko.properties.clone();
         props.insert("body".into(), Value::Text(new_body.to_string()));
         props.insert("version".into(), Value::Int(cur_ver + 1));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: Some(*koid),
             expected_version: Some(ko.version),
@@ -2359,7 +3296,7 @@ impl Kernel {
         if let Some(c) = condition {
             props.insert("condition".into(), Value::Text(c.to_string()));
         }
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -2458,7 +3395,7 @@ impl Kernel {
         let mut props = PropertyMap::new();
         props.insert("name".into(), Value::Text(name.to_string()));
         props.insert("steps".into(), Value::Text(steps_json.to_string()));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -2500,7 +3437,7 @@ impl Kernel {
         props.insert("event_kind".into(), Value::Text(event_kind.to_string()));
         props.insert("type_filter".into(), Value::Text(type_filter.to_string()));
         props.insert("program_koid".into(), Value::Text(program_koid.to_string()));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -2545,7 +3482,7 @@ impl Kernel {
         props.insert("tools".into(), Value::Text(tools_json.to_string()));
         props.insert("policies".into(), Value::Text(policies_json.to_string()));
         props.insert("version".into(), Value::Int(1));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -2592,7 +3529,7 @@ impl Kernel {
         props.insert("plugin".into(), Value::Text(plugin.to_string()));
         props.insert("config".into(), Value::Text(config_json.to_string()));
         props.insert("mapping".into(), Value::Text(mapping_json.to_string()));
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -2639,7 +3576,7 @@ impl Kernel {
         if let Some(secs) = refresh_seconds {
             props.insert("refresh_seconds".into(), Value::Int(secs));
         }
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -2689,7 +3626,7 @@ impl Kernel {
             "parameters".into(),
             Value::Text(parameters_json.to_string()),
         );
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -2738,7 +3675,7 @@ impl Kernel {
         if let Some(w) = warmup {
             props.insert("warmup".into(), Value::Int(w));
         }
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),
@@ -2797,7 +3734,7 @@ impl Kernel {
             KnowledgeObject::EXT_CONTENT_TRUST.into(),
             Value::Text(ContentTrust::Untrusted.as_str().into()),
         );
-        self.remember(RememberRequest {
+        self.remember_trusted(RememberRequest {
             context: subject.clone().into(),
             koid: None,
             expected_version: Some(0),

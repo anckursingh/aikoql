@@ -184,14 +184,45 @@ impl GraphEngine {
             if depth >= q.depth as u32 {
                 continue;
             }
-            let mut edges: Vec<(String, KOID)> =
-                kernel.outbound_edges(&cur, q.rel_type.as_deref())?;
-            // Merge inbound edges when direction is None (both) or Inbound.
-            if q.direction != Some(Direction::Outbound) {
-                let inbound = kernel.inbound_edges(&cur, q.rel_type.as_deref())?;
-                edges.extend(inbound);
+            // Collect the edges for this hop by the requested direction —
+            // Inbound and Outbound each mean ONLY that direction; None
+            // merges both. (W5-KA-001 pinned the old fall-through: Inbound
+            // collected outbound edges too, so a service's outbound monitor
+            // edge leaked into an inbound impact walk.)
+            let mut edges: Vec<(String, KOID, Direction)> = Vec::new();
+            match q.direction {
+                Some(Direction::Inbound) => {
+                    edges.extend(
+                        kernel
+                            .inbound_edges(&cur, q.rel_type.as_deref())?
+                            .into_iter()
+                            .map(|(r, t)| (r, t, Direction::Inbound)),
+                    );
+                }
+                Some(Direction::Outbound) => {
+                    edges.extend(
+                        kernel
+                            .outbound_edges(&cur, q.rel_type.as_deref())?
+                            .into_iter()
+                            .map(|(r, t)| (r, t, Direction::Outbound)),
+                    );
+                }
+                None => {
+                    edges.extend(
+                        kernel
+                            .outbound_edges(&cur, q.rel_type.as_deref())?
+                            .into_iter()
+                            .map(|(r, t)| (r, t, Direction::Outbound)),
+                    );
+                    edges.extend(
+                        kernel
+                            .inbound_edges(&cur, q.rel_type.as_deref())?
+                            .into_iter()
+                            .map(|(r, t)| (r, t, Direction::Inbound)),
+                    );
+                }
             }
-            for (rel_type, target) in edges {
+            for (rel_type, target, edge_dir) in edges {
                 let next_depth = depth + 1;
                 if kernel.verify(ctx.clone(), &target, Action::Read).is_err() {
                     continue;
@@ -200,8 +231,8 @@ impl GraphEngine {
                     hits.push(TraverseHit {
                         koid: target,
                         depth: next_depth,
-                        rel_type: rel_type.clone(),
-                        direction: Direction::Outbound,
+                        rel_type,
+                        direction: edge_dir,
                     });
                     queue.push_back((target, next_depth));
                 }
@@ -318,7 +349,14 @@ fn remember_request_from_object(
         semantic: ko.semantic,
         relationships,
         security: None,
-        extensions: ko.extensions,
+        // Kernel-managed keys (epistemic status, evidence, authority, ...) are
+        // rejected by the public remember() boundary (review P0-1) and are
+        // carried forward automatically by plain updates — strip before submit.
+        extensions: ko
+            .extensions
+            .into_iter()
+            .filter(|(key, _)| !Kernel::KERNEL_MANAGED_EXTENSIONS.contains(&key.as_str()))
+            .collect(),
         origin: ko.lifecycle.origin,
         note: None,
         referential_policy: ReferentialPolicy::default(),

@@ -159,6 +159,8 @@ pub fn execute_workflow(
 
     let programs = kernel.list_programs(subject).map_err(|e| e.to_string())?;
     let mut logs = vec![format!("Workflow: {}", wf_ko.koid.to_hex())];
+    let mut ok_steps = 0u64;
+    let mut err_steps = 0u64;
 
     for (order, prog_name) in &steps {
         logs.push(format!("  Step {}: {}", order, prog_name));
@@ -228,13 +230,64 @@ pub fn execute_workflow(
                     aikoql_runtime::RowSet::Objects(objs) => objs.len() as u64,
                     _ => 0,
                 };
+                ok_steps += 1;
                 record_execution(count, elapsed, cache_hit);
                 logs.push(format!("    OK: {} results in {}ms", count, elapsed));
             }
-            Err(e) => logs.push(format!("    ERROR: {}", e)),
+            Err(e) => {
+                err_steps += 1;
+                logs.push(format!("    ERROR: {}", e));
+            }
         }
     }
+
+    // v0.3 K5: capture the run as an experience (non-fatal).
+    capture_outcome(
+        kernel,
+        subject,
+        &format!("execute workflow {}", wf_ko.koid.to_hex()),
+        &format!(
+            "steps: {}",
+            steps
+                .iter()
+                .map(|(_, n)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        &format!("{} steps ok, {} errors", ok_steps, err_steps),
+        &format!("aikoql:workflow:{}", wf_ko.koid.to_hex()),
+        &mut logs,
+    );
     Ok(logs)
+}
+
+// ---------------------------------------------------------------------------
+// v0.3 K5 — Execution outcome capture
+// ---------------------------------------------------------------------------
+
+/// Capture an execution outcome as an aikoql:experience KO. Non-fatal: a
+/// failed capture logs a line, never fails the run. Evidence is the run's own
+/// KO — the experience is a claim about that execution, not a verified fact.
+fn capture_outcome(
+    kernel: &Kernel,
+    subject: &Subject,
+    goal: &str,
+    action: &str,
+    outcome: &str,
+    evidence_source: &str,
+    logs: &mut Vec<String>,
+) {
+    let mut req = ExperienceRequest::new(subject.clone(), goal, action, outcome);
+    req.actor = subject.name.clone();
+    req.evidence = vec![Evidence::new(
+        evidence_source,
+        EvidenceMethod::AgentAnalysis,
+    )];
+    req.ttl_seconds = Some(30 * 24 * 3600);
+    match kernel.record_experience(req) {
+        Ok(r) => logs.push(format!("  experience captured: {}", r.koid.to_hex())),
+        Err(e) => logs.push(format!("  experience capture failed (non-fatal): {}", e)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -415,6 +468,7 @@ pub fn execute_agent(
     let programs = kernel.list_programs(subject).map_err(|e| e.to_string())?;
     let mut total_rows = 0u64;
     let mut total_ms = 0u64;
+    let mut total_errors = 0u64;
 
     for skill_name in &skill_names {
         logs.push(format!("  Skill: {}", skill_name));
@@ -492,7 +546,10 @@ pub fn execute_agent(
                 record_execution(count, elapsed, cache_hit);
                 logs.push(format!("    OK: {} results in {}ms", count, elapsed));
             }
-            Err(e) => logs.push(format!("    ERROR: {}", e)),
+            Err(e) => {
+                total_errors += 1;
+                logs.push(format!("    ERROR: {}", e));
+            }
         }
     }
 
@@ -502,5 +559,31 @@ pub fn execute_agent(
         total_ms,
         skill_names.len()
     ));
+
+    // v0.3 K5: capture the run as an experience (non-fatal).
+    let goal = if prompt.is_empty() {
+        format!("run agent {}", agent_name)
+    } else {
+        prompt.to_string()
+    };
+    capture_outcome(
+        kernel,
+        subject,
+        &goal,
+        &format!(
+            "execute agent '{}' skills: {}",
+            agent_name,
+            skill_names.join(", ")
+        ),
+        &format!(
+            "{} results in {}ms across {} skills with {} errors",
+            total_rows,
+            total_ms,
+            skill_names.len(),
+            total_errors
+        ),
+        &format!("aikoql:agent:{}", agent.koid.to_hex()),
+        &mut logs,
+    );
     Ok(logs)
 }
