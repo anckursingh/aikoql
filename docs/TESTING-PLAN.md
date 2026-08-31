@@ -589,6 +589,46 @@ Each item: failing test → red → root-cause fix → green → regression → 
 
 ---
 
+## 13. Storage Engine certification matrix — MRFC-KSE-001 (2026-08-31)
+
+QA-lead mapping of `docs/MRFC-KSE-001-Storage-Engine-TDD.md` (phases KSE-1..20, tests KSE-001..141, adoption gate) against current coverage. Status: ✅ covered · 🔨 in progress · ⛔ NOT_IMPLEMENTED (honest — no stub tests). The claim under test: *an AIKOQL-native engine may replace redb/RocksDB only behind the existing `StorageEngine` trait, and only when measured evidence passes the adoption gate* — P0 100%, P1 ≥98%, 0 unrecoverable crash cases, ≥2× on one AIKOQL-specific workload, no unacceptable resource regression (TDD doc §29). `artifacts/storage-engine/adoption-decision.md` ends with exactly one of `KEEP REDB` / `KEEP ROCKSDB` / `USE HYBRID` / `ADOPT AIKOQL STORAGE ENGINE` — "keep the current backend" is an explicitly valid outcome (§33).
+
+### 13.1 Phase status (KSE-1..20)
+
+| Phase | Content | Status | Evidence |
+| --- | --- | --- | --- |
+| KSE-1 | Storage contract conformance (KSE-001..006) | 🔨 | `crates/storage/aikoql/tests/conformance.rs` — the six KSE asserts run identically against AikoqlStorageEngine + MemoryEngine (reference) + RedbEngine: get, missing key, sorted prefix scan, atomic batch, empty batch, put/delete conflict semantics |
+| KSE-2 | AIKOQL key semantics (KSE-010..017) | ⛔ | version ordering, current head, historical read, tombstone, idempotency, relo/reli/type index behavior |
+| KSE-3 | Record envelope (KSE-020..023) | ⛔ | encode/decode round trip, corrupt payload, truncated record, unsupported format version |
+| KSE-4 | Block abstraction (KSE-030..033) | ⛔ | sorted key directory, point lookup, prefix range |
+| KSE-5 | Knowledge locality (KSE-040) | ⛔ | KO+facts+relations+provenance read amplification vs redb/RocksDB |
+| KSE-6 | Relationship locality (KSE-050..052) | ⛔ | neighbor / typed neighbor / bidirectional traversal |
+| KSE-7 | Temporal locality (KSE-060..063) | ⛔ | current version, historical version, full history, temporal range |
+| KSE-8 | Transaction compatibility (KSE-070..074) | ⛔ | atomic multi-KO commit, rollback, OCC conflict, snapshot read |
+| KSE-9 | Crash consistency (KSE-080..083) | ⛔ | fault injection before/after append, flush, commit marker, index publication |
+| KSE-10 | Derived index rebuild (KSE-090..092) | ⛔ | full / partial (~10% loss) / corrupt index |
+| KSE-11 | Encryption boundary (KSE-100..104) | ⛔ | reuses the existing AIKOQL encryption architecture — no second model |
+| KSE-12 | Property-based testing | ⛔ | ≥10,000 generated op sequences in nightly CI (create/update/delete/restore/supersede/relate/unrelate/snapshot) |
+| KSE-13 | Concurrency (KSE-120) | ⛔ | 32–256 readers / 4–32 writers; no deadlocks, corruption, or invalid logical reads |
+| KSE-14 | Snapshot/restore (KSE-130..132) | ⛔ | equivalence, active readers, active writers |
+| KSE-15 | Startup/recovery (KSE-140..141) | ⛔ | cold start + crash recovery timing |
+| KSE-16..19 | Amplification + resource usage | ⛔ | space/write/read amplification; RSS/CPU/disk at 100K/1M/10M KOs |
+| KSE-20 | Backend conformance | ⛔ | same suite across Memory/redb/RocksDB/Aikoql — any divergence must be an explicit documented capability |
+
+### 13.2 Adoption gate (TDD doc §29)
+
+| Criterion | Threshold | Status |
+| --- | --- | --- |
+| Correctness | P0 = 100%, P1 ≥ 98% | not yet measured |
+| Reliability | 0 unrecoverable crash cases, 0 unexplained corruption | not yet measured |
+| Performance | ≥2× on ≥1 AIKOQL workload, no unacceptable regressions elsewhere | not yet measured |
+| Resource | no unacceptable RAM/CPU/disk/amplification regression | not yet measured |
+| Maintainability | no unjustified operational burden | not yet measured |
+
+Gate failure ⇒ **KEEP THE CURRENT BACKEND** — recorded as a valid, successful experiment outcome (§29, §33).
+
+---
+
 ## Appendix — Existing instruments that serve the suites
 
 | Instrument | What it measures | Serves |

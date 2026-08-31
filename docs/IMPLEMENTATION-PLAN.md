@@ -3769,11 +3769,31 @@ The last uninstrumented §53 stage is now measured. `tests/e2e_answer_quality.rs
 | Cloud KMS providers (AWS, Azure, GCP) | ~1 week, but user-deferred | Leave for future |
 | Remote TCP + TLS/mTLS | Feasible (~1 week, rustls on the listener) but reviewer-sanctioned post-MVP deferral; loopback + proxy-TLS contract ships now | Keep deferred |
 | Read replicas + Raft consensus | **Not feasible short-term** — blocked on the deferred Storage Kernel Split; a consensus protocol is a multi-PR, ~1 month effort | Future |
-| Native storage engine | ~6 months, replaces redb | Future, largest effort |
+| Native storage engine | **In progress (MRFC-KSE-001, started 2026-08-31)** — prototype built behind the existing `StorageEngine` trait; no replacement decision until the measured adoption gate passes | Prototype phase; production default unchanged |
 | `use crate::*` prelude cleanup | **DONE 2026-08-29** — all 21 modules that globbed the crate root now carry explicit `use crate::{...}` lists (cargo check clean, rustfmt clean); the main.rs prelude block stays as a re-export hub, nothing imports it via `use crate::*` anymore | Shipped |
 | HLD §57 PR-I multimodal query surface | Needs AIKOQL syntax design (§36: "designed later") + parser/runtime; 1–2 weeks | Post-launch |
 | P2-1/P2-2/P2-5/P2-8 kernel refinements | Small, any time; tracked in knowledge-invariants.md | Accepted deferrals |
 
 ### Next implementation
 
-The last two feasible in-scope items shipped 2026-08-29: the P2-1/P2-2/P2-5 kernel refinements (P2-8 deferred; both tracked in knowledge-invariants.md — constraints C5/C6) and the `use crate::*` prelude cleanup (21 modules now import explicitly from the main.rs prelude block). Everything else stays per its verdict above (Cloud KMS user-deferred, Remote TCP reviewer-deferred, Raft/native storage future, PR-I post-launch).
+The last two feasible in-scope items shipped 2026-08-29: the P2-1/P2-2/P2-5 kernel refinements (P2-8 deferred; both tracked in knowledge-invariants.md — constraints C5/C6) and the `use crate::*` prelude cleanup (21 modules now import explicitly from the main.rs prelude block). Everything else stays per its verdict above (Cloud KMS user-deferred, Remote TCP reviewer-deferred, Raft future, PR-I post-launch). Native storage is now in progress per the section below.
+
+## MRFC-KSE-001: AIKOQL-Native Storage Engine (2026-08-31) — TDD in `docs/MRFC-KSE-001-Storage-Engine-TDD.md`
+
+**Decision from the TDD analysis: build behind the existing contract, replace nothing yet.** The kernel already depends only on the `StorageEngine` trait (`get` / prefix `scan` / atomic `write_batch` / constraint capabilities / `snapshot_to` / `restore_from`) with three working backends — `MemoryEngine` (reference), `RedbEngine`, `RocksDbEngine`. The KSE experiment adds a fourth: `AikoqlStorageEngine` in a new `crates/storage/aikoql` crate, exercised by the same conformance suite. Production wiring is untouched until the adoption gate passes (P0 100%, P1 ≥98%, 0 crash cases, ≥2× on one AIKOQL workload, no resource regression — TDD doc §29). "Keep the current backend" is an explicitly valid outcome (§33).
+
+### Milestones
+
+| Milestone | Phases | Content |
+| --- | --- | --- |
+| M1 Contract conformance | KSE-1 (+ KSE-20 seed) | `AikoqlStorageEngine` passes the shared conformance suite (KSE-001..006: get / missing / sorted prefix scan / atomic batch / empty batch / put-delete conflict semantics agreed by all backends); the suite runs against Memory + redb + Aikoql from day one |
+| M2 Key semantics | KSE-2 | Logical prefix behavior preserved (ko/head/ke/tomb/idem/relo/reli/type) — KSE-010..017 |
+| M3 Physical format | KSE-3, KSE-4 | Versioned record envelope (magic/format-version/checksum; corruption, truncation, version errors fail safe) + block abstraction (sorted directory, binary-search point lookup, prefix ranges) |
+| M4 Locality | KSE-5..7 | Knowledge / relationship / temporal locality — the custom-engine hypotheses (KSE-040, KSE-050..063) |
+| M5 Reliability | KSE-8..11, KSE-15 | Transaction compatibility, crash-consistency fault injection, derived-index rebuild, encryption (reusing the existing envelope — no second model), startup/recovery |
+| M6 Evidence | KSE-12..14, KSE-16..19 | Property tests (10K sequences, nightly), concurrency stress, snapshot/restore, amplification + resource measurements at 100K/1M/10M KOs |
+| M7 Decision | TDD §27–29, §31 | W1..W8 AIKOQL workloads, comparison matrix, `artifacts/storage-engine/adoption-decision.md` ending in exactly one verdict |
+
+**Architectural rule (§32), enforced from day one:** no backend-specific type may appear above the storage boundary — kernel/domain code takes `&dyn StorageEngine`, never `&rocksdb::DB` or `&AikoqlStorageEngine`. The kernel stays backend-independent; the new crate imports the trait, not the other way around.
+
+**Status (2026-08-31):** M1 in progress — crate scaffolding + KSE-001..006 RED conformance tests committed first (TDD contract §5: RED → minimum correct behavior → GREEN → regression).
