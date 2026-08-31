@@ -8,3 +8,15 @@ repository.workspace = true
 
 [dependencies]
 aikoql-kernel = { path = "../../kernel" }
+# KSE-5 harness: RocksDB comparison is a strict opt-in (librocksdb-sys is a
+# multi-minute build) — the harness reports NOT_MEASURED without it, never a
+# silent skip.
+aikoql-rocksdb = { path = "../rocksdb", optional = true }
+
+[dev-dependencies]
+# KSE-5 harness: redb stats for the locality comparison.
+redb = "2"
+
+[features]
+default = []
+kse5-rocksdb = ["dep:aikoql-rocksdb"]
