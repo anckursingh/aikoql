@@ -4,12 +4,11 @@
 //! production default unless the measured adoption gate passes (TDD doc §29).
 //!
 //! KSE-1 skeleton: an append-only write-ahead log over the kernel's
-//! `MemoryEngine` reference semantics. Each batch is serialized to one log
-//! record, fsynced, then applied to the in-memory map — durable before
-//! visible, all-or-nothing. Open replays the log; a torn tail record (crash
-//! mid-append) is truncated. The physical format is deliberately minimal:
-//! KSE-3 replaces records with the versioned envelope (magic/checksum),
-//! KSE-4 adds the block abstraction.
+//! `MemoryEngine` reference semantics. Each batch is serialized to one
+//! enveloped log record (magic/format-version/checksum — KSE-3), fsynced,
+//! then applied to the in-memory map — durable before visible,
+//! all-or-nothing. Open replays the log; a torn tail record (crash
+//! mid-append) is truncated, corruption fails closed.
 //! ponytail: the log grows unbounded (no compaction/checkpoint) — KSE-4
 //! brings the block format that makes compaction possible.
 
@@ -19,6 +18,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Mutex;
+
+mod envelope;
 
 fn se(e: impl std::fmt::Display) -> KError {
     KError::Store(format!("aikoql-storage: {}", e))
@@ -38,9 +39,8 @@ pub struct AikoqlStorageEngine {
     mem: MemoryEngine,
 }
 
-// --- WAL record codec (minimal; KSE-3 replaces with RecordEnvelope) ---
+// --- batch payload codec (inside the envelope; see envelope.rs) ---
 //
-// Record: [u32 payload_len][payload]
 // Payload: [u16 n_puts] (u32 klen, k, u32 vlen, v)* [u16 n_dels] (u32 klen, k)*
 
 fn push_u16(buf: &mut Vec<u8>, v: u16) {
@@ -115,21 +115,19 @@ fn decode_batch(payload: &[u8]) -> KResult<WriteBatch> {
 }
 
 /// Replay `bytes` into a fresh map; returns the offset of the last complete
-/// record. A partial tail record (crash mid-append) is left out — it was
-/// never acknowledged to a caller.
+/// record. A torn tail (crash mid-append) is left out — it was never
+/// acknowledged to a caller. Corruption (bad magic, checksum mismatch,
+/// unknown type/version) fails closed with a deterministic error.
 fn replay(bytes: &[u8], mem: &MemoryEngine) -> KResult<usize> {
     let mut pos = 0usize;
     while pos < bytes.len() {
-        if bytes.len() - pos < 4 {
-            break; // torn tail: too short for a length prefix
+        match envelope::parse_at(bytes, pos)? {
+            envelope::ParseOutcome::Complete { payload, end, .. } => {
+                mem.write_batch(&decode_batch(&payload)?)?;
+                pos = end;
+            }
+            envelope::ParseOutcome::TornTail => break,
         }
-        let len = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
-        if pos + 4 + len > bytes.len() {
-            break; // torn tail: incomplete last record
-        }
-        let batch = decode_batch(&bytes[pos + 4..pos + 4 + len])?;
-        mem.write_batch(&batch)?;
-        pos = pos + 4 + len;
     }
     Ok(pos)
 }
@@ -138,22 +136,39 @@ impl AikoqlStorageEngine {
     /// Open (or create) a durable store at `path`. Replays the WAL; a torn
     /// tail record is truncated, anything else malformed fails closed.
     pub fn open(path: impl AsRef<Path>) -> KResult<Self> {
-        // Append mode: WAL writes always go to EOF; replay reads are unaffected.
-        let mut file = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(path.as_ref())
-            .map_err(se)?;
+        let p = path.as_ref();
+        // 1. Read the whole log under a transient read handle. A missing file
+        //    is a fresh store.
         let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).map_err(se)?;
+        match File::open(p) {
+            Ok(mut f) => {
+                f.read_to_end(&mut bytes)
+                    .map_err(|e| se(format!("read: {e}")))?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(se(format!("read: {e}"))),
+        }
+        // 2. Replay into memory.
         let mem = MemoryEngine::new();
         let last_good = replay(&bytes, &mem)?;
+        // 3. Drop a torn tail with a transient plain-write handle — on
+        //    Windows SetEndOfFile needs FILE_WRITE_DATA, which the append
+        //    WAL handle (below) cannot request.
         if last_good != bytes.len() {
-            file.set_len(last_good as u64).map_err(se)?; // drop the torn tail
+            OpenOptions::new()
+                .write(true)
+                .open(p)
+                .and_then(|f| f.set_len(last_good as u64))
+                .map_err(|e| se(format!("truncate: {e}")))?;
         }
+        // 4. The WAL handle itself: append-only (all reads happened in step 1).
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+            .map_err(|e| se(format!("open: {e}")))?;
         Ok(AikoqlStorageEngine {
-            log: Mutex::new(file),
+            log: Mutex::new(log),
             mem,
         })
     }
@@ -173,9 +188,7 @@ impl StorageEngine for AikoqlStorageEngine {
             return Ok(()); // KSE-005: no state change, no log record
         }
         let payload = encode_batch(batch);
-        let mut record = Vec::with_capacity(4 + payload.len());
-        push_u32(&mut record, payload.len() as u32);
-        record.extend_from_slice(&payload);
+        let record = envelope::encode_record(envelope::TYPE_BATCH, &payload);
         // WAL: the record is durable before the state change is visible.
         let mut log = self.log.lock().map_err(|_| poisoned())?;
         log.write_all(&record).map_err(se)?;
