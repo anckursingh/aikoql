@@ -6,21 +6,21 @@ Allocations: NOT_MEASURED (no counting-allocator instrumentation wired).
 
 | fan-out | op | redb P50/P95/P99 (µs) | redb engine reqs | RocksDB P50/P95/P99 (µs) | Aikoql P50/P95/P99 (µs) | Aikoql engine reqs |
 |---|---|---|---|---|---|---|
-| 1 | all | 54 / 139 / 139 | 0 gets + 1 scans (1 pairs, 44 B returned) | 34 / 126 / 126 | 7 / 56 / 56 | 0 gets + 1 scans (1 pairs, 44 B returned) |
-| 1 | links | 54 / 69 / 69 | 0 gets + 1 scans (1 pairs, 44 B returned) | 34 / 35 / 35 | 7 / 145 / 145 | 0 gets + 1 scans (1 pairs, 44 B returned) |
-| 1 | cites | 44 / 44 / 44 | 0 gets + 1 scans (0 pairs, 0 B returned) | 27 / 45 / 45 | 7 / 9 / 9 | 0 gets + 1 scans (0 pairs, 0 B returned) |
-| 10 | all | 99 / 111 / 111 | 0 gets + 1 scans (10 pairs, 440 B returned) | 68 / 69 / 69 | 22 / 43 / 43 | 0 gets + 1 scans (10 pairs, 440 B returned) |
-| 10 | links | 72 / 72 / 72 | 0 gets + 1 scans (5 pairs, 220 B returned) | 49 / 53 / 53 | 12 / 23 / 23 | 0 gets + 1 scans (5 pairs, 220 B returned) |
-| 10 | cites | 72 / 73 / 73 | 0 gets + 1 scans (5 pairs, 220 B returned) | 50 / 69 / 69 | 12 / 20 / 20 | 0 gets + 1 scans (5 pairs, 220 B returned) |
-| 100 | all | 585 / 628 / 628 | 0 gets + 1 scans (100 pairs, 4400 B returned) | 369 / 487 / 487 | 149 / 268 / 268 | 0 gets + 1 scans (100 pairs, 4400 B returned) |
-| 100 | links | 373 / 519 / 519 | 0 gets + 1 scans (50 pairs, 2200 B returned) | 197 / 212 / 212 | 95 / 231 / 231 | 0 gets + 1 scans (50 pairs, 2200 B returned) |
-| 100 | cites | 452 / 508 / 508 | 0 gets + 1 scans (50 pairs, 2200 B returned) | 184 / 471 / 471 | 119 / 406 / 406 | 0 gets + 1 scans (50 pairs, 2200 B returned) |
-| 1000 | all | 6687 / 7172 / 7172 | 0 gets + 1 scans (1000 pairs, 44000 B returned) | 3220 / 3373 / 3373 | 1223 / 2074 / 2074 | 0 gets + 1 scans (1000 pairs, 44000 B returned) |
-| 1000 | links | 3387 / 3739 / 3739 | 0 gets + 1 scans (500 pairs, 22000 B returned) | 1660 / 1763 / 1763 | 776 / 2786 / 2786 | 0 gets + 1 scans (500 pairs, 22000 B returned) |
-| 1000 | cites | 2738 / 2993 / 2993 | 0 gets + 1 scans (500 pairs, 22000 B returned) | 1262 / 1660 / 1660 | 667 / 1311 / 1311 | 0 gets + 1 scans (500 pairs, 22000 B returned) |
-| 10000 | all | 55077 / 61367 / 61367 | 0 gets + 1 scans (10000 pairs, 440000 B returned) | 31701 / 33145 / 33145 | 14360 / 16456 / 16456 | 0 gets + 1 scans (10000 pairs, 440000 B returned) |
-| 10000 | links | 27418 / 35362 / 35362 | 0 gets + 1 scans (5000 pairs, 220000 B returned) | 14374 / 18606 / 18606 | 6432 / 7167 / 7167 | 0 gets + 1 scans (5000 pairs, 220000 B returned) |
-| 10000 | cites | 28130 / 30017 / 30017 | 0 gets + 1 scans (5000 pairs, 220000 B returned) | 15463 / 19306 / 19306 | 6985 / 13621 / 13621 | 0 gets + 1 scans (5000 pairs, 220000 B returned) |
+| 1 | all | 64 / 184 / 184 | 0 gets + 1 scans (1 pairs, 44 B returned) | 18 / 116 / 116 | 4 / 41 / 41 | 0 gets + 1 scans (1 pairs, 44 B returned) |
+| 1 | links | 64 / 92 / 92 | 0 gets + 1 scans (1 pairs, 44 B returned) | 17 / 18 / 18 | 4 / 5 / 5 | 0 gets + 1 scans (1 pairs, 44 B returned) |
+| 1 | cites | 90 / 108 / 108 | 0 gets + 1 scans (0 pairs, 0 B returned) | 13 / 14 / 14 | 3 / 3 / 3 | 0 gets + 1 scans (0 pairs, 0 B returned) |
+| 10 | all | 166 / 199 / 199 | 0 gets + 1 scans (10 pairs, 440 B returned) | 37 / 39 / 39 | 11 / 17 / 17 | 0 gets + 1 scans (10 pairs, 440 B returned) |
+| 10 | links | 145 / 160 / 160 | 0 gets + 1 scans (5 pairs, 220 B returned) | 26 / 27 / 27 | 6 / 7 / 7 | 0 gets + 1 scans (5 pairs, 220 B returned) |
+| 10 | cites | 114 / 117 / 117 | 0 gets + 1 scans (5 pairs, 220 B returned) | 26 / 34 / 34 | 7 / 7 / 7 | 0 gets + 1 scans (5 pairs, 220 B returned) |
+| 100 | all | 758 / 951 / 951 | 0 gets + 1 scans (100 pairs, 4400 B returned) | 210 / 251 / 251 | 65 / 93 / 93 | 0 gets + 1 scans (100 pairs, 4400 B returned) |
+| 100 | links | 561 / 818 / 818 | 0 gets + 1 scans (50 pairs, 2200 B returned) | 113 / 149 / 149 | 34 / 61 / 61 | 0 gets + 1 scans (50 pairs, 2200 B returned) |
+| 100 | cites | 385 / 579 / 579 | 0 gets + 1 scans (50 pairs, 2200 B returned) | 114 / 134 / 134 | 34 / 51 / 51 | 0 gets + 1 scans (50 pairs, 2200 B returned) |
+| 1000 | all | 8043 / 9680 / 9680 | 0 gets + 1 scans (1000 pairs, 44000 B returned) | 1957 / 2105 / 2105 | 604 / 869 / 869 | 0 gets + 1 scans (1000 pairs, 44000 B returned) |
+| 1000 | links | 3679 / 4586 / 4586 | 0 gets + 1 scans (500 pairs, 22000 B returned) | 864 / 909 / 909 | 300 / 330 / 330 | 0 gets + 1 scans (500 pairs, 22000 B returned) |
+| 1000 | cites | 3667 / 4238 / 4238 | 0 gets + 1 scans (500 pairs, 22000 B returned) | 867 / 908 / 908 | 305 / 361 / 361 | 0 gets + 1 scans (500 pairs, 22000 B returned) |
+| 10000 | all | 99813 / 193973 / 193973 | 0 gets + 1 scans (10000 pairs, 440000 B returned) | 19251 / 21753 / 21753 | 9843 / 12043 / 12043 | 0 gets + 1 scans (10000 pairs, 440000 B returned) |
+| 10000 | links | 40595 / 52318 / 52318 | 0 gets + 1 scans (5000 pairs, 220000 B returned) | 9370 / 13875 / 13875 | 5111 / 6087 / 6087 | 0 gets + 1 scans (5000 pairs, 220000 B returned) |
+| 10000 | cites | 39377 / 45234 / 45234 | 0 gets + 1 scans (5000 pairs, 220000 B returned) | 9252 / 13782 / 13782 | 3995 / 5951 / 5951 | 0 gets + 1 scans (5000 pairs, 220000 B returned) |
 
 ## Consistency (KSE-052)
 

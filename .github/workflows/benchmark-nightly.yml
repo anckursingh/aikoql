@@ -32,6 +32,12 @@ jobs:
         run: KSE12_NIGHTLY=1 cargo test --release -p aikoql-storage --test kse12_property
         timeout-minutes: 60
 
+      # KSE-13 concurrency gate (MRFC-KSE-001 §19 KSE-120): 256 readers /
+      # 32 writers on the doc workloads, five expecteds. Strict opt-in.
+      - name: KSE-13 concurrency stress (256 readers / 32 writers)
+        run: KSE13_NIGHTLY=1 cargo test --release -p aikoql-storage --test kse13_concurrency
+        timeout-minutes: 60
+
       # R14: run all criterion benches, save results under the `ci` baseline.
       # Bench targets are enumerated so the criterion flags don't reach
       # libtest bench targets ("Unrecognized option: 'save-baseline'").

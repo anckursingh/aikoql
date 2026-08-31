@@ -200,11 +200,15 @@ impl StorageEngine for AikoqlStorageEngine {
         }
         let payload = encode_batch(batch);
         let record = envelope::encode_record(envelope::TYPE_BATCH, &payload);
-        // WAL: the record is durable before the state change is visible.
+        // WAL: the record is durable before the state change is visible,
+        // and the apply happens under the same log lock (KSE-13
+        // KSE-120a): log order IS commit order. Applying after releasing
+        // the lock would let two writers commit A then B in the log while
+        // applying B then A in memory — a crash right then recovers a
+        // different store than the one that was serving.
         let mut log = self.log.lock().map_err(|_| poisoned())?;
         log.write_all(&record).map_err(se)?;
         log.sync_data().map_err(se)?;
-        drop(log);
         // MemoryEngine applies puts before dels — the shared KSE-006 semantics.
         self.mem.write_batch(batch)
     }
