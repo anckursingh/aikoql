@@ -3796,4 +3796,4 @@ The last two feasible in-scope items shipped 2026-08-29: the P2-1/P2-2/P2-5 kern
 
 **Architectural rule (§32), enforced from day one:** no backend-specific type may appear above the storage boundary — kernel/domain code takes `&dyn StorageEngine`, never `&rocksdb::DB` or `&AikoqlStorageEngine`. The kernel stays backend-independent; the new crate imports the trait, not the other way around.
 
-**Status (2026-08-31):** M1 in progress — crate scaffolding + KSE-001..006 RED conformance tests committed first (TDD contract §5: RED → minimum correct behavior → GREEN → regression).
+**Status (2026-08-31):** M1–M3 complete — contract conformance (KSE-001..006, 19/19 across three backends), key semantics (KSE-010..017 over the real kernel, 8/8), record envelope (KSE-020..023 incl. file-level corruption/torn-tail reopen, 10/10), block abstraction (KSE-030..033, 4/4). M4 locality (KSE-5..7) is next.

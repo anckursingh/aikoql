@@ -9,8 +9,11 @@
 //! then applied to the in-memory map — durable before visible,
 //! all-or-nothing. Open replays the log; a torn tail record (crash
 //! mid-append) is truncated, corruption fails closed.
-//! ponytail: the log grows unbounded (no compaction/checkpoint) — KSE-4
-//! brings the block format that makes compaction possible.
+//! ponytail: the log grows unbounded — the checksummed sorted-block format
+//! (`Block`, KSE-4) is the compaction unit, but no doc phase mandates
+//! compaction, so the engine still replays the full WAL on open. Wire blocks
+//! into open/write when the resource phase (KSE-16..19) or a measurement
+//! shows replay cost matters.
 
 use aikoql_kernel::knowledge::kom::{KError, KResult};
 use aikoql_kernel::storage::store::{MemoryEngine, StorageEngine, WriteBatch};
@@ -19,7 +22,10 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Mutex;
 
+mod block;
 mod envelope;
+
+pub use block::Block;
 
 fn se(e: impl std::fmt::Display) -> KError {
     KError::Store(format!("aikoql-storage: {}", e))
@@ -91,6 +97,11 @@ impl<'a> Cursor<'a> {
     fn u32(&mut self) -> KResult<u32> {
         let raw: [u8; 4] = self.take(4)?.try_into().unwrap();
         Ok(u32::from_le_bytes(raw))
+    }
+
+    fn u32_be(&mut self) -> KResult<u32> {
+        let raw: [u8; 4] = self.take(4)?.try_into().unwrap();
+        Ok(u32::from_be_bytes(raw))
     }
 }
 
