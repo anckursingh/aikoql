@@ -5,10 +5,10 @@ Dataset per backend: 50 KOs × (50 updates + create), manual clock +10,000 ms pe
 
 | op | redb P50/P95/P99 (µs) | redb engine reqs | RocksDB P50/P95/P99 (µs) | Aikoql P50/P95/P99 (µs) | Aikoql engine reqs |
 |---|---|---|---|---|---|
-| current | 71 / 105 / 109 | 2 gets + 0 scans (0 pairs, 1113 B returned) | 32 / 40 / 58 | 23 / 33 / 39 | 2 gets + 0 scans (0 pairs, 1113 B returned) |
-| historical | 370 / 560 / 631 | 0 gets + 1 scans (51 pairs, 35598 B returned) | 135 / 206 / 276 | 75 / 130 / 409 | 0 gets + 1 scans (51 pairs, 35598 B returned) |
-| history | 1024 / 1444 / 1703 | 0 gets + 1 scans (51 pairs, 35598 B returned) | 754 / 999 / 1208 | 669 / 812 / 1037 | 0 gets + 1 scans (51 pairs, 35598 B returned) |
-| range | 1007 / 1246 / 1591 | 0 gets + 1 scans (51 pairs, 35598 B returned) | 759 / 1135 / 1243 | 674 / 792 / 1045 | 0 gets + 1 scans (51 pairs, 35598 B returned) |
+| current | 79 / 108 / 172 | 2 gets + 0 scans (0 pairs, 1113 B returned) | 31 / 36 / 48 | 23 / 31 / 36 | 2 gets + 0 scans (0 pairs, 1113 B returned) |
+| historical | 371 / 601 / 795 | 0 gets + 1 scans (51 pairs, 35598 B returned) | 125 / 163 / 219 | 47 / 89 / 115 | 0 gets + 1 scans (51 pairs, 35598 B returned) |
+| history | 1000 / 1176 / 1578 | 0 gets + 1 scans (51 pairs, 35598 B returned) | 772 / 1307 / 1568 | 697 / 1137 / 1617 | 0 gets + 1 scans (51 pairs, 35598 B returned) |
+| range | 1026 / 1489 / 2181 | 0 gets + 1 scans (51 pairs, 35598 B returned) | 775 / 984 / 1290 | 689 / 1011 / 1207 | 0 gets + 1 scans (51 pairs, 35598 B returned) |
 
 ## Pins (KSE-060..063)
 
