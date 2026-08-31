@@ -2171,6 +2171,12 @@ impl Kernel {
                 req.origin.clone(),
                 r.op.context.subject.name.clone(),
                 req.note.clone(),
+                // prev rels for the phase-3 index diff (unrelate sweep) —
+                // mirror of commit_version's QA2-PROP-002 invariant.
+                r.head
+                    .as_ref()
+                    .map(|h| h.relationships.clone())
+                    .unwrap_or_default(),
             ));
         }
 
@@ -2196,7 +2202,7 @@ impl Kernel {
         let mut results = Vec::with_capacity(pending.len());
         let mut prev_audit = pipe.audit;
         let start_seq = pipe.seq;
-        for (idx, (koid, cur_v, mut ko, kind, origin, actor, note)) in
+        for (idx, (koid, cur_v, mut ko, kind, origin, actor, note, prev_rels)) in
             pending.into_iter().enumerate()
         {
             let seq = start_seq + idx as u64 + 1;
@@ -2240,6 +2246,34 @@ impl Kernel {
                 .put_object_version(&mut batch, &koid, commit_ts, &ko);
             self.repo
                 .put_head(&mut batch, &koid, ko.version, commit_ts, ko.lifecycle.state);
+            // Relationship + type index maintenance — the same invariant
+            // commit_version upholds (QA2-PROP-002): index rows are atoms of
+            // the same batch as the version row, so the index can never
+            // drift from the head, across a crash or otherwise.
+            for rel in &ko.relationships {
+                let (src, dst) = match rel.direction {
+                    Direction::Outbound => (koid, rel.target),
+                    Direction::Inbound => (rel.target, koid),
+                };
+                self.relationships
+                    .write_index(&mut batch, &src, &rel.rel_type, &dst);
+            }
+            let mut removed: Vec<RelationshipRef> = prev_rels.to_vec();
+            for rel in &ko.relationships {
+                if let Some(i) = removed.iter().position(|p| p == rel) {
+                    removed.swap_remove(i);
+                }
+            }
+            for rel in &removed {
+                let (src, dst) = match rel.direction {
+                    Direction::Outbound => (koid, rel.target),
+                    Direction::Inbound => (rel.target, koid),
+                };
+                self.relationships
+                    .delete_index(&mut batch, &src, &rel.rel_type, &dst);
+            }
+            self.repo
+                .write_type_index(&mut batch, &ko.metadata.type_name, &koid);
             self.repo.put_event(&mut batch, seq, &ke);
             events.push(ke);
             prev_audit = audit;

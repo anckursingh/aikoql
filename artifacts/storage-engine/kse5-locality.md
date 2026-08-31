@@ -11,7 +11,7 @@ Dataset: 100 KOs × (create with 3 fact payload props + provenance marker, rels 
 | physical blocks | 84 leaf + 4 branch pages | NOT_MEASURED | 0 (RAM) |
 | bytes read / retrieval | NOT_MEASURED (mmap, no IO tracing) | NOT_MEASURED | 0 (RAM after replay) |
 | durable store bytes | 3686400 (live 231835) | 375169 | 360206 (live 231835, amplification 1.55×) |
-| P50 / P95 / P99 (µs) | 239 / 352 / 469 | 449 / 713 / 926 | 63 / 98 / 141 |
+| P50 / P95 / P99 (µs) | 247 / 359 / 441 | 459 / 762 / 1066 | 58 / 73 / 133 |
 | reopen cost | 0 (lazy mmap) | 0 | 21 ms replay of 401 WAL records (360206 bytes) |
 
 ## Read

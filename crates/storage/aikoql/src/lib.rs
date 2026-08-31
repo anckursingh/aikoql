@@ -23,7 +23,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 mod block;
-mod envelope;
+pub mod envelope; // KSE-9 fault injection + tooling need record boundaries
 
 pub use block::Block;
 
