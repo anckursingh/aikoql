@@ -26,8 +26,11 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace -- -D warnings
       - run: cargo check --workspace
+      # Windows debug-builds the full workspace incl. the Wave 5 OLAP
+      # harness's test-only client deps (clickhouse/mysql) — the step
+      # exceeded its 15-minute budget (13m41s even before Wave 5).
       - run: cargo test --workspace -- --skip load_encryption_overhead
-        timeout-minutes: 15
+        timeout-minutes: 30
       # DoD 19 (HLD §52/§53): golden PDF suite with visible per-stage
       # metrics — extraction/fragmentation/semantic/provenance/retrieval.
       - run: cargo test -p aikoql-ingestion --test multimodal_golden -- --nocapture
