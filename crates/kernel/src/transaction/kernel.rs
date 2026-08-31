@@ -34,6 +34,7 @@ use crate::security::crypto::Crypto;
 use crate::security::envelope::{Envelope, CRYPTO_META_KEY, CRYPTO_META_V1, DEKS_STORAGE_KEY};
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
 use crate::security::tenant::TenantManager;
+pub use crate::storage::repository::DerivedIndexRebuild;
 use crate::storage::repository::KnowledgeRepository;
 use crate::storage::store::{ConstraintCapabilities, StorageEngine, WriteBatch};
 use std::collections::{HashMap, HashSet};
@@ -3219,6 +3220,13 @@ impl Kernel {
     /// after restore.
     pub fn restore_store_from(&self, path: &std::path::Path) -> KResult<()> {
         self.store.restore_from(path)
+    }
+
+    /// KSE-10: rebuild the derived indexes (relo/reli/type) from canonical
+    /// ko/ heads. Repair op — repairs stale, missing, or corrupt derived
+    /// rows in one atomic batch; canonical knowledge is never touched.
+    pub fn rebuild_derived_indexes(&self) -> KResult<DerivedIndexRebuild> {
+        self.repo.rebuild_derived_indexes()
     }
 
     // ---- Programs-as-KOs (MRFC-0030 Phase 7a) ----------------------------
