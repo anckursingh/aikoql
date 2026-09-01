@@ -18,6 +18,7 @@ pub struct CountingEngine {
     write_batches: AtomicU64,
     puts: AtomicU64,
     dels: AtomicU64,
+    bytes_written: AtomicU64,
 }
 
 impl CountingEngine {
@@ -31,6 +32,7 @@ impl CountingEngine {
             write_batches: AtomicU64::new(0),
             puts: AtomicU64::new(0),
             dels: AtomicU64::new(0),
+            bytes_written: AtomicU64::new(0),
         })
     }
 }
@@ -62,6 +64,12 @@ impl StorageEngine for CountingEngine {
             .fetch_add(batch.puts.len() as u64, Ordering::Relaxed);
         self.dels
             .fetch_add(batch.dels.len() as u64, Ordering::Relaxed);
+        let wb: u64 = batch
+            .puts
+            .iter()
+            .map(|(k, v)| (k.len() + v.len()) as u64)
+            .sum();
+        self.bytes_written.fetch_add(wb, Ordering::Relaxed);
         self.inner.write_batch(batch)
     }
 }
@@ -100,6 +108,11 @@ impl LogicalCounts {
             c.dels.load(Ordering::Relaxed),
         )
     }
+}
+
+/// Σ put key+value bytes across all batches — the logical bytes written.
+pub fn bytes_written(c: &CountingEngine) -> u64 {
+    c.bytes_written.load(Ordering::Relaxed)
 }
 
 impl std::fmt::Display for LogicalCounts {
