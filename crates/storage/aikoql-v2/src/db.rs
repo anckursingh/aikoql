@@ -119,6 +119,13 @@ impl Db {
         };
         let manifest = Manifest::read(&manifest_path(&config.dir, current.manifest_generation))?;
         verify_pair(&current, &manifest)?;
+        // Orphan segments (a crash between segment publication and
+        // manifest/CURRENT, or compaction leftovers): reported and ignored.
+        // They are unreferenced data — a later flush may reuse the id,
+        // which is safe because nothing references the orphan.
+        for id in orphan_segments(&config.dir, &manifest) {
+            eprintln!("aikoql-v2: orphan segment SEGMENT-{id:06}.seg ignored (not in manifest)");
+        }
 
         // Referenced segments must open (fail closed on missing/corrupt).
         let mut segments = Vec::with_capacity(manifest.segments.len());
@@ -257,7 +264,11 @@ impl Db {
         }
         for seg in state.segments.iter().rev() {
             if let Some(e) = seg.get(key)? {
-                return Ok(Some(e.value));
+                return Ok(if e.flags & FLAG_DELETE != 0 {
+                    None // tombstone: shadow everything older
+                } else {
+                    Some(e.value)
+                });
             }
         }
         Ok(None)
@@ -351,6 +362,35 @@ impl Db {
         state.segments.extend(new_segments);
         Ok(())
     }
+}
+
+/// SEGMENT-*.seg files the manifest does not reference. Reported and
+/// ignored at open — unreferenced data; a future flush may reuse the id,
+/// which is safe because nothing references the orphan.
+pub fn orphan_segments(dir: &Path, manifest: &Manifest) -> Vec<u64> {
+    let mut orphans = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return orphans,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some(stem) = name
+            .strip_prefix("SEGMENT-")
+            .and_then(|s| s.strip_suffix(".seg"))
+        else {
+            continue;
+        };
+        let Ok(id) = stem.parse::<u64>() else {
+            continue;
+        };
+        if !manifest.segments.iter().any(|r| r.segment_id == id) {
+            orphans.push(id);
+        }
+    }
+    orphans.sort_unstable();
+    orphans
 }
 
 fn lock_directory(dir: &Path) -> Result<File, FormatError> {

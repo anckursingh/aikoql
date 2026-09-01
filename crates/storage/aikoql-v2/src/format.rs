@@ -68,7 +68,7 @@ impl fmt::Display for FormatError {
 impl std::error::Error for FormatError {}
 
 /// v1 convention: the first 8 bytes of the sha256 carry the integrity check.
-pub(crate) fn checksum8(bytes: &[u8]) -> [u8; 8] {
+pub fn checksum8(bytes: &[u8]) -> [u8; 8] {
     let full = sha256(bytes);
     full[..8].try_into().expect("sha256-8 slice")
 }
@@ -374,14 +374,5 @@ impl<'a> Cursor<'a> {
     pub(crate) fn vec(&mut self) -> Result<Vec<u8>, FormatError> {
         let len = self.u32()? as usize;
         Ok(self.take(len)?.to_vec())
-    }
-
-    /// A u32 length-prefixed byte string, returned as the byte range it
-    /// occupies (the caller holds the backing buffer).
-    pub(crate) fn slice_range(&mut self) -> Result<std::ops::Range<usize>, FormatError> {
-        let len = self.u32()? as usize;
-        let start = self.pos;
-        self.take(len)?;
-        Ok(start..self.pos)
     }
 }

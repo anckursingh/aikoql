@@ -8,3 +8,6 @@ repository.workspace = true
 
 [dependencies]
 aikoql-kernel = { path = "../../kernel" }
+# SE2-M3: legacy WAL migration rides v1's validated envelope parser; the
+# frozen batch-payload codec is re-implemented in migration.rs.
+aikoql-storage = { path = "../aikoql" }

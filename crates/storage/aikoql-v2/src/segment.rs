@@ -37,7 +37,12 @@
 use crate::format::{checksum8, publish_atomic, Cursor, FormatError};
 use aikoql_kernel::knowledge::kom::sha256;
 use std::cell::Cell;
+use std::fs::File;
 use std::ops::Range;
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;
+#[cfg(windows)]
+use std::os::windows::fs::FileExt;
 use std::path::Path;
 
 pub const SEGMENT_VERSION: u16 = 1;
@@ -269,38 +274,80 @@ fn encode_block(kind: u8, entries: u32, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A read-only handle on a published segment. Open validates everything
-/// structural (magics, versions, header + footer skeleton checksums) and
-/// defers data-block payload checksums to the read that touches the block.
+/// A read-only handle on a published segment. Open reads only the skeleton
+/// (header, block headers, index, bloom, footer) — O(block count), never
+/// O(file size) — and defers data-block payloads to the read that touches
+/// the block, which validates that block's checksum on first touch.
 #[derive(Debug)]
 pub struct SegmentReader {
-    bytes: Vec<u8>,
+    file: File,
+    file_len: u64,
     block_count: u32,
     entry_count: u64,
-    key_min: Range<usize>,
-    key_max: Range<usize>,
+    key_min: Vec<u8>,
+    key_max: Vec<u8>,
     seq_lo: u64,
     seq_hi: u64,
     data: Vec<DataBlock>,
-    bloom_payload: Range<usize>,
+    /// Index payload — per-block key ranges point into this buffer.
+    index: Vec<u8>,
+    /// Bloom payload (m u32 + bits).
+    bloom: Vec<u8>,
     bloom_m: u32,
 }
 
 #[derive(Debug)]
 struct DataBlock {
-    header: usize,
-    payload: Range<usize>,
+    /// File offset of the 28-byte block header (payload follows at +28).
+    header: u64,
+    payload_len: usize,
     entries: u32,
+    /// Key ranges into the reader's index payload.
     first: Range<usize>,
     last: Range<usize>,
     validated: Cell<bool>,
 }
 
+/// Bounded positional read: short reads are the same Corrupt truncation
+/// class the whole-file Cursor used to report (so the M1 pins hold), real
+/// I/O failures stay Io. `read_at` has no shared seek position — concurrent
+/// readers on one segment never race payload loads.
+fn read_segment_at(
+    file: &File,
+    file_len: u64,
+    offset: u64,
+    n: usize,
+) -> Result<Vec<u8>, FormatError> {
+    if file_len - offset < n as u64 {
+        return Err(FormatError::Corrupt(format!(
+            "truncated: need {n} bytes at offset {offset}, {} remain",
+            file_len - offset
+        )));
+    }
+    let mut buf = vec![0u8; n];
+    #[cfg(unix)]
+    file.read_exact_at(&mut buf, offset)
+        .map_err(|e| FormatError::Io(format!("segment read at {offset}: {e}")))?;
+    #[cfg(windows)]
+    file.seek_read(&mut buf, offset)
+        .map_err(|e| FormatError::Io(format!("segment read at {offset}: {e}")))?;
+    Ok(buf)
+}
+
 impl SegmentReader {
     pub fn open(path: &Path) -> Result<Self, FormatError> {
-        let bytes = std::fs::read(path)
-            .map_err(|e| FormatError::Io(format!("read segment {}: {e}", path.display())))?;
-        let mut cur = Cursor::new(&bytes);
+        let file = File::open(path)
+            .map_err(|e| FormatError::Io(format!("open segment {}: {e}", path.display())))?;
+        let file_len = file
+            .metadata()
+            .map_err(|e| FormatError::Io(format!("segment metadata {}: {e}", path.display())))?
+            .len();
+
+        // Header: magic(4) version(2) data_block_count(4) entry_count(8)
+        // key_min_len(4) key_min key_max_len(4) key_max seq_lo(8) seq_hi(8)
+        // checksum(8). Read in pieces — the variable key ranges are tiny.
+        let prefix = read_segment_at(&file, file_len, 0, 22)?;
+        let mut cur = Cursor::new(&prefix);
         if cur.take(4)? != SEGMENT_MAGIC {
             return Err(FormatError::Corrupt("segment bad magic".into()));
         }
@@ -308,10 +355,13 @@ impl SegmentReader {
         if version != SEGMENT_VERSION {
             // A newer format whose v1-shaped header checksum still validates
             // is Unsupported, not damaged; anything else fails closed.
-            if bytes.len() >= 54 && checksum8(&bytes[..46]) == bytes[46..54] {
-                return Err(FormatError::Unsupported(format!(
-                    "segment format version {version} (this build: {SEGMENT_VERSION})"
-                )));
+            if file_len >= 54 {
+                let head = read_segment_at(&file, file_len, 0, 54)?;
+                if checksum8(&head[..46]) == head[46..54] {
+                    return Err(FormatError::Unsupported(format!(
+                        "segment format version {version} (this build: {SEGMENT_VERSION})"
+                    )));
+                }
             }
             return Err(FormatError::Corrupt(format!(
                 "segment version {version} damaged"
@@ -319,13 +369,25 @@ impl SegmentReader {
         }
         let block_count = cur.u32()?;
         let entry_count = cur.u64()?;
-        let key_min = cur.slice_range()?;
-        let key_max = cur.slice_range()?;
-        let seq_lo = cur.u64()?;
-        let seq_hi = cur.u64()?;
-        let stored = cur.take(8)?;
-        let header_end = cur.pos();
-        if checksum8(&bytes[..header_end - 8]) != stored {
+        let key_min_len = cur.u32()? as usize;
+        let mut header = Vec::with_capacity(22 + key_min_len + 4 + 32);
+        header.extend_from_slice(&prefix);
+        let key_min = read_segment_at(&file, file_len, header.len() as u64, key_min_len)?;
+        header.extend_from_slice(&key_min);
+        let key_max_len_b = read_segment_at(&file, file_len, header.len() as u64, 4)?;
+        let key_max_len =
+            u32::from_le_bytes(key_max_len_b[..4].try_into().expect("u32 slice")) as usize;
+        header.extend_from_slice(&key_max_len_b);
+        let key_max = read_segment_at(&file, file_len, header.len() as u64, key_max_len)?;
+        header.extend_from_slice(&key_max);
+        let tail = read_segment_at(&file, file_len, header.len() as u64, 24)?; // seq_lo | seq_hi | checksum
+        let mut tcur = Cursor::new(&tail);
+        let seq_lo = tcur.u64()?;
+        let seq_hi = tcur.u64()?;
+        let stored: [u8; 8] = tcur.take(8)?.try_into().expect("8-byte checksum");
+        header.extend_from_slice(&tail[..16]);
+        header.extend_from_slice(&stored);
+        if checksum8(&header[..header.len() - 8]) != stored {
             return Err(FormatError::Corrupt(
                 "segment header checksum mismatch".into(),
             ));
@@ -336,32 +398,37 @@ impl SegmentReader {
             )));
         }
 
-        // Walk blocks until the footer. Payloads are skipped by size, so a
-        // payload that happens to start with "AKFT" is never misread.
+        // Walk blocks until the footer, skipping payloads by size (a
+        // payload that happens to start with "AKFT" is never misread).
         let mut data: Vec<DataBlock> = Vec::new();
+        let mut block_headers: Vec<u8> = Vec::new();
         let mut last_kind: Option<u8> = None;
-        let mut index_block: Option<Range<usize>> = None;
-        let mut bloom_block: Option<Range<usize>> = None;
+        let mut index_block: Option<(u64, usize)> = None;
+        let mut bloom_block: Option<(u64, usize)> = None;
+        let mut cur = header.len() as u64;
         loop {
-            let remaining = cur.remaining();
-            if remaining >= 4 && &bytes[cur.pos()..cur.pos() + 4] == FOOTER_MAGIC {
+            let remaining = file_len - cur;
+            let footer = remaining >= 4
+                && read_segment_at(&file, file_len, cur, 4)?.as_slice() == FOOTER_MAGIC;
+            if footer {
                 break;
             }
-            if remaining < BLOCK_HEADER_LEN {
+            if remaining < BLOCK_HEADER_LEN as u64 {
                 return Err(FormatError::Corrupt(format!(
-                    "truncated: need a block or footer at offset {}, {remaining} bytes remain",
-                    cur.pos()
+                    "truncated: need a block or footer at offset {cur}, {remaining} bytes remain"
                 )));
             }
-            let header = cur.pos();
-            if cur.take(4)? != BLOCK_MAGIC {
+            let header_off = cur;
+            let hdr = read_segment_at(&file, file_len, cur, BLOCK_HEADER_LEN)?;
+            let mut hcur = Cursor::new(&hdr);
+            if hcur.take(4)? != BLOCK_MAGIC {
                 return Err(FormatError::Corrupt("block bad magic".into()));
             }
-            if cur.u16()? != SEGMENT_VERSION {
+            if hcur.u16()? != SEGMENT_VERSION {
                 return Err(FormatError::Corrupt("block version".into()));
             }
-            let kind = cur.u8()?;
-            let compression = cur.u8()?;
+            let kind = hcur.u8()?;
+            let compression = hcur.u8()?;
             if compression != 0 {
                 return Err(FormatError::Unsupported(format!(
                     "block compression {compression}"
@@ -371,12 +438,17 @@ impl SegmentReader {
                 return Err(FormatError::Corrupt("block types out of order".into()));
             }
             last_kind = Some(kind);
-            let entries = cur.u32()?;
-            let compressed = cur.u32()? as usize;
-            cur.u32()?; // uncompressed size (same: compression 0)
-            cur.take(8)?; // block checksum field
-            let payload = cur.pos()..cur.pos() + compressed;
-            cur.take(compressed)?;
+            let entries = hcur.u32()?;
+            let compressed = hcur.u32()? as usize;
+            hcur.u32()?; // uncompressed size (same: compression 0)
+            hcur.take(8)?; // block checksum field — data payloads validate on first touch
+            cur += BLOCK_HEADER_LEN as u64;
+            if file_len - cur < compressed as u64 {
+                return Err(FormatError::Corrupt(format!(
+                    "truncated: need {compressed} bytes at offset {cur}, {} remain",
+                    file_len - cur
+                )));
+            }
             match kind {
                 BLOCK_DATA => {
                     if entries as usize > compressed / MIN_ENTRY_LEN {
@@ -384,9 +456,10 @@ impl SegmentReader {
                             "{entries} entries cannot fit in {compressed} bytes"
                         )));
                     }
+                    block_headers.extend_from_slice(&hdr);
                     data.push(DataBlock {
-                        header,
-                        payload,
+                        header: header_off,
+                        payload_len: compressed,
                         entries,
                         first: 0..0,
                         last: 0..0,
@@ -397,36 +470,39 @@ impl SegmentReader {
                     if index_block.is_some() {
                         return Err(FormatError::Corrupt("two index blocks".into()));
                     }
-                    index_block = Some(payload);
+                    index_block = Some((header_off, compressed));
                 }
                 BLOCK_BLOOM => {
                     if bloom_block.is_some() {
                         return Err(FormatError::Corrupt("two bloom blocks".into()));
                     }
-                    bloom_block = Some(payload);
+                    bloom_block = Some((header_off, compressed));
                 }
                 _ => unreachable!("kind checked above"),
             }
+            cur += compressed as u64;
         }
-        let footer_start = cur.pos();
-        if cur.remaining() != FOOTER_LEN {
+        let footer_start = cur;
+        if file_len - footer_start != FOOTER_LEN as u64 {
             return Err(FormatError::Corrupt(format!(
                 "footer must be exactly {FOOTER_LEN} bytes at the end, {} remain",
-                cur.remaining()
+                file_len - footer_start
             )));
         }
-        if cur.take(4)? != FOOTER_MAGIC {
+        let footer = read_segment_at(&file, file_len, footer_start, FOOTER_LEN)?;
+        let mut fcur = Cursor::new(&footer);
+        if fcur.take(4)? != FOOTER_MAGIC {
             return Err(FormatError::Corrupt("footer bad magic".into()));
         }
-        if cur.u16()? != SEGMENT_VERSION {
+        if fcur.u16()? != SEGMENT_VERSION {
             return Err(FormatError::Corrupt("footer version".into()));
         }
-        if cur.u64()? != entry_count {
+        if fcur.u64()? != entry_count {
             return Err(FormatError::Corrupt("footer entry_count mismatch".into()));
         }
-        let index =
+        let (index_header, index_len) =
             index_block.ok_or_else(|| FormatError::Corrupt("missing index block".into()))?;
-        let bloom =
+        let (bloom_header, bloom_len) =
             bloom_block.ok_or_else(|| FormatError::Corrupt("missing bloom block".into()))?;
         if data.is_empty() || data.len() != block_count as usize {
             return Err(FormatError::Corrupt(format!(
@@ -434,22 +510,34 @@ impl SegmentReader {
                 data.len()
             )));
         }
+        let index = read_segment_at(
+            &file,
+            file_len,
+            index_header + BLOCK_HEADER_LEN as u64,
+            index_len,
+        )?;
+        let bloom = read_segment_at(
+            &file,
+            file_len,
+            bloom_header + BLOCK_HEADER_LEN as u64,
+            bloom_len,
+        )?;
 
-        // Index payload: per-block key range, offset, entry count.
-        let mut icur = Cursor::new(&bytes[index.clone()]);
+        // Index payload: per-block key range, offset, entry count. Key
+        // ranges point into the index buffer; the stored offset is the
+        // file-absolute block header position.
+        let mut icur = Cursor::new(&index);
         let mut total = 0u64;
-        // Cursor positions are relative to the index payload — the stored
-        // key ranges must be file-absolute for block_key().
         for db in &mut data {
             let len = icur.u16()? as usize;
-            let start = index.start + icur.pos();
+            let start = icur.pos();
             icur.take(len)?;
-            db.first = start..index.start + icur.pos();
+            db.first = start..icur.pos();
             let len = icur.u16()? as usize;
-            let start = index.start + icur.pos();
+            let start = icur.pos();
             icur.take(len)?;
-            db.last = start..index.start + icur.pos();
-            let offset = icur.u64()? as usize;
+            db.last = start..icur.pos();
+            let offset = icur.u64()?;
             let count = icur.u32()?;
             if offset != db.header {
                 return Err(FormatError::Corrupt(format!(
@@ -475,7 +563,7 @@ impl SegmentReader {
         }
 
         // Bloom payload: m u32 + ceil(m/8) bytes of bits.
-        let mut bcur = Cursor::new(&bytes[bloom.clone()]);
+        let mut bcur = Cursor::new(&bloom);
         let bloom_m = bcur.u32()?;
         if bcur.remaining() as u32 != bloom_m.div_ceil(8) {
             return Err(FormatError::Corrupt(format!(
@@ -488,49 +576,50 @@ impl SegmentReader {
         // Index + bloom block headers must agree with the header counts
         // (block header: magic 4 | version 2 | type 1 | compression 1 |
         // entry_count u32 — so the count sits at offset 8).
-        let idx_entries = u32::from_le_bytes(
-            bytes[index.start - BLOCK_HEADER_LEN + 8..index.start - BLOCK_HEADER_LEN + 12]
-                .try_into()
-                .expect("u32 slice"),
-        );
+        let idx_entries = read_segment_at(&file, file_len, index_header + 8, 4)?;
+        let idx_entries = u32::from_le_bytes(idx_entries[..4].try_into().expect("u32 slice"));
         if idx_entries != block_count {
             return Err(FormatError::Corrupt(
                 "index block entry count mismatch".into(),
             ));
         }
-        let blm_entries = u32::from_le_bytes(
-            bytes[bloom.start - BLOCK_HEADER_LEN + 8..bloom.start - BLOCK_HEADER_LEN + 12]
-                .try_into()
-                .expect("u32 slice"),
-        );
+        let blm_entries = read_segment_at(&file, file_len, bloom_header + 8, 4)?;
+        let blm_entries = u32::from_le_bytes(blm_entries[..4].try_into().expect("u32 slice"));
         if blm_entries as u64 != entry_count {
             return Err(FormatError::Corrupt(
                 "bloom block entry count mismatch".into(),
             ));
         }
 
-        // Footer checksum over the skeleton (index and bloom blocks are
-        // adjacent, so one slice covers both).
+        // Footer checksum over the skeleton (the index header + index
+        // payload + bloom header + bloom payload are contiguous in the
+        // file, so one bounded read covers that span).
         let mut skeleton = Vec::with_capacity(
-            header_end
+            header.len()
                 + data.len() * BLOCK_HEADER_LEN
-                + (bloom.end - (index.start - BLOCK_HEADER_LEN))
+                + (bloom_header + BLOCK_HEADER_LEN as u64 + bloom_len as u64 - index_header)
+                    as usize
                 + 14,
         );
-        skeleton.extend_from_slice(&bytes[..header_end]);
-        for db in &data {
-            skeleton.extend_from_slice(&bytes[db.header..db.header + BLOCK_HEADER_LEN]);
-        }
-        skeleton.extend_from_slice(&bytes[index.start - BLOCK_HEADER_LEN..bloom.end]);
-        skeleton.extend_from_slice(&bytes[footer_start..footer_start + 14]);
-        if checksum8(&skeleton) != cur.take(8)? {
+        skeleton.extend_from_slice(&header);
+        skeleton.extend_from_slice(&block_headers);
+        skeleton.extend_from_slice(&read_segment_at(
+            &file,
+            file_len,
+            index_header,
+            (bloom_header + BLOCK_HEADER_LEN as u64 + bloom_len as u64 - index_header) as usize,
+        )?);
+        skeleton.extend_from_slice(&footer[..14]);
+        let stored: [u8; 8] = footer[14..].try_into().expect("8-byte checksum");
+        if checksum8(&skeleton) != stored {
             return Err(FormatError::Corrupt(
                 "footer skeleton checksum mismatch".into(),
             ));
         }
 
         Ok(SegmentReader {
-            bytes,
+            file,
+            file_len,
             block_count,
             entry_count,
             key_min,
@@ -538,7 +627,8 @@ impl SegmentReader {
             seq_lo,
             seq_hi,
             data,
-            bloom_payload: bloom,
+            index,
+            bloom,
             bloom_m,
         })
     }
@@ -552,11 +642,11 @@ impl SegmentReader {
     }
 
     pub fn key_min(&self) -> &[u8] {
-        &self.bytes[self.key_min.clone()]
+        &self.key_min
     }
 
     pub fn key_max(&self) -> &[u8] {
-        &self.bytes[self.key_max.clone()]
+        &self.key_max
     }
 
     pub fn seq_lo(&self) -> u64 {
@@ -573,7 +663,7 @@ impl SegmentReader {
         let d = sha256(key);
         let h1 = u64::from_le_bytes(d[..8].try_into().expect("sha256 len"));
         let h2 = u64::from_le_bytes(d[8..16].try_into().expect("sha256 len"));
-        let bits = &self.bytes[self.bloom_payload.start + 4..self.bloom_payload.end];
+        let bits = &self.bloom[4..];
         for i in 0..BLOOM_PROBES {
             let bit = ((h1 as u128 + i as u128 * h2 as u128) % self.bloom_m as u128) as usize;
             if bits[bit / 8] & (1 << (bit % 8)) == 0 {
@@ -634,25 +724,32 @@ impl SegmentReader {
     }
 
     fn block_key(&self, r: &Range<usize>) -> &[u8] {
-        &self.bytes[r.clone()]
+        &self.index[r.clone()]
     }
 
-    /// Decode a data block, validating its checksum on first touch (lazy:
-    /// open() must stay O(block count), not O(file size)).
+    /// Decode a data block, loading the payload from the file and
+    /// validating its checksum on first touch (lazy: open() must stay
+    /// O(block count), not O(file size)).
     fn block_entries(&self, i: usize) -> Result<Vec<SegmentEntry>, FormatError> {
         let b = &self.data[i];
+        let raw = read_segment_at(
+            &self.file,
+            self.file_len,
+            b.header,
+            BLOCK_HEADER_LEN + b.payload_len,
+        )?;
         if !b.validated.get() {
-            let mut sk = Vec::with_capacity(20 + b.payload.len());
-            sk.extend_from_slice(&self.bytes[b.header..b.header + 20]);
-            sk.extend_from_slice(&self.bytes[b.payload.clone()]);
-            if checksum8(&sk) != self.bytes[b.header + 20..b.header + BLOCK_HEADER_LEN] {
+            let mut sk = Vec::with_capacity(20 + b.payload_len);
+            sk.extend_from_slice(&raw[..20]);
+            sk.extend_from_slice(&raw[BLOCK_HEADER_LEN..]);
+            if checksum8(&sk) != raw[20..BLOCK_HEADER_LEN] {
                 return Err(FormatError::Corrupt(format!(
                     "data block {i} checksum mismatch"
                 )));
             }
             b.validated.set(true);
         }
-        let mut cur = Cursor::new(&self.bytes[b.payload.clone()]);
+        let mut cur = Cursor::new(&raw[BLOCK_HEADER_LEN..]);
         let mut out = Vec::with_capacity(b.entries as usize);
         let mut prev: Vec<u8> = Vec::new();
         for _ in 0..b.entries {
