@@ -25,7 +25,9 @@ artifacts/storage-engine/
 
 Plus non-§31 extras the phases produced: `kse5-locality.md`,
 `kse6-relationship-locality.md`, `kse7-temporal-locality.md`,
-`kse14-snapshot-restore.md`.
+`kse14-snapshot-restore.md`, and the three certification suites'
+`kse120c-writer-contention.md` / `kse142-recovery-scaling.md` /
+`kse143-replay-memory.md`.
 
 ## Phase table
 
@@ -50,6 +52,11 @@ Plus non-§31 extras the phases produced: `kse5-locality.md`,
 | KSE-19 | resource usage | `kse19_resource.rs` | resource-usage.md |
 | KSE-20 | backend conformance | `kse20_backend_conformance.rs` | conformance.md |
 | M7 | W1..W8 + §28 matrix + §29 gate | `kse_m7_workloads.rs` | benchmark.md + adoption-decision.md |
+| Cert-082B | TEST-KSE-082B-01..03 | `kse82b_middle_corruption.rs` | — (pins in TESTING-PLAN row 617) |
+| Cert-120C | §5 matrix 1/2/4/8/16/32 × 0/32 | `kse120c_writer_contention.rs` | kse120c-writer-contention.md |
+| Cert-142 | §6 matrix 1/10/100 MB (1 GB opt) | `kse142_recovery_scaling.rs` | kse142-recovery-scaling.md |
+| Cert-143 | §7 peak-replay multiplier | `kse143_replay_memory.rs` | kse143-replay-memory.md |
+| Cert closure | §10-12 gate | cross-suite (rows above) | `docs/testing/STORAGE_ENGINE_MVP_CERTIFICATION_CLOSURE.md` |
 
 Phases with "—" have no standalone report: their evidence is the pinned
 test itself (TESTING-PLAN §13.2 rows carry the pin descriptions). The

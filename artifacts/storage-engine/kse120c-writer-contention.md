@@ -1,23 +1,23 @@
 # KSE-120C — Writer Contention Scaling (certification §5)
 
-Date: 2026-09-01 · seed 0x120c0000 · engine: AikoqlStorageEngine · build profile: debug (CPU inflated; RSS comparable) · workload: 800 puts per scenario (unique keys, 256 B values) · test: kse120c_writer_contention.rs
+Date: 2026-09-01 · seed 0x120c0000 · engine: AikoqlStorageEngine · build profile: release · workload: 20000 puts per scenario (unique keys, 256 B values) · test: kse120c_writer_contention.rs
 
 | writers | readers | writes | writes/sec | write P50/P95/P99 ms | reads | reads/sec | read P50/P95/P99 ms | wall s | recovered == acked |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 1 | 0 | 800 | 998 | 0.91 / 1.51 / 1.67 | 0 | — | — | 0.8 | ✓ (asserted, byte-exact) |
-| 1 | 32 | 800 | 864 | 1.05 / 1.65 / 1.87 | 16000 | 17271 | 0.00 / 0.00 / 0.01 | 0.9 | ✓ (asserted, byte-exact) |
-| 2 | 32 | 800 | 1000 | 1.86 / 2.83 / 3.25 | 16000 | 20007 | 0.00 / 0.00 / 0.01 | 0.8 | ✓ (asserted, byte-exact) |
-| 4 | 32 | 800 | 980 | 3.78 / 5.04 / 7.00 | 16000 | 19604 | 0.00 / 0.00 / 0.01 | 0.8 | ✓ (asserted, byte-exact) |
-| 8 | 32 | 800 | 979 | 7.81 / 9.55 / 14.72 | 16000 | 19580 | 0.00 / 0.00 / 0.00 | 0.8 | ✓ (asserted, byte-exact) |
-| 16 | 32 | 800 | 984 | 15.90 / 17.68 / 31.28 | 16000 | 19676 | 0.00 / 0.00 / 0.01 | 0.8 | ✓ (asserted, byte-exact) |
-| 32 | 32 | 800 | 989 | 31.58 / 36.12 / 37.39 | 16000 | 19785 | 0.00 / 0.00 / 0.01 | 0.8 | ✓ (asserted, byte-exact) |
+| 1 | 0 | 20000 | 1544 | 0.59 / 0.92 / 1.09 | 0 | — | — | 13.0 | ✓ (asserted, byte-exact) |
+| 1 | 32 | 20000 | 1541 | 0.59 / 0.92 / 1.13 | 16000 | 1233 | 0.00 / 0.00 / 0.01 | 13.0 | ✓ (asserted, byte-exact) |
+| 2 | 32 | 20000 | 1517 | 1.13 / 2.93 / 5.30 | 16000 | 1214 | 0.00 / 0.00 / 0.01 | 13.2 | ✓ (asserted, byte-exact) |
+| 4 | 32 | 20000 | 1500 | 1.08 / 7.96 / 14.71 | 16000 | 1200 | 0.00 / 0.00 / 0.01 | 13.3 | ✓ (asserted, byte-exact) |
+| 8 | 32 | 20000 | 1465 | 0.77 / 21.13 / 39.53 | 16000 | 1172 | 0.00 / 0.00 / 0.01 | 13.7 | ✓ (asserted, byte-exact) |
+| 16 | 32 | 20000 | 1498 | 0.65 / 48.40 / 91.43 | 16000 | 1198 | 0.00 / 0.00 / 0.01 | 13.4 | ✓ (asserted, byte-exact) |
+| 32 | 32 | 20000 | 1491 | 0.65 / 99.39 / 180.43 | 16000 | 1193 | 0.00 / 0.00 / 0.01 | 13.4 | ✓ (asserted, byte-exact) |
 
 
 ## Proposed SLOs (reported, not asserted)
 
 - 100% acknowledged-write recovery at every writer count — the only asserted gate (all scenarios, above)
-- write P50 at 1 writer <= 1.4 ms (measured 0.91 ms; 1.5x headroom)
-- throughput must not collapse: 32-writer rate >= 25% of the 1-writer rate (measured 989/sec vs 998/sec = 99%) — serialization is intentional (log Mutex across append+fsync+apply, KSE-13 120a), so plateau is expected; a collapse would signal lock or scheduling pathology
+- write P50 at 1 writer <= 0.9 ms (measured 0.59 ms; 1.5x headroom)
+- throughput must not collapse: 32-writer rate >= 25% of the 1-writer rate (measured 1491/sec vs 1544/sec = 97%) — serialization is intentional (log Mutex across append+fsync+apply, KSE-13 120a), so plateau is expected; a collapse would signal lock or scheduling pathology
 
 
 ## NOT_MEASURED (metrics that cannot be measured here)

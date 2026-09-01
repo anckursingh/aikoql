@@ -1,14 +1,16 @@
 # KSE-143 — Large Replay Resource Stability (certification §7)
 
-Date: 2026-09-01 · seed 0x14300000 · engine: AikoqlStorageEngine · build profile: debug (CPU inflated; RSS comparable) · sizes run: 1 MB · test: kse143_replay_memory.rs
+Date: 2026-09-01 · seed 0x14300000 · engine: AikoqlStorageEngine · build profile: release · sizes run: 1 MB/10 MB/100 MB · test: kse143_replay_memory.rs
 
-Peak replay memory multiplier = **1.00x** (peak 7630848 B / final 7606272 B, at 1.00 MB WAL).
+Peak replay memory multiplier = **8.77x** (peak 112848896 B / final 12861440 B, at 100.00 MB WAL).
 
-Beyond the ~7 MB process baseline, peak grows at 1.05 B per WAL byte (marginal slope, 1.00 MB row). Proposed deployment memory requirement: baseline + 1.05 B/WAL-byte x the operational WAL cap x 1.2 headroom — e.g. an operational 100 MB WAL implies ~132 MB RAM reserved for open().
+Beyond the ~9 MB process baseline, peak grows at 1.04 B per WAL byte (marginal slope, 100.00 MB row). Proposed deployment memory requirement: baseline + 1.04 B/WAL-byte x the operational WAL cap x 1.2 headroom — e.g. an operational 100 MB WAL implies ~134 MB RAM reserved for open().
 
 | WAL (exact) | records | live keys | baseline RSS | peak RSS | final RSS | post-query RSS | peak/final | open ms |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1.00 MB | 449 | 2402 | 6582272 B | 7630848 B | 7606272 B | 7630848 B | 1.00x | 68.0 |
+| 1.00 MB | 449 | 2402 | 6316032 B | 7286784 B | 7282688 B | 7286784 B | 1.00x | 3.6 |
+| 10.00 MB | 4487 | 8471 | 8921088 B | 12406784 B | 12402688 B | 12406784 B | 1.00x | 34.5 |
+| 100.00 MB | 44864 | 8910 | 9277440 B | 112848896 B | 12861440 B | 12861440 B | 8.77x | 428.8 |
 
 
 ## Honest limits
