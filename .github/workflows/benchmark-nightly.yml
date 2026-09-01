@@ -38,6 +38,14 @@ jobs:
         run: KSE13_NIGHTLY=1 cargo test --release -p aikoql-storage --test kse13_concurrency
         timeout-minutes: 60
 
+      # KSE-19 resource usage (MRFC-KSE-001 §25): RSS/heap/disk at 100K and
+      # 1M KOs via the loader child + PowerShell-independent sampler logic
+      # (the test's own sampler is Windows-only; on Linux the loader still
+      # runs and the report carries heap/disk without RSS). Strict opt-in.
+      - name: KSE-19 resource usage (100K + 1M KOs)
+        run: KSE19_NIGHTLY=1 cargo test --release -p aikoql-storage --test kse19_resource
+        timeout-minutes: 90
+
       # R14: run all criterion benches, save results under the `ci` baseline.
       # Bench targets are enumerated so the criterion flags don't reach
       # libtest bench targets ("Unrecognized option: 'save-baseline'").

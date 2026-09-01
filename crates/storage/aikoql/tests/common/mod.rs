@@ -225,24 +225,38 @@ pub fn structural_sweep(k: &Kernel, engine: &dyn StorageEngine, label: &str) {
         if let (Some(f), Some(t)) = (head.valid_from(), head.valid_to()) {
             assert!(f <= t, "{label}: inverted interval on {}", koid.to_hex());
         }
-        let tr = k.trace(ctx(), &koid).unwrap();
+        // Lineage from the version rows themselves — decoded straight off the
+        // engine (O(lineage) prefix scan per head). NOT k.trace: trace's
+        // full scan_events per KO makes this loop O(N²) at scale; and NOT
+        // k.history: it skips supersede-transition rows, which kse14's
+        // lineages legitimately contain. Decoding here also fails closed on
+        // any version row the codec cannot read.
+        let mut ver = Vec::new();
+        let mut cts = Vec::new();
+        let mut prefix = b"ko/".to_vec();
+        prefix.extend_from_slice(&key[5..]); // koid bytes — version rows are
+                                             // ko/<koid><ts8>, no separator
+        for (_, val) in engine.scan(&prefix).unwrap() {
+            // decode_ko_wire — what the repository itself uses for version
+            // rows (storage/repository.rs scan_object_versions).
+            let ko = aikoql_kernel::codec::decode_ko_wire(&val)
+                .unwrap_or_else(|e| panic!("{label}: version row decode failed: {e:?}"));
+            ver.push(ko.version);
+            cts.push(ko.commit_ts);
+        }
         assert_eq!(
-            tr.versions.len(),
+            ver.len(),
             head.version as usize,
             "{label}: lineage length != version on {}",
             koid.to_hex()
         );
         assert!(
-            tr.versions
-                .windows(2)
-                .all(|w| w[0].version + 1 == w[1].version),
+            ver.windows(2).all(|w| w[0] + 1 == w[1]),
             "{label}: gapped lineage on {}",
             koid.to_hex()
         );
         assert!(
-            tr.versions
-                .windows(2)
-                .all(|w| w[0].commit_ts <= w[1].commit_ts),
+            cts.windows(2).all(|w| w[0] <= w[1]),
             "{label}: commit_ts ran backwards on {}",
             koid.to_hex()
         );
