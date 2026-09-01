@@ -23,7 +23,7 @@
 //!
 //! Drop does NOT flush — recovery is the WAL's job.
 
-use crate::compaction::{merge, CompactStats};
+use crate::compaction::{merge, CompactStats, KeepAll, RetentionPolicy};
 use crate::format::{
     checksum8, verify_pair, Current, FormatError, Manifest, SegmentRecord, FORMAT_VERSION,
 };
@@ -375,14 +375,39 @@ impl Db {
     /// compaction material: they are newer than every segment and read
     /// first anyway.
     pub fn compact(&mut self) -> Result<CompactStats, FormatError> {
+        self.compact_with(&KeepAll)
+    }
+
+    /// Compact with a retention policy (SE2-M5): KEEP/DROP/ARCHIVE per
+    /// key class. The policy is an input — the caller asserts which rows
+    /// are genuinely obsolete (superseded heads, tombstoned keys); the
+    /// engine stays key-space-generic. ARCHIVE rows land in
+    /// `archive/ARCHIVE-{id:06}.seg` and leave the live key space.
+    pub fn compact_with(
+        &mut self,
+        policy: &dyn RetentionPolicy,
+    ) -> Result<CompactStats, FormatError> {
         let mut state = self.state.write().unwrap();
         if state.segments.is_empty() {
             return Ok(CompactStats::default());
         }
         let id = state.next_segment_id;
         state.next_segment_id += 1;
+        let archive_id = state.next_segment_id;
+        state.next_segment_id += 1;
         let out_path = segment_path(&self.config.dir, id);
-        let (stats, out_reader) = merge(&state.segments, self.config.block_target, &out_path)?;
+        let archive_path = self
+            .config
+            .dir
+            .join("archive")
+            .join(format!("ARCHIVE-{archive_id:06}.seg"));
+        let (stats, out_reader) = merge(
+            &state.segments,
+            self.config.block_target,
+            &out_path,
+            &archive_path,
+            policy,
+        )?;
         crash_park(&self.config.dir, "after_segment");
 
         let old_paths: Vec<PathBuf> = state
