@@ -160,6 +160,7 @@ dependencies = [
  "aikoql-semantic",
  "aikoql-sqlite",
  "aikoql-storage",
+ "aikoql-storage-v2",
  "base64 0.22.1",
  "mongodb",
  "postgres",

@@ -47,3 +47,209 @@ pub fn dir(tag: &str) -> PathBuf {
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
+
+// ---------------------------------------------------------------------------
+// Kernel measurement harness (CountingEngine / LogicalCounts / percentiles /
+// ctx), copied VERBATIM from `crates/storage/aikoql/tests/common/mod.rs` —
+// the W1..W8 rows in the V2-Adopt matrix must count the same logical bytes
+// as v1's M7 matrix did, and one definition is what makes that honest.
+// ---------------------------------------------------------------------------
+
+use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
+
+/// Pass-through engine that counts every kernel→engine request.
+pub struct CountingEngine {
+    pub inner: std::sync::Arc<dyn StorageEngine>,
+    gets: AtomicU64,
+    scan_calls: AtomicU64,
+    scan_pairs: AtomicU64,
+    bytes_returned: AtomicU64,
+    write_batches: AtomicU64,
+    puts: AtomicU64,
+    dels: AtomicU64,
+    bytes_written: AtomicU64,
+}
+
+impl CountingEngine {
+    pub fn new(inner: std::sync::Arc<dyn StorageEngine>) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(CountingEngine {
+            inner,
+            gets: AtomicU64::new(0),
+            scan_calls: AtomicU64::new(0),
+            scan_pairs: AtomicU64::new(0),
+            bytes_returned: AtomicU64::new(0),
+            write_batches: AtomicU64::new(0),
+            puts: AtomicU64::new(0),
+            dels: AtomicU64::new(0),
+            bytes_written: AtomicU64::new(0),
+        })
+    }
+}
+
+impl StorageEngine for CountingEngine {
+    fn get(&self, key: &[u8]) -> aikoql_kernel::KResult<Option<Vec<u8>>> {
+        self.gets.fetch_add(1, Ordering::Relaxed);
+        let v = self.inner.get(key)?;
+        if let Some(v) = &v {
+            self.bytes_returned
+                .fetch_add(v.len() as u64, Ordering::Relaxed);
+        }
+        Ok(v)
+    }
+
+    fn scan(&self, prefix: &[u8]) -> aikoql_kernel::KResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        self.scan_calls.fetch_add(1, Ordering::Relaxed);
+        let rows = self.inner.scan(prefix)?;
+        self.scan_pairs
+            .fetch_add(rows.len() as u64, Ordering::Relaxed);
+        let bytes: u64 = rows.iter().map(|(k, v)| (k.len() + v.len()) as u64).sum();
+        self.bytes_returned.fetch_add(bytes, Ordering::Relaxed);
+        Ok(rows)
+    }
+
+    fn write_batch(&self, batch: &WriteBatch) -> aikoql_kernel::KResult<()> {
+        self.write_batches.fetch_add(1, Ordering::Relaxed);
+        self.puts
+            .fetch_add(batch.puts.len() as u64, Ordering::Relaxed);
+        self.dels
+            .fetch_add(batch.dels.len() as u64, Ordering::Relaxed);
+        let wb: u64 = batch
+            .puts
+            .iter()
+            .map(|(k, v)| (k.len() + v.len()) as u64)
+            .sum();
+        self.bytes_written.fetch_add(wb, Ordering::Relaxed);
+        self.inner.write_batch(batch)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogicalCounts {
+    pub gets: u64,
+    pub scans: u64,
+    pub pairs: u64,
+    pub bytes: u64,
+}
+
+impl LogicalCounts {
+    pub fn snapshot(c: &CountingEngine) -> LogicalCounts {
+        LogicalCounts {
+            gets: c.gets.load(Ordering::Relaxed),
+            scans: c.scan_calls.load(Ordering::Relaxed),
+            pairs: c.scan_pairs.load(Ordering::Relaxed),
+            bytes: c.bytes_returned.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn delta(&self, before: LogicalCounts) -> LogicalCounts {
+        LogicalCounts {
+            gets: self.gets - before.gets,
+            scans: self.scans - before.scans,
+            pairs: self.pairs - before.pairs,
+            bytes: self.bytes - before.bytes,
+        }
+    }
+
+    pub fn writes(c: &CountingEngine) -> (u64, u64, u64) {
+        (
+            c.write_batches.load(Ordering::Relaxed),
+            c.puts.load(Ordering::Relaxed),
+            c.dels.load(Ordering::Relaxed),
+        )
+    }
+}
+
+/// Σ put key+value bytes across all batches — the logical bytes written.
+pub fn bytes_written(c: &CountingEngine) -> u64 {
+    c.bytes_written.load(Ordering::Relaxed)
+}
+
+pub fn percentiles(mut xs: Vec<u128>) -> (u128, u128, u128) {
+    if xs.is_empty() {
+        return (0, 0, 0); // a scenario with no samples (e.g. zero readers)
+    }
+    xs.sort_unstable();
+    let p = |q: f64| xs[((xs.len() - 1) as f64 * q).round() as usize];
+    (p(0.50), p(0.95), p(0.99))
+}
+
+/// A kernel read context (alice).
+pub fn ctx() -> aikoql_kernel::KnowledgeContext {
+    aikoql_kernel::KnowledgeContext::new(aikoql_kernel::Subject::new("alice"))
+}
+
+// ---------------------------------------------------------------------------
+// The six KSE-1 contract asserts (MRFC-KSE-001 §7), copied VERBATIM from
+// `crates/storage/aikoql/tests/common/mod.rs` — the one shared definition
+// every backend runs (v1's conformance.rs + KSE-20 matrix use the same
+// text). V2-Adopt: v2 runs them unchanged, so a green row in the KSE-20
+// matrix is honest by construction.
+// ---------------------------------------------------------------------------
+
+pub mod kse {
+    use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
+
+    /// KSE-001: get returns the written value.
+    pub fn kse001_get(e: &dyn StorageEngine) {
+        let mut b = WriteBatch::new();
+        b.put(b"k1".to_vec(), b"v1".to_vec());
+        e.write_batch(&b).unwrap();
+        assert_eq!(e.get(b"k1").unwrap(), Some(b"v1".to_vec()));
+    }
+
+    /// KSE-002: a missing key reads as None.
+    pub fn kse002_missing_key(e: &dyn StorageEngine) {
+        assert_eq!(e.get(b"missing").unwrap(), None);
+    }
+
+    /// KSE-003: prefix scan returns exactly the prefix's keys, sorted ascending.
+    pub fn kse003_prefix_scan(e: &dyn StorageEngine) {
+        let mut b = WriteBatch::new();
+        for k in [&b"a/3"[..], &b"a/1"[..], &b"a/2"[..], &b"b/1"[..]] {
+            b.put(k.to_vec(), vec![0]);
+        }
+        e.write_batch(&b).unwrap();
+        let got: Vec<Vec<u8>> = e.scan(b"a/").unwrap().into_iter().map(|(k, _)| k).collect();
+        assert_eq!(got, vec![b"a/1".to_vec(), b"a/2".to_vec(), b"a/3".to_vec()]);
+    }
+
+    /// KSE-004: puts and deletes in one batch become visible atomically.
+    pub fn kse004_atomic_batch(e: &dyn StorageEngine) {
+        let mut b = WriteBatch::new();
+        b.put(b"x".to_vec(), vec![1]);
+        b.put(b"y".to_vec(), vec![2]);
+        e.write_batch(&b).unwrap();
+        let mut d = WriteBatch::new();
+        d.del(b"x".to_vec());
+        d.put(b"z".to_vec(), vec![3]);
+        e.write_batch(&d).unwrap();
+        assert_eq!(e.get(b"x").unwrap(), None);
+        assert_eq!(e.get(b"y").unwrap(), Some(vec![2]));
+        assert_eq!(e.get(b"z").unwrap(), Some(vec![3]));
+    }
+
+    /// KSE-005: an empty batch produces no state change.
+    pub fn kse005_empty_batch(e: &dyn StorageEngine) {
+        let mut b = WriteBatch::new();
+        b.put(b"k".to_vec(), vec![1]);
+        e.write_batch(&b).unwrap();
+        e.write_batch(&WriteBatch::new()).unwrap();
+        assert_eq!(e.get(b"k").unwrap(), Some(vec![1]));
+    }
+
+    /// KSE-006: deterministic semantics for a key in both puts and deletes.
+    ///
+    /// All backends apply puts before dels (documented invariant in
+    /// `store.rs`), so a put+del of the same key deletes it; duplicate puts
+    /// resolve to the last value.
+    pub fn kse006_conflicting_put_delete(e: &dyn StorageEngine) {
+        let mut b = WriteBatch::new();
+        b.put(b"c".to_vec(), vec![1]);
+        b.del(b"c".to_vec());
+        b.put(b"d".to_vec(), vec![1]);
+        b.put(b"d".to_vec(), vec![2]);
+        e.write_batch(&b).unwrap();
+        assert_eq!(e.get(b"c").unwrap(), None); // put then del: deleted
+        assert_eq!(e.get(b"d").unwrap(), Some(vec![2])); // last put wins
+    }
+}

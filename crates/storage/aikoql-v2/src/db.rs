@@ -36,6 +36,7 @@ use crate::format::{
 use crate::memtable::Memtable;
 use crate::segment::{SegmentEntry, SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT};
 use crate::wal::{encode_frame, replay_frames, Op};
+use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -45,6 +46,9 @@ use std::time::{Duration, Instant};
 
 pub const LOCK_FILE: &str = "LOCK";
 pub const WAL_FILE: &str = "WAL-000001.log";
+
+/// One scan row — a key and its current value.
+pub type ScanRow = (Vec<u8>, Vec<u8>);
 
 const DEFAULT_MEMTABLE_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_BLOCK_TARGET: usize = 64 * 1024;
@@ -384,6 +388,50 @@ impl Db {
         self.cache.as_ref().map(|c| c.stats()).unwrap_or_default()
     }
 
+    /// V2-Adopt — prefix scan, the kernel `StorageEngine` contract: keys
+    /// sorted ascending, restricted to [prefix, prefix+∞), ONE entry per
+    /// key — the newest layer's head (same layer order as `get`: active →
+    /// immutables → segments, newest first). A tombstone in a newer layer
+    /// shadows every older value: the key does not appear. Distinct keys
+    /// only — the kernel stores history as distinct (koid, ts) keys, so
+    /// head-per-key loses nothing.
+    pub fn scan(&self, prefix: &[u8]) -> Result<Vec<ScanRow>, FormatError> {
+        let state = self.state.read().unwrap();
+        let end = prefix_end(prefix);
+        // Newest layer first; first-seen wins (layer order IS seq order by
+        // construction — flushes and compactions keep newer data in newer
+        // layers). BTreeMap collects and sorts.
+        let mut out: BTreeMap<Vec<u8>, Option<Vec<u8>>> = BTreeMap::new();
+        for (k, e) in state.active.prefix_heads(prefix) {
+            out.entry(k.to_vec()).or_insert(e.value.clone());
+        }
+        for mem in state.immutables.iter().rev() {
+            for (k, e) in mem.prefix_heads(prefix) {
+                out.entry(k.to_vec()).or_insert(e.value.clone());
+            }
+        }
+        for seg in state.segments.iter().rev() {
+            for e in segment_scan(seg, prefix, end.as_deref())? {
+                // A key already collected came from a newer layer, or from
+                // this segment's own head entry (versions within a key are
+                // seq-descending) — either way, skip.
+                if out.contains_key(&e.key) {
+                    continue;
+                }
+                let v = if e.flags & FLAG_DELETE != 0 {
+                    None
+                } else {
+                    Some(e.value)
+                };
+                out.insert(e.key, v);
+            }
+        }
+        Ok(out
+            .into_iter()
+            .filter_map(|(k, v)| v.map(|v| (k, v)))
+            .collect())
+    }
+
     /// Flush's first half, public so the visibility contract is testable:
     /// the active memtable becomes immutable (reads keep seeing it) and a
     /// fresh active takes new writes. flush() = rotate + publish.
@@ -654,6 +702,45 @@ fn batch_ops_of(b: &Batch) -> usize {
 
 /// The engine's byte accounting for the cap: the sum over ops of
 /// key+value bytes (a Delete carries only its key).
+/// The byte successor of `prefix` — the exclusive end bound of the prefix
+/// range. None when the prefix is empty or overflows (all 0xFF): the range
+/// is then unbounded. Kernel keys may hold arbitrary byte values (a KOID's
+/// 16 bytes are opaque), so an ASCII sentinel like b"~" would silently
+/// drop high-byte keys from a full scan.
+fn prefix_end(prefix: &[u8]) -> Option<Vec<u8>> {
+    if prefix.is_empty() {
+        return None;
+    }
+    let mut end = prefix.to_vec();
+    for b in end.iter_mut().rev() {
+        *b = b.wrapping_add(1);
+        if *b != 0 {
+            return Some(end);
+        }
+    }
+    None
+}
+
+/// One segment's entries within [prefix, +∞) in the segment's canonical
+/// order (key asc, versions seq-desc within a key). With an end bound the
+/// seek path (`SegmentReader::scan`); without one (empty prefix, or a
+/// prefix with no successor) the full iterator filtered by prefix.
+fn segment_scan(
+    seg: &SegmentReader,
+    prefix: &[u8],
+    end: Option<&[u8]>,
+) -> Result<Vec<SegmentEntry>, FormatError> {
+    match end {
+        Some(end) => seg.scan(prefix, end),
+        None => Ok(seg
+            .iter()
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|e| e.key.starts_with(prefix))
+            .collect()),
+    }
+}
+
 fn batch_bytes_of(b: &Batch) -> usize {
     b.0.iter()
         .map(|op| match op {

@@ -107,10 +107,22 @@ Bloom: built per segment since M1 (m = 10n, k = 4, double hashing over sha256; f
 
 Perf matrix: `warm_block_cache_speedup` under `SE2M7_NIGHTLY=1` strict opt-in — cold (cache off) vs warm second pass (64 MiB cache), 2000 keys × 200-byte values, one segment, 2000 random-order gets with answers pinned identical across passes; artifact `artifacts/storage-engine-v2/cache-bloom.md`.
 
+### V2-Adopt — the kernel `StorageEngine` adapter + the adoption matrix
+
+Done (21/21 new green, 130/130 suite).
+
+Delivered: `AikoqlStorageEngineV2` (src/engine.rs) implements the kernel `StorageEngine` trait over the v2 Db — an RwLock around the Db guards the `&mut self` writes (readers share, writers serialize; the Db owns its own locking), puts-before-dels op order (KSE-006), an empty batch is a no-op (KSE-005), snapshot/restore ride the trait defaults (REC-002). `Db::scan(prefix)` — sorted ascending, one entry per key (the newest layer's head; layer order is seq order by construction), tombstones shadow, prefix-seeked via BTreeMap ranges + segment index seeks (never a full-key-space walk), byte-successor prefix bounds with an unbounded fallback so high-byte `ko/<koid 16B>` keys survive (the `b"~"` sentinel convention would have dropped them — pinned by a [0xFF;16] key test).
+
+Conformance: `tests/kse20_backend_conformance.rs` — the six KSE-1 asserts (copied verbatim from v1's shared definition) × memory/redb/aikoql/aikoql-v2, plus a reopen persistence probe per durable backend → `artifacts/storage-engine-v2/conformance.md` (the four backends' divergences are documented capabilities; no accidental semantic divergence).
+
+Adoption matrix: `tests/kse_m7_v2_workloads.rs` re-runs the M7 W1..W8 shapes on v2 vs redb vs v1 (same seed, same ops, `V2ADOPT_NIGHTLY=1` strict opt-in) → `workloads.md`; the §26 probe `v2_gate2_3_dataset_larger_than_ram` pins gates 2+3 (820 KB dataset under a 64 KiB memtable + zero cache, segment-served, byte-exact, survives reopen; cache knobs pinned at both ends). First runs of the SE2-M6/SE2-M7 nightly matrices landed `group-commit.md` + `cache-bloom.md` (both path-fixed — they were one `..` short of the artifacts dir). mcp: `AIKOQL_BACKEND=aikoql-v2` is opt-in in `open_engine` (+ the connectors mirror, fail-closed message updated); the production default is unchanged.
+
+Verdict (`artifacts/storage-engine-v2/adoption-decision.md`): conformance + gates 1-3 PASS with committed evidence; gate 5 (KO lookup competitive) within the ≤2×-of-v1 bound at smoke (W1 1.15×, W2 1.49×); gate 4's throughput half NOT evidenced — the shipped SE2-M6 matrix at 25 batches/writer with 5 ms windows never coalesces a group, so the one-fsync-per-group win has nothing to show (Sync-not-weakened IS pinned by the M6 suite). v2 stays OPT-IN — ADOPT PENDING `V2ADOPT_NIGHTLY=1` for the gate-5 scale verdict; gate 4 needs a coalescing matrix (a harness follow-up, not a re-run) or stands as mechanism-only.
+
 ## Performance acceptance (§26) — gates for the v2 adoption matrix
 
-Recovery bounded by active WAL (M3 measurement); dataset larger than RAM queryable (M4+, measured against KSE-19's ceiling); memory limits configurable (M2); group commit improves concurrent throughput without weakening Sync (M6); KO lookup competitive with the MVP baseline (M7, the M7-W1..W8 harness re-run on v2). These are architecture gates measured when the milestone lands — not claims until then.
+Recovery bounded by active WAL (M3 measurement, recovery-independence.md); dataset larger than RAM queryable (V2-Adopt probe); memory limits configurable (M2 Config knobs, V2-Adopt probe); group commit improves concurrent throughput without weakening Sync (M6 — weakening-Sync pinned, the throughput half not evidenced at the shipped matrix size); KO lookup competitive with the MVP baseline (V2-Adopt smoke within bound; scale verdict pending `V2ADOPT_NIGHTLY=1`). Measured status lives in `artifacts/storage-engine-v2/adoption-decision.md`.
 
 ## Regression policy
 
-v1 suites untouched; the kernel's `StorageEngine` contract is the compatibility surface. Once v2 implements the trait, the KSE-20 conformance battery (six asserts × backend) runs on it verbatim. v1 stays the certified default until v2 passes its own adoption matrix.
+v1 suites untouched; the kernel's `StorageEngine` contract is the compatibility surface. The KSE-20 conformance battery (six asserts × backend) runs on v2 verbatim (tests/kse20_backend_conformance.rs). v1 stays the certified default until v2 passes its own adoption matrix.

@@ -14,20 +14,25 @@ use aikoql_kernel::storage::store::StorageEngine;
 use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_kernel::{KError, KResult, Kernel, SystemClock};
 use aikoql_storage::AikoqlStorageEngine;
+use aikoql_storage_v2::AikoqlStorageEngineV2;
 use std::sync::Arc;
 
 /// Production default: the AIKOQL-native engine (adoption gate passed —
 /// artifacts/storage-engine/adoption-decision.md). Existing redb databases
 /// keep working via AIKOQL_BACKEND=redb; the migration path is the REC-002
 /// backup/restore flow (restore reads the redb snapshot format into whatever
-/// engine is current). Unknown values fail closed — a mistyped backend must
-/// not silently open a fresh store at the same path.
+/// engine is current). `aikoql-v2` (the segmented engine, SE2) is opt-in
+/// only — it becomes eligible as a default on the V2-Adopt verdict
+/// (artifacts/storage-engine-v2/adoption-decision.md), never before. Unknown
+/// values fail closed — a mistyped backend must not silently open a fresh
+/// store at the same path.
 fn open_engine(db_path: &str) -> KResult<Arc<dyn StorageEngine>> {
     match std::env::var("AIKOQL_BACKEND").ok().as_deref() {
         None | Some("aikoql") => Ok(Arc::new(AikoqlStorageEngine::open(db_path)?)),
         Some("redb") => Ok(Arc::new(RedbEngine::open(db_path)?)),
+        Some("aikoql-v2") => Ok(Arc::new(AikoqlStorageEngineV2::open(db_path)?)),
         Some(other) => Err(KError::Store(format!(
-            "unknown AIKOQL_BACKEND {other:?}: use \"aikoql\" or \"redb\""
+            "unknown AIKOQL_BACKEND {other:?}: use \"aikoql\", \"redb\" or \"aikoql-v2\""
         ))),
     }
 }
@@ -94,9 +99,14 @@ mod tests {
     }
 
     #[test]
-    fn backend_selector_default_redb_and_fail_closed() {
-        // Default (unset) and the redb opt-out both open and serve a put/get.
-        for (env, tag) in [(None, "aikoql"), (Some("redb"), "redb")] {
+    fn backend_selector_matrix_and_fail_closed() {
+        // Default (unset), the redb opt-out and the v2 opt-in all open and
+        // serve a put/get through the same selector.
+        for (env, tag) in [
+            (None, "aikoql"),
+            (Some("redb"), "redb"),
+            (Some("aikoql-v2"), "aikoql-v2"),
+        ] {
             let prev = std::env::var("AIKOQL_BACKEND").ok();
             let guard = match env {
                 Some(v) => {

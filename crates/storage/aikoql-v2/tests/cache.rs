@@ -253,6 +253,7 @@ fn warm_block_cache_speedup() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
+        .join("..")
         .join("artifacts")
         .join("storage-engine-v2");
     std::fs::create_dir_all(&dir).unwrap();

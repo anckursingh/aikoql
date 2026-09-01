@@ -15,13 +15,20 @@
 //! the correctness baseline. SE2-M7: bounded decoded-block cache
 //! (`Config.cache_bytes`, LRU, hit/miss/eviction metrics — never changes
 //! an answer) and the segment bloom wired into `Db::get` as the skip
-//! pre-check (false negatives impossible by construction).
+//! pre-check (false negatives impossible by construction). V2-Adopt: the
+//! kernel `StorageEngine` adapter (`AikoqlStorageEngineV2`) and `Db::scan`
+//! (prefix scan, sorted, head-per-key, tombstones shadow) — the KSE-20
+//! conformance battery and the §26 adoption matrix run against it; v2
+//! becomes the production default only on ADOPT.
 
 pub mod cache;
 pub mod compaction;
 pub mod db;
+pub mod engine;
 pub mod format;
 pub mod memtable;
 pub mod migration;
 pub mod segment;
 pub mod wal;
+
+pub use engine::AikoqlStorageEngineV2;

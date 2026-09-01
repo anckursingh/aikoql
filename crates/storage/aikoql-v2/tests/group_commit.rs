@@ -404,6 +404,7 @@ fn group_commit_throughput_matrix() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
+        .join("..")
         .join("artifacts")
         .join("storage-engine-v2");
     std::fs::create_dir_all(&dir).unwrap();
