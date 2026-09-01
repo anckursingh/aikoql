@@ -51,7 +51,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace -- --skip load_encryption_overhead
-        timeout-minutes: 15
+        # Same command as the Windows step above (30m there): the full suite
+        # runs 14-16 min on the 2-core runner, so 15 min was a coin flip.
+        timeout-minutes: 30
 
   lint:
     name: Lint
