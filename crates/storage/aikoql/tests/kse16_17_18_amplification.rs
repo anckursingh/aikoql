@@ -538,7 +538,7 @@ fn kse18_read_amplification() {
 }
 
 // ---------------------------------------------------------------------------
-// Report: artifacts/storage-engine/kse16-18-amplification.md
+// Report: artifacts/storage-engine/amplification.md
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -661,5 +661,5 @@ fn kse161718_report() {
          get+facts+neighbors workloads above.\n",
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("kse16-18-amplification.md"), report).unwrap();
+    std::fs::write(dir.join("amplification.md"), report).unwrap();
 }

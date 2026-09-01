@@ -234,7 +234,7 @@ fn kse19_resource_usage() {
 }
 
 // ---------------------------------------------------------------------------
-// Report: artifacts/storage-engine/kse19-resource-usage.md
+// Report: artifacts/storage-engine/resource-usage.md
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -325,5 +325,5 @@ fn kse19_report() {
             .join("/"),
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("kse19-resource-usage.md"), report).unwrap();
+    std::fs::write(dir.join("resource-usage.md"), report).unwrap();
 }

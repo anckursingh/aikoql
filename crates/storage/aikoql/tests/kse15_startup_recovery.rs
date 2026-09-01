@@ -329,7 +329,7 @@ fn kse141_crash_recovery() {
 }
 
 // ---------------------------------------------------------------------------
-// Report: artifacts/storage-engine/kse15-startup-recovery.md
+// Report: artifacts/storage-engine/crash-recovery.md
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -393,5 +393,5 @@ fn kse15_report() {
         b.first_query_ms * 1e3,
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("kse15-startup-recovery.md"), report).unwrap();
+    std::fs::write(dir.join("crash-recovery.md"), report).unwrap();
 }

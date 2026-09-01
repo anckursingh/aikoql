@@ -29,7 +29,7 @@
 //!    alice on every read shape).
 //!
 //! Perf: P50/P95/P99 + throughput per op class, reported to
-//! `artifacts/storage-engine/kse13-concurrency.md` (same writer pattern
+//! `artifacts/storage-engine/concurrency.md` (same writer pattern
 //! as kse5-7). CPU/RSS/IO/contention stay honest NOT_MEASURED rows —
 //! no counting allocator or IO tracing is wired.
 //!
@@ -797,5 +797,5 @@ fn kse120b_mixed_read_write_stress_five_expecteds() {
         total_ops as f64 / wall.as_secs_f64().max(1e-9),
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("kse13-concurrency.md"), report).unwrap();
+    std::fs::write(dir.join("concurrency.md"), report).unwrap();
 }
