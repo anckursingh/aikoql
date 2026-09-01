@@ -23,6 +23,7 @@
 //!
 //! Drop does NOT flush — recovery is the WAL's job.
 
+use crate::compaction::{merge, CompactStats};
 use crate::format::{
     checksum8, verify_pair, Current, FormatError, Manifest, SegmentRecord, FORMAT_VERSION,
 };
@@ -361,6 +362,104 @@ impl Db {
             .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
         state.segments.extend(new_segments);
         Ok(())
+    }
+
+    /// SE2-M4 — L0 → L1 compaction: merge ALL segments (L0 + L1) into one
+    /// L1 segment, per key only the newest entry survives, a tombstone
+    /// drops the key (L1 is the bottom level). Synchronous — deterministic
+    /// correctness over a background thread, the doc's own call for flush;
+    /// a trigger threshold arrives when measurements justify one.
+    /// Publication order mirrors flush (segment → manifest → CURRENT →
+    /// delete obsolete) so every crash window recovers the SAME logical
+    /// state — compaction is state-preserving. Memtables are not
+    /// compaction material: they are newer than every segment and read
+    /// first anyway.
+    pub fn compact(&mut self) -> Result<CompactStats, FormatError> {
+        let mut state = self.state.write().unwrap();
+        if state.segments.is_empty() {
+            return Ok(CompactStats::default());
+        }
+        let id = state.next_segment_id;
+        state.next_segment_id += 1;
+        let out_path = segment_path(&self.config.dir, id);
+        let (stats, out_reader) = merge(&state.segments, self.config.block_target, &out_path)?;
+        crash_park(&self.config.dir, "after_segment");
+
+        let old_paths: Vec<PathBuf> = state
+            .segment_records
+            .iter()
+            .map(|r| segment_path(&self.config.dir, r.segment_id))
+            .collect();
+        let mut new_records = Vec::new();
+        let mut new_segments = Vec::new();
+        if let Some(reader) = out_reader {
+            // ponytail: whole-file read for the record checksum (the flush
+            // idiom) — O(file) at compact time; stream it when the M4
+            // measurement says so.
+            let file_bytes = std::fs::read(&out_path).map_err(|e| {
+                FormatError::Io(format!("read segment {}: {e}", out_path.display()))
+            })?;
+            new_records.push(SegmentRecord {
+                segment_id: id,
+                level: 1,
+                key_min: reader.key_min().to_vec(),
+                key_max: reader.key_max().to_vec(),
+                seq_lo: reader.seq_lo(),
+                seq_hi: reader.seq_hi(),
+                record_count: reader.entry_count(),
+                file_size: file_bytes.len() as u64,
+                checksum: u64::from_le_bytes(checksum8(&file_bytes)),
+            });
+            new_segments.push(reader);
+        }
+        state.generation += 1;
+        let manifest = Manifest {
+            format_version: FORMAT_VERSION,
+            generation: state.generation,
+            segments: new_records.clone(),
+            wal_ids: vec![],
+        };
+        Manifest::publish(
+            &manifest_path(&self.config.dir, state.generation),
+            &manifest,
+        )?;
+        crash_park(&self.config.dir, "after_manifest");
+        Current::publish(
+            &self.config.dir.join("CURRENT"),
+            &Current::new(FORMAT_VERSION, state.generation),
+        )?;
+        crash_park(&self.config.dir, "after_current");
+
+        // Swap readers before deleting: handles open with share-delete, so
+        // Windows marks the files delete-pending and any reader that still
+        // references an obsolete segment keeps its data alive (the
+        // Arc<Segment> lifetime guarantee, via the OS).
+        state.segments = new_segments;
+        state.segment_records = new_records;
+        for p in &old_paths {
+            if let Err(e) = std::fs::remove_file(p) {
+                // Not fatal: the segment is unreferenced — a leftover is
+                // reported and ignored at the next open.
+                eprintln!(
+                    "aikoql-v2: obsolete segment {} not removed: {e}",
+                    p.display()
+                );
+            }
+        }
+        Ok(stats)
+    }
+}
+
+/// SE2-M4 crash-matrix hook: parks forever only when the env names this
+/// stage, so the child-kill harness can kill the process mid-compaction
+/// and pin the §25 windows. Unset in production — a no-op.
+fn crash_park(dir: &Path, stage: &str) {
+    if std::env::var("AIKOQL_V2_COMPACT_PARK").ok().as_deref() != Some(stage) {
+        return;
+    }
+    std::fs::write(dir.join(stage), b"1").ok();
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
     }
 }
 

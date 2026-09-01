@@ -6,8 +6,10 @@
 //! publication. SE2-M1: immutable segments (writer + reader). SE2-M2:
 //! WAL frames, memtable, flush, Db with durability modes and the OS lock.
 //! SE2-M3: bounded recovery — replay only the active WAL, orphan/missing
-//! segment policies, legacy v1 WAL migration (§23).
+//! segment policies, legacy v1 WAL migration (§23). SE2-M4: L0 → L1
+//! compaction — synchronous k-way merge, newest-per-key wins.
 
+pub mod compaction;
 pub mod db;
 pub mod format;
 pub mod memtable;

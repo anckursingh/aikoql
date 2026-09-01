@@ -36,7 +36,6 @@
 
 use crate::format::{checksum8, publish_atomic, Cursor, FormatError};
 use aikoql_kernel::knowledge::kom::sha256;
-use std::cell::Cell;
 use std::fs::File;
 use std::ops::Range;
 #[cfg(unix)]
@@ -44,6 +43,7 @@ use std::os::unix::fs::FileExt;
 #[cfg(windows)]
 use std::os::windows::fs::FileExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const SEGMENT_VERSION: u16 = 1;
 pub const FLAG_PUT: u8 = 1;
@@ -305,7 +305,9 @@ struct DataBlock {
     /// Key ranges into the reader's index payload.
     first: Range<usize>,
     last: Range<usize>,
-    validated: Cell<bool>,
+    /// Atomic so concurrent readers on one segment are safe (SE2-M4) — a
+    /// benign race re-validates a block's deterministic checksum twice.
+    validated: AtomicBool,
 }
 
 /// Bounded positional read: short reads are the same Corrupt truncation
@@ -463,7 +465,7 @@ impl SegmentReader {
                         entries,
                         first: 0..0,
                         last: 0..0,
-                        validated: Cell::new(false),
+                        validated: AtomicBool::new(false),
                     });
                 }
                 BLOCK_INDEX => {
@@ -738,7 +740,7 @@ impl SegmentReader {
             b.header,
             BLOCK_HEADER_LEN + b.payload_len,
         )?;
-        if !b.validated.get() {
+        if !b.validated.load(Ordering::Relaxed) {
             let mut sk = Vec::with_capacity(20 + b.payload_len);
             sk.extend_from_slice(&raw[..20]);
             sk.extend_from_slice(&raw[BLOCK_HEADER_LEN..]);
@@ -747,7 +749,7 @@ impl SegmentReader {
                     "data block {i} checksum mismatch"
                 )));
             }
-            b.validated.set(true);
+            b.validated.store(true, Ordering::Relaxed);
         }
         let mut cur = Cursor::new(&raw[BLOCK_HEADER_LEN..]);
         let mut out = Vec::with_capacity(b.entries as usize);
@@ -781,5 +783,47 @@ impl SegmentReader {
             )));
         }
         Ok(out)
+    }
+}
+
+/// Streaming iterator over every entry in key order — compaction's k-way
+/// merge pulls one entry at a time, so the merge is O(k) memory, not
+/// O(dataset). Blocks load (and validate) as the cursor reaches them.
+pub struct SegmentIter<'a> {
+    reader: &'a SegmentReader,
+    block: usize,
+    entries: std::vec::IntoIter<SegmentEntry>,
+}
+
+impl<'a> Iterator for SegmentIter<'a> {
+    type Item = Result<SegmentEntry, FormatError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(e) = self.entries.next() {
+                return Some(Ok(e));
+            }
+            let i = self.block;
+            if i >= self.reader.data.len() {
+                return None;
+            }
+            match self.reader.block_entries(i) {
+                Ok(v) => {
+                    self.entries = v.into_iter();
+                    self.block += 1;
+                }
+                Err(e) => return Some(Err(e)),
+            }
+        }
+    }
+}
+
+impl SegmentReader {
+    pub fn iter(&self) -> SegmentIter<'_> {
+        SegmentIter {
+            reader: self,
+            block: 0,
+            entries: Vec::new().into_iter(),
+        }
     }
 }
