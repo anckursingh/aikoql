@@ -388,11 +388,24 @@ pub fn dsn_with_dbname(dsn: &str, dbname: &str) -> String {
 
 /// Open the imported db for reads (same engine + id_seed as the CLI — see
 /// mcp src/engine.rs open_kernel_auto). The import process has exited by the
-/// time this runs, so the redb file lock is free.
+/// time this runs, so the store file lock is free. The engine must mirror
+/// src/engine.rs `open_engine`'s AIKOQL_BACKEND resolution — the child
+/// imports through the production default (aikoql), and reading those bytes
+/// back as redb is the post-gate equivalent of the REC-002 snapshot bug.
 pub fn open_kernel(db: &str) -> aikoql_kernel::Kernel {
+    use aikoql_kernel::storage::store::StorageEngine;
     use aikoql_kernel::{Kernel, RedbEngine, SystemClock};
-    let store =
-        std::sync::Arc::new(RedbEngine::open(db).unwrap_or_else(|e| panic!("open {db}: {e}")));
+    use aikoql_storage::AikoqlStorageEngine;
+    let store: std::sync::Arc<dyn StorageEngine> =
+        match std::env::var("AIKOQL_BACKEND").ok().as_deref() {
+            None | Some("aikoql") => std::sync::Arc::new(
+                AikoqlStorageEngine::open(db).unwrap_or_else(|e| panic!("open {db}: {e}")),
+            ),
+            Some("redb") => std::sync::Arc::new(
+                RedbEngine::open(db).unwrap_or_else(|e| panic!("open {db}: {e}")),
+            ),
+            Some(other) => panic!("unknown AIKOQL_BACKEND {other:?}: use \"aikoql\" or \"redb\""),
+        };
     Kernel::open(store, std::sync::Arc::new(SystemClock), 0xA9C9)
         .unwrap_or_else(|e| panic!("open kernel {db}: {e}"))
 }
