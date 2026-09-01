@@ -159,6 +159,7 @@ dependencies = [
  "aikoql-scheduler",
  "aikoql-semantic",
  "aikoql-sqlite",
+ "aikoql-storage",
  "base64 0.22.1",
  "mongodb",
  "postgres",
@@ -222,6 +223,7 @@ dependencies = [
  "aikoql-graph",
  "aikoql-kernel",
  "aikoql-runtime",
+ "aikoql-storage",
  "pyo3",
 ]
 

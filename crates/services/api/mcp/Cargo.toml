@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 aikoql-kernel = { path = "../../../kernel" }
+aikoql-storage = { path = "../../../storage/aikoql" }
 aikoql-graph = { path = "../../../engines/graph" }
 aikoql-runtime = { path = "../../../runtime" }
 aikoql-compiler = { path = "../../../compiler" }
