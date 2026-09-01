@@ -484,6 +484,7 @@ fn v2_m7_loader() {
     let path = tmp(&format!("v2-m7-loader-{backend}"));
     let kind = BackendKind::from_name(&backend);
     let _ = seed(kind, &path, sz);
+    cleanup_dataset(&path);
 }
 
 // Windows-only WorkingSet64 sampler around a loader child (kse19 pattern).
@@ -715,6 +716,7 @@ fn v2_m7_workloads() {
         BackendKind::Aikoql,
         BackendKind::AikoqlV2,
     ];
+    let mut paths = Vec::new();
     for kind in kinds {
         let path = tmp(&format!("v2-m7-{}", kind.name()));
         let seeded = seed(kind, &path, sz);
@@ -730,6 +732,10 @@ fn v2_m7_workloads() {
             rss,
             rows: run_workloads(&seeded, sz),
         });
+        paths.push(path);
+    }
+    for p in &paths {
+        cleanup_dataset(p);
     }
     let dir =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine-v2");
@@ -826,5 +832,18 @@ fn v2_gate2_3_dataset_larger_than_ram() {
     assert_eq!(
         stats.bytes, 0,
         "gate 3: a block larger than the cap is never retained"
+    );
+    drop(db);
+    cleanup_dataset(&path);
+}
+
+/// Remove a seeded dataset once its run is complete — these directories used
+/// to accumulate in the OS temp dir (hundreds of MB per nightly).
+fn cleanup_dataset(path: &Path) {
+    std::fs::remove_dir_all(path).unwrap();
+    assert!(
+        !path.exists(),
+        "test dataset not removed: {}",
+        path.display()
     );
 }

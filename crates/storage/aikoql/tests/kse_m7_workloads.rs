@@ -487,6 +487,12 @@ fn m7_loader() {
     let path = tmp(&format!("m7-loader-{backend}"));
     let kind = BackendKind::from_name(&backend);
     let _ = seed(kind, &path, sz);
+    std::fs::remove_dir_all(&path).unwrap();
+    assert!(
+        !path.exists(),
+        "loader dataset not removed: {}",
+        path.display()
+    );
 }
 
 // Windows-only WorkingSet64 sampler around a loader child (kse19 pattern).
@@ -811,6 +817,7 @@ fn m7_workloads() {
         #[cfg(feature = "kse5-rocksdb")]
         BackendKind::Rocks,
     ];
+    let mut paths = Vec::new();
     for kind in kinds {
         let path = tmp(&format!("m7-{}", kind.name()));
         let seeded = seed(kind, &path, sz);
@@ -826,6 +833,11 @@ fn m7_workloads() {
             rss,
             rows: run_workloads(&seeded, sz),
         });
+        paths.push(path);
+    }
+    for p in &paths {
+        std::fs::remove_dir_all(p).unwrap();
+        assert!(!p.exists(), "workload dataset not removed: {}", p.display());
     }
     let gates = evaluate_gates(&results);
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
