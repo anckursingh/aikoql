@@ -37,11 +37,17 @@ REDs: round-trip golden (byte-exact vs the independent fixture); random lookup a
 
 Test-side fixes found by the REDs: the shared `tmp()` tag+pid scheme collided between parallel tests in one binary (per-call counter suffix); index-key ranges were index-payload-relative (must be file-absolute).
 
-### SE2-M2 — Memtable and flush
+### SE2-M2 — Memtable and flush — done (24/24 new green; 60/60 suite, clippy clean)
 
-Deliver: active memtable (BTreeMap, deterministic — the doc's own order), threshold → immutable → background flush → segment; WAL v2 frames (magic, format_version, frame type, batch sequence, payload len, payload, CRC); commit pipeline (assign seq → append WAL → durability boundary → apply memtable → ack — the KSE-13 120a order, ported); durability modes Sync/GroupCommit/Async (Sync default, no silent downgrade); OS file lock.
+Deliver: active memtable (BTreeMap, deterministic — the doc's own order), threshold → immutable → flush → segment; WAL v2 frames (magic, format_version, frame type, batch sequence, payload len, payload, checksum); commit pipeline (assign seq → append WAL → durability boundary → apply memtable → ack — the KSE-13 120a order, ported); durability modes Sync/GroupCommit/Async (Sync default, no silent downgrade); OS file lock (`File::try_lock`, second open = `FormatError::Locked`).
 
-REDs: writes visible during flush; crash before publication recovers from WAL; crash after publication does not duplicate state (manifest generation dedup); memory threshold bounds the active memtable; Sync default + mode enforcement; second process fails closed on the lock.
+Format deviations from the doc's sketch, each pinned by a python-generated golden fixture or a crash test: the frame checksum is the crate's established sha256-8, not a CRC32; sequence is per batch (design refinement 2); the torn-tail resync classifier (KSE-082B shape) landed here because a kill mid-append produces a partial final frame — a decode failure with nothing valid after it truncates, damage followed by a valid frame fails closed.
+
+Implementation decisions: flush is **synchronous** (deterministic correctness over lock-free sophistication — the doc's own call); `rotate()` exposes the visibility window (active → immutable, reads see both, old-or-new never torn). Publication order makes every crash window recoverable: segment files → manifest → CURRENT → WAL truncate — crash before the manifest leaves orphan segments plus the full WAL (replay recovers), before CURRENT the old pair is consistent, after CURRENT the not-yet-truncated WAL replay is idempotent (same (key, seq) → same value, no seq reuse — pinned by `crash_window_replay_is_idempotent`). GroupCommit/Async skip the per-batch fsync; the real group-commit machinery is SE2-M6.
+
+REDs (all green): writes visible during flush; crash before publication recovers from WAL (two child-kill harnesses — exact-1..=50 pin after park, contiguous-prefix pin mid-burst with flushes interleaving); crash after publication does not duplicate state (deterministic crash-window replay pin); memory threshold flushes without an explicit call; Sync default + explicit opt-in for weaker modes; second process fails closed on the lock.
+
+Windows lesson the REDs caught: `FILE_APPEND_DATA` handles cannot `SetEndOfFile` — the WAL opened with `append(true)` made flush's `set_len(0)` fail with access-denied. Fixed by `write(true)` + explicit end-seek (single-writer is enforced anyway by the OS lock and `&mut self`).
 
 ### SE2-M3 — Bounded recovery
 

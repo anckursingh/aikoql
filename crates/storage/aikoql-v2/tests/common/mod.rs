@@ -41,3 +41,9 @@ pub fn dir(tag: &str) -> PathBuf {
     std::fs::create_dir_all(&path).unwrap();
     path
 }
+
+/// Golden fixtures are hex — this is the only format-drift surface left to
+/// eyeballs.
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}

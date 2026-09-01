@@ -16,7 +16,7 @@ use aikoql_storage_v2::format::FormatError;
 use aikoql_storage_v2::segment::{
     SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT, FLAG_VERSION,
 };
-use common::{entry, tmp};
+use common::{entry, hex, tmp};
 
 #[test]
 fn segment_golden_bytes() {
@@ -122,10 +122,4 @@ fn segment_publish_validation() {
         zero.publish(&tmp("segment-zero")),
         Err(FormatError::Invalid(_))
     ));
-}
-
-/// Pinned-by-construction helper: the fixture is hex, so this is the only
-/// format drift surface left to eyeballs.
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

@@ -48,6 +48,9 @@ pub enum FormatError {
     /// Caller misuse — rejected before anything touches disk (empty segment,
     /// duplicate (key, seq), zero block target…).
     Invalid(String),
+    /// The database directory is held by another process (design §19:
+    /// one process owns one database directory).
+    Locked(String),
 }
 
 impl fmt::Display for FormatError {
@@ -57,6 +60,7 @@ impl fmt::Display for FormatError {
             FormatError::Unsupported(m) => write!(f, "unsupported: {m}"),
             FormatError::Io(m) => write!(f, "io: {m}"),
             FormatError::Invalid(m) => write!(f, "invalid: {m}"),
+            FormatError::Locked(m) => write!(f, "locked: {m}"),
         }
     }
 }
