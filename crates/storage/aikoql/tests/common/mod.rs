@@ -127,6 +127,81 @@ pub fn tmp(tag: &str) -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
+// The six KSE-1 contract asserts (MRFC-KSE-001 §7), shared verbatim by the
+// per-backend granular tests (conformance.rs) and the KSE-20 matrix
+// (kse20_backend_conformance.rs) — "the same conformance suite" by
+// construction: one definition, every backend runs it.
+// ---------------------------------------------------------------------------
+
+pub mod kse {
+    use super::{StorageEngine, WriteBatch};
+
+    /// KSE-001: get returns the written value.
+    pub fn kse001_get(e: &dyn StorageEngine) {
+        let mut b = WriteBatch::new();
+        b.put(b"k1".to_vec(), b"v1".to_vec());
+        e.write_batch(&b).unwrap();
+        assert_eq!(e.get(b"k1").unwrap(), Some(b"v1".to_vec()));
+    }
+
+    /// KSE-002: a missing key reads as None.
+    pub fn kse002_missing_key(e: &dyn StorageEngine) {
+        assert_eq!(e.get(b"missing").unwrap(), None);
+    }
+
+    /// KSE-003: prefix scan returns exactly the prefix's keys, sorted ascending.
+    pub fn kse003_prefix_scan(e: &dyn StorageEngine) {
+        let mut b = WriteBatch::new();
+        for k in [&b"a/3"[..], &b"a/1"[..], &b"a/2"[..], &b"b/1"[..]] {
+            b.put(k.to_vec(), vec![0]);
+        }
+        e.write_batch(&b).unwrap();
+        let got: Vec<Vec<u8>> = e.scan(b"a/").unwrap().into_iter().map(|(k, _)| k).collect();
+        assert_eq!(got, vec![b"a/1".to_vec(), b"a/2".to_vec(), b"a/3".to_vec()]);
+    }
+
+    /// KSE-004: puts and deletes in one batch become visible atomically.
+    pub fn kse004_atomic_batch(e: &dyn StorageEngine) {
+        let mut b = WriteBatch::new();
+        b.put(b"x".to_vec(), vec![1]);
+        b.put(b"y".to_vec(), vec![2]);
+        e.write_batch(&b).unwrap();
+        let mut d = WriteBatch::new();
+        d.del(b"x".to_vec());
+        d.put(b"z".to_vec(), vec![3]);
+        e.write_batch(&d).unwrap();
+        assert_eq!(e.get(b"x").unwrap(), None);
+        assert_eq!(e.get(b"y").unwrap(), Some(vec![2]));
+        assert_eq!(e.get(b"z").unwrap(), Some(vec![3]));
+    }
+
+    /// KSE-005: an empty batch produces no state change.
+    pub fn kse005_empty_batch(e: &dyn StorageEngine) {
+        let mut b = WriteBatch::new();
+        b.put(b"k".to_vec(), vec![1]);
+        e.write_batch(&b).unwrap();
+        e.write_batch(&WriteBatch::new()).unwrap();
+        assert_eq!(e.get(b"k").unwrap(), Some(vec![1]));
+    }
+
+    /// KSE-006: deterministic semantics for a key in both puts and deletes.
+    ///
+    /// All backends apply puts before dels (documented invariant in
+    /// `store.rs`), so a put+del of the same key deletes it; duplicate puts
+    /// resolve to the last value.
+    pub fn kse006_conflicting_put_delete(e: &dyn StorageEngine) {
+        let mut b = WriteBatch::new();
+        b.put(b"c".to_vec(), vec![1]);
+        b.del(b"c".to_vec());
+        b.put(b"d".to_vec(), vec![1]);
+        b.put(b"d".to_vec(), vec![2]);
+        e.write_batch(&b).unwrap();
+        assert_eq!(e.get(b"c").unwrap(), None); // put then del: deleted
+        assert_eq!(e.get(b"d").unwrap(), Some(vec![2])); // last put wins
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Model-free structural sweep (kse14, kse15): every invariant that must hold
 // at ANY batch boundary, computed from the store's own rows — no reference
 // model, so it applies wherever the capture/crash point is unknown.
