@@ -19,7 +19,7 @@ Source: `docs/AIKOQL_Storage_Engine_V2_Production_Design.md` (2026-09-01). Branc
 
 ## Milestones
 
-### SE2-M0 — Format contracts — in progress
+### SE2-M0 — Format contracts — done (19/19 green, clippy clean)
 
 Deliver: `CURRENT` (magic `AKCV`, format_version u16, manifest_generation u64, sha256-8 over the preceding bytes — fixed 22-byte layout), `MANIFEST-{generation:06}` (magic `AKMV`, format_version, generation, segment records, wal records, trailing sha256-8), atomic publication (temp → fsync → rename), classification of the §20 corruption classes.
 

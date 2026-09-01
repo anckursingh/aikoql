@@ -26,6 +26,7 @@ members = [
     "crates/providers/neo4j",
     "crates/storage/rocksdb",
     "crates/storage/aikoql",
+    "crates/storage/aikoql-v2",
 ]
 
 [workspace.package]
