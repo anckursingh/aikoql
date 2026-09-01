@@ -34,6 +34,29 @@ record. Fault classes map onto the WAL's real crash surface:
 | KSE-082 | byte-flip inside a complete record | fails closed AND leaves the file untouched — index divergence is unreachable by construction (one record = one batch = one checksum) |
 | KSE-083 | recovery | truncation restores the last good state; corruption errors, never silent wrong data |
 
+### KSE-082B — middle-record corruption with a valid tail (`kse82b_middle_corruption.rs`)
+
+200 valid records, record 101 mutated, records 102-200 valid. Policy: fail
+closed — never skip the corrupted record, never truncate acknowledged
+records after it.
+
+| gate | damage | result |
+|---|---|---|
+| TEST-KSE-082B-01 | one payload byte of record 101 flipped | fail closed (checksum mismatch), WAL byte-unchanged |
+| TEST-KSE-082B-02 | one checksum byte of record 101 modified | fail closed (checksum mismatch), WAL byte-unchanged |
+| TEST-KSE-082B-03 | magic / version / record type / payload_len, mutated independently | fail closed per leg, no automatic truncation, no partial recovery |
+| control | genuine torn tail (cut inside the LAST record) | still truncates at the record boundary and opens with the prior state |
+
+The payload_len-OVERRUN leg was the RED: `parse_at` classified the
+overrun as TornTail (indistinguishable from a crash tail), replay broke,
+and `open()` truncated at record 101's offset — silently destroying
+acknowledged records 102-200. Fixed by construction: a torn tail is
+legitimate only when NO complete, checksum-verified record parses after
+the torn offset (resync scan; a false positive needs a whole valid record
+by ~2^-64 per checksum and fails in the safe direction). All other legs
+failed closed on day one — the envelope propagates Err before any
+truncation, and `open()` truncates only after replay succeeds.
+
 ## Corrupt derived index (KSE-092, `kse10_index_rebuild.rs`)
 
 Derived indexes (`relo`/`reli`/`type`) are WAL rows — they can be damaged
@@ -53,7 +76,9 @@ AikoqlStorageEngine.
 
 - redb / RocksDB corruption recovery is vendor-owned — NOT_MEASURED here
   (the WAL surface is aikoql-specific).
-- KSE-082 pins single-record damage. Multi-record damage with a valid
-  tail (e.g. two complete records bit-rotted, no truncation) is caught by
-  the same checksum rule — every record is individually checksummed — but
-  the specific two-record scenario is not a named pin.
+- The resync classifier distinguishes tail from middle by "anything
+  complete follows" — two adjacent middle records both bit-rotted with no
+  valid record between them and the tail fail closed via the checksum
+  path (the second damaged record's checksum mismatch errors before the
+  guard is needed); the guard's false-positive odds are the checksum
+  width (~2^-64 per candidate), and its failure direction is fail-closed.

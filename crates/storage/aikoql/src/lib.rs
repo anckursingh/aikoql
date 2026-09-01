@@ -125,6 +125,23 @@ fn decode_batch(payload: &[u8]) -> KResult<WriteBatch> {
     Ok(batch)
 }
 
+/// Does a complete, checksum-verified record exist at any offset after
+/// `pos`? A torn-looking record followed by valid data is middle
+/// corruption (KSE-082B), not a crash tail. The scan errs in the safe
+/// direction: a false positive needs a whole valid record to hide inside
+/// the tail (~2^-64 per candidate checksum), and it would fail closed
+/// where recovery could have proceeded — never the reverse.
+/// ponytail: O(remaining bytes) once per open, and only when a torn tail
+/// exists — clean opens and full replay never pay it.
+fn valid_record_after(bytes: &[u8], pos: usize) -> bool {
+    (pos + 1..bytes.len()).any(|off| {
+        matches!(
+            envelope::parse_at(bytes, off),
+            Ok(envelope::ParseOutcome::Complete { .. })
+        )
+    })
+}
+
 /// Replay `bytes` into a fresh map; returns the offset of the last complete
 /// record. A torn tail (crash mid-append) is left out — it was never
 /// acknowledged to a caller. Corruption (bad magic, checksum mismatch,
@@ -137,7 +154,16 @@ fn replay(bytes: &[u8], mem: &MemoryEngine) -> KResult<usize> {
                 mem.write_batch(&decode_batch(&payload)?)?;
                 pos = end;
             }
-            envelope::ParseOutcome::TornTail => break,
+            envelope::ParseOutcome::TornTail => {
+                // A torn tail is legitimate only when nothing complete
+                // follows — a middle record whose payload_len was corrupted
+                // to overrun EOF would otherwise masquerade as a crash tail
+                // and silently truncate acknowledged records (KSE-082B).
+                if valid_record_after(bytes, pos) {
+                    return Err(corrupt("truncated record followed by valid data"));
+                }
+                break;
+            }
         }
     }
     Ok(pos)
