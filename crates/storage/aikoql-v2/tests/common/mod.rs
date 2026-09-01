@@ -5,11 +5,30 @@
 #![allow(dead_code)]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use aikoql_storage_v2::segment::SegmentEntry;
+
+/// Parallel tests in one binary share a pid, so a plain tag+pid path would
+/// collide between tests using the same tag — every call gets its own
+/// counter suffix instead.
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// The 3-entry fixture segment (keys "a1"/"a2"/"a3", PUT/VERSION/DELETE).
+pub fn entry(key: &str, value: &str, seq: u64, flags: u8) -> SegmentEntry {
+    SegmentEntry {
+        key: key.as_bytes().to_vec(),
+        value: value.as_bytes().to_vec(),
+        seq,
+        flags,
+    }
+}
 
 /// A unique scratch FILE path under the OS temp dir: tag + pid so parallel
 /// test binaries never collide; any stale file is removed so reruns are clean.
 pub fn tmp(tag: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("aikoql-v2-{tag}-{}", std::process::id()));
+    let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("aikoql-v2-{tag}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_file(&path);
     path
 }

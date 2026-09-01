@@ -27,11 +27,15 @@ Acceptance (the doc's): golden byte-format tests; unknown version fails closed; 
 
 TDD REDs (M0): `current_golden` (hex fixture round-trip), `current_corrupt` (checksum mismatch → fail closed; unknown version → fail closed), `manifest_golden` (hex fixture round-trip), `manifest_corrupt` (checksum mismatch; generation mismatch vs CURRENT), `publication_atomic` (torn temp write never visible; crash between write and rename leaves the old CURRENT parseable — child-kill harness, KSE-15 pattern).
 
-### SE2-M1 — Immutable segments
+### SE2-M1 — Immutable segments — done (17/17 new green; 36/36 suite, clippy clean)
 
-Deliver: segment writer/reader (header, 64 KiB-target data blocks, index block, bloom, footer; per-block magic/version/type/entry-count/compressed-size/uncompressed-size/checksum; prefix-compressed keys, value len, value, seq, flags PUT/DELETE/VERSION/TOMBSTONE). Published segments never modified — read handle only.
+Deliver: segment writer/reader (header, target-sized data blocks, index block, bloom, footer; per-block magic/version/type/entry-count/compressed-size/uncompressed-size/checksum; prefix-compressed keys, value len, value, seq, flags PUT/DELETE/VERSION). Published segments never modified — read handle only.
 
-REDs: round-trip golden; random lookup; prefix scan; corrupted block fails closed; immutability (writer returns no mutable handle).
+Format deviations from the doc's sketch, each pinned by the python-generated golden fixture: block target is a writer parameter (tests use 256 B for real multi-block coverage); the footer carries a **skeleton** checksum (header + all block headers + index + bloom + footer fields — not the whole file), so open() stays O(block count); data-block payload checksums are validated lazily on the read that touches the block. Structural damage fails at open, payload damage fails on access.
+
+REDs: round-trip golden (byte-exact vs the independent fixture); random lookup across ~30 blocks; prefix/range scan byte-exact; corrupted segment fails closed (10 structural legs at open, payload flip on access, truncation at 8 boundaries, trailing bytes, unknown-but-clean version → Unsupported); immutability (reader mutates no file byte); publish validation (empty / duplicate (key, seq) / zero target → Invalid, never written).
+
+Test-side fixes found by the REDs: the shared `tmp()` tag+pid scheme collided between parallel tests in one binary (per-call counter suffix); index-key ranges were index-payload-relative (must be file-absolute).
 
 ### SE2-M2 — Memtable and flush
 

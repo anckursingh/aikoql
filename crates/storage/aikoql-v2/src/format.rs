@@ -45,6 +45,9 @@ pub enum FormatError {
     Unsupported(String),
     /// Filesystem condition (missing, permissions, rename failure…).
     Io(String),
+    /// Caller misuse — rejected before anything touches disk (empty segment,
+    /// duplicate (key, seq), zero block target…).
+    Invalid(String),
 }
 
 impl fmt::Display for FormatError {
@@ -53,6 +56,7 @@ impl fmt::Display for FormatError {
             FormatError::Corrupt(m) => write!(f, "corrupt: {m}"),
             FormatError::Unsupported(m) => write!(f, "unsupported: {m}"),
             FormatError::Io(m) => write!(f, "io: {m}"),
+            FormatError::Invalid(m) => write!(f, "invalid: {m}"),
         }
     }
 }
@@ -60,7 +64,7 @@ impl fmt::Display for FormatError {
 impl std::error::Error for FormatError {}
 
 /// v1 convention: the first 8 bytes of the sha256 carry the integrity check.
-fn checksum8(bytes: &[u8]) -> [u8; 8] {
+pub(crate) fn checksum8(bytes: &[u8]) -> [u8; 8] {
     let full = sha256(bytes);
     full[..8].try_into().expect("sha256-8 slice")
 }
@@ -281,7 +285,7 @@ pub fn verify_pair(current: &Current, manifest: &Manifest) -> Result<(), FormatE
 /// write temp → fsync → rename over the target → best-effort directory
 /// fsync. The temp lives beside the target (same volume) so the rename is
 /// atomic; a torn write is only ever in the temp, which nobody reads.
-fn publish_atomic(path: &Path, bytes: &[u8]) -> Result<(), FormatError> {
+pub(crate) fn publish_atomic(path: &Path, bytes: &[u8]) -> Result<(), FormatError> {
     let dir = path.parent().ok_or_else(|| {
         FormatError::Io(format!("publish {}: no parent directory", path.display()))
     })?;
@@ -311,25 +315,29 @@ fn publish_atomic(path: &Path, bytes: &[u8]) -> Result<(), FormatError> {
     Ok(())
 }
 
-struct Cursor<'a> {
+pub(crate) struct Cursor<'a> {
     bytes: &'a [u8],
     pos: usize,
 }
 
 impl<'a> Cursor<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Cursor { bytes, pos: 0 }
     }
 
-    fn remaining(&self) -> usize {
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
+    }
+
+    pub(crate) fn remaining(&self) -> usize {
         self.bytes.len() - self.pos
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.remaining() == 0
     }
 
-    fn take(&mut self, n: usize) -> Result<&'a [u8], FormatError> {
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], FormatError> {
         if self.remaining() < n {
             return Err(FormatError::Corrupt(format!(
                 "truncated: need {n} bytes at offset {}, {} remain",
@@ -342,25 +350,34 @@ impl<'a> Cursor<'a> {
         Ok(slice)
     }
 
-    fn u8(&mut self) -> Result<u8, FormatError> {
+    pub(crate) fn u8(&mut self) -> Result<u8, FormatError> {
         Ok(self.take(1)?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, FormatError> {
+    pub(crate) fn u16(&mut self) -> Result<u16, FormatError> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
 
-    fn u32(&mut self) -> Result<u32, FormatError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, FormatError> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
-    fn u64(&mut self) -> Result<u64, FormatError> {
+    pub(crate) fn u64(&mut self) -> Result<u64, FormatError> {
         Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }
 
     /// A u32 length-prefixed byte string (the cursor bounds the read).
-    fn vec(&mut self) -> Result<Vec<u8>, FormatError> {
+    pub(crate) fn vec(&mut self) -> Result<Vec<u8>, FormatError> {
         let len = self.u32()? as usize;
         Ok(self.take(len)?.to_vec())
+    }
+
+    /// A u32 length-prefixed byte string, returned as the byte range it
+    /// occupies (the caller holds the backing buffer).
+    pub(crate) fn slice_range(&mut self) -> Result<std::ops::Range<usize>, FormatError> {
+        let len = self.u32()? as usize;
+        let start = self.pos;
+        self.take(len)?;
+        Ok(start..self.pos)
     }
 }
