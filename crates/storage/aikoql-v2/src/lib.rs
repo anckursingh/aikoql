@@ -12,8 +12,12 @@
 //! class, `compact_with(policy)`, `compact()` = KeepAll. SE2-M6: group
 //! commit — a committer thread drains `Db::writer()` handles into groups
 //! (one fsync per group, apply-before-ack, exact-fit caps); Sync remains
-//! the correctness baseline.
+//! the correctness baseline. SE2-M7: bounded decoded-block cache
+//! (`Config.cache_bytes`, LRU, hit/miss/eviction metrics — never changes
+//! an answer) and the segment bloom wired into `Db::get` as the skip
+//! pre-check (false negatives impossible by construction).
 
+pub mod cache;
 pub mod compaction;
 pub mod db;
 pub mod format;

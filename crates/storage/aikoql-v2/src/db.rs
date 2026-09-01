@@ -28,6 +28,7 @@
 //!
 //! Drop does NOT flush — recovery is the WAL's job.
 
+use crate::cache::{BlockCache, CacheStats};
 use crate::compaction::{merge, CompactStats, KeepAll, RetentionPolicy};
 use crate::format::{
     checksum8, verify_pair, Current, FormatError, Manifest, SegmentRecord, FORMAT_VERSION,
@@ -49,6 +50,7 @@ const DEFAULT_MEMTABLE_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_BLOCK_TARGET: usize = 64 * 1024;
 const DEFAULT_GROUP_BATCH_OPS: usize = 4096;
 const DEFAULT_GROUP_BATCH_BYTES: usize = 16 * 1024 * 1024;
+const DEFAULT_CACHE_BYTES: usize = 8 * 1024 * 1024;
 
 pub fn manifest_path(dir: &Path, generation: u64) -> PathBuf {
     dir.join(format!("MANIFEST-{generation:06}"))
@@ -79,6 +81,10 @@ pub struct Config {
     pub max_batch_ops: usize,
     pub max_batch_bytes: usize,
     pub max_wait_duration: Duration,
+    /// SE2-M7 — decoded block cache cap in bytes; 0 disables. The cache
+    /// only skips repeat block reads — it can never change an answer
+    /// (pinned by `cache_never_changes_answers`).
+    pub cache_bytes: usize,
 }
 
 impl Config {
@@ -91,6 +97,7 @@ impl Config {
             max_batch_ops: DEFAULT_GROUP_BATCH_OPS,
             max_batch_bytes: DEFAULT_GROUP_BATCH_BYTES,
             max_wait_duration: Duration::ZERO,
+            cache_bytes: DEFAULT_CACHE_BYTES,
         }
     }
 }
@@ -128,6 +135,9 @@ pub struct Db {
     /// Commit fsyncs so far — one per batch (Sync) or one per group
     /// (GroupCommit); flush truncation syncs are not counted.
     fsyncs: Arc<AtomicU64>,
+    /// SE2-M7 — shared block cache (None when cache_bytes = 0). Readers
+    /// consult and feed it; it never changes an answer.
+    cache: Option<Arc<BlockCache>>,
 }
 
 impl Db {
@@ -163,12 +173,18 @@ impl Db {
         }
 
         // Referenced segments must open (fail closed on missing/corrupt).
+        // SE2-M7: when the block cache is on, every reader the Db opens
+        // shares it (reopened segments get a fresh identity — the cache is
+        // per-Db, in-memory).
+        let cache = (config.cache_bytes > 0).then(|| BlockCache::new(config.cache_bytes));
         let mut segments = Vec::with_capacity(manifest.segments.len());
         for rec in &manifest.segments {
-            segments.push(SegmentReader::open(&segment_path(
-                &config.dir,
-                rec.segment_id,
-            ))?);
+            let path = segment_path(&config.dir, rec.segment_id);
+            let reader = match &cache {
+                Some(c) => SegmentReader::open_with_cache(&path, Arc::clone(c))?,
+                None => SegmentReader::open(&path)?,
+            };
+            segments.push(reader);
         }
 
         // Replay the active WAL (create it if this is the first open).
@@ -243,7 +259,8 @@ impl Db {
                 let state = Arc::clone(&state);
                 let config = config.clone();
                 let fsyncs = Arc::clone(&fsyncs);
-                std::thread::spawn(move || committer_loop(rx, wal, state, config, fsyncs))
+                let cache = cache.clone();
+                std::thread::spawn(move || committer_loop(rx, wal, state, config, fsyncs, cache))
             };
             (Some(tx), Some(handle))
         } else {
@@ -257,6 +274,7 @@ impl Db {
             queue_tx,
             committer,
             fsyncs,
+            cache,
         })
     }
 
@@ -297,7 +315,7 @@ impl Db {
             }
         }
         if state.active.bytes() >= self.config.memtable_bytes {
-            Self::flush_locked_impl(&self.config, &self.wal, &mut state)?;
+            Self::flush_locked_impl(&self.config, &self.wal, &mut state, &self.cache)?;
         }
         Ok(seq)
     }
@@ -343,6 +361,12 @@ impl Db {
             }
         }
         for seg in state.segments.iter().rev() {
+            // SE2-M7 — bloom pre-check: false positives possible, false
+            // negatives never (M1 pin), so skipping a segment the bloom
+            // rejects is answer-preserving; it just saves the probe.
+            if !seg.bloom_may_contain(key) {
+                continue;
+            }
             if let Some(e) = seg.get(key)? {
                 return Ok(if e.flags & FLAG_DELETE != 0 {
                     None // tombstone: shadow everything older
@@ -352,6 +376,12 @@ impl Db {
             }
         }
         Ok(None)
+    }
+
+    /// SE2-M7 — block cache metrics; all zeros when the cache is off
+    /// (cache_bytes = 0).
+    pub fn cache_stats(&self) -> CacheStats {
+        self.cache.as_ref().map(|c| c.stats()).unwrap_or_default()
     }
 
     /// Flush's first half, public so the visibility contract is testable:
@@ -368,7 +398,7 @@ impl Db {
 
     pub fn flush(&mut self) -> Result<(), FormatError> {
         let mut state = self.state.write().unwrap();
-        Self::flush_locked_impl(&self.config, &self.wal, &mut state)
+        Self::flush_locked_impl(&self.config, &self.wal, &mut state, &self.cache)
     }
 
     /// Publication order (every crash window recoverable — see module doc):
@@ -378,6 +408,7 @@ impl Db {
         config: &Config,
         wal: &Arc<Mutex<File>>,
         state: &mut State,
+        cache: &Option<Arc<BlockCache>>,
     ) -> Result<(), FormatError> {
         if !state.active.is_empty() {
             let fresh = std::mem::take(&mut state.active);
@@ -406,7 +437,10 @@ impl Db {
                 });
             }
             writer.publish(&path)?;
-            let reader = SegmentReader::open(&path)?;
+            let reader = match cache {
+                Some(c) => SegmentReader::open_with_cache(&path, Arc::clone(c))?,
+                None => SegmentReader::open(&path)?,
+            };
             let file_bytes = std::fs::read(&path)
                 .map_err(|e| FormatError::Io(format!("read segment {}: {e}", path.display())))?;
             let record = SegmentRecord {
@@ -638,6 +672,7 @@ fn committer_loop(
     state: Arc<RwLock<State>>,
     config: Config,
     fsyncs: Arc<AtomicU64>,
+    cache: Option<Arc<BlockCache>>,
 ) {
     let wait = config.max_wait_duration;
     let mut carry: Option<Batch> = None;
@@ -671,7 +706,7 @@ fn committer_loop(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        commit_group(&group, &wal, &state, &config, &fsyncs);
+        commit_group(&group, &wal, &state, &config, &fsyncs, &cache);
     }
 }
 
@@ -686,6 +721,7 @@ fn commit_group(
     state: &Arc<RwLock<State>>,
     config: &Config,
     fsyncs: &Arc<AtomicU64>,
+    cache: &Option<Arc<BlockCache>>,
 ) {
     let mut st = state.write().unwrap();
     let mut seqs: Vec<u64> = Vec::with_capacity(group.len());
@@ -731,7 +767,7 @@ fn commit_group(
             }
         }
         if st.active.bytes() >= config.memtable_bytes {
-            if let Err(e) = Db::flush_locked_impl(config, wal, &mut st) {
+            if let Err(e) = Db::flush_locked_impl(config, wal, &mut st, cache) {
                 outcome = Err(e);
             }
         }

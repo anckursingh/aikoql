@@ -99,9 +99,13 @@ Perf matrix: `group_commit_throughput_matrix` under `SE2M6_NIGHTLY=1` strict opt
 
 ### SE2-M7 — Cache / bloom filters
 
-Deliver: segment metadata cache + bounded block cache + bloom filters; metrics (cache bytes, hit/miss rate, evictions). Cache must never affect correctness.
+Done (4/4 new green, 97/97 suite).
 
-REDs: bounded cache (bytes enforced); cache-neutrality (random workloads with/without cache byte-equal); bloom false negatives forbidden (by construction + property test); measured random-read improvement (reported, not asserted).
+Delivered: `Config.cache_bytes` (default 8 MiB, 0 = off) creates one shared `BlockCache` per Db — every SegmentReader the Db opens consults and feeds it. Keys are (reader_id, block_index) with a per-cache never-reused reader identity: segment ids can be reused after orphan cleanup, so a segment-id key could alias a dead reader's blocks. Capacity is decoded entry bytes, hard-capped with LRU eviction; a block bigger than the cap is simply not cached. Hits return a clone of the validated entries — answers never depend on the cache. Metrics via `Db::cache_stats()`: hits / misses / evictions / bytes (all zeros with the cache off). Segment metadata (index + bloom payloads) already lives in memory per reader since M1 — the M7 gap was repeat data-block reads, which the cache closes.
+
+Bloom: built per segment since M1 (m = 10n, k = 4, double hashing over sha256; false negatives impossible by construction, pinned by the M1 `segment_lookup` "bloom never misses"). M7 wires it into the read path: `Db::get` skips a segment the bloom rejects before probing — answer-preserving (false positives only cost a wasted probe).
+
+Perf matrix: `warm_block_cache_speedup` under `SE2M7_NIGHTLY=1` strict opt-in — cold (cache off) vs warm second pass (64 MiB cache), 2000 keys × 200-byte values, one segment, 2000 random-order gets with answers pinned identical across passes; artifact `artifacts/storage-engine-v2/cache-bloom.md`.
 
 ## Performance acceptance (§26) — gates for the v2 adoption matrix
 

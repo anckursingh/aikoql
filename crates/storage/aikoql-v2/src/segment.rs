@@ -34,6 +34,7 @@
 //! on the read that touches the block. Structural damage fails at open,
 //! payload damage fails on access.
 
+use crate::cache::BlockCache;
 use crate::format::{checksum8, publish_atomic, Cursor, FormatError};
 use aikoql_kernel::knowledge::kom::sha256;
 use std::fs::File;
@@ -294,6 +295,10 @@ pub struct SegmentReader {
     /// Bloom payload (m u32 + bits).
     bloom: Vec<u8>,
     bloom_m: u32,
+    /// SE2-M7 — shared block cache, when the Db runs one. Consulted before
+    /// a block read, fed after a validated decode; answers never change.
+    cache: Option<std::sync::Arc<BlockCache>>,
+    cache_id: u64,
 }
 
 #[derive(Debug)]
@@ -338,6 +343,24 @@ fn read_segment_at(
 
 impl SegmentReader {
     pub fn open(path: &Path) -> Result<Self, FormatError> {
+        Self::open_inner(path, None)
+    }
+
+    /// Open with a shared block cache (SE2-M7): block reads consult and
+    /// feed it. The cache assigns this reader a never-reused identity —
+    /// segment ids can be reused after orphan cleanup, so the cache key
+    /// cannot be the segment id.
+    pub fn open_with_cache(
+        path: &Path,
+        cache: std::sync::Arc<BlockCache>,
+    ) -> Result<Self, FormatError> {
+        Self::open_inner(path, Some(cache))
+    }
+
+    fn open_inner(
+        path: &Path,
+        cache: Option<std::sync::Arc<BlockCache>>,
+    ) -> Result<Self, FormatError> {
         let file = File::open(path)
             .map_err(|e| FormatError::Io(format!("open segment {}: {e}", path.display())))?;
         let file_len = file
@@ -619,6 +642,7 @@ impl SegmentReader {
             ));
         }
 
+        let cache_id = cache.as_ref().map(|c| c.reader_id()).unwrap_or(0);
         Ok(SegmentReader {
             file,
             file_len,
@@ -632,6 +656,8 @@ impl SegmentReader {
             index,
             bloom,
             bloom_m,
+            cache,
+            cache_id,
         })
     }
 
@@ -731,9 +757,15 @@ impl SegmentReader {
 
     /// Decode a data block, loading the payload from the file and
     /// validating its checksum on first touch (lazy: open() must stay
-    /// O(block count), not O(file size)).
+    /// O(block count), not O(file size)). With a cache (SE2-M7), a hit
+    /// skips the read entirely; a validated decode is fed back in.
     fn block_entries(&self, i: usize) -> Result<Vec<SegmentEntry>, FormatError> {
         let b = &self.data[i];
+        if let Some(cache) = &self.cache {
+            if let Some(entries) = cache.get(self.cache_id, i as u32) {
+                return Ok(entries);
+            }
+        }
         let raw = read_segment_at(
             &self.file,
             self.file_len,
@@ -781,6 +813,9 @@ impl SegmentReader {
             return Err(FormatError::Corrupt(format!(
                 "data block {i} trailing bytes"
             )));
+        }
+        if let Some(cache) = &self.cache {
+            cache.insert(self.cache_id, i as u32, out.clone());
         }
         Ok(out)
     }
