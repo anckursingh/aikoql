@@ -3814,9 +3814,13 @@ Interpretation: KSE-13 pins correctness under concurrency; it does not measure h
 
 Interpretation: KSE-15 pins recovery semantics at 2,200 records / 92.4 ms; the scaling curve (1/10/100 MB WAL, 1 GB if practical) and the MVP dataset limit are unmeasured. Confirm as a certification gap, not a suspected defect: replay is O(bytes) parse + O(records) BTreeMap inserts (amortized linear, memory-first by design — documented limitation). RED: the harness. Target MVP dataset proposal (pre-measurement, from AIKOQL workloads): 100K KOs is the recommended single-node boundary (M7's scale; agent memory / repository knowledge), 1M KOs is the measured ceiling (KSE-19, 4.13 GB RSS) — the recovery SLO is proposed AFTER the matrix numbers land, per the doc. Correctness gate: byte-equal replay vs model + logical key count + deletes/overwrites spot-checked.
 
+Result: harness GREEN — `kse142_recovery_scaling.rs` + `artifacts/storage-engine/kse142-recovery-scaling.md`. Smoke 1 MB: 449 records, open 73 ms, first query 8 µs, 100% semantic recovery (full model equality, not spot checks — the doc's correctness list is all asserts). Nightly sizes KSE142_NIGHTLY=1 (10/100 MB) / =2 (1 GB) fill the rest of the matrix. Recovery SLO proposed data-driven in the report (slope × 1.5 headroom). Correctness and performance stay separate (§9): the validation pins are asserts in the child, the timings are report cells.
+
 ### Finding KSE-143 — large replay resource stability — CONFIRM, P1
 
 Interpretation: steady-state RSS is measured (KSE-19); startup PEAK is not — during replay the raw WAL buffer, decode allocations, and the BTreeMap coexist. Deployment risk is peak, not final. Confirm. Expected shape (to be verified): peak ≈ final + WAL bytes, so the multiplier grows with the WAL-to-live ratio. RED: the harness — child opens a prebuilt WAL while a sampler polls WorkingSet64 across the replay window; publish Peak/final multiplier and a deployment memory requirement afterwards.
+
+Result: harness GREEN — `kse143_replay_memory.rs` + `artifacts/storage-engine/kse143-replay-memory.md`, the doc's RED shape executed verbatim (generate → close → baseline → open → peak → final → first query). Smoke 1 MB: multiplier 1.00x (peak 7.5 MB / final 7.5 MB, baseline 6.6 MB). Deployment memory requirement proposed data-driven on the marginal slope (baseline taken out — the 1 MB row is baseline-dominated): ~124 MB RAM at a 100 MB operational WAL cap. Three phase-anchored RSS self-reports (exact phases, one PowerShell call each) + parent peak poll at 100 ms; the peak cell is an upper bound on the replay peak (includes tails) and a lower bound on the transient (granularity) — both directions documented in the report.
 
 ### Challenge questions (§11) — positions
 
@@ -3824,9 +3828,9 @@ Q1: fail-closed middle corruption is correct HERE because the WAL has no redunda
 
 ### Work order
 
-1. KSE-082B RED → fix → regression (only production change expected in this document).
-2. Shared child RSS sampler in tests/common (kse142/kse143; kse19 keeps its loader-child shape).
-3. KSE-142 harness + nightly run + report + recovery SLO.
-4. KSE-143 harness + nightly run + report + memory requirement.
+1. ~~KSE-082B RED → fix → regression~~ — done (31971a2; the only production change in this document).
+2. ~~Shared child RSS sampler in tests/common~~ — done: `common::walgen` (deterministic sized-WAL generator + model) + `sample_child_peak`/`self_rss` (kse142/kse143; kse19 keeps its loader-child shape).
+3. ~~KSE-142 harness + report + recovery SLO~~ — done (smoke row committed; the 10/100 MB + 1 GB nightly rows land when the nightly runs — KSE142_NIGHTLY).
+4. ~~KSE-143 harness + report + memory requirement~~ — done (smoke row committed; nightly rows via KSE143_NIGHTLY).
 5. KSE-120C harness + nightly run + report + SLOs.
 6. `docs/testing/STORAGE_ENGINE_MVP_CERTIFICATION_CLOSURE.md` — verdict, results table, PoV per finding, measured operational boundary, Q1-Q4, §12 checklist.

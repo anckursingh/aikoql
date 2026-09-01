@@ -140,6 +140,211 @@ pub fn tmp(tag: &str) -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
+// Sized-WAL generator (kse142, kse143): a deterministic store-level workload
+// whose live model is rebuilt byte-exact in a child process by re-running the
+// same seeded sequence for B batches — no model serialization crosses the
+// process boundary. `Gen::step` is pure (no engine, no IO, no HashMap
+// iteration), so one seed reproduces one model in any process; the parent
+// pins this by re-running the sequence once and comparing models.
+// ---------------------------------------------------------------------------
+
+pub mod walgen {
+    use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
+    use aikoql_storage::AikoqlStorageEngine;
+    use std::collections::BTreeMap;
+
+    #[derive(Clone, Copy, Debug)]
+    pub struct Config {
+        pub seed: u64,
+        pub keys: u64,        // unique keyspace
+        pub families: u64,    // key prefix families (keys round-robin)
+        pub value_len: usize, // fixed value size
+        pub puts_per_batch: usize,
+        pub dels_per_batch: usize,
+    }
+
+    pub fn key(cfg: &Config, idx: u64) -> Vec<u8> {
+        format!("{}/{idx:08}", idx % cfg.families).into_bytes()
+    }
+
+    fn value(idx: u64, wc: u64, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|j| (idx.wrapping_mul(31).wrapping_add(wc).wrapping_add(j as u64)) & 0xFF)
+            .map(|x| x as u8)
+            .collect()
+    }
+
+    /// Live model + per-run stats. Key order is BTreeMap order (sorted) — the
+    /// engine serves scans sorted too, so model slices compare byte-exact.
+    pub struct Gen {
+        cfg: Config,
+        state: u64,
+        model: BTreeMap<Vec<u8>, Vec<u8>>,
+        written: Vec<u64>,     // keys ever written — delete pool
+        write_count: Vec<u32>, // per key: puts ever
+        pub batches: u64,
+        pub puts: u64,
+        pub dels: u64,
+        pub overwrites: u64, // puts on a live key
+        pub recreates: u64,  // puts on a deleted key
+        pub last_del: Option<Vec<u8>>,
+        pub overwrite_pin: Option<(Vec<u8>, Vec<u8>)>, // a key put >= 2x + final value
+    }
+
+    impl Gen {
+        pub fn new(cfg: Config) -> Gen {
+            Gen {
+                cfg,
+                state: cfg.seed,
+                model: BTreeMap::new(),
+                written: Vec::new(),
+                write_count: vec![0; cfg.keys as usize],
+                batches: 0,
+                puts: 0,
+                dels: 0,
+                overwrites: 0,
+                recreates: 0,
+                last_del: None,
+                overwrite_pin: None,
+            }
+        }
+
+        fn next(&mut self) -> u64 {
+            self.state = self
+                .state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.state >> 17
+        }
+
+        /// One batch: puts then dels, applied to the model in the engine's
+        /// own order (puts before dels — KSE-006), so a same-batch put+del
+        /// resolves identically on both sides. Put #0 (once any key exists)
+        /// overwrites a recently written key — pins a stable overwrite mix.
+        pub fn step(&mut self) -> WriteBatch {
+            let mut b = WriteBatch::new();
+            for p in 0..self.cfg.puts_per_batch {
+                let idx = if p == 0 && !self.written.is_empty() {
+                    let n = self.next();
+                    self.written[n as usize % self.written.len()]
+                } else {
+                    self.next() % self.cfg.keys
+                };
+                let k = key(&self.cfg, idx);
+                let was_live = self.model.contains_key(&k);
+                let wc_before = self.write_count[idx as usize];
+                let wc = wc_before + 1;
+                self.write_count[idx as usize] = wc;
+                if was_live {
+                    self.overwrites += 1;
+                } else if wc_before > 0 {
+                    self.recreates += 1;
+                } else {
+                    self.written.push(idx);
+                }
+                let v = value(idx, wc as u64, self.cfg.value_len);
+                if wc >= 2 {
+                    self.overwrite_pin = Some((k.clone(), v.clone()));
+                }
+                self.model.insert(k.clone(), v.clone());
+                self.puts += 1;
+                b.put(k, v);
+            }
+            for _ in 0..self.cfg.dels_per_batch {
+                let n = self.next();
+                let idx = self.written[n as usize % self.written.len()];
+                let k = key(&self.cfg, idx);
+                self.model.remove(&k);
+                self.last_del = Some(k.clone());
+                self.dels += 1;
+                b.del(k);
+            }
+            self.batches += 1;
+            b
+        }
+
+        pub fn model(&self) -> &BTreeMap<Vec<u8>, Vec<u8>> {
+            &self.model
+        }
+
+        /// Keys ever written (unique keys — the spec's "unique keys" cell).
+        pub fn unique_keys(&self) -> usize {
+            self.written.len()
+        }
+    }
+
+    /// Write batches until the WAL reaches `target_bytes`; returns the
+    /// generator (model + stats) and the exact WAL size reached. Drops the
+    /// engine — the measured open happens later, in a child process.
+    pub fn generate(path: &std::path::Path, cfg: Config, target_bytes: u64) -> (Gen, u64) {
+        let e = AikoqlStorageEngine::open(path).unwrap();
+        let mut g = Gen::new(cfg);
+        let mut wal = 0;
+        while wal < target_bytes {
+            e.write_batch(&g.step()).unwrap();
+            wal = std::fs::metadata(path).unwrap().len();
+        }
+        drop(e);
+        (g, wal)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RSS sampling (kse142, kse143): phase-anchored self-reports from inside the
+// measured child (precise — read at the exact phase) + a parent-side peak
+// poll at interval granularity (a lower bound — spikes between samples are
+// missed). Windows-only (PowerShell WorkingSet64); non-Windows callers get
+// None/0 and report an honest NOT_SAMPLED row (kse19 convention).
+// ---------------------------------------------------------------------------
+
+/// The calling process's own WorkingSet64 at this exact phase.
+#[cfg(windows)]
+pub fn self_rss() -> Option<u64> {
+    let pid = std::process::id();
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!("(Get-Process -Id {pid}).WorkingSet64"),
+        ])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+/// Poll `child`'s WorkingSet64 every `interval_ms` until it exits. Returns
+/// (peak, sample count). One PowerShell process does the loop (kse19 shape);
+/// the child's exit ends both it and, within one interval, the sampler. A
+/// fast child (smoke scale) can outrun the sampler's own startup — zero
+/// samples then, reported honestly rather than asserted.
+#[cfg(windows)]
+pub fn sample_child_peak(child: &mut std::process::Child, interval_ms: u64) -> (u64, usize) {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    let pid = child.id();
+    let script = format!(
+        "while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ Write-Output (Get-Process -Id {pid}).WorkingSet64; Start-Sleep -Milliseconds {interval_ms} }}"
+    );
+    let mut sampler = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut peak = 0u64;
+    let mut samples = 0usize;
+    if let Some(out) = sampler.stdout.take() {
+        for line in BufReader::new(out).lines().map_while(Result::ok) {
+            if let Ok(v) = line.trim().parse::<u64>() {
+                peak = peak.max(v);
+                samples += 1;
+            }
+        }
+    }
+    let _ = sampler.wait();
+    (peak, samples)
+}
+
+// ---------------------------------------------------------------------------
 // The six KSE-1 contract asserts (MRFC-KSE-001 §7), shared verbatim by the
 // per-backend granular tests (conformance.rs) and the KSE-20 matrix
 // (kse20_backend_conformance.rs) — "the same conformance suite" by
