@@ -1,13 +1,18 @@
-//! SE2-M2 — Db: WAL → memtable → flush → segment (design §7–§10, §19).
+//! SE2-M2/M6 — Db: WAL → memtable → flush → segment (design §7–§10, §19).
 //!
 //! Commit pipeline (the KSE-13 120a order, ported): assign seq → append
 //! WAL frame → durability boundary → apply memtable → ack. One frame =
 //! one batch = one sequence number.
 //!
 //! Durability modes (§7): Sync is the default and fsyncs every batch;
-//! GroupCommit/Async skip the per-batch fsync (the real group-commit
-//! machinery is SE2-M6). No mode may silently downgrade — Sync is the
-//! Default.
+//! Async skips the durability boundary. GroupCommit (SE2-M6) runs a
+//! committer thread: batches submitted through `Db::writer()` handles
+//! queue up and commit as groups — one fsync per group, bounded by
+//! max_batch_ops / max_batch_bytes / max_wait_duration — applied and
+//! acked in submission order (ack only after apply, so acked == durable
+//! AND visible). Sync mode remains the correctness baseline: its WAL
+//! bytes are what group commit must reproduce exactly. No mode may
+//! silently downgrade — Sync is the Default.
 //!
 //! One-writer policy (§19): `LOCK` holds an OS file lock for the database
 //! lifetime; a second open fails closed (FormatError::Locked).
@@ -33,13 +38,17 @@ use crate::wal::{encode_frame, replay_frames, Op};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 pub const LOCK_FILE: &str = "LOCK";
 pub const WAL_FILE: &str = "WAL-000001.log";
 
 const DEFAULT_MEMTABLE_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_BLOCK_TARGET: usize = 64 * 1024;
+const DEFAULT_GROUP_BATCH_OPS: usize = 4096;
+const DEFAULT_GROUP_BATCH_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn manifest_path(dir: &Path, generation: u64) -> PathBuf {
     dir.join(format!("MANIFEST-{generation:06}"))
@@ -63,6 +72,13 @@ pub struct Config {
     pub memtable_bytes: usize,
     pub block_target: usize,
     pub durability: DurabilityMode,
+    /// Group commit caps (SE2-M6): a group never exceeds these (a single
+    /// batch larger than a cap commits alone) and waits at most
+    /// `max_wait_duration` for company — ZERO commits as soon as the
+    /// queue has what it has.
+    pub max_batch_ops: usize,
+    pub max_batch_bytes: usize,
+    pub max_wait_duration: Duration,
 }
 
 impl Config {
@@ -72,6 +88,9 @@ impl Config {
             memtable_bytes: DEFAULT_MEMTABLE_BYTES,
             block_target: DEFAULT_BLOCK_TARGET,
             durability: DurabilityMode::default(),
+            max_batch_ops: DEFAULT_GROUP_BATCH_OPS,
+            max_batch_bytes: DEFAULT_GROUP_BATCH_BYTES,
+            max_wait_duration: Duration::ZERO,
         }
     }
 }
@@ -87,13 +106,28 @@ struct State {
     generation: u64,
 }
 
+/// One queued batch waiting on its group: the ops plus the ack channel
+/// (a fresh bounded(1) per batch — std has no oneshot).
+type Batch = (Vec<Op>, mpsc::SyncSender<Result<u64, FormatError>>);
+
 pub struct Db {
     config: Config,
     /// Held forever — the OS lock (dropping the file releases it).
     _lock: File,
-    /// Append-only handle; truncated at each flush publication.
-    wal: File,
-    state: RwLock<State>,
+    /// Append-only handle; truncated at each flush publication. Shared:
+    /// in GroupCommit mode the committer thread appends and flush may
+    /// truncate — one mutex, always taken alone (never nested), so a
+    /// flush can never interleave a group's append-and-apply window.
+    wal: Arc<Mutex<File>>,
+    state: Arc<RwLock<State>>,
+    /// GroupCommit mode only: the Db's own sender (dropping it makes the
+    /// queue disconnect and lets the committer exit) and the committer
+    /// thread itself, joined on drop.
+    queue_tx: Option<mpsc::Sender<Batch>>,
+    committer: Option<std::thread::JoinHandle<()>>,
+    /// Commit fsyncs so far — one per batch (Sync) or one per group
+    /// (GroupCommit); flush truncation syncs are not counted.
+    fsyncs: Arc<AtomicU64>,
 }
 
 impl Db {
@@ -191,26 +225,50 @@ impl Db {
             .unwrap_or(0)
             + 1;
 
+        let wal = Arc::new(Mutex::new(wal));
+        let state = Arc::new(RwLock::new(State {
+            active,
+            immutables: vec![],
+            segments,
+            segment_records: manifest.segments,
+            next_seq,
+            next_segment_id,
+            generation: manifest.generation,
+        }));
+        let fsyncs = Arc::new(AtomicU64::new(0));
+        let (queue_tx, committer) = if config.durability == DurabilityMode::GroupCommit {
+            let (tx, rx) = mpsc::channel();
+            let handle = {
+                let wal = Arc::clone(&wal);
+                let state = Arc::clone(&state);
+                let config = config.clone();
+                let fsyncs = Arc::clone(&fsyncs);
+                std::thread::spawn(move || committer_loop(rx, wal, state, config, fsyncs))
+            };
+            (Some(tx), Some(handle))
+        } else {
+            (None, None)
+        };
         Ok(Db {
             config,
             _lock: lock,
             wal,
-            state: RwLock::new(State {
-                active,
-                immutables: vec![],
-                segments,
-                segment_records: manifest.segments,
-                next_seq,
-                next_segment_id,
-                generation: manifest.generation,
-            }),
+            state,
+            queue_tx,
+            committer,
+            fsyncs,
         })
     }
 
     /// One batch, one sequence (design refinement: sequence is per-batch).
+    /// GroupCommit mode routes through the commit queue — the same
+    /// pipeline, executed by the committer thread one group at a time.
     pub fn write(&mut self, ops: &[Op]) -> Result<u64, FormatError> {
         if ops.is_empty() {
             return Err(FormatError::Invalid("empty write batch".into()));
+        }
+        if self.config.durability == DurabilityMode::GroupCommit {
+            return self.writer()?.write(ops);
         }
         let seq = {
             let mut state = self.state.write().unwrap();
@@ -219,16 +277,17 @@ impl Db {
             seq
         };
         let frame = encode_frame(seq, ops)?;
-        self.wal
-            .seek(SeekFrom::End(0))
-            .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
-        self.wal
-            .write_all(&frame)
-            .map_err(|e| FormatError::Io(format!("WAL append: {e}")))?;
-        if self.config.durability == DurabilityMode::Sync {
-            self.wal
-                .sync_all()
-                .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
+        {
+            let mut wal = self.wal.lock().unwrap();
+            wal.seek(SeekFrom::End(0))
+                .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
+            wal.write_all(&frame)
+                .map_err(|e| FormatError::Io(format!("WAL append: {e}")))?;
+            if self.config.durability == DurabilityMode::Sync {
+                wal.sync_all()
+                    .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
+                self.fsyncs.fetch_add(1, Ordering::SeqCst);
+            }
         }
         let mut state = self.state.write().unwrap();
         for op in ops {
@@ -238,9 +297,29 @@ impl Db {
             }
         }
         if state.active.bytes() >= self.config.memtable_bytes {
-            self.flush_locked(&mut state)?;
+            Self::flush_locked_impl(&self.config, &self.wal, &mut state)?;
         }
         Ok(seq)
+    }
+
+    /// A shared writer handle for group commit. Only GroupCommit mode has
+    /// a commit queue — anything else returns Invalid. Drop every handle
+    /// before dropping the Db: the committer exits (and the Db's drop
+    /// joins it) only once no sender remains.
+    pub fn writer(&self) -> Result<CommitWriter, FormatError> {
+        match &self.queue_tx {
+            Some(tx) => Ok(CommitWriter { tx: tx.clone() }),
+            None => Err(FormatError::Invalid(
+                "writer handles require DurabilityMode::GroupCommit".into(),
+            )),
+        }
+    }
+
+    /// Commit fsyncs so far: one per batch (Sync) or one per group
+    /// (GroupCommit); none in Async. Flush truncation syncs are not
+    /// counted.
+    pub fn fsync_count(&self) -> u64 {
+        self.fsyncs.load(Ordering::SeqCst)
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<u64, FormatError> {
@@ -289,12 +368,17 @@ impl Db {
 
     pub fn flush(&mut self) -> Result<(), FormatError> {
         let mut state = self.state.write().unwrap();
-        self.flush_locked(&mut state)
+        Self::flush_locked_impl(&self.config, &self.wal, &mut state)
     }
 
     /// Publication order (every crash window recoverable — see module doc):
-    /// segment files → manifest → CURRENT → WAL truncate.
-    fn flush_locked(&self, state: &mut State) -> Result<(), FormatError> {
+    /// segment files → manifest → CURRENT → WAL truncate. Shared with the
+    /// group-commit committer — it takes the pieces, not the Db.
+    fn flush_locked_impl(
+        config: &Config,
+        wal: &Arc<Mutex<File>>,
+        state: &mut State,
+    ) -> Result<(), FormatError> {
         if !state.active.is_empty() {
             let fresh = std::mem::take(&mut state.active);
             state.immutables.push(fresh);
@@ -306,8 +390,8 @@ impl Db {
         for mem in state.immutables.drain(..) {
             let id = state.next_segment_id;
             state.next_segment_id += 1;
-            let path = segment_path(&self.config.dir, id);
-            let mut writer = SegmentWriter::new(self.config.block_target);
+            let path = segment_path(&config.dir, id);
+            let mut writer = SegmentWriter::new(config.block_target);
             for (key, seq, e) in mem.entries() {
                 let flags = if e.value.is_some() {
                     FLAG_PUT
@@ -346,20 +430,18 @@ impl Db {
             segments: state.segment_records.clone(),
             wal_ids: vec![],
         };
-        Manifest::publish(
-            &manifest_path(&self.config.dir, state.generation),
-            &manifest,
-        )?;
+        Manifest::publish(&manifest_path(&config.dir, state.generation), &manifest)?;
         Current::publish(
-            &self.config.dir.join("CURRENT"),
+            &config.dir.join("CURRENT"),
             &Current::new(FORMAT_VERSION, state.generation),
         )?;
-        self.wal
-            .set_len(0)
-            .map_err(|e| FormatError::Io(format!("WAL truncate: {e}")))?;
-        self.wal
-            .sync_all()
-            .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
+        {
+            let wal = wal.lock().unwrap();
+            wal.set_len(0)
+                .map_err(|e| FormatError::Io(format!("WAL truncate: {e}")))?;
+            wal.sync_all()
+                .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
+        }
         state.segments.extend(new_segments);
         Ok(())
     }
@@ -408,7 +490,7 @@ impl Db {
             &archive_path,
             policy,
         )?;
-        crash_park(&self.config.dir, "after_segment");
+        crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_segment");
 
         let old_paths: Vec<PathBuf> = state
             .segment_records
@@ -448,12 +530,12 @@ impl Db {
             &manifest_path(&self.config.dir, state.generation),
             &manifest,
         )?;
-        crash_park(&self.config.dir, "after_manifest");
+        crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_manifest");
         Current::publish(
             &self.config.dir.join("CURRENT"),
             &Current::new(FORMAT_VERSION, state.generation),
         )?;
-        crash_park(&self.config.dir, "after_current");
+        crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_current");
 
         // Swap readers before deleting: handles open with share-delete, so
         // Windows marks the files delete-pending and any reader that still
@@ -478,14 +560,188 @@ impl Db {
 /// SE2-M4 crash-matrix hook: parks forever only when the env names this
 /// stage, so the child-kill harness can kill the process mid-compaction
 /// and pin the §25 windows. Unset in production — a no-op.
-fn crash_park(dir: &Path, stage: &str) {
-    if std::env::var("AIKOQL_V2_COMPACT_PARK").ok().as_deref() != Some(stage) {
+impl Drop for Db {
+    fn drop(&mut self) {
+        // GroupCommit mode: drop the Db's own sender so the queue
+        // disconnects once every CommitWriter handle is gone, let the
+        // committer commit what is still pending, and join it — a reopen
+        // of the same directory must never race the old committer's last
+        // group. (CommitWriter's doc spells out the drop-order rule.)
+        self.queue_tx = None;
+        if let Some(handle) = self.committer.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Park forever when `var` names this stage — the crash-window harness
+/// (no-op unset). The marker file tells the parent the park was reached.
+fn crash_park(var: &str, dir: &Path, stage: &str) {
+    if std::env::var(var).ok().as_deref() != Some(stage) {
         return;
     }
     std::fs::write(dir.join(stage), b"1").ok();
     loop {
         std::thread::sleep(std::time::Duration::from_secs(60));
     }
+}
+
+/// A shared writer handle (GroupCommit mode): batches submitted through
+/// handles queue up and commit as groups — one fsync per group, applied
+/// and acked in submission order. Clone cheaply for one handle per
+/// writer thread; drop every handle before dropping the Db.
+#[derive(Clone)]
+pub struct CommitWriter {
+    tx: mpsc::Sender<Batch>,
+}
+
+impl CommitWriter {
+    /// Submit one batch and block until its group commits: the returned
+    /// seq is assigned in submission order, and the ack fires only after
+    /// the batch is durable (group fsync) AND visible (applied).
+    pub fn write(&self, ops: &[Op]) -> Result<u64, FormatError> {
+        if ops.is_empty() {
+            return Err(FormatError::Invalid("empty write batch".into()));
+        }
+        let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+        self.tx
+            .send((ops.to_vec(), ack_tx))
+            .map_err(|_| FormatError::Io("commit queue closed".into()))?;
+        match ack_rx.recv() {
+            Ok(result) => result,
+            Err(_) => Err(FormatError::Io("commit queue closed".into())),
+        }
+    }
+}
+
+fn batch_ops_of(b: &Batch) -> usize {
+    b.0.len()
+}
+
+/// The engine's byte accounting for the cap: the sum over ops of
+/// key+value bytes (a Delete carries only its key).
+fn batch_bytes_of(b: &Batch) -> usize {
+    b.0.iter()
+        .map(|op| match op {
+            Op::Put(k, v) => k.len() + v.len(),
+            Op::Delete(k) => k.len(),
+        })
+        .sum()
+}
+
+/// The committer: drain the queue into groups bounded by the caps and
+/// the wait window, commit each group with ONE fsync, apply, ack. Exits
+/// when every sender is gone and nothing is pending.
+fn committer_loop(
+    rx: mpsc::Receiver<Batch>,
+    wal: Arc<Mutex<File>>,
+    state: Arc<RwLock<State>>,
+    config: Config,
+    fsyncs: Arc<AtomicU64>,
+) {
+    let wait = config.max_wait_duration;
+    let mut carry: Option<Batch> = None;
+    loop {
+        let first = match carry.take().or_else(|| rx.recv().ok()) {
+            Some(b) => b,
+            None => return, // all senders dropped, nothing pending
+        };
+        let mut group = vec![first];
+        let deadline = Instant::now() + wait;
+        loop {
+            // Sum over the whole group — groups are small; exact-fit caps.
+            let (ops_n, bytes_n) = group.iter().fold((0usize, 0usize), |(o, b), batch| {
+                (o + batch_ops_of(batch), b + batch_bytes_of(batch))
+            });
+            if ops_n >= config.max_batch_ops || bytes_n >= config.max_batch_bytes {
+                break;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(batch) => {
+                    if ops_n + batch_ops_of(&batch) > config.max_batch_ops
+                        || bytes_n + batch_bytes_of(&batch) > config.max_batch_bytes
+                    {
+                        carry = Some(batch); // exact fit: leads the next group
+                        break;
+                    }
+                    group.push(batch);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        commit_group(&group, &wal, &state, &config, &fsyncs);
+    }
+}
+
+/// Commit one group: assign seqs, append every frame, ONE fsync, apply,
+/// ack — all under one state write-lock (the same exclusivity Sync's
+/// write() gets via &mut self), so a flush can never interleave the
+/// append-and-apply window. Lock order is always state → wal, and the
+/// wal lock is never held across a flush.
+fn commit_group(
+    group: &[Batch],
+    wal: &Arc<Mutex<File>>,
+    state: &Arc<RwLock<State>>,
+    config: &Config,
+    fsyncs: &Arc<AtomicU64>,
+) {
+    let mut st = state.write().unwrap();
+    let mut seqs: Vec<u64> = Vec::with_capacity(group.len());
+    let mut outcome: Result<(), FormatError> = Ok(());
+    {
+        let mut wal = wal.lock().unwrap();
+        for (ops, _) in group {
+            let seq = st.next_seq;
+            st.next_seq += 1;
+            seqs.push(seq);
+            let frame = match encode_frame(seq, ops) {
+                Ok(f) => f,
+                Err(e) => {
+                    outcome = Err(e);
+                    break;
+                }
+            };
+            let appended = wal
+                .seek(SeekFrom::End(0))
+                .and_then(|_| wal.write_all(&frame));
+            if let Err(e) = appended {
+                outcome = Err(FormatError::Io(format!("WAL append: {e}")));
+                break;
+            }
+        }
+        if outcome.is_ok() {
+            if let Err(e) = wal.sync_all() {
+                outcome = Err(FormatError::Io(format!("WAL sync: {e}")));
+            }
+        }
+    }
+    if outcome.is_ok() {
+        fsyncs.fetch_add(1, Ordering::SeqCst);
+    }
+    crash_park("AIKOQL_V2_GROUP_PARK", &config.dir, "after_fsync");
+    if outcome.is_ok() {
+        for ((ops, _), seq) in group.iter().zip(&seqs) {
+            for op in ops {
+                match op {
+                    Op::Put(k, v) => st.active.apply(k.clone(), *seq, Some(v.clone())),
+                    Op::Delete(k) => st.active.apply(k.clone(), *seq, None),
+                }
+            }
+        }
+        if st.active.bytes() >= config.memtable_bytes {
+            if let Err(e) = Db::flush_locked_impl(config, wal, &mut st) {
+                outcome = Err(e);
+            }
+        }
+    }
+    crash_park("AIKOQL_V2_GROUP_PARK", &config.dir, "after_apply");
+    drop(st);
+    for ((_, ack_tx), seq) in group.iter().zip(&seqs) {
+        let _ = ack_tx.send(outcome.clone().map(|()| *seq));
+    }
+    crash_park("AIKOQL_V2_GROUP_PARK", &config.dir, "after_ack");
 }
 
 /// SEGMENT-*.seg files the manifest does not reference. Reported and

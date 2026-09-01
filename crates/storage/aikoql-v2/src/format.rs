@@ -36,7 +36,7 @@ const MANIFEST_MAGIC: &[u8; 4] = b"AKMV";
 /// Minimum encoded size of one segment record (both keys empty).
 const MIN_SEGMENT_RECORD: usize = 57;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FormatError {
     /// Byte-level damage: bad magic, bad checksum, truncation, impossible
     /// structure. The file must not be trusted.

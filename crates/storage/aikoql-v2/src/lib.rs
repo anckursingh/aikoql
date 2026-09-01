@@ -9,7 +9,10 @@
 //! segment policies, legacy v1 WAL migration (§23). SE2-M4: L0 → L1
 //! compaction — synchronous k-way merge, newest-per-key wins. SE2-M5:
 //! retention policy as a compaction input — KEEP/DROP/ARCHIVE per key
-//! class, `compact_with(policy)`, `compact()` = KeepAll.
+//! class, `compact_with(policy)`, `compact()` = KeepAll. SE2-M6: group
+//! commit — a committer thread drains `Db::writer()` handles into groups
+//! (one fsync per group, apply-before-ack, exact-fit caps); Sync remains
+//! the correctness baseline.
 
 pub mod compaction;
 pub mod db;

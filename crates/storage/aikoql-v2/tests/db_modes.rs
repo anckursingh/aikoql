@@ -1,6 +1,7 @@
 //! SE2-M2 — durability modes (design §7): Sync is the default and no mode
 //! may silently downgrade. GroupCommit/Async take explicit opt-in and skip
-//! the per-batch fsync (the real group-commit machinery is SE2-M6).
+//! the per-batch fsync; the group-commit machinery landed in SE2-M6
+//! (committer thread, one fsync per group, apply-before-ack).
 
 mod common;
 

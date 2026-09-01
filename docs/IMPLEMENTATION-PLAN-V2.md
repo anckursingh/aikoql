@@ -89,9 +89,13 @@ One RED-caught test-design flaw (not an engine bug): the gate pins assumed `comp
 
 ### SE2-M6 — Group commit
 
-Deliver: commit queue, `max_batch_ops` / `max_batch_bytes` / `max_wait_duration`, one fsync per group, apply/ack the group. Sync mode remains the correctness baseline.
+Done (9/9 new green, 93/93 suite).
 
-REDs: no acknowledged commit lost (crash at group boundaries); commit order deterministic (log order == apply order == ack order); Sync semantics unchanged (byte-exact parity with M2 pins); throughput improves under multi-writer load (measured, the KSE-120C matrix shape); strict opt-in for the perf variant.
+Delivered: `DurabilityMode::GroupCommit` runs a committer thread; `Db::writer()` returns a `CommitWriter` handle (Clone, any thread) whose `write()` queues the batch and blocks until the ack. Groups are bounded by `max_batch_ops` (4096) / `max_batch_bytes` (16 MiB) / `max_wait_duration` (ZERO) with exact-fit caps — a batch that would exceed a cap is carried over to lead the next group. One fsync per group; apply happens before the acks (acked == durable AND visible). The whole group window (assign seqs → append frames → fsync → apply) holds one `state` write-lock — the same exclusivity Sync's `write()` gets via `&mut self` — so a flush can never interleave it. Lock order is always state → wal, never nested; the wal lock is never held across a flush. Seq order == submission order == WAL order == apply order == ack order, by construction. `Db::fsync_count()` counts commit fsyncs (Sync: per batch; GroupCommit: per group; flush truncation syncs don't count). Sync/Async paths are unchanged — the M2 pins are the regression, and Sync's WAL bytes are the golden group commit reproduces byte-exactly. Drop drops the queue sender and joins the committer (all writer handles must be dropped first — documented). Crash parks generalized: `crash_park(var, dir, stage)` with `AIKOQL_V2_GROUP_PARK` = after_fsync / after_apply / after_ack (the M4 compaction parks now take the var parameter too).
+
+One RED-caught test-design flaw (not an engine bug): the first three REDs submitted batches sequentially through one writer and pinned per-batch grouping — impossible by construction, because a synchronous submitter's `write()` blocks until its ack, so the queue never holds two batches. Group commit exists for concurrent submitters; the tests now submit from threads (one batch per thread), which is also what makes the child-kill stages meaningful (all 20 batches in the one parked group, not one batch plus 19 never-submitted writes).
+
+Perf matrix: `group_commit_throughput_matrix` under `SE2M6_NIGHTLY=1` strict opt-in — Sync 1 writer / GC 1 writer wait=0 / GC 8 writers wait=5ms, 200 batches × 128-byte values, fsync counts per cell, report-only (never asserts), artifact `artifacts/storage-engine-v2/group-commit.md`.
 
 ### SE2-M7 — Cache / bloom filters
 
