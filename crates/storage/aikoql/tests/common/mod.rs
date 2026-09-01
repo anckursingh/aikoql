@@ -126,6 +126,9 @@ impl std::fmt::Display for LogicalCounts {
 }
 
 pub fn percentiles(mut xs: Vec<u128>) -> (u128, u128, u128) {
+    if xs.is_empty() {
+        return (0, 0, 0); // a scenario with no samples (e.g. zero readers)
+    }
     xs.sort_unstable();
     let p = |q: f64| xs[((xs.len() - 1) as f64 * q).round() as usize];
     (p(0.50), p(0.95), p(0.99))
