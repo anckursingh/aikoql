@@ -126,7 +126,8 @@ fn verify(d: &Path) {
 
 #[test]
 fn compact_crash_after_segment_before_manifest() {
-    let d = dir("compact-crash-seg");
+    // dir() AFTER the child branch: the child would otherwise create its own
+    // pid-namespaced dir at this line and, being hard-killed, never sweep it.
     if std::env::var_os(CHILD_ENV).is_some() {
         let mut cfg = Config::new(child_dir());
         cfg.memtable_bytes = 512;
@@ -134,6 +135,7 @@ fn compact_crash_after_segment_before_manifest() {
         run_workload_then_compact(&mut db);
         unreachable!("the parent kills the parked child");
     }
+    let d = dir("compact-crash-seg");
     let mut child = spawn_child(
         "compact_crash_after_segment_before_manifest",
         &d,
@@ -165,7 +167,7 @@ fn compact_crash_after_segment_before_manifest() {
 
 #[test]
 fn compact_crash_after_manifest_before_current() {
-    let d = dir("compact-crash-manifest");
+    // dir() AFTER the child branch (see ..._after_segment_before_manifest).
     if std::env::var_os(CHILD_ENV).is_some() {
         let mut cfg = Config::new(child_dir());
         cfg.memtable_bytes = 512;
@@ -173,6 +175,7 @@ fn compact_crash_after_manifest_before_current() {
         run_workload_then_compact(&mut db);
         unreachable!("the parent kills the parked child");
     }
+    let d = dir("compact-crash-manifest");
     let mut child = spawn_child(
         "compact_crash_after_manifest_before_current",
         &d,
@@ -199,7 +202,7 @@ fn compact_crash_after_manifest_before_current() {
 
 #[test]
 fn compact_crash_after_current_before_deletion() {
-    let d = dir("compact-crash-current");
+    // dir() AFTER the child branch (see ..._after_segment_before_manifest).
     if std::env::var_os(CHILD_ENV).is_some() {
         let mut cfg = Config::new(child_dir());
         cfg.memtable_bytes = 512;
@@ -207,6 +210,7 @@ fn compact_crash_after_current_before_deletion() {
         run_workload_then_compact(&mut db);
         unreachable!("the parent kills the parked child");
     }
+    let d = dir("compact-crash-current");
     let mut child = spawn_child(
         "compact_crash_after_current_before_deletion",
         &d,

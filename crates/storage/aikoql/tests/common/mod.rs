@@ -134,11 +134,48 @@ pub fn percentiles(mut xs: Vec<u128>) -> (u128, u128, u128) {
     (p(0.50), p(0.95), p(0.99))
 }
 
+// Temp paths created by THIS thread, swept when the thread exits (the main
+// thread's destructor runs at process exit — statics are NOT dropped on
+// Windows MSVC, TLS is). Per-thread on purpose: the KSE-141/SE2 kill-harness
+// children reopen paths the parent passed them via env and must never delete
+// the parent's evidence — a child only ever registers paths it created
+// itself, and a hard-killed child never runs TLS destructors at all.
+thread_local! {
+    static TEMP_PATHS: std::cell::RefCell<TempSweeper> =
+        const { std::cell::RefCell::new(TempSweeper { paths: Vec::new() }) };
+}
+
+struct TempSweeper {
+    paths: Vec<PathBuf>,
+}
+impl Drop for TempSweeper {
+    fn drop(&mut self) {
+        for p in &self.paths {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_dir_all(p);
+            // Sidecars the engine creates NEXT TO the registered stem
+            // (`{stem}.kse`, `{stem}.redb.artifacts`): the stem is
+            // pid-unique, so a `{stem}.` prefix match is own-files only.
+            let Some(name) = p.file_name() else { continue };
+            if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
+                let prefix = format!("{}.", name.to_string_lossy());
+                for e in rd.flatten() {
+                    if e.file_name().to_string_lossy().starts_with(&prefix) {
+                        let _ = std::fs::remove_file(e.path());
+                        let _ = std::fs::remove_dir_all(e.path());
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn tmp(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!("aikoql_kse_unit_{}_{}", tag, std::process::id()));
     let _ = std::fs::remove_file(&p);
     let _ = std::fs::remove_dir_all(&p);
+    TEMP_PATHS.with(|t| t.borrow_mut().paths.push(p.clone()));
     p
 }
 

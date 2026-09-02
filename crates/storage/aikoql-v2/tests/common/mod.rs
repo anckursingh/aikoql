@@ -24,12 +24,49 @@ pub fn entry(key: &str, value: &str, seq: u64, flags: u8) -> SegmentEntry {
     }
 }
 
+// Temp paths created by THIS thread, swept when the thread exits (the main
+// thread's destructor runs at process exit — statics are NOT dropped on
+// Windows MSVC, TLS is). Per-thread on purpose: the SE2 kill-harness children
+// reopen paths the parent passed them via env and must never delete the
+// parent's evidence — a child only ever registers paths it created itself,
+// and a hard-killed child never runs TLS destructors at all.
+thread_local! {
+    static TEMP_PATHS: std::cell::RefCell<TempSweeper> =
+        const { std::cell::RefCell::new(TempSweeper { paths: Vec::new() }) };
+}
+
+struct TempSweeper {
+    paths: Vec<PathBuf>,
+}
+impl Drop for TempSweeper {
+    fn drop(&mut self) {
+        for p in &self.paths {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_dir_all(p);
+            // Sidecars the engine creates NEXT TO the registered stem
+            // (`{stem}.kse`, `{stem}.redb.artifacts`): the stem is
+            // pid-unique, so a `{stem}.` prefix match is own-files only.
+            let Some(name) = p.file_name() else { continue };
+            if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
+                let prefix = format!("{}.", name.to_string_lossy());
+                for e in rd.flatten() {
+                    if e.file_name().to_string_lossy().starts_with(&prefix) {
+                        let _ = std::fs::remove_file(e.path());
+                        let _ = std::fs::remove_dir_all(e.path());
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A unique scratch FILE path under the OS temp dir: tag + pid so parallel
 /// test binaries never collide; any stale file is removed so reruns are clean.
 pub fn tmp(tag: &str) -> PathBuf {
     let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("aikoql-v2-{tag}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_file(&path);
+    TEMP_PATHS.with(|t| t.borrow_mut().paths.push(path.clone()));
     path
 }
 
@@ -39,6 +76,7 @@ pub fn dir(tag: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("aikoql-v2-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).unwrap();
+    TEMP_PATHS.with(|t| t.borrow_mut().paths.push(path.clone()));
     path
 }
 

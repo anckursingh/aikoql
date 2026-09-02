@@ -129,10 +129,12 @@ fn verify(d: &Path) {
 
 #[test]
 fn group_crash_after_fsync_before_apply() {
-    let d = dir("gc-crash-fsync");
+    // dir() AFTER the child branch: the child would otherwise create its own
+    // pid-namespaced dir at this line and, being hard-killed, never sweep it.
     if std::env::var_os(CHILD_ENV).is_some() {
         run_child();
     }
+    let d = dir("gc-crash-fsync");
     let mut child = spawn_child("group_crash_after_fsync_before_apply", &d, "after_fsync");
     wait_for(&d.join("after_fsync"), Duration::from_secs(60));
     child.kill().expect("kill child");
@@ -142,10 +144,11 @@ fn group_crash_after_fsync_before_apply() {
 
 #[test]
 fn group_crash_after_apply_before_ack() {
-    let d = dir("gc-crash-apply");
+    // dir() AFTER the child branch (see ..._after_fsync_before_apply).
     if std::env::var_os(CHILD_ENV).is_some() {
         run_child();
     }
+    let d = dir("gc-crash-apply");
     let mut child = spawn_child("group_crash_after_apply_before_ack", &d, "after_apply");
     wait_for(&d.join("after_apply"), Duration::from_secs(60));
     child.kill().expect("kill child");
@@ -155,10 +158,11 @@ fn group_crash_after_apply_before_ack() {
 
 #[test]
 fn group_crash_after_ack_loses_no_acknowledged_commit() {
-    let d = dir("gc-crash-ack");
+    // dir() AFTER the child branch (see ..._after_fsync_before_apply).
     if std::env::var_os(CHILD_ENV).is_some() {
         run_child();
     }
+    let d = dir("gc-crash-ack");
     let mut child = spawn_child(
         "group_crash_after_ack_loses_no_acknowledged_commit",
         &d,

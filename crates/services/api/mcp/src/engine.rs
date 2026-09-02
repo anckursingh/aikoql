@@ -91,10 +91,42 @@ mod tests {
         }
     }
 
+    // Temp db paths written by THIS test thread, swept when the thread exits
+    // (the main thread's destructor runs at process exit — statics are NOT
+    // dropped on Windows MSVC, TLS is).
+    thread_local! {
+        static TEMP_PATHS: std::cell::RefCell<TempSweeper> =
+            const { std::cell::RefCell::new(TempSweeper { paths: Vec::new() }) };
+    }
+
+    struct TempSweeper {
+        paths: Vec<std::path::PathBuf>,
+    }
+    impl Drop for TempSweeper {
+        fn drop(&mut self) {
+            for p in &self.paths {
+                let _ = std::fs::remove_file(p);
+                let _ = std::fs::remove_dir_all(p);
+                // Sidecars next to the registered stem (`{stem}.redb.artifacts`).
+                let Some(name) = p.file_name() else { continue };
+                if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
+                    let prefix = format!("{}.", name.to_string_lossy());
+                    for e in rd.flatten() {
+                        if e.file_name().to_string_lossy().starts_with(&prefix) {
+                            let _ = std::fs::remove_file(e.path());
+                            let _ = std::fs::remove_dir_all(e.path());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn scratch(tag: &str) -> String {
         let mut p = std::env::temp_dir();
         p.push(format!("aikoql_mcp_backend_{}_{}", tag, std::process::id()));
         let _ = std::fs::remove_file(&p);
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(p.clone()));
         p.to_string_lossy().into_owned()
     }
 

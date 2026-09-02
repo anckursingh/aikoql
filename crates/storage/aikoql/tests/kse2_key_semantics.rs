@@ -16,16 +16,8 @@ use aikoql_storage::AikoqlStorageEngine;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-fn tmp(tag: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "aikoql_kse2_unit_{}_{}.log",
-        tag,
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&p);
-    p
-}
+mod common;
+use common::tmp;
 
 fn alice() -> Subject {
     Subject::new("alice")

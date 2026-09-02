@@ -53,7 +53,8 @@ fn value(i: u64) -> Vec<u8> {
 
 #[test]
 fn child_kill_after_park_recovers_exactly() {
-    let d = dir("crash-park");
+    // dir() AFTER the child branch: the child would otherwise create its own
+    // pid-namespaced dir at this line and, being hard-killed, never sweep it.
     if std::env::var_os(CHILD_ENV).is_some() {
         let cdir = child_dir();
         let mut db = Db::open(Config::new(cdir.clone())).unwrap();
@@ -65,6 +66,7 @@ fn child_kill_after_park_recovers_exactly() {
             std::thread::sleep(Duration::from_secs(60)); // killed by the parent
         }
     }
+    let d = dir("crash-park");
     let mut child = spawn_child("child_kill_after_park_recovers_exactly", &d);
     wait_for(&d.join("done"), Duration::from_secs(60));
     child.kill().expect("kill child");
@@ -87,7 +89,7 @@ fn child_kill_after_park_recovers_exactly() {
 
 #[test]
 fn child_kill_mid_burst_recovers_prefix() {
-    let d = dir("crash-burst");
+    // dir() AFTER the child branch (see child_kill_after_park_recovers_exactly).
     if std::env::var_os(CHILD_ENV).is_some() {
         let cdir = child_dir();
         let mut cfg = Config::new(cdir.clone());
@@ -103,6 +105,7 @@ fn child_kill_mid_burst_recovers_prefix() {
             std::thread::sleep(Duration::from_secs(60)); // killed by the parent
         }
     }
+    let d = dir("crash-burst");
     let mut child = spawn_child("child_kill_mid_burst_recovers_prefix", &d);
     let marker = d.join("count");
     let start = Instant::now();

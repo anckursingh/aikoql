@@ -10,16 +10,8 @@ use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
 use aikoql_storage::AikoqlStorageEngine;
 use std::path::PathBuf;
 
-fn tmp(tag: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "aikoql_kse3_unit_{}_{}.log",
-        tag,
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&p);
-    p
-}
+mod common;
+use common::tmp;
 
 fn seed(p: &PathBuf) {
     let e = AikoqlStorageEngine::open(p).unwrap();

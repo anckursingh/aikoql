@@ -496,6 +496,26 @@ mod tests {
 
     static TOML_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+    // Temp toml files written by THIS test thread, swept when the thread
+    // exits (the main thread's destructor runs at process exit — statics
+    // are NOT dropped on Windows MSVC, TLS is). The files are tiny but used
+    // to accumulate in the OS temp dir (3,934 leftovers at last count).
+    thread_local! {
+        static TEMP_FILES: std::cell::RefCell<TempSweeper> =
+            const { std::cell::RefCell::new(TempSweeper { paths: Vec::new() }) };
+    }
+
+    struct TempSweeper {
+        paths: Vec<std::path::PathBuf>,
+    }
+    impl Drop for TempSweeper {
+        fn drop(&mut self) {
+            for p in &self.paths {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+
     fn tmp_toml(content: &str) -> String {
         let n = TOML_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let p = std::env::temp_dir().join(format!(
@@ -503,6 +523,7 @@ mod tests {
             std::process::id()
         ));
         std::fs::write(&p, content).unwrap();
+        TEMP_FILES.with(|t| t.borrow_mut().paths.push(p.clone()));
         p.to_string_lossy().into_owned()
     }
 
@@ -691,6 +712,7 @@ level = "debug"
         let p =
             std::env::temp_dir().join(format!("aikoql-token-test-{}-{n}.txt", std::process::id()));
         std::fs::write(&p, content).unwrap();
+        TEMP_FILES.with(|t| t.borrow_mut().paths.push(p.clone()));
         p.to_string_lossy().into_owned()
     }
 

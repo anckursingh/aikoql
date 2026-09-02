@@ -149,11 +149,44 @@ impl Live {
     }
 }
 
+// Temp db paths written by THIS test thread, swept when the thread exits
+// (the main thread's destructor runs at process exit — statics are NOT
+// dropped on Windows MSVC, TLS is). The 1,587-file mcp-* pile in TEMP is
+// what this sweeps: every helper below registers before returning.
+thread_local! {
+    static TEMP_PATHS: std::cell::RefCell<TempSweeper> =
+        const { std::cell::RefCell::new(TempSweeper { paths: Vec::new() }) };
+}
+
+struct TempSweeper {
+    paths: Vec<std::path::PathBuf>,
+}
+impl Drop for TempSweeper {
+    fn drop(&mut self) {
+        for p in &self.paths {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_dir_all(p);
+            // redb sidecar next to the registered stem (`{stem}.redb.artifacts`).
+            let Some(name) = p.file_name() else { continue };
+            if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
+                let prefix = format!("{}.", name.to_string_lossy());
+                for e in rd.flatten() {
+                    if e.file_name().to_string_lossy().starts_with(&prefix) {
+                        let _ = std::fs::remove_file(e.path());
+                        let _ = std::fs::remove_dir_all(e.path());
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Fresh temp db path for this process (deleted if it exists), same pattern
 /// as mcp_real_world.rs.
 pub fn temp_db(suffix: &str) -> String {
     let path = std::env::temp_dir().join(format!("mcp-{suffix}-{}.redb", std::process::id()));
     let _ = std::fs::remove_file(&path);
+    TEMP_PATHS.with(|t| t.borrow_mut().paths.push(path.clone()));
     path.to_string_lossy().into_owned()
 }
 

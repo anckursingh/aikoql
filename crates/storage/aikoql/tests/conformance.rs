@@ -10,20 +10,7 @@ mod common;
 use aikoql_kernel::storage::store::{MemoryEngine, StorageEngine, WriteBatch};
 use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_storage::AikoqlStorageEngine;
-use common::kse;
-use std::path::PathBuf;
-
-fn tmp(name: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "aikoql_kse_unit_{}_{}.kse",
-        name,
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&p);
-    let _ = std::fs::remove_dir_all(&p);
-    p
-}
+use common::{kse, tmp};
 
 /// Runs the six KSE asserts against one backend instance.
 macro_rules! backend_tests {
