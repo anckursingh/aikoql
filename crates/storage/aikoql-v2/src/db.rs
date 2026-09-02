@@ -52,7 +52,10 @@ pub const WAL_FILE: &str = "WAL-000001.log";
 pub type ScanRow = (Vec<u8>, Vec<u8>);
 
 const DEFAULT_MEMTABLE_BYTES: usize = 64 * 1024 * 1024;
-const DEFAULT_BLOCK_TARGET: usize = 64 * 1024;
+/// SE2-M9 — 16 KiB: v2 point lookups decode ≤16 entries of their block, so
+/// the per-read cost scales with block size (~6 µs/KiB measured); 64 KiB
+/// blocks cost the warm read path 4× the decode work of 16 KiB ones.
+const DEFAULT_BLOCK_TARGET: usize = 16 * 1024;
 const DEFAULT_GROUP_BATCH_OPS: usize = 4096;
 const DEFAULT_GROUP_BATCH_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_CACHE_BYTES: usize = 8 * 1024 * 1024;
@@ -86,9 +89,9 @@ pub struct Config {
     pub max_batch_ops: usize,
     pub max_batch_bytes: usize,
     pub max_wait_duration: Duration,
-    /// SE2-M7 — decoded block cache cap in bytes; 0 disables. The cache
-    /// only skips repeat block reads — it can never change an answer
-    /// (pinned by `cache_never_changes_answers`).
+    /// SE2-M7 — block cache cap in raw block bytes (SE2-M9); 0 disables.
+    /// The cache only skips repeat block reads — it can never change an
+    /// answer (pinned by `cache_never_changes_answers`).
     pub cache_bytes: usize,
 }
 
@@ -396,6 +399,15 @@ impl Db {
             self.stats
                 .segments_considered
                 .fetch_add(1, Ordering::Relaxed);
+            // SE2-M9 — key-range skip: a segment whose [key_min, key_max]
+            // excludes the target cannot hold it; skip before the bloom is
+            // even probed. Considered counts the iteration.
+            if key < seg.key_min() || key > seg.key_max() {
+                self.stats
+                    .segments_range_skipped
+                    .fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             // SE2-M7 — bloom pre-check: false positives possible, false
             // negatives never (M1 pin), so skipping a segment the bloom
             // rejects is answer-preserving; it just saves the probe.
@@ -522,7 +534,7 @@ impl Db {
             let id = state.next_segment_id;
             state.next_segment_id += 1;
             let path = segment_path(&config.dir, id);
-            let mut writer = SegmentWriter::new(config.block_target);
+            let mut writer = SegmentWriter::new_v2(config.block_target);
             for (key, seq, e) in mem.entries() {
                 let flags = if e.value.is_some() {
                     FLAG_PUT

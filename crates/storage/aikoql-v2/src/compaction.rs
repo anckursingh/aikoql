@@ -86,7 +86,7 @@ pub fn merge(
         }
     }
 
-    let mut writer = SegmentWriter::new(block_target);
+    let mut writer = SegmentWriter::new_v2(block_target);
     let mut archive: Option<SegmentWriter> = None;
     while let Some((key, _, i)) = heap.pop() {
         let winner = fronts[i].take().expect("front present");
@@ -118,7 +118,7 @@ pub fn merge(
             }
             Retention::Drop => {}
             Retention::Archive => {
-                let aw = archive.get_or_insert_with(|| SegmentWriter::new(block_target));
+                let aw = archive.get_or_insert_with(|| SegmentWriter::new_v2(block_target));
                 aw.push(winner);
                 stats.entries_archived += 1;
                 for loser in losers {

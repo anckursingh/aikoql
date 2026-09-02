@@ -1,17 +1,18 @@
-//! SE2-M7 — bounded decoded-block cache. One cache per Db, shared by every
-//! SegmentReader the Db opens. Keys are (reader_id, block_index) where
-//! reader_id comes from a per-cache counter that is NEVER reused: segment
-//! ids can be reused after an orphan is cleaned up, so a key based on
-//! segment ids could alias a dead reader's blocks and serve wrong data.
-//! Capacity is decoded entry bytes (key + value + seq/flags), hard-capped
-//! with LRU eviction; a block bigger than the cap is simply not cached.
-//! Answers never depend on the cache — a hit returns a clone of the same
-//! entries the file would produce.
+//! SE2-M7 — bounded raw-block cache, SE2-M9 — raw bytes (v2 blocks decode
+//! per lookup; caching decoded entries would re-pay the full-block decode
+//! that v2 removes). One cache per Db, shared by every SegmentReader the
+//! Db opens. Keys are (reader_id, block_index) where reader_id comes from
+//! a per-cache counter that is NEVER reused: segment ids can be reused
+//! after an orphan is cleaned up, so a key based on segment ids could
+//! alias a dead reader's blocks and serve wrong data. Capacity is raw
+//! block bytes (28-byte header + payload), hard-capped with LRU eviction;
+//! a block bigger than the cap is simply not cached. Only checksum-
+//! validated bytes enter the cache. Answers never depend on the cache —
+//! a hit hands the caller the same bytes the file would produce.
 //!
-//! # ponytail: O(n) recency move per hit (n = cached blocks, ~128 at
-//! 8 MiB / 64 KiB blocks) — swap for a linked LRU if blocks get tiny.
+//! # ponytail: O(n) recency move per hit (n = cached blocks, ~512 at
+//! 8 MiB / 16 KiB blocks) — swap for a linked LRU if blocks get tiny.
 
-use crate::segment::SegmentEntry;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,7 +22,7 @@ pub struct CacheStats {
     pub hits: u64,
     pub misses: u64,
     pub evictions: u64,
-    /// Decoded entry bytes currently held (never exceeds the cap).
+    /// Raw block bytes currently held (never exceeds the cap).
     pub bytes: usize,
 }
 
@@ -37,17 +38,9 @@ pub struct BlockCache {
 
 #[derive(Debug, Default)]
 struct State {
-    entries: HashMap<(u64, u32), Vec<SegmentEntry>>,
+    entries: HashMap<(u64, u32), Arc<Vec<u8>>>,
     recency: VecDeque<(u64, u32)>,
     bytes: usize,
-}
-
-/// Decoded size of the entries — key + value + seq(8) + flags(1).
-fn entry_bytes(entries: &[SegmentEntry]) -> usize {
-    entries
-        .iter()
-        .map(|e| e.key.len() + e.value.len() + 9)
-        .sum()
 }
 
 impl BlockCache {
@@ -68,8 +61,8 @@ impl BlockCache {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Lookup returns a clone: the caller consumes the Vec.
-    pub fn get(&self, id: u64, block: u32) -> Option<Vec<SegmentEntry>> {
+    /// Lookup returns an Arc clone — the caller decodes from shared bytes.
+    pub fn get(&self, id: u64, block: u32) -> Option<Arc<Vec<u8>>> {
         let key = (id, block);
         let mut st = self.state.lock().unwrap();
         let Some(e) = st.entries.get(&key) else {
@@ -83,15 +76,15 @@ impl BlockCache {
         Some(hit)
     }
 
-    pub fn insert(&self, id: u64, block: u32, entries: Vec<SegmentEntry>) {
-        let bytes = entry_bytes(&entries);
+    pub fn insert(&self, id: u64, block: u32, raw: Arc<Vec<u8>>) {
+        let bytes = raw.len();
         let mut st = self.state.lock().unwrap();
         if bytes > self.cap {
             return; // one block bigger than the cache: never cached
         }
         let key = (id, block);
         if let Some(old) = st.entries.remove(&key) {
-            st.bytes -= entry_bytes(&old);
+            st.bytes -= old.len();
             st.recency.retain(|k| k != &key);
         }
         while st.bytes + bytes > self.cap {
@@ -99,12 +92,12 @@ impl BlockCache {
                 break;
             };
             if let Some(v) = st.entries.remove(&victim) {
-                st.bytes -= entry_bytes(&v);
+                st.bytes -= v.len();
                 self.evictions.fetch_add(1, Ordering::Relaxed);
             }
         }
         st.bytes += bytes;
-        st.entries.insert(key, entries);
+        st.entries.insert(key, raw);
         st.recency.push_back(key);
     }
 

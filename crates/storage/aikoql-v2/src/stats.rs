@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// A snapshot of the cumulative read-path counters (the QA doc's
 /// `ReadPathMetrics`; `value_decode_ns` is folded into `block_decode_ns` —
 /// values decode with their entries, a separate counter would be fiction).
-/// `segments_range_skipped` stays 0 until the key-range skip lands (SE2-M9).
+/// `segments_range_skipped` fires before the bloom probe (SE2-M9).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ReadPathStats {
     pub lookups: u64,

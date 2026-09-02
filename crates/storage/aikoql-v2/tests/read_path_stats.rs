@@ -1,12 +1,15 @@
-//! SE2-M8 — read-path instrumentation (QA spec M0, TC-PERF-0001..0003).
+//! SE2-M8 — read-path instrumentation (QA spec M0, TC-PERF-0001..0003),
+//! extended SE2-M9 with the key-range skip (QA M1 candidate selection).
 //!
 //! The counters must move only with real operations — a metric that never
 //! moves fails the pin (the QA doc's "not synthetic" rule). The bloom-skip
-//! scenario is deterministic by construction: 1-entry segments give m = 10
-//! bits (m = 10·n, the M1 spec); the nine filler keys are chosen so all four
-//! of their probe positions sit below bit 5, and the target probes at least
-//! one bit ≥ 5 — so the fillers' blooms provably reject the target, and the
-//! exact 9-skipped / 1-searched split is not a probability.
+//! scenario is deterministic by construction: the nine filler segments hold
+//! TWO keys each (m = 20 bits, m = 10·n per the M1 spec), all eight of
+//! their probe positions below bit 10, and the target probes at least one
+//! bit ≥ 10 — so the fillers' blooms provably reject the target. The filler
+//! pairs bracket the target lexically ("a…" < "m…" < "z…"), so the M9
+//! range skip cannot fire first — the exact 9-skipped / 1-searched split is
+//! not a probability and not a range-skip artifact.
 
 mod common;
 
@@ -29,34 +32,35 @@ fn probes(key: &[u8], m: u32) -> [u32; 4] {
     p
 }
 
-/// A key whose bloom (m = 10) rejects any target that probes bit ≥ 5: all
-/// four of its own probe positions sit in the low half. The search is
-/// bounded and deterministic (sha256 is).
-fn low_half_key(seed: u32) -> String {
+/// A key of prefix `p` whose bloom has all four probes in the low half of
+/// `m` — any target probing the high half is provably rejected. The search
+/// is bounded and deterministic (sha256 is).
+fn low_half_key(prefix: &str, seed: u32, m: u32) -> String {
     for i in 0..10_000u32 {
-        let k = format!("f{seed}-{i}");
-        if probes(k.as_bytes(), 10).iter().all(|p| *p < 5) {
+        let k = format!("{prefix}{seed}-{i}");
+        if probes(k.as_bytes(), m).iter().all(|p| *p < m / 2) {
             return k;
         }
     }
-    panic!("no low-half filler found for seed {seed}");
+    panic!("no low-half filler found for {prefix}{seed}");
 }
 
-/// A target that provably probes the high half at least once.
-fn high_bit_target() -> String {
+/// A key of prefix `p` that probes the high half of `m` at least once.
+fn high_half_key(prefix: &str, m: u32) -> String {
     for i in 0..10_000u32 {
-        let k = format!("t{i}");
-        if probes(k.as_bytes(), 10).iter().any(|p| *p >= 5) {
+        let k = format!("{prefix}{i}");
+        if probes(k.as_bytes(), m).iter().any(|p| *p >= m / 2) {
             return k;
         }
     }
-    panic!("no high-bit target found");
+    panic!("no high-half key found for {prefix}");
 }
 
-/// Nine one-key segments whose blooms reject `target` by construction, plus
-/// the segment that holds it. Flush is explicit (memtable threshold off).
+/// Nine two-key segments whose blooms reject `target` by construction and
+/// whose key ranges bracket it (so only the bloom can skip them), plus the
+/// segment that holds it. Flush is explicit (memtable threshold off).
 fn ten_segments(tag: &str) -> (Db, String) {
-    let target = high_bit_target();
+    let target = high_half_key("m", 20);
     let mut cfg = Config::new(dir(tag));
     cfg.memtable_bytes = usize::MAX;
     cfg.block_target = 256;
@@ -66,7 +70,27 @@ fn ten_segments(tag: &str) -> (Db, String) {
     db.put(target.as_bytes(), &[b'v'; 200][..]).unwrap();
     db.flush().unwrap();
     for i in 0..9 {
-        let filler = low_half_key(i);
+        let low = low_half_key("a", i, 20);
+        let high = low_half_key("z", i, 20);
+        db.put(low.as_bytes(), &[b'v'; 200][..]).unwrap();
+        db.put(high.as_bytes(), &[b'v'; 200][..]).unwrap();
+        db.flush().unwrap();
+    }
+    (db, target)
+}
+
+/// Nine newer single-key segments whose ranges provably exclude the target
+/// ("f{i}-x" vs "m…") — only the range skip can reject them.
+fn ten_disjoint_segments(tag: &str) -> (Db, String) {
+    let target = "m000-target".to_string();
+    let mut cfg = Config::new(dir(tag));
+    cfg.memtable_bytes = usize::MAX;
+    cfg.block_target = 256;
+    let mut db = Db::open(cfg).unwrap();
+    db.put(target.as_bytes(), &[b'v'; 200][..]).unwrap();
+    db.flush().unwrap();
+    for i in 0..9 {
+        let filler = format!("f{i}-x");
         db.put(filler.as_bytes(), &[b'v'; 200][..]).unwrap();
         db.flush().unwrap();
     }
@@ -108,6 +132,10 @@ fn bloom_skip_evidence() {
     db.get(target.as_bytes()).unwrap();
     let s = db.read_path_stats();
     assert_eq!(
+        s.segments_range_skipped, 0,
+        "the filler ranges bracket the target — the range skip cannot fire"
+    );
+    assert_eq!(
         s.segments_bloom_skipped, 9,
         "the nine non-matching segments are bloom-rejected by construction"
     );
@@ -118,8 +146,30 @@ fn bloom_skip_evidence() {
 }
 
 #[test]
+fn key_range_skip_evidence() {
+    // SE2-M9 — a segment whose [key_min, key_max] excludes the target is
+    // rejected before the bloom is ever probed; considered stays "iterated".
+    let (db, target) = ten_disjoint_segments("perf-0003");
+    assert_eq!(
+        db.get(target.as_bytes()).unwrap().as_deref(),
+        Some(&[b'v'; 200][..])
+    );
+    let s = db.read_path_stats();
+    assert_eq!(s.segments_considered, 10);
+    assert_eq!(
+        s.segments_range_skipped, 9,
+        "out-of-range segments skip before the bloom probe"
+    );
+    assert_eq!(
+        s.segments_bloom_skipped, 0,
+        "the range skip fires before the bloom is consulted"
+    );
+    assert_eq!(s.segments_index_searched, 1);
+}
+
+#[test]
 fn cache_hit_skips_physical_io() {
-    let (db, target) = ten_segments("perf-0003");
+    let (db, target) = ten_segments("perf-0004");
     db.get(target.as_bytes()).unwrap();
     let first = db.read_path_stats();
     assert_eq!(first.blocks_read, 1);
