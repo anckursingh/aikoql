@@ -37,7 +37,7 @@ use crate::memtable::Memtable;
 use crate::segment::{SegmentEntry, SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT};
 use crate::stats::{ReadPathStats, Stats};
 use crate::wal::{encode_frame, replay_frames, Op};
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -503,45 +503,74 @@ impl Db {
     /// head-per-key loses nothing.
     pub fn scan(&self, prefix: &[u8]) -> Result<Vec<ScanRow>, FormatError> {
         let end = prefix_end(prefix);
-        // Newest layer first; first-seen wins (layer order IS seq order by
-        // construction — flushes and compactions keep newer data in newer
-        // layers). BTreeMap collects and sorts.
-        let mut out: BTreeMap<Vec<u8>, Option<Vec<u8>>> = BTreeMap::new();
-        let segments = {
+        // SE2-M12 — a k-way merge over the layer streams, oldest first
+        // (segments in manifest order, immutables, active): for a key the
+        // entry from the NEWEST stream holding it wins; a tombstone
+        // suppresses the key. Memtable heads are collected to owned runs
+        // under the guard; the segment cursors ride the arc snapshot and
+        // decode one entry at a time (SegmentScan) — no whole-block Vec,
+        // no BTreeMap of every prefix key, no state lock across segment I/O.
+        let (segs, mem_runs, act_run) = {
             let state = self.state.read().unwrap();
-            for (k, e) in state.active.prefix_heads(prefix) {
-                out.entry(k.to_vec()).or_insert(e.value.clone());
+            let segs = Arc::clone(&state.segments);
+            let mut mem_runs: Vec<Vec<MergeEntry>> = Vec::new();
+            for mem in state.immutables.iter() {
+                mem_runs.push(
+                    mem.prefix_heads(prefix)
+                        .map(|(k, e)| (k.to_vec(), e.value.clone()))
+                        .collect(),
+                );
             }
-            for mem in state.immutables.iter().rev() {
-                for (k, e) in mem.prefix_heads(prefix) {
-                    out.entry(k.to_vec()).or_insert(e.value.clone());
-                }
-            }
-            // SE2-M10 — segment I/O runs lock-free, like get. The memtable
-            // walks above still hold the guard (ms-scale only for huge
-            // memtables): Arc-ify them if a scan stall ever shows up.
-            Arc::clone(&state.segments)
+            let act_run: Vec<MergeEntry> = state
+                .active
+                .prefix_heads(prefix)
+                .map(|(k, e)| (k.to_vec(), e.value.clone()))
+                .collect();
+            (segs, mem_runs, act_run)
         };
-        for seg in segments.iter().rev() {
-            for e in segment_scan(seg, prefix, end.as_deref())? {
-                // A key already collected came from a newer layer, or from
-                // this segment's own head entry (versions within a key are
-                // seq-descending) — either way, skip.
-                if out.contains_key(&e.key) {
-                    continue;
-                }
-                let v = if e.flags & FLAG_DELETE != 0 {
-                    None
-                } else {
-                    Some(e.value)
-                };
-                out.insert(e.key, v);
+        let mut streams: Vec<ScanStream<'_>> = Vec::new();
+        for seg in segs.iter() {
+            streams.push(ScanStream::Seg(seg.scan_iter(prefix, end.as_deref())));
+        }
+        for run in mem_runs {
+            streams.push(ScanStream::Mem(run.into_iter()));
+        }
+        streams.push(ScanStream::Mem(act_run.into_iter()));
+
+        // Min-heap of (Reverse<key>, stream_idx, value) — one head per
+        // stream; equal keys drain together and the max-index (newest
+        // layer) entry wins.
+        let mut heap: std::collections::BinaryHeap<HeapEntry> = std::collections::BinaryHeap::new();
+        for (i, s) in streams.iter_mut().enumerate() {
+            if let Some((k, v)) = s.next()? {
+                heap.push((Reverse(k), i, v));
             }
         }
-        Ok(out
-            .into_iter()
-            .filter_map(|(k, v)| v.map(|v| (k, v)))
-            .collect())
+        let mut out = Vec::new();
+        while let Some((Reverse(k), i, v)) = heap.pop() {
+            let mut drained = vec![(i, v)];
+            while let Some((Reverse(k2), _, _)) = heap.peek() {
+                if k2.as_slice() != k.as_slice() {
+                    break;
+                }
+                let (_, i, v) = heap.pop().expect("peeked");
+                drained.push((i, v));
+            }
+            let (_, win_v) = drained
+                .iter()
+                .cloned()
+                .max_by_key(|(i, _)| *i)
+                .expect("drained non-empty");
+            for (i, _) in &drained {
+                if let Some((nk, nv)) = streams[*i].next()? {
+                    heap.push((Reverse(nk), *i, nv));
+                }
+            }
+            if let Some(v) = win_v {
+                out.push((k, v));
+            }
+        }
+        Ok(out)
     }
 
     /// Flush's first half, public so the visibility contract is testable:
@@ -839,23 +868,36 @@ fn prefix_end(prefix: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-/// One segment's entries within [prefix, +∞) in the segment's canonical
-/// order (key asc, versions seq-desc within a key). With an end bound the
-/// seek path (`SegmentReader::scan`); without one (empty prefix, or a
-/// prefix with no successor) the full iterator filtered by prefix.
-fn segment_scan(
-    seg: &SegmentReader,
-    prefix: &[u8],
-    end: Option<&[u8]>,
-) -> Result<Vec<SegmentEntry>, FormatError> {
-    match end {
-        Some(end) => seg.scan(prefix, end),
-        None => Ok(seg
-            .iter()
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .filter(|e| e.key.starts_with(prefix))
-            .collect()),
+/// SE2-M12 — one scan merge stream: a lazy segment cursor or an owned run
+/// of memtable heads (key asc, one entry per key, None = tombstone).
+enum ScanStream<'a> {
+    Seg(crate::segment::SegmentScan<'a>),
+    Mem(std::vec::IntoIter<MergeEntry>),
+}
+
+/// A stream's next row: key and value (None = tombstone).
+type MergeEntry = (Vec<u8>, Option<Vec<u8>>);
+
+/// One merge heap element: reverse key (min-first), stream index, value.
+type HeapEntry = (Reverse<Vec<u8>>, usize, Option<Vec<u8>>);
+
+impl ScanStream<'_> {
+    fn next(&mut self) -> Result<Option<MergeEntry>, FormatError> {
+        match self {
+            ScanStream::Seg(s) => match s.next() {
+                Some(Ok(e)) => Ok(Some((
+                    e.key,
+                    if e.flags & FLAG_DELETE != 0 {
+                        None
+                    } else {
+                        Some(e.value)
+                    },
+                ))),
+                Some(Err(e)) => Err(e),
+                None => Ok(None),
+            },
+            ScanStream::Mem(m) => Ok(m.next()),
+        }
     }
 }
 

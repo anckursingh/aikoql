@@ -1147,4 +1147,215 @@ impl SegmentReader {
             entries: Vec::new().into_iter(),
         }
     }
+
+    /// SE2-M12 — a streaming cursor over [start, end) (`end` None =
+    /// unbounded): starts at the first block whose key range can hold
+    /// `start`; blocks whose first key ≥ end are never opened.
+    pub fn scan_iter<'a>(&'a self, start: &'a [u8], end: Option<&'a [u8]>) -> SegmentScan<'a> {
+        let first = self
+            .data
+            .partition_point(|b| self.block_key(&b.last) < start);
+        SegmentScan {
+            reader: self,
+            start,
+            end,
+            block: first,
+            raw: None,
+            pos: 0,
+            scratch: Vec::new(),
+            last: None,
+            done: false,
+        }
+    }
+}
+
+/// SE2-M12 — per-segment streaming scan cursor: one block in memory at a
+/// time (cache-served raw bytes), one entry decoded per step after a
+/// restart-table seek — no whole-block Vec materialization (the legacy
+/// `scan` path keeps its for the M1 suite). Versions within a key are
+/// consecutive and seq-descending, so the cursor yields each key's HEAD
+/// only; every decoded entry — skipped versions and out-of-range entries
+/// included — counts in entries_decoded (the W4/W5 amplification
+/// evidence).
+pub struct SegmentScan<'a> {
+    reader: &'a SegmentReader,
+    start: &'a [u8],
+    end: Option<&'a [u8]>,
+    block: usize,
+    raw: Option<std::sync::Arc<Vec<u8>>>,
+    pos: usize,
+    scratch: Vec<u8>,
+    last: Option<Vec<u8>>,
+    done: bool,
+}
+
+impl<'a> SegmentScan<'a> {
+    /// Load the next block that can hold in-range keys (the first one's
+    /// key ≥ end stops the scan), seek the decode position, and reset the
+    /// prefix scratch — a block's entry chain starts fresh at its first
+    /// entry (v2 restart entries carry shared = 0).
+    fn load_block(&mut self) -> Result<bool, FormatError> {
+        if self.block >= self.reader.data.len() {
+            return Ok(false);
+        }
+        if let Some(end) = self.end {
+            if self.reader.block_key(&self.reader.data[self.block].first) >= end {
+                return Ok(false);
+            }
+        }
+        let b = &self.reader.data[self.block];
+        let raw = self.reader.block_raw(self.block)?;
+        self.pos = scan_seek_pos(&raw[BLOCK_HEADER_LEN..], b.v2, self.start)?;
+        self.raw = Some(raw);
+        self.block += 1;
+        self.scratch.clear();
+        Ok(true)
+    }
+}
+
+impl<'a> Iterator for SegmentScan<'a> {
+    type Item = Result<SegmentEntry, FormatError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.done {
+                return None;
+            }
+            if self.raw.is_none() {
+                match self.load_block() {
+                    Ok(true) => {}
+                    Ok(false) => return None,
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+            let raw = self.raw.as_ref().expect("loaded");
+            let payload = &raw[BLOCK_HEADER_LEN..];
+            if self.pos >= payload.len() {
+                self.raw = None; // block exhausted — next block
+                continue;
+            }
+            let mut cur = Cursor::new(&payload[self.pos..]);
+            let shared = match cur.u16() {
+                Ok(v) => v as usize,
+                Err(e) => return Some(Err(e)),
+            };
+            if shared > self.scratch.len() {
+                return Some(Err(FormatError::Corrupt(format!(
+                    "entry shared prefix {shared} exceeds previous key {}",
+                    self.scratch.len()
+                ))));
+            }
+            let suffix = match cur.u16().and_then(|n| cur.take(n as usize)) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            self.scratch.truncate(shared);
+            self.scratch.extend_from_slice(suffix);
+            if let Some(st) = &self.reader.stats {
+                st.entries_decoded.fetch_add(1, Ordering::Relaxed);
+            }
+            // The first loaded block may hold keys before start (the seek
+            // lands at most one restart interval back): skip their bodies.
+            if self.scratch.as_slice() < self.start {
+                match skip_entry_body(&mut cur) {
+                    Ok(()) => {}
+                    Err(e) => return Some(Err(e)),
+                }
+                self.pos += cur.pos();
+                continue;
+            }
+            if self.end.is_some_and(|end| self.scratch.as_slice() >= end) {
+                self.done = true; // sorted — nothing further is in range
+                return None;
+            }
+            // Versions of one key are consecutive — yield the head only.
+            if self.last.as_deref() == Some(self.scratch.as_slice()) {
+                match skip_entry_body(&mut cur) {
+                    Ok(()) => {}
+                    Err(e) => return Some(Err(e)),
+                }
+                self.pos += cur.pos();
+                continue;
+            }
+            let value = match cur.vec() {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            let seq = match cur.u64() {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            let flags = match cur.u8() {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            self.pos += cur.pos();
+            let key = self.scratch.clone();
+            self.last = Some(key.clone());
+            return Some(Ok(SegmentEntry {
+                key,
+                value,
+                seq,
+                flags,
+            }));
+        }
+    }
+}
+
+/// Skip the value/seq/flags tail of an entry whose key is out of range or
+/// an older version — no clone for rows the scan will not return.
+fn skip_entry_body(cur: &mut Cursor<'_>) -> Result<(), FormatError> {
+    let value_len = cur.u32()? as usize;
+    cur.take(value_len)?;
+    cur.u64()?; // seq
+    cur.u8()?; // flags
+    Ok(())
+}
+
+/// SE2-M12 — the payload position where [start, ·) decoding begins: the
+/// last v2 restart whose key ≤ start (the first restart when none is — its
+/// key > start and nothing precedes it), or 0 for v1. Restart keys are
+/// strictly increasing (a writer invariant, validated up front in
+/// block_get_v2), so a binary search lands the decode point with at most
+/// one interval (≤16 entries) decoded before `start`.
+/// ponytail: probes validate bounds + shared = 0 per restart only — the
+/// block checksum covers accidental corruption, and the legacy whole-block
+/// scan path never validated the table either; a valid-checksum lying
+/// table is a malicious-writer case. Full-table validation stays where it
+/// exists (block_get_v2); add it here if a v2 table is ever found corrupt.
+fn scan_seek_pos(payload: &[u8], v2: bool, start: &[u8]) -> Result<usize, FormatError> {
+    if !v2 {
+        return Ok(0);
+    }
+    let mut cur = Cursor::new(payload);
+    cur.u16()?; // restart interval
+    let restarts = cur.u32()? as usize;
+    let table_len = 6 + 4 * restarts;
+    if table_len > payload.len() {
+        return Err(FormatError::Corrupt(
+            "v2 restart table exceeds payload".into(),
+        ));
+    }
+    let offs = &payload[6..table_len];
+    let at = |j: usize| -> Result<&[u8], FormatError> {
+        let o = u32::from_le_bytes(offs[j * 4..j * 4 + 4].try_into().expect("u32 slice")) as usize;
+        if o < table_len || o >= payload.len() {
+            return Err(FormatError::Corrupt(format!(
+                "restart offset {o} outside payload"
+            )));
+        }
+        restart_key(payload, o)
+    };
+    let (mut lo, mut hi) = (0usize, restarts);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if at(mid)? <= start {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let r = lo.saturating_sub(1); // 0 when start < the first restart key
+    let o = u32::from_le_bytes(offs[r * 4..r * 4 + 4].try_into().expect("u32 slice")) as usize;
+    Ok(o)
 }
