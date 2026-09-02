@@ -59,6 +59,9 @@ const DEFAULT_BLOCK_TARGET: usize = 16 * 1024;
 const DEFAULT_GROUP_BATCH_OPS: usize = 4096;
 const DEFAULT_GROUP_BATCH_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_CACHE_BYTES: usize = 8 * 1024 * 1024;
+/// SE2-M10 — at least this many L0 segments triggers a KeepAll compaction
+/// on the write path (steady state: one L1 + the active L0).
+const DEFAULT_L0_COMPACT_TRIGGER: usize = 4;
 
 pub fn manifest_path(dir: &Path, generation: u64) -> PathBuf {
     dir.join(format!("MANIFEST-{generation:06}"))
@@ -93,6 +96,10 @@ pub struct Config {
     /// The cache only skips repeat block reads — it can never change an
     /// answer (pinned by `cache_never_changes_answers`).
     pub cache_bytes: usize,
+    /// SE2-M10 — L0 compaction trigger: a write path that leaves this many
+    /// L0 segments compacts them (KeepAll) into one L1. 0 disables. An
+    /// explicit flush() is the caller's checkpoint and never triggers.
+    pub l0_compact_trigger: usize,
 }
 
 impl Config {
@@ -106,6 +113,7 @@ impl Config {
             max_batch_bytes: DEFAULT_GROUP_BATCH_BYTES,
             max_wait_duration: Duration::ZERO,
             cache_bytes: DEFAULT_CACHE_BYTES,
+            l0_compact_trigger: DEFAULT_L0_COMPACT_TRIGGER,
         }
     }
 }
@@ -114,7 +122,12 @@ impl Config {
 struct State {
     active: Memtable,
     immutables: Vec<Memtable>,
-    segments: Vec<SegmentReader>, // manifest order, oldest first
+    /// Manifest order, oldest first. SE2-M10 — arc-vectored: a get clones
+    /// the whole vec under the read guard and probes lock-free, so a cold
+    /// disk read never holds the state lock (the W8 write-stall). Readers
+    /// that cloned the vec keep their segment set alive across a flush or
+    /// compaction — snapshot semantics by construction.
+    segments: Arc<Vec<Arc<SegmentReader>>>,
     segment_records: Vec<SegmentRecord>,
     next_seq: u64,
     next_segment_id: u64,
@@ -194,7 +207,7 @@ impl Db {
         for rec in &manifest.segments {
             let path = segment_path(&config.dir, rec.segment_id);
             let reader = SegmentReader::open_with(&path, cache.clone(), Some(Arc::clone(&stats)))?;
-            segments.push(reader);
+            segments.push(Arc::new(reader));
         }
 
         // Replay the active WAL (create it if this is the first open).
@@ -255,7 +268,7 @@ impl Db {
         let state = Arc::new(RwLock::new(State {
             active,
             immutables: vec![],
-            segments,
+            segments: Arc::new(segments),
             segment_records: manifest.segments,
             next_seq,
             next_segment_id,
@@ -300,7 +313,11 @@ impl Db {
             return Err(FormatError::Invalid("empty write batch".into()));
         }
         if self.config.durability == DurabilityMode::GroupCommit {
-            return self.writer()?.write(ops);
+            let seq = self.writer()?.write(ops)?;
+            // The committer applied and (if the threshold fired) flushed
+            // before the ack — the L0 count is current. SE2-M10 trigger.
+            self.maybe_compact()?;
+            return Ok(seq);
         }
         let seq = {
             let mut state = self.state.write().unwrap();
@@ -321,23 +338,49 @@ impl Db {
                 self.fsyncs.fetch_add(1, Ordering::SeqCst);
             }
         }
-        let mut state = self.state.write().unwrap();
-        for op in ops {
-            match op {
-                Op::Put(k, v) => state.active.apply(k.clone(), seq, Some(v.clone())),
-                Op::Delete(k) => state.active.apply(k.clone(), seq, None),
+        {
+            let mut state = self.state.write().unwrap();
+            for op in ops {
+                match op {
+                    Op::Put(k, v) => state.active.apply(k.clone(), seq, Some(v.clone())),
+                    Op::Delete(k) => state.active.apply(k.clone(), seq, None),
+                }
+            }
+            if state.active.bytes() >= self.config.memtable_bytes {
+                Self::flush_locked_impl(
+                    &self.config,
+                    &self.wal,
+                    &mut state,
+                    &self.cache,
+                    &self.stats,
+                )?;
             }
         }
-        if state.active.bytes() >= self.config.memtable_bytes {
-            Self::flush_locked_impl(
-                &self.config,
-                &self.wal,
-                &mut state,
-                &self.cache,
-                &self.stats,
-            )?;
-        }
+        self.maybe_compact()?;
         Ok(seq)
+    }
+
+    /// SE2-M10 — the L0 trigger: a write path that leaves at least
+    /// `l0_compact_trigger` L0 segments compacts them (KeepAll) into one
+    /// L1, so the steady state is one L1 + the active L0 and a get
+    /// considers ≤ 2 segments. Explicit flush() is the caller's checkpoint
+    /// and never triggers.
+    fn maybe_compact(&mut self) -> Result<(), FormatError> {
+        if self.config.l0_compact_trigger == 0 {
+            return Ok(());
+        }
+        let l0 = {
+            let state = self.state.read().unwrap();
+            state
+                .segment_records
+                .iter()
+                .filter(|r| r.level == 0)
+                .count()
+        };
+        if l0 >= self.config.l0_compact_trigger {
+            self.compact()?;
+        }
+        Ok(())
     }
 
     /// A shared writer handle for group commit. Only GroupCommit mode has
@@ -372,30 +415,36 @@ impl Db {
     /// first). A tombstone in a newer layer shadows an older value.
     /// SE2-M8: the Db-level read-path counters are recorded here — the
     /// segment-level counters (I/O, decode) fire inside the reader.
+    /// SE2-M10: the state guard covers only the memtable probes and the
+    /// arc clone — the segment probes (bloom, index, disk reads) run after
+    /// the guard is dropped, so a cold get never stalls a writer.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, FormatError> {
-        let state = self.state.read().unwrap();
         self.stats.lookups.fetch_add(1, Ordering::Relaxed);
-        let t0 = Instant::now();
-        if let Some(e) = state.active.get(key) {
-            self.stats
-                .memtable_lookup_ns
-                .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-            self.stats.memtable_hits.fetch_add(1, Ordering::Relaxed);
-            return Ok(e.value.clone());
-        }
-        for mem in state.immutables.iter().rev() {
-            if let Some(e) = mem.get(key) {
+        let segments = {
+            let state = self.state.read().unwrap();
+            let t0 = Instant::now();
+            if let Some(e) = state.active.get(key) {
                 self.stats
                     .memtable_lookup_ns
                     .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 self.stats.memtable_hits.fetch_add(1, Ordering::Relaxed);
                 return Ok(e.value.clone());
             }
-        }
-        self.stats
-            .memtable_lookup_ns
-            .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-        for seg in state.segments.iter().rev() {
+            for mem in state.immutables.iter().rev() {
+                if let Some(e) = mem.get(key) {
+                    self.stats
+                        .memtable_lookup_ns
+                        .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    self.stats.memtable_hits.fetch_add(1, Ordering::Relaxed);
+                    return Ok(e.value.clone());
+                }
+            }
+            self.stats
+                .memtable_lookup_ns
+                .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            Arc::clone(&state.segments)
+        };
+        for seg in segments.iter().rev() {
             self.stats
                 .segments_considered
                 .fetch_add(1, Ordering::Relaxed);
@@ -453,21 +502,27 @@ impl Db {
     /// only — the kernel stores history as distinct (koid, ts) keys, so
     /// head-per-key loses nothing.
     pub fn scan(&self, prefix: &[u8]) -> Result<Vec<ScanRow>, FormatError> {
-        let state = self.state.read().unwrap();
         let end = prefix_end(prefix);
         // Newest layer first; first-seen wins (layer order IS seq order by
         // construction — flushes and compactions keep newer data in newer
         // layers). BTreeMap collects and sorts.
         let mut out: BTreeMap<Vec<u8>, Option<Vec<u8>>> = BTreeMap::new();
-        for (k, e) in state.active.prefix_heads(prefix) {
-            out.entry(k.to_vec()).or_insert(e.value.clone());
-        }
-        for mem in state.immutables.iter().rev() {
-            for (k, e) in mem.prefix_heads(prefix) {
+        let segments = {
+            let state = self.state.read().unwrap();
+            for (k, e) in state.active.prefix_heads(prefix) {
                 out.entry(k.to_vec()).or_insert(e.value.clone());
             }
-        }
-        for seg in state.segments.iter().rev() {
+            for mem in state.immutables.iter().rev() {
+                for (k, e) in mem.prefix_heads(prefix) {
+                    out.entry(k.to_vec()).or_insert(e.value.clone());
+                }
+            }
+            // SE2-M10 — segment I/O runs lock-free, like get. The memtable
+            // walks above still hold the guard (ms-scale only for huge
+            // memtables): Arc-ify them if a scan stall ever shows up.
+            Arc::clone(&state.segments)
+        };
+        for seg in segments.iter().rev() {
             for e in segment_scan(seg, prefix, end.as_deref())? {
                 // A key already collected came from a newer layer, or from
                 // this segment's own head entry (versions within a key are
@@ -564,7 +619,7 @@ impl Db {
                 checksum: u64::from_le_bytes(checksum8(&file_bytes)),
             };
             state.segment_records.push(record);
-            new_segments.push(reader);
+            new_segments.push(Arc::new(reader));
         }
         state.generation += 1;
         let manifest = Manifest {
@@ -585,7 +640,9 @@ impl Db {
             wal.sync_all()
                 .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
         }
-        state.segments.extend(new_segments);
+        // make_mut: in-flight gets holding a clone keep their snapshot —
+        // the new segments land in the fresh vec only.
+        Arc::make_mut(&mut state.segments).extend(new_segments);
         Ok(())
     }
 
@@ -660,7 +717,7 @@ impl Db {
                 file_size: file_bytes.len() as u64,
                 checksum: u64::from_le_bytes(checksum8(&file_bytes)),
             });
-            new_segments.push(reader);
+            new_segments.push(Arc::new(reader));
         }
         state.generation += 1;
         let manifest = Manifest {
@@ -684,7 +741,7 @@ impl Db {
         // Windows marks the files delete-pending and any reader that still
         // references an obsolete segment keeps its data alive (the
         // Arc<Segment> lifetime guarantee, via the OS).
-        state.segments = new_segments;
+        state.segments = Arc::new(new_segments);
         state.segment_records = new_records;
         for p in &old_paths {
             if let Err(e) = std::fs::remove_file(p) {

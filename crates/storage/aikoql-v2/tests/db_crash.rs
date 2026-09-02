@@ -94,6 +94,9 @@ fn child_kill_mid_burst_recovers_prefix() {
         let cdir = child_dir();
         let mut cfg = Config::new(cdir.clone());
         cfg.memtable_bytes = 200; // flushes interleave with the burst
+                                  // SE2-M10: the scenario pins flush/WAL recovery — keep the trigger's
+                                  // compaction crash windows out of it (compact_crash covers those).
+        cfg.l0_compact_trigger = 0;
         let mut db = Db::open(cfg).unwrap();
         for i in 0..200u64 {
             db.put(&key(i), &value(i)).unwrap();

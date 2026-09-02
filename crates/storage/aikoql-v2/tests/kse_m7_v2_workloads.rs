@@ -756,6 +756,9 @@ fn v2_gate2_3_dataset_larger_than_ram() {
     let mut cfg = Config::new(path.clone());
     cfg.memtable_bytes = 64 * 1024;
     cfg.cache_bytes = 0;
+    // SE2-M10: the gate pins the ≥2 SEGMENT files the flushes produce — an
+    // auto-triggered compaction would merge them away.
+    cfg.l0_compact_trigger = 0;
     let engine = AikoqlStorageEngineV2::open_with_config(cfg).unwrap();
 
     // ~820 KB logical over a 64 KiB memtable: every batch after the first

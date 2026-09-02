@@ -49,6 +49,7 @@ fn logical_state_survives_compaction() {
     let d = dir("compact-equiv");
     let mut cfg = Config::new(d.clone());
     cfg.memtable_bytes = 512; // many flushes → several L0 segments
+    cfg.l0_compact_trigger = 0; // SE2-M10: this test pins MANUAL compaction
     let mut db = Db::open(cfg).unwrap();
     let mut next = rng(7);
     let mut oracle: HashMap<Vec<u8>, Option<Vec<u8>>> = HashMap::new();
@@ -209,6 +210,7 @@ fn readers_continue_and_obsolete_survive_while_referenced() {
     let d = dir("compact-readers");
     let mut cfg = Config::new(d.clone());
     cfg.memtable_bytes = 512;
+    cfg.l0_compact_trigger = 0; // SE2-M10: segment 1 must survive to open
     let mut db = Db::open(cfg).unwrap();
     let mut next = rng(11);
     let mut oracle: HashMap<Vec<u8>, Option<Vec<u8>>> = HashMap::new();

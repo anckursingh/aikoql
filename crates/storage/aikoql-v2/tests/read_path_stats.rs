@@ -63,6 +63,10 @@ fn ten_segments(tag: &str) -> (Db, String) {
     let target = high_half_key("m", 20);
     let mut cfg = Config::new(dir(tag));
     cfg.memtable_bytes = usize::MAX;
+    // SE2-M10: these scenarios pin the exact 10-segment layout and the
+    // counters-move-only-with-real-operations invariant — the L0 trigger's
+    // compaction would clobber both mid-setup (compaction I/O is counted).
+    cfg.l0_compact_trigger = 0;
     cfg.block_target = 256;
     let mut db = Db::open(cfg).unwrap();
     // Target FIRST so it lives in the oldest segment: get walks newest-first,
@@ -85,6 +89,8 @@ fn ten_disjoint_segments(tag: &str) -> (Db, String) {
     let target = "m000-target".to_string();
     let mut cfg = Config::new(dir(tag));
     cfg.memtable_bytes = usize::MAX;
+    // SE2-M10: pins the exact 10-segment layout (see ten_segments).
+    cfg.l0_compact_trigger = 0;
     cfg.block_target = 256;
     let mut db = Db::open(cfg).unwrap();
     db.put(target.as_bytes(), &[b'v'; 200][..]).unwrap();

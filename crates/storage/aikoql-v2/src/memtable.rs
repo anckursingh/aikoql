@@ -39,12 +39,17 @@ impl Memtable {
     }
 
     /// Head for a key: the highest-seq entry (BTreeMap order is key asc,
-    /// seq asc, so the last in the key's range is the head).
+    /// seq asc, so the last in the key's run is the head). SE2-M10 — ONE
+    /// allocation (the owned range start): `RangeFrom` + take-while covers
+    /// the key's run without building both bounds. (`last()`, not
+    /// `next_back()`: TakeWhile's DoubleEndedIterator impl needs an
+    /// ExactSize inner, which a BTreeMap range is not.)
     pub fn get(&self, key: &[u8]) -> Option<&MemEntry> {
         self.map
-            .range((key.to_vec(), 0)..=(key.to_vec(), u64::MAX))
-            .next_back()
+            .range((key.to_vec(), 0)..)
+            .take_while(|((k, _), _)| k.as_slice() == key)
             .map(|(_, e)| e)
+            .last()
     }
 
     /// All entries in (key, seq) order — the flush order.
@@ -58,19 +63,18 @@ impl Memtable {
     /// walking the whole key space.
     pub fn prefix_heads<'a>(
         &'a self,
-        prefix: &[u8],
+        prefix: &'a [u8],
     ) -> impl Iterator<Item = (&'a [u8], &'a MemEntry)> {
-        // The owned range start doubles as the prefix check in the closure
-        // (no borrow-capture lifetime games).
-        let start = prefix.to_vec();
+        // SE2-M10 — one allocation: the owned range start moves into the
+        // iterator; the closure compares against the borrowed prefix.
         let mut it = self
             .map
-            .range((start.clone(), 0)..)
+            .range((prefix.to_vec(), 0)..)
             .map(|((k, _), e)| (k.as_slice(), e))
             .peekable();
         std::iter::from_fn(move || {
             let (first_key, first_e) = it.next()?;
-            if !first_key.starts_with(&start) {
+            if !first_key.starts_with(prefix) {
                 return None;
             }
             // (key, seq) order is seq-ascending within a key — the last

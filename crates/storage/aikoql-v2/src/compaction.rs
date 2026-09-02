@@ -18,6 +18,7 @@ use crate::segment::{SegmentEntry, SegmentIter, SegmentReader, SegmentWriter, FL
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CompactStats {
@@ -59,7 +60,7 @@ impl RetentionPolicy for KeepAll {
 /// to the live key space and the L1 set is empty (an archive, if any, is
 /// still published).
 pub fn merge(
-    inputs: &[SegmentReader],
+    inputs: &[Arc<SegmentReader>],
     block_target: usize,
     out_path: &Path,
     archive_path: &Path,

@@ -131,6 +131,9 @@ fn compact_crash_after_segment_before_manifest() {
     if std::env::var_os(CHILD_ENV).is_some() {
         let mut cfg = Config::new(child_dir());
         cfg.memtable_bytes = 512;
+        // SE2-M10: these children pin the EXPLICIT compact's windows — an
+        // auto-triggered compact would park at the env stage mid-workload.
+        cfg.l0_compact_trigger = 0;
         let mut db = Db::open(cfg).unwrap();
         run_workload_then_compact(&mut db);
         unreachable!("the parent kills the parked child");
@@ -171,6 +174,9 @@ fn compact_crash_after_manifest_before_current() {
     if std::env::var_os(CHILD_ENV).is_some() {
         let mut cfg = Config::new(child_dir());
         cfg.memtable_bytes = 512;
+        // SE2-M10: these children pin the EXPLICIT compact's windows — an
+        // auto-triggered compact would park at the env stage mid-workload.
+        cfg.l0_compact_trigger = 0;
         let mut db = Db::open(cfg).unwrap();
         run_workload_then_compact(&mut db);
         unreachable!("the parent kills the parked child");
@@ -206,6 +212,9 @@ fn compact_crash_after_current_before_deletion() {
     if std::env::var_os(CHILD_ENV).is_some() {
         let mut cfg = Config::new(child_dir());
         cfg.memtable_bytes = 512;
+        // SE2-M10: these children pin the EXPLICIT compact's windows — an
+        // auto-triggered compact would park at the env stage mid-workload.
+        cfg.l0_compact_trigger = 0;
         let mut db = Db::open(cfg).unwrap();
         run_workload_then_compact(&mut db);
         unreachable!("the parent kills the parked child");

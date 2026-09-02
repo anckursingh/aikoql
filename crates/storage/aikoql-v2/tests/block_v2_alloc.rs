@@ -60,7 +60,9 @@ fn block_v2_allocation_regression() {
     }
     let per = ALLOCS.load(Ordering::Relaxed) / N;
     assert!(
-        per <= 8,
-        "{per} allocations per warm v2 lookup — the decode must be borrowed, not owned"
+        per <= 5,
+        "{per} allocations per warm v2 lookup — the budget is 1 memtable \
+         probe bound (SE2-M10) + restart-keys vec + scratch + winner key + \
+         winner value; the decode must be borrowed, not owned"
     );
 }
