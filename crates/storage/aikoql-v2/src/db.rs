@@ -88,7 +88,12 @@ pub struct Config {
     /// Group commit caps (SE2-M6): a group never exceeds these (a single
     /// batch larger than a cap commits alone) and waits at most
     /// `max_wait_duration` for company — ZERO commits as soon as the
-    /// queue has what it has.
+    /// queue has what it has. SE2-M13 — the default stays ZERO: under the
+    /// blocking ack (in-flight = 1 per writer), the window is dead time —
+    /// coalescing comes from concurrent submitters, not from waiting (the
+    /// M6 wait=5ms arm measured ~5 ms window tax per group for zero extra
+    /// coalescing). Upgrade path, if a workload ever needs window-filling:
+    /// a non-blocking submit API.
     pub max_batch_ops: usize,
     pub max_batch_bytes: usize,
     pub max_wait_duration: Duration,
