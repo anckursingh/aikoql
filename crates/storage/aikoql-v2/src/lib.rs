@@ -29,6 +29,7 @@ pub mod format;
 pub mod memtable;
 pub mod migration;
 pub mod segment;
+pub mod stats;
 pub mod wal;
 
 pub use engine::AikoqlStorageEngineV2;

@@ -840,7 +840,21 @@ fn v2_gate2_3_dataset_larger_than_ram() {
 /// Remove a seeded dataset once its run is complete — these directories used
 /// to accumulate in the OS temp dir (hundreds of MB per nightly).
 fn cleanup_dataset(path: &Path) {
-    std::fs::remove_dir_all(path).unwrap();
+    // A backend leaves a file (redb, aikoql v1), a directory (aikoql-v2), or
+    // nothing (Memory — idempotent by contract). remove_dir_all is dir-only:
+    // on a file it fails with 267 on Windows, so dispatch on the path type.
+    let res = std::fs::symlink_metadata(path).and_then(|m| {
+        if m.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        }
+    });
+    match res {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => panic!("test dataset not removed: {}: {e}", path.display()),
+    }
     assert!(
         !path.exists(),
         "test dataset not removed: {}",

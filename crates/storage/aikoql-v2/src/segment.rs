@@ -36,6 +36,7 @@
 
 use crate::cache::BlockCache;
 use crate::format::{checksum8, publish_atomic, Cursor, FormatError};
+use crate::stats::Stats;
 use aikoql_kernel::knowledge::kom::sha256;
 use std::fs::File;
 use std::ops::Range;
@@ -45,6 +46,7 @@ use std::os::unix::fs::FileExt;
 use std::os::windows::fs::FileExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 pub const SEGMENT_VERSION: u16 = 1;
 pub const FLAG_PUT: u8 = 1;
@@ -299,6 +301,9 @@ pub struct SegmentReader {
     /// a block read, fed after a validated decode; answers never change.
     cache: Option<std::sync::Arc<BlockCache>>,
     cache_id: u64,
+    /// SE2-M8 — read-path stats, when the Db runs them (cumulative atomics;
+    /// timings run only when present). None = zero instrumentation overhead.
+    stats: Option<std::sync::Arc<Stats>>,
 }
 
 #[derive(Debug)]
@@ -343,23 +348,26 @@ fn read_segment_at(
 
 impl SegmentReader {
     pub fn open(path: &Path) -> Result<Self, FormatError> {
-        Self::open_inner(path, None)
+        Self::open_inner(path, None, None)
     }
 
-    /// Open with a shared block cache (SE2-M7): block reads consult and
-    /// feed it. The cache assigns this reader a never-reused identity —
+    /// Open with a shared block cache (SE2-M7) and/or read-path stats
+    /// (SE2-M8). The cache assigns this reader a never-reused identity —
     /// segment ids can be reused after orphan cleanup, so the cache key
-    /// cannot be the segment id.
-    pub fn open_with_cache(
+    /// cannot be the segment id. Stats are cumulative atomics shared with
+    /// the Db — None means zero instrumentation overhead.
+    pub(crate) fn open_with(
         path: &Path,
-        cache: std::sync::Arc<BlockCache>,
+        cache: Option<std::sync::Arc<BlockCache>>,
+        stats: Option<std::sync::Arc<Stats>>,
     ) -> Result<Self, FormatError> {
-        Self::open_inner(path, Some(cache))
+        Self::open_inner(path, cache, stats)
     }
 
     fn open_inner(
         path: &Path,
         cache: Option<std::sync::Arc<BlockCache>>,
+        stats: Option<std::sync::Arc<Stats>>,
     ) -> Result<Self, FormatError> {
         let file = File::open(path)
             .map_err(|e| FormatError::Io(format!("open segment {}: {e}", path.display())))?;
@@ -658,6 +666,7 @@ impl SegmentReader {
             bloom_m,
             cache,
             cache_id,
+            stats,
         })
     }
 
@@ -703,7 +712,13 @@ impl SegmentReader {
 
     /// The head version of `key` (highest seq — entries sort seq-descending).
     pub fn get(&self, key: &[u8]) -> Result<Option<SegmentEntry>, FormatError> {
-        let Some(i) = self.locate(key) else {
+        let t0 = self.stats.as_ref().map(|_| Instant::now());
+        let located = self.locate(key);
+        if let (Some(st), Some(t0)) = (&self.stats, t0) {
+            st.index_lookup_ns
+                .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+        let Some(i) = located else {
             return Ok(None);
         };
         let entries = self.block_entries(i)?;
@@ -762,16 +777,39 @@ impl SegmentReader {
     fn block_entries(&self, i: usize) -> Result<Vec<SegmentEntry>, FormatError> {
         let b = &self.data[i];
         if let Some(cache) = &self.cache {
-            if let Some(entries) = cache.get(self.cache_id, i as u32) {
-                return Ok(entries);
+            let t0 = self.stats.as_ref().map(|_| Instant::now());
+            let hit = cache.get(self.cache_id, i as u32);
+            if let (Some(st), Some(t0)) = (&self.stats, t0) {
+                st.block_cache_lookup_ns
+                    .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            }
+            match hit {
+                Some(entries) => {
+                    if let Some(st) = &self.stats {
+                        st.block_cache_hits.fetch_add(1, Ordering::Relaxed);
+                    }
+                    return Ok(entries);
+                }
+                None => {
+                    if let Some(st) = &self.stats {
+                        st.block_cache_misses.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
             }
         }
+        let t0 = self.stats.as_ref().map(|_| Instant::now());
         let raw = read_segment_at(
             &self.file,
             self.file_len,
             b.header,
             BLOCK_HEADER_LEN + b.payload_len,
         )?;
+        if let (Some(st), Some(t0)) = (&self.stats, t0) {
+            st.block_io_ns
+                .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            st.blocks_read.fetch_add(1, Ordering::Relaxed);
+            st.bytes_read.fetch_add(raw.len() as u64, Ordering::Relaxed);
+        }
         if !b.validated.load(Ordering::Relaxed) {
             let mut sk = Vec::with_capacity(20 + b.payload_len);
             sk.extend_from_slice(&raw[..20]);
@@ -783,6 +821,7 @@ impl SegmentReader {
             }
             b.validated.store(true, Ordering::Relaxed);
         }
+        let t0 = self.stats.as_ref().map(|_| Instant::now());
         let mut cur = Cursor::new(&raw[BLOCK_HEADER_LEN..]);
         let mut out = Vec::with_capacity(b.entries as usize);
         let mut prev: Vec<u8> = Vec::new();
@@ -813,6 +852,12 @@ impl SegmentReader {
             return Err(FormatError::Corrupt(format!(
                 "data block {i} trailing bytes"
             )));
+        }
+        if let (Some(st), Some(t0)) = (&self.stats, t0) {
+            st.block_decode_ns
+                .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            st.entries_decoded
+                .fetch_add(b.entries as u64, Ordering::Relaxed);
         }
         if let Some(cache) = &self.cache {
             cache.insert(self.cache_id, i as u32, out.clone());

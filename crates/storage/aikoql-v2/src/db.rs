@@ -35,6 +35,7 @@ use crate::format::{
 };
 use crate::memtable::Memtable;
 use crate::segment::{SegmentEntry, SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT};
+use crate::stats::{ReadPathStats, Stats};
 use crate::wal::{encode_frame, replay_frames, Op};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
@@ -142,6 +143,9 @@ pub struct Db {
     /// SE2-M7 — shared block cache (None when cache_bytes = 0). Readers
     /// consult and feed it; it never changes an answer.
     cache: Option<Arc<BlockCache>>,
+    /// SE2-M8 — read-path instrumentation (the QA spec's truth layer):
+    /// cumulative atomics shared with every reader the Db opens.
+    stats: Arc<Stats>,
 }
 
 impl Db {
@@ -179,15 +183,14 @@ impl Db {
         // Referenced segments must open (fail closed on missing/corrupt).
         // SE2-M7: when the block cache is on, every reader the Db opens
         // shares it (reopened segments get a fresh identity — the cache is
-        // per-Db, in-memory).
+        // per-Db, in-memory). SE2-M8: readers also share the read-path
+        // stats.
         let cache = (config.cache_bytes > 0).then(|| BlockCache::new(config.cache_bytes));
+        let stats = Arc::new(Stats::default());
         let mut segments = Vec::with_capacity(manifest.segments.len());
         for rec in &manifest.segments {
             let path = segment_path(&config.dir, rec.segment_id);
-            let reader = match &cache {
-                Some(c) => SegmentReader::open_with_cache(&path, Arc::clone(c))?,
-                None => SegmentReader::open(&path)?,
-            };
+            let reader = SegmentReader::open_with(&path, cache.clone(), Some(Arc::clone(&stats)))?;
             segments.push(reader);
         }
 
@@ -264,7 +267,10 @@ impl Db {
                 let config = config.clone();
                 let fsyncs = Arc::clone(&fsyncs);
                 let cache = cache.clone();
-                std::thread::spawn(move || committer_loop(rx, wal, state, config, fsyncs, cache))
+                let stats = Arc::clone(&stats);
+                std::thread::spawn(move || {
+                    committer_loop(rx, wal, state, config, fsyncs, cache, stats)
+                })
             };
             (Some(tx), Some(handle))
         } else {
@@ -279,6 +285,7 @@ impl Db {
             committer,
             fsyncs,
             cache,
+            stats,
         })
     }
 
@@ -319,7 +326,13 @@ impl Db {
             }
         }
         if state.active.bytes() >= self.config.memtable_bytes {
-            Self::flush_locked_impl(&self.config, &self.wal, &mut state, &self.cache)?;
+            Self::flush_locked_impl(
+                &self.config,
+                &self.wal,
+                &mut state,
+                &self.cache,
+                &self.stats,
+            )?;
         }
         Ok(seq)
     }
@@ -354,23 +367,47 @@ impl Db {
 
     /// Newest layer wins: active → immutables → segments (all newest
     /// first). A tombstone in a newer layer shadows an older value.
+    /// SE2-M8: the Db-level read-path counters are recorded here — the
+    /// segment-level counters (I/O, decode) fire inside the reader.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, FormatError> {
         let state = self.state.read().unwrap();
+        self.stats.lookups.fetch_add(1, Ordering::Relaxed);
+        let t0 = Instant::now();
         if let Some(e) = state.active.get(key) {
+            self.stats
+                .memtable_lookup_ns
+                .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            self.stats.memtable_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(e.value.clone());
         }
         for mem in state.immutables.iter().rev() {
             if let Some(e) = mem.get(key) {
+                self.stats
+                    .memtable_lookup_ns
+                    .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                self.stats.memtable_hits.fetch_add(1, Ordering::Relaxed);
                 return Ok(e.value.clone());
             }
         }
+        self.stats
+            .memtable_lookup_ns
+            .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
         for seg in state.segments.iter().rev() {
+            self.stats
+                .segments_considered
+                .fetch_add(1, Ordering::Relaxed);
             // SE2-M7 — bloom pre-check: false positives possible, false
             // negatives never (M1 pin), so skipping a segment the bloom
             // rejects is answer-preserving; it just saves the probe.
             if !seg.bloom_may_contain(key) {
+                self.stats
+                    .segments_bloom_skipped
+                    .fetch_add(1, Ordering::Relaxed);
                 continue;
             }
+            self.stats
+                .segments_index_searched
+                .fetch_add(1, Ordering::Relaxed);
             if let Some(e) = seg.get(key)? {
                 return Ok(if e.flags & FLAG_DELETE != 0 {
                     None // tombstone: shadow everything older
@@ -380,6 +417,14 @@ impl Db {
             }
         }
         Ok(None)
+    }
+
+    /// SE2-M8 — cumulative read-path counters (the QA spec's truth layer).
+    /// Db-level counters cover `get` only; the segment-level counters cover
+    /// every block load the Db's readers serve (scans and compaction
+    /// included — a compaction's I/O is not a point read).
+    pub fn read_path_stats(&self) -> ReadPathStats {
+        self.stats.snapshot()
     }
 
     /// SE2-M7 — block cache metrics; all zeros when the cache is off
@@ -446,7 +491,13 @@ impl Db {
 
     pub fn flush(&mut self) -> Result<(), FormatError> {
         let mut state = self.state.write().unwrap();
-        Self::flush_locked_impl(&self.config, &self.wal, &mut state, &self.cache)
+        Self::flush_locked_impl(
+            &self.config,
+            &self.wal,
+            &mut state,
+            &self.cache,
+            &self.stats,
+        )
     }
 
     /// Publication order (every crash window recoverable — see module doc):
@@ -457,6 +508,7 @@ impl Db {
         wal: &Arc<Mutex<File>>,
         state: &mut State,
         cache: &Option<Arc<BlockCache>>,
+        stats: &Arc<Stats>,
     ) -> Result<(), FormatError> {
         if !state.active.is_empty() {
             let fresh = std::mem::take(&mut state.active);
@@ -485,10 +537,7 @@ impl Db {
                 });
             }
             writer.publish(&path)?;
-            let reader = match cache {
-                Some(c) => SegmentReader::open_with_cache(&path, Arc::clone(c))?,
-                None => SegmentReader::open(&path)?,
-            };
+            let reader = SegmentReader::open_with(&path, cache.clone(), Some(Arc::clone(stats)))?;
             let file_bytes = std::fs::read(&path)
                 .map_err(|e| FormatError::Io(format!("read segment {}: {e}", path.display())))?;
             let record = SegmentRecord {
@@ -760,6 +809,7 @@ fn committer_loop(
     config: Config,
     fsyncs: Arc<AtomicU64>,
     cache: Option<Arc<BlockCache>>,
+    stats: Arc<Stats>,
 ) {
     let wait = config.max_wait_duration;
     let mut carry: Option<Batch> = None;
@@ -793,7 +843,7 @@ fn committer_loop(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        commit_group(&group, &wal, &state, &config, &fsyncs, &cache);
+        commit_group(&group, &wal, &state, &config, &fsyncs, &cache, &stats);
     }
 }
 
@@ -809,6 +859,7 @@ fn commit_group(
     config: &Config,
     fsyncs: &Arc<AtomicU64>,
     cache: &Option<Arc<BlockCache>>,
+    stats: &Arc<Stats>,
 ) {
     let mut st = state.write().unwrap();
     let mut seqs: Vec<u64> = Vec::with_capacity(group.len());
@@ -854,7 +905,7 @@ fn commit_group(
             }
         }
         if st.active.bytes() >= config.memtable_bytes {
-            if let Err(e) = Db::flush_locked_impl(config, wal, &mut st, cache) {
+            if let Err(e) = Db::flush_locked_impl(config, wal, &mut st, cache, stats) {
                 outcome = Err(e);
             }
         }
