@@ -3,7 +3,9 @@
 Evidence-led follow-up to the SE2-M14 finding (DS-PERF-L seed peak
 **16.21 GiB** vs a **2.12 GiB** dataset; adoption loader 496.93 → 1.35 GiB
 vs the 09-01 nightly). No code changed in this pass — this is the root
-cause with citations, reconciliation, and fix options.
+cause with citations, reconciliation, and fix options. Options 1-4 were
+then implemented and re-measured in SE2-M15 — the outcome section at the
+end supersedes the fix-options framing.
 
 ## Verdict
 
@@ -92,10 +94,69 @@ Ordered by savings vs. diff size:
    existing `l0_compact_trigger = 0` knob to the seed harness. Policy
    decision, not a one-liner — belongs with the next milestone's scope.
 
-Options 1-4 together take the L peak from ~16 GiB to roughly
-memtable + one encoded block + index (< 1 GiB), and the write path is
-then bounded by the largest single segment merge — which for KeepAll is
-still the dataset, but held once, streamed.
+Options 1-4 together take the L peak from ~16 GiB to the merge
+writer's entries — one materialized copy, ≈ 4 GiB at L — plus one block
+plus index/bloom, so ≈ 4-4.5 GiB at L, not < 1 GiB: the header's
+variable-length key range forces the two-pass entries design, so the
+merge writer cannot fully stream. < 1 GiB would need a format change or
+a streaming merge (out of scope).
+
+## SE2-M15 — fixes shipped, measured outcome (2026-09-03)
+
+Options 1-4 implemented: `publish(&mut self)` + `std::mem::take` (the
+sort clone is gone), streaming two-pass publish (dry pass for block
+boundaries; blocks written and dropped as they complete — the
+whole-file buffer and the per-block copies are gone), publish returns
+`(file_size, checksum8)` from a streaming `sha2::Sha256` so flush and
+compact drop the whole-file read-backs, and `Memtable::into_entries`
+moves keys/values at flush. Byte-identity with the pre-rewrite writer
+is pinned by machine-captured hex fixtures — both the v2 and the v1
+multi-block formats, the latter captured from the original writer at
+00e2270 in a worktree and cmp-verified (`segment_golden.rs`).
+
+Re-measured on the same machine (windows/x86_64, 8 cores, 30 GiB RAM),
+polling `Get-Process -Id` WorkingSet64 at 500 ms — the same method
+`measure_rss` uses, so the pre- and post-fix cells are comparable:
+
+| cell | pre-fix (M14 nightly) | post-fix (M15) |
+|---|---|---|
+| DS-PERF-L peak working set | 16.21 GiB | **5.10 GiB** (commit 5.48 GiB) |
+| DS-PERF-L seed wall | 1,750.4 s | **1,234.2 s** |
+
+Peak **−3.2×**; the wall fell **29.5%** — the five-copy pipeline and
+the whole-file read-backs were wall-clock too, not just RSS.
+
+**Where the peak sits now.** The post-fix peak is the merge writer's
+`entries` at the final KeepAll merge — one materialized copy, ≈ 4.5 GiB
+of 32M `SegmentEntry`s, plus block/index/bloom scratch ≈ 0.5 GiB. Commit
+tracks WS nearly 1:1 (5.48 vs 5.10 GiB), so file-cache pages contribute
+nothing material to the working set at this scale — the peak is the
+engine's own allocations. The "≈ 4-4.5 GiB at L" prediction in the
+options paragraph was conservative by ~15% but correct in mechanism.
+
+**The pre-fix 16.21 GiB cell stands.** One intermediate run in this
+follow-up used a process-NAME-matched sampler and reproduced 16.21 GiB,
+but its trace is impossible for the loader (instant multi-GiB working-set
+drops, a constant ~0.5 GiB baseline for minutes at a time, a 50% longer
+wall) — the name match aliased a concurrent same-named process. The same
+binary PID-sampled produces the clean staircase to 5.10 GiB above. PID
+sampling is the certified method; the M14 16.21 GiB cell remains the
+pre-fix baseline (it was PID-sampled by `measure_rss` on the five-copy
+code, whose predicted peak it matched). `scale-certification.md`
+regenerates at the next nightly and will pick up the 5.10 GiB cell; this
+doc is the interim evidence.
+
+**Remaining headroom.** The residual ~5 GiB is option-5 territory: the
+quadratic KeepAll policy still re-reads and re-writes the whole dataset
+every fourth flush (Σ ≈ 34 GiB at L), and the merge writer still
+materializes the full output once — the format's variable-length header
+forces the two-pass entries design. Size-tiered triggering or a streaming
+merge is the next lever; policy or format change, out of M15's scope.
+
+**New mid row.** `DS-PERF-S` (100K KOs × 10 versions, 3.2M rows) added to
+the loader as the trigger-crossing scale: 86 s wall, peak 0.48 GiB WS
+(0.58 GiB commit) at its single 4-L0 merge — the same merge-only shape at
+mid scale, between the flush-only M row (469.93 MiB) and L.
 
 ## Caveats
 

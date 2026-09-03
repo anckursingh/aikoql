@@ -48,10 +48,12 @@
 //! payload damage fails on access.
 
 use crate::cache::BlockCache;
-use crate::format::{checksum8, publish_atomic, Cursor, FormatError};
+use crate::format::{checksum8, publish_atomic_writer, Cursor, FormatError};
 use crate::stats::Stats;
 use aikoql_kernel::knowledge::kom::sha256;
+use sha2::{Digest, Sha256};
 use std::fs::File;
+use std::io::Write;
 use std::ops::Range;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
@@ -123,7 +125,15 @@ impl SegmentWriter {
     /// Sort (key asc, seq desc), split into target-sized data blocks, and
     /// write the segment atomically. Caller misuse — empty input, duplicate
     /// (key, seq), zero block target — is Invalid, never written to disk.
-    pub fn publish(&self, path: &Path) -> Result<(), FormatError> {
+    ///
+    /// SE2-M15 — the write streams: block boundaries come from a dry pass
+    /// over the sorted entries (payloads never retained), then each block
+    /// is encoded, written, and dropped as it completes. Peak memory is the
+    /// entries themselves + one block + the index and bloom — not several
+    /// whole-segment copies. Returns (file_size, checksum8) of the file as
+    /// published — the manifest record's fields, so callers never read the
+    /// segment back.
+    pub fn publish(&mut self, path: &Path) -> Result<(u64, u64), FormatError> {
         if self.target_block_bytes == 0 {
             return Err(FormatError::Invalid("target block size must be > 0".into()));
         }
@@ -132,7 +142,7 @@ impl SegmentWriter {
                 "cannot publish an empty segment".into(),
             ));
         }
-        let mut entries = self.entries.clone();
+        let mut entries = std::mem::take(&mut self.entries);
         entries.sort_by(|a, b| a.key.cmp(&b.key).then(b.seq.cmp(&a.seq)));
         if entries
             .windows(2)
@@ -141,185 +151,194 @@ impl SegmentWriter {
             return Err(FormatError::Invalid("duplicate (key, seq) pair".into()));
         }
 
-        // Split into data blocks: encode as we go, start a new block when
-        // the next entry would push the payload past the target (a block
-        // always holds at least one entry, even one bigger than the target).
-        struct Pending {
-            payload: Vec<u8>,
-            /// v2 only — restart-entry positions within `payload`. Absolute
-            /// payload positions are computed at assembly (the table size
-            /// depends on the final restart count).
-            restarts: Vec<u32>,
-            first: Vec<u8>,
-            last: Vec<u8>,
-            count: u32,
-            prev: Option<Vec<u8>>,
-            /// v2 only — the key at the last emitted restart. Equal keys
-            /// never get a restart: the reader's fail-closed "restart keys
-            /// strictly increasing" check is what the binary search stands
-            /// on, and a restart inside an equal-key run would hide its
-            /// higher-seq heads. Intervals may therefore exceed
-            /// RESTART_INTERVAL across a run — the version-lookup cost of
-            /// multi-version keys (SE2-M14).
-            last_restart_key: Option<Vec<u8>>,
-        }
-        let mut blocks: Vec<Pending> = Vec::new();
-        for e in &entries {
-            let split = match blocks.last() {
-                Some(b) if !b.payload.is_empty() => {
-                    let shared = shared_of(&b.prev, e);
-                    let len = 2 + 2 + (e.key.len() - shared) + 4 + e.value.len() + 8 + 1;
-                    b.payload.len() + len > self.target_block_bytes
-                }
-                _ => false,
-            };
-            if blocks.is_empty() || split {
-                blocks.push(Pending {
-                    payload: Vec::new(),
-                    restarts: Vec::new(),
-                    first: e.key.clone(),
-                    last: e.key.clone(),
-                    count: 0,
-                    prev: None,
-                    last_restart_key: None,
-                });
-            }
-            let b = blocks.last_mut().expect("block pushed above");
-            // v2: every RESTART_INTERVAL-th entry (0, 16, 32, …) with a key
-            // strictly greater than the last restart key carries its full
-            // key (shared = 0) and its position goes into the table. Equal
-            // keys are skipped (see `last_restart_key`).
-            let is_restart = self.v2
-                && b.count.is_multiple_of(RESTART_INTERVAL as u32)
-                && b.last_restart_key
-                    .as_ref()
-                    .is_none_or(|k| e.key.as_slice() > k.as_slice());
-            if is_restart {
-                b.restarts.push(b.payload.len() as u32);
-                b.last_restart_key = Some(e.key.clone());
-            }
-            let shared = if is_restart { 0 } else { shared_of(&b.prev, e) };
-            b.payload.extend_from_slice(&(shared as u16).to_le_bytes());
-            b.payload
-                .extend_from_slice(&((e.key.len() - shared) as u16).to_le_bytes());
-            b.payload.extend_from_slice(&e.key[shared..]);
-            b.payload
-                .extend_from_slice(&(e.value.len() as u32).to_le_bytes());
-            b.payload.extend_from_slice(&e.value);
-            b.payload.extend_from_slice(&e.seq.to_le_bytes());
-            b.payload.push(e.flags);
-            b.last = e.key.clone();
-            b.count += 1;
-            b.prev = Some(e.key.clone());
-        }
-
-        let block_count = blocks.len() as u32;
         let entry_count = entries.len() as u64;
-        let key_min = &entries[0].key;
-        let key_max = &entries[entries.len() - 1].key;
+        let key_min = entries[0].key.clone();
+        let key_max = entries[entries.len() - 1].key.clone();
         let seq_lo = entries.iter().map(|e| e.seq).min().expect("non-empty");
         let seq_hi = entries.iter().map(|e| e.seq).max().expect("non-empty");
+        let v2 = self.v2;
 
-        // Header.
-        let mut out = Vec::new();
-        out.extend_from_slice(SEGMENT_MAGIC);
-        out.extend_from_slice(&SEGMENT_VERSION.to_le_bytes());
-        out.extend_from_slice(&block_count.to_le_bytes());
-        out.extend_from_slice(&entry_count.to_le_bytes());
-        out.extend_from_slice(&(key_min.len() as u32).to_le_bytes());
-        out.extend_from_slice(key_min);
-        out.extend_from_slice(&(key_max.len() as u32).to_le_bytes());
-        out.extend_from_slice(key_max);
-        out.extend_from_slice(&seq_lo.to_le_bytes());
-        out.extend_from_slice(&seq_hi.to_le_bytes());
-        out.extend_from_slice(&checksum8(&out));
-
-        // Data blocks + index payload (offsets are final-file positions).
-        let mut index_payload = Vec::new();
-        let mut offset = out.len() as u64;
-        let mut data_blocks = Vec::with_capacity(blocks.len());
-        for b in &blocks {
-            index_payload.extend_from_slice(&(b.first.len() as u16).to_le_bytes());
-            index_payload.extend_from_slice(&b.first);
-            index_payload.extend_from_slice(&(b.last.len() as u16).to_le_bytes());
-            index_payload.extend_from_slice(&b.last);
-            index_payload.extend_from_slice(&offset.to_le_bytes());
-            index_payload.extend_from_slice(&b.count.to_le_bytes());
-            let (version, payload) = if self.v2 {
-                // Table first: interval, restart count, then each restart's
-                // absolute payload position (table size + entry position).
-                let mut p = Vec::with_capacity(6 + 4 * b.restarts.len() + b.payload.len());
-                p.extend_from_slice(&RESTART_INTERVAL.to_le_bytes());
-                p.extend_from_slice(&(b.restarts.len() as u32).to_le_bytes());
-                for &pos in &b.restarts {
-                    p.extend_from_slice(
-                        &((6 + 4 * b.restarts.len() + pos as usize) as u32).to_le_bytes(),
-                    );
+        // Block boundaries without the payloads. The split state machine
+        // mirrors the encode pass exactly — including the buffered writer's
+        // estimate quirk: the split check sizes an entry with its shared
+        // prefix (not the restart's full key), so a restart can overshoot
+        // the target slightly, as before.
+        let mut bounds: Vec<(usize, usize)> = Vec::new();
+        {
+            let mut len = 0usize;
+            let mut prev: Option<Vec<u8>> = None;
+            let mut last_restart_key: Option<Vec<u8>> = None;
+            let mut start = 0usize;
+            for (i, e) in entries.iter().enumerate() {
+                let shared_c = shared_of(&prev, e);
+                let est = 2 + 2 + (e.key.len() - shared_c) + 4 + e.value.len() + 8 + 1;
+                if len > 0 && len + est > self.target_block_bytes {
+                    bounds.push((start, i));
+                    len = 0;
+                    prev = None;
+                    last_restart_key = None;
+                    start = i;
                 }
-                p.extend_from_slice(&b.payload);
-                (2u16, p)
-            } else {
-                (SEGMENT_VERSION, b.payload.clone())
-            };
-            let block = encode_block(BLOCK_DATA, b.count, &payload, version);
-            offset += block.len() as u64;
-            data_blocks.push(block);
+                // v2: every RESTART_INTERVAL-th entry (0, 16, 32, …) with a
+                // key strictly greater than the last restart key carries
+                // its full key (shared = 0) and its position goes into the
+                // table. Equal keys are skipped (see `last_restart_key`).
+                // `i - start` is the block-local index — the counter the
+                // split resets, without the counter.
+                let is_restart = v2
+                    && (i - start).is_multiple_of(RESTART_INTERVAL as usize)
+                    && last_restart_key
+                        .as_ref()
+                        .is_none_or(|k| e.key.as_slice() > k.as_slice());
+                // After a split the entry encodes with shared = 0 (the new
+                // block's prev is None) — recomputed like the encode pass,
+                // not from the split estimate above.
+                let shared = if is_restart { 0 } else { shared_of(&prev, e) };
+                len += 2 + 2 + (e.key.len() - shared) + 4 + e.value.len() + 8 + 1;
+                if is_restart {
+                    last_restart_key = Some(e.key.clone());
+                }
+                prev = Some(e.key.clone());
+            }
+            bounds.push((start, entries.len()));
         }
+        let block_count = bounds.len() as u32;
 
         // Bloom: m = 10·n bits, 4 probes, double hashing over sha256(key).
         let m = BLOOM_BITS_PER_KEY as u64 * entry_count;
         let mut bits = vec![0u8; m.div_ceil(8) as usize];
-        for e in &entries {
-            let d = sha256(&e.key);
-            let h1 = u64::from_le_bytes(d[..8].try_into().expect("sha256 len"));
-            let h2 = u64::from_le_bytes(d[8..16].try_into().expect("sha256 len"));
-            for i in 0..BLOOM_PROBES {
-                let bit = ((h1 as u128 + i as u128 * h2 as u128) % m as u128) as usize;
-                bits[bit / 8] |= 1 << (bit % 8);
+
+        let mut index_payload = Vec::new();
+        let mut skeleton = Vec::new();
+        let mut payload = Vec::new();
+        let mut table = Vec::new();
+        let mut restarts: Vec<u32> = Vec::new();
+        let mut file_size = 0u64;
+        let mut whole = Sha256::new();
+
+        publish_atomic_writer(path, move |f: &mut File| {
+            // Header.
+            let mut header = Vec::new();
+            header.extend_from_slice(SEGMENT_MAGIC);
+            header.extend_from_slice(&SEGMENT_VERSION.to_le_bytes());
+            header.extend_from_slice(&block_count.to_le_bytes());
+            header.extend_from_slice(&entry_count.to_le_bytes());
+            header.extend_from_slice(&(key_min.len() as u32).to_le_bytes());
+            header.extend_from_slice(&key_min);
+            header.extend_from_slice(&(key_max.len() as u32).to_le_bytes());
+            header.extend_from_slice(&key_max);
+            header.extend_from_slice(&seq_lo.to_le_bytes());
+            header.extend_from_slice(&seq_hi.to_le_bytes());
+            header.extend_from_slice(&checksum8(&header));
+            f.write_all(&header)?;
+            whole.update(&header);
+            skeleton.extend_from_slice(&header);
+            file_size += header.len() as u64;
+
+            // Data blocks, written as they complete (index offsets are
+            // final-file positions).
+            for &(start, end) in &bounds {
+                payload.clear();
+                restarts.clear();
+                let mut prev: Option<Vec<u8>> = None;
+                let mut last_restart_key: Option<Vec<u8>> = None;
+                for (count, e) in entries[start..end].iter().enumerate() {
+                    let is_restart = v2
+                        && count.is_multiple_of(RESTART_INTERVAL as usize)
+                        && last_restart_key
+                            .as_ref()
+                            .is_none_or(|k| e.key.as_slice() > k.as_slice());
+                    if is_restart {
+                        restarts.push(payload.len() as u32);
+                        last_restart_key = Some(e.key.clone());
+                    }
+                    let shared = if is_restart { 0 } else { shared_of(&prev, e) };
+                    payload.extend_from_slice(&(shared as u16).to_le_bytes());
+                    payload.extend_from_slice(&((e.key.len() - shared) as u16).to_le_bytes());
+                    payload.extend_from_slice(&e.key[shared..]);
+                    payload.extend_from_slice(&(e.value.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(&e.value);
+                    payload.extend_from_slice(&e.seq.to_le_bytes());
+                    payload.push(e.flags);
+                    prev = Some(e.key.clone());
+                    let d = sha256(&e.key);
+                    let h1 = u64::from_le_bytes(d[..8].try_into().expect("sha256 len"));
+                    let h2 = u64::from_le_bytes(d[8..16].try_into().expect("sha256 len"));
+                    for i in 0..BLOOM_PROBES {
+                        let bit = ((h1 as u128 + i as u128 * h2 as u128) % m as u128) as usize;
+                        bits[bit / 8] |= 1 << (bit % 8);
+                    }
+                }
+                let count_u32 = (end - start) as u32;
+                index_payload.extend_from_slice(&(entries[start].key.len() as u16).to_le_bytes());
+                index_payload.extend_from_slice(&entries[start].key);
+                index_payload.extend_from_slice(&(entries[end - 1].key.len() as u16).to_le_bytes());
+                index_payload.extend_from_slice(&entries[end - 1].key);
+                index_payload.extend_from_slice(&file_size.to_le_bytes());
+                index_payload.extend_from_slice(&count_u32.to_le_bytes());
+                let block = if v2 {
+                    // Table first: interval, restart count, then each
+                    // restart's absolute payload position (table size +
+                    // entry position).
+                    table.clear();
+                    table.extend_from_slice(&RESTART_INTERVAL.to_le_bytes());
+                    table.extend_from_slice(&(restarts.len() as u32).to_le_bytes());
+                    for &pos in &restarts {
+                        table.extend_from_slice(
+                            &((6 + 4 * restarts.len() + pos as usize) as u32).to_le_bytes(),
+                        );
+                    }
+                    table.extend_from_slice(&payload);
+                    encode_block(BLOCK_DATA, count_u32, &table, 2u16)
+                } else {
+                    encode_block(BLOCK_DATA, count_u32, &payload, SEGMENT_VERSION)
+                };
+                f.write_all(&block)?;
+                whole.update(&block);
+                skeleton.extend_from_slice(&block[..BLOCK_HEADER_LEN]);
+                file_size += block.len() as u64;
             }
-        }
-        let mut bloom_payload = Vec::with_capacity(4 + bits.len());
-        bloom_payload.extend_from_slice(&(m as u32).to_le_bytes());
-        bloom_payload.extend_from_slice(&bits);
 
-        let index_block = encode_block(BLOCK_INDEX, block_count, &index_payload, SEGMENT_VERSION);
-        let bloom_block = encode_block(
-            BLOCK_BLOOM,
-            entry_count as u32,
-            &bloom_payload,
-            SEGMENT_VERSION,
-        );
+            let index_block =
+                encode_block(BLOCK_INDEX, block_count, &index_payload, SEGMENT_VERSION);
+            let mut bloom_payload = Vec::with_capacity(4 + bits.len());
+            bloom_payload.extend_from_slice(&(m as u32).to_le_bytes());
+            bloom_payload.extend_from_slice(&bits);
+            let bloom_block = encode_block(
+                BLOCK_BLOOM,
+                entry_count as u32,
+                &bloom_payload,
+                SEGMENT_VERSION,
+            );
 
-        // Footer checksum over the skeleton: header, all block headers, the
-        // index and bloom blocks whole, and the footer fields. Data payloads
-        // are excluded so open() never hashes the whole file.
-        let mut skeleton = Vec::with_capacity(
-            out.len()
-                + BLOCK_HEADER_LEN * blocks.len()
-                + index_block.len()
-                + bloom_block.len()
-                + 14,
-        );
-        skeleton.extend_from_slice(&out);
-        for b in &data_blocks {
-            skeleton.extend_from_slice(&b[..BLOCK_HEADER_LEN]);
-        }
-        skeleton.extend_from_slice(&index_block);
-        skeleton.extend_from_slice(&bloom_block);
-        skeleton.extend_from_slice(FOOTER_MAGIC);
-        skeleton.extend_from_slice(&SEGMENT_VERSION.to_le_bytes());
-        skeleton.extend_from_slice(&entry_count.to_le_bytes());
+            // Footer checksum over the skeleton: header, all block headers,
+            // the index and bloom blocks whole, and the footer fields. Data
+            // payloads are excluded so open() never hashes the whole file.
+            f.write_all(&index_block)?;
+            whole.update(&index_block);
+            skeleton.extend_from_slice(&index_block);
+            file_size += index_block.len() as u64;
+            f.write_all(&bloom_block)?;
+            whole.update(&bloom_block);
+            skeleton.extend_from_slice(&bloom_block);
+            file_size += bloom_block.len() as u64;
+            skeleton.extend_from_slice(FOOTER_MAGIC);
+            skeleton.extend_from_slice(&SEGMENT_VERSION.to_le_bytes());
+            skeleton.extend_from_slice(&entry_count.to_le_bytes());
 
-        for b in &data_blocks {
-            out.extend_from_slice(b);
-        }
-        out.extend_from_slice(&index_block);
-        out.extend_from_slice(&bloom_block);
-        out.extend_from_slice(FOOTER_MAGIC);
-        out.extend_from_slice(&SEGMENT_VERSION.to_le_bytes());
-        out.extend_from_slice(&entry_count.to_le_bytes());
-        out.extend_from_slice(&checksum8(&skeleton));
-        publish_atomic(path, &out)
+            let mut footer = Vec::with_capacity(FOOTER_LEN);
+            footer.extend_from_slice(FOOTER_MAGIC);
+            footer.extend_from_slice(&SEGMENT_VERSION.to_le_bytes());
+            footer.extend_from_slice(&entry_count.to_le_bytes());
+            footer.extend_from_slice(&checksum8(&skeleton));
+            f.write_all(&footer)?;
+            whole.update(&footer);
+            file_size += footer.len() as u64;
+
+            let digest = whole.finalize();
+            let checksum = u64::from_le_bytes(digest[..8].try_into().expect("sha256-8 slice"));
+            Ok((file_size, checksum))
+        })
     }
 }
 

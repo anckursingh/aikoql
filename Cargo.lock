@@ -300,6 +300,7 @@ version = "0.1.18"
 dependencies = [
  "aikoql-kernel",
  "aikoql-storage",
+ "sha2 0.10.9",
 ]
 
 [[package]]

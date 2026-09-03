@@ -57,6 +57,13 @@ impl Memtable {
         self.map.iter().map(|((k, s), e)| (k.as_slice(), *s, e))
     }
 
+    /// All entries in (key, seq) order, moved out — the table is consumed,
+    /// so the flush takes keys and values by move instead of cloning
+    /// (SE2-M15).
+    pub fn into_entries(self) -> impl Iterator<Item = ((Vec<u8>, u64), MemEntry)> {
+        self.map.into_iter()
+    }
+
     /// V2-Adopt — one entry per key with the prefix, key-ascending: the
     /// highest-seq entry for that key (its head in this layer). Seeks
     /// directly to the prefix range — the kernel's scan contract forbids

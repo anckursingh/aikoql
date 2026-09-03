@@ -29,6 +29,11 @@ pub struct CompactStats {
     pub entries_archived: u64,
 }
 
+/// A just-published segment, open for validation: the reader plus the
+/// manifest record fields publish computes (SE2-M15 — file size and
+/// whole-file checksum8, so callers never read the segment back).
+pub type PublishedSegment = (SegmentReader, u64, u64);
+
 /// Per-key-class verdict for a compaction (SE2-M5). The policy is an
 /// input, never an engine feature — the engine stays key-space-generic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +70,7 @@ pub fn merge(
     out_path: &Path,
     archive_path: &Path,
     policy: &dyn RetentionPolicy,
-) -> Result<(CompactStats, Option<SegmentReader>), FormatError> {
+) -> Result<(CompactStats, Option<PublishedSegment>), FormatError> {
     let mut stats = CompactStats {
         segments_in: inputs.len() as u64,
         ..CompactStats::default()
@@ -131,7 +136,7 @@ pub fn merge(
     }
 
     // An archive is published even when the live output is empty.
-    if let Some(aw) = archive {
+    if let Some(mut aw) = archive {
         std::fs::create_dir_all(
             archive_path
                 .parent()
@@ -148,12 +153,12 @@ pub fn merge(
     if stats.entries_out == 0 {
         return Ok((stats, None));
     }
-    writer.publish(out_path)?;
+    let (file_size, checksum) = writer.publish(out_path)?;
     // The validate step of the pipeline: structural damage must never
     // reach the manifest.
     let reader = SegmentReader::open(out_path)?;
     stats.segments_out = 1;
-    Ok((stats, Some(reader)))
+    Ok((stats, Some((reader, file_size, checksum))))
 }
 
 /// Pull the next entry of iterator `i` into the heap.

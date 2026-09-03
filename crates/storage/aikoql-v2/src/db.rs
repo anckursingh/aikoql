@@ -30,9 +30,7 @@
 
 use crate::cache::{BlockCache, CacheStats};
 use crate::compaction::{merge, CompactStats, KeepAll, RetentionPolicy};
-use crate::format::{
-    checksum8, verify_pair, Current, FormatError, Manifest, SegmentRecord, FORMAT_VERSION,
-};
+use crate::format::{verify_pair, Current, FormatError, Manifest, SegmentRecord, FORMAT_VERSION};
 use crate::memtable::Memtable;
 use crate::segment::{SegmentEntry, SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT};
 use crate::stats::{ReadPathStats, Stats};
@@ -624,23 +622,23 @@ impl Db {
             state.next_segment_id += 1;
             let path = segment_path(&config.dir, id);
             let mut writer = SegmentWriter::new_v2(config.block_target);
-            for (key, seq, e) in mem.entries() {
+            // into_entries: the flushed table is consumed — keys/values
+            // move into the writer, no second copy (SE2-M15).
+            for ((key, seq), e) in mem.into_entries() {
                 let flags = if e.value.is_some() {
                     FLAG_PUT
                 } else {
                     FLAG_DELETE
                 };
                 writer.push(SegmentEntry {
-                    key: key.to_vec(),
-                    value: e.value.clone().unwrap_or_default(),
+                    key,
+                    value: e.value.unwrap_or_default(),
                     seq,
                     flags,
                 });
             }
-            writer.publish(&path)?;
+            let (file_size, checksum) = writer.publish(&path)?;
             let reader = SegmentReader::open_with(&path, cache.clone(), Some(Arc::clone(stats)))?;
-            let file_bytes = std::fs::read(&path)
-                .map_err(|e| FormatError::Io(format!("read segment {}: {e}", path.display())))?;
             let record = SegmentRecord {
                 segment_id: id,
                 level: 0,
@@ -649,8 +647,8 @@ impl Db {
                 seq_lo: reader.seq_lo(),
                 seq_hi: reader.seq_hi(),
                 record_count: reader.entry_count(),
-                file_size: file_bytes.len() as u64,
-                checksum: u64::from_le_bytes(checksum8(&file_bytes)),
+                file_size,
+                checksum,
             };
             state.segment_records.push(record);
             new_segments.push(Arc::new(reader));
@@ -733,13 +731,7 @@ impl Db {
             .collect();
         let mut new_records = Vec::new();
         let mut new_segments = Vec::new();
-        if let Some(reader) = out_reader {
-            // ponytail: whole-file read for the record checksum (the flush
-            // idiom) — O(file) at compact time; stream it when the M4
-            // measurement says so.
-            let file_bytes = std::fs::read(&out_path).map_err(|e| {
-                FormatError::Io(format!("read segment {}: {e}", out_path.display()))
-            })?;
+        if let Some((reader, file_size, checksum)) = out_reader {
             new_records.push(SegmentRecord {
                 segment_id: id,
                 level: 1,
@@ -748,8 +740,8 @@ impl Db {
                 seq_lo: reader.seq_lo(),
                 seq_hi: reader.seq_hi(),
                 record_count: reader.entry_count(),
-                file_size: file_bytes.len() as u64,
-                checksum: u64::from_le_bytes(checksum8(&file_bytes)),
+                file_size,
+                checksum,
             });
             new_segments.push(Arc::new(reader));
         }

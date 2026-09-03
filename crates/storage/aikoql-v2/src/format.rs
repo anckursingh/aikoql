@@ -286,10 +286,14 @@ pub fn verify_pair(current: &Current, manifest: &Manifest) -> Result<(), FormatE
 // ---------------------------------------------------------------------------
 // Publication + decode cursor
 
-/// write temp → fsync → rename over the target → best-effort directory
-/// fsync. The temp lives beside the target (same volume) so the rename is
-/// atomic; a torn write is only ever in the temp, which nobody reads.
-pub(crate) fn publish_atomic(path: &Path, bytes: &[u8]) -> Result<(), FormatError> {
+/// write temp (via the closure) → fsync → rename over the target →
+/// best-effort directory fsync. The temp lives beside the target (same
+/// volume) so the rename is atomic; a torn write is only ever in the temp,
+/// which nobody reads. The closure's value is returned after the rename.
+pub(crate) fn publish_atomic_writer<T>(
+    path: &Path,
+    write: impl FnOnce(&mut File) -> std::io::Result<T>,
+) -> Result<T, FormatError> {
     let dir = path.parent().ok_or_else(|| {
         FormatError::Io(format!("publish {}: no parent directory", path.display()))
     })?;
@@ -298,25 +302,33 @@ pub(crate) fn publish_atomic(path: &Path, bytes: &[u8]) -> Result<(), FormatErro
         .ok_or_else(|| FormatError::Io("publish: no file name".into()))?
         .to_string_lossy();
     let tmp: PathBuf = dir.join(format!(".{name}.tmp.{}", std::process::id()));
-    let write = (|| -> std::io::Result<()> {
+    let written = (|| -> std::io::Result<T> {
         let mut f = File::create(&tmp)?;
-        f.write_all(bytes)?;
+        let v = write(&mut f)?;
         f.sync_all()?;
         drop(f);
         std::fs::rename(&tmp, path)?;
-        Ok(())
+        Ok(v)
     })();
-    if let Err(e) = write {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(FormatError::Io(format!("publish {}: {e}", path.display())));
+    match written {
+        Ok(v) => {
+            // Best-effort: flush the directory entry so the rename itself is
+            // durable. On Windows std cannot open a directory handle (NTFS
+            // rename metadata is journaled anyway) — ignore that failure.
+            if let Ok(d) = File::open(dir) {
+                let _ = d.sync_all();
+            }
+            Ok(v)
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(FormatError::Io(format!("publish {}: {e}", path.display())))
+        }
     }
-    // Best-effort: flush the directory entry so the rename itself is
-    // durable. On Windows std cannot open a directory handle (NTFS rename
-    // metadata is journaled anyway) — ignore that specific failure.
-    if let Ok(d) = File::open(dir) {
-        let _ = d.sync_all();
-    }
-    Ok(())
+}
+
+pub(crate) fn publish_atomic(path: &Path, bytes: &[u8]) -> Result<(), FormatError> {
+    publish_atomic_writer(path, |f| f.write_all(bytes))
 }
 
 pub(crate) struct Cursor<'a> {

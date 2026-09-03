@@ -1310,6 +1310,14 @@ fn ds_perf_loader() {
             versions: 10,
             label: "DS-PERF-L",
         },
+        // SE2-M15 — the mid size that crosses the L0 trigger (≈ 3.2M rows,
+        // ~7 flushes): one merge of 4 L0s mid-seed. Same per-row shape as
+        // L, 10× fewer KOs — the decomposition probe for the merge peak.
+        "DS-PERF-S" => Size {
+            n: 100_000,
+            versions: 10,
+            label: "DS-PERF-S",
+        },
         _ => Size {
             n: 100_000,
             versions: 5,

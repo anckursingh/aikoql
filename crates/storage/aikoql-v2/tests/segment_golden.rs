@@ -12,7 +12,7 @@
 
 mod common;
 
-use aikoql_storage_v2::format::FormatError;
+use aikoql_storage_v2::format::{checksum8, FormatError};
 use aikoql_storage_v2::segment::{
     SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT, FLAG_VERSION,
 };
@@ -100,9 +100,87 @@ fn segment_reader_never_mutates() {
 }
 
 #[test]
+fn v2_publish_bytes_pinned() {
+    // SE2-M15 — the streamed publish rewrite must stay byte-identical to
+    // the buffered writer. The fixture spans the branches the rewrite has
+    // to reproduce exactly: unsorted input, a 17-version equal-key run
+    // (the SE2-M14 restart skip), and a second block forced by a 300-byte
+    // value (target 512).
+    let mut w = SegmentWriter::new_v2(512);
+    w.push(entry("gamma", &"g".repeat(300), 300, FLAG_PUT));
+    for (i, seq) in (100..=116).enumerate() {
+        w.push(entry("alpha", &format!("v{i}"), seq, FLAG_PUT));
+    }
+    w.push(entry("beta", "vb", 200, FLAG_VERSION));
+    let path = tmp("v2-publish-pin");
+    let (file_size, checksum) = w.publish(&path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(
+        file_size as usize,
+        bytes.len(),
+        "publish file_size mismatch"
+    );
+    assert_eq!(
+        checksum,
+        u64::from_le_bytes(checksum8(&bytes)),
+        "publish checksum is not the whole-file checksum8"
+    );
+    assert_eq!(
+        hex(&bytes),
+        // Pinned bytes captured from the buffered writer BEFORE the
+        // SE2-M15 streamed rewrite (the rewrite must be byte-identical).
+        // The shared header/block/footer paths are independently pinned
+        // by the python-computed v1 golden above.
+        include_str!("v2_publish_pin.hex"),
+        "v2 segment bytes changed — format break"
+    );
+    let r = SegmentReader::open(&path).unwrap();
+    assert_eq!(r.entry_count(), 19);
+}
+
+#[test]
+fn v1_multiblock_bytes_pinned() {
+    // SE2-M15 — the v1 dry pass must reproduce the buffered writer's block
+    // boundaries. Target 64 splits on every entry, and each boundary entry
+    // prefix-shares with the previous block's last key — the case where the
+    // split estimate (old-block shared prefix) differs from the encoding
+    // (shared = 0 in the new block). Pinned bytes captured from the
+    // buffered writer at 00e2270 (worktree) and verified byte-identical to
+    // the streamed rewrite.
+    let mut w = SegmentWriter::new(64);
+    w.push(entry("aa1", &"x".repeat(24), 1, FLAG_PUT));
+    w.push(entry("aa2", &"x".repeat(24), 2, FLAG_PUT));
+    w.push(entry("aa3", &"x".repeat(24), 3, FLAG_PUT));
+    w.push(entry("aa4", &"x".repeat(24), 4, FLAG_PUT));
+    w.push(entry("aa4", &"y".repeat(24), 5, FLAG_VERSION));
+    w.push(entry("zz", &"z".repeat(24), 6, FLAG_DELETE));
+    let path = tmp("v1-multiblock-pin");
+    let (file_size, checksum) = w.publish(&path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(
+        file_size as usize,
+        bytes.len(),
+        "publish file_size mismatch"
+    );
+    assert_eq!(
+        checksum,
+        u64::from_le_bytes(checksum8(&bytes)),
+        "publish checksum is not the whole-file checksum8"
+    );
+    assert_eq!(
+        hex(&bytes),
+        include_str!("v1_multiblock_pin.hex"),
+        "v1 multiblock segment bytes changed — format break"
+    );
+    let r = SegmentReader::open(&path).unwrap();
+    assert_eq!(r.entry_count(), 6);
+    assert_eq!(r.block_count(), 6);
+}
+
+#[test]
 fn segment_publish_validation() {
     // Caller misuse is rejected at publish, not written to disk.
-    let empty = SegmentWriter::new(4096);
+    let mut empty = SegmentWriter::new(4096);
     assert!(matches!(
         empty.publish(&tmp("segment-empty")),
         Err(FormatError::Invalid(_))
