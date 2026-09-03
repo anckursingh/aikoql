@@ -266,3 +266,29 @@ fn block_v2_future_version_fails_closed() {
         "stale-checksum future block version must be Corrupt, got {err:?}"
     );
 }
+
+#[test]
+fn block_v2_equal_key_run_restarts() {
+    // SE2-M14 — the compaction retention shape: V versions of the SAME user
+    // key (seq descending) landed in one block. Restart points must skip
+    // equal keys — the reader's fail-closed strictly-increasing restart
+    // check is what the binary search stands on, and a restart inside the
+    // run would hide its higher-seq heads.
+    let mut w = SegmentWriter::new_v2(4096);
+    for i in 0..20u64 {
+        w.push(entry("k", &format!("v{i:02}"), 100 - i, FLAG_PUT));
+    }
+    let path = tmp("blockv2-equal-keys");
+    w.publish(&path).unwrap();
+    let reader = SegmentReader::open(&path).unwrap();
+    let head = reader.get(b"k").unwrap();
+    assert_eq!(
+        head.as_ref().map(|e| e.seq),
+        Some(100),
+        "the highest seq is the head of the run"
+    );
+    let all = reader.versions(b"k").unwrap();
+    assert_eq!(all.len(), 20, "all 20 versions survive");
+    assert_eq!(all[0].seq, 100);
+    assert_eq!(all[19].seq, 81);
+}

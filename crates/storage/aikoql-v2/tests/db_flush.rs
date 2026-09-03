@@ -135,3 +135,33 @@ fn newer_memtable_shadows_flushed_segment() {
     let db = Db::open(Config::new(d.clone())).unwrap();
     assert_eq!(db.get(b"k1").unwrap(), Some(b"v2".to_vec()));
 }
+
+#[test]
+fn equal_key_versions_survive_flush() {
+    // SE2-M14 — the kernel's RMW restatement rewrites the same head key
+    // between flushes; the memtable keeps every (key, seq) version, so one
+    // flush segment holds a 20-entry equal-key run (publish sorts seq
+    // desc, and get's first match is the head). The v2 writer's restart
+    // points must skip equal keys, or the first read of the flushed
+    // segment fails closed (restart keys strictly increasing).
+    let d = dir("flush-equal-keys");
+    let mut cfg = Config::new(d.clone());
+    cfg.memtable_bytes = 1 << 30; // no auto-flush — versions accumulate
+    let mut db = Db::open(cfg).unwrap();
+    for i in 0..20u64 {
+        db.put(b"head/x", format!("v{i:02}").as_bytes()).unwrap();
+    }
+    db.flush().unwrap();
+    assert_eq!(
+        db.get(b"head/x").unwrap().as_deref(),
+        Some(&b"v19"[..]),
+        "the newest version is the head of the run"
+    );
+    drop(db);
+    let db = Db::open(Config::new(d)).unwrap();
+    assert_eq!(
+        db.get(b"head/x").unwrap().as_deref(),
+        Some(&b"v19"[..]),
+        "cold reopen must survive the flushed segment's equal-key run"
+    );
+}

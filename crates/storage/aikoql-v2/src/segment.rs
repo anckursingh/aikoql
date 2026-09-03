@@ -29,7 +29,9 @@
 //! encoding is unchanged, but an entry at a restart position encodes
 //! shared = 0 (full key), so every interval decodes standalone. A point
 //! lookup binary-searches the restart keys (borrowed, no alloc) and
-//! decodes only the one interval slice it lands in (≤ 16 entries).
+//! decodes only the one interval slice it lands in (≤ 16 entries — a
+//! multi-version equal-key run extends its interval, see
+//! `last_restart_key` in `publish`).
 //!
 //! Index payload: per data block `first_key_len u16 | first_key |
 //! last_key_len u16 | last_key | block_offset u64 | entry_count u32`.
@@ -152,6 +154,14 @@ impl SegmentWriter {
             last: Vec<u8>,
             count: u32,
             prev: Option<Vec<u8>>,
+            /// v2 only — the key at the last emitted restart. Equal keys
+            /// never get a restart: the reader's fail-closed "restart keys
+            /// strictly increasing" check is what the binary search stands
+            /// on, and a restart inside an equal-key run would hide its
+            /// higher-seq heads. Intervals may therefore exceed
+            /// RESTART_INTERVAL across a run — the version-lookup cost of
+            /// multi-version keys (SE2-M14).
+            last_restart_key: Option<Vec<u8>>,
         }
         let mut blocks: Vec<Pending> = Vec::new();
         for e in &entries {
@@ -171,14 +181,22 @@ impl SegmentWriter {
                     last: e.key.clone(),
                     count: 0,
                     prev: None,
+                    last_restart_key: None,
                 });
             }
             let b = blocks.last_mut().expect("block pushed above");
-            // v2: every RESTART_INTERVAL-th entry (0, 16, 32, …) carries its
-            // full key (shared = 0) and its position goes into the table.
-            let is_restart = self.v2 && b.count.is_multiple_of(RESTART_INTERVAL as u32);
+            // v2: every RESTART_INTERVAL-th entry (0, 16, 32, …) with a key
+            // strictly greater than the last restart key carries its full
+            // key (shared = 0) and its position goes into the table. Equal
+            // keys are skipped (see `last_restart_key`).
+            let is_restart = self.v2
+                && b.count.is_multiple_of(RESTART_INTERVAL as u32)
+                && b.last_restart_key
+                    .as_ref()
+                    .is_none_or(|k| e.key.as_slice() > k.as_slice());
             if is_restart {
                 b.restarts.push(b.payload.len() as u32);
+                b.last_restart_key = Some(e.key.clone());
             }
             let shared = if is_restart { 0 } else { shared_of(&b.prev, e) };
             b.payload.extend_from_slice(&(shared as u16).to_le_bytes());
