@@ -216,7 +216,9 @@ reverted before commit.
 active L0: L0 piles to ≤17 segments before the tier fires, and a get()
 considers up to 18 segments vs ≤2 under count-only. That fan-out is
 the design trade for −76% merge I/O; the read-side cost at this depth
-is not yet measured, and the hot-head / read-path gates pin their own
+was unmeasured here and is now certified in M17 — see tiered-read.md:
+every QA read gate passes at depth 17 with 3.7–5.7× headroom. The
+hot-head / read-path gates pin their own
 count-only configs so their cells stand. DS-PERF-S (7 flushes) is
 unchanged by the tier — its single merge is the L1-empty one. Remaining
 headroom is the merge writer's full-output materialization (the

@@ -1297,6 +1297,120 @@ fn write_report(sections: &[Section], m: Mode) {
     std::fs::write(dir.join("scale-certification.md"), s).unwrap();
 }
 
+/// SE2-M17 — tier-depth read probe: the same row shapes the QA matrix
+/// runs, on the seeded database in its tiered steady state (up to ~17
+/// L0 + L1 at L, vs 2 under count-only). Cold rows detach the cache like
+/// the matrix (cache_bytes = 0); warm/hot rows carry the same pins. The
+/// cells are report-only evidence against the QA read gates (cold point
+/// <= 100 us, warm <= 50 us, hot head <= 20 us) — printed live to the
+/// stderr handle (libtest captures eprintln on the test thread).
+fn tier_read_probe(dir: &Path, b: &Built, sz: Size) -> Vec<Row> {
+    let mut rows = Vec::new();
+    let sample = sample_indices(sz);
+    let targets: Vec<Target> = sample.iter().map(|&i| (b.koids[i], i)).collect();
+    let absent = head_key(&[0xFF; 16]); // written by nobody: the pure fan-out walk
+
+    let mut cfg = Config::new(dir.to_path_buf());
+    cfg.cache_bytes = 0;
+    let db = Db::open(cfg).unwrap();
+    {
+        let mut it = targets.iter();
+        let mut r = timed(&db, targets.len(), |db| {
+            let &(koid, i) = it.next().unwrap();
+            assert_eq!(
+                db.get(&head_key(&koid)).unwrap(),
+                Some(head_value(i)),
+                "tier cold head diverged"
+            );
+        });
+        r.label = "head get · cold · tier".into();
+        rows.push(r);
+    }
+    {
+        let mut it = targets.iter();
+        let mut r = timed(&db, targets.len(), |db| {
+            let &(koid, i) = it.next().unwrap();
+            assert_eq!(
+                db.get(&obj_key(&koid, 1)).unwrap(),
+                Some(version_value(i, 1)),
+                "tier cold version diverged"
+            );
+        });
+        r.label = "version get · cold · tier".into();
+        rows.push(r);
+    }
+    {
+        let mut r = timed(&db, targets.len(), |db| {
+            assert_eq!(db.get(&absent).unwrap(), None, "tier absent must miss");
+        });
+        r.label = "absent get · cold · tier".into();
+        rows.push(r);
+    }
+    {
+        let mut t = 0usize;
+        let mut r = timed(&db, TYPE_SCANS, |db| {
+            let p = format!("type/m7t_{t}/");
+            t += 1;
+            assert_eq!(
+                db.scan(p.as_bytes()).unwrap().len(),
+                sz.n / N_TYPES,
+                "tier type scan drifted"
+            );
+        });
+        r.label = "type scan · cold · tier".into();
+        rows.push(r);
+    }
+    drop(db);
+
+    // warm/hot: default cache, one open — all reads, no mutation
+    let db = Db::open(Config::new(dir.to_path_buf())).unwrap();
+    {
+        let mut r = warm_pinned(
+            &db,
+            |db| {
+                for &(koid, _) in &targets {
+                    let _ = db.get(&head_key(&koid)).unwrap();
+                }
+            },
+            targets.len(),
+            {
+                let mut it = targets.iter();
+                move |db| {
+                    let &(koid, i) = it.next().unwrap();
+                    assert_eq!(
+                        db.get(&head_key(&koid)).unwrap(),
+                        Some(head_value(i)),
+                        "tier warm head diverged"
+                    );
+                }
+            },
+        );
+        r.label = "head get · warm · tier".into();
+        rows.push(r);
+    }
+    {
+        let (koid, i) = targets[0];
+        let key = head_key(&koid);
+        let mut r = warm_pinned(
+            &db,
+            |db| {
+                let _ = db.get(&key).unwrap();
+            },
+            100_000,
+            |db| {
+                assert_eq!(
+                    db.get(&key).unwrap(),
+                    Some(head_value(i)),
+                    "tier hot head diverged"
+                );
+            },
+        );
+        r.label = "head get · hot · tier".into();
+        rows.push(r);
+    }
+    rows
+}
+
 // ---- the tests ------------------------------------------------------------
 
 #[test]
@@ -1326,7 +1440,38 @@ fn ds_perf_loader() {
     };
     let p = tmp(&format!("m14-loader-{label}"));
     let built = build_dataset(&p, sz);
-    drop(built);
+    // SE2-M17 — the tier-depth read probe: strict opt-in, report cells
+    // printed live to the stderr handle (libtest captures eprintln on the
+    // test thread, so the loader's own .err log carries the probe rows).
+    if std::env::var_os("SE2M17_READS").is_some() {
+        use std::io::Write;
+        let mut out = std::io::stderr();
+        let _ = writeln!(
+            out,
+            "SE2M17 tier read probe — {} ({} rows, seed wall {:.1}s)",
+            sz.label,
+            built.rows,
+            built.wall_ms / 1000.0
+        );
+        for r in tier_read_probe(&p, &built, sz) {
+            let _ = writeln!(
+                out,
+                "{:24} ops={:7} wall={:9.1}ms p50={:6} p95={:6} p99={:6} | blocks={} bytes={} segs={:2} hits={} misses={}",
+                r.label,
+                r.ops,
+                r.wall_ms,
+                r.p50,
+                r.p95,
+                r.p99,
+                r.cells.blocks,
+                r.cells.bytes,
+                r.cells.segs,
+                r.cells.hits,
+                r.cells.misses
+            );
+        }
+        let _ = out.flush();
+    }
     cleanup(&p);
 }
 
