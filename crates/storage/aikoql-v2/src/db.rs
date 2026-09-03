@@ -60,6 +60,11 @@ const DEFAULT_CACHE_BYTES: usize = 8 * 1024 * 1024;
 /// SE2-M10 — at least this many L0 segments triggers a KeepAll compaction
 /// on the write path (steady state: one L1 + the active L0).
 const DEFAULT_L0_COMPACT_TRIGGER: usize = 4;
+/// SE2-M16 — a KeepAll merge rewrites the whole accumulated dataset, so a
+/// monotonically growing bulk seed pays it quadratically; the size tier
+/// skips the merge while L0 is not yet this fraction of L1 (L0 bytes >=
+/// L1 bytes / ratio; L1 empty always merges; 0 restores count-only M10).
+const DEFAULT_L0_TIER_RATIO: usize = 1;
 
 pub fn manifest_path(dir: &Path, generation: u64) -> PathBuf {
     dir.join(format!("MANIFEST-{generation:06}"))
@@ -103,6 +108,13 @@ pub struct Config {
     /// L0 segments compacts them (KeepAll) into one L1. 0 disables. An
     /// explicit flush() is the caller's checkpoint and never triggers.
     pub l0_compact_trigger: usize,
+    /// SE2-M16 — size tier above the count floor: the merge only fires once
+    /// L0's bytes are at least L1's bytes divided by this ratio (1 = the
+    /// L0 pile is as big as L1). 0 disables the size gate (M10
+    /// count-only). With uniform flushes F and trigger 4, merges land at
+    /// flushes 4, 8, 16, 32… instead of every 4th — the bulk-seed write
+    /// amplification drops from quadratic to ~O(n log n).
+    pub l0_tier_ratio: usize,
 }
 
 impl Config {
@@ -117,6 +129,7 @@ impl Config {
             max_wait_duration: Duration::ZERO,
             cache_bytes: DEFAULT_CACHE_BYTES,
             l0_compact_trigger: DEFAULT_L0_COMPACT_TRIGGER,
+            l0_tier_ratio: DEFAULT_L0_TIER_RATIO,
         }
     }
 }
@@ -367,20 +380,35 @@ impl Db {
     /// `l0_compact_trigger` L0 segments compacts them (KeepAll) into one
     /// L1, so the steady state is one L1 + the active L0 and a get
     /// considers ≤ 2 segments. Explicit flush() is the caller's checkpoint
-    /// and never triggers.
+    /// and never triggers. SE2-M16 — the size tier gates the merge: it
+    /// only fires once L0's bytes are at least L1's bytes divided by
+    /// `l0_tier_ratio` (L1 empty always merges; 0 = count-only M10), so a
+    /// growing bulk seed merges at 4, 8, 16, 32… flushes instead of every
+    /// 4th — write amplification ~O(n log n) instead of quadratic.
     fn maybe_compact(&mut self) -> Result<(), FormatError> {
         if self.config.l0_compact_trigger == 0 {
             return Ok(());
         }
-        let l0 = {
+        let (l0, l0_bytes, l1_bytes) = {
             let state = self.state.read().unwrap();
-            state
-                .segment_records
-                .iter()
-                .filter(|r| r.level == 0)
-                .count()
+            let mut l0 = 0usize;
+            let mut l0_bytes = 0u64;
+            let mut l1_bytes = 0u64;
+            for r in &state.segment_records {
+                if r.level == 0 {
+                    l0 += 1;
+                    l0_bytes += r.file_size;
+                } else {
+                    l1_bytes += r.file_size;
+                }
+            }
+            (l0, l0_bytes, l1_bytes)
         };
-        if l0 >= self.config.l0_compact_trigger {
+        let triggered = l0 >= self.config.l0_compact_trigger;
+        let tier_ok = self.config.l0_tier_ratio == 0
+            || l1_bytes == 0
+            || l0_bytes >= l1_bytes / self.config.l0_tier_ratio as u64;
+        if triggered && tier_ok {
             self.compact()?;
         }
         Ok(())

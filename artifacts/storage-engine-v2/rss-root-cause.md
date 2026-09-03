@@ -158,6 +158,70 @@ the loader as the trigger-crossing scale: 86 s wall, peak 0.48 GiB WS
 (0.58 GiB commit) at its single 4-L0 merge — the same merge-only shape at
 mid scale, between the flush-only M row (469.93 MiB) and L.
 
+## SE2-M16 — size-tiered compaction, measured outcome (2026-09-03)
+
+Option 5 implemented: `maybe_compact` gains a size tier above the M10
+count floor — the merge fires only when L0 holds at least
+`l0_compact_trigger` segments AND L0's bytes are at least L1's bytes
+divided by `l0_tier_ratio` (default 1; L1 empty always merges; 0
+restores count-only). A monotonically growing bulk seed now merges at
+L0 counts 4, 8, 16, 32… instead of every 4th flush — merge write
+amplification drops from quadratic to ~O(n log n). Three unit tests
+(`db_tiered_compact.rs`) pin the schedule: first merge at 4 with L1
+empty, skip while L0 < L1, ratio 2 fires earlier, ratio 0 and trigger
+0 preserve the M10 modes.
+
+Re-measured on the same machine (windows/x86_64, 8 cores, 30 GiB RAM),
+PID-sampled WorkingSet64 at 500 ms — the same method as the M15 cells:
+
+| cell | M15 | M16 |
+|---|---|---|
+| DS-PERF-L seed wall | 1,234.2 s | **1,035 s** (−16.1%) |
+| DS-PERF-L peak working set | 5.10 GiB | **4.02 GiB** (−21.2%) |
+
+**The tier schedule at L** (56 flushes, 37.4M rows, 680,064 rows and
+48.36 MB per flush): merges at L0 counts 4 (L1 empty), 4 again (L1 was
+exactly 4 flushes, so the count floor immediately satisfies the ratio —
+193.42 MB ≥ 193.20 MB), 9 (L1 was 8 flushes; the ~47-KB-per-flush
+output shrink from header collapse means 9 flushes, not 8, to match it
+— 435.2 MB ≥ 386.9 MB), 17 (L1 was 17 flushes, and here the shrink
+and the growth cancel — it fires by 0.8 MB: 822.1 ≥ 821.3). The next
+merge would need L0 ≥ 1.64 GB ≈ 34 flushes; the seed ended with 16 L0
+segments ≈ 776 MB, so the gate held and the pointless 5th merge never
+happened. Merge walls 5.16 / 9.76 / 20.59 / 44.77 s (80.3 s total);
+outputs 193.2 / 386.9 / 821.3 / 1640.1 MB — Σ 3.04 GB of merge I/O vs
+KeepAll's 12.77 GB (−76%).
+
+**The peak moved with the merges.** Merge peaks at 2.72M / 5.44M /
+11.56M / 23.12M entries measured 0.5 / 1.0 / 2.1 / 4.0 GiB WS — the
+1.27-1.3× entries footprint M9's bounded decode promises, with clean
+release to the ~80 MB baseline after each. M15's 5.10 GiB peak was the
+FINAL KeepAll merge over all 32M rows; the tier deferred that merge
+past seed end, so the M16 peak is the 23.1M-entry merge at L0 = 17.
+
+**Fast/slow cycles reconciled.** The 10-cluster staircase of the
+pre-M15 binary (run-1: 16.21 GiB / 1,952 s) was retired as M14-era
+code — exe forensics showed run-1 executed the 00:19 build that
+predates the M15 fix, and its signature ~78 s flush cycles once L0 ≥
+5-6 DO NOT recur on the M16 code: cycle times stay 16-27 s at every L0
+depth, writers never block, and the gate fires mid-write. The residual
+slow windows (26-38 s, ~8 of 56 cycles, scattered) decompose to
+periodic fsync stalls — 13-14 ms on ~a quarter of batches for 30-40 s
+windows, plus occasional 3.7-4.5 s publishes — OS-level periodic
+interference, engine-independent, already present in the M15 wall's
+shape. The per-component timing instrumentation was diagnostic-only and
+reverted before commit.
+
+**Read-path consequence.** The steady state is no longer one L1 + the
+active L0: L0 piles to ≤17 segments before the tier fires, and a get()
+considers up to 18 segments vs ≤2 under count-only. That fan-out is
+the design trade for −76% merge I/O; the read-side cost at this depth
+is not yet measured, and the hot-head / read-path gates pin their own
+count-only configs so their cells stand. DS-PERF-S (7 flushes) is
+unchanged by the tier — its single merge is the L1-empty one. Remaining
+headroom is the merge writer's full-output materialization (the
+variable-length header's two-pass shape), out of M16's scope.
+
 ## Caveats
 
 - Per-entry real RAM is estimated; the 14.4 vs 16.21 GiB gap is
