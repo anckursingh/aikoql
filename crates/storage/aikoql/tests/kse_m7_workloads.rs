@@ -836,7 +836,17 @@ fn m7_workloads() {
         paths.push(path);
     }
     for p in &paths {
-        std::fs::remove_dir_all(p).unwrap();
+        // Datasets come in both shapes: redb stores a single file at the
+        // path, the engine stores a directory, and the memory backend
+        // stores nothing (no dataset is ever created for it). Remove
+        // whichever is there, tolerating only "nothing was there" — any
+        // other failure leaves the path behind and the assert below fails.
+        let r = std::fs::remove_dir_all(p).or_else(|e| std::fs::remove_file(p).map_err(|_| e));
+        match r {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => panic!("workload dataset removal failed: {}: {e}", p.display()),
+        }
         assert!(!p.exists(), "workload dataset not removed: {}", p.display());
     }
     let gates = evaluate_gates(&results);

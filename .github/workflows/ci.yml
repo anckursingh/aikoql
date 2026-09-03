@@ -26,11 +26,17 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace -- -D warnings
       - run: cargo check --workspace
-      # Windows debug-builds the full workspace incl. the Wave 5 OLAP
-      # harness's test-only client deps (clickhouse/mysql) — the step
-      # exceeded its 15-minute budget (13m41s even before Wave 5).
-      - run: cargo test --workspace -- --skip load_encryption_overhead
-        timeout-minutes: 30
+      # Per-push CI is the fast regression net — every unit test plus the
+      # fast integration tests. The minute-scale measurement suites (m7
+      # workload matrix, kse120c writer contention, relationship locality,
+      # wave31 scale, v2 merged-scan) are skipped here and smoke-tested
+      # weekly in benchmark-nightly.yml; they also run locally at
+      # milestones. The step exceeded 15 min even before Wave 5 (13m41s)
+      # and SE2-M8..M14 grew it past 30 (timed out mid-suite); the budget
+      # is 60 to cover the 2-core debug runner's remaining variance. If it
+      # exceeds again, move the next-slowest test here, don't raise it.
+      - run: cargo test --workspace -- --skip load_encryption_overhead --skip w31_scale_001_knowledge_complexity_scaling --skip w31_scale_002_id_family_flood --skip kse120c_report --skip kse120c_writer_contention --skip kse050_052_relationship_locality --skip m7_workloads --skip merged_iterator_correctness
+        timeout-minutes: 60
       # DoD 19 (HLD §52/§53): golden PDF suite with visible per-stage
       # metrics — extraction/fragmentation/semantic/provenance/retrieval.
       - run: cargo test -p aikoql-ingestion --test multimodal_golden -- --nocapture
@@ -50,9 +56,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace -- --skip load_encryption_overhead
-        # Same command as the Windows step above (30m there): the full suite
-        # runs 14-16 min on the 2-core runner, so 15 min was a coin flip.
+      - run: cargo test --workspace -- --skip load_encryption_overhead --skip w31_scale_001_knowledge_complexity_scaling --skip w31_scale_002_id_family_flood --skip kse120c_report --skip kse120c_writer_contention --skip kse050_052_relationship_locality --skip m7_workloads --skip merged_iterator_correctness
+        # Fast regression net — the skipped minute-scale measurement suites
+        # run in benchmark-nightly.yml and locally at milestones. The full
+        # suite used to run 14-16 min on the 2-core runner; the skips keep
+        # it there instead of the ~25 min SE2-M8..M14 added.
         timeout-minutes: 30
 
   lint:

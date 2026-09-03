@@ -25,6 +25,20 @@ jobs:
       - run: cargo test --workspace -- --ignored --test-threads=1
         timeout-minutes: 30
 
+      # Smoke pass of the minute-scale suites per-push CI skips (ci.yml):
+      # the same regression net, weekly, release mode.
+      - name: Skipped-by-CI suites — smoke (release)
+        run: |
+          cargo test --release -p aikoql-storage \
+            --test kse_m7_workloads \
+            --test kse120c_writer_contention \
+            --test kse6_relationship_locality \
+            && cargo test --release -p aikoql-storage-v2 \
+              --test kse_m7_v2_workloads \
+              --test merged_scan \
+            && cargo test --release -p aikoql-ingestion --test wave31_scale
+        timeout-minutes: 60
+
       # KSE-12 property gate (MRFC-KSE-001 §18): ≥10,000 generated op
       # sequences, six invariants asserted after every sequence. The test
       # fails if KSE12_NIGHTLY is set but not honored (strict opt-in).
