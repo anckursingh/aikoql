@@ -203,9 +203,55 @@ Deliver: DS-PERF-M (100K KOs × 5 versions + relationships) and DS-PERF-L (1M ×
 
 **GREEN (2026-09-03)**: harness 3/3 green at smoke, full v2 suite green (137), gates clean, and the mode-2 nightly (`SE2M14_NIGHTLY=2`, release, 3 h 16 m) green end to end — report `artifacts/storage-engine-v2/scale-certification.md`. Datasets: DS-PERF-M 100K × 5 = 2 702 200 rows (77.5 s seed, 100 002 fsyncs, 157.77 MiB, 1 segment); DS-PERF-L 1M × 10 = 32 002 200 rows (1 750 s seed, 2.12 GiB). All seven QA M8 gate rows PASS on DS-PERF-M with the machine spec per row: cold point 22.0 µs (redb 3.2), warm 4.6 (2.4), hot head 2.3, fanout F=10/100/1000 = 33.8 µs / 314.9 µs / 11 216.4 µs (redb F=1000: 2 403.8), hot context 48.1, group commit cited from SE2-M13 — redb is faster on every comparable M row, reported honestly. Hot head 403 863 ops/s @ P50 2.3 µs (M11's probe was 1.2 µs — the equal-run decode cost, 8.7× under the gate). DS-PERF-L scale check: the hot path stays flat (2.4 µs), cold point 22→30 µs, type scan 632→6 813 µs (~linear in data), F=1000 11.2→20.5 ms. Adoption matrix re-ran on the same harness (child exit 0, `workloads.md` regenerated): 7.5×–23.8× across W1..W8 vs the 09-01 nightly; gate 5 FAIL at W1 6.61× / W2 6.13× v1 (was 72.53× / 69.79× — 11× closer, verdict stays NOT ADOPT); v2 now beats redb on W8 (5.4×) and W6 (2.9×). **Regression found and fixed by this nightly, TDD REDs first** (`block_v2_equal_key_run_restarts` writer-level + `equal_key_versions_survive_flush` engine-level, both fired the exact corruption): v2 restart points landed on every 16th entry unconditionally, but the memtable keys on (key, seq) — the kernel's RMW restatements accumulate versions of one key and a single flush publishes the whole run, which the reader's fail-closed strictly-increasing restart check rejected. The writer now skips restarts on equal keys (intervals over a run exceed 16 — the honest version-lookup cost). Two findings carried in the report for follow-up: seed RSS amplification (DS-PERF-L peak 16.21 GiB vs 2.12 GiB dataset; kse loader 496.93 MiB → 1.35 GiB vs 09-01) and the L seed wall (29 min, fsync-per-batch Sync durability). Machine: windows/x86_64, 8 cores, AMD Ryzen Family 23.
 
+### SE2-M15 — Publish pipeline (streamed segment writer)
+
+Done (2/2 new green, 139/139 suite).
+
+Delivered: `SegmentWriter::publish` streams blocks to the temp file instead of the 5-copy in-memory pipeline (per-block Vec → whole-file buffer → whole-file `Vec<SegmentEntry>`), and returns `(file_size, checksum8)` so compaction measures its own I/O without a second pass. Byte-pins `v2_publish_bytes_pinned` + `v1_multiblock_bytes_pinned` (fixtures v2_publish_pin.hex / v1_multiblock_pin.hex — the v1 multiblock captured from the 00e2270 worktree, so the byte contract is pinned against the ORIGINAL writer, not the rewritten one). Nightly DS-PERF-L re-run: peak RSS 16.21 → 5.10 GiB (−3.2×), seed wall 1750.4 → 1234.2 s (−29.5%) — the M14 follow-up finding, fixed.
+
+### SE2-M16 — Tiered compaction (size-tier merge gates)
+
+Done (3/3 new green, 142/142 suite).
+
+Delivered: `Config.l0_tier_ratio` — size-tier merge gate: L0 compacts only when Σ L0 bytes ≥ Σ L1 bytes / ratio (default 1; 0 = the M10 count-based trigger). REDs: `tiered_trigger_skips_small_l0`, `tiered_skip_reads_walk_unmerged_l0` (reads walk unmerged L0 correctly — no phantom, no lost row), `tiered_ratio_zero_is_count_only`. Nightly DS-PERF-L re-run: seed wall 1234.2 → 1035 s (−16.1%), peak RSS 5.10 → 4.02 GiB (−21.2%), Σ merge I/O 3.04 GB (−76%); merges at L0 4/4/9/17 with the gate held at end. exe-trap lesson: run-1's staircase was a stale pre-M15 exe — exe hash ≠ content, verify by content-grep/build time.
+
+### SE2-M17 — Tiered read path (QA read gates at depth)
+
+Done (2/2 new green, 144/144 suite).
+
+Delivered: the tiered read path certified — `Db::get` walks L0 newest-first then L1, the M7 bloom + M9 range skip absorb fan-out. Probe `SE2M17_READS=1` strict opt-in, release, artifact `tiered-read.md`. QA read gates PASS at depth 17 (16 L0 + 1 L1): cold 27.3 µs ≤ 100, warm 9.5 ≤ 50, hot 3.5 ≤ 20 at L (3.7–5.7× headroom); absent walk 1.7 µs = 15 segments / 0 blocks (metadata traversal provably cheap); type scan 6.23 ms under M14's count-only 6.81 ms. REDs: `tier_depth_answers_match_oracle` (50k oracle, 0 mismatches), `tier_depth_fanout_absorbed` (range-skip + bloom absorb fan-out).
+
+### SE2-M18 — Tier-depth fanout certification
+
+Done (0/0 new — certification only).
+
+Delivered: the full QA read matrix at depth 17 (release, probe-opt-in): fanout warm F=10 59.1 µs / F=100 521 µs / F=1000 21.5 ms; hot context 92.8 µs = 1.08× the thinnest head. Findings reported: F=1000 warm thrashes the 8 MiB cache (the fanout walk re-reads blocks).
+
+### SE2-M19 — V2-adopt re-matrix on post-M18 code
+
+Done (0/0 new — matrix + harness honesty fixes).
+
+Delivered: the adoption-scale matrix re-run on post-M18 code (`V2ADOPT_NIGHTLY=1`, release, 2675 s, exit 0) → workloads.md (2026-09-04) + the adoption-decision.md M19 section. Gate 5 FAILs the ≤2× bound in both page-cache regimes — warm W1 6.53× / W2 6.81× (this run; 7.09×/8.52× on a second warm run the same day), cold 72.53×/69.79× (09-01) — **NOT ADOPT stands**. M15/M16 gains visible: v2 seed wall 294.9 → 221.6 s (≈ v1's 230.2), RSS 496.93 → 428.05 MiB (30% below v1's 611.22), disk 347.99 MiB. Harness honesty fixes: shared `run_date()` civil-date helper (8 lines, no chrono) un-hardcodes the date across the workloads/conformance/scale harnesses; the workloads.md write is guarded by NIGHTLY_ENV so smoke runs stop clobbering the canonical artifact (guard proven by the suite leaving it untouched).
+
+### SE2-M20 — Merge-writer streaming (bounded-memory merge emission)
+
+In-flight — design done, **PARKED**.
+
+Designed: chunked merge emission, not a true streaming writer. The whole-file sha256-8 + header-first layout (the header needs block_count/entry_count/key_max before anything can be hashed) makes a byte-exact single-segment streaming writer require a full-file re-read or a body copy. Chunked emission: `merge_chunk_bytes` (64 MiB default, 0 = unbounded/pre-M20), merge emits k bounded L1 segments named SEGMENT-{id_base+k}.seg (archive chunks ARCHIVE-{id}.{k}.seg), a manifest record per chunk, next_segment_id = id + k + 1; existing pins survive (small datasets → 1 chunk). Parked per the read-path recovery plan's "What NOT to do" (no compaction work while gate 5 fails) — pending user decision.
+
+### SE2-M21..M27 — TDD read-path recovery program (the gate-5 attack)
+
+Source: `AIKOQL_Storage_V2_TDD_Read_Path_Recovery_Plan.md` (downloads; corrected 2026-09-04 against the executed ledger — its original M18..M24 collided with executed M18/M19 and assigned M20, renumbered M21..M27; its §7 W2 target corrected to the gate's own 10 µs; its perf cells verified correct against the 09-04 matrix).
+
+Objective: gate 5 — W1/W2 P50 ≤ 2× v1. Known split: warm W1 37 µs ≈ 27 µs engine get (M17 cold, cache-detached) + ~10 µs kernel/adapter. Evidence already on file: hot head 2.3 µs (M14), warm 9.5 / cold 27.3 / absent 1.7 µs (M17), fanout 59.1 µs + hot context 92.8 µs (M18) — metadata traversal and synchronization are NOT dominant (M10 fixed the read-lock-across-disk stall); the open questions are the ~18 µs cache-miss block path and the ~10 µs kernel leg.
+
+Sequence: **M21 attribution** (read the existing ReadPathStats at adoption scale — all but two counters exist since M8; add `lock_wait_ns` + a kernel-side leg; tests M21-01..04: attribution error ≤ 10%, memtable hit, segment cache hit, segment cache miss; exit = a published P50/P95 attribution report) → **M22 fix the measured dominant cost** (hypotheses A decode/allocation, B synchronization, C metadata traversal — pursue only the proven one; acceptance W1 ≥ 25% better, no >10% W6/RSS regression) → **M23/M24 conditional** (head lookup specialization / bounded KO object cache — only if M21 proves their cause; M11's 16× hot-head margin argues against pre-building them) → **scale experiment 1M/10M** (100K fully measured; 1M has M14 QA-gate cells only — DS-PERF-L hot 2.4 / cold 30.1 µs — 10M never; run W1–W8 at both after M22) → **attack the gate** → **M25 relationship batching** (dedup → group by segment → group by block → decode once) → **M26 type scan** (profile first — M17's 6.23 ms at depth 17 vs the 22.6 ms W5 cell already cuts the search space) → **M27 context batch retrieval**.
+
+Discipline carried from the doc: the hypothesis template (Hypothesis / Existing evidence / What will falsify it / Expected contribution / Implementation risk / Correctness risk / Alternatives / Recommendation) before every milestone; keep-or-revert after W1–W8; no indexes without profiling; correctness pins never weakened; adoption gates never redefined to pass; no compaction work while gate 5 fails (M20 parked).
+
 ## Performance acceptance (§26) — gates for the v2 adoption matrix
 
-Recovery bounded by active WAL (M3 measurement, recovery-independence.md); dataset larger than RAM queryable (V2-Adopt probe); memory limits configurable (M2 Config knobs, V2-Adopt probe); group commit improves concurrent throughput without weakening Sync (M6 — weakening-Sync pinned, throughput half re-evidenced in SE2-M13 after the 2026-09-02 matrix misread correction); KO lookup competitive with the MVP baseline (FAIL at adoption scale — W1 6.61×, W2 6.13× v1 at 100K, 2026-09-03 re-run; was 72.53× / 69.79× on 2026-09-01 — 11× closer, still above the ≤2× bound). Measured status lives in `artifacts/storage-engine-v2/adoption-decision.md`.
+Recovery bounded by active WAL (M3 measurement, recovery-independence.md); dataset larger than RAM queryable (V2-Adopt probe); memory limits configurable (M2 Config knobs, V2-Adopt probe); group commit improves concurrent throughput without weakening Sync (M6 — weakening-Sync pinned, throughput half re-evidenced in SE2-M13 after the 2026-09-02 matrix misread correction); KO lookup competitive with the MVP baseline (FAIL at adoption scale in both page-cache regimes — W1 6.53×, W2 6.81× warm on the 2026-09-04 post-M18 re-run, 72.53× / 69.79× cold on 2026-09-01; every measurement is above the ≤2× bound — see the SE2-M19 row above). Measured status lives in `artifacts/storage-engine-v2/adoption-decision.md`.
 
 The 2026-09-02 stabilization program (QA spec, SE2-M8..M14) adds the QA operational gates: cold point P50 ≤ 100 µs, warm ≤ 50 µs, hot head ≤ 20 µs, fanout F=10/100/1000 ≤ 1/10/50 ms, hot context ≤ 100 µs, group commit reduces fsyncs AND beats Sync per-op where batching is possible. Gate numbers are machine-relative — reported with the machine spec, never silently relaxed (the QA doc's own rule); perf numbers remain report cells, never asserts. The ≤2×-of-v1 bound stays out of the stabilization scope: it is a RAM-vs-disk bound, priced in by the 2026-09-01 NOT-ADOPT verdict; the achievable bar is redb/RocksDB-class parity.
 
