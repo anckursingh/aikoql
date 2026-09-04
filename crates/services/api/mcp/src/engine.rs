@@ -13,12 +13,34 @@ use aikoql_kernel::storage::encrypted::EncryptedStore;
 use aikoql_kernel::storage::store::StorageEngine;
 use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_kernel::{KError, KResult, Kernel, SystemClock};
+use aikoql_storage::AikoqlStorageEngine;
+use aikoql_storage_v2::AikoqlStorageEngineV2;
 use std::sync::Arc;
 
+/// Production default: the AIKOQL-native engine (adoption gate passed —
+/// artifacts/storage-engine/adoption-decision.md). Existing redb databases
+/// keep working via AIKOQL_BACKEND=redb; the migration path is the REC-002
+/// backup/restore flow (restore reads the redb snapshot format into whatever
+/// engine is current). `aikoql-v2` (the segmented engine, SE2) is opt-in
+/// only — it becomes eligible as a default on the V2-Adopt verdict
+/// (artifacts/storage-engine-v2/adoption-decision.md), never before. Unknown
+/// values fail closed — a mistyped backend must not silently open a fresh
+/// store at the same path.
+fn open_engine(db_path: &str) -> KResult<Arc<dyn StorageEngine>> {
+    match std::env::var("AIKOQL_BACKEND").ok().as_deref() {
+        None | Some("aikoql") => Ok(Arc::new(AikoqlStorageEngine::open(db_path)?)),
+        Some("redb") => Ok(Arc::new(RedbEngine::open(db_path)?)),
+        Some("aikoql-v2") => Ok(Arc::new(AikoqlStorageEngineV2::open(db_path)?)),
+        Some(other) => Err(KError::Store(format!(
+            "unknown AIKOQL_BACKEND {other:?}: use \"aikoql\", \"redb\" or \"aikoql-v2\""
+        ))),
+    }
+}
+
 pub(crate) fn open_kernel(db_path: &str, enc: &RuntimeEncryption) -> KResult<Kernel> {
-    let engine = RedbEngine::open(db_path)?;
+    let engine = open_engine(db_path)?;
     if !enc.enabled {
-        return Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xA9C9);
+        return Kernel::open(engine, Arc::new(SystemClock), 0xA9C9);
     }
     let Some(pass) = enc.passphrase.as_deref() else {
         return Err(KError::Store(
@@ -33,11 +55,8 @@ pub(crate) fn open_kernel(db_path: &str, enc: &RuntimeEncryption) -> KResult<Ker
     let store_key = hkdf::domain_sep(&kek, DOMAIN_STORE);
     let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
     let envelope = Arc::new(Envelope::init(&kms, pass, crypto.clone()).map_err(KError::Store)?);
-    let store: Arc<dyn StorageEngine> = Arc::new(EncryptedStore::new(
-        Arc::new(engine),
-        crypto.clone(),
-        store_key,
-    ));
+    let store: Arc<dyn StorageEngine> =
+        Arc::new(EncryptedStore::new(engine, crypto.clone(), store_key));
     let kernel = Kernel::open(store, Arc::new(SystemClock), 0xA9C9)?
         .with_field_encryption(crypto, envelope)?;
     for (type_name, fields) in &enc.policies {
@@ -50,4 +69,99 @@ pub(crate) fn open_kernel(db_path: &str, enc: &RuntimeEncryption) -> KResult<Ker
 pub(crate) fn open_kernel_auto(db_path: &str) -> KResult<Kernel> {
     let enc = RuntimeEncryption::discover().map_err(KError::Store)?;
     open_kernel(db_path, &enc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::open_engine;
+    use aikoql_kernel::storage::store::WriteBatch;
+
+    /// Restores AIKOQL_BACKEND on drop — mcp unit tests share one process, and
+    /// a leaked backend value would change every later open_kernel call.
+    struct EnvGuard {
+        prev: Option<String>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var("AIKOQL_BACKEND", v),
+                None => std::env::remove_var("AIKOQL_BACKEND"),
+            }
+        }
+    }
+
+    // Temp db paths written by THIS test thread, swept when the thread exits
+    // (the main thread's destructor runs at process exit — statics are NOT
+    // dropped on Windows MSVC, TLS is).
+    thread_local! {
+        static TEMP_PATHS: std::cell::RefCell<TempSweeper> =
+            const { std::cell::RefCell::new(TempSweeper { paths: Vec::new() }) };
+    }
+
+    struct TempSweeper {
+        paths: Vec<std::path::PathBuf>,
+    }
+    impl Drop for TempSweeper {
+        fn drop(&mut self) {
+            for p in &self.paths {
+                let _ = std::fs::remove_file(p);
+                let _ = std::fs::remove_dir_all(p);
+                // Sidecars next to the registered stem (`{stem}.redb.artifacts`).
+                let Some(name) = p.file_name() else { continue };
+                if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
+                    let prefix = format!("{}.", name.to_string_lossy());
+                    for e in rd.flatten() {
+                        if e.file_name().to_string_lossy().starts_with(&prefix) {
+                            let _ = std::fs::remove_file(e.path());
+                            let _ = std::fs::remove_dir_all(e.path());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn scratch(tag: &str) -> String {
+        let mut p = std::env::temp_dir();
+        p.push(format!("aikoql_mcp_backend_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        TEMP_PATHS.with(|t| t.borrow_mut().paths.push(p.clone()));
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn backend_selector_matrix_and_fail_closed() {
+        // Default (unset), the redb opt-out and the v2 opt-in all open and
+        // serve a put/get through the same selector.
+        for (env, tag) in [
+            (None, "aikoql"),
+            (Some("redb"), "redb"),
+            (Some("aikoql-v2"), "aikoql-v2"),
+        ] {
+            let prev = std::env::var("AIKOQL_BACKEND").ok();
+            let guard = match env {
+                Some(v) => {
+                    std::env::set_var("AIKOQL_BACKEND", v);
+                    EnvGuard { prev }
+                }
+                None => {
+                    std::env::remove_var("AIKOQL_BACKEND");
+                    EnvGuard { prev }
+                }
+            };
+            let engine = open_engine(&scratch(tag)).unwrap();
+            let mut b = WriteBatch::new();
+            b.put(b"k".to_vec(), b"v".to_vec());
+            engine.write_batch(&b).unwrap();
+            assert_eq!(engine.get(b"k").unwrap(), Some(b"v".to_vec()));
+            drop(guard);
+        }
+        // Unknown values fail closed.
+        let prev = std::env::var("AIKOQL_BACKEND").ok();
+        std::env::set_var("AIKOQL_BACKEND", "nope");
+        let guard = EnvGuard { prev };
+        assert!(open_engine(&scratch("bad")).is_err());
+        drop(guard);
+    }
 }

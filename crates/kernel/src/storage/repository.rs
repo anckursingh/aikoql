@@ -33,6 +33,7 @@ use crate::knowledge::kom::*;
 use crate::knowledge::notify::{EventFilter, SubscriptionRecord};
 use crate::storage::cache::KnowledgeCache;
 use crate::storage::store::{StorageEngine, WriteBatch};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 const P_OBJ: &[u8] = b"ko/";
@@ -302,6 +303,19 @@ fn decode_sub(buf: &[u8]) -> KResult<SubscriptionRecord> {
     Ok(SubscriptionRecord { filter, last_seq })
 }
 
+/// KSE-10 report of a derived-index rebuild: the exact image of the
+/// canonical heads, plus what the sweep removed.
+pub struct DerivedIndexRebuild {
+    pub heads_scanned: usize,
+    pub relo_rows: usize,
+    pub reli_rows: usize,
+    pub type_rows: usize,
+    /// Rows removed that decoded fine but referenced nothing canonical.
+    pub removed_stale: usize,
+    /// Rows removed that failed key decode (corrupt index entries).
+    pub removed_invalid: usize,
+}
+
 /// The kernel's storage boundary. Hides key layout and low-level encoding.
 pub struct KnowledgeRepository {
     engine: Arc<dyn StorageEngine>,
@@ -422,6 +436,80 @@ impl KnowledgeRepository {
 
     pub fn put_type_index_marker(&self, batch: &mut WriteBatch) {
         batch.put(K_TYPE_INDEX.to_vec(), vec![]);
+    }
+
+    /// KSE-10: rebuild all derived indexes (relo/reli/type) from canonical
+    /// state. The ko/ heads are the authority; every derived row is
+    /// recomputed as their exact image and the symmetric difference is
+    /// applied in ONE batch (disjoint put/del key sets, so the engine's
+    /// puts-before-dels order cannot cross a del with a put).
+    /// ponytail: O(derived-index) memory for the two key sets — rebuild is a
+    /// repair op, not a hot path.
+    pub fn rebuild_derived_indexes(&self) -> KResult<DerivedIndexRebuild> {
+        let mut old: HashSet<Vec<u8>> = HashSet::new();
+        let mut removed_invalid = 0usize;
+        for (key, _v) in self.engine().scan(P_REL_OUT)? {
+            if decode_rel_out_key(&key).is_err() {
+                removed_invalid += 1;
+            }
+            old.insert(key);
+        }
+        for (key, _v) in self.engine().scan(P_REL_IN)? {
+            if decode_rel_in_key(&key).is_err() {
+                removed_invalid += 1;
+            }
+            old.insert(key);
+        }
+        for (key, _v) in self.engine().scan(P_TYPE)? {
+            if key.len() < P_TYPE.len() + 1 + KOID_LEN {
+                removed_invalid += 1;
+            }
+            old.insert(key);
+        }
+
+        let mut new: HashSet<Vec<u8>> = HashSet::new();
+        let mut relo_rows = 0usize;
+        let mut reli_rows = 0usize;
+        let mut type_rows = 0usize;
+        let heads = self.scan_heads()?;
+        let heads_scanned = heads.len();
+        for (koid, _version, ts, _state) in heads {
+            let Some(ko) = self.get_object_version(&koid, ts)? else {
+                continue; // head without a version row — canonical corruption, not derivable
+            };
+            for rel in &ko.relationships {
+                let (src, dst) = match rel.direction {
+                    Direction::Outbound => (koid, rel.target),
+                    Direction::Inbound => (rel.target, koid),
+                };
+                new.insert(rel_out_key(&src, &rel.rel_type, &dst));
+                new.insert(rel_in_key(&dst, &rel.rel_type, &src));
+                relo_rows += 1;
+                reli_rows += 1;
+            }
+            new.insert(type_key(&ko.metadata.type_name, &koid));
+            type_rows += 1;
+        }
+
+        let removed = old.difference(&new).count();
+        let mut batch = WriteBatch::new();
+        for key in old.difference(&new) {
+            batch.del(key.clone());
+        }
+        for key in new.difference(&old) {
+            batch.put(key.clone(), vec![]);
+        }
+        if !batch.is_empty() {
+            self.write_batch(&batch)?;
+        }
+        Ok(DerivedIndexRebuild {
+            heads_scanned,
+            relo_rows,
+            reli_rows,
+            type_rows,
+            removed_stale: removed - removed_invalid,
+            removed_invalid,
+        })
     }
 
     // -----------------------------------------------------------------------

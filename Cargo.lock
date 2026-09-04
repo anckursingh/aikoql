@@ -159,6 +159,8 @@ dependencies = [
  "aikoql-scheduler",
  "aikoql-semantic",
  "aikoql-sqlite",
+ "aikoql-storage",
+ "aikoql-storage-v2",
  "base64 0.22.1",
  "mongodb",
  "postgres",
@@ -222,6 +224,7 @@ dependencies = [
  "aikoql-graph",
  "aikoql-kernel",
  "aikoql-runtime",
+ "aikoql-storage",
  "pyo3",
 ]
 
@@ -280,6 +283,24 @@ version = "0.1.18"
 dependencies = [
  "aikoql-kernel",
  "rusqlite",
+]
+
+[[package]]
+name = "aikoql-storage"
+version = "0.1.18"
+dependencies = [
+ "aikoql-kernel",
+ "aikoql-rocksdb",
+ "redb",
+]
+
+[[package]]
+name = "aikoql-storage-v2"
+version = "0.1.18"
+dependencies = [
+ "aikoql-kernel",
+ "aikoql-storage",
+ "sha2 0.10.9",
 ]
 
 [[package]]
