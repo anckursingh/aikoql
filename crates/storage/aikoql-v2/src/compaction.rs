@@ -12,6 +12,15 @@
 //! ARCHIVE rows are appended to an archive segment (all versions — they
 //! leave the live key space); the archive is never consulted by the live
 //! database, only readable directly (SegmentReader).
+//!
+//! SE2-M20 — chunked emission: the merge publishes its output as a
+//! sequence of bounded segments (chunk cap, 0 = one unbounded segment)
+//! instead of buffering the whole merged dataset in one writer — the
+//! DS-PERF-L RSS amplification. Chunks split on entry granularity in
+//! merge order, so chunks are globally sorted and non-overlapping, and
+//! ids come from one counter (archive chunks pull lazily). A crash
+//! mid-merge leaves only orphan chunks the next open ignores; the
+//! manifest naming all chunks stays the single atomic commit point.
 
 use crate::format::FormatError;
 use crate::segment::{SegmentEntry, SegmentIter, SegmentReader, SegmentWriter, FLAG_DELETE};
@@ -57,20 +66,28 @@ impl RetentionPolicy for KeepAll {
     }
 }
 
-/// Merge `inputs` (key-sorted segments, any levels) into one L1 segment
-/// published at `out_path` and validated by reopening it. Rows the
-/// `policy` classifies ARCHIVE are appended to `archive_path` (created
-/// with its parent directory) instead of the output. Returns the open
-/// reader, or None when the output would be empty — nothing is published
-/// to the live key space and the L1 set is empty (an archive, if any, is
-/// still published).
+/// Merge `inputs` (key-sorted segments, any levels) into a sequence of
+/// bounded L1 segments under `dir` (SE2-M20): live chunks publish as
+/// `SEGMENT-{id:06}.seg` with ids pulled from `next_id` in chunk order,
+/// archive chunks as `archive/ARCHIVE-{id:06}.seg` / `ARCHIVE-{id:06}-{c}.seg`
+/// (the archive id is pulled lazily on first use). `chunk_bytes` is the
+/// cap in estimated entry bytes — 0 keeps the pre-M20 shape, one
+/// unbounded segment. Chunks split on entry granularity in merge order,
+/// so they are globally sorted and non-overlapping. Every chunk is
+/// reopened for validation (the pipeline's validate step) and returned
+/// open with its manifest-record fields. An empty live output returns no
+/// chunks — nothing is published to the live key space (an archive, if
+/// any, is still published). A mid-merge error leaves earlier chunks as
+/// orphans the next open ignores — the manifest naming all chunks stays
+/// the single atomic commit point.
 pub fn merge(
     inputs: &[Arc<SegmentReader>],
     block_target: usize,
-    out_path: &Path,
-    archive_path: &Path,
+    chunk_bytes: usize,
+    dir: &Path,
+    next_id: &mut u64,
     policy: &dyn RetentionPolicy,
-) -> Result<(CompactStats, Option<PublishedSegment>), FormatError> {
+) -> Result<(CompactStats, Vec<(u64, PublishedSegment)>), FormatError> {
     let mut stats = CompactStats {
         segments_in: inputs.len() as u64,
         ..CompactStats::default()
@@ -93,7 +110,9 @@ pub fn merge(
     }
 
     let mut writer = SegmentWriter::new_v2(block_target);
-    let mut archive: Option<SegmentWriter> = None;
+    let mut live_len = 0usize;
+    let mut chunks: Vec<(u64, PublishedSegment)> = Vec::new();
+    let mut archive: Option<ArchiveSink> = None;
     while let Some((key, _, i)) = heap.pop() {
         let winner = fronts[i].take().expect("front present");
         stats.entries_in += 1;
@@ -118,47 +137,161 @@ pub fn merge(
         match policy.classify(&winner.key) {
             Retention::Keep => {
                 if winner.flags & FLAG_DELETE == 0 {
-                    writer.push(winner);
+                    push_live(
+                        &mut writer,
+                        &mut live_len,
+                        &mut chunks,
+                        dir,
+                        next_id,
+                        chunk_bytes,
+                        winner,
+                    )?;
                     stats.entries_out += 1;
                 }
             }
             Retention::Drop => {}
             Retention::Archive => {
-                let aw = archive.get_or_insert_with(|| SegmentWriter::new_v2(block_target));
-                aw.push(winner);
+                let aw = archive.get_or_insert_with(|| ArchiveSink::new(block_target));
+                push_archive(aw, dir, next_id, chunk_bytes, winner)?;
                 stats.entries_archived += 1;
                 for loser in losers {
-                    aw.push(loser);
+                    push_archive(aw, dir, next_id, chunk_bytes, loser)?;
                     stats.entries_archived += 1;
                 }
             }
         }
     }
 
+    if live_len > 0 {
+        chunks.push(publish_chunk(&mut writer, &mut live_len, dir, next_id)?);
+    }
     // An archive is published even when the live output is empty.
     if let Some(mut aw) = archive {
-        std::fs::create_dir_all(
-            archive_path
-                .parent()
-                .expect("archive path has a parent directory"),
-        )
-        .map_err(|e| {
-            FormatError::Io(format!(
-                "create archive dir {}: {e}",
-                archive_path.display()
-            ))
-        })?;
-        aw.publish(archive_path)?;
+        if aw.len > 0 {
+            let id = aw.id.get_or_insert_with(|| {
+                let id = *next_id;
+                *next_id += 1;
+                id
+            });
+            publish_archive_chunk(&mut aw.writer, &mut aw.len, dir, *id, aw.chunk)?;
+        }
     }
-    if stats.entries_out == 0 {
-        return Ok((stats, None));
+    stats.segments_out = chunks.len() as u64;
+    Ok((stats, chunks))
+}
+
+/// Wire-size upper bound of one entry (shared-prefix savings ignored — an
+/// over-estimate is exactly right for a memory bound).
+fn entry_bytes(e: &SegmentEntry) -> usize {
+    e.key.len() + e.value.len() + 17
+}
+
+/// Buffer one live entry, publishing the current chunk first when the cap
+/// would be exceeded (the buffer never holds more than the cap + one
+/// entry, and a chunk never publishes empty).
+fn push_live(
+    writer: &mut SegmentWriter,
+    len: &mut usize,
+    chunks: &mut Vec<(u64, PublishedSegment)>,
+    dir: &Path,
+    next_id: &mut u64,
+    chunk_bytes: usize,
+    e: SegmentEntry,
+) -> Result<(), FormatError> {
+    let est = entry_bytes(&e);
+    if chunk_bytes > 0 && *len > 0 && *len + est > chunk_bytes {
+        chunks.push(publish_chunk(writer, len, dir, next_id)?);
     }
-    let (file_size, checksum) = writer.publish(out_path)?;
-    // The validate step of the pipeline: structural damage must never
-    // reach the manifest.
-    let reader = SegmentReader::open(out_path)?;
-    stats.segments_out = 1;
-    Ok((stats, Some((reader, file_size, checksum))))
+    *len += est;
+    writer.push(e);
+    Ok(())
+}
+
+/// Publish one buffered live chunk at SEGMENT-{id:06}.seg, pulling its id
+/// from `next_id`, and reopen it for validation.
+fn publish_chunk(
+    writer: &mut SegmentWriter,
+    len: &mut usize,
+    dir: &Path,
+    next_id: &mut u64,
+) -> Result<(u64, PublishedSegment), FormatError> {
+    let id = *next_id;
+    *next_id += 1;
+    let path = crate::segment::segment_path(dir, id);
+    let (file_size, checksum) = writer.publish(&path)?;
+    let reader = SegmentReader::open(&path)?;
+    *len = 0;
+    Ok((id, (reader, file_size, checksum)))
+}
+
+/// The buffered archive output: writer plus its chunk accounting. The
+/// archive id is pulled from the shared counter lazily, on the first
+/// chunk publish — an archive that never emits a chunk consumes no id.
+struct ArchiveSink {
+    writer: SegmentWriter,
+    len: usize,
+    chunk: usize,
+    id: Option<u64>,
+}
+
+impl ArchiveSink {
+    fn new(block_target: usize) -> Self {
+        ArchiveSink {
+            writer: SegmentWriter::new_v2(block_target),
+            len: 0,
+            chunk: 0,
+            id: None,
+        }
+    }
+}
+
+/// Buffer one archive entry, splitting archive chunks on the same cap. A
+/// key's version run may straddle two chunks — the archive is never
+/// consulted for answers, each chunk stays a valid standalone segment.
+fn push_archive(
+    sink: &mut ArchiveSink,
+    dir: &Path,
+    next_id: &mut u64,
+    chunk_bytes: usize,
+    e: SegmentEntry,
+) -> Result<(), FormatError> {
+    let est = entry_bytes(&e);
+    if chunk_bytes > 0 && sink.len > 0 && sink.len + est > chunk_bytes {
+        let this = sink.id.get_or_insert_with(|| {
+            let id = *next_id;
+            *next_id += 1;
+            id
+        });
+        publish_archive_chunk(&mut sink.writer, &mut sink.len, dir, *this, sink.chunk)?;
+        sink.chunk += 1;
+    }
+    sink.len += est;
+    sink.writer.push(e);
+    Ok(())
+}
+
+/// Publish one archive chunk at archive/ARCHIVE-{id:06}.seg (first chunk)
+/// or archive/ARCHIVE-{id:06}-{c}.seg. Not reopened for validation —
+/// archives are never consulted by the live database (SE2-M5 unchanged).
+fn publish_archive_chunk(
+    writer: &mut SegmentWriter,
+    len: &mut usize,
+    dir: &Path,
+    id: u64,
+    chunk: usize,
+) -> Result<(), FormatError> {
+    let name = if chunk == 0 {
+        format!("ARCHIVE-{id:06}.seg")
+    } else {
+        format!("ARCHIVE-{id:06}-{chunk}.seg")
+    };
+    let archive_dir = dir.join("archive");
+    std::fs::create_dir_all(&archive_dir).map_err(|e| {
+        FormatError::Io(format!("create archive dir {}: {e}", archive_dir.display()))
+    })?;
+    writer.publish(&archive_dir.join(name))?;
+    *len = 0;
+    Ok(())
 }
 
 /// Pull the next entry of iterator `i` into the heap.

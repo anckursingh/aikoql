@@ -59,7 +59,7 @@ use std::ops::Range;
 use std::os::unix::fs::FileExt;
 #[cfg(windows)]
 use std::os::windows::fs::FileExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -67,6 +67,10 @@ pub const SEGMENT_VERSION: u16 = 1;
 pub const FLAG_PUT: u8 = 1;
 pub const FLAG_DELETE: u8 = 2;
 pub const FLAG_VERSION: u8 = 4;
+
+pub fn segment_path(dir: &Path, segment_id: u64) -> PathBuf {
+    dir.join(format!("SEGMENT-{segment_id:06}.seg"))
+}
 
 const SEGMENT_MAGIC: &[u8; 4] = b"AKSE";
 const BLOCK_MAGIC: &[u8; 4] = b"AKBL";

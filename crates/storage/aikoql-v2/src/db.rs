@@ -65,14 +65,19 @@ const DEFAULT_L0_COMPACT_TRIGGER: usize = 4;
 /// skips the merge while L0 is not yet this fraction of L1 (L0 bytes >=
 /// L1 bytes / ratio; L1 empty always merges; 0 restores count-only M10).
 const DEFAULT_L0_TIER_RATIO: usize = 1;
+/// SE2-M20 — compaction merge chunk cap in estimated entry bytes: a merge
+/// publishes its output as a sequence of ~this-size segments instead of
+/// buffering the whole merged dataset in one writer (the DS-PERF-L RSS
+/// amplification). 0 = one unbounded segment (the pre-M20 shape). Small
+/// datasets produce one chunk either way — every pre-M20 pin holds at the
+/// 64 MiB default.
+const DEFAULT_MERGE_CHUNK_BYTES: usize = 64 * 1024 * 1024;
 
 pub fn manifest_path(dir: &Path, generation: u64) -> PathBuf {
     dir.join(format!("MANIFEST-{generation:06}"))
 }
 
-pub fn segment_path(dir: &Path, segment_id: u64) -> PathBuf {
-    dir.join(format!("SEGMENT-{segment_id:06}.seg"))
-}
+pub use crate::segment::segment_path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DurabilityMode {
@@ -115,6 +120,12 @@ pub struct Config {
     /// flushes 4, 8, 16, 32… instead of every 4th — the bulk-seed write
     /// amplification drops from quadratic to ~O(n log n).
     pub l0_tier_ratio: usize,
+    /// SE2-M20 — compaction merge chunk cap in estimated entry bytes: a
+    /// merge publishes its output as a sequence of ~this-size segments
+    /// (one manifest record each) so compaction memory is bounded by the
+    /// cap instead of the whole merged dataset. 0 = one unbounded segment
+    /// (the pre-M20 shape).
+    pub merge_chunk_bytes: usize,
 }
 
 impl Config {
@@ -130,6 +141,7 @@ impl Config {
             cache_bytes: DEFAULT_CACHE_BYTES,
             l0_compact_trigger: DEFAULT_L0_COMPACT_TRIGGER,
             l0_tier_ratio: DEFAULT_L0_TIER_RATIO,
+            merge_chunk_bytes: DEFAULT_MERGE_CHUNK_BYTES,
         }
     }
 }
@@ -733,21 +745,13 @@ impl Db {
         if state.segments.is_empty() {
             return Ok(CompactStats::default());
         }
-        let id = state.next_segment_id;
-        state.next_segment_id += 1;
-        let archive_id = state.next_segment_id;
-        state.next_segment_id += 1;
-        let out_path = segment_path(&self.config.dir, id);
-        let archive_path = self
-            .config
-            .dir
-            .join("archive")
-            .join(format!("ARCHIVE-{archive_id:06}.seg"));
-        let (stats, out_reader) = merge(
+        let mut next_id = state.next_segment_id;
+        let (stats, chunks) = merge(
             &state.segments,
             self.config.block_target,
-            &out_path,
-            &archive_path,
+            self.config.merge_chunk_bytes,
+            &self.config.dir,
+            &mut next_id,
             policy,
         )?;
         crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_segment");
@@ -759,9 +763,9 @@ impl Db {
             .collect();
         let mut new_records = Vec::new();
         let mut new_segments = Vec::new();
-        if let Some((reader, file_size, checksum)) = out_reader {
+        for (segment_id, (reader, file_size, checksum)) in chunks {
             new_records.push(SegmentRecord {
-                segment_id: id,
+                segment_id,
                 level: 1,
                 key_min: reader.key_min().to_vec(),
                 key_max: reader.key_max().to_vec(),
@@ -773,6 +777,7 @@ impl Db {
             });
             new_segments.push(Arc::new(reader));
         }
+        state.next_segment_id = next_id;
         state.generation += 1;
         let manifest = Manifest {
             format_version: FORMAT_VERSION,
