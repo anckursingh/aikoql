@@ -1,6 +1,6 @@
 # W1..W8 Workloads — v2 vs redb vs v1 (MRFC-KSE-001 §27-28 + design §26)
 
-Date: 2026-09-01 · profile: release · seed 0x270000 · scale: 100000 KOs / 10000 deep × 10 versions / 20000 ops (V2ADOPT_NIGHTLY — strict opt-in)
+Date: 2026-09-04 · profile: release · seed 0x270000 · scale: 100000 KOs / 10000 deep × 10 versions / 20000 ops (V2ADOPT_NIGHTLY — strict opt-in)
 
 The same workload shapes v1's M7 adoption ran, on the same seed. All workloads through the Kernel on `&dyn StorageEngine` (§32). One seeded dataset per backend.
 
@@ -8,17 +8,17 @@ The same workload shapes v1's M7 adoption ran, on the same seed. All workloads t
 
 | workload | memory | redb | aikoql | aikoql-v2 |
 |---|---|---|---|---|
-| KO get (W1) | 163665 ops/s · p50 6 µs · p95 9 · p99 13| 43219 ops/s · p50 19 µs · p95 46 · p99 142| 160518 ops/s · p50 6 µs · p95 8 · p99 10| 24045 ops/s · p50 39 µs · p95 70 · p99 101 |
-| head get (W2) | 164338 ops/s · p50 6 µs · p95 8 · p99 10| 118066 ops/s · p50 8 µs · p95 11 · p99 13| 158090 ops/s · p50 6 µs · p95 8 · p99 13| 26944 ops/s · p50 37 µs · p95 60 · p99 78 |
-| version lookup (W3) | 101868 ops/s · p50 9 µs · p95 14 · p99 20| 81187 ops/s · p50 12 µs · p95 14 · p99 18| 104057 ops/s · p50 9 µs · p95 12 · p99 15| 20438 ops/s · p50 46 µs · p95 82 · p99 116 |
-| history (W3) | 25914 ops/s · p50 33 µs · p95 67 · p99 82| 24227 ops/s · p50 36 µs · p95 67 · p99 112| 31060 ops/s · p50 32 µs · p95 38 · p99 51| 13694 ops/s · p50 70 µs · p95 107 · p99 139 |
-| relationship lookup F=10 (W4) | 6501 ops/s · p50 152 µs · p95 160 · p99 185| 4932 ops/s · p50 157 µs · p95 298 · p99 350| 7986 ops/s · p50 123 µs · p95 135 · p99 156| 4469 ops/s · p50 231 µs · p95 242 · p99 327 |
-| relationship lookup F=100 (W4) | 1991 ops/s · p50 492 µs · p95 581 · p99 581| 1269 ops/s · p50 714 µs · p95 1264 · p99 1264| 2434 ops/s · p50 403 µs · p95 480 · p99 480| 957 ops/s · p50 1010 µs · p95 1407 · p99 1407 |
-| relationship lookup F=1000 (W4) | 213 ops/s · p50 4811 µs · p95 4885 · p99 4885| 135 ops/s · p50 7006 µs · p95 8414 · p99 8414| 248 ops/s · p50 4025 µs · p95 4207 · p99 4207| 95 ops/s · p50 9894 µs · p95 12878 · p99 12878 |
-| type scan (W5) | 83 ops/s · p50 5430 µs · p95 7380 · p99 12436| 61 ops/s · p50 7702 µs · p95 9433 · p99 21661| 91 ops/s · p50 5485 µs · p95 6643 · p99 14543| 24 ops/s · p50 22686 µs · p95 27858 · p99 41263 |
-| context compilation (W7) | 15234 ops/s · p50 57 µs · p95 104 · p99 149| 8835 ops/s · p50 110 µs · p95 151 · p99 175| 16116 ops/s · p50 56 µs · p95 91 · p99 115| 3269 ops/s · p50 274 µs · p95 495 · p99 793 |
-| mixed 70/20/10 (W8) | 95988 ops/s · p50 6 µs · p95 38 · p99 57| 1436 ops/s · p50 12 µs · p95 2825 · p99 31144| 1301 ops/s · p50 8 µs · p95 774 · p99 31316| 7746 ops/s · p50 46 µs · p95 788 · p99 1073 |
-| ingestion (W6) | 44121 ops/s · p50 23 µs · p95 23 · p99 23| 444 ops/s · p50 2250 µs · p95 2250 · p99 2250| 1306 ops/s · p50 766 µs · p95 766 · p99 766| 1307 ops/s · p50 765 µs · p95 765 · p99 765 |
+| KO get (W1) | 178200 ops/s · p50 6 µs · p95 7 · p99 8| 49648 ops/s · p50 16 µs · p95 40 · p99 120| 167768 ops/s · p50 6 µs · p95 8 · p99 9| 25955 ops/s · p50 37 µs · p95 66 · p99 90 |
+| head get (W2) | 178026 ops/s · p50 5 µs · p95 7 · p99 9| 122639 ops/s · p50 8 µs · p95 10 · p99 14| 182634 ops/s · p50 5 µs · p95 7 · p99 8| 27404 ops/s · p50 36 µs · p95 61 · p99 81 |
+| version lookup (W3) | 96451 ops/s · p50 10 µs · p95 12 · p99 18| 79457 ops/s · p50 12 µs · p95 17 · p99 23| 115444 ops/s · p50 8 µs · p95 10 · p99 12| 20986 ops/s · p50 45 µs · p95 80 · p99 110 |
+| history (W3) | 29396 ops/s · p50 32 µs · p95 40 · p99 59| 19826 ops/s · p50 40 µs · p95 74 · p99 151| 31012 ops/s · p50 31 µs · p95 39 · p99 53| 14045 ops/s · p50 69 µs · p95 103 · p99 133 |
+| relationship lookup F=10 (W4) | 8175 ops/s · p50 118 µs · p95 147 · p99 212| 5284 ops/s · p50 186 µs · p95 201 · p99 275| 8292 ops/s · p50 119 µs · p95 126 · p99 164| 4225 ops/s · p50 203 µs · p95 462 · p99 581 |
+| relationship lookup F=100 (W4) | 2407 ops/s · p50 394 µs · p95 537 · p99 537| 1228 ops/s · p50 790 µs · p95 981 · p99 981| 2441 ops/s · p50 401 µs · p95 469 · p99 469| 838 ops/s · p50 1202 µs · p95 1678 · p99 1678 |
+| relationship lookup F=1000 (W4) | 246 ops/s · p50 4018 µs · p95 4306 · p99 4306| 106 ops/s · p50 9941 µs · p95 10276 · p99 10276| 256 ops/s · p50 3905 µs · p95 4022 · p99 4022| 88 ops/s · p50 10972 µs · p95 14338 · p99 14338 |
+| type scan (W5) | 83 ops/s · p50 5390 µs · p95 7202 · p99 23738| 59 ops/s · p50 7992 µs · p95 10638 · p99 17333| 94 ops/s · p50 5232 µs · p95 6353 · p99 7584| 24 ops/s · p50 22627 µs · p95 29050 · p99 50051 |
+| context compilation (W7) | 14551 ops/s · p50 58 µs · p95 106 · p99 137| 8437 ops/s · p50 112 µs · p95 162 · p99 208| 16347 ops/s · p50 56 µs · p95 88 · p99 106| 3882 ops/s · p50 252 µs · p95 349 · p99 470 |
+| mixed 70/20/10 (W8) | 99265 ops/s · p50 6 µs · p95 37 · p99 52| 3324 ops/s · p50 12 µs · p95 2769 · p99 3204| 1363 ops/s · p50 8 µs · p95 743 · p99 31288| 7917 ops/s · p50 43 µs · p95 798 · p99 1061 |
+| ingestion (W6) | 43665 ops/s · p50 23 µs · p95 23 · p99 23| 424 ops/s · p50 2358 µs · p95 2358 · p99 2358| 1216 ops/s · p50 822 µs · p95 822 · p99 822| 1263 ops/s · p50 792 µs · p95 792 · p99 792 |
 
 ## §28 matrix — logical bytes read / written per workload
 
@@ -40,10 +40,10 @@ The same workload shapes v1's M7 adoption ran, on the same seed. All workloads t
 
 | backend | CPU (seed wall) | RSS (peak, loader child) | disk |
 |---|---|---|---|
-| memory | 6346 ms | NOT_SAMPLED | 0 B |
-| redb | 630070 ms | 510.23 MiB | 1.00 GiB |
-| aikoql | 214442 ms | 613.38 MiB | 435.44 MiB |
-| aikoql-v2 | 214248 ms | 1.35 GiB | 347.99 MiB |
+| memory | 6413 ms | NOT_SAMPLED | 0 B |
+| redb | 660113 ms | 513.38 MiB | 1.00 GiB |
+| aikoql | 230219 ms | 611.22 MiB | 435.44 MiB |
+| aikoql-v2 | 221646 ms | 428.05 MiB | 347.99 MiB |
 
 ## §26 adoption gates
 
@@ -53,7 +53,7 @@ The same workload shapes v1's M7 adoption ran, on the same seed. All workloads t
 | 2. dataset larger than RAM remains queryable | PASS | `v2_gate2_3_dataset_larger_than_ram` (this suite): ~820 KB dataset under a 64 KiB memtable + zero cache → served from on-disk segments, full scan byte-exact, survives reopen |
 | 3. memory limits configurable | PASS | the same probe pins both knobs: `memtable_bytes=64 KiB` forced flushes (≥2 SEGMENT files); `cache_bytes=0` detaches the cache (silent stats), a 4 KiB cap is consulted (misses) yet holds nothing (oversize block never retained) |
 | 4. group commit improves concurrent throughput without weakening Sync | — | SE2-M6 suite green (Sync baseline reproduced exactly); throughput evidence = the `SE2M6_NIGHTLY=1` matrix → artifacts/storage-engine-v2/group-commit.md |
-| 5. KO lookup competitive with the MVP baseline (v1) | FAIL | W1 6.61× v1, W2 6.13× v1 (P50; bound ≤ 2× — perf verdict only at V2ADOPT_NIGHTLY=1, this run is V2ADOPT_NIGHTLY) |
+| 5. KO lookup competitive with the MVP baseline (v1) | FAIL | W1 6.53× v1, W2 6.81× v1 (P50; bound ≤ 2× — perf verdict only at V2ADOPT_NIGHTLY=1, this run is V2ADOPT_NIGHTLY) |
 
 ## Reference rows (not re-measured here)
 

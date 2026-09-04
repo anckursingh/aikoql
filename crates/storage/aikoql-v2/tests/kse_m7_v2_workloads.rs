@@ -45,6 +45,7 @@ use aikoql_kernel::{Direction, Kernel, Metadata, RelationshipRef, Subject, Value
 use aikoql_storage::AikoqlStorageEngine;
 use aikoql_storage_v2::db::{Config, Db};
 use aikoql_storage_v2::AikoqlStorageEngineV2;
+use common::run_date;
 use common::{bytes_written, ctx, percentiles, tmp, CountingEngine, LogicalCounts};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -647,9 +648,10 @@ fn benchmark_report(backends: &[BackendResult], sz: Size) -> String {
     );
 
     let mut s = String::new();
+    let date = run_date();
     s.push_str(&format!(
         "# W1..W8 Workloads — v2 vs redb vs v1 (MRFC-KSE-001 §27-28 + design §26)\n\n\
-         Date: 2026-09-01 · profile: {profile} · seed {SEED:#x} · scale: {} KOs / {} deep × {} versions / {} ops ({scale} — strict opt-in)\n\n\
+         Date: {date} · profile: {profile} · seed {SEED:#x} · scale: {} KOs / {} deep × {} versions / {} ops ({scale} — strict opt-in)\n\n\
          The same workload shapes v1's M7 adoption ran, on the same seed. All workloads through the Kernel on `&dyn StorageEngine` (§32). One seeded dataset per backend.\n\n",
         sz.n, sz.deep, DEEP_VERSIONS, sz.ops,
     ));
@@ -737,10 +739,14 @@ fn v2_m7_workloads() {
     for p in &paths {
         cleanup_dataset(p);
     }
-    let dir =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine-v2");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("workloads.md"), benchmark_report(&results, sz)).unwrap();
+    // The artifact is canonical at adoption scale only — a smoke run (the
+    // plain suite) must not clobber it (SE2-M19: it used to).
+    if std::env::var_os(NIGHTLY_ENV).is_some() {
+        let dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine-v2");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("workloads.md"), benchmark_report(&results, sz)).unwrap();
+    }
 }
 
 // ---- §26 gates 2 + 3 probe ------------------------------------------------

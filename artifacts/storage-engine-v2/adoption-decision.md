@@ -68,6 +68,36 @@ Remediation paths, each with its honest ceiling:
 - **Cache sized to the working set** — closes the gap completely, by converging on v1's RAM-mirror design. Correct, and the admission that the bounded-RAM win and the ≤2×-read gate pull in opposite directions at this dataset size.
 - **Profile-specific deployment** — the actual answer: keep v1 as the default (query-heavy, RAM-affordant) and offer v2 (AIKOQL_BACKEND=aikoql-v2) for bounded-memory/bounded-recovery/disk-constrained profiles. A follow-up milestone could pair compaction + smaller blocks and re-measure W1; even optimistic arithmetic (7× from blocks, 3× from compaction ≈ 20×) does not reach the 36× needed for the bound, so a re-run is only worth scheduling if the goal is shrinking the gap for the profile case, not ADOPT.
 
+## SE2-M19 re-matrix — 2026-09-04, post-M18 code (page-cache-warm)
+
+The adoption-scale matrix was re-run on the post-M18 engine (M15 publish pipeline, M16 tiered compaction, M17/M18 tiered read path; the harness now stamps the run's actual date and smoke runs no longer clobber workloads.md). Fresh cells, same seed:
+
+| workload | v2 p50 | v1 p50 | redb p50 | v2 ops/s |
+|---|---|---|---|---|
+| KO get (W1) | 37 µs | 6 µs | 16 µs | 25955 |
+| head get (W2) | 36 µs | 5 µs | 8 µs | 27404 |
+| version lookup (W3) | 45 µs | 8 µs | 12 µs | 20986 |
+| history (W3) | 69 µs | 31 µs | 40 µs | 14045 |
+| relationship F=10 (W4) | 203 µs | 119 µs | 186 µs | 4225 |
+| relationship F=100 (W4) | 1202 µs | 401 µs | 790 µs | 838 |
+| relationship F=1000 (W4) | 10972 µs | 3905 µs | 9941 µs | 88 |
+| type scan (W5) | 22627 µs | 5232 µs | 7992 µs | 24 |
+| context compilation (W7) | 252 µs | 56 µs | 112 µs | 3882 |
+| mixed 70/20/10 (W8) | 43 µs | 8 µs | 12 µs | 7917 |
+| ingestion (W6) | 792 µs commit | 822 µs commit | 2358 µs | 1263 vs 1216 |
+
+**Gate 5 still FAILs — now in both page-cache regimes.** This run is page-cache-warm (the harness seeds, then immediately reads: the ~350 MB dataset sits in the OS page cache, so W1's 37 µs ≈ M17's tier-depth raw get of 27 µs plus kernel overhead — tiered-read.md). The 09-01 run's 399 µs was page-cache-cold (the nightly child read behind the parent's freshly seeded ~6 GB, so every point get paid a physical 64 KiB block read). The harness's gate cell: **W1 6.53× v1, W2 6.81× v1** (a second warm run earlier the same day gave 7.09×/8.52× — run variance inside the same regime). The ≤2× bound is missed ~3.3× even in the best-case warm regime and ~35× in the cold regime. Nothing in M14–M18 changed that shape: the warm number is the honest best case, and it still does not reach the bound.
+
+The countervailing wins did move, from M15/M16:
+
+| backend | seed wall | RSS | disk |
+|---|---|---|---|
+| aikoql-v2 (09-01) | 294863 ms | 496.93 MiB | 354.36 MiB |
+| aikoql-v2 (09-04) | 221646 ms | 428.05 MiB | 347.99 MiB |
+| aikoql v1 (09-04) | 230219 ms | 611.22 MiB | 435.44 MiB |
+
+v2 seeding is now ≈ v1's (221.6 s vs 230.2 s, −3.7%), RSS is 30% below v1's, and disk stays the smallest. The bounded-memory/bounded-recovery profile case is stronger than at the 09-01 verdict — the read-gate case is not. The remediation arithmetic stands unchanged: blocks + compaction would shrink the gap for the profile case, not reach ≤2× of a RAM mirror.
+
 ## Verdict
 
-**VERDICT: NOT ADOPT. v2 stays OPT-IN (default remains aikoql v1).** Conformance and gates 1–3 PASS with committed evidence — v2 is a qualified bounded-memory / bounded-recovery profile engine. Gate 5 FAILs the ≤2× bound by ~70× at adoption scale (W1 72.53×, W2 69.79×, cold 64 KiB block reads against a 1:44 cache:working-set ratio), which per §26 disqualifies it as the production default. Gate 4's throughput half remains NOT_EVIDENCED (mechanism asserted green in SE2-M6; no coalescing matrix exists yet).
+**VERDICT: NOT ADOPT. v2 stays OPT-IN (default remains aikoql v1).** Conformance and gates 1–3 PASS with committed evidence — v2 is a qualified bounded-memory / bounded-recovery profile engine, and the SE2-M19 re-matrix strengthens that profile (seed ≈ v1, RSS 30% below v1). Gate 5 FAILs the ≤2× bound in both measured page-cache regimes — 6.53×/6.81× warm (09-04, post-M18) and 72.53×/69.79× cold (09-01) — which per §26 disqualifies it as the production default. Gate 4's throughput half remains NOT_EVIDENCED (mechanism asserted green in SE2-M6; no coalescing matrix exists yet).

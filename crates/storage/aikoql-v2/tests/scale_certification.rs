@@ -26,7 +26,7 @@ use aikoql_storage_v2::cache::CacheStats;
 use aikoql_storage_v2::db::{Config, Db};
 use aikoql_storage_v2::stats::ReadPathStats;
 use aikoql_storage_v2::wal::Op;
-use common::{dir, percentiles, tmp};
+use common::{dir, percentiles, run_date, tmp};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
@@ -1141,13 +1141,14 @@ fn write_report(sections: &[Section], m: Mode) {
         "1 (DS-PERF-M)"
     };
     let mut s = String::new();
+    let date = run_date();
     s.push_str(&format!(
         "# Scale Certification — SE2-M14\n\n\
          Generated only when `SE2M14_NIGHTLY=1|2` (strict opt-in — any other\n\
          value panics). Perf numbers are report cells, never asserts; the pins\n\
          are answer correctness and cache state.\n\n\
          - Test: `scale_certification`\n\
-         - Date: 2026-09-02 · Build mode: {}\n\
+         - Date: {date} · Build mode: {}\n\
          - Machine: {}\n\
          - Mode: SE2M14_NIGHTLY={mode_label}\n\n",
         if cfg!(debug_assertions) {

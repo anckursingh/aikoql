@@ -21,7 +21,7 @@ use aikoql_kernel::storage::store::{MemoryEngine, StorageEngine, WriteBatch};
 use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_storage::AikoqlStorageEngine;
 use aikoql_storage_v2::AikoqlStorageEngineV2;
-use common::{kse, tmp};
+use common::{kse, run_date, tmp};
 use std::path::PathBuf;
 
 /// (path, opener) — how a durable backend reopens its store.
@@ -118,9 +118,10 @@ fn kse20_backend_conformance_v2() {
         ));
     }
 
+    let date = run_date();
     let report = format!(
         "# Backend Conformance — v2 (MRFC-KSE-001 §7 + §26)\n\n\
-         Date: 2026-09-01 · the six KSE-1 asserts from one shared definition \
+         Date: {date} · the six KSE-1 asserts from one shared definition \
          (`tests/common` `kse` module, copied verbatim from v1's harness), run \
          per backend as granular tests (`tests/engine.rs`, V2-Adopt) and as \
          this matrix (`kse20_backend_conformance.rs`, KSE-20). All through \
