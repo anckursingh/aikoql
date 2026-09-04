@@ -14,6 +14,7 @@
 //! snapshot) — the adapter needs no override.
 
 use crate::db::{Config, Db};
+use crate::stats::ReadPathStats;
 use crate::wal::Op;
 use aikoql_kernel::knowledge::kom::{KError, KResult};
 use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
@@ -51,6 +52,17 @@ impl AikoqlStorageEngineV2 {
         Ok(AikoqlStorageEngineV2 {
             db: RwLock::new(db),
         })
+    }
+
+    /// SE2-M21 — the Db's cumulative read-path counters, reachable through
+    /// the adapter: the attribution probe measures the kernel leg (kernel
+    /// op → engine gets) against the engine leg (this engine's gets) on
+    /// one dataset.
+    pub fn read_path_stats(&self) -> KResult<ReadPathStats> {
+        self.db
+            .read()
+            .map_err(|_| poisoned())
+            .map(|d| d.read_path_stats())
     }
 }
 

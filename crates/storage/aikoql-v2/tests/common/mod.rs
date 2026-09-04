@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use aikoql_storage_v2::segment::SegmentEntry;
+use aikoql_storage_v2::stats::ReadPathStats;
 
 /// Parallel tests in one binary share a pid, so a plain tag+pid path would
 /// collide between tests using the same tag — every call gets its own
@@ -68,6 +69,48 @@ pub fn tmp(tag: &str) -> PathBuf {
     let _ = std::fs::remove_file(&path);
     TEMP_PATHS.with(|t| t.borrow_mut().paths.push(path.clone()));
     path
+}
+
+/// Per-window read-path counter delta (SE2-M21). Saturating: a background
+/// committer flush can move segment-level counters between snapshots.
+pub fn stats_delta(after: ReadPathStats, before: ReadPathStats) -> ReadPathStats {
+    ReadPathStats {
+        lookups: after.lookups.saturating_sub(before.lookups),
+        memtable_lookup_ns: after
+            .memtable_lookup_ns
+            .saturating_sub(before.memtable_lookup_ns),
+        memtable_hits: after.memtable_hits.saturating_sub(before.memtable_hits),
+        segments_considered: after
+            .segments_considered
+            .saturating_sub(before.segments_considered),
+        segments_range_skipped: after
+            .segments_range_skipped
+            .saturating_sub(before.segments_range_skipped),
+        segments_bloom_skipped: after
+            .segments_bloom_skipped
+            .saturating_sub(before.segments_bloom_skipped),
+        segments_index_searched: after
+            .segments_index_searched
+            .saturating_sub(before.segments_index_searched),
+        index_lookup_ns: after.index_lookup_ns.saturating_sub(before.index_lookup_ns),
+        block_cache_lookup_ns: after
+            .block_cache_lookup_ns
+            .saturating_sub(before.block_cache_lookup_ns),
+        block_cache_hits: after
+            .block_cache_hits
+            .saturating_sub(before.block_cache_hits),
+        block_cache_misses: after
+            .block_cache_misses
+            .saturating_sub(before.block_cache_misses),
+        block_io_ns: after.block_io_ns.saturating_sub(before.block_io_ns),
+        block_decode_ns: after.block_decode_ns.saturating_sub(before.block_decode_ns),
+        blocks_read: after.blocks_read.saturating_sub(before.blocks_read),
+        bytes_read: after.bytes_read.saturating_sub(before.bytes_read),
+        entries_decoded: after.entries_decoded.saturating_sub(before.entries_decoded),
+        lock_wait_ns: after.lock_wait_ns.saturating_sub(before.lock_wait_ns),
+        bloom_probe_ns: after.bloom_probe_ns.saturating_sub(before.bloom_probe_ns),
+        get_wall_ns: after.get_wall_ns.saturating_sub(before.get_wall_ns),
+    }
 }
 
 /// A fresh, empty scratch DIRECTORY under the OS temp dir (same tag+pid

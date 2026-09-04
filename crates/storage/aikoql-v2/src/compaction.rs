@@ -23,7 +23,9 @@
 //! manifest naming all chunks stays the single atomic commit point.
 
 use crate::format::FormatError;
-use crate::segment::{SegmentEntry, SegmentIter, SegmentReader, SegmentWriter, FLAG_DELETE};
+use crate::segment::{
+    SegmentAttach, SegmentEntry, SegmentIter, SegmentReader, SegmentWriter, FLAG_DELETE,
+};
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::path::Path;
@@ -73,20 +75,24 @@ impl RetentionPolicy for KeepAll {
 /// (the archive id is pulled lazily on first use). `chunk_bytes` is the
 /// cap in estimated entry bytes — 0 keeps the pre-M20 shape, one
 /// unbounded segment. Chunks split on entry granularity in merge order,
-/// so they are globally sorted and non-overlapping. Every chunk is
+/// so they are globally sorted and non-overlapping. Every live chunk is
 /// reopened for validation (the pipeline's validate step) and returned
-/// open with its manifest-record fields. An empty live output returns no
-/// chunks — nothing is published to the live key space (an archive, if
-/// any, is still published). A mid-merge error leaves earlier chunks as
+/// open with its manifest-record fields — SE2-M21: the reopened reader
+/// carries `attach` (the shared block cache and read-path stats), a
+/// merged segment serves point reads so its reads are cached and counted
+/// like any segment's. An empty live output returns no chunks — nothing
+/// is published to the live key space (an archive, if any, is still
+/// published). A mid-merge error leaves earlier chunks as
 /// orphans the next open ignores — the manifest naming all chunks stays
 /// the single atomic commit point.
-pub fn merge(
+pub(crate) fn merge(
     inputs: &[Arc<SegmentReader>],
     block_target: usize,
     chunk_bytes: usize,
     dir: &Path,
     next_id: &mut u64,
     policy: &dyn RetentionPolicy,
+    attach: &SegmentAttach,
 ) -> Result<(CompactStats, Vec<(u64, PublishedSegment)>), FormatError> {
     let mut stats = CompactStats {
         segments_in: inputs.len() as u64,
@@ -109,9 +115,11 @@ pub fn merge(
         }
     }
 
-    let mut writer = SegmentWriter::new_v2(block_target);
-    let mut live_len = 0usize;
-    let mut chunks: Vec<(u64, PublishedSegment)> = Vec::new();
+    let mut live = LiveSink {
+        writer: SegmentWriter::new_v2(block_target),
+        len: 0,
+        chunks: Vec::new(),
+    };
     let mut archive: Option<ArchiveSink> = None;
     while let Some((key, _, i)) = heap.pop() {
         let winner = fronts[i].take().expect("front present");
@@ -137,15 +145,7 @@ pub fn merge(
         match policy.classify(&winner.key) {
             Retention::Keep => {
                 if winner.flags & FLAG_DELETE == 0 {
-                    push_live(
-                        &mut writer,
-                        &mut live_len,
-                        &mut chunks,
-                        dir,
-                        next_id,
-                        chunk_bytes,
-                        winner,
-                    )?;
+                    push_live(&mut live, dir, next_id, chunk_bytes, winner, attach)?;
                     stats.entries_out += 1;
                 }
             }
@@ -162,8 +162,14 @@ pub fn merge(
         }
     }
 
-    if live_len > 0 {
-        chunks.push(publish_chunk(&mut writer, &mut live_len, dir, next_id)?);
+    if live.len > 0 {
+        live.chunks.push(publish_chunk(
+            &mut live.writer,
+            &mut live.len,
+            dir,
+            next_id,
+            attach,
+        )?);
     }
     // An archive is published even when the live output is empty.
     if let Some(mut aw) = archive {
@@ -176,8 +182,8 @@ pub fn merge(
             publish_archive_chunk(&mut aw.writer, &mut aw.len, dir, *id, aw.chunk)?;
         }
     }
-    stats.segments_out = chunks.len() as u64;
-    Ok((stats, chunks))
+    stats.segments_out = live.chunks.len() as u64;
+    Ok((stats, live.chunks))
 }
 
 /// Wire-size upper bound of one entry (shared-prefix savings ignored — an
@@ -190,38 +196,53 @@ fn entry_bytes(e: &SegmentEntry) -> usize {
 /// would be exceeded (the buffer never holds more than the cap + one
 /// entry, and a chunk never publishes empty).
 fn push_live(
-    writer: &mut SegmentWriter,
-    len: &mut usize,
-    chunks: &mut Vec<(u64, PublishedSegment)>,
+    sink: &mut LiveSink,
     dir: &Path,
     next_id: &mut u64,
     chunk_bytes: usize,
     e: SegmentEntry,
+    attach: &SegmentAttach,
 ) -> Result<(), FormatError> {
     let est = entry_bytes(&e);
-    if chunk_bytes > 0 && *len > 0 && *len + est > chunk_bytes {
-        chunks.push(publish_chunk(writer, len, dir, next_id)?);
+    if chunk_bytes > 0 && sink.len > 0 && sink.len + est > chunk_bytes {
+        sink.chunks.push(publish_chunk(
+            &mut sink.writer,
+            &mut sink.len,
+            dir,
+            next_id,
+            attach,
+        )?);
     }
-    *len += est;
-    writer.push(e);
+    sink.len += est;
+    sink.writer.push(e);
     Ok(())
 }
 
 /// Publish one buffered live chunk at SEGMENT-{id:06}.seg, pulling its id
-/// from `next_id`, and reopen it for validation.
+/// from `next_id`, and reopen it for validation — with `attach`, so reads
+/// the merged segment serves are cached and attributed (SE2-M21).
 fn publish_chunk(
     writer: &mut SegmentWriter,
     len: &mut usize,
     dir: &Path,
     next_id: &mut u64,
+    attach: &SegmentAttach,
 ) -> Result<(u64, PublishedSegment), FormatError> {
     let id = *next_id;
     *next_id += 1;
     let path = crate::segment::segment_path(dir, id);
     let (file_size, checksum) = writer.publish(&path)?;
-    let reader = SegmentReader::open(&path)?;
+    let reader = SegmentReader::open_with(&path, attach.cache.clone(), attach.stats.clone())?;
     *len = 0;
     Ok((id, (reader, file_size, checksum)))
+}
+
+/// The live merge output: the buffering writer plus its chunk accounting
+/// (the ArchiveSink shape, SE2-M20).
+struct LiveSink {
+    writer: SegmentWriter,
+    len: usize,
+    chunks: Vec<(u64, PublishedSegment)>,
 }
 
 /// The buffered archive output: writer plus its chunk accounting. The

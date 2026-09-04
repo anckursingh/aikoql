@@ -44,6 +44,7 @@ use aikoql_kernel::transaction::kernel::ManualClock;
 use aikoql_kernel::{Direction, Kernel, Metadata, RelationshipRef, Subject, Value, KOID};
 use aikoql_storage::AikoqlStorageEngine;
 use aikoql_storage_v2::db::{Config, Db};
+use aikoql_storage_v2::stats::ReadPathStats;
 use aikoql_storage_v2::AikoqlStorageEngineV2;
 use common::run_date;
 use common::{bytes_written, ctx, percentiles, tmp, CountingEngine, LogicalCounts};
@@ -200,14 +201,16 @@ fn file_len(path: &PathBuf) -> u64 {
     }
 }
 
-fn seed(kind: BackendKind, path: &Path, sz: Size) -> Seeded {
-    let engine = kind.open(path);
-    let counting = CountingEngine::new(engine);
-    let clock = Arc::new(ManualClock::new(10_000));
-    let k = Arc::new(Kernel::open(counting.clone(), clock.clone(), SEED).unwrap());
-    let before = LogicalCounts::snapshot(&counting);
-    let t0 = Instant::now();
-
+/// The seeding phases, engine-agnostic (SE2-M21: the attribution probe
+/// seeds one v2 dataset through the Kernel over the adapter, while the
+/// matrix's `seed()` counts bytes through a CountingEngine — same phases,
+/// same order, so the datasets are the same by construction).
+/// Returns (ids, deep, hubs, commits).
+fn seed_phases(
+    k: &Kernel,
+    clock: &ManualClock,
+    sz: Size,
+) -> (Vec<KOID>, Vec<KOID>, [KOID; 3], u64) {
     // phase 1: bare creates (edges need minted KOIDs → RMW phase 2)
     let mut ids = Vec::with_capacity(sz.n);
     for i in 0..sz.n {
@@ -225,7 +228,7 @@ fn seed(kind: BackendKind, path: &Path, sz: Size) -> Seeded {
     // phase 2: ring edges (10 outbound links per KO) — RMW restatement
     for i in 0..sz.n {
         clock.tick(1);
-        let mut req = rmv(&k, &ids[i], "m7_0");
+        let mut req = rmv(k, &ids[i], "m7_0");
         for r in 1..=10 {
             req.relationships.push(RelationshipRef {
                 rel_type: "links".into(),
@@ -241,7 +244,7 @@ fn seed(kind: BackendKind, path: &Path, sz: Size) -> Seeded {
     let extras: [(usize, usize, usize); 2] = [(11, 100, 190), (12, 500, 1490)];
     for (idx, lo, hi) in extras {
         clock.tick(1);
-        let mut req = rmv(&k, &ids[idx], "m7_0");
+        let mut req = rmv(k, &ids[idx], "m7_0");
         for t in ids[lo..hi].iter() {
             req.relationships.push(RelationshipRef {
                 rel_type: "links".into(),
@@ -259,15 +262,26 @@ fn seed(kind: BackendKind, path: &Path, sz: Size) -> Seeded {
         deep.push(id);
         for v in 0..(DEEP_VERSIONS - 2) {
             clock.tick(1);
-            let mut req = rmv(&k, &id, "m7_0");
+            let mut req = rmv(k, &id, "m7_0");
             req.properties.insert("v".into(), Value::Int(v as i64));
             let _ = k.remember(req).unwrap();
         }
     }
 
+    let commits = (sz.n * 2 + 3 + sz.deep * (DEEP_VERSIONS - 2)) as u64;
+    (ids, deep, hubs, commits)
+}
+
+fn seed(kind: BackendKind, path: &Path, sz: Size) -> Seeded {
+    let engine = kind.open(path);
+    let counting = CountingEngine::new(engine);
+    let clock = Arc::new(ManualClock::new(10_000));
+    let k = Arc::new(Kernel::open(counting.clone(), clock.clone(), SEED).unwrap());
+    let before = LogicalCounts::snapshot(&counting);
+    let t0 = Instant::now();
+    let (ids, deep, hubs, commits) = seed_phases(&k, &clock, sz);
     let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
     let seed_read = LogicalCounts::snapshot(&counting).delta(before).bytes;
-    let commits = (sz.n * 2 + 3 + sz.deep * (DEEP_VERSIONS - 2)) as u64;
     let disk = if kind.is_memory() {
         0
     } else {
@@ -869,4 +883,381 @@ fn cleanup_dataset(path: &Path) {
         "test dataset not removed: {}",
         path.display()
     );
+}
+
+// ---- SE2-M21 attribution probe ----------------------------------------------
+// The adoption-scale legs of the point-read attribution: M21-01..04 pin the
+// ACCOUNTING on unit-scale legs; this pins WHERE a warm adoption-scale
+// k.get spends its time. One v2 dataset seeded through the Kernel over the
+// adapter (the same seeding phases as the matrix — byte-identical datasets),
+// then per-leg per-op ReadPathStats deltas: W1/W2 kernel k.get (2 engine
+// gets per op), the exact engine reads the kernel makes (head/<koid>,
+// ko/<koid><ts>), and the pure mechanism legs on a small Db (memtable hit,
+// cached-block hit). Writes artifacts/storage-engine-v2/attribution.md —
+// the M22 input. Strict opt-in: `SE2M21_ATTRIB=1`.
+
+const ATTRIB_ENV: &str = "SE2M21_ATTRIB";
+const ATTRIB_ROW_BYTES: usize = 1400; // the M11 adoption row shape
+
+/// One op's attribution: external wall, the engine's whole-get timer, each
+/// timed phase (counter deltas), the untimed engine residual, and the
+/// kernel-side overhead (wall − get_wall). Everything in ns.
+#[derive(Default, Clone, Copy)]
+struct AttribOp {
+    wall: u64,
+    get_wall: u64,
+    lock: u64,
+    memtable: u64,
+    bloom: u64,
+    index: u64,
+    cache: u64,
+    io: u64,
+    decode: u64,
+    residual: u64,
+    overhead: u64,
+}
+
+impl AttribOp {
+    fn at(self, i: usize) -> u64 {
+        [
+            self.wall,
+            self.get_wall,
+            self.lock,
+            self.memtable,
+            self.bloom,
+            self.index,
+            self.cache,
+            self.io,
+            self.decode,
+            self.residual,
+            self.overhead,
+        ][i]
+    }
+}
+
+const PHASE_NAMES: [&str; 11] = [
+    "wall (external)",
+    "get_wall (engine gets)",
+    "lock_wait",
+    "memtable lookup",
+    "bloom probe",
+    "index lookup",
+    "block cache lookup",
+    "block io",
+    "block decode",
+    "residual (engine untimed)",
+    "overhead (kernel + adapter)",
+];
+
+/// One instrumented leg: `ops` executions of `run`, each wrapped in a
+/// per-op ReadPathStats delta (the snapshots straddle the op and nothing
+/// else writes during a leg, so a delta is exactly that op's counters).
+/// The stats closure reads the same engine the ops hit. Returns the
+/// per-op records plus the leg's counter delta — the mechanism pins.
+fn attrib_leg(
+    stats: impl Fn() -> ReadPathStats,
+    seed: u64,
+    ops: usize,
+    mut run: impl FnMut(&mut Xs),
+) -> (Vec<AttribOp>, ReadPathStats) {
+    let before = stats();
+    let mut rng = Xs(seed);
+    let mut recs = Vec::with_capacity(ops);
+    for _ in 0..ops {
+        let s = stats();
+        let t0 = Instant::now();
+        run(&mut rng);
+        let wall = t0.elapsed().as_nanos() as u64;
+        let d = common::stats_delta(stats(), s);
+        let parts = d.lock_wait_ns
+            + d.memtable_lookup_ns
+            + d.bloom_probe_ns
+            + d.index_lookup_ns
+            + d.block_cache_lookup_ns
+            + d.block_io_ns
+            + d.block_decode_ns;
+        recs.push(AttribOp {
+            wall,
+            get_wall: d.get_wall_ns,
+            lock: d.lock_wait_ns,
+            memtable: d.memtable_lookup_ns,
+            bloom: d.bloom_probe_ns,
+            index: d.index_lookup_ns,
+            cache: d.block_cache_lookup_ns,
+            io: d.block_io_ns,
+            decode: d.block_decode_ns,
+            residual: d.get_wall_ns.saturating_sub(parts),
+            overhead: wall.saturating_sub(d.get_wall_ns),
+        });
+    }
+    (recs, common::stats_delta(stats(), before))
+}
+
+fn col(recs: &[AttribOp], i: usize) -> Vec<u128> {
+    recs.iter().map(|r| r.at(i) as u128).collect()
+}
+
+fn attrib_leg_report(label: &str, kind: &str, d: ReadPathStats, recs: &[AttribOp]) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("## {label}\n\n{kind}\n\n"));
+    s.push_str(&format!(
+        "counters: lookups {} · memtable hits {} · segments {} · cache hits {} misses {} · blocks read {} · bytes read {} · entries decoded {}\n\n",
+        d.lookups,
+        d.memtable_hits,
+        d.segments_considered,
+        d.block_cache_hits,
+        d.block_cache_misses,
+        d.blocks_read,
+        d.bytes_read,
+        d.entries_decoded,
+    ));
+    s.push_str("| phase | p50 | p95 | p99 |\n|---|---|---|---|\n");
+    for (i, name) in PHASE_NAMES.iter().enumerate() {
+        let (a, b, c) = percentiles(col(recs, i));
+        s.push_str(&format!(
+            "| {name} | {:.2} µs | {:.2} | {:.2} |\n",
+            a as f64 / 1000.0,
+            b as f64 / 1000.0,
+            c as f64 / 1000.0
+        ));
+    }
+    s.push('\n');
+    s
+}
+
+#[test]
+fn v2_attribution_probe() {
+    match std::env::var(ATTRIB_ENV) {
+        Err(std::env::VarError::NotPresent) => return,
+        Ok(v) if v == "1" => {}
+        other => panic!("{ATTRIB_ENV} strict opt-in: unset or 1, got {other:?}"),
+    }
+    // adoption scale — the same dataset shape the M19 matrix ran (100K KOs,
+    // 10K deep × 10 versions, 20K ops). Attribution only means something
+    // where the working set dwarfs the 8 MiB block cache.
+    let sz = Size {
+        n: 100_000,
+        deep: 10_000,
+        ops: 20_000,
+        scan_rounds: 10,
+    };
+
+    // one v2 dataset, seeded through the Kernel over the adapter — the
+    // probe holds the adapter, so the kernel leg and the engine legs
+    // measure the same database (no CountingEngine: the counters are the
+    // v2 ReadPathStats themselves).
+    let path = tmp("v2-attrib");
+    let engine = Arc::new(AikoqlStorageEngineV2::open(&path).unwrap());
+    let clock = Arc::new(ManualClock::new(10_000));
+    let k = Arc::new(Kernel::open(engine.clone(), clock.clone(), SEED).unwrap());
+    let (ids, _deep, _hubs, _commits) = seed_phases(&k, &clock, sz);
+    let stats = || engine.read_path_stats().unwrap();
+
+    // W1 + W2: the kernel leg — k.get on a uniform id sample (W2 a fresh
+    // sample, the harness convention). Pin: exactly 2 engine gets per op
+    // (head/<koid> + ko/<koid><ts>, kernel cache off by default).
+    let (w1, d1) = attrib_leg(stats, SEED ^ 0x21, sz.ops, |rng| {
+        let id = ids[rng.below(ids.len())];
+        let _ = k.get(ctx(), &id).unwrap();
+    });
+    let (w2, d2) = attrib_leg(stats, SEED ^ 0x22, sz.ops, |rng| {
+        let id = ids[rng.below(ids.len())];
+        let _ = k.get(ctx(), &id).unwrap();
+    });
+    assert_eq!(d1.lookups, (sz.ops * 2) as u64, "k.get = 2 engine gets");
+    assert_eq!(d2.lookups, (sz.ops * 2) as u64, "k.get = 2 engine gets");
+
+    // the engine legs read the exact keys the kernel leg reads: head/<koid>
+    // and ko/<koid><ts>, ts captured in an uncounted warm-up pass.
+    let mut rng = Xs(SEED ^ 0x21);
+    let mut targets = Vec::with_capacity(sz.ops);
+    for _ in 0..sz.ops {
+        let id = ids[rng.below(ids.len())];
+        targets.push((id, k.get(ctx(), &id).unwrap().commit_ts));
+    }
+    let (head_leg, dh) = attrib_leg(stats, SEED ^ 0x23, sz.ops, |rng| {
+        let (id, _) = targets[rng.below(targets.len())];
+        let mut key = Vec::with_capacity(5 + 16);
+        key.extend_from_slice(b"head/");
+        key.extend_from_slice(id.as_bytes());
+        assert!(engine.get(&key).unwrap().is_some());
+    });
+    let (obj_leg, dk) = attrib_leg(stats, SEED ^ 0x24, sz.ops, |rng| {
+        let (id, ts) = targets[rng.below(targets.len())];
+        let mut key = Vec::with_capacity(3 + 16 + 8);
+        key.extend_from_slice(b"ko/");
+        key.extend_from_slice(id.as_bytes());
+        key.extend_from_slice(&ts.to_be_bytes());
+        assert!(engine.get(&key).unwrap().is_some());
+    });
+    assert_eq!(dh.lookups, sz.ops as u64);
+    assert_eq!(dk.lookups, sz.ops as u64);
+
+    // the pure mechanism legs: a small Db with the adoption row shape —
+    // the memtable path and the cached-block path do not depend on dataset
+    // scale, and their counters prove each leg IS its mechanism.
+    let small = tmp("v2-attrib-small");
+    let mut cfg = Config::new(small.clone());
+    cfg.memtable_bytes = usize::MAX; // nothing flushes — every get a hit
+    let mut db = Db::open(cfg).unwrap();
+    for i in 0..1000 {
+        db.put(
+            &format!("a/{i:04}").into_bytes(),
+            &vec![b'f'; ATTRIB_ROW_BYTES],
+        )
+        .unwrap();
+    }
+    let (mem_leg, dm) = attrib_leg(
+        || db.read_path_stats(),
+        SEED ^ 0x25,
+        20_000,
+        |rng| {
+            let i = rng.below(1000);
+            assert!(db.get(&format!("a/{i:04}").into_bytes()).unwrap().is_some());
+        },
+    );
+    assert_eq!(
+        dm.memtable_hits, 20_000,
+        "the memtable leg is memtable hits"
+    );
+    assert_eq!(dm.segments_considered, 0);
+
+    db.flush().unwrap();
+    for i in 0..1000 {
+        assert!(db.get(&format!("a/{i:04}").into_bytes()).unwrap().is_some()); // warm pass
+    }
+    let (hit_leg, dc) = attrib_leg(
+        || db.read_path_stats(),
+        SEED ^ 0x26,
+        20_000,
+        |rng| {
+            let i = rng.below(1000);
+            assert!(db.get(&format!("a/{i:04}").into_bytes()).unwrap().is_some());
+        },
+    );
+    assert!(dc.block_cache_hits >= 20_000, "the hit leg is cache hits");
+    assert_eq!(dc.block_cache_misses, 0);
+    assert_eq!(dc.blocks_read, 0, "a cached get performs no physical read");
+    drop(db);
+    cleanup_dataset(&small);
+
+    // the verdict: where a warm W1 k.get goes, naming the dominant engine
+    // phase for M22.
+    let p50 = |recs: &[AttribOp], i: usize| {
+        let (a, _, _) = percentiles(col(recs, i));
+        a
+    };
+    let dom = (2..9)
+        .max_by_key(|&i| p50(&w1, i))
+        .expect("phase columns exist");
+    let verdict = format!(
+        "## Where a warm W1 `k.get` goes (M22 input)\n\n\
+         - external wall P50 {:.2} µs = engine get_wall {:.2} µs + kernel/adapter overhead {:.2} µs\n\
+         - the kernel leg runs 2 engine gets per op; engine-leg P50s: head row {:.2} µs, version row {:.2} µs\n\
+         - dominant engine phase at adoption scale: {} ({:.2} µs of {:.2} µs get_wall); engine residual {:.2} µs\n",
+        p50(&w1, 0) as f64 / 1000.0,
+        p50(&w1, 1) as f64 / 1000.0,
+        p50(&w1, 10) as f64 / 1000.0,
+        p50(&head_leg, 1) as f64 / 1000.0,
+        p50(&obj_leg, 1) as f64 / 1000.0,
+        PHASE_NAMES[dom],
+        p50(&w1, dom) as f64 / 1000.0,
+        p50(&w1, 1) as f64 / 1000.0,
+        p50(&w1, 9) as f64 / 1000.0,
+    );
+
+    let dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine-v2");
+    std::fs::create_dir_all(&dir).unwrap();
+    let machine = format!(
+        "{}/{}; {} logical cores; {}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0),
+        std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "processor NOT_REPORTED".into()),
+    );
+    let mut report = format!(
+        "# Point-Read Cost Attribution — SE2-M21\n\n\
+         Generated only when `{ATTRIB_ENV}=1` (strict opt-in). Perf numbers are report cells, never asserts.\n\n\
+         - Test: `v2_attribution_probe`\n\
+         - Build mode: {}\n\
+         - Machine: {machine}\n\
+         - Date: {}\n\
+         - Dataset: one v2 database, {} KOs / {} deep × {DEEP_VERSIONS} versions / {} ops per leg, seeded through the Kernel over the adapter (SEED {SEED:#x}); the mechanism legs run on a second small Db with the same row shape\n\
+         - Reference: M19 warm W1/W2 P50 ≈ 37 µs ≈ 27 µs engine + 10 µs kernel; M17 hot-path 3.5 µs; M18 hot context 92.8 µs\n\n\
+         Each row = P50/P95/P99 over {} ops; engine phases are per-op ReadPathStats deltas (SE2-M8 counters + the M21 lock_wait/bloom/get_wall closure), kernel overhead = external wall − engine get_wall.\n\n",
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+        run_date(),
+        sz.n,
+        sz.deep,
+        sz.ops,
+        sz.ops,
+    );
+    report.push_str(&attrib_leg_report(
+        "W1 kernel get (k.get)",
+        "the gate-5 leg: 2 engine gets per op",
+        d1,
+        &w1,
+    ));
+    report.push_str(&attrib_leg_report(
+        "W2 kernel get (fresh sample)",
+        "same storage leg, independent sample",
+        d2,
+        &w2,
+    ));
+    report.push_str(&attrib_leg_report(
+        "Engine leg — head/<koid>",
+        "the small row (KSE-18)",
+        dh,
+        &head_leg,
+    ));
+    report.push_str(&attrib_leg_report(
+        "Engine leg — ko/<koid><ts>",
+        "the ~1.4 KB version row",
+        dk,
+        &obj_leg,
+    ));
+    report.push_str(&attrib_leg_report(
+        "Memtable hit (active memtable)",
+        "the M17 hot-path mechanism, same row shape",
+        dm,
+        &mem_leg,
+    ));
+    report.push_str(&attrib_leg_report(
+        "Cache hit (flushed + warmed block)",
+        "cached-block mechanism",
+        dc,
+        &hit_leg,
+    ));
+    report.push_str(&verdict);
+    std::fs::write(dir.join("attribution.md"), report).unwrap();
+
+    // the accounting closure holds at adoption scale too (M21-01 unit pins
+    // the same bound on mixed small legs; this is the gate-5 leg) — after
+    // the report write, so a failing probe still lands the artifact
+    let sum = |recs: &[AttribOp], i: usize| recs.iter().map(|r| r.at(i) as u128).sum::<u128>();
+    let phase_sums = (2..9)
+        .map(|i| (PHASE_NAMES[i], sum(&w1, i)))
+        .collect::<Vec<_>>();
+    assert!(
+        sum(&w1, 9) * 10 <= sum(&w1, 1),
+        "W1 accounting does not close at adoption scale: residual {} ns of get_wall {} ns ({:.1}%) — phase sums: {} · memtable hits {:.1}/op · segments {:.1}/get · blocks {:.1}/get · cache hits {:.1} misses {:.1}/get · entries decoded {:.1}/get",
+        sum(&w1, 9),
+        sum(&w1, 1),
+        sum(&w1, 9) as f64 / sum(&w1, 1) as f64 * 100.0,
+        phase_sums
+            .iter()
+            .map(|(n, s)| format!("{n} {} ns", s))
+            .collect::<Vec<_>>()
+            .join(" · "),
+        d1.memtable_hits as f64 / sz.ops as f64,
+        d1.segments_considered as f64 / (sz.ops * 2) as f64,
+        d1.blocks_read as f64 / (sz.ops * 2) as f64,
+        d1.block_cache_hits as f64 / (sz.ops * 2) as f64,
+        d1.block_cache_misses as f64 / (sz.ops * 2) as f64,
+        d1.entries_decoded as f64 / (sz.ops * 2) as f64,
+    );
+    cleanup_dataset(&path);
 }

@@ -32,7 +32,9 @@ use crate::cache::{BlockCache, CacheStats};
 use crate::compaction::{merge, CompactStats, KeepAll, RetentionPolicy};
 use crate::format::{verify_pair, Current, FormatError, Manifest, SegmentRecord, FORMAT_VERSION};
 use crate::memtable::Memtable;
-use crate::segment::{SegmentEntry, SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT};
+use crate::segment::{
+    SegmentAttach, SegmentEntry, SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT,
+};
 use crate::stats::{ReadPathStats, Stats};
 use crate::wal::{encode_frame, replay_frames, Op};
 use std::cmp::Reverse;
@@ -461,25 +463,44 @@ impl Db {
     /// SE2-M10: the state guard covers only the memtable probes and the
     /// arc clone — the segment probes (bloom, index, disk reads) run after
     /// the guard is dropped, so a cold get never stalls a writer.
+    /// SE2-M21: `get_wall_ns` times the whole call (the attribution
+    /// denominator), `lock_wait_ns` the state-guard wait, `bloom_probe_ns`
+    /// the bloom pre-check; the memtable timer covers the value clone too —
+    /// the clone is get work, not attribution residual.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, FormatError> {
+        let t_wall = Instant::now();
+        let out = self.get_inner(key);
+        self.stats
+            .get_wall_ns
+            .fetch_add(t_wall.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        out
+    }
+
+    fn get_inner(&self, key: &[u8]) -> Result<Option<Vec<u8>>, FormatError> {
         self.stats.lookups.fetch_add(1, Ordering::Relaxed);
         let segments = {
+            let t_lock = Instant::now();
             let state = self.state.read().unwrap();
+            self.stats
+                .lock_wait_ns
+                .fetch_add(t_lock.elapsed().as_nanos() as u64, Ordering::Relaxed);
             let t0 = Instant::now();
             if let Some(e) = state.active.get(key) {
+                let value = e.value.clone();
                 self.stats
                     .memtable_lookup_ns
                     .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 self.stats.memtable_hits.fetch_add(1, Ordering::Relaxed);
-                return Ok(e.value.clone());
+                return Ok(value);
             }
             for mem in state.immutables.iter().rev() {
                 if let Some(e) = mem.get(key) {
+                    let value = e.value.clone();
                     self.stats
                         .memtable_lookup_ns
                         .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     self.stats.memtable_hits.fetch_add(1, Ordering::Relaxed);
-                    return Ok(e.value.clone());
+                    return Ok(value);
                 }
             }
             self.stats
@@ -503,7 +524,12 @@ impl Db {
             // SE2-M7 — bloom pre-check: false positives possible, false
             // negatives never (M1 pin), so skipping a segment the bloom
             // rejects is answer-preserving; it just saves the probe.
-            if !seg.bloom_may_contain(key) {
+            let t_bloom = Instant::now();
+            let may = seg.bloom_may_contain(key);
+            self.stats
+                .bloom_probe_ns
+                .fetch_add(t_bloom.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            if !may {
                 self.stats
                     .segments_bloom_skipped
                     .fetch_add(1, Ordering::Relaxed);
@@ -746,6 +772,10 @@ impl Db {
             return Ok(CompactStats::default());
         }
         let mut next_id = state.next_segment_id;
+        let attach = SegmentAttach {
+            cache: self.cache.clone(),
+            stats: Some(Arc::clone(&self.stats)),
+        };
         let (stats, chunks) = merge(
             &state.segments,
             self.config.block_target,
@@ -753,6 +783,7 @@ impl Db {
             &self.config.dir,
             &mut next_id,
             policy,
+            &attach,
         )?;
         crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_segment");
 

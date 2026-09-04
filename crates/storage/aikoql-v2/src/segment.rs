@@ -447,6 +447,15 @@ fn read_segment_at(
     Ok(buf)
 }
 
+/// The reader attachment every segment the Db opens for reads carries: the
+/// shared block cache and the shared read-path stats (SE2-M21 — the pair
+/// that makes a segment's reads cached and counted; grouped because every
+/// reader-opening site passes them together).
+pub(crate) struct SegmentAttach {
+    pub(crate) cache: Option<std::sync::Arc<BlockCache>>,
+    pub(crate) stats: Option<std::sync::Arc<Stats>>,
+}
+
 impl SegmentReader {
     pub fn open(path: &Path) -> Result<Self, FormatError> {
         Self::open_inner(path, None, None)
@@ -927,12 +936,8 @@ impl SegmentReader {
             b.header,
             BLOCK_HEADER_LEN + b.payload_len,
         )?;
-        if let (Some(st), Some(t0)) = (&self.stats, t0) {
-            st.block_io_ns
-                .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-            st.blocks_read.fetch_add(1, Ordering::Relaxed);
-            st.bytes_read.fetch_add(raw.len() as u64, Ordering::Relaxed);
-        }
+        // SE2-M21: the first-touch checksum validation is block-I/O-path
+        // work — inside the io timer, so a cold get attributes fully.
         if !b.validated.load(Ordering::Relaxed) {
             let mut sk = Vec::with_capacity(20 + b.payload_len);
             sk.extend_from_slice(&raw[..20]);
@@ -943,6 +948,12 @@ impl SegmentReader {
                 )));
             }
             b.validated.store(true, Ordering::Relaxed);
+        }
+        if let (Some(st), Some(t0)) = (&self.stats, t0) {
+            st.block_io_ns
+                .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            st.blocks_read.fetch_add(1, Ordering::Relaxed);
+            st.bytes_read.fetch_add(raw.len() as u64, Ordering::Relaxed);
         }
         let raw = std::sync::Arc::new(raw);
         if let Some(cache) = &self.cache {

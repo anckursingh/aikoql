@@ -16,6 +16,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// `ReadPathMetrics`; `value_decode_ns` is folded into `block_decode_ns` —
 /// values decode with their entries, a separate counter would be fiction).
 /// `segments_range_skipped` fires before the bloom probe (SE2-M9).
+/// SE2-M21 adds the attribution closure: `lock_wait_ns` (state-guard wait),
+/// `bloom_probe_ns` (the bloom pre-check — untimed it would be ~a quarter
+/// of a warm cache hit, so the accounting could not close), `get_wall_ns`
+/// (the whole get — the denominator the residual is bounded against).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ReadPathStats {
     pub lookups: u64,
@@ -34,6 +38,9 @@ pub struct ReadPathStats {
     pub blocks_read: u64,
     pub bytes_read: u64,
     pub entries_decoded: u64,
+    pub lock_wait_ns: u64,
+    pub bloom_probe_ns: u64,
+    pub get_wall_ns: u64,
 }
 
 /// The live counters — one per field, relaxed atomics (~ns overhead).
@@ -55,6 +62,9 @@ pub(crate) struct Stats {
     pub(crate) blocks_read: AtomicU64,
     pub(crate) bytes_read: AtomicU64,
     pub(crate) entries_decoded: AtomicU64,
+    pub(crate) lock_wait_ns: AtomicU64,
+    pub(crate) bloom_probe_ns: AtomicU64,
+    pub(crate) get_wall_ns: AtomicU64,
 }
 
 impl Stats {
@@ -76,6 +86,9 @@ impl Stats {
             blocks_read: self.blocks_read.load(Ordering::Relaxed),
             bytes_read: self.bytes_read.load(Ordering::Relaxed),
             entries_decoded: self.entries_decoded.load(Ordering::Relaxed),
+            lock_wait_ns: self.lock_wait_ns.load(Ordering::Relaxed),
+            bloom_probe_ns: self.bloom_probe_ns.load(Ordering::Relaxed),
+            get_wall_ns: self.get_wall_ns.load(Ordering::Relaxed),
         }
     }
 }
