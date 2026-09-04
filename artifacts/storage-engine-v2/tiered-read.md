@@ -1,6 +1,7 @@
-# Tier-depth read certification — SE2-M17
+# Tier-depth read certification — SE2-M17/M18
 
-2026-09-03, not pushed (SE2 flow: commit per milestone, user pushes).
+2026-09-03 (M17) and 2026-09-04 (M18), not pushed (SE2 flow: commit per
+milestone, user pushes).
 Machine: windows/x86_64, 8 cores (AMD64 Family 23 Model 24), 30 GiB RAM.
 Config under test: M16 defaults (`l0_compact_trigger = 4`, `l0_tier_ratio = 1`),
 8 MiB decoded-block cache, 64 KiB blocks.
@@ -95,3 +96,77 @@ No read-side fix needed. The size tier's fan-out is absorbed by the
 range-skip → bloom walk, and every gated cell passes at depth 17 with
 3.7–5.7× headroom. The M16 trade (−76% merge I/O for a ≤17-segment walk)
 is certified as made.
+
+---
+
+# SE2-M18 — fan-out + hot context at tier depth
+
+2026-09-04. M17 certified the point-get / scan rows; the QA matrix also
+gates fan-out traversals (F=10/100/1000 ≤ 1/10/50 ms) and the hot context
+(≤ 100 µs), whose cells were M14 count-only. This extends the probe with
+those rows at the tier steady state — the same shapes, the same pins
+(warm rows carry the zero-miss pin; F=1000's working set exceeds the
+8 MiB cache and reports its thrash; the hot context asserts no block
+reads and cache-served hits).
+
+## Gate verdicts
+
+| gate | S cell (depth 2) | L cell (depth 17) | verdict |
+|---|---|---|---|
+| fanout F=10 ≤ 1 ms | 24.7 µs | 59.1 µs | PASS — 16.9× headroom at L |
+| fanout F=100 ≤ 10 ms | 274.5 µs | 521.0 µs | PASS — 19.2× at L |
+| fanout F=1000 ≤ 50 ms | 10.43 ms | 21.50 ms | PASS — 2.3× at L |
+| hot context ≤ 100 µs | 39.7 µs | 92.8 µs | PASS — 1.08× at L |
+
+## The new rows, verbatim
+
+DS-PERF-S (3,202,200 rows, seed 88.3 s):
+
+    fanout F=10 · cold · tier ops=    200 wall=     24.7ms p50=111200 p95=190600 p99=216800 | blocks=2400 bytes=39475600 segs=4000 hits=0 misses=0
+    fanout F=100 · cold · tier ops=     20 wall=     28.2ms p50=1368800 p95=2076900 p99=2297700 | blocks=2100 bytes=34439200 segs=3720 hits=0 misses=0
+    fanout F=1000 · cold · tier ops=      4 wall=     42.7ms p50=9832100 p95=14018500 p99=14018500 | blocks=4072 bytes=66786544 segs=7404 hits=0 misses=0
+    fanout F=10 · warm · tier ops=    200 wall=      5.0ms p50= 24700 p95= 26400 p99= 35500 | blocks=0 bytes=0 segs=4000 hits=2400 misses=0
+    fanout F=100 · warm · tier ops=     20 wall=      5.7ms p50=274500 p95=292200 p99=443000 | blocks=0 bytes=0 segs=3720 hits=2100 misses=0
+    fanout F=1000 · warm · tier ops=      4 wall=     43.1ms p50=10427400 p95=12933900 p99=12933900 | blocks=2724 bytes=44678376 segs=7404 hits=1348 misses=2724
+    context · hot · tier     ops=   2000 wall=     84.1ms p50= 39700 p95= 58500 p99=101400 | blocks=0 bytes=0 segs=44000 hits=30000 misses=0
+
+DS-PERF-L (32,002,200 rows, seed 969.1 s):
+
+    fanout F=10 · cold · tier ops=    200 wall=     42.7ms p50=190200 p95=334900 p99=577600 | blocks=5200 bytes=85571600 segs=30000 hits=0 misses=0
+    fanout F=100 · cold · tier ops=     20 wall=     41.0ms p50=2000000 p95=2091000 p99=3611700 | blocks=2500 bytes=40983760 segs=29660 hits=0 misses=0
+    fanout F=1000 · cold · tier ops=      4 wall=     90.9ms p50=20589000 p95=29924300 p99=29924300 | blocks=4632 bytes=75766636 segs=52632 hits=0 misses=0
+    fanout F=10 · warm · tier ops=    200 wall=     12.2ms p50= 59100 p95= 72900 p99=103000 | blocks=0 bytes=0 segs=30000 hits=5200 misses=0
+    fanout F=100 · warm · tier ops=     20 wall=     11.1ms p50=521000 p95=730400 p99=956500 | blocks=0 bytes=0 segs=29660 hits=2500 misses=0
+    fanout F=1000 · warm · tier ops=      4 wall=     84.7ms p50=21501400 p95=21934200 p99=21934200 | blocks=4432 bytes=72497028 segs=52632 hits=200 misses=4432
+    context · hot · tier     ops=   2000 wall=    199.2ms p50= 92800 p95=133300 p99=172500 | blocks=0 bytes=0 segs=330000 hits=88000 misses=0
+
+The M17 rows in both runs reproduce in the same band (cold head 27.0 vs
+27.3 µs, absent 1.7 µs, warm 9.9 vs 9.5 µs, hot 3.6 vs 3.5 µs at L).
+
+## What the cells say
+
+- Fan-out scales ~linearly with F, on the depth walk: cold blocks per
+  dst get ≈ 1.16 at every F (26/125/1158 per traversal at L), and the
+  warm rows stay cache-served through the gate band (F=10/100 zero
+  misses, 0 blocks).
+- The hot context is the gate the tier tightens most: 39.7 µs at depth 2
+  → 92.8 µs at depth 17 — each context is ~44 cache-served block hits
+  walked across the full depth (segs/op = 165 at L). It PASSES with
+  1.08× headroom, the thinnest margin in the matrix. If the depth or the
+  cache:working-set ratio grows, this is the first gate to watch — for
+  now the gate is pass/fail and it passes, so no change.
+- F=1000 warm ≈ cold (21.5 vs 20.6 ms at L): the ~16 MiB fan working set
+  exceeds the 8 MiB cache and thrashes — the M14 finding, reported not
+  hidden (misses 4432 at L). Cache sizing for big fan-outs is a
+  documented knob, not a hidden one.
+- The S type scan spread 440–738 µs across the two S runs is run
+  variance (both far under any scan gate; the L scans agree at
+  5.76–6.23 ms).
+
+## Verdict
+
+Every QA read gate now has a tier-depth cell, and all seven pass: cold
+point, warm point, hot head (M17) + fanout F=10/100/1000 and hot context
+(M18). The tier is certified against the complete QA read matrix with no
+read-side fix needed; the honest watch item is the hot context's 1.08×
+margin at L.

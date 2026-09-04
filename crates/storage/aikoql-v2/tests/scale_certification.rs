@@ -1297,12 +1297,13 @@ fn write_report(sections: &[Section], m: Mode) {
     std::fs::write(dir.join("scale-certification.md"), s).unwrap();
 }
 
-/// SE2-M17 — tier-depth read probe: the same row shapes the QA matrix
+/// SE2-M17/M18 — tier-depth read probe: the same row shapes the QA matrix
 /// runs, on the seeded database in its tiered steady state (up to ~17
 /// L0 + L1 at L, vs 2 under count-only). Cold rows detach the cache like
 /// the matrix (cache_bytes = 0); warm/hot rows carry the same pins. The
 /// cells are report-only evidence against the QA read gates (cold point
-/// <= 100 us, warm <= 50 us, hot head <= 20 us) — printed live to the
+/// <= 100 us, warm <= 50 us, hot head <= 20 us, fanout F=10/100/1000
+/// <= 1/10/50 ms, hot context <= 100 us) — printed live to the
 /// stderr handle (libtest captures eprintln on the test thread).
 fn tier_read_probe(dir: &Path, b: &Built, sz: Size) -> Vec<Row> {
     let mut rows = Vec::new();
@@ -1360,6 +1361,16 @@ fn tier_read_probe(dir: &Path, b: &Built, sz: Size) -> Vec<Row> {
         r.label = "type scan · cold · tier".into();
         rows.push(r);
     }
+    for h in 0..3 {
+        // report cells: the cold fan-out walk at tier depth
+        let f = b.fans[h];
+        let rel = if h == 0 { "links" } else { "fan" };
+        let src = b.hubs[h];
+        let ops = (2000 / f).max(4);
+        let mut r = timed(&db, ops, |db| traverse(db, &src, rel, f));
+        r.label = format!("fanout F={f} · cold · tier");
+        rows.push(r);
+    }
     drop(db);
 
     // warm/hot: default cache, one open — all reads, no mutation
@@ -1408,6 +1419,63 @@ fn tier_read_probe(dir: &Path, b: &Built, sz: Size) -> Vec<Row> {
         r.label = "head get · hot · tier".into();
         rows.push(r);
     }
+    for h in 0..3 {
+        // the gated rows: warm fan-out at tier depth, same pin shape as
+        // the matrix (F <= 100 zero-miss pin; F=1000's working set
+        // exceeds the 8 MiB cache — thrash reported, not hidden)
+        let f = b.fans[h];
+        let rel = if h == 0 { "links" } else { "fan" };
+        let src = b.hubs[h];
+        let ops = (2000 / f).max(4);
+        let mut r = if f <= 100 {
+            warm_pinned(
+                &db,
+                |db| traverse(db, &src, rel, f),
+                ops,
+                move |db| traverse(db, &src, rel, f),
+            )
+        } else {
+            traverse(&db, &src, rel, f); // pre-warm, uncounted
+            timed(&db, ops, move |db| traverse(db, &src, rel, f))
+        };
+        r.label = format!("fanout F={f} · warm · tier");
+        rows.push(r);
+    }
+    {
+        // the hot-context gate row: pre-warm one KO's ring + history,
+        // then repeat — cache-served, no block reads (the same pins as
+        // the matrix's context · hot)
+        let koid = b.koids[0];
+        context(&db, &koid, sz); // pre-warm, uncounted
+        let s0 = db.read_path_stats();
+        let c0 = db.cache_stats();
+        let t0 = Instant::now();
+        let mut lats = Vec::with_capacity(HOT_CTX_LOOKUPS);
+        for _ in 0..HOT_CTX_LOOKUPS {
+            let s = Instant::now();
+            context(&db, &koid, sz);
+            lats.push(s.elapsed().as_nanos());
+        }
+        let c1 = db.cache_stats();
+        let s1 = db.read_path_stats();
+        assert_eq!(
+            s1.blocks_read, s0.blocks_read,
+            "a hot context reads no blocks"
+        );
+        assert!(
+            c1.hits - c0.hits >= HOT_CTX_LOOKUPS as u64,
+            "a hot context must be cache-served"
+        );
+        rows.push(row_from(
+            "context · hot · tier".into(),
+            lats,
+            t0.elapsed().as_secs_f64() * 1000.0,
+            s0,
+            s1,
+            c0,
+            c1,
+        ));
+    }
     rows
 }
 
@@ -1448,7 +1516,7 @@ fn ds_perf_loader() {
         let mut out = std::io::stderr();
         let _ = writeln!(
             out,
-            "SE2M17 tier read probe — {} ({} rows, seed wall {:.1}s)",
+            "tier read probe (SE2M17_READS) — {} ({} rows, seed wall {:.1}s)",
             sz.label,
             built.rows,
             built.wall_ms / 1000.0
