@@ -43,6 +43,9 @@ pub(crate) struct HttpSession {
     pub username: String,
     pub roles: Vec<String>,
     pub created: Instant,
+    /// P3-M1 (§53): session TTL from [auth].session_ttl_seconds (default
+    /// 24h). validate_token enforces `elapsed < ttl`.
+    pub ttl_secs: u64,
 }
 
 // pub(crate) re-exports: this block is the crate prelude. Extracted modules
@@ -202,6 +205,30 @@ fn main() {
     // PRR-3: local model store override (default ~/.aikoql/models).
     let model_dir_flag = cfg.model_dir;
     MEMORY_DIR.set(memory_dir).ok();
+
+    // P3-M1 (§53–54): build the HTTP login resolver once — argon2id hashes
+    // verified per login, bootstrap admin hashed here (the plaintext then
+    // drops out of scope) — and fail closed on an armed-but-credentialless
+    // remote HTTP surface (auth004) and on non-loopback metrics binds.
+    let http_auth = Arc::new(crate::http::AuthResolver::new(
+        cfg.auth_users,
+        cfg.admin_password.as_deref(),
+        cfg.auth_session_ttl_secs,
+    ));
+    if let Err(msg) = remote_http_requires_auth(cfg.allow_remote_http, http_auth.is_configured()) {
+        eprintln!("{msg}");
+        std::process::exit(2);
+    }
+    let metrics_addr = match metrics_addr {
+        Some(a) => match validate_http_listen(&a, cfg.allow_remote_http) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        },
+        None => None,
+    };
 
     let kernel = match engine::open_kernel(&db_path, &cfg.encryption, cfg.backend) {
         Ok(k) => k,
@@ -403,6 +430,7 @@ fn main() {
             addr.clone(),
             db_path.clone(),
             rest_rate_limit.clone(),
+            http_auth.clone(),
         );
     }
 
@@ -473,6 +501,48 @@ fn validate_listen(addr: &str) -> Result<String, String> {
         ));
     }
     Ok(expanded)
+}
+
+/// P3-M1 (auth004): the HTTP/metrics listener carries login + the knowledge
+/// API — loopback-only unless allow_remote_http is armed (same fail-closed
+/// reasoning as validate_listen; arming itself is gated on credentials by
+/// remote_http_requires_auth).
+fn validate_http_listen(addr: &str, allow_remote: bool) -> Result<String, String> {
+    let expanded = match addr.rsplit_once(':') {
+        Some(("", port)) => format!("127.0.0.1:{port}"),
+        _ => addr.to_string(),
+    };
+    let resolved: Vec<std::net::SocketAddr> = expanded
+        .to_socket_addrs()
+        .map_err(|e| format!("invalid --metrics-addr address {expanded}: {e}"))?
+        .collect();
+    if resolved.is_empty() {
+        return Err(format!(
+            "--metrics-addr {expanded} did not resolve to any address"
+        ));
+    }
+    if !allow_remote && !resolved.iter().all(|a| a.ip().is_loopback()) {
+        return Err(format!(
+            "--metrics-addr {expanded} would serve the HTTP surface (login + knowledge API) \
+             on a non-loopback interface; bind 127.0.0.1 (or ::1), or set \
+             allow_remote_http = true together with [auth] credentials"
+        ));
+    }
+    Ok(expanded)
+}
+
+/// P3-M1 (auth004): a remote HTTP surface without configured credentials is
+/// an unauthenticated network API — refused at serve, never defaulted.
+fn remote_http_requires_auth(allow_remote: bool, auth_configured: bool) -> Result<(), String> {
+    if allow_remote && !auth_configured {
+        return Err(
+            "allow_remote_http = true requires HTTP credentials ([auth].users in aikoql.toml \
+             or AIKOQL_ADMIN_PASSWORD) — refusing to serve an unauthenticated HTTP surface \
+             on non-loopback interfaces"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@ pub(crate) fn print_usage() {
         "  ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR] Ingest directory into knowledge base\n",
         "  report [PATH]          Print knowledge report for directory\n",
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
+        "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
         "\n",
         "Server options (serve mode):\n",
         "  --listen ADDR          TCP listen address (e.g., 127.0.0.1:9090; empty host = loopback)\n",
@@ -37,6 +38,10 @@ pub(crate) fn print_usage() {
         "  --config PATH           TOML config file (auto: ./aikoql.toml, then /etc/aikoql/aikoql.toml)\n",
         "\n",
         "Precedence: defaults < aikoql.toml < env (AIKOQL_*) < CLI flags.\n",
+        "HTTP auth: [auth] users/session_ttl_seconds in aikoql.toml (argon2id hashes);\n",
+        "  AIKOQL_ADMIN_PASSWORD bootstraps an admin when no users are configured.\n",
+        "  The HTTP/metrics surface is loopback-only unless allow_remote_http = true\n",
+        "  (arming it requires configured credentials).\n",
         "\n",
         "Examples:\n",
         "  aikoql-mcp shell                           # Interactive shell\n",
@@ -194,6 +199,22 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         Some("report") => {
             let path = arg_after.unwrap_or(".");
             run_report(path);
+            true
+        }
+        Some("hash-password") => {
+            // P3-M1 (§53): argon2id hash for the [auth].users table.
+            let Some(pw) = arg_after else {
+                eprintln!("Usage: aikoql-mcp hash-password <PASSWORD>");
+                eprintln!("Prints an argon2id hash for the [auth].users table in aikoql.toml.");
+                std::process::exit(2);
+            };
+            match argon2_hash_password(pw) {
+                Ok(h) => println!("{h}"),
+                Err(e) => {
+                    eprintln!("hash-password: {e}");
+                    std::process::exit(1);
+                }
+            }
             true
         }
         Some("import") => {
@@ -513,4 +534,16 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         }
         _ => false,
     }
+}
+
+/// P3-M1: argon2id hash for the [auth].users table (argon2 defaults —
+/// m=19 MiB, t=2, p=1 — the same parameters the kernel envelope KDF uses).
+fn argon2_hash_password(password: &str) -> Result<String, String> {
+    use argon2::password_hash::PasswordHasher;
+    let salt =
+        argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+    argon2::Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| e.to_string())
 }

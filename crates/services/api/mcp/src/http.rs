@@ -17,6 +17,7 @@ pub(crate) fn serve_metrics(
     addr: &str,
     db_path: &Arc<String>,
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
+    auth: Arc<AuthResolver>,
 ) {
     let listener = match TcpListener::bind(addr) {
         Ok(l) => l,
@@ -34,7 +35,8 @@ pub(crate) fn serve_metrics(
                 let db = db_path.clone();
                 let ont = ontology.clone();
                 let rl = rate_limit.clone();
-                std::thread::spawn(move || handle_http(&mut s, &k, &sess, &db, &ont, &rl));
+                let auth = auth.clone();
+                std::thread::spawn(move || handle_http(&mut s, &k, &sess, &db, &ont, &rl, &auth));
             }
             Err(e) => {
                 // ponytail: don't die on transient accept errors.
@@ -49,7 +51,7 @@ pub(crate) fn serve_metrics(
 /// Build graph JSON: { nodes: [...], edges: [...] }.
 /// Query params: ?koid=<hex> to center on a node, &detail=1 for properties.
 /// Without koid, returns all heads + their outbound relationships.
-pub(crate) fn graph_api(k: &Kernel, path: &str) -> Result<String, String> {
+pub(crate) fn graph_api(k: &Kernel, path: &str, subject: &Subject) -> Result<String, String> {
     let mut center_koid: Option<KOID> = None;
     let mut detail = false;
     let mut type_filter: Option<String> = None;
@@ -75,11 +77,9 @@ pub(crate) fn graph_api(k: &Kernel, path: &str) -> Result<String, String> {
         }
     }
 
-    let browser_ctx = KnowledgeContext::from(Subject {
-        name: "graph-browser".into(),
-        roles: vec!["admin".into()],
-        tenant: None, // unscoped admin; tenant is a visual filter below
-    });
+    // P3-M1 (auth006): the caller's session subject — never a hardcoded
+    // admin. The tenant claim confines every kernel read/write.
+    let browser_ctx = KnowledgeContext::from(subject.clone());
 
     // Parse tenant filter from query string.
     let tenant_filter: Option<String> = path.split_once('?').and_then(|(_, qs)| {
@@ -400,38 +400,90 @@ pub(crate) fn extract_token(path: &str, req: &str) -> Option<String> {
     None
 }
 
+/// P3-M1 (§53): HTTP login credentials. Users come from [auth].users with
+/// argon2id hashes (`aikoql hash-password`); with no configured users,
+/// AIKOQL_ADMIN_PASSWORD bootstraps a single admin at serve start. Neither
+/// present → is_configured() is false and every login fails (fail-closed,
+/// no hardcoded credentials anywhere).
+pub(crate) struct AuthResolver {
+    users: Vec<crate::config::AuthUser>,
+    ttl_secs: u64,
+}
+
+impl AuthResolver {
+    pub(crate) fn new(
+        users: Vec<crate::config::AuthUser>,
+        admin_password: Option<&str>,
+        ttl_secs: u64,
+    ) -> Self {
+        let mut users = users;
+        if let Some(pw) = admin_password {
+            if !users.iter().any(|u| u.username == "admin") {
+                use argon2::password_hash::PasswordHasher;
+                let salt = argon2::password_hash::SaltString::generate(
+                    &mut argon2::password_hash::rand_core::OsRng,
+                );
+                match argon2::Argon2::default().hash_password(pw.as_bytes(), &salt) {
+                    Ok(h) => users.push(crate::config::AuthUser {
+                        username: "admin".into(),
+                        hash: h.to_string(),
+                        roles: vec!["admin".into()],
+                    }),
+                    Err(e) => eprintln!("admin password hash failed: {e}"),
+                }
+            }
+        }
+        AuthResolver { users, ttl_secs }
+    }
+
+    pub(crate) fn is_configured(&self) -> bool {
+        !self.users.is_empty()
+    }
+
+    pub(crate) fn ttl_secs(&self) -> u64 {
+        self.ttl_secs
+    }
+
+    /// argon2id-verify `password` against the configured hash for
+    /// `username`; the user's roles on match.
+    pub(crate) fn verify(&self, username: &str, password: &str) -> Option<Vec<String>> {
+        use argon2::password_hash::PasswordVerifier;
+        for u in &self.users {
+            if u.username != username {
+                continue;
+            }
+            let Ok(parsed) = argon2::PasswordHash::new(&u.hash) else {
+                return None; // malformed configured hash never matches
+            };
+            if argon2::Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok()
+            {
+                return Some(u.roles.clone());
+            }
+            return None;
+        }
+        None
+    }
+}
+
 pub(crate) fn handle_login(
     body: &str,
     sessions: &Mutex<HashMap<String, HttpSession>>,
+    auth: &AuthResolver,
 ) -> Result<String, String> {
     let creds: J = serde_json::from_str(body).map_err(|e| format!("bad JSON: {}", e))?;
     let username = creds.get("username").and_then(|v| v.as_str()).unwrap_or("");
     let password = creds.get("password").and_then(|v| v.as_str()).unwrap_or("");
 
-    // Default credentials (ponytail: hardcoded, config-file in prod).
-    let valid = match username {
-        "admin" => password == "admin",
-        "user" => password == "user" || password == "readonly",
-        _ => false,
-    };
-    if !valid {
-        return Err("invalid credentials".into());
-    }
-    let roles: Vec<String> = if username == "admin" {
-        vec!["admin".into()]
-    } else {
-        vec![]
-    };
-    // Generate a simple session token.
-    // Generate session token from time + PID (ponytail: not cryptographic, fine for localhost UI).
-    let token = format!(
-        "{:x}{:x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0),
-        std::process::id()
-    );
+    let roles = auth
+        .verify(username, password)
+        .ok_or("invalid credentials")?;
+    // P3-M1 (auth002): 256-bit CSPRNG session token (64 hex chars). The old
+    // time+pid token was predictable; sessions are bearer credentials now.
+    let mut raw = [0u8; 32];
+    getrandom::getrandom(&mut raw).map_err(|e| format!("session token: {e}"))?;
+    let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     // justified: Mutex poison is unrecoverable
     sessions.lock().unwrap().insert(
         token.clone(),
@@ -439,6 +491,7 @@ pub(crate) fn handle_login(
             username: username.to_string(),
             roles,
             created: Instant::now(),
+            ttl_secs: auth.ttl_secs(),
         },
     );
     Ok(token)
@@ -452,8 +505,9 @@ pub(crate) fn validate_token(
     // justified: Mutex poison is unrecoverable
     let guard = sessions.lock().unwrap();
     let sess = guard.get(token)?;
-    // Session expires after 24h.
-    if sess.created.elapsed().as_secs() > 86400 {
+    // P3-M1 (auth003): the session's configured TTL ([auth].session_ttl_seconds,
+    // default 24h). TTL 0 = login disabled-by-expiry.
+    if sess.created.elapsed().as_secs() >= sess.ttl_secs {
         return None;
     }
     Some(Subject {
@@ -670,6 +724,7 @@ pub(crate) fn handle_http(
     db_path: &Arc<String>,
     ontology: &OntologyRegistry,
     rate_limit: &Mutex<crate::rate_limiter::RateLimiter>,
+    auth: &AuthResolver,
 ) {
     // ponytail: 64 KB buffer fits all practical HTTP requests. Browsers send
     // ~2-8 KB of headers; single read captures the full request.
@@ -789,7 +844,7 @@ pub(crate) fn handle_http(
             let body = prometheus_metrics(k);
             ("200 OK", "text/plain; version=0.0.4", body)
         }
-        "/api/login" if method == "POST" => match handle_login(&body_str, sessions) {
+        "/api/login" if method == "POST" => match handle_login(&body_str, sessions, auth) {
             Ok(token) => (
                 "200 OK",
                 "application/json",
@@ -801,32 +856,56 @@ pub(crate) fn handle_http(
                 json!({"error": e}).to_string(),
             ),
         },
-        _p if route.starts_with("/api/graph") => {
-            let body = graph_api(k, path);
-            match body {
+        // P3-M1 (auth005/auth006): the pre-v1 route aliases are part of the
+        // same surface — session required, and graph runs as the session's
+        // subject (never the old hardcoded graph-browser admin).
+        _p if route.starts_with("/api/graph") => match validate_token(token.as_deref(), sessions) {
+            Some(s) => match graph_api(k, path, &s) {
                 Ok(b) => ("200 OK", "application/json", b),
                 Err(e) => ("500 Internal Server Error", "text/plain", e),
-            }
-        }
-        _p if route.starts_with("/api/schema") => match schema_endpoint(k) {
-            Ok(b) => ("200 OK", "application/json", b),
-            Err(e) => (
-                "500 Internal Server Error",
+            },
+            None => (
+                "401 Unauthorized",
                 "application/json",
-                json!({"error": e, "code": "INTERNAL"}).to_string(),
+                json!({"error": "login required"}).to_string(),
             ),
         },
-        _p if route.starts_with("/api/explain") => {
-            let query = parse_query_param(path, "query");
-            match explain_endpoint(&query) {
-                Ok(b) => ("200 OK", "application/json", b),
-                Err(e) => (
-                    "400 Bad Request",
+        _p if route.starts_with("/api/schema") => {
+            match validate_token(token.as_deref(), sessions) {
+                Some(_) => match schema_endpoint(k) {
+                    Ok(b) => ("200 OK", "application/json", b),
+                    Err(e) => (
+                        "500 Internal Server Error",
+                        "application/json",
+                        json!({"error": e, "code": "INTERNAL"}).to_string(),
+                    ),
+                },
+                None => (
+                    "401 Unauthorized",
                     "application/json",
-                    json!({"error": e, "code": "PARSE_ERROR"}).to_string(),
+                    json!({"error": "login required"}).to_string(),
                 ),
             }
         }
+        _p if route.starts_with("/api/explain") => match validate_token(token.as_deref(), sessions)
+        {
+            Some(_) => {
+                let query = parse_query_param(path, "query");
+                match explain_endpoint(&query) {
+                    Ok(b) => ("200 OK", "application/json", b),
+                    Err(e) => (
+                        "400 Bad Request",
+                        "application/json",
+                        json!({"error": e, "code": "PARSE_ERROR"}).to_string(),
+                    ),
+                }
+            }
+            None => (
+                "401 Unauthorized",
+                "application/json",
+                json!({"error": "login required"}).to_string(),
+            ),
+        },
         _p if route.starts_with("/api/aikoql") => {
             let session = validate_token(token.as_deref(), sessions);
             if let Some(session) = session {
@@ -938,7 +1017,8 @@ pub(crate) fn spawn_metrics(
     addr: String,
     db_path: Arc<String>,
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
+    auth: Arc<AuthResolver>,
 ) {
     info!(addr = %addr, "metrics HTTP server started");
-    thread::spawn(move || serve_metrics(kernel, ontology, &addr, &db_path, rate_limit));
+    thread::spawn(move || serve_metrics(kernel, ontology, &addr, &db_path, rate_limit, auth));
 }

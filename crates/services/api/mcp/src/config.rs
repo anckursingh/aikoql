@@ -12,6 +12,15 @@ pub(crate) struct RuntimeConfig {
     pub listen_addr: Option<String>,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
+    /// P3-M1 (§53): HTTP login users ([auth].users), plus the
+    /// AIKOQL_ADMIN_PASSWORD bootstrap (plaintext in config only — hashed
+    /// once into the AuthResolver at serve start).
+    pub auth_users: Vec<AuthUser>,
+    pub admin_password: Option<String>,
+    pub auth_session_ttl_secs: u64,
+    /// P3-M1 (auth004): non-loopback HTTP/metrics bind (loopback stays the
+    /// default); refused at serve without configured credentials.
+    pub allow_remote_http: bool,
     pub memory_dir: String,
     /// None = default (candle); Some("openai") = OpenAI-compatible HTTP endpoint.
     /// Canonical config names: "candle" | "http" | "ollama" (alias of http).
@@ -77,6 +86,14 @@ pub(crate) struct RuntimeEncryption {
     pub policies: std::collections::HashMap<String, Vec<String>>,
 }
 
+/// P3-M1 (§53): one [auth].users row — argon2id hash + roles.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct AuthUser {
+    pub username: String,
+    pub hash: String,
+    pub roles: Vec<String>,
+}
+
 // ---------------------------------------------------------------------------
 // TOML schema — every section mirrors aikoql.toml. All fields Option so we
 // can layer sections over defaults.
@@ -88,6 +105,7 @@ struct TomlConfig {
     storage: Option<TomlStorage>,
     database: Option<TomlDatabase>,
     server: Option<TomlServer>,
+    auth: Option<TomlAuth>,
     encryption: Option<TomlEncryption>,
     rate_limit: Option<TomlRateLimit>,
     embedding: Option<TomlEmbedding>,
@@ -113,6 +131,26 @@ struct TomlServer {
     listen: Option<String>,
     metrics_addr: Option<String>,
     tcp_tokens: Option<Vec<String>>,
+    // P3-M1 (auth004): the HTTP surface is loopback-only unless explicitly
+    // armed — and arming it requires [auth] credentials (fail-closed).
+    allow_remote_http: Option<bool>,
+}
+
+/// P3-M1 (§53): HTTP login credentials — argon2id hashes (see
+/// `aikoql hash-password`), never plaintext, never hardcoded.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct TomlAuth {
+    users: Option<Vec<TomlAuthUser>>,
+    session_ttl_seconds: Option<u64>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct TomlAuthUser {
+    username: String,
+    hash: String,
+    roles: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -224,6 +262,10 @@ pub(crate) fn load(
         listen_addr: None,
         metrics_addr: None,
         tcp_tokens: Vec::new(),
+        auth_users: Vec::new(),
+        admin_password: None,
+        auth_session_ttl_secs: 86_400,
+        allow_remote_http: false,
         memory_dir: "./memory".into(),
         embedding_provider: None,
         embedding_base_url: "http://localhost:11434".into(),
@@ -280,6 +322,24 @@ pub(crate) fn load(
             // layer stops it working.
             if let Some(v) = s.tcp_tokens {
                 cfg.tcp_tokens = v;
+            }
+            if let Some(v) = s.allow_remote_http {
+                cfg.allow_remote_http = v;
+            }
+        }
+        if let Some(a) = t.auth {
+            if let Some(users) = a.users {
+                cfg.auth_users = users
+                    .into_iter()
+                    .map(|u| AuthUser {
+                        username: u.username,
+                        hash: u.hash,
+                        roles: u.roles.unwrap_or_default(),
+                    })
+                    .collect();
+            }
+            if let Some(v) = a.session_ttl_seconds {
+                cfg.auth_session_ttl_secs = v;
             }
         }
         if let Some(e) = t.encryption {
@@ -377,6 +437,15 @@ pub(crate) fn load(
     }
     if let Some(v) = env_opt("AIKOQL_PASSPHRASE") {
         cfg.encryption.passphrase = Some(v);
+    }
+    // P3-M1: allow_remote_http arming + the admin bootstrap password (the
+    // password stays in the config struct only until serve hashes it into
+    // the AuthResolver — it is never logged and never persisted).
+    if let Some(v) = env_opt("AIKOQL_ALLOW_REMOTE_HTTP") {
+        cfg.allow_remote_http = v == "1" || v.eq_ignore_ascii_case("true");
+    }
+    if let Some(v) = env_opt("AIKOQL_ADMIN_PASSWORD") {
+        cfg.admin_password = Some(v);
     }
 
     // Layer 4: CLI (highest precedence). Same semantics as the pre-PRR-4 loop.

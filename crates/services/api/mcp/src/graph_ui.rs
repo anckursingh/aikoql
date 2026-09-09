@@ -88,11 +88,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 <div id="login-overlay">
   <div id="login-box">
     <h2>aikoql</h2>
-    <input type="text" id="login-user" placeholder="Username" value="admin" />
-    <input type="password" id="login-pass" placeholder="Password" value="admin" />
+    <input type="text" id="login-user" placeholder="Username" />
+    <input type="password" id="login-pass" placeholder="Password" />
     <button onclick="doLogin()">Sign In</button>
     <div class="error" id="login-error"></div>
-    <div class="hint">Default: admin / admin (full access)<br>Read-only: user / user</div>
+    <div class="hint">Credentials: [auth].users in aikoql.toml, or the AIKOQL_ADMIN_PASSWORD bootstrap</div>
   </div>
 </div>
 

@@ -361,3 +361,242 @@ fn execute_program_idempotency_execution_id_replays() {
     drop(k);
     let _ = std::fs::remove_file(&db);
 }
+
+// ---------------------------------------------------------------------------
+// P3-M1 (§53–55): auth surface — RED trio against today's behavior
+// ---------------------------------------------------------------------------
+
+/// auth002 RED: the session token must be a 256-bit CSPRNG hex string
+/// (64 chars). Today it is `{:x}{:x}` time-nanos + pid — short, predictable,
+/// and structurally derivable from the process start time.
+#[test]
+fn auth002_session_token_256bit_unpredictable() {
+    let auth = crate::http::AuthResolver::new(vec![], Some("admin"), 86_400);
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let body = serde_json::json!({"username": "admin", "password": "admin"}).to_string();
+    let t1 = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    let t2 = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    assert_eq!(t1.len(), 64, "token must be 256-bit hex (32 bytes)");
+    assert!(
+        t1.chars().all(|c| c.is_ascii_hexdigit()),
+        "token must be hex-encoded"
+    );
+    assert_ne!(t1, t2, "two logins must never share a token");
+}
+
+/// auth005 RED: every route outside the pinned allowlist (openapi.json,
+/// abi-version, metrics-info — health/metrics/login live outside route_v1)
+/// must refuse an unauthenticated caller. Today 11 arms serve anonymously.
+#[test]
+fn auth005_route_matrix_unauthenticated_401() {
+    let db = tmp_db("auth5");
+    let _ = std::fs::remove_file(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(crate::RedbEngine::open(&db).expect("open store")),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let rl = crate::Mutex::new(crate::rate_limiter::RateLimiter::new(true, 100_000));
+
+    // Allowlist stays open — any status except the auth failure counts.
+    for (method, path) in [
+        ("GET", "/api/v1/openapi.json"),
+        ("GET", "/api/v1/abi-version"),
+        ("GET", "/api/v1/metrics-info"),
+    ] {
+        let (status, _, _) =
+            crate::api_rest::route_v1(method, path, "", &k, &db, &sessions, None, &rl);
+        assert!(
+            !status.starts_with("401"),
+            "{method} {path} must stay on the allowlist, got {status}"
+        );
+    }
+
+    // Everything else must 401 without a session.
+    for (method, path) in [
+        ("GET", "/api/v1/audit"),
+        ("GET", "/api/v1/backups"),
+        ("POST", "/api/v1/discover-ontology"),
+        ("GET", "/api/v1/schema"),
+        ("GET", "/api/v1/graph"),
+        ("POST", "/api/v1/backup"),
+        ("POST", "/api/v1/restore"),
+        ("POST", "/api/v1/verify-backup"),
+        ("POST", "/api/v1/remember"),
+        ("GET", "/api/v1/get/deadbeef"),
+        ("POST", "/api/v1/aikoql"),
+        ("POST", "/api/v1/documents"),
+        ("POST", "/api/v1/agent/memory-search"),
+    ] {
+        let (status, _, body) =
+            crate::api_rest::route_v1(method, path, "", &k, &db, &sessions, None, &rl);
+        assert!(
+            status.starts_with("401"),
+            "{method} {path} unauthenticated must 401, got {status}: {body}"
+        );
+    }
+
+    drop(k);
+    let _ = std::fs::remove_file(&db);
+}
+
+/// auth008 (regression): the REST rate limiter keys per principal — an
+/// exhausted token bucket never bleeds into other tokens or "anon".
+#[test]
+fn auth008_rate_limiter_keys_per_principal() {
+    let mut rl = crate::rate_limiter::RateLimiter::new(true, 3);
+    for _ in 0..3 {
+        assert!(rl.check_at("tok-a", 1000).is_ok());
+    }
+    assert!(rl.check_at("tok-a", 1000).is_err(), "tok-a exhausted");
+    assert!(
+        rl.check_at("tok-b", 1000).is_ok(),
+        "separate principal bucket"
+    );
+    assert!(
+        rl.check_at("anon", 1000).is_ok(),
+        "anonymous bucket untouched"
+    );
+}
+
+/// auth001 RED: login verifies CONFIGURED credentials (argon2id) — no
+/// hardcoded admin/admin. The resolver here bootstraps admin from the
+/// AIKOQL_ADMIN_PASSWORD path; the second half pins [auth].users hashes.
+#[test]
+fn auth001_login_configured_creds_ok_wrong_401() {
+    let auth = crate::http::AuthResolver::new(vec![], Some("s3cret-pw"), 86400);
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let ok = serde_json::json!({"username": "admin", "password": "s3cret-pw"}).to_string();
+    assert!(
+        crate::http::handle_login(&ok, &sessions, &auth).is_ok(),
+        "bootstrap admin must log in"
+    );
+    let wrong = serde_json::json!({"username": "admin", "password": "admin"}).to_string();
+    assert!(
+        crate::http::handle_login(&wrong, &sessions, &auth).is_err(),
+        "the old hardcoded admin/admin pair must be dead"
+    );
+    let nobody = serde_json::json!({"username": "user", "password": "user"}).to_string();
+    assert!(crate::http::handle_login(&nobody, &sessions, &auth).is_err());
+
+    // [auth].users path: a configured hash verifies and maps to its roles.
+    use argon2::password_hash::PasswordHasher;
+    let salt =
+        argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+    let hash = argon2::Argon2::default()
+        .hash_password(b"cfg-pw", &salt)
+        .expect("hash")
+        .to_string();
+    let auth = crate::http::AuthResolver::new(
+        vec![crate::config::AuthUser {
+            username: "ops".into(),
+            hash,
+            roles: vec!["operator".into()],
+        }],
+        None,
+        86400,
+    );
+    let ok = serde_json::json!({"username": "ops", "password": "cfg-pw"}).to_string();
+    let tok = crate::http::handle_login(&ok, &sessions, &auth).expect("configured login");
+    let subj = crate::http::validate_token(Some(&tok), &sessions).expect("valid session");
+    assert_eq!(subj.name, "ops");
+    assert_eq!(subj.roles, vec!["operator".to_string()]);
+}
+
+/// auth003 RED: sessions carry the configured TTL and validate_token
+/// enforces it (TTL 0 = every session already expired).
+#[test]
+fn auth003_session_expiry_rejects_after_ttl() {
+    let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 0);
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let body = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
+    let tok = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    assert!(
+        crate::http::validate_token(Some(&tok), &sessions).is_none(),
+        "TTL 0 must expire immediately"
+    );
+
+    let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86_400);
+    let tok = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    assert!(crate::http::validate_token(Some(&tok), &sessions).is_some());
+}
+
+/// auth004 RED (unit): remote HTTP requires configured credentials, and the
+/// metrics listener is loopback-only unless armed — the same fail-closed
+/// reasoning as --listen. (Binary-level spawn pins live in auth_surface.rs.)
+#[test]
+fn auth004_remote_http_refused_without_auth() {
+    assert!(crate::remote_http_requires_auth(true, false).is_err());
+    assert!(crate::remote_http_requires_auth(true, true).is_ok());
+    assert!(crate::remote_http_requires_auth(false, false).is_ok());
+    assert!(crate::validate_http_listen("0.0.0.0:9091", false).is_err());
+    assert!(crate::validate_http_listen("0.0.0.0:9091", true).is_ok());
+    assert!(crate::validate_http_listen("127.0.0.1:9091", false).is_ok());
+    assert!(crate::validate_http_listen(":9091", false).is_ok());
+    assert!(crate::validate_http_listen("nonsense", false).is_err());
+}
+
+/// auth006 RED: graph_api executes as the CALLER's subject — a
+/// tenant-confined session sees nothing of another tenant's heads. A
+/// hardcoded admin context (today's graph-browser) would see everything.
+#[test]
+fn auth006_graph_runs_as_session_subject_not_hardcoded_admin() {
+    let db = tmp_db("auth6");
+    let _ = std::fs::remove_file(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(crate::RedbEngine::open(&db).expect("open store")),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+
+    // Seed one head under tenant "acme".
+    let seed = crate::Subject::with_roles("seed", &["admin"]);
+    let mut req = crate::RememberRequest::create(
+        seed,
+        crate::Metadata {
+            type_name: "Note".into(),
+            tenant: Some("acme".into()),
+            schema_version: 1,
+            tags: vec![],
+        },
+    );
+    req.properties
+        .insert("body".into(), crate::Value::Text("x".into()));
+    k.remember(req).expect("seed head");
+
+    // Confined subject: either an empty graph or a confinement error —
+    // never the acme head. (The pin: an internal admin ctx would see it.)
+    let confined = crate::Subject {
+        name: "bob".into(),
+        roles: vec![],
+        tenant: Some("other".into()),
+    };
+    // confined away is also not-hardcoded-admin
+    if let Ok(s) = crate::http::graph_api(&k, "/api/graph", &confined) {
+        let v: serde_json::Value = serde_json::from_str(&s).expect("graph json");
+        assert_eq!(
+            v["nodes"].as_array().map(|a| a.len()).unwrap_or(0),
+            0,
+            "confined subject must see no heads"
+        );
+    }
+
+    // An unscoped admin sees the head.
+    let free = crate::Subject {
+        name: "alice".into(),
+        roles: vec!["admin".into()],
+        tenant: None,
+    };
+    let s = crate::http::graph_api(&k, "/api/graph", &free).expect("admin graph");
+    let v: serde_json::Value = serde_json::from_str(&s).expect("graph json");
+    assert!(
+        v["nodes"].as_array().map(|a| a.len()).unwrap_or(0) >= 1,
+        "unscoped admin must see the seeded head"
+    );
+
+    drop(k);
+    let _ = std::fs::remove_file(&db);
+}

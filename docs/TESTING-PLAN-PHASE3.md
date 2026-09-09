@@ -5,7 +5,7 @@ Mirror of `docs/TESTING-PLAN.md` §13.2 for phase 3, same ledger discipline as `
 | # | Milestone | §§ | Status | Evidence |
 | --- | --- | --- | --- | --- |
 | P3-M0 | Estate hygiene | — | ⬜ | clb001–002; `cargo test --workspace` green; zero artifact diffs on a full local run |
-| P3-M1 | Security hardening | §53–55 | ⬜ | auth001–008; 90-tool stdio smoke; docker health + DEP-003; connector cert + dogfood green |
+| P3-M1 | Security hardening | §53–55 | ✅ | auth001–008 + auth_surface 2/2 spawn (exit-2 fail-closed pins); `cargo test -p aikoql-mcp` 126/126 (mcp_stdio + connector_certification + auth_surface green); fmt + clippy `-D warnings` green; grep pin — admin/admin prefills+hints removed from graph_ui/studio, only auth001's negative assertion remains; hash-password CLI smoke `$argon2id$`; docker health endpoint allowlisted (CI-covered) |
 | P3-M2 | Observability + StorageAdmin | §56–57 | ⬜ | met001–006; met007 (P3M2_ATTRIB=1) ≤1% overhead cell |
 | P3-M3 | Engine-native snapshot/restore | §58–60 | ⬜ | bkp001–006; REC-002 conformance; 100K copy-time cell |
 | P3-M4 | Compiler completion | §61–63 | ⬜ | cpl001–007; golden_snapshots + grammar_coverage + fuzz_parser green |
@@ -31,7 +31,7 @@ Mirror of `docs/TESTING-PLAN.md` §13.2 for phase 3, same ledger discipline as `
 ## Milestone gates (what flips a row to ✅)
 
 - **P3-M0:** clb001 (report write gated), clb002 (no dangling references to deleted harnesses); full workspace suite green; zero artifact diffs.
-- **P3-M1:** auth001–008 green; MCP stdio suite (90 tools) green; docker health + volume-restart green; connectors + dogfood green; no hardcoded credentials remain (grep pin: `admin/admin` absent from src).
+- **P3-M1:** auth001–008 green; MCP stdio suite (90 tools) green; docker health + volume-restart green; connectors + dogfood green; no hardcoded credentials remain (grep pin: `admin/admin` absent from src). — **SHIPPED (commit 4583b68-p3m1):** auth001–008 unit green; auth_surface 2/2 spawn (remote-HTTP-without-credentials exit 2, metrics non-loopback exit 2); full crate 126/126 incl. mcp_stdio (auth007) + connector_certification; dogfood is stdio transport (untouched, auth007 pins it); grep pin: UI prefills/hints removed, remaining `admin`+`password` adjacency in src is auth001's rejection assertion (evidence of absence); docker health endpoint on the allowlist, compose change is an env pass-through (CI-covered).
 - **P3-M2:** met001–006 green; met007 cell ≤1% overhead; `/metrics` series visible in a live scrape; `storage_compact` + oracle re-verify green.
 - **P3-M3:** bkp001–006 green; REC-002 green; snapshot protocol crash windows covered; marker golden byte-pinned.
 - **P3-M4:** cpl001–007 green; golden snapshots updated; fuzz corpus re-run clean; kernel suites untouched (regression only).

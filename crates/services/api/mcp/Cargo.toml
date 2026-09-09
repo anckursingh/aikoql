@@ -27,6 +27,10 @@ sha2 = "0.10"
 base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# P3-M1 (§53): HTTP login credentials (argon2id, same crate/version the kernel
+# KMS uses) + 256-bit CSPRNG session tokens. Both already in Cargo.lock.
+argon2 = "0.5"
+getrandom = "0.2"
 
 [features]
 default = ["embedding-candle"]
