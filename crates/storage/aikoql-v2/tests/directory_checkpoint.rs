@@ -978,5 +978,5 @@ fn ckp008_growth_probe() {
     let artifacts =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine-v2");
     std::fs::create_dir_all(&artifacts).unwrap();
-    std::fs::write(artifacts.join("directory-checkpoint.md"), out).unwrap();
+    common::report_write(&artifacts.join("directory-checkpoint.md"), out);
 }

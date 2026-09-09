@@ -7,6 +7,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # P3-M0: the report legs below regenerate committed artifacts/ files —
+  # arm the report writer (TESTING-PLAN-PHASE3 rule 6). Nothing is committed
+  # from CI; the regenerated files land in the uploaded artifacts only.
+  AIKOQL_REPORT_WRITE: 1
 
 # CodeQL actions/missing-workflow-permissions: benchmark only reads the repo
 # (artifact upload/download does not need contents: write).

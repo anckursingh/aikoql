@@ -4,7 +4,7 @@
 
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use aikoql_storage_v2::segment::SegmentEntry;
@@ -116,6 +116,18 @@ pub fn stats_delta(after: ReadPathStats, before: ReadPathStats) -> ReadPathStats
 
 /// A fresh, empty scratch DIRECTORY under the OS temp dir (same tag+pid
 /// scheme); any stale directory is wiped first.
+/// P3-M0 (clb001), copied VERBATIM from `crates/storage/aikoql/tests/common/mod.rs`:
+/// committed `artifacts/` evidence is only rewritten when the report env is
+/// armed — a plain local suite run must never dirty committed artifacts
+/// (TESTING-PLAN-PHASE3 rule 6). Correctness asserts in the suites stay
+/// unconditional; only the report write is gated.
+pub fn report_write(path: &Path, contents: impl AsRef<[u8]>) {
+    if std::env::var("AIKOQL_REPORT_WRITE").as_deref() != Ok("1") {
+        return;
+    }
+    std::fs::write(path, contents).expect("report write");
+}
+
 pub fn dir(tag: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("aikoql-v2-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);

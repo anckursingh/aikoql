@@ -168,5 +168,5 @@ fn write_report(seg_bytes: u64, wal_bytes: u64, open_ms: u128, control_ms: u128)
         .join("artifacts")
         .join("storage-engine-v2");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("recovery-independence.md"), report).unwrap();
+    common::report_write(&dir.join("recovery-independence.md"), report);
 }

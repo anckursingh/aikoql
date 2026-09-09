@@ -156,5 +156,5 @@ fn kse20_backend_conformance_v2() {
     );
     let dir =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine-v2");
-    std::fs::write(dir.join("conformance.md"), report).unwrap();
+    common::report_write(&dir.join("conformance.md"), report);
 }

@@ -327,4 +327,15 @@ jobs:
             echo "DAG VIOLATION: kernel must not depend on runtime/compiler"
             exit 1
           fi
+          # P3-M0 (clb002): the estate-hygiene deletions must stay deleted —
+          # no code or script may reference them again.
+          echo "Checking deleted harness references..."
+          if grep -rn 'tests/universal_test_harness\.py\|benchmarks/tests/load_test\.rs\|tests/e2e/' \
+              --include='*.rs' --include='*.py' --include='*.js' --include='*.yml' \
+              --include='*.yaml' --include='*.toml' --include='*.json' \
+              --exclude-dir=node_modules --exclude-dir=.github \
+              . 2>/dev/null; then
+            echo "DAG VIOLATION: reference to a deleted P3-M0 harness"
+            exit 1
+          fi
           echo "Dependency DAG OK"

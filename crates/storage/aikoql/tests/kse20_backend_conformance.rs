@@ -152,5 +152,5 @@ fn kse20_backend_conformance() {
          is a documented capability of the engine's design.\n",
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("conformance.md"), report).unwrap();
+    common::report_write(&dir.join("conformance.md"), report);
 }

@@ -1082,18 +1082,16 @@ fn v2_m7_workloads() {
         // Scale/filter suffixes (SE2-M28): a 1m or single-backend run never
         // clobbers the canonical 100K workloads.md/result.json.
         let suffix = artifact_suffix(filter.as_deref());
-        std::fs::write(
-            dir.join(format!("workloads{suffix}.md")),
+        common::report_write(
+            &dir.join(format!("workloads{suffix}.md")),
             benchmark_report(&results, sz, filter.as_deref()),
-        )
-        .unwrap();
+        );
         // SE-11 (PR#2 review): machine-readable twin of workloads.md for
         // automated comparison (Markdown = human report, JSON = diffable).
-        std::fs::write(
-            dir.join(format!("result{suffix}.json")),
+        common::report_write(
+            &dir.join(format!("result{suffix}.json")),
             result_json(&results, sz, filter.as_deref()),
-        )
-        .unwrap();
+        );
     }
 }
 
@@ -1566,7 +1564,7 @@ fn v2_attribution_probe() {
         &hit_leg,
     ));
     report.push_str(&verdict);
-    std::fs::write(dir.join("attribution.md"), report).unwrap();
+    common::report_write(&dir.join("attribution.md"), report);
 
     // the accounting closure holds at adoption scale too (M21-01 unit pins
     // the same bound on mixed small legs; this is the gate-5 leg) — after
@@ -1814,7 +1812,7 @@ fn v2_m25_relationship_batch() {
         c.d.blocks_read as f64 / c.ops as f64,
         c.d.entries_decoded as f64 / c.ops as f64,
     ));
-    std::fs::write(dir.join("relationship-batch.md"), report).unwrap();
+    common::report_write(&dir.join("relationship-batch.md"), report);
     cleanup_dataset(&path);
 }
 
@@ -2082,7 +2080,7 @@ fn v2_m26_scan_profile() {
         scan_share * 100.0,
         kernel_share * 100.0,
     ));
-    std::fs::write(dir.join("type-scan-profile.md"), report).unwrap();
+    common::report_write(&dir.join("type-scan-profile.md"), report);
     cleanup_dataset(&path);
 }
 
@@ -2519,6 +2517,6 @@ fn v2_m27_context_profile() {
         batch_ratio2,
         history_share * 100.0,
     ));
-    std::fs::write(dir.join("context-profile.md"), report).unwrap();
+    common::report_write(&dir.join("context-profile.md"), report);
     cleanup_dataset(&path);
 }

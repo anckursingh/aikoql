@@ -342,5 +342,5 @@ fn scan_amplification_report() {
         .join("artifacts")
         .join("storage-engine-v2");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("scan-amplification.md"), report).unwrap();
+    common::report_write(&dir.join("scan-amplification.md"), report);
 }

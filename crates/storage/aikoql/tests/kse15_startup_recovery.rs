@@ -393,5 +393,5 @@ fn kse15_report() {
         b.first_query_ms * 1e3,
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("crash-recovery.md"), report).unwrap();
+    common::report_write(&dir.join("crash-recovery.md"), report);
 }

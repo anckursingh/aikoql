@@ -309,5 +309,5 @@ fn kse143_report() {
         }),
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("kse143-replay-memory.md"), report).unwrap();
+    common::report_write(&dir.join("kse143-replay-memory.md"), report);
 }

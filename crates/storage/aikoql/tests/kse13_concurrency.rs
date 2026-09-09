@@ -797,5 +797,5 @@ fn kse120b_mixed_read_write_stress_five_expecteds() {
         total_ops as f64 / wall.as_secs_f64().max(1e-9),
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("concurrency.md"), report).unwrap();
+    common::report_write(&dir.join("concurrency.md"), report);
 }

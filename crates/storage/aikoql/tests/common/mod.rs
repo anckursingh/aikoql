@@ -4,7 +4,7 @@
 use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
 use aikoql_kernel::{Direction, Kernel, KnowledgeContext, Subject, KOID};
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -168,6 +168,17 @@ impl Drop for TempSweeper {
             }
         }
     }
+}
+
+/// P3-M0 (clb001): committed `artifacts/` evidence is only rewritten when
+/// the report env is armed — a plain local suite run must never dirty
+/// committed artifacts (TESTING-PLAN-PHASE3 rule 6). Correctness asserts in
+/// the suites stay unconditional; only the report write is gated.
+pub fn report_write(path: &Path, contents: impl AsRef<[u8]>) {
+    if std::env::var("AIKOQL_REPORT_WRITE").as_deref() != Ok("1") {
+        return;
+    }
+    std::fs::write(path, contents).expect("report write");
 }
 
 pub fn tmp(tag: &str) -> PathBuf {
