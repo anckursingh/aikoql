@@ -134,7 +134,9 @@ impl Lexer {
         let mut s = String::new();
         s.push(first);
         while let Some(c) = self.peek() {
-            if c.is_alphanumeric() || c == '_' {
+            // ':' joins ident segments — namespaced types like aikoql:document
+            // (P3-M4 follow-up). It appears nowhere else in the grammar.
+            if c.is_alphanumeric() || c == '_' || c == ':' {
                 s.push(c);
                 self.advance();
             } else {
@@ -284,6 +286,15 @@ mod tests {
         assert_eq!(ts[5], Token::StringLit("Visa".into()));
         assert_eq!(ts[6], Token::Return);
         assert_eq!(ts[7], Token::Star);
+    }
+
+    #[test]
+    fn lex_namespaced_type_ident() {
+        let ts = tokens("MATCH aikoql:document RETURN *");
+        assert_eq!(ts[0], Token::Match);
+        assert_eq!(ts[1], Token::Ident("aikoql:document".into()));
+        assert_eq!(ts[2], Token::Return);
+        assert_eq!(ts[3], Token::Star);
     }
 
     #[test]

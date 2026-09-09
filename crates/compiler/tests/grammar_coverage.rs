@@ -51,6 +51,16 @@ fn cover_match_bare() {
 }
 
 #[test]
+fn cover_match_type_with_colon() {
+    // P3-M4 follow-up: namespaced types like aikoql:document must be MATCHable.
+    let m = match parser::parse("MATCH aikoql:document RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.entity, "aikoql:document");
+}
+
+#[test]
 fn cover_match_where() {
     let m = match parser::parse(r#"MATCH Person WHERE x == "y" RETURN *"#).unwrap() {
         Statement::Match(m) => m,
