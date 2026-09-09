@@ -4,8 +4,47 @@
 use crate::helpers::*;
 use crate::session::*;
 use crate::{
-    json, Kernel, KnowledgeContext, Origin, ReferentialPolicy, RememberRequest, Value, J, KOID,
+    json, CardinalityConstraint, CheckConstraint, CheckExpression, ConstraintTiming,
+    EnforcementMode, Kernel, KnowledgeContext, Origin, ReferentialPolicy, RememberRequest, Schema,
+    SchemaProperty, TemporalConstraint, UniqueConstraint, UniquenessScope, Value,
+    ViolationSeverity, J, KOID,
 };
+
+fn parse_mode(v: Option<&str>) -> Result<EnforcementMode, String> {
+    match v.unwrap_or("Enforced") {
+        "Enforced" => Ok(EnforcementMode::Enforced),
+        "Validated" => Ok(EnforcementMode::Validated),
+        "Advisory" => Ok(EnforcementMode::Advisory),
+        "Disabled" => Ok(EnforcementMode::Disabled),
+        other => Err(format!("invalid mode: {}", other)),
+    }
+}
+
+fn parse_severity(v: Option<&str>) -> Result<ViolationSeverity, String> {
+    match v.unwrap_or("Error") {
+        "Error" => Ok(ViolationSeverity::Error),
+        "Warning" => Ok(ViolationSeverity::Warning),
+        "Info" => Ok(ViolationSeverity::Info),
+        other => Err(format!("invalid severity: {}", other)),
+    }
+}
+
+fn parse_scope(v: Option<&str>) -> Result<UniquenessScope, String> {
+    match v.unwrap_or("Type") {
+        "Type" => Ok(UniquenessScope::Type),
+        "Tenant" => Ok(UniquenessScope::Tenant),
+        "Global" => Ok(UniquenessScope::Global),
+        other => Err(format!("invalid scope: {}", other)),
+    }
+}
+
+fn parse_timing(v: Option<&str>) -> Result<ConstraintTiming, String> {
+    match v.unwrap_or("Immediate") {
+        "Immediate" => Ok(ConstraintTiming::Immediate),
+        "Deferred" => Ok(ConstraintTiming::Deferred),
+        other => Err(format!("invalid timing: {}", other)),
+    }
+}
 pub(crate) fn tool_decide(k: &Kernel, args: &J) -> Result<J, String> {
     let koid_hex = args
         .get("koid")
@@ -138,4 +177,130 @@ pub(crate) fn tool_constraint_diagnostics(k: &Kernel, _args: &J) -> Result<J, St
             "skipped_unaffected": stats.skipped_unaffected,
         },
     }))
+}
+
+/// P3-M5 follow-up: register a constraint-bearing schema (MRFC-0060 §7/§30/§31).
+/// Check predicates are strings parsed by `CheckExpression::parse`. Mode/severity
+/// default to Enforced/Error; timing to Immediate; scope to Type.
+pub(crate) fn tool_register_schema(k: &Kernel, args: &J) -> Result<J, String> {
+    let type_name = args
+        .get("type_name")
+        .and_then(|v| v.as_str())
+        .ok_or("missing: type_name")?;
+    let schema_version = args
+        .get("schema_version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1) as u32;
+    let mut schema = Schema::new(type_name, schema_version);
+    if let Some(props) = args.get("properties").and_then(|v| v.as_array()) {
+        for p in props {
+            let name = p
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or("property missing name")?;
+            let value_type = p
+                .get("value_type")
+                .and_then(|v| v.as_str())
+                .ok_or("property missing value_type")?;
+            schema.properties.push(SchemaProperty {
+                name: name.to_string(),
+                value_type: value_type.to_string(),
+                required: p.get("required").and_then(|v| v.as_bool()).unwrap_or(false),
+                nullable: p.get("nullable").and_then(|v| v.as_bool()).unwrap_or(true),
+                provenance_required: p
+                    .get("provenance_required")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                domain_constraints: Vec::new(),
+            });
+        }
+    }
+    if let Some(us) = args.get("uniques").and_then(|v| v.as_array()) {
+        for u in us {
+            let mut properties = Vec::new();
+            if let Some(ps) = u.get("properties").and_then(|v| v.as_array()) {
+                for p in ps {
+                    properties.push(
+                        p.as_str()
+                            .ok_or("unique property must be a string")?
+                            .to_string(),
+                    );
+                }
+            }
+            schema.unique_constraints.push(UniqueConstraint {
+                properties,
+                scope: parse_scope(u.get("scope").and_then(|v| v.as_str()))?,
+                timing: parse_timing(u.get("timing").and_then(|v| v.as_str()))?,
+                mode: parse_mode(u.get("mode").and_then(|v| v.as_str()))?,
+                severity: parse_severity(u.get("severity").and_then(|v| v.as_str()))?,
+            });
+        }
+    }
+    if let Some(cs) = args.get("checks").and_then(|v| v.as_array()) {
+        for c in cs {
+            let name = c
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or("check missing name")?;
+            let expr = c
+                .get("expr")
+                .and_then(|v| v.as_str())
+                .ok_or("check missing expr")?;
+            schema.check_constraints.push(CheckConstraint {
+                name: name.to_string(),
+                predicate: CheckExpression::parse(expr)
+                    .map_err(|e| format!("check '{}': {}", name, e))?,
+                timing: parse_timing(c.get("timing").and_then(|v| v.as_str()))?,
+                mode: parse_mode(c.get("mode").and_then(|v| v.as_str()))?,
+                severity: parse_severity(c.get("severity").and_then(|v| v.as_str()))?,
+            });
+        }
+    }
+    if let Some(cs) = args.get("cardinality").and_then(|v| v.as_array()) {
+        for c in cs {
+            let name = c
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or("cardinality missing name")?;
+            let relationship_type = c
+                .get("relationship_type")
+                .and_then(|v| v.as_str())
+                .ok_or("cardinality missing relationship_type")?;
+            schema.cardinality_constraints.push(CardinalityConstraint {
+                name: name.to_string(),
+                relationship_type: relationship_type.to_string(),
+                min_outbound: c.get("min").and_then(|v| v.as_u64()).map(|n| n as u32),
+                max_outbound: c.get("max").and_then(|v| v.as_u64()).map(|n| n as u32),
+                mode: parse_mode(c.get("mode").and_then(|v| v.as_str()))?,
+                severity: parse_severity(c.get("severity").and_then(|v| v.as_str()))?,
+            });
+        }
+    }
+    if let Some(ts) = args.get("temporal").and_then(|v| v.as_array()) {
+        for t in ts {
+            let name = t
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or("temporal missing name")?;
+            let start_property = t
+                .get("start")
+                .and_then(|v| v.as_str())
+                .ok_or("temporal missing start")?
+                .to_string();
+            let end_property = t
+                .get("end")
+                .and_then(|v| v.as_str())
+                .ok_or("temporal missing end")?
+                .to_string();
+            schema.temporal_constraints.push(TemporalConstraint {
+                name: name.to_string(),
+                start_property,
+                end_property,
+                mode: parse_mode(t.get("mode").and_then(|v| v.as_str()))?,
+                severity: parse_severity(t.get("severity").and_then(|v| v.as_str()))?,
+            });
+        }
+    }
+    k.register_schema(schema).map_err(|e| e.to_string())?;
+    Ok(json!({ "type_name": type_name, "registered": true }))
 }

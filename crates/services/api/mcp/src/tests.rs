@@ -762,3 +762,80 @@ fn met006_storage_compact_via_mcp_returns_stats_and_preserves_data() {
     drop((k, e, kernel_engine, scan_engine, cap));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// P3-M5 follow-up: register_schema over the tool surface drives the full
+/// constraint pipeline — advisory violations land in constraint_diagnostics
+/// with mode/severity/koid, enforced uniqueness still blocks.
+#[test]
+fn register_schema_tool_drives_constraint_diagnostics() {
+    use crate::tools::constraints::{tool_constraint_diagnostics, tool_register_schema};
+    let db = tmp_db("cst");
+    let _ = std::fs::remove_file(&db);
+    let engine = crate::RedbEngine::open(&db).expect("open store");
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(engine),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+
+    let args = serde_json::json!({
+        "type_name": "Person",
+        "checks": [{"name": "ck_age", "expr": "age >= 18", "mode": "Advisory", "severity": "Warning"}],
+        "uniques": [{"properties": ["email"], "scope": "Type", "mode": "Enforced", "severity": "Error"}],
+    });
+    let reg = tool_register_schema(&k, &args).expect("register");
+    assert_eq!(reg["registered"], serde_json::json!(true));
+
+    let person = |email: &str, age: i64, idem: &str| {
+        let mut props = crate::PropertyMap::new();
+        props.insert("age".into(), crate::Value::Int(age));
+        props.insert("email".into(), crate::Value::Text(email.into()));
+        crate::RememberRequest {
+            context: crate::KnowledgeContext::from(&crate::Subject::with_roles("test", &["admin"])),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: Some(idem.into()),
+            metadata: crate::Metadata {
+                type_name: "Person".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: crate::ExtensionMap::new(),
+            origin: crate::Origin::Human,
+            note: None,
+            referential_policy: crate::ReferentialPolicy::Permissive,
+        }
+    };
+
+    // age 15 violates ck_age but the mode is Advisory → write succeeds.
+    let r = k
+        .remember(person("ann@x.com", 15, "cst-1"))
+        .expect("advisory write succeeds");
+    let koid = r.koid;
+
+    // Same email under the Enforced unique → blocked.
+    assert!(
+        k.remember(person("ann@x.com", 30, "cst-2")).is_err(),
+        "enforced unique must block the duplicate"
+    );
+
+    // Diagnostics show the advisory event with mode + severity + koid.
+    let diag = tool_constraint_diagnostics(&k, &serde_json::json!({})).expect("diag");
+    let events = diag["events"].as_array().expect("events array");
+    let age_evt = events
+        .iter()
+        .find(|e| e["constraint"] == serde_json::json!("ck_age"))
+        .expect("ck_age event recorded");
+    assert_eq!(age_evt["mode"], serde_json::json!("Advisory"));
+    assert_eq!(age_evt["severity"], serde_json::json!("Warning"));
+    assert_eq!(age_evt["koid"], serde_json::json!(koid.to_hex()));
+
+    drop(k);
+    let _ = std::fs::remove_file(&db);
+}

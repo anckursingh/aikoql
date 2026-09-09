@@ -119,6 +119,7 @@ pub use knowledge::kom::{
     RelationshipRef,
     Schema,
     SchemaMigration,
+    SchemaProperty,
     SecurityDescriptor,
     SemanticBlock,
     TemporalConstraint,

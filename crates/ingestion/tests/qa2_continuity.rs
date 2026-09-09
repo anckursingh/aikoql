@@ -464,6 +464,8 @@ fn w2_cont_001_full_knowledge_continuity_chain() {
         properties: vec![],
         unique_constraints: vec![],
         check_constraints: vec![],
+        cardinality_constraints: vec![],
+        temporal_constraints: vec![],
     };
     let v1 = Schema {
         schema_version: 1,
