@@ -70,7 +70,7 @@ impl SchemaRegistry {
         exists: F,
         skip_deferred: bool,
         write_set: Option<&HashSet<String>>,
-    ) -> KResult<()>
+    ) -> KResult<Vec<crate::knowledge::kom::ConstraintViolation>>
     where
         F: Fn(
             crate::knowledge::kom::UniquenessScope,
@@ -82,9 +82,15 @@ impl SchemaRegistry {
     {
         let schema = match self.schemas.get(&ko.metadata.type_name) {
             Some(s) => s,
-            None => return Ok(()),
+            None => return Ok(Vec::new()),
         };
-        for (ci, constraint) in schema.unique_constraints.iter().enumerate() {
+        // Advisory violations recorded here; Enforced/Validated fail with Err.
+        let mut events: Vec<crate::knowledge::kom::ConstraintViolation> = Vec::new();
+        for constraint in &schema.unique_constraints {
+            // P3-M5 M5a: Disabled unique constraints skip the lookup entirely.
+            if constraint.mode == crate::knowledge::kom::EnforcementMode::Disabled {
+                continue;
+            }
             if skip_deferred
                 && constraint.timing == crate::knowledge::kom::ConstraintTiming::Deferred
             {
@@ -114,14 +120,26 @@ impl SchemaRegistry {
                 &ko.koid,
             ) {
                 let names: Vec<&str> = constraint.properties.iter().map(|s| s.as_str()).collect();
-                return Err(KError::InvalidSchema(format!(
+                let msg = format!(
                     "uniqueness constraint violated: ({}) already exists",
                     names.join(", ")
-                )));
+                );
+                // P3-M5 M5a: Advisory records the violation and lets the write through.
+                if constraint.mode == crate::knowledge::kom::EnforcementMode::Advisory {
+                    let mut event = crate::knowledge::kom::ConstraintViolation::error(
+                        &format!("{}.unique({})", ko.metadata.type_name, names.join(",")),
+                        &msg,
+                    )
+                    .with_koid(ko.koid)
+                    .with_mode(crate::knowledge::kom::EnforcementMode::Advisory);
+                    event.severity = constraint.severity;
+                    events.push(event);
+                } else {
+                    return Err(KError::InvalidSchema(msg));
+                }
             }
-            let _ = ci;
         }
-        Ok(())
+        Ok(events)
     }
 
     /// Collect deferred unique constraint entries for commit-time evaluation.
@@ -142,6 +160,10 @@ impl SchemaRegistry {
         let mut entries = Vec::new();
         for (ci, constraint) in schema.unique_constraints.iter().enumerate() {
             if constraint.timing != crate::knowledge::kom::ConstraintTiming::Deferred {
+                continue;
+            }
+            // P3-M5 M5a: Disabled deferred constraints are never recorded.
+            if constraint.mode == crate::knowledge::kom::EnforcementMode::Disabled {
                 continue;
             }
             let mut pairs = Vec::with_capacity(constraint.properties.len());

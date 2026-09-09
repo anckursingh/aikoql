@@ -5,19 +5,86 @@
 //! `remember()` and `transact()`.
 
 use crate::knowledge::kom::{
-    ConstraintResult, ConstraintTiming, ConstraintViolation, InferenceCandidate, KResult,
-    KnowledgeObject, PropertyMap, Schema, Value,
+    ConstraintResult, ConstraintTiming, ConstraintViolation, Direction, EnforcementMode,
+    InferenceCandidate, KResult, KnowledgeObject, PropertyMap, RelationshipRef, Schema,
+    TemporalConstraint, Value,
 };
 use crate::KError;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-/// Stateless evaluator for domain and check constraints.
+/// Per-evaluation counters for incremental re-evaluation evidence
+/// (MRFC-0060 §36–37; P3-M5 M5c cst006).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConstraintEvalStats {
+    /// Constraints actually evaluated.
+    pub evaluated: u64,
+    /// Disabled-mode constraints seen and skipped.
+    pub skipped_disabled: u64,
+    /// Constraints skipped because the write-set doesn't touch their properties.
+    pub skipped_unaffected: u64,
+}
+
+#[derive(Debug, Default)]
+struct StatsInner {
+    evaluated: AtomicU64,
+    skipped_disabled: AtomicU64,
+    skipped_unaffected: AtomicU64,
+}
+
+/// Evaluator for domain/check/cardinality/temporal constraints, mode-aware
+/// (MRFC-0060 §30) with severity-stamped violation events (§31).
 #[derive(Clone, Debug, Default)]
-pub struct ConstraintEvaluator;
+pub struct ConstraintEvaluator {
+    stats: Arc<StatsInner>,
+}
 
 impl ConstraintEvaluator {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Snapshot of the incremental evaluation counters (MRFC-0060 §36–37).
+    pub fn stats(&self) -> ConstraintEvalStats {
+        ConstraintEvalStats {
+            evaluated: self.stats.evaluated.load(Ordering::Relaxed),
+            skipped_disabled: self.stats.skipped_disabled.load(Ordering::Relaxed),
+            skipped_unaffected: self.stats.skipped_unaffected.load(Ordering::Relaxed),
+        }
+    }
+
+    fn count_evaluated(&self) {
+        self.stats.evaluated.fetch_add(1, Ordering::Relaxed);
+    }
+    fn count_disabled(&self) {
+        self.stats.skipped_disabled.fetch_add(1, Ordering::Relaxed);
+    }
+    fn count_unaffected(&self) {
+        self.stats
+            .skipped_unaffected
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// MRFC-0060 §30 mode dispatch: Enforced/Validated block (violation),
+    /// Advisory records without blocking (warning), Disabled never reaches here.
+    fn dispatch(
+        &self,
+        mode: EnforcementMode,
+        severity: crate::knowledge::kom::ViolationSeverity,
+        mut event: ConstraintViolation,
+        result: &mut ConstraintResult,
+    ) {
+        event.mode = mode;
+        event.severity = severity;
+        match mode {
+            EnforcementMode::Enforced | EnforcementMode::Validated => {
+                result.valid = false;
+                result.violations.push(event);
+            }
+            EnforcementMode::Advisory => result.warnings.push(event),
+            EnforcementMode::Disabled => {} // callers skip before dispatch
+        }
     }
 
     /// Evaluate domain constraints (always immediate) and immediate check constraints.
@@ -31,18 +98,20 @@ impl ConstraintEvaluator {
         schema: &Schema,
         properties: &PropertyMap,
         write_set: Option<&HashSet<String>>,
-    ) -> KResult<()> {
+    ) -> KResult<Vec<ConstraintViolation>> {
+        let mut events = Vec::new();
         // Skim: empty write-set on update means nothing changed — skip all.
         if let Some(ws) = write_set {
             if ws.is_empty() {
-                return Ok(());
+                return Ok(events);
             }
         }
-        // Domain constraints (always immediate)
+        // Domain constraints (always immediate, always enforced — no mode field).
         for prop_def in &schema.properties {
             if write_set.is_none_or(|ws| ws.contains(&prop_def.name)) {
                 if let Some(value) = properties.get(&prop_def.name) {
                     for dc in &prop_def.domain_constraints {
+                        self.count_evaluated();
                         dc.validate(value).map_err(|msg| {
                             KError::InvalidSchema(format!(
                                 "property '{}' failed domain constraint: {}",
@@ -58,26 +127,39 @@ impl ConstraintEvaluator {
             if cc.timing != ConstraintTiming::Immediate {
                 continue;
             }
+            if cc.mode == EnforcementMode::Disabled {
+                self.count_disabled();
+                continue;
+            }
             if !check_affected_by_write_set(cc, write_set) {
                 continue;
             }
-            match cc.predicate.evaluate(properties) {
-                Ok(false) => {
+            self.count_evaluated();
+            let mut result = ConstraintResult::ok();
+            let event = match cc.predicate.evaluate(properties) {
+                Ok(false) => Some(ConstraintViolation::error(
+                    &cc.name,
+                    &format!("check constraint '{}' failed", cc.name),
+                )),
+                Err(msg) => Some(ConstraintViolation::error(
+                    &cc.name,
+                    &format!("check constraint '{}' error: {}", cc.name, msg),
+                )),
+                Ok(true) => None,
+            };
+            if let Some(event) = event {
+                self.dispatch(cc.mode, cc.severity, event, &mut result);
+                // Enforced/Validated fail fast; Advisory events pass through.
+                if !result.valid {
                     return Err(KError::InvalidSchema(format!(
                         "check constraint '{}' failed",
                         cc.name
                     )));
                 }
-                Err(msg) => {
-                    return Err(KError::InvalidSchema(format!(
-                        "check constraint '{}' error: {}",
-                        cc.name, msg
-                    )));
-                }
-                Ok(true) => {}
             }
+            events.extend(result.warnings);
         }
-        Ok(())
+        Ok(events)
     }
 
     /// Evaluate all domain + check constraints for a single object, collecting every
@@ -106,6 +188,7 @@ impl ConstraintEvaluator {
             if write_set.is_none_or(|ws| ws.contains(&prop_def.name)) {
                 if let Some(value) = properties.get(&prop_def.name) {
                     for dc in &prop_def.domain_constraints {
+                        self.count_evaluated();
                         if let Err(msg) = dc.validate(value) {
                             result.valid = false;
                             let mut v = ConstraintViolation::error(
@@ -142,33 +225,158 @@ impl ConstraintEvaluator {
 
         // All check constraints (remember is single-object, deferred = immediate)
         for cc in &schema.check_constraints {
-            if !check_affected_by_write_set(cc, write_set) {
+            if cc.mode == EnforcementMode::Disabled {
+                self.count_disabled();
                 continue;
             }
-            match cc.predicate.evaluate(properties) {
-                Ok(false) => {
-                    result.valid = false;
-                    let mut v = ConstraintViolation::error(&cc.name, "check constraint failed");
-                    if let Some(k) = koid {
-                        v = v.with_koid(k);
-                    }
-                    result.violations.push(v);
-                }
-                Err(msg) => {
-                    result.valid = false;
-                    let mut v = ConstraintViolation::error(
-                        &cc.name,
-                        &format!("check constraint error: {}", msg),
-                    );
-                    if let Some(k) = koid {
-                        v = v.with_koid(k);
-                    }
-                    result.violations.push(v);
-                }
-                Ok(true) => {}
+            if !check_affected_by_write_set(cc, write_set) {
+                self.count_unaffected();
+                continue;
+            }
+            self.count_evaluated();
+            let event = match cc.predicate.evaluate(properties) {
+                Ok(false) => Some(ConstraintViolation::error(
+                    &cc.name,
+                    "check constraint failed",
+                )),
+                Err(msg) => Some(ConstraintViolation::error(
+                    &cc.name,
+                    &format!("check constraint error: {}", msg),
+                )),
+                Ok(true) => None,
+            };
+            if let Some(event) = event {
+                let event = if let Some(k) = koid {
+                    event.with_koid(k)
+                } else {
+                    event
+                };
+                self.dispatch(cc.mode, cc.severity, event, &mut result);
+            }
+        }
+
+        // Temporal window constraints (MRFC-0060 §24; P3-M5 M5c) — start <= end.
+        for tc in &schema.temporal_constraints {
+            if tc.mode == EnforcementMode::Disabled {
+                self.count_disabled();
+                continue;
+            }
+            let affected = write_set
+                .is_none_or(|ws| ws.contains(&tc.start_property) || ws.contains(&tc.end_property));
+            if !affected {
+                self.count_unaffected();
+                continue;
+            }
+            self.count_evaluated();
+            if let Some(event) = eval_temporal(tc, properties, koid) {
+                self.dispatch(tc.mode, tc.severity, event, &mut result);
             }
         }
         result
+    }
+
+    /// Evaluate cardinality constraints against an object's outbound
+    /// relationships (MRFC-0060 §16; P3-M5 M5b). Called by the kernel next to
+    /// `evaluate_full` — relationships are not part of the property map.
+    pub fn evaluate_cardinality(
+        &self,
+        schema: &Schema,
+        relationships: &[RelationshipRef],
+        koid: Option<crate::knowledge::kom::KOID>,
+    ) -> ConstraintResult {
+        let mut result = ConstraintResult::ok();
+        for cc in &schema.cardinality_constraints {
+            if cc.mode == EnforcementMode::Disabled {
+                self.count_disabled();
+                continue;
+            }
+            self.count_evaluated();
+            let count = relationships
+                .iter()
+                .filter(|r| {
+                    r.direction == Direction::Outbound && r.rel_type == cc.relationship_type
+                })
+                .count() as u32;
+            let event = match (cc.min_outbound, cc.max_outbound) {
+                (Some(min), _) if count < min => Some(ConstraintViolation::error(
+                    &cc.name,
+                    &format!(
+                        "cardinality '{}': {} outbound '{}' relationships, minimum {}",
+                        cc.name, count, cc.relationship_type, min
+                    ),
+                )),
+                (_, Some(max)) if count > max => Some(ConstraintViolation::error(
+                    &cc.name,
+                    &format!(
+                        "cardinality '{}': {} outbound '{}' relationships, maximum {}",
+                        cc.name, count, cc.relationship_type, max
+                    ),
+                )),
+                _ => None,
+            };
+            if let Some(event) = event {
+                let event = if let Some(k) = koid {
+                    event.with_koid(k)
+                } else {
+                    event
+                };
+                self.dispatch(cc.mode, cc.severity, event, &mut result);
+            }
+        }
+        result
+    }
+}
+
+/// Evaluate one temporal constraint: `start <= end`. Returns a violation
+/// event on a reversed window, or `None` when valid / nothing to compare.
+/// Int compares numerically, Text lexicographically (ISO-8601 orders
+/// correctly); any other pair is a type error (fail-closed).
+fn eval_temporal(
+    tc: &TemporalConstraint,
+    properties: &PropertyMap,
+    koid: Option<crate::knowledge::kom::KOID>,
+) -> Option<ConstraintViolation> {
+    let start = properties.get(&tc.start_property);
+    let end = properties.get(&tc.end_property);
+    let (Some(s), Some(e)) = (start, end) else {
+        return None; // one bound missing — nothing to compare
+    };
+    let bad = match (s, e) {
+        (Value::Int(a), Value::Int(b)) => a > b,
+        (Value::Text(a), Value::Text(b)) => a > b,
+        (Value::Null, _) | (_, Value::Null) => return None,
+        _ => {
+            let v = ConstraintViolation::error(
+                &tc.name,
+                &format!(
+                    "temporal '{}': window bounds must both be Int or both be Text, got {} and {}",
+                    tc.name,
+                    s.type_name(),
+                    e.type_name()
+                ),
+            );
+            return Some(if let Some(k) = koid {
+                v.with_koid(k)
+            } else {
+                v
+            });
+        }
+    };
+    if bad {
+        let v = ConstraintViolation::error(
+            &tc.name,
+            &format!(
+                "temporal '{}': {} > {} (window reversed)",
+                tc.name, tc.start_property, tc.end_property
+            ),
+        );
+        Some(if let Some(k) = koid {
+            v.with_koid(k)
+        } else {
+            v
+        })
+    } else {
+        None
     }
 }
 
@@ -308,7 +516,16 @@ impl ConstraintEvaluator {
                     };
                     if in_scope {
                         let prop_names: Vec<&str> = pairs.iter().map(|(n, _)| n.as_str()).collect();
-                        result.valid = false;
+                        // Mode/severity from the registered schema (Disabled never recorded).
+                        let (mode, severity) = schemas
+                            .get(type_name)
+                            .and_then(|s| s.unique_constraints.get(*ci))
+                            .map(|u| (u.mode, u.severity))
+                            .unwrap_or((
+                                EnforcementMode::Enforced,
+                                crate::knowledge::kom::ViolationSeverity::Error,
+                            ));
+                        self.count_evaluated();
                         let mut v = ConstraintViolation::error(
                             &format!("{}.unique({})", type_name, prop_names.join(",")),
                             &format!(
@@ -318,14 +535,22 @@ impl ConstraintEvaluator {
                         )
                         .with_koid(*koid);
                         v.timestamp = commit_ts;
-                        result.violations.push(v);
+                        self.dispatch(mode, severity, v, &mut result);
                     }
                 }
             }
             // Against storage
             if lookup(*scope, tenant.as_deref(), type_name, pairs, koid) {
                 let prop_names: Vec<&str> = pairs.iter().map(|(n, _)| n.as_str()).collect();
-                result.valid = false;
+                let (mode, severity) = schemas
+                    .get(type_name)
+                    .and_then(|s| s.unique_constraints.get(*ci))
+                    .map(|u| (u.mode, u.severity))
+                    .unwrap_or((
+                        EnforcementMode::Enforced,
+                        crate::knowledge::kom::ViolationSeverity::Error,
+                    ));
+                self.count_evaluated();
                 let mut v = ConstraintViolation::error(
                     &format!("{}.unique({})", type_name, prop_names.join(",")),
                     &format!(
@@ -335,7 +560,7 @@ impl ConstraintEvaluator {
                 )
                 .with_koid(*koid);
                 v.timestamp = commit_ts;
-                result.violations.push(v);
+                self.dispatch(mode, severity, v, &mut result);
             }
         }
 
@@ -343,28 +568,22 @@ impl ConstraintEvaluator {
         for (type_name, ci, koid, props) in &state.deferred_checks {
             if let Some(schema) = schemas.get(type_name) {
                 if let Some(cc) = schema.check_constraints.get(*ci) {
-                    match cc.predicate.evaluate(props) {
-                        Ok(false) => {
-                            result.valid = false;
-                            let mut v = ConstraintViolation::error(
-                                &cc.name,
-                                &format!("deferred check constraint '{}' failed", cc.name),
-                            )
-                            .with_koid(*koid);
-                            v.timestamp = commit_ts;
-                            result.violations.push(v);
-                        }
-                        Err(msg) => {
-                            result.valid = false;
-                            let mut v = ConstraintViolation::error(
-                                &cc.name,
-                                &format!("deferred check constraint '{}' error: {}", cc.name, msg),
-                            )
-                            .with_koid(*koid);
-                            v.timestamp = commit_ts;
-                            result.violations.push(v);
-                        }
-                        Ok(true) => {}
+                    self.count_evaluated();
+                    let event = match cc.predicate.evaluate(props) {
+                        Ok(false) => Some(ConstraintViolation::error(
+                            &cc.name,
+                            &format!("deferred check constraint '{}' failed", cc.name),
+                        )),
+                        Err(msg) => Some(ConstraintViolation::error(
+                            &cc.name,
+                            &format!("deferred check constraint '{}' error: {}", cc.name, msg),
+                        )),
+                        Ok(true) => None,
+                    };
+                    if let Some(event) = event {
+                        let mut event = event.with_koid(*koid);
+                        event.timestamp = commit_ts;
+                        self.dispatch(cc.mode, cc.severity, event, &mut result);
                     }
                 }
             }

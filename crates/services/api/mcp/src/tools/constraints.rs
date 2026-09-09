@@ -111,3 +111,31 @@ pub(crate) fn tool_predict(kernel: &Kernel, args: &J) -> Result<J, String> {
         "predicted": merged.iter().map(|(key, val)| (key.clone(), value_to_json(val))).collect::<serde_json::Map<_,_>>(),
     }))
 }
+
+/// P3-M5 M5a: diagnostics surface for the constraint engine — the violation
+/// event ring (capped at 256, oldest evicted) plus evaluation counters.
+pub(crate) fn tool_constraint_diagnostics(k: &Kernel, _args: &J) -> Result<J, String> {
+    let events: Vec<J> = k
+        .violation_events()
+        .into_iter()
+        .map(|v| {
+            json!({
+                "constraint": v.constraint_name,
+                "message": v.message,
+                "severity": format!("{:?}", v.severity),
+                "mode": format!("{:?}", v.mode),
+                "timestamp": v.timestamp,
+                "koid": v.koid.map(|kid| kid.to_hex()),
+            })
+        })
+        .collect();
+    let stats = k.constraint_stats();
+    Ok(json!({
+        "events": events,
+        "stats": {
+            "evaluated": stats.evaluated,
+            "skipped_disabled": stats.skipped_disabled,
+            "skipped_unaffected": stats.skipped_unaffected,
+        },
+    }))
+}

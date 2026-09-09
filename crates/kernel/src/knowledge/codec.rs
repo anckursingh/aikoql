@@ -815,8 +815,75 @@ fn dec_timing(d: &mut Dec) -> KResult<ConstraintTiming> {
     )
 }
 
+// P3-M5 M5a: mode + severity codecs (v2 sections only).
+
+fn enc_mode(e: &mut Enc, m: EnforcementMode) {
+    e.u8(match m {
+        EnforcementMode::Enforced => 0,
+        EnforcementMode::Validated => 1,
+        EnforcementMode::Advisory => 2,
+        EnforcementMode::Disabled => 3,
+    });
+}
+
+fn dec_mode(d: &mut Dec) -> KResult<EnforcementMode> {
+    dec_tag(
+        d,
+        |t| match t {
+            0 => Some(EnforcementMode::Enforced),
+            1 => Some(EnforcementMode::Validated),
+            2 => Some(EnforcementMode::Advisory),
+            3 => Some(EnforcementMode::Disabled),
+            _ => None,
+        },
+        "mode",
+    )
+}
+
+fn enc_severity(e: &mut Enc, s: ViolationSeverity) {
+    e.u8(match s {
+        ViolationSeverity::Error => 0,
+        ViolationSeverity::Warning => 1,
+        ViolationSeverity::Info => 2,
+    });
+}
+
+fn dec_severity(d: &mut Dec) -> KResult<ViolationSeverity> {
+    dec_tag(
+        d,
+        |t| match t {
+            0 => Some(ViolationSeverity::Error),
+            1 => Some(ViolationSeverity::Warning),
+            2 => Some(ViolationSeverity::Info),
+            _ => None,
+        },
+        "severity",
+    )
+}
+
+fn enc_opt_u32(e: &mut Enc, v: Option<u32>) {
+    match v {
+        None => e.u8(0),
+        Some(n) => {
+            e.u8(1);
+            e.u32(n);
+        }
+    }
+}
+
+fn dec_opt_u32(d: &mut Dec) -> KResult<Option<u32>> {
+    match d.u8()? {
+        0 => Ok(None),
+        1 => Ok(Some(d.u32()?)),
+        t => Err(KError::Codec(format!("invalid opt_u32 tag {}", t))),
+    }
+}
+
 pub fn encode_schema(s: &Schema) -> Vec<u8> {
     let mut e = Enc::new();
+    // P3-M5 M5a: v2 marker — v2 = magic + v1 body + mode/severity/cardinality/
+    // temporal sections. v1 readers never see this format; we write v2 always.
+    e.raw(b"SCH2");
     e.str(&s.type_name);
     e.u32(s.schema_version);
     e.u64(s.required_properties.len() as u64);
@@ -862,11 +929,98 @@ pub fn encode_schema(s: &Schema) -> Vec<u8> {
         enc_expr(&mut e, &c.predicate);
         enc_timing(&mut e, c.timing);
     }
+    // --- P3-M5 M5a/M5b/M5c extensions ---
+    for u in &s.unique_constraints {
+        enc_mode(&mut e, u.mode);
+        enc_severity(&mut e, u.severity);
+    }
+    for c in &s.check_constraints {
+        enc_mode(&mut e, c.mode);
+        enc_severity(&mut e, c.severity);
+    }
+    e.u64(s.cardinality_constraints.len() as u64);
+    for c in &s.cardinality_constraints {
+        e.str(&c.name);
+        e.str(&c.relationship_type);
+        enc_opt_u32(&mut e, c.min_outbound);
+        enc_opt_u32(&mut e, c.max_outbound);
+        enc_mode(&mut e, c.mode);
+        enc_severity(&mut e, c.severity);
+    }
+    e.u64(s.temporal_constraints.len() as u64);
+    for t in &s.temporal_constraints {
+        e.str(&t.name);
+        e.str(&t.start_property);
+        e.str(&t.end_property);
+        enc_mode(&mut e, t.mode);
+        enc_severity(&mut e, t.severity);
+    }
     e.buf
 }
 
+/// Decode a schema row: try v2 (magic-prefixed), fall back to the v1 layout.
+/// REC-002 fail-closed stays intact — a row that parses as neither errors.
 pub fn decode_schema(buf: &[u8]) -> KResult<Schema> {
+    decode_schema_v2(buf).or_else(|_| decode_schema_v1(buf))
+}
+
+fn decode_schema_v2(buf: &[u8]) -> KResult<Schema> {
     let mut d = Dec::new(buf);
+    if d.take(4, "schema magic")? != b"SCH2" {
+        return Err(KError::Codec("schema row is not v2".into()));
+    }
+    let mut schema = decode_schema_v1_body(&mut d)?;
+    for u in &mut schema.unique_constraints {
+        u.mode = dec_mode(&mut d)?;
+        u.severity = dec_severity(&mut d)?;
+    }
+    for c in &mut schema.check_constraints {
+        c.mode = dec_mode(&mut d)?;
+        c.severity = dec_severity(&mut d)?;
+    }
+    schema.cardinality_constraints = {
+        let n = d.u64()? as usize;
+        let mut v = Vec::with_capacity(n.min(4096));
+        for _ in 0..n {
+            v.push(CardinalityConstraint {
+                name: d.str()?,
+                relationship_type: d.str()?,
+                min_outbound: dec_opt_u32(&mut d)?,
+                max_outbound: dec_opt_u32(&mut d)?,
+                mode: dec_mode(&mut d)?,
+                severity: dec_severity(&mut d)?,
+            });
+        }
+        v
+    };
+    schema.temporal_constraints = {
+        let n = d.u64()? as usize;
+        let mut v = Vec::with_capacity(n.min(4096));
+        for _ in 0..n {
+            v.push(TemporalConstraint {
+                name: d.str()?,
+                start_property: d.str()?,
+                end_property: d.str()?,
+                mode: dec_mode(&mut d)?,
+                severity: dec_severity(&mut d)?,
+            });
+        }
+        v
+    };
+    d.finish()?;
+    Ok(schema)
+}
+
+fn decode_schema_v1(buf: &[u8]) -> KResult<Schema> {
+    let mut d = Dec::new(buf);
+    let schema = decode_schema_v1_body(&mut d)?;
+    d.finish()?;
+    Ok(schema)
+}
+
+/// The pre-P3-M5 schema layout: no magic, no mode/severity, no cardinality/
+/// temporal constraints. Shared by both decoders.
+fn decode_schema_v1_body(d: &mut Dec) -> KResult<Schema> {
     let type_name = d.str()?;
     let schema_version = d.u32()?;
     let required_properties = {
@@ -906,7 +1060,7 @@ pub fn decode_schema(buf: &[u8]) -> KResult<Schema> {
             let dn = d.u64()? as usize;
             let mut domain_constraints = Vec::with_capacity(dn.min(4096));
             for _ in 0..dn {
-                domain_constraints.push(dec_domain(&mut d)?);
+                domain_constraints.push(dec_domain(d)?);
             }
             v.push(SchemaProperty {
                 name,
@@ -928,12 +1082,14 @@ pub fn decode_schema(buf: &[u8]) -> KResult<Schema> {
             for _ in 0..pn {
                 props.push(d.str()?);
             }
-            let scope = dec_scope(&mut d)?;
-            let timing = dec_timing(&mut d)?;
+            let scope = dec_scope(d)?;
+            let timing = dec_timing(d)?;
             v.push(UniqueConstraint {
                 properties: props,
                 scope,
                 timing,
+                mode: EnforcementMode::Enforced,
+                severity: ViolationSeverity::Error,
             });
         }
         v
@@ -943,17 +1099,18 @@ pub fn decode_schema(buf: &[u8]) -> KResult<Schema> {
         let mut v = Vec::with_capacity(n.min(4096));
         for _ in 0..n {
             let name = d.str()?;
-            let predicate = dec_expr(&mut d)?;
-            let timing = dec_timing(&mut d)?;
+            let predicate = dec_expr(d)?;
+            let timing = dec_timing(d)?;
             v.push(CheckConstraint {
                 name,
                 predicate,
                 timing,
+                mode: EnforcementMode::Enforced,
+                severity: ViolationSeverity::Error,
             });
         }
         v
     };
-    d.finish()?;
     Ok(Schema {
         type_name,
         schema_version,
@@ -962,6 +1119,8 @@ pub fn decode_schema(buf: &[u8]) -> KResult<Schema> {
         properties,
         unique_constraints,
         check_constraints,
+        cardinality_constraints: Vec::new(),
+        temporal_constraints: Vec::new(),
     })
 }
 
@@ -1182,11 +1341,15 @@ mod tests {
                 properties: vec!["name".into(), "qty".into()],
                 scope: UniquenessScope::Tenant,
                 timing: ConstraintTiming::Deferred,
+                mode: EnforcementMode::Advisory,
+                severity: ViolationSeverity::Warning,
             },
             UniqueConstraint {
                 properties: vec!["qty".into()],
                 scope: UniquenessScope::Global,
                 timing: ConstraintTiming::Immediate,
+                mode: EnforcementMode::Disabled,
+                severity: ViolationSeverity::Info,
             },
         ];
         schema.check_constraints = vec![
@@ -1198,6 +1361,8 @@ mod tests {
                     right: Box::new(CheckExpression::Literal(Value::Int(0))),
                 },
                 timing: ConstraintTiming::Immediate,
+                mode: EnforcementMode::Validated,
+                severity: ViolationSeverity::Error,
             },
             CheckConstraint {
                 name: "fancy".into(),
@@ -1219,6 +1384,8 @@ mod tests {
                     )),
                 ),
                 timing: ConstraintTiming::Deferred,
+                mode: EnforcementMode::Enforced,
+                severity: ViolationSeverity::Error,
             },
         ];
         let bytes = encode_schema(&schema);
@@ -1227,5 +1394,58 @@ mod tests {
         let mut truncated = bytes.clone();
         truncated.pop();
         assert!(matches!(decode_schema(&truncated), Err(KError::Codec(_))));
+    }
+
+    #[test]
+    fn schema_v1_rows_fall_back_with_defaults() {
+        // Hand-built pre-P3-M5 row: no magic, no mode/severity/cardinality/
+        // temporal sections. decode_schema must fall back to the v1 layout
+        // with Enforced/Error defaults and empty new sections.
+        let mut e = Enc::new();
+        e.str("Legacy");
+        e.u32(1);
+        e.u64(0); // required_properties
+        e.u8(0); // allowed_properties: none
+        e.u64(1); // properties
+        e.str("age");
+        e.str("Int");
+        e.bool(false); // required
+        e.bool(false); // nullable
+        e.bool(false); // provenance_required
+        e.u64(0); // domain_constraints
+        e.u64(1); // unique_constraints
+        e.u64(1); // properties in the constraint
+        e.str("age");
+        enc_scope(&mut e, UniquenessScope::Type);
+        enc_timing(&mut e, ConstraintTiming::Immediate);
+        e.u64(1); // check_constraints
+        e.str("age_ge_0");
+        enc_expr(
+            &mut e,
+            &CheckExpression::Compare {
+                op: CompareOp::Gte,
+                left: Box::new(CheckExpression::Property("age".into())),
+                right: Box::new(CheckExpression::Literal(Value::Int(0))),
+            },
+        );
+        enc_timing(&mut e, ConstraintTiming::Immediate);
+        let schema = decode_schema(&e.buf).expect("v1 row decodes");
+        assert_eq!(schema.type_name, "Legacy");
+        assert_eq!(schema.unique_constraints.len(), 1);
+        assert_eq!(schema.unique_constraints[0].mode, EnforcementMode::Enforced);
+        assert_eq!(
+            schema.unique_constraints[0].severity,
+            ViolationSeverity::Error
+        );
+        assert_eq!(schema.check_constraints.len(), 1);
+        assert_eq!(schema.check_constraints[0].mode, EnforcementMode::Enforced);
+        assert_eq!(
+            schema.check_constraints[0].severity,
+            ViolationSeverity::Error
+        );
+        assert!(schema.cardinality_constraints.is_empty());
+        assert!(schema.temporal_constraints.is_empty());
+        // Re-encoding the fallback-decoded schema yields v2.
+        assert_eq!(encode_schema(&schema)[0..4], *b"SCH2");
     }
 }

@@ -1796,6 +1796,10 @@ pub struct Schema {
     pub unique_constraints: Vec<UniqueConstraint>,
     /// Cross-property check constraints (MRFC-0060 Phase C4).
     pub check_constraints: Vec<CheckConstraint>,
+    /// Relationship cardinality constraints (MRFC-0060 §16; P3-M5 M5b).
+    pub cardinality_constraints: Vec<CardinalityConstraint>,
+    /// Temporal window constraints (MRFC-0060 §24; P3-M5 M5c).
+    pub temporal_constraints: Vec<TemporalConstraint>,
 }
 
 /// An atomic schema migration: a new schema plus per-object property
@@ -1865,6 +1869,10 @@ pub struct UniqueConstraint {
     pub scope: UniquenessScope,
     /// When to evaluate this constraint (MRFC-0060 Phase C5).
     pub timing: ConstraintTiming,
+    /// Enforcement mode (MRFC-0060 §30; P3-M5 M5a).
+    pub mode: EnforcementMode,
+    /// Severity stamped on violation events (MRFC-0060 §31; P3-M5 M5a).
+    pub severity: ViolationSeverity,
 }
 
 // ---------------------------------------------------------------------------
@@ -1906,26 +1914,90 @@ pub struct CheckConstraint {
     pub predicate: CheckExpression,
     /// When to evaluate this constraint (MRFC-0060 Phase C5).
     pub timing: ConstraintTiming,
+    /// Enforcement mode (MRFC-0060 §30; P3-M5 M5a).
+    pub mode: EnforcementMode,
+    /// Severity stamped on violation events (MRFC-0060 §31; P3-M5 M5a).
+    pub severity: ViolationSeverity,
 }
 
-/// Severity of a constraint violation (MRFC-0060 Phase C5).
+/// A cardinality bound on the object's outbound relationships of one type
+/// (MRFC-0060 §16; P3-M5 M5b — the cross-object/cross-type constraint class).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CardinalityConstraint {
+    pub name: String,
+    /// Relationship type this bounds (outbound from objects of the schema's type).
+    pub relationship_type: String,
+    /// Minimum outbound count; `None` = unbounded below.
+    pub min_outbound: Option<u32>,
+    /// Maximum outbound count; `None` = unbounded above.
+    pub max_outbound: Option<u32>,
+    /// Enforcement mode (MRFC-0060 §30; P3-M5 M5a).
+    pub mode: EnforcementMode,
+    /// Severity stamped on violation events (MRFC-0060 §31; P3-M5 M5a).
+    pub severity: ViolationSeverity,
+}
+
+/// Temporal window constraint: `start_property <= end_property` on every write
+/// (MRFC-0060 §24 ordering; P3-M5 M5c). Int values compare numerically,
+/// Text values lexicographically (ISO-8601 strings order correctly).
+/// Non-overlapping-interval enforcement across objects is descoped (coverage table).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TemporalConstraint {
+    pub name: String,
+    /// Property carrying the window start.
+    pub start_property: String,
+    /// Property carrying the window end.
+    pub end_property: String,
+    /// Enforcement mode (MRFC-0060 §30; P3-M5 M5a).
+    pub mode: EnforcementMode,
+    /// Severity stamped on violation events (MRFC-0060 §31; P3-M5 M5a).
+    pub severity: ViolationSeverity,
+}
+
+/// Severity of a constraint violation (MRFC-0060 Phase C5, §31).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViolationSeverity {
     Error,
     Warning,
+    /// P3-M5 §31: informational — recorded on the diagnostics surface only.
+    Info,
 }
 
-/// A single constraint violation (MRFC-0060 Phase C5).
+/// Per-constraint enforcement mode (MRFC-0060 §30; P3-M5 M5a).
+///
+/// - `Enforced`: violation fails the write (fail-closed).
+/// - `Validated`: evaluated pre-commit; violation fails the write.
+/// - `Advisory`: write succeeds, violation recorded as an event.
+/// - `Disabled`: constraint not evaluated at all (zero-overhead path).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EnforcementMode {
+    #[default]
+    Enforced,
+    Validated,
+    Advisory,
+    Disabled,
+}
+
+/// A single constraint violation (MRFC-0060 Phase C5, §31).
+///
+/// Doubles as the `ViolationEvent` record (see alias) — every detected
+/// violation carries its constraint, mode, severity, message, timestamp and
+/// attributable KOID for the diagnostics surface.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConstraintViolation {
     pub constraint_name: String,
     pub message: String,
     pub severity: ViolationSeverity,
+    /// Enforcement mode of the constraint that produced this event (MRFC-0060 §30).
+    pub mode: EnforcementMode,
     /// Commit timestamp when the violation was detected, 0 if immediate/pre-commit.
     pub timestamp: u64,
     /// KOID of the object that caused the violation, when attributable.
     pub koid: Option<KOID>,
 }
+
+/// Recorded constraint-violation event (MRFC-0060 §31/§32 diagnostics).
+pub type ViolationEvent = ConstraintViolation;
 
 impl ConstraintViolation {
     pub fn error(name: &str, msg: &str) -> Self {
@@ -1933,6 +2005,7 @@ impl ConstraintViolation {
             constraint_name: name.into(),
             message: msg.into(),
             severity: ViolationSeverity::Error,
+            mode: EnforcementMode::Enforced,
             timestamp: 0,
             koid: None,
         }
@@ -1943,6 +2016,19 @@ impl ConstraintViolation {
             constraint_name: name.into(),
             message: msg.into(),
             severity: ViolationSeverity::Warning,
+            mode: EnforcementMode::Enforced,
+            timestamp: 0,
+            koid: None,
+        }
+    }
+
+    /// Info-severity event builder (MRFC-0060 §31; P3-M5 M5a).
+    pub fn info(name: &str, msg: &str) -> Self {
+        ConstraintViolation {
+            constraint_name: name.into(),
+            message: msg.into(),
+            severity: ViolationSeverity::Info,
+            mode: EnforcementMode::Enforced,
             timestamp: 0,
             koid: None,
         }
@@ -1951,6 +2037,12 @@ impl ConstraintViolation {
     /// Set the koid on this violation (builder-style).
     pub fn with_koid(mut self, koid: KOID) -> Self {
         self.koid = Some(koid);
+        self
+    }
+
+    /// Set the enforcement mode on this event (builder-style).
+    pub fn with_mode(mut self, mode: EnforcementMode) -> Self {
+        self.mode = mode;
         self
     }
 }
@@ -1989,9 +2081,10 @@ impl ConstraintResult {
         self.warnings.extend(other.warnings.clone());
     }
 
-    /// Convert all errors and warnings into a single KError message.
+    /// Convert violations into a single KError message. Warnings do NOT block —
+    /// MRFC-0060 §44: advisory violations record and continue (P3-M5 M5a).
     pub fn into_kresult(self) -> KResult<()> {
-        if self.valid && self.warnings.is_empty() {
+        if self.valid {
             return Ok(());
         }
         let mut parts: Vec<String> = Vec::new();
@@ -2079,6 +2172,8 @@ impl Schema {
             properties: Vec::new(),
             unique_constraints: Vec::new(),
             check_constraints: Vec::new(),
+            cardinality_constraints: Vec::new(),
+            temporal_constraints: Vec::new(),
         }
     }
 
@@ -2151,12 +2246,14 @@ impl Schema {
         self
     }
 
-    /// Add a uniqueness constraint (MRFC-0060 Phase C2).
+    /// Add a uniqueness constraint (MRFC-0060 Phase C2). Defaults: Enforced / Error.
     pub fn unique(mut self, properties: &[&str], scope: UniquenessScope) -> Self {
         self.unique_constraints.push(UniqueConstraint {
             properties: properties.iter().map(|s| s.to_string()).collect(),
             scope,
             timing: ConstraintTiming::Immediate,
+            mode: EnforcementMode::Enforced,
+            severity: ViolationSeverity::Error,
         });
         self
     }
@@ -2167,7 +2264,15 @@ impl Schema {
             properties: properties.iter().map(|s| s.to_string()).collect(),
             scope,
             timing: ConstraintTiming::Deferred,
+            mode: EnforcementMode::Enforced,
+            severity: ViolationSeverity::Error,
         });
+        self
+    }
+
+    /// Add a fully-specified uniqueness constraint (P3-M5 M5a: mode/severity).
+    pub fn unique_constraint(mut self, constraint: UniqueConstraint) -> Self {
+        self.unique_constraints.push(constraint);
         self
     }
 
@@ -2180,11 +2285,14 @@ impl Schema {
     }
 
     /// Add a cross-property check constraint evaluated immediately (MRFC-0060 Phase C4).
+    /// Defaults: Enforced / Error.
     pub fn check(mut self, name: &str, predicate: CheckExpression) -> Self {
         self.check_constraints.push(CheckConstraint {
             name: name.into(),
             predicate,
             timing: ConstraintTiming::Immediate,
+            mode: EnforcementMode::Enforced,
+            severity: ViolationSeverity::Error,
         });
         self
     }
@@ -2195,8 +2303,86 @@ impl Schema {
             name: name.into(),
             predicate,
             timing: ConstraintTiming::Deferred,
+            mode: EnforcementMode::Enforced,
+            severity: ViolationSeverity::Error,
         });
         self
+    }
+
+    /// Add a fully-specified check constraint (P3-M5 M5a: mode/severity).
+    pub fn check_constraint(mut self, constraint: CheckConstraint) -> Self {
+        self.check_constraints.push(constraint);
+        self
+    }
+
+    /// Add a relationship cardinality bound (MRFC-0060 §16; P3-M5 M5b).
+    /// Defaults: Enforced / Error.
+    pub fn cardinality(
+        mut self,
+        name: &str,
+        relationship_type: &str,
+        min_outbound: Option<u32>,
+        max_outbound: Option<u32>,
+    ) -> Self {
+        self.cardinality_constraints.push(CardinalityConstraint {
+            name: name.into(),
+            relationship_type: relationship_type.into(),
+            min_outbound,
+            max_outbound,
+            mode: EnforcementMode::Enforced,
+            severity: ViolationSeverity::Error,
+        });
+        self
+    }
+
+    /// Add a fully-specified cardinality constraint (P3-M5 M5a: mode/severity).
+    pub fn cardinality_constraint(mut self, constraint: CardinalityConstraint) -> Self {
+        self.cardinality_constraints.push(constraint);
+        self
+    }
+
+    /// Add a temporal window constraint (MRFC-0060 §24; P3-M5 M5c).
+    /// Defaults: Enforced / Error.
+    pub fn temporal(mut self, name: &str, start_property: &str, end_property: &str) -> Self {
+        self.temporal_constraints.push(TemporalConstraint {
+            name: name.into(),
+            start_property: start_property.into(),
+            end_property: end_property.into(),
+            mode: EnforcementMode::Enforced,
+            severity: ViolationSeverity::Error,
+        });
+        self
+    }
+
+    /// Add a fully-specified temporal constraint (P3-M5 M5a: mode/severity).
+    pub fn temporal_constraint(mut self, constraint: TemporalConstraint) -> Self {
+        self.temporal_constraints.push(constraint);
+        self
+    }
+
+    /// True when at least one constraint (or always-enforced domain/provenance
+    /// rule) would do work — the kernel's zero-overhead gate for all-Disabled
+    /// schemas (P3-M5 M5a, cst007).
+    pub fn has_enabled_constraints(&self) -> bool {
+        self.properties
+            .iter()
+            .any(|p| !p.domain_constraints.is_empty() || p.provenance_required)
+            || self
+                .unique_constraints
+                .iter()
+                .any(|c| c.mode != EnforcementMode::Disabled)
+            || self
+                .check_constraints
+                .iter()
+                .any(|c| c.mode != EnforcementMode::Disabled)
+            || self
+                .cardinality_constraints
+                .iter()
+                .any(|c| c.mode != EnforcementMode::Disabled)
+            || self
+                .temporal_constraints
+                .iter()
+                .any(|c| c.mode != EnforcementMode::Disabled)
     }
 
     /// Look up a property definition by name.

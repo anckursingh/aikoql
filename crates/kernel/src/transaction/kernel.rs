@@ -25,7 +25,7 @@ use crate::knowledge::codec::{self, Enc};
 use crate::knowledge::kom::*;
 use crate::knowledge::ontology::{Cardinality, OntologyRegistry};
 use crate::knowledge::scope::Scope;
-use crate::lifecycle::constraint::{ConstraintEvaluator, InferenceEngine};
+use crate::lifecycle::constraint::{ConstraintEvalStats, ConstraintEvaluator, InferenceEngine};
 use crate::lifecycle::schema::SchemaRegistry;
 use crate::object::ObjectManager;
 use crate::relationship::RelationshipManager;
@@ -37,7 +37,7 @@ use crate::security::tenant::TenantManager;
 pub use crate::storage::repository::DerivedIndexRebuild;
 use crate::storage::repository::KnowledgeRepository;
 use crate::storage::store::{ConstraintCapabilities, StorageEngine, WriteBatch};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 
 // v0.3 K4: knowledge transactions (observe/assert/verify/contradict/supersede/
@@ -602,6 +602,9 @@ pub struct Kernel {
     schemas: Arc<RwLock<SchemaRegistry>>,
     ontologies: Arc<RwLock<OntologyRegistry>>,
     constraint_eval: ConstraintEvaluator,
+    /// Bounded in-memory ring of recorded violation events (MRFC-0060 §32
+    /// diagnostics surface; P3-M5 M5a). Shared across clones, oldest evicted.
+    violation_events: Arc<Mutex<VecDeque<ViolationEvent>>>,
     /// Backend-native constraint capabilities snapshot at open time (C7).
     constraint_caps: ConstraintCapabilities,
     relationships: Arc<RelationshipManager>,
@@ -680,6 +683,7 @@ impl Kernel {
             schemas,
             ontologies: Arc::new(RwLock::new(OntologyRegistry::empty())),
             constraint_eval: ConstraintEvaluator::new(),
+            violation_events: Arc::new(Mutex::new(VecDeque::new())),
             constraint_caps,
             relationships,
             objects,
@@ -834,6 +838,7 @@ impl Kernel {
             schemas: self.schemas.clone(),
             ontologies: self.ontologies.clone(),
             constraint_eval: self.constraint_eval.clone(),
+            violation_events: self.violation_events.clone(),
             constraint_caps: self.constraint_caps,
             relationships: self.relationships.clone(),
             objects: self.objects.clone(),
@@ -892,6 +897,36 @@ impl Kernel {
     ///
     /// Scans all committed objects of `new_schema.type_name` and runs every
     /// constraint (domain, check, unique) against each one.  Returns violations
+    /// Record detected violations on the bounded in-memory diagnostics ring
+    /// (MRFC-0060 §32; P3-M5 M5a — oldest evicted past 256 entries).
+    fn record_events<I>(&self, events: I)
+    where
+        I: IntoIterator<Item = ViolationEvent>,
+    {
+        let mut ring = self.violation_events.lock().unwrap();
+        for v in events {
+            if ring.len() >= 256 {
+                ring.pop_front();
+            }
+            ring.push_back(v);
+        }
+    }
+
+    /// Snapshot of the violation-event ring (MRFC-0060 §32 diagnostics surface).
+    pub fn violation_events(&self) -> Vec<ViolationEvent> {
+        self.violation_events
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Snapshot of the incremental constraint-evaluation counters (MRFC-0060 §36–37).
+    pub fn constraint_stats(&self) -> ConstraintEvalStats {
+        self.constraint_eval.stats()
+    }
+
     /// keyed by KOID so the caller can decide whether to proceed with the migration.
     pub fn validate_schema_migration(
         &self,
@@ -916,6 +951,13 @@ impl Kernel {
                 None,
                 Some(*hkoid),
                 None,
+            );
+            self.record_events(
+                result
+                    .violations
+                    .iter()
+                    .chain(result.warnings.iter())
+                    .cloned(),
             );
             for v in result.violations {
                 violations.push(v);
@@ -1017,6 +1059,13 @@ impl Kernel {
             let result =
                 self.constraint_eval
                     .evaluate_full(new_schema, &props, None, Some(*hkoid), None);
+            self.record_events(
+                result
+                    .violations
+                    .iter()
+                    .chain(result.warnings.iter())
+                    .cloned(),
+            );
             if !result.violations.is_empty() {
                 return Err(KError::InvalidSchema(format!(
                     "schema migration of '{}' would violate constraints on {}: {}",
@@ -1562,7 +1611,8 @@ impl Kernel {
         }
         // MRFC-0060 Phase C6: compute write-set for incremental constraint evaluation.
         let write_set: Option<HashSet<String>> = if creating {
-            None // evaluate all constraints for creates
+            // A create writes exactly the request's properties — that IS the write-set.
+            Some(req.properties.keys().cloned().collect())
         } else {
             let head_props = &head.as_ref().unwrap().properties;
             let mut changed = HashSet::new();
@@ -1660,22 +1710,39 @@ impl Kernel {
             // MRFC-0060 Phase C4/C5/C7: domain + check constraint evaluation (skip if backend native)
             if !self.constraint_caps.check {
                 if let Some(schema) = schemas.get(&ko.metadata.type_name) {
-                    self.constraint_eval
-                        .evaluate_full(
+                    // P3-M5 M5a (cst007): all-Disabled schemas skip the evaluator
+                    // entirely — the zero-overhead path.
+                    if schema.has_enabled_constraints() {
+                        let mut result = self.constraint_eval.evaluate_full(
                             schema,
                             &ko.properties,
                             write_set.as_ref(),
                             Some(ko.koid),
                             ko.semantic.as_ref().and_then(|s| s.source.as_deref()),
-                        )
-                        .into_kresult()?;
+                        );
+                        // MRFC-0060 §16 (P3-M5 M5b): relationship cardinality.
+                        let cardinality = self.constraint_eval.evaluate_cardinality(
+                            schema,
+                            &ko.relationships,
+                            Some(ko.koid),
+                        );
+                        result.merge(&cardinality);
+                        self.record_events(
+                            result
+                                .violations
+                                .iter()
+                                .chain(result.warnings.iter())
+                                .cloned(),
+                        );
+                        result.into_kresult()?;
+                    }
                 }
             }
         }
         // MRFC-0060 Phase C2/C7: uniqueness check — skip if backend enforces unique natively
         if !self.constraint_caps.unique {
             let objects = &self.objects;
-            self.schemas.read().unwrap().check_uniqueness(
+            let events = self.schemas.read().unwrap().check_uniqueness(
                 &ko,
                 |scope, tenant, type_name, pairs, exclude_koid| {
                     uniqueness_conflict(objects, scope, tenant, type_name, pairs, exclude_koid)
@@ -1683,6 +1750,7 @@ impl Kernel {
                 false, // remember() checks all constraints including deferred
                 write_set.as_ref(),
             )?;
+            self.record_events(events);
         }
         // MRFC-0060 Phase C3: ontology relationship validation.
         if req.referential_policy == ReferentialPolicy::Enforced {
@@ -1989,7 +2057,8 @@ impl Kernel {
             };
             // MRFC-0060 Phase C6: write-set for incremental constraint evaluation.
             let tx_write_set: Option<HashSet<String>> = if r.creating {
-                None
+                // A create writes exactly the request's properties — that IS the write-set.
+                Some(req.properties.keys().cloned().collect())
             } else {
                 let head_props = &r.head.as_ref().unwrap().properties;
                 let mut changed = HashSet::new();
@@ -2011,11 +2080,12 @@ impl Kernel {
                 // MRFC-0060 Phase C7: skip check constraint eval if backend native
                 if !self.constraint_caps.check {
                     if let Some(schema) = schemas.get(&ko.metadata.type_name) {
-                        self.constraint_eval.evaluate(
+                        let events = self.constraint_eval.evaluate(
                             schema,
                             &ko.properties,
                             tx_write_set.as_ref(),
                         )?;
+                        self.record_events(events);
                     }
                 }
             }
@@ -2026,7 +2096,7 @@ impl Kernel {
                 // MRFC-0060 Phase C7: skip immediate uniqueness check if backend native.
                 // Deferred unique constraints are always evaluated in-kernel.
                 if !self.constraint_caps.unique {
-                    schemas.check_uniqueness(
+                    let events = schemas.check_uniqueness(
                         &ko,
                         |scope, tenant, type_name, pairs, exclude_koid| {
                             uniqueness_conflict(
@@ -2041,6 +2111,7 @@ impl Kernel {
                         true, // skip deferred — collected below
                         tx_write_set.as_ref(),
                     )?;
+                    self.record_events(events);
                 }
                 // Deferred constraints are never pushed down (StorageEngine has no txn handles).
                 for (ci, pairs, scope) in schemas.collect_deferred_unique(&ko) {
@@ -2056,6 +2127,10 @@ impl Kernel {
                 if let Some(schema) = schemas.get(&ko.metadata.type_name) {
                     for (ci, cc) in schema.check_constraints.iter().enumerate() {
                         if cc.timing == ConstraintTiming::Deferred {
+                            // P3-M5 M5a: Disabled deferred constraints are never recorded.
+                            if cc.mode == EnforcementMode::Disabled {
+                                continue;
+                            }
                             // C6: skip deferred checks unaffected by write-set
                             if !crate::lifecycle::constraint::check_affected_by_write_set(
                                 cc,
@@ -2192,6 +2267,13 @@ impl Kernel {
                     uniqueness_conflict(objects, scope, tenant, type_name, pairs, exclude_koid)
                 },
                 0, // pre-commit — timestamp assigned in Phase 3
+            );
+            self.record_events(
+                result
+                    .violations
+                    .iter()
+                    .chain(result.warnings.iter())
+                    .cloned(),
             );
             result.into_kresult()?;
         }
