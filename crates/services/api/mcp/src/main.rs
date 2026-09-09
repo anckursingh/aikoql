@@ -230,8 +230,8 @@ fn main() {
         None => None,
     };
 
-    let kernel = match engine::open_kernel(&db_path, &cfg.encryption, cfg.backend) {
-        Ok(k) => k,
+    let (kernel, admin) = match engine::open_kernel(&db_path, &cfg.encryption, cfg.backend) {
+        Ok((k, admin)) => (k, admin),
         Err(e) => {
             eprintln!("open kernel: {}", e);
             std::process::exit(1);
@@ -431,6 +431,7 @@ fn main() {
             db_path.clone(),
             rest_rate_limit.clone(),
             http_auth.clone(),
+            admin.clone(),
         );
     }
 
@@ -468,9 +469,9 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        run_tcp_listener(kernel, listener, auth, db_path, mcp_rate_limit);
+        run_tcp_listener(kernel, listener, auth, db_path, mcp_rate_limit, admin);
     } else {
-        run_stdio(&kernel, &db_path, mcp_rate_limit);
+        run_stdio(&kernel, &db_path, mcp_rate_limit, admin);
     }
 }
 

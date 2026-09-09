@@ -43,6 +43,9 @@ pub(crate) fn tools_list() -> J {
             {"name": "aikoql", "description": "Execute an aikoql query (text-based knowledge query language). Supports MATCH, WHERE, SIMILAR TO, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, RETURN, CREATE, UPDATE, DELETE.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string", "description": "aikoql query text"}, "subject": {"type": "string", "description": "Calling principal for ACL (default: query-user)"}}, "required": ["query"]}},
             {"name": "backup", "description": "Create a timestamped backup of the database.", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "restore", "description": "Restore the database from a backup directory.", "inputSchema": {"type": "object", "properties": {"backup": {"type": "string", "description": "Backup directory name"}}, "required": ["backup"]}},
+            {"name": "storage_stats", "description": "Design §22 storage admin: write-path, segment, and cache statistics from the storage engine (v2 only).", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "storage_compact", "description": "Design §22 storage admin: trigger a storage-engine compaction and report segment deltas (v2 only).", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "storage_checkpoint", "description": "Design §22 storage admin: force a storage-engine directory checkpoint (v2 only).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "list_backups", "description": "List available backups in the current directory.", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "verify_backup", "description": "Verify a backup by opening it in a temporary kernel and checking journal + object count integrity.", "inputSchema": {"type": "object", "properties": {"backup": {"type": "string", "description": "Backup directory name"}}, "required": ["backup"]}},
             {"name": "metrics", "description": "Return database metrics: journal sequence, object counts, uptime.", "inputSchema": {"type": "object", "properties": {}}},
@@ -169,6 +172,7 @@ pub(crate) fn call_tool(
     args: &J,
     db_path: &str,
     session: &mut McpSession,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
 ) -> ToolResult {
     // PRR-2 defense in depth: a TCP session with no roles can never pass the
     // authz empty-roles passthrough. Startup rejects role-less token specs,
@@ -285,6 +289,9 @@ pub(crate) fn call_tool(
         "batch" => tool_batch(k, args),
         "session_init" => tool_session_init(args, session),
         "decide" => tool_decide(k, args),
+        "storage_stats" => tool_storage_stats(admin),
+        "storage_compact" => tool_storage_compact(admin),
+        "storage_checkpoint" => tool_storage_checkpoint(admin),
         _ => Err(format!("unknown tool: {}", name)),
     };
     let wrapped = error_codes::wrap_result(res);

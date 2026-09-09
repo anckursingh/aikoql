@@ -11,6 +11,7 @@ use crate::{
 
 use crate::protocol::*;
 use crate::tool_registry::*;
+use aikoql_storage_v2::engine::StorageAdminApi;
 
 pub(crate) fn handle_message(
     k: &Kernel,
@@ -20,6 +21,7 @@ pub(crate) fn handle_message(
     db_path: &Arc<String>,
     session: &mut McpSession,
     msg: J,
+    admin: Option<&dyn StorageAdminApi>,
 ) {
     let id = msg.get("id").cloned();
     let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
@@ -206,7 +208,8 @@ pub(crate) fn handle_message(
             let args = params.get("arguments").cloned().unwrap_or(J::Null);
             let args = inject_for_session(&args, session);
             let span = info_span!("tool_call", tool = %name);
-            let result = span.in_scope(|| call_tool(k, &name, &args, db_path.as_ref(), session));
+            let result =
+                span.in_scope(|| call_tool(k, &name, &args, db_path.as_ref(), session, admin));
             if result.is_err() {
                 error!(tool = %name, "tool call failed");
             }

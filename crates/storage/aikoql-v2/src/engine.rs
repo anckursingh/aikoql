@@ -15,8 +15,9 @@
 //! forwards one). REC-002 snapshot/restore ride the trait defaults (full
 //! scan + redb snapshot) — the adapter needs no override.
 
-use crate::db::{Config, Db};
-use crate::stats::ReadPathStats;
+use crate::compaction::CompactStats;
+use crate::db::{CheckpointInfo, Config, Db};
+use crate::stats::{DbStats, ReadPathStats};
 use crate::wal::Op;
 use aikoql_kernel::knowledge::kom::{KError, KResult};
 use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
@@ -24,6 +25,17 @@ use std::path::Path;
 
 fn se(e: impl std::fmt::Display) -> KError {
     KError::Store(format!("aikoql-v2: {e}"))
+}
+
+/// Design §22 — the OPTIONAL storage admin capability, never shipped: a
+/// caller that opened the concrete v2 engine can also inspect and drive
+/// it (stats, compaction, checkpoint) without breaking the `StorageEngine`
+/// contract. Value-opaque surface — nothing here decrypts or reads user
+/// values, so an MCP adapter may hold it beside an EncryptedStore wrap.
+pub trait StorageAdminApi: Send + Sync {
+    fn storage_stats(&self) -> KResult<DbStats>;
+    fn storage_compact(&self) -> KResult<CompactStats>;
+    fn storage_checkpoint(&self) -> KResult<CheckpointInfo>;
 }
 
 /// AIKOQL v2 engine: bounded WAL → memtable → immutable segments, served
@@ -60,6 +72,20 @@ impl AikoqlStorageEngineV2 {
     /// serializes writers before the commit queue).
     pub fn fsync_count(&self) -> u64 {
         self.db.fsync_count()
+    }
+}
+
+impl StorageAdminApi for AikoqlStorageEngineV2 {
+    fn storage_stats(&self) -> KResult<DbStats> {
+        Ok(self.db.stats())
+    }
+
+    fn storage_compact(&self) -> KResult<CompactStats> {
+        self.db.compact().map_err(se)
+    }
+
+    fn storage_checkpoint(&self) -> KResult<CheckpointInfo> {
+        self.db.checkpoint_now().map_err(se)
     }
 }
 

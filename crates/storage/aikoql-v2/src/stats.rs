@@ -12,6 +12,23 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// P3-M2 (design §21) — fsync-latency histogram edges in µs. Twelve
+/// buckets: everything above 16 ms lands in the last one.
+pub const FSYNC_LATENCY_BUCKETS: usize = 12;
+const FSYNC_LATENCY_EDGES: [u64; FSYNC_LATENCY_BUCKETS - 1] =
+    [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384];
+
+/// Record one latency sample into its bucket (first edge it fits under;
+/// past the last edge = the final bucket). Relaxed — the counters are
+/// advisory, never a correctness input.
+pub(crate) fn record_latency_us(buckets: &[AtomicU64; FSYNC_LATENCY_BUCKETS], us: u64) {
+    let idx = FSYNC_LATENCY_EDGES
+        .iter()
+        .position(|&e| us <= e)
+        .unwrap_or(FSYNC_LATENCY_BUCKETS - 1);
+    buckets[idx].fetch_add(1, Ordering::Relaxed);
+}
+
 /// A snapshot of the cumulative read-path counters (the QA doc's
 /// `ReadPathMetrics`; `value_decode_ns` is folded into `block_decode_ns` —
 /// values decode with their entries, a separate counter would be fiction).
@@ -91,4 +108,107 @@ impl Stats {
             get_wall_ns: self.get_wall_ns.load(Ordering::Relaxed),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// P3-M2 (design §21) — write-path instrumentation. Same discipline as the
+// read path: cumulative relaxed atomics that move only with real
+// operations; a snapshot struct for callers. The gauges
+// (compaction_backlog_bytes / compaction_pending_segments) are L0-only —
+// the backlog a background compactor would have to drain — and are
+// refreshed by the maybe_compact scan on every write path plus after every
+// successful merge.
+// ---------------------------------------------------------------------------
+
+/// A snapshot of the write-path counters (design §21's `WritePathStats`).
+/// `fsync_count` rides the Db's existing commit-fsync counter (one per
+/// batch/group; flush truncation syncs are not counted).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WritePathStats {
+    /// WAL frame bytes appended since open — cumulative, flushes truncate
+    /// the file, not the ledger.
+    pub wal_bytes: u64,
+    pub flush_count: u64,
+    pub flush_latency_us: u64,
+    pub fsync_count: u64,
+    pub fsync_latency_us_buckets: [u64; FSYNC_LATENCY_BUCKETS],
+    /// Σ uncompacted L0 segment bytes / count while the trigger is
+    /// unsatisfied — the backlog a background compactor (P3-M8) would
+    /// drain.
+    pub compaction_backlog_bytes: u64,
+    pub compaction_pending_segments: u64,
+    pub checkpoint_count: u64,
+    pub checkpoint_latency_us: u64,
+    pub write_queue_depth: u64,
+    pub group_commit_batches: u64,
+    pub group_commit_ops: u64,
+    pub group_commit_max_ops: u64,
+    /// Wall ms of the last merge that actually ran (0 = none yet).
+    pub last_compaction_ms: u64,
+    /// This open's recovery: wall ms of open() and WAL bytes replayed.
+    pub recovery_ms: u64,
+    pub wal_replay_bytes: u64,
+}
+
+/// The live write-path counters.
+#[derive(Debug, Default)]
+pub(crate) struct WriteStats {
+    pub(crate) wal_bytes: AtomicU64,
+    pub(crate) flush_count: AtomicU64,
+    pub(crate) flush_latency_us: AtomicU64,
+    pub(crate) fsync_latency_us_buckets: [AtomicU64; FSYNC_LATENCY_BUCKETS],
+    pub(crate) compaction_backlog_bytes: AtomicU64,
+    pub(crate) compaction_pending_segments: AtomicU64,
+    pub(crate) checkpoint_count: AtomicU64,
+    pub(crate) checkpoint_latency_us: AtomicU64,
+    pub(crate) write_queue_depth: AtomicU64,
+    pub(crate) group_commit_batches: AtomicU64,
+    pub(crate) group_commit_ops: AtomicU64,
+    pub(crate) group_commit_max_ops: AtomicU64,
+    pub(crate) last_compaction_ms: AtomicU64,
+    pub(crate) recovery_ms: AtomicU64,
+    pub(crate) wal_replay_bytes: AtomicU64,
+}
+
+impl WriteStats {
+    pub(crate) fn snapshot(&self, fsync_count: u64) -> WritePathStats {
+        WritePathStats {
+            wal_bytes: self.wal_bytes.load(Ordering::Relaxed),
+            flush_count: self.flush_count.load(Ordering::Relaxed),
+            flush_latency_us: self.flush_latency_us.load(Ordering::Relaxed),
+            fsync_count,
+            fsync_latency_us_buckets: std::array::from_fn(|i| {
+                self.fsync_latency_us_buckets[i].load(Ordering::Relaxed)
+            }),
+            compaction_backlog_bytes: self.compaction_backlog_bytes.load(Ordering::Relaxed),
+            compaction_pending_segments: self.compaction_pending_segments.load(Ordering::Relaxed),
+            checkpoint_count: self.checkpoint_count.load(Ordering::Relaxed),
+            checkpoint_latency_us: self.checkpoint_latency_us.load(Ordering::Relaxed),
+            write_queue_depth: self.write_queue_depth.load(Ordering::Relaxed),
+            group_commit_batches: self.group_commit_batches.load(Ordering::Relaxed),
+            group_commit_ops: self.group_commit_ops.load(Ordering::Relaxed),
+            group_commit_max_ops: self.group_commit_max_ops.load(Ordering::Relaxed),
+            last_compaction_ms: self.last_compaction_ms.load(Ordering::Relaxed),
+            recovery_ms: self.recovery_ms.load(Ordering::Relaxed),
+            wal_replay_bytes: self.wal_replay_bytes.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// The segment inventory as of the snapshot: every manifest segment, all
+/// levels.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SegmentStats {
+    pub count: u64,
+    pub bytes: u64,
+}
+
+/// `Db::stats()` — the whole observable surface in one snapshot (design
+/// §21's list, plus the read path and cache from SE2-M7/M8).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DbStats {
+    pub read: ReadPathStats,
+    pub write: WritePathStats,
+    pub segments: SegmentStats,
+    pub cache: crate::cache::CacheStats,
 }

@@ -3,6 +3,76 @@
 
 use crate::{json, Kernel, LifecycleState, Ordering, Subject, ACTIVE_CONNECTIONS, J, SERVER_START};
 use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// Design §22 storage admin tools — v2 backend only. A None capability means
+// the serving backend (redb/v1) has no admin surface: the tool answers with
+// an error inside the normal tool-result envelope, never a transport error.
+// ---------------------------------------------------------------------------
+
+pub(crate) fn tool_storage_stats(
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
+    let admin = admin.ok_or("storage admin unavailable on this backend")?;
+    let s = admin.storage_stats().map_err(|e| e.to_string())?;
+    Ok(json!({
+        "write": {
+            "wal_bytes": s.write.wal_bytes,
+            "flush_count": s.write.flush_count,
+            "flush_latency_us": s.write.flush_latency_us,
+            "fsync_count": s.write.fsync_count,
+            "fsync_latency_us_buckets": s.write.fsync_latency_us_buckets,
+            "compaction_backlog_bytes": s.write.compaction_backlog_bytes,
+            "compaction_pending_segments": s.write.compaction_pending_segments,
+            "checkpoint_count": s.write.checkpoint_count,
+            "checkpoint_latency_us": s.write.checkpoint_latency_us,
+            "write_queue_depth": s.write.write_queue_depth,
+            "group_commit_batches": s.write.group_commit_batches,
+            "group_commit_ops": s.write.group_commit_ops,
+            "group_commit_max_ops": s.write.group_commit_max_ops,
+            "last_compaction_ms": s.write.last_compaction_ms,
+            "recovery_ms": s.write.recovery_ms,
+            "wal_replay_bytes": s.write.wal_replay_bytes,
+        },
+        "segments": {
+            "count": s.segments.count,
+            "bytes": s.segments.bytes,
+        },
+        "cache": {
+            "hits": s.cache.hits,
+            "misses": s.cache.misses,
+            "evictions": s.cache.evictions,
+            "bytes": s.cache.bytes,
+        },
+        "read": {
+            "lookups": s.read.lookups,
+            "get_wall_ns": s.read.get_wall_ns,
+        },
+    }))
+}
+
+pub(crate) fn tool_storage_compact(
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
+    let admin = admin.ok_or("storage admin unavailable on this backend")?;
+    let c = admin.storage_compact().map_err(|e| e.to_string())?;
+    Ok(json!({
+        "segments_in": c.segments_in,
+        "segments_out": c.segments_out,
+        "entries_in": c.entries_in,
+        "entries_out": c.entries_out,
+        "entries_archived": c.entries_archived,
+    }))
+}
+
+pub(crate) fn tool_storage_checkpoint(
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
+    let admin = admin.ok_or("storage admin unavailable on this backend")?;
+    let c = admin.storage_checkpoint().map_err(|e| e.to_string())?;
+    Ok(json!({"generation": c.generation}))
+}
+
 pub(crate) fn tool_metrics(k: &Kernel) -> Result<J, String> {
     let (seq, _audit) = k.journal_head().map_err(|e| e.to_string())?;
     let heads = k.scan_heads().map_err(|e| e.to_string())?;

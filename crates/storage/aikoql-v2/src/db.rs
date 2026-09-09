@@ -53,7 +53,7 @@ use crate::placement::{BlockId, SegmentId};
 use crate::segment::{
     SegmentAttach, SegmentEntry, SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT,
 };
-use crate::stats::{ReadPathStats, Stats};
+use crate::stats::{record_latency_us, DbStats, ReadPathStats, SegmentStats, Stats, WriteStats};
 use crate::wal::{encode_frame, replay_frames, Op};
 use aikoql_kernel::knowledge::kom::sha256;
 use std::cmp::Reverse;
@@ -256,10 +256,21 @@ pub struct Db {
     /// SE2-M8 — read-path instrumentation (the QA spec's truth layer):
     /// cumulative atomics shared with every reader the Db opens.
     stats: Arc<Stats>,
+    /// P3-M2 — write-path instrumentation (design §21), shared with the
+    /// committer thread in GroupCommit mode.
+    wstats: Arc<WriteStats>,
+}
+
+/// P3-M2 — the checkpoint_now admin surface (design §22): the publication
+/// generation of the checkpoint just written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckpointInfo {
+    pub generation: u64,
 }
 
 impl Db {
     pub fn open(config: Config) -> Result<Db, FormatError> {
+        let open_t = Instant::now();
         let lock = lock_directory(&config.dir)?;
         let current_path = config.dir.join("CURRENT");
         let current = match Current::read(&current_path) {
@@ -349,6 +360,7 @@ impl Db {
         // stats.
         let cache = (config.cache_bytes > 0).then(|| BlockCache::new(config.cache_bytes));
         let stats = Arc::new(Stats::default());
+        let wstats = Arc::new(WriteStats::default());
         let mut segments = Vec::with_capacity(manifest.segments.len());
         let mut readers_by_segment: HashMap<u64, Arc<SegmentReader>> = HashMap::new();
         for rec in &manifest.segments {
@@ -588,14 +600,23 @@ impl Db {
                 let fsyncs = Arc::clone(&fsyncs);
                 let cache = cache.clone();
                 let stats = Arc::clone(&stats);
+                let wstats = Arc::clone(&wstats);
                 std::thread::spawn(move || {
-                    committer_loop(rx, wal, state, config, fsyncs, cache, stats)
+                    committer_loop(rx, wal, state, config, fsyncs, cache, stats, wstats)
                 })
             };
             (Some(tx), Some(handle))
         } else {
             (None, None)
         };
+        // P3-M2 — recovery surface (design §21): this open's wall time and
+        // the WAL bytes replayed.
+        wstats
+            .recovery_ms
+            .store(open_t.elapsed().as_millis() as u64, Ordering::Relaxed);
+        wstats
+            .wal_replay_bytes
+            .store(consumed as u64, Ordering::Relaxed);
         Ok(Db {
             config,
             _lock: lock,
@@ -606,6 +627,35 @@ impl Db {
             fsyncs,
             cache,
             stats,
+            wstats,
+        })
+    }
+
+    /// P3-M2 (design §21) — the whole observable surface in one snapshot:
+    /// read path (SE2-M8), write path, segment inventory, cache.
+    pub fn stats(&self) -> DbStats {
+        let (count, bytes) = {
+            let state = self.state.read().unwrap();
+            let count = state.segments.len() as u64;
+            let bytes = state.segment_records.iter().map(|r| r.file_size).sum();
+            (count, bytes)
+        };
+        DbStats {
+            read: self.stats.snapshot(),
+            write: self.wstats.snapshot(self.fsyncs.load(Ordering::SeqCst)),
+            segments: SegmentStats { count, bytes },
+            cache: self.cache.as_ref().map(|c| c.stats()).unwrap_or_default(),
+        }
+    }
+
+    /// P3-M2 — the admin checkpoint (design §22): publish the live
+    /// directory state NOW, at the current generation, outside the
+    /// checkpoint_bytes trigger.
+    pub fn checkpoint_now(&self) -> Result<CheckpointInfo, FormatError> {
+        let mut state = self.state.write().unwrap();
+        Self::write_checkpoint(&self.config, &mut state, &self.wstats)?;
+        Ok(CheckpointInfo {
+            generation: state.generation,
         })
     }
 
@@ -638,9 +688,17 @@ impl Db {
                 .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
             wal.write_all(&frame)
                 .map_err(|e| FormatError::Io(format!("WAL append: {e}")))?;
+            self.wstats
+                .wal_bytes
+                .fetch_add(frame.len() as u64, Ordering::Relaxed);
             if self.config.durability == DurabilityMode::Sync {
+                let t = Instant::now();
                 wal.sync_all()
                     .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
+                record_latency_us(
+                    &self.wstats.fsync_latency_us_buckets,
+                    t.elapsed().as_micros() as u64,
+                );
                 self.fsyncs.fetch_add(1, Ordering::SeqCst);
             }
         }
@@ -722,6 +780,7 @@ impl Db {
                 &mut state,
                 &self.cache,
                 &self.stats,
+                &self.wstats,
             )?;
         }
         drop(state);
@@ -755,6 +814,14 @@ impl Db {
                     l1_bytes += r.file_size;
                 }
             }
+            // P3-M2 — the scan is the backlog gauge's free ride: every
+            // write path refreshes what a background compactor would face.
+            self.wstats
+                .compaction_pending_segments
+                .store(l0 as u64, Ordering::Relaxed);
+            self.wstats
+                .compaction_backlog_bytes
+                .store(l0_bytes, Ordering::Relaxed);
             (l0, l0_bytes, l1_bytes)
         };
         let triggered = l0 >= self.config.l0_compact_trigger;
@@ -773,7 +840,10 @@ impl Db {
     /// joins it) only once no sender remains.
     pub fn writer(&self) -> Result<CommitWriter, FormatError> {
         match &self.queue_tx {
-            Some(tx) => Ok(CommitWriter { tx: tx.clone() }),
+            Some(tx) => Ok(CommitWriter {
+                tx: tx.clone(),
+                wstats: Arc::clone(&self.wstats),
+            }),
             None => Err(FormatError::Invalid(
                 "writer handles require DurabilityMode::GroupCommit".into(),
             )),
@@ -1370,6 +1440,7 @@ impl Db {
             &mut state,
             &self.cache,
             &self.stats,
+            &self.wstats,
         )
     }
 
@@ -1382,6 +1453,7 @@ impl Db {
         state: &mut State,
         cache: &Option<Arc<BlockCache>>,
         stats: &Arc<Stats>,
+        wstats: &Arc<WriteStats>,
     ) -> Result<(), FormatError> {
         if !state.active.is_empty() {
             let fresh = std::mem::take(&mut state.active);
@@ -1390,6 +1462,7 @@ impl Db {
         if state.immutables.is_empty() {
             return Ok(());
         }
+        let flush_t = Instant::now();
         let mut new_segments = Vec::with_capacity(state.immutables.len());
         let mut anchors: HashMap<ReplicaId, (u64, SegmentId, BlockId, u32)> = HashMap::new();
         for mem in state.immutables.drain(..) {
@@ -1536,8 +1609,14 @@ impl Db {
         if config.checkpoint_bytes > 0
             && state.bytes_since_checkpoint >= config.checkpoint_bytes as u64
         {
-            Self::write_checkpoint(config, state)?;
+            Self::write_checkpoint(config, state, wstats)?;
         }
+        // P3-M2 — a real flush (a no-op flush never gets counted: the
+        // is_empty guard above returns first).
+        wstats.flush_count.fetch_add(1, Ordering::Relaxed);
+        wstats
+            .flush_latency_us
+            .fetch_add(flush_t.elapsed().as_micros() as u64, Ordering::Relaxed);
         Ok(())
     }
 
@@ -1581,6 +1660,7 @@ impl Db {
         if state.segments.is_empty() {
             return Ok(CompactStats::default());
         }
+        let compact_t = Instant::now();
         let mut next_id = state.next_segment_id;
         let attach = SegmentAttach {
             cache: self.cache.clone(),
@@ -1739,8 +1819,20 @@ impl Db {
         if self.config.checkpoint_bytes > 0
             && state.bytes_since_checkpoint >= self.config.checkpoint_bytes as u64
         {
-            Self::write_checkpoint(&self.config, &mut state)?;
+            Self::write_checkpoint(&self.config, &mut state, &self.wstats)?;
         }
+        // P3-M2 — the merge drained L0 into L1: the backlog gauges drop to
+        // zero here (the maybe_compact scan would have refreshed them on
+        // the next write anyway — this keeps the admin view current).
+        self.wstats
+            .compaction_pending_segments
+            .store(0, Ordering::Relaxed);
+        self.wstats
+            .compaction_backlog_bytes
+            .store(0, Ordering::Relaxed);
+        self.wstats
+            .last_compaction_ms
+            .store(compact_t.elapsed().as_millis() as u64, Ordering::Relaxed);
         Ok(stats)
     }
 
@@ -1749,7 +1841,12 @@ impl Db {
     /// the file back → prune the subsumed delta history and older
     /// checkpoints. Runs inside the state lock at the end of the flush or
     /// compaction that crossed the trigger, at the CURRENT generation.
-    fn write_checkpoint(config: &Config, state: &mut State) -> Result<(), FormatError> {
+    fn write_checkpoint(
+        config: &Config,
+        state: &mut State,
+        wstats: &Arc<WriteStats>,
+    ) -> Result<(), FormatError> {
+        let ckp_t = Instant::now();
         let checkpoint = DirectoryCheckpoint::from_state(
             state.generation,
             &state.identity,
@@ -1770,6 +1867,12 @@ impl Db {
         prune_deltas_before(&config.dir, state.generation)?;
         crash_park("AIKOQL_V2_CKP_PARK", &config.dir, "after_prune");
         state.bytes_since_checkpoint = 0;
+        // P3-M2 — a published+verified checkpoint counts; a failed one (the
+        // error paths above) doesn't.
+        wstats.checkpoint_count.fetch_add(1, Ordering::Relaxed);
+        wstats
+            .checkpoint_latency_us
+            .fetch_add(ckp_t.elapsed().as_micros() as u64, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -1801,6 +1904,8 @@ impl Drop for Db {
 #[derive(Clone)]
 pub struct CommitWriter {
     tx: mpsc::Sender<Batch>,
+    /// P3-M2 — the write_queue_depth gauge: submitted-but-unacked batches.
+    wstats: Arc<WriteStats>,
 }
 
 impl CommitWriter {
@@ -1811,14 +1916,25 @@ impl CommitWriter {
         if ops.is_empty() {
             return Err(FormatError::Invalid("empty write batch".into()));
         }
+        self.wstats
+            .write_queue_depth
+            .fetch_add(1, Ordering::Relaxed);
         let (ack_tx, ack_rx) = mpsc::sync_channel(1);
-        self.tx
+        let submitted = self
+            .tx
             .send((ops.to_vec(), ack_tx))
-            .map_err(|_| FormatError::Io("commit queue closed".into()))?;
-        match ack_rx.recv() {
-            Ok(result) => result,
-            Err(_) => Err(FormatError::Io("commit queue closed".into())),
-        }
+            .map_err(|_| FormatError::Io("commit queue closed".into()));
+        let result = match submitted {
+            Ok(()) => match ack_rx.recv() {
+                Ok(result) => result,
+                Err(_) => Err(FormatError::Io("commit queue closed".into())),
+            },
+            Err(e) => Err(e),
+        };
+        self.wstats
+            .write_queue_depth
+            .fetch_sub(1, Ordering::Relaxed);
+        result
     }
 }
 
@@ -1951,6 +2067,9 @@ fn merge_replica(
 /// The committer: drain the queue into groups bounded by the caps and
 /// the wait window, commit each group with ONE fsync, apply, ack. Exits
 /// when every sender is gone and nothing is pending.
+// ponytail: 8 params mirror the Db handle set (wstats added in P3-M2);
+// group into a struct if a third caller appears.
+#[allow(clippy::too_many_arguments)]
 fn committer_loop(
     rx: mpsc::Receiver<Batch>,
     wal: Arc<Mutex<File>>,
@@ -1959,6 +2078,7 @@ fn committer_loop(
     fsyncs: Arc<AtomicU64>,
     cache: Option<Arc<BlockCache>>,
     stats: Arc<Stats>,
+    wstats: Arc<WriteStats>,
 ) {
     let wait = config.max_wait_duration;
     let mut carry: Option<Batch> = None;
@@ -1992,7 +2112,9 @@ fn committer_loop(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        commit_group(&group, &wal, &state, &config, &fsyncs, &cache, &stats);
+        commit_group(
+            &group, &wal, &state, &config, &fsyncs, &cache, &stats, &wstats,
+        );
     }
 }
 
@@ -2001,6 +2123,7 @@ fn committer_loop(
 /// (SE-05), so a flush can never interleave the append-and-apply window.
 /// Lock order is always state → wal, and the wal lock is never held
 /// across a flush.
+#[allow(clippy::too_many_arguments)] // same handle-set mirror as committer_loop
 fn commit_group(
     group: &[Batch],
     wal: &Arc<Mutex<File>>,
@@ -2009,7 +2132,20 @@ fn commit_group(
     fsyncs: &Arc<AtomicU64>,
     cache: &Option<Arc<BlockCache>>,
     stats: &Arc<Stats>,
+    wstats: &Arc<WriteStats>,
 ) {
+    // P3-M2 — group shape (design §21): batches per group, ops per group,
+    // the widest group so far.
+    let group_ops: u64 = group.iter().map(|b| b.0.len() as u64).sum();
+    wstats
+        .group_commit_batches
+        .fetch_add(group.len() as u64, Ordering::Relaxed);
+    wstats
+        .group_commit_ops
+        .fetch_add(group_ops, Ordering::Relaxed);
+    wstats
+        .group_commit_max_ops
+        .fetch_max(group_ops, Ordering::Relaxed);
     let mut st = state.write().unwrap();
     let mut seqs: Vec<u64> = Vec::with_capacity(group.len());
     let mut outcome: Result<(), FormatError> = Ok(());
@@ -2033,10 +2169,18 @@ fn commit_group(
                 outcome = Err(FormatError::Io(format!("WAL append: {e}")));
                 break;
             }
+            wstats
+                .wal_bytes
+                .fetch_add(frame.len() as u64, Ordering::Relaxed);
         }
         if outcome.is_ok() {
-            if let Err(e) = wal.sync_all() {
-                outcome = Err(FormatError::Io(format!("WAL sync: {e}")));
+            let t = Instant::now();
+            match wal.sync_all() {
+                Ok(()) => record_latency_us(
+                    &wstats.fsync_latency_us_buckets,
+                    t.elapsed().as_micros() as u64,
+                ),
+                Err(e) => outcome = Err(FormatError::Io(format!("WAL sync: {e}"))),
             }
         }
     }
@@ -2133,7 +2277,7 @@ fn commit_group(
             }
         }
         if outcome.is_ok() && st.active.bytes() >= config.memtable_bytes {
-            if let Err(e) = Db::flush_locked_impl(config, wal, &mut st, cache, stats) {
+            if let Err(e) = Db::flush_locked_impl(config, wal, &mut st, cache, stats, wstats) {
                 outcome = Err(e);
             }
         }

@@ -36,7 +36,7 @@ pub fn run_shell(db_path: &str, tenant: Option<&str>) {
             }
         }
         match engine::open_kernel_auto(db_path) {
-            Ok(e) => e,
+            Ok((e, _admin)) => e,
             Err(e) => {
                 eprintln!("open kernel: {}", e);
                 std::process::exit(1);

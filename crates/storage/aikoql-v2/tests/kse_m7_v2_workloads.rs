@@ -48,6 +48,7 @@ use aikoql_kernel::transaction::kernel::ManualClock;
 use aikoql_kernel::{Direction, Kernel, Metadata, RelationshipRef, Subject, Value, KOID};
 use aikoql_storage::AikoqlStorageEngine;
 use aikoql_storage_v2::db::{Config, Db};
+use aikoql_storage_v2::engine::StorageAdminApi;
 use aikoql_storage_v2::stats::ReadPathStats;
 use aikoql_storage_v2::AikoqlStorageEngineV2;
 use common::run_date;
@@ -2518,5 +2519,149 @@ fn v2_m27_context_profile() {
         history_share * 100.0,
     ));
     common::report_write(&dir.join("context-profile.md"), report);
+    cleanup_dataset(&path);
+}
+
+// ---------------------------------------------------------------------------
+// P3-M2 — write-path instrumentation overhead cell (met007). Strict opt-in:
+// `P3M2_ATTRIB=1`. The §21 stats are unconditional atomics (a config switch
+// would be a knob that exists only to be turned off in prod), so the cell
+// measures the marginal cost of the ADDED accounting directly — the same
+// relaxed fetch_adds + the two Instant::now the Sync write path performs
+// per op, in a loop with no engine — and divides by the measured per-op
+// wall of real instrumented puts. Writes
+// `artifacts/storage-engine-v2/write-stats-overhead.md`. Perf numbers are
+// report cells; the one assert is a lenient sanity bound (shared-runner
+// safe, M21 precedent), never the ≤1% target itself.
+
+const M2_ENV: &str = "P3M2_ATTRIB";
+
+fn m2_walls(ops: usize, mut run: impl FnMut()) -> Vec<u128> {
+    let mut walls = Vec::with_capacity(ops);
+    for _ in 0..ops {
+        let t0 = Instant::now();
+        run();
+        walls.push(t0.elapsed().as_nanos() as u128);
+    }
+    walls
+}
+
+#[test]
+fn v2_p3m2_write_stats_overhead() {
+    match std::env::var(M2_ENV) {
+        Err(std::env::VarError::NotPresent) => return,
+        Ok(v) if v == "1" => {}
+        other => panic!("{M2_ENV} strict opt-in: unset or 1, got {other:?}"),
+    }
+    const OPS: usize = 100_000;
+    let path = tmp("p3m2-attrib");
+    let engine = AikoqlStorageEngineV2::open_with_config(Config::new(path.clone())).unwrap();
+    let stats0 = engine.storage_stats().unwrap();
+
+    // L1: small values — WAL-append-bound, the added counters' share is
+    // maximal. L2: the adoption row shape (1400 B) — the amortized ceiling.
+    let put_walls = |len: usize| {
+        m2_walls(OPS, || {
+            let mut b = WriteBatch::new();
+            b.put(format!("p3m2/{len}/{OPS}").into_bytes(), vec![0x5a; len]);
+            engine.write_batch(&b).unwrap();
+        })
+    };
+    let w1 = put_walls(16);
+    let w2 = put_walls(1400);
+
+    // The marginal sequence — per §21 the Sync write path adds per op:
+    // wal_bytes += frame.len, t0 = now, sync_all, elapsed, one bucket
+    // fetch_add (record_latency_us — its 11-edge position scan is ~ns and
+    // folded in), and the two backlog gauges inside maybe_compact's
+    // pre-existing scan. The syscall itself is the op's own I/O, not the
+    // instrumentation.
+    let wal_bytes = AtomicU64::new(0);
+    let buckets = [const { AtomicU64::new(0) }; 12];
+    let pending = AtomicU64::new(0);
+    let backlog = AtomicU64::new(0);
+    let marginal = m2_walls(OPS, || {
+        wal_bytes.fetch_add(1, Ordering::Relaxed);
+        let t0 = Instant::now();
+        let _ = t0.elapsed();
+        buckets[0].fetch_add(1, Ordering::Relaxed);
+        pending.fetch_add(1, Ordering::Relaxed);
+        backlog.fetch_add(1, Ordering::Relaxed);
+    });
+    drop((wal_bytes, buckets, pending, backlog)); // dead after the loop
+
+    let stats1 = engine.storage_stats().unwrap();
+    // Counter sanity — the instrumentation must tick, never silently zero.
+    assert!(
+        stats1.write.wal_bytes > stats0.write.wal_bytes,
+        "wal_bytes must advance over the legs"
+    );
+    assert!(
+        stats1.write.fsync_count >= 2 * OPS as u64 - 1,
+        "Sync mode: one fsync per put, got {}",
+        stats1.write.fsync_count
+    );
+    // group-commit counters stay silent on the Sync path (no committer).
+    assert_eq!(stats1.write.group_commit_batches, 0);
+    assert_eq!(stats1.write.write_queue_depth, 0);
+
+    let (p50, p95, _) = percentiles(w1.clone());
+    let m_mean = marginal.iter().sum::<u128>() as f64 / OPS as f64;
+    let op_mean_1 = w1.iter().sum::<u128>() as f64 / OPS as f64;
+    let op_mean_2 = w2.iter().sum::<u128>() as f64 / OPS as f64;
+    let oh_1 = m_mean / op_mean_1 * 100.0;
+    let oh_2 = m_mean / op_mean_2 * 100.0;
+
+    // Lenient sanity only — a pathological regression (per-op cost of the
+    // counters in the µs) must fail even on a shared CI runner; the ≤1%
+    // target is the report's cell, measured, never asserted.
+    assert!(
+        oh_1 < 5.0,
+        "instrumentation overhead sanity bound: {oh_1:.1}% of a 16 B put"
+    );
+
+    let dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine-v2");
+    std::fs::create_dir_all(&dir).unwrap();
+    let machine = format!(
+        "{}/{}; {} logical cores; {}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0),
+        std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "processor NOT_REPORTED".into()),
+    );
+    let report = format!(
+        "# Write-Path Instrumentation Overhead — P3-M2 (met007)\n\n\
+         Generated only when `{M2_ENV}=1` (strict opt-in). Perf numbers are report cells, never asserts.\n\n\
+         - Test: `v2_p3m2_write_stats_overhead`\n\
+         - Build mode: {}\n\
+         - Machine: {machine}\n\
+         - Date: {}\n\
+         - Method: {} puts per leg through the instrumented Sync write path (one put per batch); the marginal cost loop runs the exact counter sequence the write path adds per op (1 × wal_bytes fetch_add + 2 × Instant::now + elapsed + 1 × latency-bucket fetch_add + 2 × backlog-gauge fetch_adds — §21 atomics, no allocs) with no engine underneath\n\n\
+         ## Cells\n\n\
+         - 16 B put: mean {:.0} ns/op, p50 {} ns (instrumentation share {:.2}%)\n\
+         - 1400 B put: mean {:.0} ns/op (instrumentation share {:.2}%)\n\
+         - marginal instrumentation cost: mean {:.1} ns/op\n\
+         - counters at end: wal_bytes {} · fsync_count {} · flush_count {} · checkpoint_count {} · group_commit_batches {} · write_queue_depth {}\n",
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+        run_date(),
+        OPS,
+        op_mean_1,
+        p50,
+        oh_1,
+        op_mean_2,
+        oh_2,
+        m_mean,
+        stats1.write.wal_bytes,
+        stats1.write.fsync_count,
+        stats1.write.flush_count,
+        stats1.write.checkpoint_count,
+        stats1.write.group_commit_batches,
+        stats1.write.write_queue_depth,
+    );
+    common::report_write(&dir.join("write-stats-overhead.md"), report);
+    drop(engine);
     cleanup_dataset(&path);
 }

@@ -600,3 +600,165 @@ fn auth006_graph_runs_as_session_subject_not_hardcoded_admin() {
     drop(k);
     let _ = std::fs::remove_file(&db);
 }
+
+// ---------------------------------------------------------------------------
+// P3-M2 (met004–006) — StorageAdmin surface REDs. met004 is behavioral:
+// the catalog and the role gate fail on today's code. met005/006 target the
+// planned API surface (StorageAdminApi in aikoql-storage-v2, call_tool's
+// admin param) — compile-level REDs, acceptable for new surface (rule 1).
+// ---------------------------------------------------------------------------
+
+/// met004 RED: the operator-gated storage admin surface — the catalog must
+/// list storage_stats/storage_compact/storage_checkpoint, and the capability
+/// gate admits only operator/admin. developer and auditor are denied on
+/// TCP; the stdio role-less passthrough (P1-10) still holds.
+#[test]
+fn met004_storage_admin_tools_exist_and_are_operator_gated() {
+    let names: Vec<String> = crate::tool_registry::tools_list()["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    for tool in ["storage_stats", "storage_compact", "storage_checkpoint"] {
+        assert!(names.contains(&tool.to_string()), "missing tool: {tool}");
+    }
+
+    use crate::authz::check_capability;
+    use crate::session::TrustMode;
+    let roles = |r: &[&str]| -> Vec<String> { r.iter().map(|s| s.to_string()).collect() };
+    for tool in ["storage_stats", "storage_compact", "storage_checkpoint"] {
+        assert!(check_capability(TrustMode::Tcp, &roles(&["operator"]), tool).is_ok());
+        assert!(check_capability(TrustMode::Tcp, &roles(&["admin"]), tool).is_ok());
+        assert!(
+            check_capability(TrustMode::Tcp, &roles(&["developer"]), tool).is_err(),
+            "developer must not run {tool}"
+        );
+        assert!(
+            check_capability(TrustMode::Tcp, &roles(&["auditor"]), tool).is_err(),
+            "auditor must not run {tool}"
+        );
+    }
+    // Stdio role-less passthrough (review P1-10) extends to the new tools.
+    assert!(check_capability(TrustMode::Stdio, &[], "storage_stats").is_ok());
+}
+
+/// met005 RED: the /metrics payload gains aikoql_storage_* series when a
+/// StorageAdminApi cap is present and stays bare without one. (Compile RED:
+/// StorageAdminApi and the prometheus_metrics admin param do not exist yet.)
+#[test]
+fn met005_metrics_carry_storage_series_only_with_cap() {
+    use aikoql_kernel::storage::store::StorageEngine;
+    use aikoql_storage_v2::engine::StorageAdminApi; // RED: new surface
+    use aikoql_storage_v2::AikoqlStorageEngineV2;
+    use std::sync::Arc;
+
+    let dir = std::env::temp_dir().join(format!("mnemo-met005-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let e = Arc::new(AikoqlStorageEngineV2::open(dir.to_str().unwrap()).unwrap());
+    let engine: Arc<dyn StorageEngine> = e.clone();
+    let cap: Arc<dyn StorageAdminApi> = e.clone(); // RED: trait missing
+    let k = crate::Kernel::open(engine, Arc::new(crate::SystemClock), 0).expect("open kernel");
+
+    let bare = crate::http::prometheus_metrics(&k, None);
+    assert!(
+        !bare.contains("aikoql_storage_"),
+        "no cap, no storage series:\n{bare}"
+    );
+
+    let with = crate::http::prometheus_metrics(&k, Some(cap.as_ref()));
+    for series in [
+        "aikoql_storage_wal_bytes",
+        "aikoql_storage_segment_bytes",
+        "aikoql_storage_compaction_backlog_bytes",
+    ] {
+        assert!(with.contains(series), "missing series {series} in:\n{with}");
+    }
+
+    drop(k);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// met006 RED: storage_compact through the MCP dispatcher returns
+/// CompactStats-shaped JSON and the oracle (engine.scan) re-verifies the
+/// database byte-equal afterwards; a call without the admin cap is refused,
+/// never silently ignored. (Compile RED: call_tool's admin param + the
+/// StorageAdminApi impl do not exist yet.)
+#[test]
+fn met006_storage_compact_via_mcp_returns_stats_and_preserves_data() {
+    use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
+    use aikoql_storage_v2::db::Config;
+    use aikoql_storage_v2::engine::StorageAdminApi; // RED: new surface
+    use aikoql_storage_v2::AikoqlStorageEngineV2;
+    use std::sync::Arc;
+
+    let dir = std::env::temp_dir().join(format!("mnemo-met006-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut c = Config::new(dir.clone());
+    c.memtable_bytes = 512; // force flushes so compact has segments to merge
+    c.l0_compact_trigger = 0;
+    c.checkpoint_bytes = 0;
+    let e = Arc::new(AikoqlStorageEngineV2::open_with_config(c).unwrap());
+    let kernel_engine: Arc<dyn StorageEngine> = e.clone();
+    let scan_engine: Arc<dyn StorageEngine> = e.clone();
+    let cap: Arc<dyn StorageAdminApi> = e.clone(); // RED: trait missing
+
+    for i in 0..5 {
+        let mut b = WriteBatch::new();
+        b.put(format!("k{i}").into_bytes(), vec![0x2e; 300]);
+        kernel_engine.write_batch(&b).unwrap();
+    }
+    let k = crate::Kernel::open(kernel_engine.clone(), Arc::new(crate::SystemClock), 0)
+        .expect("open kernel");
+    let mut session = crate::session::McpSession::default();
+
+    // Oracle baseline AFTER kernel open — the kernel writes its own
+    // meta/type_index record on open, and only compact-induced changes may
+    // differ after.
+    let before: Vec<(Vec<u8>, Vec<u8>)> = scan_engine.scan(b"").unwrap();
+    assert_eq!(before.len(), 6, "oracle must see all 5 keys + type_index");
+    let path = dir.to_str().unwrap().to_string();
+
+    let denied = crate::tool_registry::call_tool(
+        &k,
+        "storage_compact",
+        &crate::json!({}),
+        &path,
+        &mut session,
+        None,
+    )
+    .expect("call_tool answers (stdio passthrough)");
+    assert_eq!(
+        denied["isError"], true,
+        "no-cap call must be refused loudly"
+    );
+    let denied_text = denied["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        denied_text.contains("storage admin unavailable"),
+        "got: {denied_text}"
+    );
+
+    let out = crate::tool_registry::call_tool(
+        &k,
+        "storage_compact",
+        &crate::json!({}),
+        &path,
+        &mut session,
+        Some(cap.as_ref()),
+    )
+    .expect("storage_compact with cap");
+    assert_eq!(out["isError"], false, "compact must succeed: {out}");
+    let text = out["content"][0]["text"].as_str().unwrap_or("");
+    let payload: serde_json::Value = serde_json::from_str(text).expect("compact payload is JSON");
+    assert!(
+        payload["segments_in"].as_u64().unwrap_or(0) >= 2,
+        "CompactStats-shaped result, merged the flushed pile: {payload}"
+    );
+
+    // The oracle re-verifies the db after the admin-triggered merge.
+    let after: Vec<(Vec<u8>, Vec<u8>)> = scan_engine.scan(b"").unwrap();
+    assert_eq!(before, after, "compact must preserve the key-value content");
+
+    drop((k, e, kernel_engine, scan_engine, cap));
+    let _ = std::fs::remove_dir_all(&dir);
+}

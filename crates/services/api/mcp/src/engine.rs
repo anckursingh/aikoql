@@ -17,9 +17,14 @@ use aikoql_kernel::storage::store::StorageEngine;
 use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_kernel::{KError, KResult, Kernel, SystemClock};
 use aikoql_storage::AikoqlStorageEngine;
+use aikoql_storage_v2::engine::StorageAdminApi;
 use aikoql_storage_v2::AikoqlStorageEngineV2;
 use std::io::Read;
 use std::sync::Arc;
+
+/// An opened engine plus its optional design §22 admin capability (P3-M2 —
+/// only aikoql-v2 implements StorageAdminApi today).
+pub(crate) type Opened = (Arc<dyn StorageEngine>, Option<Arc<dyn StorageAdminApi>>);
 
 /// Backend resolution (PR#2 review SE-01/SE-02, docs/STORAGE-BACKENDS.md):
 /// the config pipeline owns the selection — no direct env reads here. An
@@ -36,15 +41,25 @@ use std::sync::Arc;
 /// and a native WAL written while aikoql was the production default both
 /// keep working at the same path. A directory that is not a v2 database is
 /// an explicit error — never a silent fresh create.
-fn open_engine(db_path: &str, backend: Option<StorageBackend>) -> KResult<Arc<dyn StorageEngine>> {
+fn open_engine(db_path: &str, backend: Option<StorageBackend>) -> KResult<Opened> {
     let backend = match backend {
         Some(b) => b,
         None => detect_backend(db_path)?,
     };
     match backend {
-        StorageBackend::Redb => Ok(Arc::new(RedbEngine::open(db_path)?)),
-        StorageBackend::Aikoql => Ok(Arc::new(AikoqlStorageEngine::open(db_path)?)),
-        StorageBackend::AikoqlV2 => Ok(Arc::new(AikoqlStorageEngineV2::open(db_path)?)),
+        StorageBackend::Redb => Ok((Arc::new(RedbEngine::open(db_path)?), None)),
+        StorageBackend::Aikoql => Ok((Arc::new(AikoqlStorageEngine::open(db_path)?), None)),
+        StorageBackend::AikoqlV2 => {
+            // P3-M2 (design §22): extract the admin capability from the
+            // CONCRETE engine before the StorageEngine coercion — only v2
+            // implements it today. The surface is value-opaque (stats
+            // counters, compaction, checkpoints — no reads/writes of user
+            // values), so holding it beside an EncryptedStore wrap below
+            // stays inside P1's encryption semantics.
+            let e = Arc::new(AikoqlStorageEngineV2::open(db_path)?);
+            let admin: Arc<dyn StorageAdminApi> = e.clone();
+            Ok((e, Some(admin)))
+        }
     }
 }
 
@@ -80,10 +95,10 @@ pub(crate) fn open_kernel(
     db_path: &str,
     enc: &RuntimeEncryption,
     backend: Option<StorageBackend>,
-) -> KResult<Kernel> {
-    let engine = open_engine(db_path, backend)?;
+) -> KResult<(Kernel, Option<Arc<dyn StorageAdminApi>>)> {
+    let (engine, admin) = open_engine(db_path, backend)?;
     if !enc.enabled {
-        return Kernel::open(engine, Arc::new(SystemClock), 0xA9C9);
+        return Ok((Kernel::open(engine, Arc::new(SystemClock), 0xA9C9)?, admin));
     }
     let Some(pass) = enc.passphrase.as_deref() else {
         return Err(KError::Store(
@@ -105,13 +120,15 @@ pub(crate) fn open_kernel(
     for (type_name, fields) in &enc.policies {
         kernel.set_encryption_policy(type_name, EncryptionPolicy::new(fields.clone()));
     }
-    Ok(kernel)
+    Ok((kernel, admin))
 }
 
 /// Subcommand variant: one config pipeline (R10, PR#2 review SE-02) —
 /// encryption AND backend both come from `load()` (defaults → TOML → env;
 /// subcommand flags are not server config and are not parsed).
-pub(crate) fn open_kernel_auto(db_path: &str) -> KResult<Kernel> {
+pub(crate) fn open_kernel_auto(
+    db_path: &str,
+) -> KResult<(Kernel, Option<Arc<dyn StorageAdminApi>>)> {
     let cfg = crate::config::load(&[], None, None).map_err(KError::Store)?;
     open_kernel(db_path, &cfg.encryption, cfg.backend)
 }
@@ -174,7 +191,7 @@ mod tests {
             (Some(StorageBackend::Aikoql), "aikoql"),
             (Some(StorageBackend::AikoqlV2), "aikoql-v2"),
         ] {
-            let engine = open_engine(&scratch(tag), backend).unwrap();
+            let (engine, _admin) = open_engine(&scratch(tag), backend).unwrap();
             let mut b = WriteBatch::new();
             b.put(b"k".to_vec(), b"v".to_vec());
             engine.write_batch(&b).unwrap();
@@ -196,7 +213,7 @@ mod tests {
             e.write_batch(&b).unwrap();
         }
         {
-            let engine = open_engine(&path, None).unwrap();
+            let (engine, _admin) = open_engine(&path, None).unwrap();
             assert_eq!(engine.get(b"k").unwrap(), Some(b"v".to_vec()));
         } // redb holds a live file lock — read the head bytes after close
         let mut head = [0u8; 4];
@@ -221,7 +238,7 @@ mod tests {
             b.put(b"k".to_vec(), b"v".to_vec());
             e.write_batch(&b).unwrap();
         }
-        let engine = open_engine(&path, None).unwrap();
+        let (engine, _admin) = open_engine(&path, None).unwrap();
         assert_eq!(engine.get(b"k").unwrap(), Some(b"v".to_vec()));
     }
 
@@ -236,12 +253,12 @@ mod tests {
             b.put(b"k".to_vec(), b"v".to_vec());
             e.write_batch(&b).unwrap();
         }
-        let engine = open_engine(&dir, None).unwrap();
+        let (engine, _admin) = open_engine(&dir, None).unwrap();
         assert_eq!(engine.get(b"k").unwrap(), Some(b"v".to_vec()));
 
         let plain = scratch("plain-dir");
         std::fs::create_dir_all(&plain).unwrap();
-        let err = match open_engine(&plain, None) {
+        let err = match open_engine(&plain, None).map(|(_, admin)| admin) {
             Err(e) => e,
             Ok(_) => panic!("a non-v2 directory must fail closed, not become a fresh store"),
         };
@@ -259,7 +276,7 @@ mod tests {
     #[test]
     fn fresh_path_auto_creates_aikoql_v2() {
         let path = scratch("fresh-default");
-        let engine = open_engine(&path, None).unwrap();
+        let (engine, _admin) = open_engine(&path, None).unwrap();
         let mut b = WriteBatch::new();
         b.put(b"k".to_vec(), b"v".to_vec());
         engine.write_batch(&b).unwrap();

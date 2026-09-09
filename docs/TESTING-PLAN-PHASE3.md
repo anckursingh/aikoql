@@ -6,7 +6,7 @@ Mirror of `docs/TESTING-PLAN.md` §13.2 for phase 3, same ledger discipline as `
 | --- | --- | --- | --- | --- |
 | P3-M0 | Estate hygiene | — | ⬜ | clb001–002; `cargo test --workspace` green; zero artifact diffs on a full local run |
 | P3-M1 | Security hardening | §53–55 | ✅ | auth001–008 + auth_surface 2/2 spawn (exit-2 fail-closed pins); `cargo test -p aikoql-mcp` 126/126 (mcp_stdio + connector_certification + auth_surface green); fmt + clippy `-D warnings` green; grep pin — admin/admin prefills+hints removed from graph_ui/studio, only auth001's negative assertion remains; hash-password CLI smoke `$argon2id$`; docker health endpoint allowlisted (CI-covered) |
-| P3-M2 | Observability + StorageAdmin | §56–57 | ⬜ | met001–006; met007 (P3M2_ATTRIB=1) ≤1% overhead cell |
+| P3-M2 | Observability + StorageAdmin | §56–57 | ✅ | met001–003 3/3 (0.09s); met004–006 green in `cargo test -p aikoql-mcp` (74/74 main binary, 129 across binaries); `cargo test -p aikoql-storage-v2` 264/0; fmt + clippy `-D warnings` green; met007 (P3M2_ATTRIB=1, release) instrumentation share **0.02%** ≤1% (16 B put 832 µs/op, 1400 B 902 µs/op, marginal 194.6 ns/op; fsync_count 200000 pins one fsync/Sync-put) — artifact `artifacts/storage-engine-v2/write-stats-overhead.md` |
 | P3-M3 | Engine-native snapshot/restore | §58–60 | ⬜ | bkp001–006; REC-002 conformance; 100K copy-time cell |
 | P3-M4 | Compiler completion | §61–63 | ⬜ | cpl001–007; golden_snapshots + grammar_coverage + fuzz_parser green |
 | P3-M5 | Constraint engine (a/b/c) | §64–66 | ⬜ | cst001–007 per sub-boundary; MRFC-0060 coverage table |

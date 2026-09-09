@@ -18,6 +18,7 @@ pub(crate) fn serve_metrics(
     db_path: &Arc<String>,
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
     auth: Arc<AuthResolver>,
+    admin: Option<Arc<dyn aikoql_storage_v2::engine::StorageAdminApi>>,
 ) {
     let listener = match TcpListener::bind(addr) {
         Ok(l) => l,
@@ -36,7 +37,10 @@ pub(crate) fn serve_metrics(
                 let ont = ontology.clone();
                 let rl = rate_limit.clone();
                 let auth = auth.clone();
-                std::thread::spawn(move || handle_http(&mut s, &k, &sess, &db, &ont, &rl, &auth));
+                let admin = admin.clone();
+                std::thread::spawn(move || {
+                    handle_http(&mut s, &k, &sess, &db, &ont, &rl, &auth, admin.as_deref())
+                });
             }
             Err(e) => {
                 // ponytail: don't die on transient accept errors.
@@ -725,6 +729,7 @@ pub(crate) fn handle_http(
     ontology: &OntologyRegistry,
     rate_limit: &Mutex<crate::rate_limiter::RateLimiter>,
     auth: &AuthResolver,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
 ) {
     // ponytail: 64 KB buffer fits all practical HTTP requests. Browsers send
     // ~2-8 KB of headers; single read captures the full request.
@@ -841,7 +846,7 @@ pub(crate) fn handle_http(
             ("200 OK", "application/json", body)
         }
         "/metrics" => {
-            let body = prometheus_metrics(k);
+            let body = prometheus_metrics(k, admin);
             ("200 OK", "text/plain; version=0.0.4", body)
         }
         "/api/login" if method == "POST" => match handle_login(&body_str, sessions, auth) {
@@ -959,7 +964,10 @@ pub(crate) fn handle_http(
     let _ = stream.write_all(resp.as_bytes());
 }
 
-pub(crate) fn prometheus_metrics(k: &Kernel) -> String {
+pub(crate) fn prometheus_metrics(
+    k: &Kernel,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> String {
     // R4: a storage failure must not render as "0 objects" — it is logged per
     // scrape and surfaced via the aikoql_metrics_error gauge.
     let mut metrics_error = 0u8;
@@ -982,6 +990,31 @@ pub(crate) fn prometheus_metrics(k: &Kernel) -> String {
         .map(|s| s.elapsed().as_secs_f64())
         .unwrap_or(0.0);
 
+    // P3-M2 (§57): storage gauges ride the same scrape; None = non-v2 backend.
+    let mut storage_metrics = String::new();
+    if let Some(admin) = admin {
+        match admin.storage_stats() {
+            Ok(s) => {
+                storage_metrics = format!(
+                    "# HELP aikoql_storage_wal_bytes WAL bytes appended by the storage engine.\n\
+                 # TYPE aikoql_storage_wal_bytes counter\n\
+                 aikoql_storage_wal_bytes {}\n\
+                 # HELP aikoql_storage_segment_bytes Bytes in live segments.\n\
+                 # TYPE aikoql_storage_segment_bytes gauge\n\
+                 aikoql_storage_segment_bytes {}\n\
+                 # HELP aikoql_storage_compaction_backlog_bytes L0 bytes awaiting compaction.\n\
+                 # TYPE aikoql_storage_compaction_backlog_bytes gauge\n\
+                 aikoql_storage_compaction_backlog_bytes {}\n",
+                    s.write.wal_bytes, s.segments.bytes, s.write.compaction_backlog_bytes
+                )
+            }
+            Err(e) => {
+                eprintln!("metrics: storage_stats: {}", e);
+                metrics_error = 1;
+            }
+        }
+    }
+
     format!(
         "# HELP aikoql_journal_seq Monotonically increasing journal sequence number.\n\
          # TYPE aikoql_journal_seq counter\n\
@@ -997,12 +1030,14 @@ pub(crate) fn prometheus_metrics(k: &Kernel) -> String {
          aikoql_uptime_seconds {:.1}\n\
          # HELP aikoql_metrics_error 1 if a store read failed during scrape.\n\
          # TYPE aikoql_metrics_error gauge\n\
-         aikoql_metrics_error {}\n",
+         aikoql_metrics_error {}\n\
+         {}",
         seq,
         heads.len(),
         active,
         uptime,
-        metrics_error
+        metrics_error,
+        storage_metrics
     )
 }
 
@@ -1018,7 +1053,10 @@ pub(crate) fn spawn_metrics(
     db_path: Arc<String>,
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
     auth: Arc<AuthResolver>,
+    admin: Option<Arc<dyn aikoql_storage_v2::engine::StorageAdminApi>>,
 ) {
     info!(addr = %addr, "metrics HTTP server started");
-    thread::spawn(move || serve_metrics(kernel, ontology, &addr, &db_path, rate_limit, auth));
+    thread::spawn(move || {
+        serve_metrics(kernel, ontology, &addr, &db_path, rate_limit, auth, admin)
+    });
 }

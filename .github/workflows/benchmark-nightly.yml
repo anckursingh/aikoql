@@ -64,6 +64,13 @@ jobs:
         run: KSE19_NIGHTLY=1 cargo test --release -p aikoql-storage --test kse19_resource
         timeout-minutes: 90
 
+      # P3-M2 met007: write-path instrumentation overhead cell (design §21
+      # atomics) — reported to write-stats-overhead.md, lenient sanity
+      # assert only. Strict opt-in.
+      - name: P3-M2 write-stats overhead cell (met007)
+        run: P3M2_ATTRIB=1 cargo test --release -p aikoql-storage-v2 --test kse_m7_v2_workloads v2_p3m2_write_stats_overhead
+        timeout-minutes: 30
+
       # R14: run all criterion benches, save results under the `ci` baseline.
       # Bench targets are enumerated so the criterion flags don't reach
       # libtest bench targets ("Unrecognized option: 'save-baseline'").

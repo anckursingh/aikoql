@@ -11,6 +11,7 @@ use crate::{json, RedbEngine, SystemClock};
 
 use crate::dispatcher::*;
 use crate::protocol::*;
+use aikoql_storage_v2::engine::StorageAdminApi;
 
 pub(crate) static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static STREAM_ID: AtomicU64 = AtomicU64::new(0);
@@ -20,6 +21,7 @@ pub(crate) fn handle_tcp_client(
     db_path: Arc<String>,
     auth: &Arc<TcpAuthTable>,
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
+    admin: Option<Arc<dyn StorageAdminApi>>,
 ) {
     let peer = stream
         .peer_addr()
@@ -114,6 +116,7 @@ pub(crate) fn handle_tcp_client(
             &db_path,
             &mut session,
             msg,
+            admin.as_deref(),
         );
     }
     ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
@@ -125,6 +128,7 @@ pub(crate) fn run_tcp_listener(
     auth: Arc<TcpAuthTable>,
     db_path: Arc<String>,
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
+    admin: Option<Arc<dyn StorageAdminApi>>,
 ) {
     info!(
         addr = %listener.local_addr().map(|a| a.to_string()).unwrap_or_default(),
@@ -138,7 +142,8 @@ pub(crate) fn run_tcp_listener(
                 let db = db_path.clone();
                 let auth = auth.clone();
                 let rl = rate_limit.clone();
-                thread::spawn(move || handle_tcp_client(&k, stream, db, &auth, rl));
+                let admin = admin.clone();
+                thread::spawn(move || handle_tcp_client(&k, stream, db, &auth, rl, admin));
             }
             Err(e) => error!("accept error: {}", e),
         }
@@ -148,6 +153,7 @@ pub(crate) fn run_stdio(
     kernel: &Arc<Kernel>,
     db_path: &Arc<String>,
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
+    admin: Option<Arc<dyn StorageAdminApi>>,
 ) {
     info!(db = %db_path, protocol = PROTOCOL_VERSION, "aikoql-mcp ready");
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
@@ -181,6 +187,7 @@ pub(crate) fn run_stdio(
             db_path,
             &mut session,
             msg,
+            admin.as_deref(),
         );
     }
 }
@@ -224,7 +231,7 @@ mod tcp_auth_tests {
             max_per_minute,
         )));
         thread::spawn(move || {
-            run_tcp_listener(Arc::new(kernel), listener, auth, db_path, rate_limit)
+            run_tcp_listener(Arc::new(kernel), listener, auth, db_path, rate_limit, None)
         });
         addr
     }
