@@ -183,7 +183,7 @@ impl Config {
 }
 
 #[derive(Debug)]
-struct State {
+pub(crate) struct State {
     active: Memtable,
     immutables: Vec<Memtable>,
     /// Manifest order, oldest first. SE2-M10 — arc-vectored: a get clones
@@ -233,15 +233,15 @@ struct State {
 type Batch = (Vec<Op>, mpsc::SyncSender<Result<u64, FormatError>>);
 
 pub struct Db {
-    config: Config,
+    pub(crate) config: Config,
     /// Held forever — the OS lock (dropping the file releases it).
     _lock: File,
     /// Append-only handle; truncated at each flush publication. Shared:
     /// in GroupCommit mode the committer thread appends and flush may
     /// truncate — one mutex, always taken alone (never nested), so a
     /// flush can never interleave a group's append-and-apply window.
-    wal: Arc<Mutex<File>>,
-    state: Arc<RwLock<State>>,
+    pub(crate) wal: Arc<Mutex<File>>,
+    pub(crate) state: Arc<RwLock<State>>,
     /// GroupCommit mode only: the Db's own sender (dropping it makes the
     /// queue disconnect and lets the committer exit) and the committer
     /// thread itself, joined on drop.

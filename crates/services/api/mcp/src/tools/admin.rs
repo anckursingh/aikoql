@@ -135,18 +135,40 @@ pub(crate) fn tool_metrics(k: &Kernel) -> Result<J, String> {
 // tools/list
 // ---------------------------------------------------------------------------
 
-pub(crate) fn tool_verify_backup(args: &J) -> Result<J, String> {
+/// A v2-native backup dir holds exactly one `SNAPSHOT-{gen}` marker — its
+/// presence is what routes restore/verify to the engine-native path.
+fn snapshot_marker_in(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().starts_with("SNAPSHOT-"))
+        .map(|e| e.path())
+}
+
+pub(crate) fn tool_verify_backup(
+    args: &J,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
     let backup = args
         .get("backup")
         .and_then(|b| b.as_str())
         .ok_or("missing argument: backup")?;
-    let data_path = backup_data_file(backup)?;
     let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
     let expected_seq = meta["journal_seq"].as_u64().unwrap_or(0);
     let expected_objects = meta["object_count"].as_u64().unwrap_or(0) as usize;
-    let ok = verify_backup_file(&data_path, expected_seq, expected_objects);
+    // P3-M3: a v2-native backup verifies through its marker (decode +
+    // checksum). Any other backup on a v2 server — or any backup on
+    // redb/v1 — verifies through the redb open below.
+    let ok = if let (Some(_), Some(marker)) =
+        (admin, snapshot_marker_in(std::path::Path::new(backup)))
+    {
+        aikoql_storage_v2::snapshot::SnapshotMarker::read(&marker).is_ok()
+    } else {
+        let data_path = backup_data_file(backup)?;
+        verify_backup_file(&data_path, expected_seq, expected_objects)
+    };
     Ok(json!({
         "backup": backup,
         "verified": ok,
@@ -198,7 +220,11 @@ pub(crate) fn tool_health(k: &Kernel) -> Result<J, String> {
     }))
 }
 
-pub(crate) fn tool_backup(k: &Kernel, db_path: &str) -> Result<J, String> {
+pub(crate) fn tool_backup(
+    k: &Kernel,
+    db_path: &str,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
@@ -210,6 +236,36 @@ pub(crate) fn tool_backup(k: &Kernel, db_path: &str) -> Result<J, String> {
         p.push(format!(".backup.{}", ts));
         PathBuf::from(p)
     };
+
+    // P3-M3 §58: a v2 backend takes the engine-native snapshot — pinned
+    // generation, verified byte-for-byte, marker published LAST (its
+    // presence IS the commit point, so `verified` needs no extra pass).
+    // Recovery-point metadata is read BEFORE the snapshot pins the
+    // generation: the reported seq is a point the snapshot contains.
+    if let Some(admin) = admin {
+        let (seq, _audit) = k.journal_head().map_err(|e| e.to_string())?;
+        let obj_count = k.scan_heads().map_err(|e| e.to_string())?.len();
+        let info = admin.snapshot_to(&backup_dir).map_err(|e| e.to_string())?;
+        let meta_path = backup_dir.join("meta.json");
+        std::fs::write(
+            &meta_path,
+            json!({
+                "timestamp": ts, "source": db_path, "journal_seq": seq,
+                "object_count": obj_count, "engine": "aikoql-v2",
+                "generation": info.generation, "file_count": info.file_count
+            })
+            .to_string(),
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(json!({
+            "backup": backup_dir, "timestamp": ts, "journal_seq": seq,
+            "object_count": obj_count, "verified": true, "engine": "aikoql-v2",
+            "generation": info.generation, "file_count": info.file_count,
+            "bytes_copied": info.bytes_copied
+        }));
+    }
+
+    // redb/v1 backends keep the REC-002 trait-default scan (untouched).
     std::fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
 
     // Snapshot the store through the kernel — the live file is region-locked
@@ -289,7 +345,11 @@ fn backup_data_file(backup: &str) -> Result<String, String> {
         .ok_or_else(|| "backup data file missing".into())
 }
 
-pub(crate) fn tool_restore(k: &Kernel, args: &J) -> Result<J, String> {
+pub(crate) fn tool_restore(
+    k: &Kernel,
+    args: &J,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
     let backup = args
         .get("backup")
         .and_then(|b| b.as_str())
@@ -297,6 +357,29 @@ pub(crate) fn tool_restore(k: &Kernel, args: &J) -> Result<J, String> {
     let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
+    // P3-M3 §60: a v2-native backup (marker present) on a v2 server takes
+    // the engine-native path — verify, materialize, swap rows in one frame.
+    // A redb-format backup on a v2 server still restores through the
+    // trait-default scan below.
+    if let (Some(admin), Some(_marker)) = (admin, snapshot_marker_in(std::path::Path::new(backup)))
+    {
+        let info = admin
+            .restore_from(std::path::Path::new(backup))
+            .map_err(|e| e.to_string())?;
+        let pitr_seq = meta.get("journal_seq").and_then(|v| v.as_u64());
+        let pitr_ts = meta.get("timestamp").and_then(|v| v.as_u64());
+        return Ok(json!({
+            "restored": true,
+            "engine": "aikoql-v2",
+            "generation": info.generation,
+            "rows_restored": info.rows_restored,
+            "meta": meta,
+            "recovery_point": {
+                "journal_seq": pitr_seq,
+                "timestamp": pitr_ts,
+            }
+        }));
+    }
     let data_file = backup_data_file(backup)?;
     // Engine-level restore: the live file cannot be overwritten while the
     // server holds it open (region lock), so rows are swapped through the

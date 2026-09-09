@@ -12,6 +12,7 @@ pub fn route_v1(
     sessions: &Mutex<HashMap<String, crate::HttpSession>>,
     token: Option<String>,
     rate_limit: &Mutex<crate::rate_limiter::RateLimiter>,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
 ) -> (String, String, String) {
     let clean_path = path.split('?').next().unwrap_or(path);
 
@@ -36,6 +37,7 @@ pub fn route_v1(
         db_path,
         sessions,
         token.as_deref(),
+        admin,
     );
 
     match result {
@@ -63,6 +65,7 @@ fn route_inner(
     db_path: &str,
     sessions: &Mutex<HashMap<String, crate::HttpSession>>,
     token: Option<&str>,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
 ) -> Result<J, String> {
     let need_auth = || check_auth(token, sessions);
     let args = || {
@@ -321,15 +324,15 @@ fn route_inner(
         }
         ("POST", "/api/v1/backup") => {
             need_auth()?;
-            tool_backup(k, db_path)
+            tool_backup(k, db_path, admin)
         }
         ("POST", "/api/v1/restore") => {
             need_auth()?;
-            tool_restore(k, &args())
+            tool_restore(k, &args(), admin)
         }
         ("POST", "/api/v1/verify-backup") => {
             need_auth()?;
-            tool_verify_backup(&args())
+            tool_verify_backup(&args(), admin)
         }
         ("POST", "/api/v1/eval/recall") => {
             need_auth()?;

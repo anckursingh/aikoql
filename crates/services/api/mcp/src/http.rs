@@ -803,6 +803,7 @@ pub(crate) fn handle_http(
             sessions,
             token.clone(),
             rate_limit,
+            admin,
         );
         let mut resp = format!(
             "HTTP/1.0 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",

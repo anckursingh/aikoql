@@ -407,7 +407,7 @@ fn auth005_route_matrix_unauthenticated_401() {
         ("GET", "/api/v1/metrics-info"),
     ] {
         let (status, _, _) =
-            crate::api_rest::route_v1(method, path, "", &k, &db, &sessions, None, &rl);
+            crate::api_rest::route_v1(method, path, "", &k, &db, &sessions, None, &rl, None);
         assert!(
             !status.starts_with("401"),
             "{method} {path} must stay on the allowlist, got {status}"
@@ -431,7 +431,7 @@ fn auth005_route_matrix_unauthenticated_401() {
         ("POST", "/api/v1/agent/memory-search"),
     ] {
         let (status, _, body) =
-            crate::api_rest::route_v1(method, path, "", &k, &db, &sessions, None, &rl);
+            crate::api_rest::route_v1(method, path, "", &k, &db, &sessions, None, &rl, None);
         assert!(
             status.starts_with("401"),
             "{method} {path} unauthenticated must 401, got {status}: {body}"

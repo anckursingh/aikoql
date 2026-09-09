@@ -1468,3 +1468,167 @@ fn mvp_rec_002_backup_destroy_restore_round_trip() {
 
     let _ = std::fs::remove_file(&db);
 }
+
+// P3-M3 bkp005 — MCP backup/restore route v2 backends through the
+// engine-native snapshot (§58–60): the backup dir holds the manifest +
+// segments + logs + torn-safe WAL and exactly one SNAPSHOT-{gen} marker
+// (the commit point), and restore verifies then swaps rows through the
+// live kernel. redb servers keep the trait-default scan (REC-002
+// untouched): the backup dir holds a redb data file and no marker.
+#[test]
+fn p3m3_bkp005_backup_restore_route_by_backend() {
+    // ── v2 leg (the production default): engine-native snapshot ──────────
+    let db = tmp_db("bkp005v2");
+    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
+
+    let mut c = McpClient::start(&db);
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note",
+            "properties": {"body": "bkp005 native snapshot", "memo": "bkp005"}
+        }),
+    );
+    let koid = note["koid"].as_str().unwrap().to_string();
+
+    let backup = c.call("backup", &json!({"subject": "admin"}));
+    assert_eq!(backup["verified"], true, "v2 backup must verify: {backup}");
+    assert_eq!(
+        backup["engine"], "aikoql-v2",
+        "v2 backup routes engine-native: {backup}"
+    );
+    assert!(
+        backup["generation"].as_u64().unwrap() > 0,
+        "v2 backup records its generation"
+    );
+    let backup_dir = std::path::PathBuf::from(backup["backup"].as_str().unwrap());
+    let entries: Vec<String> = std::fs::read_dir(&backup_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        entries.iter().any(|n| n.starts_with("SNAPSHOT-")),
+        "v2 backup must hold a snapshot marker, got {entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|n| n.ends_with(".redb")),
+        "v2 backup must not hold a redb file, got {entries:?}"
+    );
+
+    // verify_backup on a v2 backup verifies the marker instead of redb.
+    let v = c.call(
+        "verify_backup",
+        &json!({"subject": "admin", "backup": backup_dir.to_str().unwrap()}),
+    );
+    assert_eq!(
+        v["verified"], true,
+        "verify_backup must accept the marker: {v}"
+    );
+
+    // destroy → fresh v2 server → restore → restart → knowledge is back.
+    drop(c);
+    let mut removed = false;
+    for _ in 0..20 {
+        if std::fs::remove_dir_all(&db).is_ok() {
+            removed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    assert!(removed, "destroy: v2 database dir must be removable");
+
+    let mut c = McpClient::start(&db);
+    let restored = c.call(
+        "restore",
+        &json!({"subject": "admin", "backup": backup_dir.to_str().unwrap()}),
+    );
+    assert_eq!(restored["restored"], true, "v2 native restore: {restored}");
+    assert_eq!(
+        restored["engine"], "aikoql-v2",
+        "restore routed engine-native: {restored}"
+    );
+    assert!(
+        restored["rows_restored"].as_u64().unwrap() >= 1,
+        "restore must report rows: {restored}"
+    );
+    drop(c);
+    let mut c = McpClient::start(&db);
+    let fetched = c.call("get", &json!({"koid": &koid, "subject": "admin"}));
+    assert_eq!(
+        fetched["properties"]["body"], "bkp005 native snapshot",
+        "restored knowledge must read back: {fetched}"
+    );
+    drop(c);
+
+    // ── redb leg: trait-default scan unchanged (REC-002 untouched) ───────
+    std::env::set_var("AIKOQL_BACKEND", "redb");
+    let db2 = tmp_db("bkp005rb");
+    let _ = std::fs::remove_file(&db2);
+
+    let mut c = McpClient::start(&db2);
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note",
+            "properties": {"body": "bkp005 redb path", "memo": "bkp005"}
+        }),
+    );
+    let koid2 = note["koid"].as_str().unwrap().to_string();
+
+    let backup = c.call("backup", &json!({"subject": "admin"}));
+    assert_eq!(
+        backup["verified"], true,
+        "redb backup must verify: {backup}"
+    );
+    assert!(
+        backup["engine"].as_str().is_none(),
+        "redb backup keeps the old response shape: {backup}"
+    );
+    let backup_dir = std::path::PathBuf::from(backup["backup"].as_str().unwrap());
+    let entries: Vec<String> = std::fs::read_dir(&backup_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        entries.iter().any(|n| n.ends_with(".redb")),
+        "redb backup must hold a redb data file, got {entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|n| n.starts_with("SNAPSHOT-")),
+        "redb backup must hold no snapshot marker, got {entries:?}"
+    );
+
+    // Full REC-002 loop on redb stays green.
+    drop(c);
+    let mut removed = false;
+    for _ in 0..20 {
+        if std::fs::remove_file(&db2).is_ok() {
+            removed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    assert!(removed, "destroy: redb file must be removable");
+
+    let mut c = McpClient::start(&db2);
+    let restored = c.call(
+        "restore",
+        &json!({"subject": "admin", "backup": backup_dir.to_str().unwrap()}),
+    );
+    assert_eq!(
+        restored["restored"], true,
+        "redb restore unchanged: {restored}"
+    );
+    drop(c);
+    let mut c = McpClient::start(&db2);
+    let fetched = c.call("get", &json!({"koid": &koid2, "subject": "admin"}));
+    assert_eq!(
+        fetched["properties"]["body"], "bkp005 redb path",
+        "redb restored knowledge must read back: {fetched}"
+    );
+    drop(c);
+    std::env::remove_var("AIKOQL_BACKEND");
+}

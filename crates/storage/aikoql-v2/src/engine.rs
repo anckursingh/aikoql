@@ -12,11 +12,14 @@
 //! through `Db::write` — one frame per batch, durable before the ack,
 //! all-or-nothing by construction (M2). An empty batch is a no-op
 //! (KSE-005 — `Db::write` rejects empty frames, so the adapter never
-//! forwards one). REC-002 snapshot/restore ride the trait defaults (full
-//! scan + redb snapshot) — the adapter needs no override.
+//! forwards one). REC-002: snapshot/restore on v2 route through the
+//! engine-native path (§58–60) — `snapshot_to` here, `snapshot::restore_from`
+//! beside it; the trait defaults (full scan + redb snapshot) serve the
+//! other backends and stay untouched.
 
 use crate::compaction::CompactStats;
 use crate::db::{CheckpointInfo, Config, Db};
+use crate::snapshot::{RestoreInfo, SnapshotInfo};
 use crate::stats::{DbStats, ReadPathStats};
 use crate::wal::Op;
 use aikoql_kernel::knowledge::kom::{KError, KResult};
@@ -29,13 +32,16 @@ fn se(e: impl std::fmt::Display) -> KError {
 
 /// Design §22 — the OPTIONAL storage admin capability, never shipped: a
 /// caller that opened the concrete v2 engine can also inspect and drive
-/// it (stats, compaction, checkpoint) without breaking the `StorageEngine`
-/// contract. Value-opaque surface — nothing here decrypts or reads user
-/// values, so an MCP adapter may hold it beside an EncryptedStore wrap.
+/// it (stats, compaction, checkpoint, snapshot) without breaking the
+/// `StorageEngine` contract. Value-opaque surface — nothing here decrypts
+/// or reads user values, so an MCP adapter may hold it beside an
+/// EncryptedStore wrap.
 pub trait StorageAdminApi: Send + Sync {
     fn storage_stats(&self) -> KResult<DbStats>;
     fn storage_compact(&self) -> KResult<CompactStats>;
     fn storage_checkpoint(&self) -> KResult<CheckpointInfo>;
+    fn snapshot_to(&self, dir: &Path) -> KResult<SnapshotInfo>;
+    fn restore_from(&self, dir: &Path) -> KResult<RestoreInfo>;
 }
 
 /// AIKOQL v2 engine: bounded WAL → memtable → immutable segments, served
@@ -86,6 +92,14 @@ impl StorageAdminApi for AikoqlStorageEngineV2 {
 
     fn storage_checkpoint(&self) -> KResult<CheckpointInfo> {
         self.db.checkpoint_now().map_err(se)
+    }
+
+    fn snapshot_to(&self, dir: &Path) -> KResult<SnapshotInfo> {
+        self.db.snapshot_to(dir).map_err(se)
+    }
+
+    fn restore_from(&self, dir: &Path) -> KResult<RestoreInfo> {
+        self.db.restore_from_dir(dir).map_err(se)
     }
 }
 
