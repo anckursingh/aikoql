@@ -251,8 +251,11 @@ dependencies = [
 name = "aikoql-runtime"
 version = "0.1.19"
 dependencies = [
+ "aikoql-compiler",
+ "aikoql-graph",
  "aikoql-kernel",
  "aikoql-semantic",
+ "sha2 0.10.9",
  "tokio",
 ]
 

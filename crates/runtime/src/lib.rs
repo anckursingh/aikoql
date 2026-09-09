@@ -452,6 +452,21 @@ impl Interpreter {
             IrOp::Project { fields } => {
                 let mut kos = match input {
                     RowSet::Objects(kos) => kos,
+                    // §63: Projection after Traverse — Traverse output is
+                    // (koid, rel_type, depth) tuples; load the KOs before
+                    // projecting (pre-P3-M4 the compiler skipped Project
+                    // whenever Traverse was present).
+                    RowSet::Traversal(t) => {
+                        let subj = self
+                            .cached_subject
+                            .clone()
+                            .unwrap_or_else(|| Subject::new("system"));
+                        let mut out = Vec::with_capacity(t.len());
+                        for (koid, _, _) in &t {
+                            out.push(kernel.get(KnowledgeContext::new(subj.clone()), koid)?);
+                        }
+                        out
+                    }
                     _ => return Err(KError::InvalidQuery("Project requires Object input".into())),
                 };
                 if fields.contains(&"*".to_string()) {
@@ -467,6 +482,45 @@ impl Interpreter {
                     ko.properties = filtered;
                 }
                 Ok(RowSet::Objects(kos))
+            }
+            IrOp::Ingest { artifact_ref } => {
+                // §62: dispatch to the existing ingestion pipeline — the
+                // read → hash → deploy_document flow document_ingest uses,
+                // minus the base64/artifact-store step (INGEST's source is
+                // already a file path). Extraction stays optional in that
+                // flow too; INGEST deploys the Document KO metadata.
+                let bytes = std::fs::read(artifact_ref)
+                    .map_err(|e| KError::Store(format!("INGEST read {}: {}", artifact_ref, e)))?;
+                let hash: String = {
+                    use sha2::{Digest, Sha256};
+                    Sha256::digest(&bytes)
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect()
+                };
+                let filename = std::path::Path::new(artifact_ref)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(artifact_ref.as_str())
+                    .to_string();
+                // ponytail: IngestOp carries no subject — deploy as "system";
+                // carry the Scan subject if a future INGEST plan embeds one.
+                let subj = self
+                    .cached_subject
+                    .clone()
+                    .unwrap_or_else(|| Subject::new("system"));
+                let r = kernel.deploy_document(
+                    &filename,
+                    "application/octet-stream",
+                    &hash,
+                    bytes.len() as i64,
+                    0,
+                    0,
+                    "ingested",
+                    &subj,
+                )?;
+                let ctx = KnowledgeContext::new(subj);
+                Ok(RowSet::Objects(vec![kernel.get(ctx, &r.koid)?]))
             }
         }
     }

@@ -22,6 +22,7 @@ fn token_name(t: &Token) -> String {
         Token::Using => "USING".into(),
         Token::Embedding => "EMBEDDING".into(),
         Token::Traverse => "TRAVERSE".into(),
+        Token::Depth => "DEPTH".into(),
         Token::Create => "CREATE".into(),
         Token::Update => "UPDATE".into(),
         Token::Delete => "DELETE".into(),
@@ -179,9 +180,14 @@ impl Parser {
                 }
                 Token::Traverse => {
                     self.advance();
-                    trav = Some(TraverseClause {
-                        relation: self.expect_ident("relation name")?,
-                    });
+                    let relation = self.expect_ident("relation name")?;
+                    // P3-M4 §62: optional DEPTH n (default 1 at lowering).
+                    let mut depth = None;
+                    if let Token::Depth = &self.current {
+                        self.advance();
+                        depth = Some(self.parse_nonneg_int("DEPTH count")?);
+                    }
+                    trav = Some(TraverseClause { relation, depth });
                 }
                 Token::AsOf | Token::Between | Token::Historical => {
                     if temporal.is_some() {

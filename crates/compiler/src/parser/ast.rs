@@ -155,6 +155,8 @@ pub enum UsingMethod {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TraverseClause {
     pub relation: String,
+    /// P3-M4 §62: optional DEPTH (default 1 at lowering). `None` = absent.
+    pub depth: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

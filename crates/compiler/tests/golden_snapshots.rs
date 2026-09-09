@@ -82,8 +82,18 @@ fn golden_match_hybrid() {
     assert_eq!(m.similarity.as_ref().unwrap().query, "John");
     assert!(m.traverse.is_some());
     assert_eq!(m.traverse.as_ref().unwrap().relation, "managed_by");
+    assert_eq!(m.traverse.as_ref().unwrap().depth, None);
     assert_eq!(m.predicates.len(), 1);
     assert_eq!(m.projection, Projection::Explain);
+}
+
+#[test]
+fn golden_traverse_depth() {
+    let stmt = parser::parse("MATCH Person TRAVERSE knows DEPTH 3 RETURN *").unwrap();
+    let m = as_match(&stmt);
+    let trav = m.traverse.as_ref().expect("traverse clause");
+    assert_eq!(trav.relation, "knows");
+    assert_eq!(trav.depth, Some(3));
 }
 
 #[test]

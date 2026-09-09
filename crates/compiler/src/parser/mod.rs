@@ -163,7 +163,19 @@ fn ast_to_ir(stmt: &ast::Statement, subject: &ScanSubject) -> Result<IrPlan, Str
         ast::Statement::Create(c) => compile_create(c, subject),
         ast::Statement::Update(u) => compile_update(u, subject),
         ast::Statement::Delete(d) => compile_delete(d, subject),
-        ast::Statement::Ingest(_) => Err("INGEST not yet supported in KIR".into()),
+        ast::Statement::Ingest(i) => {
+            // §62: INGEST lowers to IngestOp — a standalone single-op plan
+            // dispatched by the runtime to the ingestion pipeline. The
+            // EXTRACT/BUILD flags stay AST-only until extraction is wired
+            // into that dispatch (ponytail).
+            let plan = IrPlan::new(vec![IrOp::Ingest {
+                artifact_ref: i.source.clone(),
+            }])
+            .with_description(format!("INGEST {}", i.source));
+            plan.validate()
+                .map_err(|e| format!("AIKOQL1014: conflicting clauses — {}", e))?;
+            Ok(plan)
+        }
     }
 }
 
@@ -274,28 +286,32 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
     }
 
     // TRAVERSE — set-based, consumes Scan output.
-    let has_traverse = m.traverse.is_some();
     if let Some(ref trav) = m.traverse {
+        // §62: DEPTH default 1; 0 is a semantic error (no-op traversal).
+        let depth = trav.depth.unwrap_or(1);
+        if depth == 0 {
+            return Err("AIKOQL1034: TRAVERSE DEPTH must be >= 1".into());
+        }
         ops.push(IrOp::Traverse {
             start_koid: String::new(), // empty = set-based: consume input RowSet
             rel_type: Some(trav.relation.clone()),
-            depth: 1,
+            depth,
         });
     }
 
     // Projection (RETURN clause) — filter properties to requested fields.
-    // ponytail: skip Project when Traverse is present — Traverse output is
-    // (koid, rel_type, depth) tuples, not KnowledgeObjects. Add KO loading
-    // after Traverse when RETURN field projection is needed.
-    if !has_traverse {
-        match &m.projection {
-            ast::Projection::Star => {}    // no Project needed — return all fields
-            ast::Projection::Explain => {} // handled by explain_endpoint separately
-            ast::Projection::Fields(fields) => {
-                ops.push(IrOp::Project {
-                    fields: fields.clone(),
-                });
-            }
+    // Projection applies after Traverse too (§63) — pre-P3-M4 this arm was
+    // skipped whenever Traverse was present (record of what was missing:
+    // Traverse output is (koid, rel_type, depth) tuples, not
+    // KnowledgeObjects; the runtime Project op now loads the KOs before
+    // projecting).
+    match &m.projection {
+        ast::Projection::Star => {}    // no Project needed — return all fields
+        ast::Projection::Explain => {} // handled by explain_endpoint separately
+        ast::Projection::Fields(fields) => {
+            ops.push(IrOp::Project {
+                fields: fields.clone(),
+            });
         }
     }
 

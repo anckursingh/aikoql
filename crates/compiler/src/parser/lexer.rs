@@ -39,6 +39,8 @@ pub enum Token {
     // EXE-006: pagination (LIMIT n [OFFSET m])
     Limit,
     Offset,
+    // P3-M4 §62: TRAVERSE <rel> [DEPTH n]
+    Depth,
     // Symbols
     Eq,     // ==
     Neq,    // !=
@@ -152,6 +154,7 @@ impl Lexer {
             "USING" => Token::Using,
             "EMBEDDING" => Token::Embedding,
             "TRAVERSE" => Token::Traverse,
+            "DEPTH" => Token::Depth,
             "CREATE" => Token::Create,
             "UPDATE" => Token::Update,
             "DELETE" => Token::Delete,

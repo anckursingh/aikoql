@@ -78,6 +78,23 @@ fn cover_match_traverse() {
 }
 
 #[test]
+fn cover_match_traverse_depth() {
+    let m = match parser::parse(r#"MATCH Person TRAVERSE knows DEPTH 5 RETURN *"#).unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    let trav = m.traverse.expect("traverse clause");
+    assert_eq!(trav.relation, "knows");
+    assert_eq!(trav.depth, Some(5));
+}
+
+#[test]
+fn cover_error_traverse_depth_zero() {
+    let e = parser::compile("MATCH Person TRAVERSE knows DEPTH 0 RETURN *").unwrap_err();
+    assert!(e.contains("AIKOQL1034"), "got: {}", e);
+}
+
+#[test]
 fn cover_match_source() {
     let m = match parser::parse(r#"MATCH Fact SOURCE "x.pdf" RETURN *"#).unwrap() {
         Statement::Match(m) => m,

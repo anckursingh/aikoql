@@ -26,6 +26,7 @@ fn ident_str() -> impl Strategy<Value = String> {
         "update",
         "delete",
         "ingest",
+        "depth",
         "extract",
         "tables",
         "entities",
@@ -110,6 +111,27 @@ proptest! {
             Statement::Match(m) => {
                 assert_eq!(m.entity, entity);
                 assert_eq!(m.predicates.len(), 2);
+            }
+            _ => panic!("expected Match"),
+        }
+    }
+
+    /// TRAVERSE with an optional DEPTH clause parses and round-trips.
+    #[test]
+    fn fuzz_traverse_depth_parses(
+        entity in ident_str(),
+        rel in ident_str(),
+        depth in 0usize..=4usize,
+    ) {
+        let source = format!("MATCH {} TRAVERSE {} DEPTH {} RETURN *", entity, rel, depth);
+        let result = parser::parse(&source);
+        assert!(result.is_ok(), "failed to parse: {:?}", result.err());
+        let stmt = result.unwrap();
+        match stmt {
+            Statement::Match(m) => {
+                let trav = m.traverse.expect("traverse clause");
+                assert_eq!(trav.relation, rel);
+                assert_eq!(trav.depth, Some(depth));
             }
             _ => panic!("expected Match"),
         }

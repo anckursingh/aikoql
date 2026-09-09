@@ -162,6 +162,11 @@ pub enum IrOp {
     Limit { limit: usize, offset: usize },
     /// Project specific fields from the result set.
     Project { fields: Vec<String> },
+    /// Ingest an artifact into the knowledge base via the ingestion pipeline
+    /// (§62): the runtime reads the artifact at `artifact_ref`, hashes it, and
+    /// deploys the Document KO (`aikoql:document`). Standalone operator — an
+    /// INGEST plan has exactly one op.
+    Ingest { artifact_ref: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -197,10 +202,10 @@ impl IrPlan {
         }
         let first = &self.operators[0];
         match first {
-            IrOp::Scan { .. } | IrOp::Traverse { .. } => {}
+            IrOp::Scan { .. } | IrOp::Traverse { .. } | IrOp::Ingest { .. } => {}
             _ => {
                 return Err(KError::InvalidQuery(
-                    "first IR operator must be Scan or Traverse".into(),
+                    "first IR operator must be Scan, Traverse or Ingest".into(),
                 ))
             }
         }
