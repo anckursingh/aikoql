@@ -51,6 +51,9 @@ pub enum FormatError {
     /// The database directory is held by another process (design §19:
     /// one process owns one database directory).
     Locked(String),
+    /// P4-M2 — a physical handle whose placement generation has moved, or
+    /// one the registry never issued. Fail-closed: the caller re-resolves.
+    Stale(String),
 }
 
 impl fmt::Display for FormatError {
@@ -61,6 +64,7 @@ impl fmt::Display for FormatError {
             FormatError::Io(m) => write!(f, "io: {m}"),
             FormatError::Invalid(m) => write!(f, "invalid: {m}"),
             FormatError::Locked(m) => write!(f, "locked: {m}"),
+            FormatError::Stale(m) => write!(f, "stale: {m}"),
         }
     }
 }
