@@ -1,6 +1,6 @@
 # AIKOQL Phase 3 — Implementation Plan
 
-Source: architect review 2026-09-09 (storage / kernel / integration / testing surveys; see `docs/TESTING-PLAN-PHASE3.md` for the evidence ledger). Branch `feature/phase3-enhancements` cut fresh from main (post-PR#5 dbd8db4). Commit per milestone, NO push (user pushes). TDD loop per milestone: PoV → RED (fail for the stated reason) → root-cause GREEN → regression → gates (`cargo fmt --all` + `cargo clippy --all-targets --all-features -- -D warnings`).
+Source: architect review 2026-09-09 (storage / kernel / integration / testing surveys; see `docs/TESTING-PLAN-PHASE3.md` for the evidence ledger) + class-by-class main-branch review 2026-09-10 (`AIKOQL_Main_Branch_Class_by_Class_Next_Steps_TDD.md`, main@dbd8db4 — pre-Phase-3, does not reflect M0–M5). Branch `feature/phase3-enhancements` cut fresh from main (post-PR#5 dbd8db4). Commit per milestone, NO push (user pushes). TDD loop per milestone: PoV → RED (fail for the stated reason) → root-cause GREEN → regression → gates (`cargo fmt --all` + `cargo clippy --all-targets --all-features -- -D warnings`).
 
 ## Coder point of view (before implementation)
 
@@ -17,7 +17,7 @@ Source: architect review 2026-09-09 (storage / kernel / integration / testing su
 7. **Background compaction is the only default-flip on a shipped engine — protect it.** Background by default, synchronous on config (`compact_background = false` for deterministic tests), backpressure when the backlog gauge crosses a hard bound. All existing compaction suites (CP-001..010, relocation, crash windows) must run green in background mode — the park points are mode-agnostic, so the crash matrix is reusable as-is.
 8. **SDK/proxy: delete beats maintain.** Unversioned half-clients outside the workspace (TS, Go), a 0.1.0-vs-0.1.19 Python wheel, and a 306-line untested, unpackaged shard proxy are liability, not feature. M9 is decision-first: a one-page decision doc with the delete-first recommendation; only kept surfaces get TDD. Federation stays NOT_IMPLEMENTED — the identity/placement directory is the seam, and no multi-node demand has appeared.
 
-**Build order & dependencies:** M0 → M1 → M2 → {M3, M4, M5a, M6, M7a} → M8 (needs M2) → M9. M6 needs M0 (artifact gating). M5b/M5c and M7b are gated continuations, not separate milestones.
+**Build order & dependencies:** M0 → M1 → M2 → {M3, M4, M5a, M6, M7a} → M8 (needs M2) → M9. M6 needs M0 (artifact gating). M5b/M5c and M7b are gated continuations, not separate milestones. Phase 4 (below): P4-M1 → P4-M2 → P4-M3 → P4-M4 → P4-M5 (gated on M6's fresh 1M cells) → P4-M6 → P4-M7.
 
 **Non-goals (honest ledger — each with a reopen gate):**
 
@@ -29,6 +29,9 @@ Source: architect review 2026-09-09 (storage / kernel / integration / testing su
 | Compression | header byte reserved; dataset is text; no evidence | disk-footprint gate fails |
 | Paged placement directory (§47) | 419 B/object = fine at 1M; unbounded at 10M | >5M-object deployment exists |
 | Read replicas / Raft | federation non-goal | federation reopens |
+| Db/State/Kernel internal decomposition (TDD-STOR-001..003, TDD-KERNEL-003) | no measured driver — pure churn risk; review's own gate is "freeze with conformance first" | lock-contention or latency cells show a real cost of the current split |
+| Cost-based planner | IR interpreter adequate; review agrees (P2) | query perf gates fail after the batch wave |
+| Replication | review agrees (Later) | federation reopens |
 
 ## Milestones
 
@@ -121,6 +124,71 @@ Deliver: decision doc first (one page): TS/Go SDKs → delete (outside workspace
 Acceptance: decision doc committed with evidence; kept-surface REDs green; deleted surfaces leave the ledger rows.
 
 TDD REDs (M9): sdk001 (python kept) contract tests vs the real MCP binary asserting workspace version parity; sdk002 (proxy kept) hash-routing correctness + a CI job + packaging — these REDs exist only if adoption wins over the delete-first recommendation.
+
+## Phase 4 — Semantic safety + physical resolution + batch read certification
+
+Source: class-by-class main-branch review 2026-09-10 (TDD-STOR/ID/READ/KERNEL/COMP/GRAPH/VECTOR/INDEX ids below). Sequenced after P3-M9. Claims verified against this branch's code on 2026-09-10 before scheduling:
+
+- **CONFIRMED P0:** `planner.rs:62` `dedup_scans` removes `Scan` ops by `type_name` only — subject/roles/tenant/snapshot ignored — and the existing test `dedup_consecutive_scans_on_same_type` (planner.rs:107) **pins the bug** (scans with subjects "a" and "b" deduped into one). Fix before any optimizer work.
+- **CONFIRMED:** `get_object_at` (`repository.rs:684`) scans the object's whole prefix and walks backward — O(all versions) per temporal read; `TantivyTextIndex::upsert` (`engines/vector/src/lib.rs:328`) delete+add+commits per upsert; event `replay` filters `scan_events_after` in-kernel (`event.rs:101`).
+- **STALE:** "kernel imports SegmentId/BlockId" — `PhysicalLocation` appears only in `crates/storage/aikoql-v2/**`; the kernel crate imports none of it. The handle boundary to fix is *inside* the v2 crate, not the kernel.
+- **ALREADY COVERED** by shipped/planned work: serving security (M1), write-path observability (M2), point-read attribution (SE2-M21), batch `get_many` (SE2-M25 — **falsified at 100K warm, 0.73–1.13×**; the batch wave below is evidence-gated, not vibes), crash/corruption/checkpoint matrices (SE2-M36..M40), background compaction + backpressure (M8 — TDD-RUNTIME-001 pairs with it).
+
+### P4-M1 — Planner semantic safety (TDD-COMP-002/003)
+
+Deliver: `dedup_scans` replaced with equivalence analysis — a `Scan` is removable only when type + subject + roles + tenant + snapshot + security scope are equal AND interleaved ops are provably row-set-neutral; the pinning test rewritten as a negative test (different subject → MUST NOT dedup); Filter/Search ordering documented coherently (define `Filter(Search)` vs `Search(Filter)`; rewrite only when valid — ANN/text recall caveat recorded).
+
+Acceptance: negative matrix green (tenant/role/subject/snapshot/scope), identical scans still dedup; compiler suites extended; kernel suites untouched-green.
+
+TDD REDs: ppl001 same type + different tenant → both scans remain (RED today — second scan removed); ppl002 different role → not deduped; ppl003 different subject → not deduped; ppl004 different snapshot → not deduped; ppl005 identical scans still deduped; ppl006 filter/search ordering comment+test coherence.
+
+### P4-M2 — PhysicalHandle + batch resolver (TDD-ID-001/002)
+
+Deliver: opaque `PhysicalHandle` between `PlacementEntry` and segment/block coordinates; `PhysicalResolver { resolve, resolve_many }` (many is mandatory); stale-handle-generation rejection fail-closed; compaction relocation flips handles atomically from the reader's view without changing `ReplicaId`. Boundary is inside the v2 crate (kernel already clean — verified).
+
+Acceptance: scalar == batch answers elementwise; stale handle → error not data; relocation visible as old-or-new, never mixed; public API unchanged; 1M oracle zero divergence.
+
+TDD REDs: phy001 stale handle generation → fail-closed error; phy002 `resolve_many` == `resolve` elementwise; phy003 relocation mid-read sees one consistent generation; phy004 grep pin in the DAG job: kernel crate stays free of `PhysicalLocation`/`SegmentId`/`BlockId`.
+
+### P4-M3 — Storage invariant validator (TDD-STOR-005)
+
+Deliver: one `validate_manifest` + placement-directory invariant suite — generation > 0, unique segment ids, file exists + size matches, key_min ≤ key_max, seq_lo ≤ seq_hi, record_count > 0, level supported, segment metadata agrees with reader metadata. Runs at open, after compaction, in corruption tests, and in debug builds after publication.
+
+Acceptance: iv001–005 green; recovery fails closed on impossible metadata; all existing suites unchanged.
+
+TDD REDs: iv001 key_min/key_max flipped → open refuses; iv002 manifest → missing segment file → refuses; iv003 size mismatch → refuses; iv004 duplicate segment id → refuses; iv005 valid manifest passes.
+
+### P4-M4 — Repository complexity audit + temporal seek + event seek (TDD-KERNEL-001/002, TDD-EVENT-001)
+
+Deliver: machine-readable manifest classifying every public repository method O(1)/O(log N)/O(matches)/O(versions)/O(N), with tests pinning each hot-path classification; `get_version_at(koid, snap_ts)` as a bounded predecessor lookup in storage (no fetch-all-versions) wired into `get_object_at`; `scan_from(prefix, start_key)` / event replay seeking from seq without scanning the prefix.
+
+Acceptance: temporal-read latency flat-ish across 10 → 10M versions (cell, env-gated); last-100 replay in a big journal bounded; classification manifest committed; answers identical to the reference scan.
+
+TDD REDs: ker001 classification manifest exists, every hot-path method pinned; ker002 version-count sweep latency cell; ker003 event-replay cell — last 100 in a 100M-event journal bounded; ker004 results == reference scan.
+
+### P4-M5 — Read attribution → batch physical read wave (TDD-READ-001..004, TDD-REL-001, TDD-OBJ-001, TDD-GRAPH-001)
+
+Deliver, sub-boundaries, each with its own evidence gate: (a) read trace (request → resolver → segment → block → cache → decode timings; sampled, off by default) — measurement before any optimization; (b) `resolve_many` + `SegmentReader::read_many` grouped segment→block — N keys in one block cost ≈1 block I/O and N decodes; (c) batch object reconstruction feeding type-scan/context pipelines; (d) graph frontier batching (batch edge lookup → batch ACL → batch object resolution). Each boundary ships only with a cell showing a real gain over the scalar path at current scale — SE2-M25 falsified naive `get_many` at 100K warm; **M6's fresh 1M cells are the decision input** for what to batch first.
+
+Acceptance: same-block N keys → block-I/O counter == 1, answers == N scalar gets; type-scan/context/traversal cells improved vs scalar baseline (reported, bound per evidence); kernel suites unchanged.
+
+TDD REDs: rd001 read_many same-block N keys → block I/O ≈ 1; rd002 answers identical to N scalar gets; rd003 trace fields present when enabled, zero cost when disabled; rd004 type-scan pipeline resolves heads/objects in batches (counter pin); rd005 graph traversal ACL evals < edge count (counter pin).
+
+### P4-M6 — Streaming checkpoint writer (TDD-ID-003)
+
+Deliver: checkpoint written as sorted extraction → staged file → streamed records → checksum → fsync → rename; bounded external sort only above a size threshold; no full encoded buffer for large datasets.
+
+Acceptance: streamed output byte-identical to materialized; crash during write/fsync leaves the old checkpoint valid (reuse the park harness); 1M peak-RSS cell bounded.
+
+TDD REDs: cps001 streamed == materialized byte-for-byte; cps002 crash windows → old checkpoint valid; cps003 1M peak-RSS cell ≤ materialized baseline (env-gated).
+
+### P4-M7 — Production hardening batch (TDD-RUNTIME-001, TDD-INDEX-001, TDD-VECTOR-001/002, TDD-TIME-001, TDD-COMP-001, TDD-STOR-006)
+
+Deliver: bounded `AsyncKernel` concurrency (semaphore + queue-wait metrics — pairs with M8's backpressure); index lag semantics on every index (`applied_event_seq`/`target_event_seq`/`lag`/`status`/`last_error`) with unambiguous exact-vs-eventually-consistent query choice; `upsert_many`/`remove_many`/`commit_batch` for Tantivy + batched index maintainer + HNSW health metrics (live/physical/tombstone ratio) + dead-ratio rebuild trigger; HLC property tests (rollback, same-ms commits, restart, max counter, concurrent writers, determinism) + documented overflow; ontology physical-type index (O(1) lookup); memtable `ObjectRow` vs `ByteRow` split (identity rows impossible to construct wrong).
+
+Acceptance: per-item suites green; ingestion throughput cell improved; overload creates no unbounded blocked work with measurable p99; kernel suites unchanged.
+
+TDD REDs: run001 overload → bounded queued work + measurable p99; idx001 lag fields present on every index, exact vs eventual choice unambiguous; vec001 `upsert_many` answers == per-item answers; vec002 dead-ratio rebuild triggers once, not per delete; time001 six property groups green; comp001 resolution O(1) average (counter pin); stor006 byte API cannot answer object reads (type-level pin).
 
 ## Gates (every milestone)
 
