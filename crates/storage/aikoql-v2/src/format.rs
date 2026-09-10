@@ -301,6 +301,72 @@ pub fn verify_pair(current: &Current, manifest: &Manifest) -> Result<(), FormatE
     Ok(())
 }
 
+/// P4-M3 — manifest invariants (TDD-STOR-005): structural checks plus the
+/// filesystem cross-check (every named segment file present at the recorded
+/// size). Runs at open — impossible metadata fails closed as Corrupt before
+/// any reader opens — and in debug builds before each publication. The
+/// manifest-record ↔ segment-header agreement (key range, sequence bounds,
+/// entry count) lives in the Db's open loop where the readers are in hand.
+pub fn validate_manifest(manifest: &Manifest, dir: &Path) -> Result<(), FormatError> {
+    if manifest.generation == 0 {
+        return Err(FormatError::Corrupt(
+            "manifest generation must be > 0".into(),
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for rec in &manifest.segments {
+        if !seen.insert(rec.segment_id) {
+            return Err(FormatError::Corrupt(format!(
+                "manifest names segment {} twice",
+                rec.segment_id
+            )));
+        }
+        if rec.level > 1 {
+            return Err(FormatError::Corrupt(format!(
+                "segment {} has unsupported level {}",
+                rec.segment_id, rec.level
+            )));
+        }
+        if rec.key_min > rec.key_max {
+            return Err(FormatError::Corrupt(format!(
+                "segment {} key range flipped",
+                rec.segment_id
+            )));
+        }
+        if rec.seq_lo > rec.seq_hi {
+            return Err(FormatError::Corrupt(format!(
+                "segment {} sequence range flipped",
+                rec.segment_id
+            )));
+        }
+        if rec.record_count == 0 {
+            return Err(FormatError::Corrupt(format!(
+                "segment {} claims zero records",
+                rec.segment_id
+            )));
+        }
+        // A missing file is a filesystem condition (Io — the SE2-M1
+        // `missing_segment_fails_closed` pin), not metadata damage; the
+        // recorded size differing from the file IS disagreement (Corrupt).
+        let actual =
+            std::fs::metadata(crate::segment::segment_path(dir, rec.segment_id)).map_err(|e| {
+                FormatError::Io(format!(
+                    "segment {} file missing or unreadable: {e}",
+                    rec.segment_id
+                ))
+            })?;
+        if actual.len() != rec.file_size {
+            return Err(FormatError::Corrupt(format!(
+                "segment {} size mismatch: manifest {}, on disk {}",
+                rec.segment_id,
+                rec.file_size,
+                actual.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Publication + decode cursor
 

@@ -34,7 +34,8 @@ use crate::checkpoint::{
 };
 use crate::compaction::{merge, CompactStats, KeepAll, RetentionPolicy};
 use crate::format::{
-    crash_park, verify_pair, Current, FormatError, Manifest, SegmentRecord, FORMAT_VERSION,
+    crash_park, validate_manifest, verify_pair, Current, FormatError, Manifest, SegmentRecord,
+    FORMAT_VERSION,
 };
 use crate::identity::directory::{
     identity_log_path, load_identity_logs, load_replica_logs, orphan_identity_logs,
@@ -293,6 +294,9 @@ impl Db {
         };
         let manifest = Manifest::read(&manifest_path(&config.dir, current.manifest_generation))?;
         verify_pair(&current, &manifest)?;
+        // P4-M3 — manifest invariants (TDD-STOR-005): impossible metadata
+        // fails closed before any reader opens.
+        validate_manifest(&manifest, &config.dir)?;
         // Orphan segments (a crash between segment publication and
         // manifest/CURRENT, or compaction leftovers): reported and ignored.
         // They are unreferenced data — a later flush may reuse the id,
@@ -370,6 +374,20 @@ impl Db {
                 cache.clone(),
                 Some(Arc::clone(&stats)),
             )?);
+            // P4-M3 — the manifest record must agree with the segment's own
+            // header metadata; a mismatch is corruption, not a read-time
+            // surprise.
+            if rec.key_min != reader.key_min()
+                || rec.key_max != reader.key_max()
+                || rec.seq_lo != reader.seq_lo()
+                || rec.seq_hi != reader.seq_hi()
+                || rec.record_count != reader.entry_count()
+            {
+                return Err(FormatError::Corrupt(format!(
+                    "manifest record for segment {} disagrees with the segment header",
+                    rec.segment_id
+                )));
+            }
             readers_by_segment.insert(rec.segment_id, Arc::clone(&reader));
             segments.push(reader);
         }
@@ -1588,6 +1606,10 @@ impl Db {
             segments: state.segment_records.clone(),
             wal_ids: vec![],
         };
+        // P4-M3 — debug builds refuse to publish impossible metadata
+        // (before the manifest lands, not after: the same check, earlier).
+        #[cfg(debug_assertions)]
+        validate_manifest(&manifest, &config.dir)?;
         Manifest::publish(&manifest_path(&config.dir, state.generation), &manifest)?;
         Current::publish(
             &config.dir.join("CURRENT"),
@@ -1775,6 +1797,9 @@ impl Db {
             segments: new_records.clone(),
             wal_ids: vec![],
         };
+        // P4-M3 — debug builds refuse to publish impossible metadata.
+        #[cfg(debug_assertions)]
+        validate_manifest(&manifest, &self.config.dir)?;
         // SE2-M36 — staged: the §38 MANIFEST windows park inside.
         Manifest::publish_staged(
             &manifest_path(&self.config.dir, state.generation),
