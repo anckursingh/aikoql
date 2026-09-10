@@ -2541,7 +2541,7 @@ fn m2_walls(ops: usize, mut run: impl FnMut()) -> Vec<u128> {
     for _ in 0..ops {
         let t0 = Instant::now();
         run();
-        walls.push(t0.elapsed().as_nanos() as u128);
+        walls.push(t0.elapsed().as_nanos());
     }
     walls
 }
@@ -2588,7 +2588,7 @@ fn v2_p3m2_write_stats_overhead() {
         pending.fetch_add(1, Ordering::Relaxed);
         backlog.fetch_add(1, Ordering::Relaxed);
     });
-    drop((wal_bytes, buckets, pending, backlog)); // dead after the loop
+    let _ = (wal_bytes, buckets, pending, backlog); // dead after the loop
 
     let stats1 = engine.storage_stats().unwrap();
     // Counter sanity — the instrumentation must tick, never silently zero.
@@ -2605,7 +2605,7 @@ fn v2_p3m2_write_stats_overhead() {
     assert_eq!(stats1.write.group_commit_batches, 0);
     assert_eq!(stats1.write.write_queue_depth, 0);
 
-    let (p50, p95, _) = percentiles(w1.clone());
+    let (p50, _p95, _) = percentiles(w1.clone());
     let m_mean = marginal.iter().sum::<u128>() as f64 / OPS as f64;
     let op_mean_1 = w1.iter().sum::<u128>() as f64 / OPS as f64;
     let op_mean_2 = w2.iter().sum::<u128>() as f64 / OPS as f64;
