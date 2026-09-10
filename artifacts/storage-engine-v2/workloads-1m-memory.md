@@ -2,28 +2,28 @@
 
 Date: 2026-09-10 · profile: release · seed 0x270000 · scale: 1000000 KOs / 100000 deep × 10 versions / 200000 ops (V2ADOPT_NIGHTLY=1m — strict opt-in)
 
-Single-backend run (V2ADOPT_BACKEND=aikoql-v2 — SE2-M28 staged): the matrix holds one row; gate 5 is decided across the aikoql-v2 and aikoql runs' cells.
+Single-backend run (V2ADOPT_BACKEND=memory — SE2-M28 staged): the matrix holds one row; gate 5 is decided across the aikoql-v2 and aikoql runs' cells.
 The same workload shapes v1's M7 adoption ran, on the same seed. All workloads through the Kernel on `&dyn StorageEngine` (§32). One seeded dataset per backend.
 
 ## §28 matrix — throughput + latency
 
-| workload | aikoql-v2 |
+| workload | memory |
 |---|---|
-| KO get (W1) | 6572 ops/s · p50 59 µs · p95 410 · p99 556 |
-| head get (W2) | 21416 ops/s · p50 42 µs · p95 75 · p99 102 |
-| version lookup (W3) | 16673 ops/s · p50 53 µs · p95 98 · p99 150 |
-| history (W3) | 11295 ops/s · p50 81 µs · p95 128 · p99 176 |
-| relationship lookup F=10 (W4) | 3664 ops/s · p50 229 µs · p95 356 · p99 479 |
-| relationship lookup F=100 (W4) | 819 ops/s · p50 1140 µs · p95 1736 · p99 1736 |
-| relationship lookup F=1000 (W4) | 74 ops/s · p50 13658 µs · p95 15363 · p99 15363 |
-| type scan (W5) | 2 ops/s · p50 265948 µs · p95 312321 · p99 475372 |
-| context compilation (W7) | 2442 ops/s · p50 324 µs · p95 720 · p99 973 |
-| mixed 70/20/10 (W8) | 6624 ops/s · p50 60 µs · p95 744 · p99 1002 |
-| ingestion (W6) | 967 ops/s · p50 1034 µs · p95 1034 · p99 1034 |
+| KO get (W1) | 106489 ops/s · p50 8 µs · p95 13 · p99 20 |
+| head get (W2) | 131574 ops/s · p50 7 µs · p95 10 · p99 13 |
+| version lookup (W3) | 91628 ops/s · p50 10 µs · p95 14 · p99 18 |
+| history (W3) | 26999 ops/s · p50 35 µs · p95 48 · p99 60 |
+| relationship lookup F=10 (W4) | 2037 ops/s · p50 278 µs · p95 354 · p99 4760 |
+| relationship lookup F=100 (W4) | 397 ops/s · p50 1066 µs · p95 15875 · p99 15875 |
+| relationship lookup F=1000 (W4) | 146 ops/s · p50 7144 µs · p95 9297 · p99 9297 |
+| type scan (W5) | 7 ops/s · p50 59664 µs · p95 67399 · p99 112101 |
+| context compilation (W7) | 13778 ops/s · p50 62 µs · p95 112 · p99 166 |
+| mixed 70/20/10 (W8) | 84858 ops/s · p50 8 µs · p95 42 · p99 54 |
+| ingestion (W6) | 46011 ops/s · p50 22 µs · p95 22 · p99 22 |
 
 ## §28 matrix — logical bytes read / written per workload
 
-| workload | aikoql-v2 |
+| workload | memory |
 |---|---|
 | KO get (W1) | 139462290 / 0 |
 | head get (W2) | 139462290 / 0 |
@@ -41,7 +41,7 @@ The same workload shapes v1's M7 adoption ran, on the same seed. All workloads t
 
 | backend | CPU (seed wall) | RSS (peak, loader child) | disk |
 |---|---|---|---|
-| aikoql-v2 | 2895347 ms | 368.61 MiB | 2.84 GiB |
+| memory | 60855 ms | NOT_SAMPLED | 0 B |
 
 ## §26 adoption gates
 

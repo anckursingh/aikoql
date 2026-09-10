@@ -117,3 +117,17 @@ The condition recorded above fired, and the user made the decision:
 - **2026-09-07, user ratification: ADOPT** — aikoql-v2 is the production default. Shipped: `engine.rs` auto-detection now creates a missing path as `aikoql-v2` (existing redb files and v1 WALs still auto-detect to their engines), and the Python SDK defaults `backend = "aikoql-v2"`. The decision and its evidence live in the ADR `docs/STORAGE-ENGINE-ARCHITECTURE-DECISION.md` (status: accepted).
 
 The 09-01 NOT ADOPT verdict stands as history, not as the current record: it was superseded by this ratification, exactly as the 09-05 amendment said it could be.
+
+## 1M scale re-certification — 2026-09-10 (SE2-M28 un-park, P3-M6)
+
+The amended gate was bound at 100K; the 1M row was the open scale question (M28's v2 cells were pre-M38, hence stale). The fresh 4-backend chain (v1 → v2 → redb → memory, release, git 75391b8, dataset seed 2555904, `V2ADOPT_NIGHTLY=1m`, strictly sequential, ~7 h wall) closes it:
+
+| Cell (1M) | aikoql v1 | aikoql-v2 | redb | memory |
+| --- | --- | --- | --- | --- |
+| W1 KO get p50 | 7.4 µs | 58.9 µs | 19.0 µs | 8.3 µs |
+| W2 head get p50 | 7.2 µs | 41.8 µs | 9.1 µs | 7.3 µs |
+| seed wall | 2324 s | 2895 s | 7090 s | 61 s |
+| RSS peak | 6334 MB | 386.5 MB | 1505 MB | — (in-memory) |
+| disk | 4.55 GB | 3.05 GB | 6.13 GB | 0 |
+
+**Gate 5 at 1M: W1 58.9/7.4 = 7.96×, W2 41.8/7.2 = 5.81× v1 — both ≤8× PASS** (W1 margin 0.04×). The M22 projection (5.6–6.7×) held on W2; W1 sits above it but inside the amended bound. Identity divergence 0 — the harness shape asserts (zero-loss, per-backend parity) held on all four legs (each leg rc=0). The bounded-memory profile holds at 1M: RSS 386.5 MB = 16.4× below v1 (6334 MB), disk 3.05 vs 4.55 GB. W1/seed regressed slightly vs the stale pre-M38 cells (54.8→58.9 µs, 2335→2895 s — the M38 splice cost), W2/W5 improved (50.5→41.8 µs, 288.5→265.9 ms). The per-backend result-1m-*.json files are the committed raw cells; the single-backend filtered run leaves `verdict: null` by design and the cross-leg ratio above is the verdict.
