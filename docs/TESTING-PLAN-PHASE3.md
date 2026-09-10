@@ -1,6 +1,6 @@
 # AIKOQL Phase 3 — Testing Plan
 
-Mirror of `docs/TESTING-PLAN.md` §13.2 for phase 3, same ledger discipline as `docs/TESTING-PLAN-V2.md`: one row per milestone; status flips to ✅ only with real evidence (test names + green counts + artifacts). Requirement numbering continues V2 (S52 was the v2 acceptance matrix — phase 3 starts at §53). TDD rules below are binding for every milestone.
+Mirror of `docs/TESTING-PLAN.md` §13.2 for phase 3, same ledger discipline as `docs/TESTING-PLAN-V2.md`: one row per milestone; status flips to ✅ only with real evidence (test names + green counts + artifacts). Requirement numbering continues V2 (S52 was the v2 acceptance matrix — phase 3 starts at §53). Phase 4 rows (P4-M1..M7) carry the class-by-class review's TDD ids (2026-09-10, main@dbd8db4) — no spec sections are numbered past §73. TDD rules below are binding for every milestone.
 
 | # | Milestone | §§ | Status | Evidence |
 | --- | --- | --- | --- | --- |
@@ -14,6 +14,13 @@ Mirror of `docs/TESTING-PLAN.md` §13.2 for phase 3, same ledger discipline as `
 | P3-M7 | Class-B async | §68–69 | ⬜ | cb001–005; MRFC-0011 §11 conformance green |
 | P3-M8 | Background compaction | §70–71 | ⬜ | bgc001–005; CP-001..010 + relocation + crash windows green in background mode; W8 tail cell |
 | P3-M9 | SDK & proxy decision | §72–73 | ⬜ | decision doc; kept-surface REDs (sdk001–002) or deletion commits + DAG green |
+| P4-M1 | Planner semantic safety (P0) | TDD-COMP-002/003 | ⬜ | ppl001–006 (negative matrix tenant/role/subject/snapshot/scope; identical scans still dedup; filter/search ordering coherence); compiler suites extended; kernel suites untouched-green |
+| P4-M2 | PhysicalHandle + batch resolver | TDD-ID-001/002 | ⬜ | phy001–004 (stale generation fail-closed, resolve_many == resolve, relocation old-or-new never mixed, grep pin — kernel crate free of PhysicalLocation/SegmentId/BlockId); 1M oracle zero divergence |
+| P4-M3 | Storage invariant validator | TDD-STOR-005 | ⬜ | iv001–005 (flipped key range / missing segment / size mismatch / dup segment id refuse open; valid manifest passes); runs at open + post-compaction + corruption tests |
+| P4-M4 | Repository complexity audit + temporal/event seek | TDD-KERNEL-001/002, TDD-EVENT-001 | ⬜ | ker001–004 (classification manifest committed, version-count sweep cell, last-100-in-big-journal replay cell, answers == reference scan) |
+| P4-M5 | Read attribution → batch read wave | TDD-READ-001..004, TDD-REL-001, TDD-OBJ-001, TDD-GRAPH-001 | ⬜ | rd001–005 (same-block N keys → block I/O ≈1, answers == N scalar gets, trace on/off zero-cost, type-scan batch counter pin, traversal ACL-eval counter pin); per-boundary evidence cells gate each step (M25 falsification precedent; M6 1M cells are the decision input) |
+| P4-M6 | Streaming checkpoint writer | TDD-ID-003 | ⬜ | cps001–003 (streamed == materialized byte-for-byte; park-harness crash windows leave old checkpoint valid; 1M peak-RSS cell bounded) |
+| P4-M7 | Production hardening batch | TDD-RUNTIME-001, TDD-INDEX-001, TDD-VECTOR-001/002, TDD-TIME-001, TDD-COMP-001, TDD-STOR-006 | ⬜ | run001 (bounded overload + measurable p99), idx001 (lag fields on every index), vec001/002 (upsert_many parity; dead-ratio rebuild), time001 (6 HLC property groups), comp001 (O(1) ontology lookup pin), stor006 (byte API cannot answer object reads — type-level pin) |
 
 ## Rules carried from v2 (binding) + phase-3 additions
 
@@ -26,7 +33,8 @@ Mirror of `docs/TESTING-PLAN.md` §13.2 for phase 3, same ledger discipline as `
 7. **Security test hygiene.** No real secrets in fixtures; argon2 test vectors, not live hashes; no test binds a public interface; loopback enforcement tests bind loopback.
 8. **Regressions.** Gate 5 ≤8× and the workload bounds (10/10/15% vs 09-05 baseline) hold wherever a milestone touches the engine. Suite counts recorded per milestone in this ledger's Evidence column.
 9. **Honest ledger.** Anything descoped (M5c, M7b, SDK adoptions) gets a "PASS WITH ACCEPTED LIMITATIONS" closure citing evidence — the KSE/M41 pattern — never a silent drop.
-10. **CI carry-over.** The existing skip list stays authoritative; new suites that are measurement-first join it or gate themselves. The dependency-DAG grep ban extends to the new deletion sweeps (clb002).
+10. **CI carry-over.** The existing skip list stays authoritative; new suites that are measurement-first join it or gate themselves. The dependency-DAG grep ban extends to the new deletion sweeps (clb002) and to the P4-M2 boundary pin (phy004: no `PhysicalLocation`/`SegmentId`/`BlockId` in the kernel crate).
+11. **Batch wave is evidence-gated.** No batch optimization (P4-M5b–d) ships without a cell showing a real gain over the scalar path at current scale — SE2-M25 falsified naive `get_many` at 100K warm (0.73–1.13×); each sub-boundary closes with evidence or a "PASS WITH ACCEPTED LIMITATIONS" row, never a vibes green.
 
 ## Milestone gates (what flips a row to ✅)
 
@@ -40,3 +48,10 @@ Mirror of `docs/TESTING-PLAN.md` §13.2 for phase 3, same ledger discipline as `
 - **P3-M7:** cb001–005 green; MRFC-0011 §11 conformance green; restart durability covered by a child-kill window.
 - **P3-M8:** bgc001–005 green; the full existing compaction battery green in background mode; W8 cell recorded.
 - **P3-M9:** decision doc + evidence committed; kept surfaces have green REDs, deleted surfaces leave zero dangling references (DAG green).
+- **P4-M1:** ppl001–006 green (the pre-fix RED: same type + different subject/tenant/role/snapshot is deduped today — planner.rs:107 pins it); identical scans still dedup; kernel suites untouched-green.
+- **P4-M2:** phy001–004 green; scalar == batch answers; relocation atomic from the reader's view; 1M oracle zero divergence; grep pin green in the DAG job.
+- **P4-M3:** iv001–005 green; open refuses on impossible metadata; all existing storage suites unchanged.
+- **P4-M4:** ker001–004 green; classification manifest committed; version-count and event-replay cells recorded (env-gated, reported not asserted); reference-scan parity pinned.
+- **P4-M5:** rd001–005 green; every sub-boundary ships with its cell; kernel suites unchanged; no batch path lands without evidence (rule 11).
+- **P4-M6:** cps001–003 green; byte-identical streamed output; park-harness crash windows covered; peak-RSS cell recorded.
+- **P4-M7:** run001, idx001, vec001–002, time001, comp001, stor006 green; ingestion throughput cell recorded; overload bounded with measurable p99; kernel suites unchanged.

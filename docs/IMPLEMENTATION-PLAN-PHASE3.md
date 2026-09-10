@@ -17,7 +17,7 @@ Source: architect review 2026-09-09 (storage / kernel / integration / testing su
 7. **Background compaction is the only default-flip on a shipped engine — protect it.** Background by default, synchronous on config (`compact_background = false` for deterministic tests), backpressure when the backlog gauge crosses a hard bound. All existing compaction suites (CP-001..010, relocation, crash windows) must run green in background mode — the park points are mode-agnostic, so the crash matrix is reusable as-is.
 8. **SDK/proxy: delete beats maintain.** Unversioned half-clients outside the workspace (TS, Go), a 0.1.0-vs-0.1.19 Python wheel, and a 306-line untested, unpackaged shard proxy are liability, not feature. M9 is decision-first: a one-page decision doc with the delete-first recommendation; only kept surfaces get TDD. Federation stays NOT_IMPLEMENTED — the identity/placement directory is the seam, and no multi-node demand has appeared.
 
-**Build order & dependencies:** M0 → M1 → M2 → {M3, M4, M5a, M6, M7a} → M8 (needs M2) → M9. M6 needs M0 (artifact gating). M5b/M5c and M7b are gated continuations, not separate milestones. Phase 4 (below): P4-M1 → P4-M2 → P4-M3 → P4-M4 → P4-M5 (gated on M6's fresh 1M cells) → P4-M6 → P4-M7.
+**Build order & dependencies:** M0 → M1 → M2 → {M3, M4, M5a, M6, M7a} → M8 (needs M2) → M9. M6 needs M0 (artifact gating). M5b/M5c and M7b are gated continuations, not separate milestones. **Phase 4 re-sequences ahead of M7–M9 (2026-09-10, user): the planner P0 is a correctness defect in shipped code — it beats feature milestones.** After M6: P4-M1 → P4-M2 → P4-M3 → P4-M4 → P4-M5 (gated on M6's fresh 1M cells) → P4-M6 → P4-M7 → then M7 → M8 → M9 (P4-M7's bounded-async pairs with M8's backpressure).
 
 **Non-goals (honest ledger — each with a reopen gate):**
 
@@ -42,6 +42,8 @@ Deliver: delete the dead harnesses, gate artifact writes. `tests/universal_test_
 Acceptance: `cargo test --workspace` compiles and runs with zero dangling references; a full local suite run produces no diff in committed artifacts; dependency-DAG CI job still green; deletions recorded in the testing-plan ledger.
 
 TDD REDs (M0): clb001 artifact-gating — `AIKOQL_REPORT_WRITE` unset → report file unchanged after suite run (pre-existing content hash equal), set → rewritten; clb002 a deleted-harness sweep — repo contains no reference to the four deleted paths (grep pin in the DAG job).
+
+Status: **SHIPPED** (commit 10851bf, 2026-09-09, no-push). Dead harnesses (`tests/universal_test_harness.py`, `tests/common/`, `benchmarks/tests/load_test.rs`, `tests/e2e/` Playwright) deleted with ledger rows; report gating `AIKOQL_REPORT_WRITE=1` in `tests/common/mod.rs` `report_write` (correctness asserts stay unconditional); `cargo test --workspace` green with zero dangling references; DAG grep ban extended (clb002).
 
 ### P3-M1 — Serving-surface security hardening (§53–55)
 
@@ -101,6 +103,8 @@ Acceptance: gate 5 ≤8× asserted in the matrix; identity divergence 0 across t
 
 TDD REDs (M6): m28-1m matrix invariants (zero-loss, per-backend parity, gate-5 bound assert) — the harness exists; the milestone's RED work is the reconciliation diff, evidenced before the run.
 
+Status: **IN PROGRESS** (2026-09-10, no-push). Reconciliation committed `75391b8` (harness clippy fixes kept, P3-M3 snapshot cell + plugin dogfood smoke scripts committed, tmp/ scratch swept). 1M chain running (`V2ADOPT_NIGHTLY=1m` + `AIKOQL_REPORT_WRITE=1`, release, sequential, TMP on C:, logs `%TEMP%\m28-1m\`): build rc=0, **v1 DONE rc=0** (14:54:39, 1h33m), **v2 DONE rc=0** (19:55:14, 2h55m — post-M38 writer), **redb leg started 19:55:14** (~4.2h), memory leg last (minutes). Pending: gate-5 verdict (v2 ÷ v1 ≤8×), identity divergence 0, RSS/amplification cells, doc updates + commit.
+
 ### P3-M7 — Class-B async (MRFC-0011 §68–69)
 
 Deliver (sub-boundaries): **M7a** — `reason` becomes an async JobHandle: persisted minimal job table (status, input-hash, result ref), admission control (max concurrent), `JOB_REJECTED`, poll/status tool, claim-commit wiring on approval (Class-B claim → Class-A commit); **M7b** — `infer`/`predict` on the same machinery (no-op AiProvider still legal).
@@ -127,7 +131,9 @@ TDD REDs (M9): sdk001 (python kept) contract tests vs the real MCP binary assert
 
 ## Phase 4 — Semantic safety + physical resolution + batch read certification
 
-Source: class-by-class main-branch review 2026-09-10 (TDD-STOR/ID/READ/KERNEL/COMP/GRAPH/VECTOR/INDEX ids below). Sequenced after P3-M9. Claims verified against this branch's code on 2026-09-10 before scheduling:
+Source: class-by-class main-branch review 2026-09-10 (TDD-STOR/ID/READ/KERNEL/COMP/GRAPH/VECTOR/INDEX ids below). Sequenced after M6, ahead of M7–M9. Claims verified against this branch's code on 2026-09-10 before scheduling:
+
+**Coder point of view (before implementation):** the review's verdict is right — storage correctness is certified; the next fight is execution locality plus one shipped-compiler correctness defect. P4-M1 is a bug fix, not a feature: `dedup_scans` can serve one subject's scan results under another subject's query context (tenant/roles/snapshot included) and the existing test currently blesses it. Nothing else starts before it. The rest of the phase is a measurement ladder, not a shopping list: attribution (P4-M5a) → evidence → batch (P4-M5b-d), with SE2-M25's falsified `get_many` as the standing proof that batch APIs without block-coalescing are vibes. The invariant validator (P4-M3) and temporal seek (P4-M4) are the fail-closed and capability items; decomposition refactors stay non-goals until contention cells exist.
 
 - **CONFIRMED P0:** `planner.rs:62` `dedup_scans` removes `Scan` ops by `type_name` only — subject/roles/tenant/snapshot ignored — and the existing test `dedup_consecutive_scans_on_same_type` (planner.rs:107) **pins the bug** (scans with subjects "a" and "b" deduped into one). Fix before any optimizer work.
 - **CONFIRMED:** `get_object_at` (`repository.rs:684`) scans the object's whole prefix and walks backward — O(all versions) per temporal read; `TantivyTextIndex::upsert` (`engines/vector/src/lib.rs:328`) delete+add+commits per upsert; event `replay` filters `scan_events_after` in-kernel (`event.rs:101`).
