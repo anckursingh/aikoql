@@ -72,7 +72,7 @@ curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-
 **Linux (static musl — any distro):**
 ```bash
 curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-linux-musl
-chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql
+chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql-mcp
 ```
 
 A glibc build (`aikoql-mcp-linux`) is also available for distros that prefer dynamic linking.
@@ -81,17 +81,17 @@ A glibc build (`aikoql-mcp-linux`) is also available for distros that prefer dyn
 ```bash
 # Apple Silicon
 curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-macos-arm64
-chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql
+chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql-mcp
 
 # Intel
 curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-macos
-chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql
+chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql-mcp
 ```
 
 ### Verify
 
 ```bash
-aikoql --version
+aikoql-mcp --version
 # aikoql-mcp 0.1.19
 ```
 
@@ -100,7 +100,7 @@ aikoql --version
 ### Interactive Shell
 
 ```bash
-aikoql shell :memory:
+aikoql-mcp shell :memory:
 ```
 ```
 aikoql> CREATE Person name == "Alice", role == "Architect"
@@ -120,7 +120,7 @@ Bye.
 ### MCP Server (stdio mode)
 
 ```bash
-aikoql serve ./my-knowledge
+aikoql-mcp serve ./my-knowledge
 ```
 
 Connects via stdin/stdout — perfect for Claude Code, VS Code, and other MCP clients. Add to your MCP config:
@@ -129,7 +129,7 @@ Connects via stdin/stdout — perfect for Claude Code, VS Code, and other MCP cl
 {
   "mcpServers": {
     "aikoql": {
-      "command": "aikoql",
+      "command": "aikoql-mcp",
       "args": ["serve", "./my-knowledge"]
     }
   }
@@ -142,7 +142,7 @@ TCP mode requires at least one auth token (`TOKEN[:TENANT[:ROLE1,ROLE2]]`); clie
 pass it as `params.token` to MCP `initialize`.
 
 ```bash
-aikoql serve --listen 127.0.0.1:9090 --tcp-token mytoken:acme:admin \
+aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token mytoken:acme:admin \
   --metrics-addr 127.0.0.1:9091 ./my-knowledge
 ```
 
@@ -174,7 +174,7 @@ curl http://127.0.0.1:9091/api/v1/schema
 
 ```bash
 # Open a database (fresh path = aikoql-v2 directory)
-aikoql shell ./kb
+aikoql-mcp shell ./kb
 
 # Create objects
 aikoql> CREATE Employee name == "Alice", dept == "Engineering", salary == 125000
@@ -195,7 +195,7 @@ Semantic search (`MATCH ... USING EMBEDDING`) runs fully offline — the server
 never downloads models at runtime. Install the bundled model once:
 
 ```bash
-aikoql model install
+aikoql-mcp model install
 ```
 
 Without an installed model, `serve` still starts and `/health` reports

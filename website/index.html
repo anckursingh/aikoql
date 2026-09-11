@@ -368,14 +368,14 @@ aikoql-mcp --version</code></pre></div>
     <div id="inst-windows" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp.exe
 .\aikoql-mcp.exe --help</code></pre></div>
     <div id="inst-linux" style="display:none"><pre><code>curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-linux-musl
-chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql
-aikoql --help</code></pre></div>
+chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql-mcp
+aikoql-mcp --help</code></pre></div>
     <div id="inst-macos" style="display:none"><pre><code># Apple Silicon
 curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-macos-arm64
-chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql
+chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql-mcp
 # Intel
 curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-macos
-chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql</code></pre></div>
+chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql-mcp</code></pre></div>
     <div id="inst-source" style="display:none"><pre><code>git clone https://github.com/anckursingh/aikoql.git
 cd aikoql
 cargo build --release -p aikoql-mcp

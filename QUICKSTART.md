@@ -4,15 +4,26 @@ aikoql is a knowledge database with built-in encryption, hybrid vector+text sear
 
 ## 5-Second Start
 
-Get the binary from [GitHub Releases](https://github.com/anckursingh/aikoql/releases) (SHA-256 files alongside), or `npm i -g aikoql-mcp`:
+The binary is named **`aikoql-mcp`**. Install it — pick one:
 
 ```bash
-# Download and run (stdio mode — perfect for MCP clients like Claude Code):
-./aikoql-mcp serve
-
-# Or TCP server mode (for multiple clients — a token with roles is required, PRR-2):
-./aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091 ./data/kb
+npm i -g aikoql-mcp   # launcher fetches the right binary for your OS
+# or download from https://github.com/anckursingh/aikoql/releases (SHA-256 files alongside)
 ```
+
+Then see it work immediately — the interactive shell (a real database, in your terminal):
+
+```bash
+aikoql-mcp shell
+# aikoql> CREATE note body == "hello"
+# aikoql> MATCH note RETURN *
+# aikoql> .exit
+```
+
+From there, serve it to agents:
+
+- **MCP server for Claude Code:** `claude mcp add aikoql -- npx -y aikoql-mcp@0.1.19 serve ./kb`
+- **TCP + Studio UI:** `aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091` → open http://127.0.0.1:9091/studio (login `admin` / `admin`)
 
 ## Usage Modes
 
@@ -69,7 +80,7 @@ aikoql includes a built-in web-based Studio for visual knowledge management. No 
 ```bash
 # Start with metrics-addr (any port):
 # Windows:
-sleep 99999 | .\target\release\aikoql-mcp.exe serve .\aikoql.redb --metrics-addr 127.0.0.1:9191
+sleep 99999 | aikoql-mcp serve .\aikoql.redb --metrics-addr 127.0.0.1:9191
 
 # Linux:
 sleep 99999 | ./aikoql-mcp serve ./aikoql.redb --metrics-addr 127.0.0.1:9191
@@ -285,7 +296,7 @@ Container contract: config at `/etc/aikoql/aikoql.toml`; all state under the `/d
 | Platform | Binary | Status |
 |----------|--------|--------|
 | Windows 10/11 | `aikoql-mcp.exe` | ✅ Full (build + Studio + E2E) |
-| Linux x86_64 | `aikoql-mcp` (GNU) / `aikoql-mcp-linux-musl` (static) | ✅ Full (native build or cross-compile) |
+| Linux x86_64 | `aikoql-mcp-linux` (GNU) / `aikoql-mcp-linux-musl` (static) | ✅ Full (native build or cross-compile) |
 | macOS ARM | `aikoql-mcp-macos-arm64` | ✅ Shipped binary (GitHub Releases) |
 | macOS Intel | `aikoql-mcp-macos` | ✅ Shipped binary (GitHub Releases) |
 

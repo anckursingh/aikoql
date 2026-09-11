@@ -52,7 +52,7 @@ auto-detects as its own backend.
 **Claude Code:**
 
 ```bash
-claude mcp add aikoql -- npx -y aikoql-mcp serve ./kb
+claude mcp add aikoql -- npx -y aikoql-mcp@0.1.19 serve ./kb
 ```
 
 (A packaged aikoql plugin also exists for Claude Code — it runs this same
@@ -61,7 +61,7 @@ server, with the knowledge-base path pinned via `userConfig.KB_PATH`.)
 **Codex:**
 
 ```bash
-codex mcp add aikoql -- npx -y aikoql-mcp serve ./kb
+codex mcp add aikoql -- npx -y aikoql-mcp@0.1.19 serve ./kb
 ```
 
 **Anything else** (Cursor, Windsurf, VS Code, custom harnesses) — the
@@ -72,7 +72,7 @@ portable MCP config block, e.g. `.vscode/mcp.json` / `.cursor/mcp.json`:
   "mcpServers": {
     "aikoql": {
       "command": "npx",
-      "args": ["-y", "aikoql-mcp", "serve", "./kb"]
+      "args": ["-y", "aikoql-mcp@0.1.19", "serve", "./kb"]
     }
   }
 }

@@ -156,6 +156,13 @@ pub(crate) fn run_stdio(
     admin: Option<Arc<dyn StorageAdminApi>>,
 ) {
     info!(db = %db_path, protocol = PROTOCOL_VERSION, "aikoql-mcp ready");
+    // A bare terminal run looks like a hang — this is a server, not a REPL.
+    // stderr only: stdout carries MCP protocol frames.
+    eprintln!(
+        "waiting for an MCP client on stdin/stdout \
+         (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; \
+         for an interactive prompt run: aikoql-mcp shell)"
+    );
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
     let mut sub_ids: HashSet<String> = HashSet::new();
     let mut session = McpSession::default();

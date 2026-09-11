@@ -133,6 +133,21 @@ use crate::session::TcpAuthTable;
 use crate::transport::*;
 
 #[allow(unused_assignments)]
+/// ANSI colors render on Windows only in terminals with VT processing
+/// (Windows Terminal, VS Code, mintty, CI). Legacy conhost — PowerShell 5.1's
+/// default console — prints the raw escapes as `←[2m` garbage, so fall back to
+/// plain logs there. (ponytail: env heuristic instead of a windows-sys dep;
+/// plain logs are never broken, colors just degrade.)
+fn use_ansi() -> bool {
+    if !cfg!(windows) {
+        return true;
+    }
+    std::env::var_os("WT_SESSION").is_some()
+        || std::env::var_os("TERM_PROGRAM").is_some()
+        || std::env::var_os("TERM").is_some_and(|t| !t.eq_ignore_ascii_case("dumb"))
+        || std::env::var_os("CI").is_some()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -167,7 +182,8 @@ fn main() {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&cfg.log_level)),
         )
-        .with_writer(std::io::stderr);
+        .with_writer(std::io::stderr)
+        .with_ansi(use_ansi());
     if cfg.log_format == "json" {
         subscriber.json().init();
     } else {
