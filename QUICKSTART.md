@@ -6,10 +6,10 @@ aikoql is a knowledge database with built-in encryption, hybrid vector+text sear
 
 ```bash
 # Download and run (stdio mode — perfect for MCP clients like Claude Code):
-./aikoql-mcp
+./aikoql-mcp serve
 
-# Or TCP server mode (for multiple clients — a token is required, PRR-2):
-./aikoql-mcp --listen 127.0.0.1:9090 --tcp-token TOKEN --metrics-addr 127.0.0.1:9091 ./data/aikoql.redb
+# Or TCP server mode (for multiple clients — a token with roles is required, PRR-2):
+./aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091 ./data/kb
 ```
 
 ## Usage Modes
@@ -18,32 +18,35 @@ aikoql is a knowledge database with built-in encryption, hybrid vector+text sear
 The MCP server runs over stdin/stdout. Ideal for desktop AI tools (Claude Code, VS Code, etc.) that spawn the binary as a child process.
 
 ```
-aikoql-mcp [database_path]
+aikoql-mcp serve [database_path]
 ```
+
+A fresh path creates an `aikoql-v2` directory (the default since SE2-M41);
+an existing `.redb` file or v1 WAL auto-detects as its own backend.
 
 ### TCP Mode
-Accepts multiple MCP client connections over TCP. Requires a token — `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]]` (repeatable; also `AIKOQL_TCP_TOKEN` env or `tcp_tokens` in `aikoql.toml`). Refuses to start without one.
+Accepts multiple MCP client connections over TCP. Requires a token — `--tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]]` (repeatable; also `AIKOQL_TCP_TOKEN` env, `AIKOQL_TCP_TOKEN_FILE`, or `tcp_tokens` in `aikoql.toml`). Refuses to start without one — and a bare `TOKEN` (no roles) exits 2, roles are mandatory.
 
 ```
-aikoql-mcp --listen 127.0.0.1:9090 --tcp-token TOKEN [database_path]
+aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin [database_path]
 ```
 
 ### TCP + Metrics (REST API + Studio)
 Starts the HTTP server with REST API, health endpoints, and the Studio web UI:
 
 ```
-aikoql-mcp --listen 127.0.0.1:9090 --tcp-token TOKEN --metrics-addr 127.0.0.1:9091 [database_path]
+aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091 [database_path]
 ```
 
 ### Metrics-Only Mode (Studio UI)
 For local use where you only need the Studio web interface and REST API (no MCP over TCP):
 
 ```
-aikoql-mcp ./aikoql.redb --metrics-addr 127.0.0.1:9191
+aikoql-mcp serve ./aikoql.redb --metrics-addr 127.0.0.1:9191
 ```
 
 > **Note:** In metrics-only mode, the process must have an open stdin to stay alive.
-> Run with: `sleep 99999 | aikoql-mcp ./aikoql.redb --metrics-addr 127.0.0.1:9191`
+> Run with: `sleep 99999 | aikoql-mcp serve ./aikoql.redb --metrics-addr 127.0.0.1:9191`
 
 Endpoints available on the metrics port:
 | Endpoint | Description |
@@ -64,10 +67,10 @@ aikoql includes a built-in web-based Studio for visual knowledge management. No 
 ```bash
 # Start with metrics-addr (any port):
 # Windows:
-sleep 99999 | .\target\release\aikoql-mcp.exe .\aikoql.redb --metrics-addr 127.0.0.1:9191
+sleep 99999 | .\target\release\aikoql-mcp.exe serve .\aikoql.redb --metrics-addr 127.0.0.1:9191
 
 # Linux:
-sleep 99999 | ./aikoql-mcp ./aikoql.redb --metrics-addr 127.0.0.1:9191
+sleep 99999 | ./aikoql-mcp serve ./aikoql.redb --metrics-addr 127.0.0.1:9191
 ```
 
 Open **http://127.0.0.1:9191/studio** in your browser. Login with `admin` / `admin`.
@@ -139,7 +142,8 @@ Copy `aikoql.toml` alongside the binary and edit values. Discovery order: `--con
 
 Environment variables:
 - `RUST_LOG` — log level (trace, debug, info, warn, error). Default: info.
-- `AIKOQL_TCP_TOKEN` — TCP auth token for `--listen` (one per variable).
+- `AIKOQL_TCP_TOKEN` — TCP auth token for `--listen` (same `TOKEN[:TENANT[:ROLES]]` spec — roles required; env replaces flags).
+- `AIKOQL_TCP_TOKEN_FILE` — file containing the token (env replaces flags).
 - `AIKOQL_DB`, `AIKOQL_LISTEN`, `AIKOQL_METRICS_ADDR` — override TOML settings.
 - `AIKOQL_PASSPHRASE` — KMS passphrase for encryption (if enabled).
 
@@ -165,7 +169,7 @@ key_path = "./aikoql.key"
 employee = ["salary", "ssn"]
 ```
 
-1. Generate the master key: `aikoql keygen ./aikoql.key` — passphrase comes
+1. Generate the master key: `aikoql-mcp keygen ./aikoql.key` — passphrase comes
    from `AIKOQL_PASSPHRASE`, else one is generated and printed once (save it).
 2. Start serve with `AIKOQL_PASSPHRASE` set (or the TOML `passphrase`).
 
@@ -174,7 +178,7 @@ missing passphrase fails the open — an encrypted database never silently
 opens as plaintext. All store values are AES-256-GCM encrypted; the envelope
 hierarchy (KEK→tenant DEK→field) encrypts policy-listed properties per type,
 decrypted transparently on read. All subcommands (`audit`, `backup`,
-`imports`, `ingest-dir`, `shell`) honor the same settings.
+`restore`, `import`, `ingest-dir`, `shell`) honor the same settings.
 
 ## Building from Source
 
@@ -209,9 +213,6 @@ cargo test -p aikoql-ingestion
 
 # Multi-source ontology merge tests:
 cargo test -p aikoql-ingestion --test multi_source_ontology
-
-# E2E Playwright tests (requires npx playwright install):
-cd tests/e2e && npx playwright test
 ```
 
 ## Connecting from Code
@@ -251,7 +252,12 @@ for when first-party drivers return.
 
 ## Data Storage
 
-By default, aikoql stores all data in a single [redb](https://github.com/cberner/redb) file. This is an embedded ACID-compliant database — no external database server required.
+A fresh path creates an **aikoql-v2** directory — the native engine (the
+default since SE2-M41): WAL + tiered compacted segments, and the only
+backend with the full feature set. The engine auto-detects what is already
+on disk: an existing `.redb` file opens as [redb](https://github.com/cberner/redb), a v1 WAL opens
+as v1 — each format reads as itself, never reinterpreted. Either way it is
+embedded ACID storage — no external database server required.
 
 - Backups: `backup` tool creates verified snapshots. `restore` recovers with PITR metadata.
 - Encryption: All data encrypted at rest when enabled (AES-256-GCM, ChaCha20-Poly1305 available).
@@ -262,15 +268,15 @@ By default, aikoql stores all data in a single [redb](https://github.com/cberner
 Release images are multi-arch (linux/amd64 + linux/arm64) and published on every release tag alongside the binaries:
 
 ```bash
-docker pull ghcr.io/anckursingh/aikoql:0.1.18   # pin the immutable release tag
+docker pull ghcr.io/anckursingh/aikoql:0.1.19   # pin the immutable release tag
 docker run -d --name aikoql \
-  -e AIKOQL_TCP_TOKEN=TOKEN \
+  -e AIKOQL_TCP_TOKEN=TOKEN::admin \
   -p 9090:9090 -p 9091:9091 \
   -v aikoql_data:/data \
-  ghcr.io/anckursingh/aikoql:0.1.18
+  ghcr.io/anckursingh/aikoql:0.1.19
 ```
 
-Container contract: config at `/etc/aikoql/aikoql.toml`; all state under the `/data` volume — `/data/aikoql.redb`, `memory/`, and the local embedding model store (`/data/models`, installable with `docker exec aikoql aikoql model install`). The image is stateless: upgrades are pull + recreate, the knowledge base survives in the volume. TCP auth is fail-closed — the container refuses to listen without a token. Health check: `curl http://127.0.0.1:9091/health`. Compose variant: `AIKOQL_VERSION=0.1.18 AIKOQL_TCP_TOKEN=TOKEN docker compose -f docker-compose.release.yml up -d`.
+Container contract: config at `/etc/aikoql/aikoql.toml`; all state under the `/data` volume — `/data/aikoql.redb`, `memory/`, and the local embedding model store (`/data/models`, installable with `docker exec aikoql aikoql model install`). The image is stateless: upgrades are pull + recreate, the knowledge base survives in the volume. TCP auth is fail-closed — the container refuses to listen without a token (and a token without roles exits 2). Health check: `curl http://127.0.0.1:9091/health`. Compose variant: `AIKOQL_VERSION=0.1.19 AIKOQL_TCP_TOKEN=TOKEN::admin docker compose -f docker-compose.release.yml up -d`.
 
 ## Platform Support
 

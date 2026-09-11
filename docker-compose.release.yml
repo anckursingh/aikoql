@@ -1,7 +1,7 @@
 # PRODUCTION compose: runs the released multi-arch GHCR image — no local
 # build (docker-compose.yml is the development variant with `build: .`).
 #
-#   AIKOQL_VERSION=0.1.18 AIKOQL_TCP_TOKEN=TOKEN docker compose -f docker-compose.release.yml up -d
+#   AIKOQL_VERSION=0.1.19 AIKOQL_TCP_TOKEN=TOKEN::admin docker compose -f docker-compose.release.yml up -d
 #
 # TCP auth is fail-closed (PRR-2): the container refuses to listen without a
 # token, so AIKOQL_TCP_TOKEN (TOKEN[:TENANT[:ROLE1,ROLE2]]) is required here.
