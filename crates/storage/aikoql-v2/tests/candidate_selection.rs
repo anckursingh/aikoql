@@ -129,6 +129,7 @@ fn compaction_trigger_bounds_candidates() {
     for i in 0..4 {
         db.put(format!("k{i}").as_bytes(), b"v").unwrap();
     }
+    db.wait_compactor_idle(); // P3-M8 — the triggered merge runs off the write path
 
     // The 4th write's flush hit the trigger: four L0 → one L1 (KeepAll).
     let current = Current::read(&d.join("CURRENT")).unwrap();

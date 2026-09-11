@@ -26,6 +26,10 @@ fn round_put(db: &Db, r: usize) {
         let v = format!("v{r:03}{i:02}{}", "y".repeat(34)).into_bytes();
         db.put(&k, &v).unwrap();
     }
+    // P3-M8 — the auto-triggered merge runs on the compactor thread. Wait
+    // per round: each kick's scan then sees exactly the flushed pile (the
+    // synchronous trace), and the asserts read the drained state.
+    db.wait_compactor_idle();
 }
 
 fn seg_count(d: &std::path::Path) -> usize {

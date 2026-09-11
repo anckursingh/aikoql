@@ -214,6 +214,9 @@ pub struct WritePathStats {
     pub group_commit_max_ops: u64,
     /// Wall ms of the last merge that actually ran (0 = none yet).
     pub last_compaction_ms: u64,
+    /// P3-M8 — background merges that failed (the error text rides
+    /// `Db::last_compaction_error`; the snapshot stays Copy).
+    pub compaction_error_count: u64,
     /// This open's recovery: wall ms of open() and WAL bytes replayed.
     pub recovery_ms: u64,
     pub wal_replay_bytes: u64,
@@ -237,6 +240,10 @@ pub(crate) struct WriteStats {
     pub(crate) last_compaction_ms: AtomicU64,
     pub(crate) recovery_ms: AtomicU64,
     pub(crate) wal_replay_bytes: AtomicU64,
+    /// P3-M8 — the failed background merge's error text (None = none yet).
+    /// Not in the Copy snapshot — the admin reads it via `Db::last_compaction_error`.
+    pub(crate) compaction_error: std::sync::Mutex<Option<String>>,
+    pub(crate) compaction_error_count: AtomicU64,
 }
 
 impl WriteStats {
@@ -260,6 +267,7 @@ impl WriteStats {
             last_compaction_ms: self.last_compaction_ms.load(Ordering::Relaxed),
             recovery_ms: self.recovery_ms.load(Ordering::Relaxed),
             wal_replay_bytes: self.wal_replay_bytes.load(Ordering::Relaxed),
+            compaction_error_count: self.compaction_error_count.load(Ordering::Relaxed),
         }
     }
 }

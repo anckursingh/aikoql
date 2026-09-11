@@ -64,8 +64,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 pub const LOCK_FILE: &str = "LOCK";
@@ -82,6 +82,11 @@ const DEFAULT_BLOCK_TARGET: usize = 16 * 1024;
 const DEFAULT_GROUP_BATCH_OPS: usize = 4096;
 const DEFAULT_GROUP_BATCH_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_CACHE_BYTES: usize = 8 * 1024 * 1024;
+/// P3-M8 — the default hard bound (256 MiB): a write waits for an
+/// in-flight merge only once the L0 backlog passes this; below it the
+/// compactor is fire-and-forget.
+const DEFAULT_BACKLOG_HARD_BOUND_BYTES: u64 = 256 * 1024 * 1024;
+
 /// SE2-M10 — at least this many L0 segments triggers a KeepAll compaction
 /// on the write path (steady state: one L1 + the active L0).
 const DEFAULT_L0_COMPACT_TRIGGER: usize = 4;
@@ -159,6 +164,19 @@ pub struct Config {
     /// flushes 4, 8, 16, 32… instead of every 4th — the bulk-seed write
     /// amplification drops from quadratic to ~O(n log n).
     pub l0_tier_ratio: usize,
+    /// P3-M8 — true (default) moves auto-triggered merges off the write
+    /// path onto a compactor thread: the triggering write returns without
+    /// waiting, and `compact()` stays synchronous (explicit request).
+    /// false restores the pre-M8 inline path — deterministic tests pin
+    /// their merge windows against it.
+    pub compact_background: bool,
+    /// P3-M8 — hard-bound backpressure: when a write arrives while a
+    /// merge is already in flight AND the L0 backlog exceeds this many
+    /// bytes, the write blocks until the compactor drains it. 0 disables
+    /// the block (kicks stay fire-and-forget). A failed merge always
+    /// clears the block, so the write path can never deadlock behind a
+    /// doomed merge.
+    pub backlog_hard_bound_bytes: u64,
     /// SE2-M20 — compaction merge chunk cap in estimated entry bytes: a
     /// merge publishes its output as a sequence of ~this-size segments
     /// (one manifest record each) so compaction memory is bounded by the
@@ -187,6 +205,8 @@ impl Config {
             cache_bytes: DEFAULT_CACHE_BYTES,
             l0_compact_trigger: DEFAULT_L0_COMPACT_TRIGGER,
             l0_tier_ratio: DEFAULT_L0_TIER_RATIO,
+            compact_background: true,
+            backlog_hard_bound_bytes: DEFAULT_BACKLOG_HARD_BOUND_BYTES,
             merge_chunk_bytes: DEFAULT_MERGE_CHUNK_BYTES,
             checkpoint_bytes: DEFAULT_CHECKPOINT_BYTES,
             trace_every: 0,
@@ -244,6 +264,70 @@ pub(crate) struct State {
 /// (a fresh bounded(1) per batch — std has no oneshot).
 type Batch = (Vec<Op>, mpsc::SyncSender<Result<u64, FormatError>>);
 
+/// P3-M8 — the write path ↔ compactor handshake. `pending` = a kick was
+/// delivered (a merge is in flight or about to run); the compactor clears
+/// it and notifies when it drains (or fails). `kick` sets it and returns
+/// whether a merge was ALREADY in flight when this write arrived — that
+/// bit is the backpressure gate's "already behind" test. No lost
+/// wakeups: the predicate flips under the mutex and every notify follows
+/// a flip.
+struct CompactorSignal {
+    pending: Mutex<bool>,
+    cv: Condvar,
+    shutdown: AtomicBool,
+}
+
+impl CompactorSignal {
+    fn new() -> Arc<Self> {
+        Arc::new(CompactorSignal {
+            pending: Mutex::new(false),
+            cv: Condvar::new(),
+            shutdown: AtomicBool::new(false),
+        })
+    }
+
+    /// Arm a kick. Returns true when a merge was already pending — the
+    /// caller then applies the hard-bound block.
+    fn kick(&self) -> bool {
+        let mut pending = self.pending.lock().unwrap();
+        let already = *pending;
+        *pending = true;
+        self.cv.notify_one();
+        already
+    }
+
+    /// Block until the compactor drains (or shutdown). The compactor
+    /// clears `pending` on success AND on failure — the write path can
+    /// never wait forever behind a doomed merge.
+    fn wait_idle(&self) {
+        let mut pending = self.pending.lock().unwrap();
+        while *pending && !self.shutdown.load(Ordering::SeqCst) {
+            pending = self.cv.wait(pending).unwrap();
+        }
+    }
+
+    /// The compactor side: wait for a kick, or report shutdown.
+    fn wait_kick(&self) -> bool {
+        let mut pending = self.pending.lock().unwrap();
+        while !*pending && !self.shutdown.load(Ordering::SeqCst) {
+            pending = self.cv.wait(pending).unwrap();
+        }
+        !self.shutdown.load(Ordering::SeqCst)
+    }
+
+    fn clear_pending(&self) {
+        *self.pending.lock().unwrap() = false;
+        self.cv.notify_all();
+    }
+
+    /// Drop-side: release every waiter and wake the compactor so its join
+    /// terminates.
+    fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        self.clear_pending();
+    }
+}
+
 pub struct Db {
     pub(crate) config: Config,
     /// Held forever — the OS lock (dropping the file releases it).
@@ -271,6 +355,13 @@ pub struct Db {
     /// P3-M2 — write-path instrumentation (design §21), shared with the
     /// committer thread in GroupCommit mode.
     wstats: Arc<WriteStats>,
+    /// P3-M8 — the background compactor thread (None when
+    /// `compact_background` is off or the trigger is 0) and its handshake.
+    /// The signal lives even without the thread so the write path and
+    /// `wait_compactor_idle` need no Option plumbing — an unarmed signal
+    /// is never pending.
+    compactor: Option<std::thread::JoinHandle<()>>,
+    compactor_signal: Arc<CompactorSignal>,
     /// P4-M5 — the sampled per-request read trace (empty while disabled).
     trace: TraceState,
 }
@@ -675,6 +766,22 @@ impl Db {
         } else {
             (None, None)
         };
+        // P3-M8 — the background compactor (the committer-thread pattern):
+        // spawned whenever auto-compaction can ever fire, joined on drop.
+        let compactor_signal = CompactorSignal::new();
+        let compactor = if config.compact_background && config.l0_compact_trigger > 0 {
+            let state = Arc::clone(&state);
+            let config = config.clone();
+            let cache = cache.clone();
+            let stats = Arc::clone(&stats);
+            let wstats = Arc::clone(&wstats);
+            let signal = Arc::clone(&compactor_signal);
+            Some(std::thread::spawn(move || {
+                compactor_loop(config, state, cache, stats, wstats, signal)
+            }))
+        } else {
+            None
+        };
         // P3-M2 — recovery surface (design §21): this open's wall time and
         // the WAL bytes replayed.
         wstats
@@ -694,6 +801,8 @@ impl Db {
             cache,
             stats,
             wstats,
+            compactor,
+            compactor_signal,
             trace: TraceState::new(),
         })
     }
@@ -713,6 +822,20 @@ impl Db {
             segments: SegmentStats { count, bytes },
             cache: self.cache.as_ref().map(|c| c.stats()).unwrap_or_default(),
         }
+    }
+
+    /// P3-M8 — block until the compactor drains: every kicked merge has
+    /// finished (or failed) and the write path's backpressure wait would
+    /// not block. No-op when the compactor is off (`compact_background`
+    /// false or trigger 0): an unarmed signal is never pending.
+    pub fn wait_compactor_idle(&self) {
+        self.compactor_signal.wait_idle();
+    }
+
+    /// P3-M8 — the last failed background merge's error text (None = none
+    /// yet, or the compactor is off).
+    pub fn last_compaction_error(&self) -> Option<String> {
+        self.wstats.compaction_error.lock().unwrap().clone()
     }
 
     /// P3-M2 — the admin checkpoint (design §22): publish the live
@@ -870,33 +993,39 @@ impl Db {
         }
         let (l0, l0_bytes, l1_bytes) = {
             let state = self.state.read().unwrap();
-            let mut l0 = 0usize;
-            let mut l0_bytes = 0u64;
-            let mut l1_bytes = 0u64;
-            for r in &state.segment_records {
-                if r.level == 0 {
-                    l0 += 1;
-                    l0_bytes += r.file_size;
-                } else {
-                    l1_bytes += r.file_size;
-                }
-            }
             // P3-M2 — the scan is the backlog gauge's free ride: every
-            // write path refreshes what a background compactor would face.
+            // write path refreshes what the compactor faces (met003).
+            let scan = scan_l0(&state);
             self.wstats
                 .compaction_pending_segments
-                .store(l0 as u64, Ordering::Relaxed);
+                .store(scan.0 as u64, Ordering::Relaxed);
             self.wstats
                 .compaction_backlog_bytes
-                .store(l0_bytes, Ordering::Relaxed);
-            (l0, l0_bytes, l1_bytes)
+                .store(scan.1, Ordering::Relaxed);
+            scan
         };
         let triggered = l0 >= self.config.l0_compact_trigger;
         let tier_ok = self.config.l0_tier_ratio == 0
             || l1_bytes == 0
             || l0_bytes >= l1_bytes / self.config.l0_tier_ratio as u64;
-        if triggered && tier_ok {
+        if !triggered || !tier_ok {
+            return Ok(());
+        }
+        if !self.config.compact_background {
             self.compact()?;
+            return Ok(());
+        }
+        // P3-M8 — background: kick the compactor and return. Only a write
+        // that arrived while a merge was ALREADY in flight blocks, and
+        // only over the hard bound — the first triggering write never
+        // waits, tier-skips never block, and a failed merge clears the
+        // block (liveness by construction).
+        let already = self.compactor_signal.kick();
+        if already
+            && self.config.backlog_hard_bound_bytes > 0
+            && l0_bytes > self.config.backlog_hard_bound_bytes
+        {
+            self.compactor_signal.wait_idle();
         }
         Ok(())
     }
@@ -1761,186 +1890,14 @@ impl Db {
     /// only after CURRENT.
     pub fn compact_with(&self, policy: &dyn RetentionPolicy) -> Result<CompactStats, FormatError> {
         let mut state = self.state.write().unwrap();
-        if state.segments.is_empty() {
-            return Ok(CompactStats::default());
-        }
-        let compact_t = Instant::now();
-        let mut next_id = state.next_segment_id;
-        let attach = SegmentAttach {
-            cache: self.cache.clone(),
-            stats: Some(Arc::clone(&self.stats)),
-        };
-        let (stats, chunks, relocations) = merge(
-            &state.segments,
-            self.config.block_target,
-            self.config.merge_chunk_bytes,
-            &self.config.dir,
-            &mut next_id,
+        compact_impl(
+            &self.config,
+            &mut state,
+            &self.cache,
+            &self.stats,
+            &self.wstats,
             policy,
-            &attach,
-        )?;
-        crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_segment");
-
-        // SE2-M35 — every Segment-placed replica relocates: a fresh §25
-        // generation per move, the relocation set's anchor as the new home,
-        // Retired when the merge dropped the replica's last live entry.
-        // Memtable-placed replicas keep theirs — the next flush moves them.
-        // SE2-M39 — the pending records (placement flips a put produced
-        // after the last flush) publish in THIS window too: the compaction
-        // removes the input segments from the manifest, and a flip whose
-        // last LOGGED record named one of them would otherwise resurrect a
-        // dangling Segment placement on reopen (M35: no surviving record
-        // may reference a removed segment). The flip's generation predates
-        // the relocation draws (one allocator), so the order never matters.
-        let mut placement_records: Vec<PlacementRecord> =
-            std::mem::take(&mut state.pending_placements);
-        let mut segment_rids: Vec<ReplicaId> = state
-            .placements
-            .iter()
-            .filter_map(|(&rid, p)| matches!(p, Placement::Segment(_)).then_some(rid))
-            .collect();
-        // SE2-M35 — sorted, so the fresh generations assign deterministically.
-        segment_rids.sort_unstable();
-        for rid in segment_rids {
-            let pgen = state.next_placement_generation;
-            state.next_placement_generation += 1;
-            let relocated = match relocations.get(&rid) {
-                Some(Some(loc)) => Placement::Segment(PhysicalLocation {
-                    segment_id: loc.0,
-                    block_id: loc.1,
-                    entry_offset: loc.2,
-                    generation: pgen,
-                }),
-                Some(None) => Placement::Retired { generation: pgen },
-                // Fail closed: the merge saw every entry of every input
-                // segment, so a Segment-placed replica missing from the set
-                // means the placement predates the input — never relocate
-                // what cannot be proven.
-                None => {
-                    return Err(FormatError::Corrupt(format!(
-                        "segment-placed replica {rid:?} absent from the relocation set"
-                    )))
-                }
-            };
-            placement_records.push(PlacementRecord {
-                rid,
-                placement: relocated,
-            });
-        }
-
-        let old_paths: Vec<PathBuf> = state
-            .segment_records
-            .iter()
-            .map(|r| segment_path(&self.config.dir, r.segment_id))
-            .collect();
-        let mut new_records = Vec::new();
-        let mut new_segments = Vec::new();
-        for (segment_id, (reader, file_size, checksum), _anchors) in chunks {
-            new_records.push(SegmentRecord {
-                segment_id,
-                level: 1,
-                key_min: reader.key_min().to_vec(),
-                key_max: reader.key_max().to_vec(),
-                seq_lo: reader.seq_lo(),
-                seq_hi: reader.seq_hi(),
-                record_count: reader.entry_count(),
-                file_size,
-                checksum,
-            });
-            new_segments.push(Arc::new(reader));
-        }
-        state.next_segment_id = next_id;
-        state.generation += 1;
-        // SE2-M35 — the relocation records publish at the NEW generation,
-        // before the manifest names it (the §23 order, mirroring flush):
-        // state-C — log durable, manifest not — keeps the old placements
-        // authoritative (the new log is an orphan past CURRENT), state-D
-        // applies them on reopen. A compaction that relocated nothing and
-        // drained no pending records publishes no log — gaps are normal.
-        if !placement_records.is_empty() {
-            let log = PlacementLog {
-                format_version: FORMAT_VERSION,
-                generation: state.generation,
-                records: placement_records.clone(),
-            };
-            // SE2-M40 — the checkpoint trigger's budget.
-            state.bytes_since_checkpoint += log.encoded_len() as u64;
-            // SE2-M36 — staged: the §38 LOCATION windows park inside.
-            PlacementLog::publish_staged(
-                &placement_log_path(&self.config.dir, state.generation),
-                &log,
-                Some("LOCATION"),
-            )?;
-        }
-        crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_location");
-        let manifest = Manifest {
-            format_version: FORMAT_VERSION,
-            generation: state.generation,
-            segments: new_records.clone(),
-            wal_ids: vec![],
-        };
-        // P4-M3 — debug builds refuse to publish impossible metadata.
-        #[cfg(debug_assertions)]
-        validate_manifest(&manifest, &self.config.dir)?;
-        // SE2-M36 — staged: the §38 MANIFEST windows park inside.
-        Manifest::publish_staged(
-            &manifest_path(&self.config.dir, state.generation),
-            &manifest,
-            Some("MANIFEST"),
-        )?;
-        crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_manifest");
-        Current::publish(
-            &self.config.dir.join("CURRENT"),
-            &Current::new(FORMAT_VERSION, state.generation),
-        )?;
-        crash_park(
-            "AIKOQL_V2_PLACE_PARK",
-            &self.config.dir,
-            "FAIL_AFTER_PUBLISH",
-        );
-        crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_current");
-
-        // Swap readers before deleting: handles open with share-delete, so
-        // Windows marks the files delete-pending and any reader that still
-        // references an obsolete segment keeps its data alive (the
-        // Arc<Segment> lifetime guarantee, via the OS).
-        state.segments = Arc::new(new_segments);
-        state.segment_records = new_records;
-        for rec in &placement_records {
-            // Infallible in practice — the records carry fresh generations —
-            // but the gate stays the one path in.
-            merge_placement(&mut state.placements, rec.rid, rec.placement)?;
-        }
-        for p in &old_paths {
-            if let Err(e) = std::fs::remove_file(p) {
-                // Not fatal: the segment is unreferenced — a leftover is
-                // reported and ignored at the next open.
-                eprintln!(
-                    "aikoql-v2: obsolete segment {} not removed: {e}",
-                    p.display()
-                );
-            }
-        }
-        // SE2-M40 — the relocation log's bytes count toward the trigger;
-        // a compaction-heavy workload checkpoints without any flush.
-        if self.config.checkpoint_bytes > 0
-            && state.bytes_since_checkpoint >= self.config.checkpoint_bytes as u64
-        {
-            Self::write_checkpoint(&self.config, &mut state, &self.wstats)?;
-        }
-        // P3-M2 — the merge drained L0 into L1: the backlog gauges drop to
-        // zero here (the maybe_compact scan would have refreshed them on
-        // the next write anyway — this keeps the admin view current).
-        self.wstats
-            .compaction_pending_segments
-            .store(0, Ordering::Relaxed);
-        self.wstats
-            .compaction_backlog_bytes
-            .store(0, Ordering::Relaxed);
-        self.wstats
-            .last_compaction_ms
-            .store(compact_t.elapsed().as_millis() as u64, Ordering::Relaxed);
-        Ok(stats)
+        )
     }
 
     /// SE2-M40 — the checkpoint publication protocol (review P0-2):
@@ -1987,6 +1944,261 @@ impl Db {
     }
 }
 
+/// The merge body shared by the synchronous `compact_with` and the
+/// background compactor (P3-M8) — free of `self` so both run the exact
+/// same publication protocol (segment → manifest → CURRENT → delete
+/// obsolete, the flush mirror; every crash park in between).
+#[allow(clippy::too_many_arguments)] // same handle-set mirror as committer_loop
+fn compact_impl(
+    config: &Config,
+    state: &mut State,
+    cache: &Option<Arc<BlockCache>>,
+    stats: &Arc<Stats>,
+    wstats: &Arc<WriteStats>,
+    policy: &dyn RetentionPolicy,
+) -> Result<CompactStats, FormatError> {
+    if state.segments.is_empty() {
+        return Ok(CompactStats::default());
+    }
+    let compact_t = Instant::now();
+    let mut next_id = state.next_segment_id;
+    let attach = SegmentAttach {
+        cache: cache.clone(),
+        stats: Some(Arc::clone(stats)),
+    };
+    let (stats, chunks, relocations) = merge(
+        &state.segments,
+        config.block_target,
+        config.merge_chunk_bytes,
+        &config.dir,
+        &mut next_id,
+        policy,
+        &attach,
+    )?;
+    crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_segment");
+
+    // SE2-M35 — every Segment-placed replica relocates: a fresh §25
+    // generation per move, the relocation set's anchor as the new home,
+    // Retired when the merge dropped the replica's last live entry.
+    // Memtable-placed replicas keep theirs — the next flush moves them.
+    // SE2-M39 — the pending records (placement flips a put produced
+    // after the last flush) publish in THIS window too: the compaction
+    // removes the input segments from the manifest, and a flip whose
+    // last LOGGED record named one of them would otherwise resurrect a
+    // dangling Segment placement on reopen (M35: no surviving record
+    // may reference a removed segment). The flip's generation predates
+    // the relocation draws (one allocator), so the order never matters.
+    let mut placement_records: Vec<PlacementRecord> = std::mem::take(&mut state.pending_placements);
+    let mut segment_rids: Vec<ReplicaId> = state
+        .placements
+        .iter()
+        .filter_map(|(&rid, p)| matches!(p, Placement::Segment(_)).then_some(rid))
+        .collect();
+    // SE2-M35 — sorted, so the fresh generations assign deterministically.
+    segment_rids.sort_unstable();
+    for rid in segment_rids {
+        let pgen = state.next_placement_generation;
+        state.next_placement_generation += 1;
+        let relocated = match relocations.get(&rid) {
+            Some(Some(loc)) => Placement::Segment(PhysicalLocation {
+                segment_id: loc.0,
+                block_id: loc.1,
+                entry_offset: loc.2,
+                generation: pgen,
+            }),
+            Some(None) => Placement::Retired { generation: pgen },
+            // Fail closed: the merge saw every entry of every input
+            // segment, so a Segment-placed replica missing from the set
+            // means the placement predates the input — never relocate
+            // what cannot be proven.
+            None => {
+                return Err(FormatError::Corrupt(format!(
+                    "segment-placed replica {rid:?} absent from the relocation set"
+                )))
+            }
+        };
+        placement_records.push(PlacementRecord {
+            rid,
+            placement: relocated,
+        });
+    }
+
+    let old_paths: Vec<PathBuf> = state
+        .segment_records
+        .iter()
+        .map(|r| segment_path(&config.dir, r.segment_id))
+        .collect();
+    let mut new_records = Vec::new();
+    let mut new_segments = Vec::new();
+    for (segment_id, (reader, file_size, checksum), _anchors) in chunks {
+        new_records.push(SegmentRecord {
+            segment_id,
+            level: 1,
+            key_min: reader.key_min().to_vec(),
+            key_max: reader.key_max().to_vec(),
+            seq_lo: reader.seq_lo(),
+            seq_hi: reader.seq_hi(),
+            record_count: reader.entry_count(),
+            file_size,
+            checksum,
+        });
+        new_segments.push(Arc::new(reader));
+    }
+    state.next_segment_id = next_id;
+    state.generation += 1;
+    // SE2-M35 — the relocation records publish at the NEW generation,
+    // before the manifest names it (the §23 order, mirroring flush):
+    // state-C — log durable, manifest not — keeps the old placements
+    // authoritative (the new log is an orphan past CURRENT), state-D
+    // applies them on reopen. A compaction that relocated nothing and
+    // drained no pending records publishes no log — gaps are normal.
+    if !placement_records.is_empty() {
+        let log = PlacementLog {
+            format_version: FORMAT_VERSION,
+            generation: state.generation,
+            records: placement_records.clone(),
+        };
+        // SE2-M40 — the checkpoint trigger's budget.
+        state.bytes_since_checkpoint += log.encoded_len() as u64;
+        // SE2-M36 — staged: the §38 LOCATION windows park inside.
+        PlacementLog::publish_staged(
+            &placement_log_path(&config.dir, state.generation),
+            &log,
+            Some("LOCATION"),
+        )?;
+    }
+    crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_location");
+    let manifest = Manifest {
+        format_version: FORMAT_VERSION,
+        generation: state.generation,
+        segments: new_records.clone(),
+        wal_ids: vec![],
+    };
+    // P4-M3 — debug builds refuse to publish impossible metadata.
+    #[cfg(debug_assertions)]
+    validate_manifest(&manifest, &config.dir)?;
+    // SE2-M36 — staged: the §38 MANIFEST windows park inside.
+    Manifest::publish_staged(
+        &manifest_path(&config.dir, state.generation),
+        &manifest,
+        Some("MANIFEST"),
+    )?;
+    crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_manifest");
+    Current::publish(
+        &config.dir.join("CURRENT"),
+        &Current::new(FORMAT_VERSION, state.generation),
+    )?;
+    crash_park("AIKOQL_V2_PLACE_PARK", &config.dir, "FAIL_AFTER_PUBLISH");
+    crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_current");
+
+    // Swap readers before deleting: handles open with share-delete, so
+    // Windows marks the files delete-pending and any reader that still
+    // references an obsolete segment keeps its data alive (the
+    // Arc<Segment> lifetime guarantee, via the OS).
+    state.segments = Arc::new(new_segments);
+    state.segment_records = new_records;
+    for rec in &placement_records {
+        // Infallible in practice — the records carry fresh generations —
+        // but the gate stays the one path in.
+        merge_placement(&mut state.placements, rec.rid, rec.placement)?;
+    }
+    for p in &old_paths {
+        if let Err(e) = std::fs::remove_file(p) {
+            // Not fatal: the segment is unreferenced — a leftover is
+            // reported and ignored at the next open.
+            eprintln!(
+                "aikoql-v2: obsolete segment {} not removed: {e}",
+                p.display()
+            );
+        }
+    }
+    // SE2-M40 — the relocation log's bytes count toward the trigger;
+    // a compaction-heavy workload checkpoints without any flush.
+    if config.checkpoint_bytes > 0 && state.bytes_since_checkpoint >= config.checkpoint_bytes as u64
+    {
+        Db::write_checkpoint(config, state, wstats)?;
+    }
+    // P3-M2 — the merge drained L0 into L1: the backlog gauges drop to
+    // zero here (the maybe_compact scan would have refreshed them on
+    // the next write anyway — this keeps the admin view current).
+    wstats
+        .compaction_pending_segments
+        .store(0, Ordering::Relaxed);
+    wstats.compaction_backlog_bytes.store(0, Ordering::Relaxed);
+    wstats
+        .last_compaction_ms
+        .store(compact_t.elapsed().as_millis() as u64, Ordering::Relaxed);
+    Ok(stats)
+}
+
+/// The L0 pile one scan sees: (segment count, total bytes) plus the L1
+/// byte total the tier gate compares against. Shared by the write path
+/// (which refreshes the P3-M2 backlog gauges with it) and the compactor's
+/// re-evaluation (which doesn't — the write path owns the gauges, met003).
+fn scan_l0(state: &State) -> (usize, u64, u64) {
+    let mut l0 = 0usize;
+    let mut l0_bytes = 0u64;
+    let mut l1_bytes = 0u64;
+    for r in &state.segment_records {
+        if r.level == 0 {
+            l0 += 1;
+            l0_bytes += r.file_size;
+        } else {
+            l1_bytes += r.file_size;
+        }
+    }
+    (l0, l0_bytes, l1_bytes)
+}
+
+/// P3-M8 — the background compactor (the committer-thread pattern): wait
+/// for a kick, re-evaluate the SAME trigger gates the write path used
+/// (the scan is fresh — more flushes may have landed since the kick, and
+/// merging them too is always correct), and keep merging until the gates
+/// no longer hold. One merge failure records the error and clears the
+/// pending flag — a doomed merge must never stall the write path's
+/// backpressure wait forever. The `segments.len() > 1` floor mirrors
+/// compact()'s own no-op guard so a lone segment never loops.
+fn compactor_loop(
+    config: Config,
+    state: Arc<RwLock<State>>,
+    cache: Option<Arc<BlockCache>>,
+    stats: Arc<Stats>,
+    wstats: Arc<WriteStats>,
+    signal: Arc<CompactorSignal>,
+) {
+    while signal.wait_kick() {
+        loop {
+            if signal.shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            let (l0, l0_bytes, l1_bytes, len) = {
+                let state = state.read().unwrap();
+                let (l0, l0_bytes, l1_bytes) = scan_l0(&state);
+                (l0, l0_bytes, l1_bytes, state.segments.len())
+            };
+            let triggered = l0 >= config.l0_compact_trigger;
+            let tier_ok = config.l0_tier_ratio == 0
+                || l1_bytes == 0
+                || l0_bytes >= l1_bytes / config.l0_tier_ratio as u64;
+            if !triggered || !tier_ok || len <= 1 {
+                break;
+            }
+            let mut st = state.write().unwrap();
+            match compact_impl(&config, &mut st, &cache, &stats, &wstats, &KeepAll) {
+                Ok(_) => {}
+                Err(e) => {
+                    wstats
+                        .compaction_error_count
+                        .fetch_add(1, Ordering::Relaxed);
+                    *wstats.compaction_error.lock().unwrap() = Some(format!("{e}"));
+                    break;
+                }
+            }
+        }
+        signal.clear_pending();
+    }
+}
+
 /// SE2-M4 crash-matrix hook: parks forever only when the env names this
 /// stage, so the child-kill harness can kill the process mid-compaction
 /// and pin the §25 windows. Unset in production — a no-op.
@@ -1999,6 +2211,13 @@ impl Drop for Db {
         // group. (CommitWriter's doc spells out the drop-order rule.)
         self.queue_tx = None;
         if let Some(handle) = self.committer.take() {
+            let _ = handle.join();
+        }
+        // P3-M8 — stop the compactor: release every waiter (a writer
+        // blocked on the hard bound must not join-drop forever), wake the
+        // compactor, and join it — an in-flight merge finishes first.
+        self.compactor_signal.shutdown();
+        if let Some(handle) = self.compactor.take() {
             let _ = handle.join();
         }
     }

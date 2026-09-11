@@ -54,6 +54,10 @@ fn drive_to_depth(
     loop {
         r += 1;
         put(db, r);
+        // P3-M8 — the auto-triggered merge runs on the compactor thread.
+        // Wait per round: the l0_count probe and the get's depth pin then
+        // read the drained state (the synchronous trace).
+        db.wait_compactor_idle();
         if l0_count(d) >= depth {
             return r;
         }

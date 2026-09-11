@@ -31,6 +31,7 @@ pub(crate) fn tool_storage_stats(
             "group_commit_ops": s.write.group_commit_ops,
             "group_commit_max_ops": s.write.group_commit_max_ops,
             "last_compaction_ms": s.write.last_compaction_ms,
+            "compaction_error_count": s.write.compaction_error_count,
             "recovery_ms": s.write.recovery_ms,
             "wal_replay_bytes": s.write.wal_replay_bytes,
         },
