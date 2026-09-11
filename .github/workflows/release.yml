@@ -374,3 +374,36 @@ jobs:
         run: npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ''  # force pure OIDC — GitHub injects a managed token that npmjs.org 404s (v0.1.18)
+
+  # ── PyPI publish (P3-M9): the adopted Python SDK, versioned from the
+  # workspace (pyproject dynamic = ["version"] → the crate's
+  # version.workspace; sdk001 pins the parity). Trusted publishing (OIDC) —
+  # requires the PyPI project configured for GitHub trusted publishing.
+  pypi-publish:
+    name: Publish Python SDK to PyPI
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [github-release, validate-versions]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build wheel + tag-version gate
+        run: |
+          set -euo pipefail
+          pip install -q maturin
+          cd crates/sdk/python
+          maturin build --release --out dist
+          v="${GITHUB_REF_NAME#v}"
+          ls "dist/aikoql-${v}"-*.whl >/dev/null || {
+            echo "::error::wheel version does not match tag '${v}' (sdk001 parity)"
+            exit 1
+          }
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: crates/sdk/python/dist/

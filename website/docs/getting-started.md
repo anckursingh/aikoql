@@ -206,28 +206,28 @@ Ollama/OpenAI-compatible endpoint to use a remote model instead
 
 ## Connecting from Code
 
+MCP is the blessed integration surface (P3-M9): every language uses its
+standard MCP client, plus a first-party Python SDK.
+
 ### Python
 ```python
-import aikoql_py
-kernel = aikoql_py.Kernel.open("./kb")  # fresh path = aikoql-v2 database directory
-result = kernel.remember({"type_name": "Note", "properties": {"body": "Hello"}})
+from aikoql import Agent
+db = Agent.connect("./kb")  # embedded — fresh path = aikoql-v2 database directory
+# or server mode: Agent.connect("localhost:9090", token="your-tcp-token")
+result = db.remember("Note", {"body": "Hello"})
 ```
 
-### TypeScript
+### TypeScript / Go / any language
 ```typescript
-import { AikoqlClient } from 'aikoql-sdk';
-const client = new AikoqlClient({ command: './aikoql' });
-await client.connect();
-await client.remember({ type_name: 'Note', properties: { body: 'Hello' } });
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+const client = new Client({ name: 'my-agent', version: '1.0.0' });
+await client.connect(new StdioClientTransport({ command: 'aikoql-mcp', args: ['serve', './kb'] }));
+const result = await client.callTool({ name: 'remember', arguments: { type_name: 'Note', properties: { body: 'Hello' } } });
 ```
 
-### Go
-```go
-import "github.com/ancku/aikoql-sdk"
-client := aikoql.NewClient("127.0.0.1:9090")
-client.Connect()
-result, _ := client.Remember(map[string]interface{}{"type_name": "Note"})
-```
+First-party drivers for other languages return with the primary-DB roadmap
+(`docs/first-class-db-roadmap.md`).
 
 ## Encryption (Optional)
 

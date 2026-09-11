@@ -32,9 +32,11 @@ class McpError(Exception):
 class McpClient:
     """JSON-RPC 2.0 client for aikoql-mcp over TCP."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9090):
+    def __init__(self, host: str = "127.0.0.1", port: int = 9090, token: Optional[str] = None):
         self.host = host
         self.port = port
+        # P3-M1 servers require a --tcp-token: it rides initialize params.
+        self.token = token
         self._sock: Optional[socket.socket] = None
         self._buf = b""
         self._next_id = 0
@@ -96,16 +98,25 @@ class McpClient:
     # -- MCP protocol ---------------------------------------------------
 
     def initialize(self, client_name: str = "aikoql-py", client_version: str = "0.1.0"):
-        return self._rpc("initialize", {
+        params = {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {"name": client_name, "version": client_version},
-        })
+        }
+        if self.token:
+            params["token"] = self.token
+        return self._rpc("initialize", params)
 
-    def session_init(self, agent_id: str, run_id: Optional[str] = None,
+    def session_init(self, agent_id: Optional[str] = None, run_id: Optional[str] = None,
                      tenant: Optional[str] = None, roles: Optional[List[str]] = None):
-        """Establish session identity (MRFC-0040). Subsequent calls inherit it."""
-        params: Dict[str, Any] = {"agent_id": agent_id}
+        """Establish session identity (MRFC-0040). Subsequent calls inherit it.
+
+        P3-M1: on TCP the identity is server-assigned by --tcp-token, so
+        agent_id must be omitted there (only run_id is per-session).
+        """
+        params: Dict[str, Any] = {}
+        if agent_id:
+            params["agent_id"] = agent_id
         if run_id:
             params["run_id"] = run_id
         if tenant:

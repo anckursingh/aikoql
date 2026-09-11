@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>aikoql — The Agent-First Knowledge Database</title>
-<meta name="description" content="aikoql is the knowledge operating system for AI agents. Everything is a Knowledge Object — data, programs, workflows, policies. MCP tools, 4 SDKs, 14-panel Studio UI.">
+<meta name="description" content="aikoql is the knowledge operating system for AI agents. Everything is a Knowledge Object — data, programs, workflows, policies. MCP tools, Python SDK, 14-panel Studio UI.">
 <style>
 :root {
   --bg: #0a0a12;
@@ -139,7 +139,7 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
   <div class="stat"><div class="n">370K+</div><div class="l">Reads/sec</div></div>
   <div class="stat"><div class="n">120K+</div><div class="l">Writes/sec</div></div>
   <div class="stat"><div class="n">88</div><div class="l">MCP Tools</div></div>
-  <div class="stat"><div class="n">4</div><div class="l">Language SDKs</div></div>
+  <div class="stat"><div class="n">MCP</div><div class="l">Any Language</div></div>
   <div class="stat"><div class="n">4</div><div class="l">DB Connectors</div></div>
   <div class="stat"><div class="n">0</div><div class="l">Runtime Deps</div></div>
 </div>
@@ -203,8 +203,8 @@ footer .links { margin-bottom: 12px; display: flex; gap: 20px; justify-content: 
     </div>
     <div class="feature">
       <div class="icon">🧩</div>
-      <h3>4 Language SDKs</h3>
-      <p>Python (PyO3 native + pure MCP client), TypeScript, Go (stdlib), Java (Gson). Unified Agent.connect() that auto-detects embedded vs server mode.</p>
+      <h3>MCP for Every Language</h3>
+      <p>One server, every ecosystem's standard MCP client. Plus a first-party Python SDK (PyO3 native + pure MCP client) with unified Agent.connect() that auto-detects embedded vs server mode.</p>
     </div>
     <div class="feature">
       <div class="icon">🏗</div>
@@ -409,20 +409,16 @@ aikoql report ~/my-project</code></pre>
   <div class="tabs">
     <button class="tab active" onclick="showInstall('py',this)">Python</button>
     <button class="tab" onclick="showInstall('ts',this)">TypeScript</button>
-    <button class="tab" onclick="showInstall('go',this)">Go</button>
   </div>
   <div id="inst-py"><pre><code>from aikoql import Agent
 db = Agent.connect("localhost:9090")  # or embedded: Agent.connect("./kb") — aikoql-v2 by default
-db.remember({"type_name": "Note", "properties": {"body": "Hello aikoql"}})
-result = db.query("MATCH Note RETURN *")</code></pre></div>
-  <div id="inst-ts" style="display:none"><pre><code>import { AikoqlClient } from 'aikoql-sdk';
-const client = new AikoqlClient({ command: './aikoql' });
-await client.connect();
-await client.remember({ type_name: 'Note', properties: { body: 'Hello' } });</code></pre></div>
-  <div id="inst-go" style="display:none"><pre><code>import "github.com/ancku/aikoql-sdk"
-client := aikoql.NewClient("127.0.0.1:9090")
-client.Connect()
-result, _ := client.Remember(map[string]interface{}{"type_name": "Note"})</code></pre></div>
+db.remember("Note", {"body": "Hello aikoql"})
+result = db.aikoql("MATCH Note RETURN *")</code></pre></div>
+  <div id="inst-ts" style="display:none"><pre><code>import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+const client = new Client({ name: 'my-agent', version: '1.0.0' });
+await client.connect(new StdioClientTransport({ command: 'aikoql-mcp', args: ['serve', './kb'] }));
+const result = await client.callTool({ name: 'remember', arguments: { type_name: 'Note', properties: { body: 'Hello' } } });</code></pre></div>
 </section>
 
 <div class="divider"></div>

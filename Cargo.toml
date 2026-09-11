@@ -15,7 +15,6 @@ members = [
     "crates/runtime",
     "crates/compiler",
     "benchmarks",
-    "crates/cluster/proxy",
     "crates/services/api/mcp",
     "crates/sdk/python",
     "crates/ingestion",

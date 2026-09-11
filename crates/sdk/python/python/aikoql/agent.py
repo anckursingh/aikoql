@@ -42,7 +42,7 @@ class Agent:
             host, port = target
             agent._mode = "mcp"
             from .mcp_client import McpClient
-            agent._backend = McpClient(host, port).connect(timeout=kwargs.get("timeout", 5.0))
+            agent._backend = McpClient(host, port, kwargs.get("token")).connect(timeout=kwargs.get("timeout", 5.0))
             agent._backend.initialize(
                 kwargs.get("client_name", "aikoql-py"),
                 kwargs.get("client_version", "0.1.0"),
@@ -61,7 +61,7 @@ class Agent:
                 agent._mode = "mcp"
                 host, _, port = target.partition(":")
                 from .mcp_client import McpClient
-                agent._backend = McpClient(host, int(port)).connect(timeout=kwargs.get("timeout", 5.0))
+                agent._backend = McpClient(host, int(port), kwargs.get("token")).connect(timeout=kwargs.get("timeout", 5.0))
                 agent._backend.initialize(
                     kwargs.get("client_name", "aikoql-py"),
                     kwargs.get("client_version", "0.1.0"),
@@ -103,7 +103,7 @@ class Agent:
 
     # -- Session identity (MRFC-0040 #2) -------------------------------
 
-    def session_init(self, agent_id: str, run_id: Optional[str] = None,
+    def session_init(self, agent_id: Optional[str] = None, run_id: Optional[str] = None,
                      tenant: Optional[str] = None, roles: Optional[List[str]] = None) -> dict:
         """Establish session identity. Server mode only."""
         if self._mode == "mcp":

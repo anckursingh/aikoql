@@ -4,7 +4,9 @@ build-backend = "maturin"
 
 [project]
 name = "aikoql"
-version = "0.1.0"
+# P3-M9 — the version comes from the Rust crate (version.workspace): one
+# source of truth, sdk001 pins the parity.
+dynamic = ["version"]
 description = "Python SDK for the Aikoql Knowledge Kernel"
 requires-python = ">=3.9"
 classifiers = [

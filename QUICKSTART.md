@@ -216,36 +216,38 @@ cd tests/e2e && npx playwright test
 
 ## Connecting from Code
 
+MCP is the blessed integration surface (P3-M9): the server ships as a single
+binary or npm package, and every language uses its standard MCP client —
+no hand-rolled SDKs to drift.
+
+### Python (first-party SDK)
+```python
+from aikoql import Agent
+
+# Embedded (in-process) — a fresh path creates an aikoql-v2 database:
+db = Agent.connect("./kb")
+# Server mode — MCP over TCP (P3-M1 servers require a token):
+db = Agent.connect("localhost:9090", token="your-tcp-token")
+
+result = db.remember("note", {"body": "Hello"})
+tasks = db.aikoql("MATCH note RETURN *")
+```
+
 ### TypeScript/JavaScript
 ```typescript
-import { AikoqlClient } from './aikoql-sdk';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-const client = new AikoqlClient({ command: './aikoql-mcp' });
-await client.connect();
-const result = await client.remember({ type_name: 'note', properties: { body: 'Hello' } });
+const client = new Client({ name: 'my-agent', version: '1.0.0' });
+await client.connect(new StdioClientTransport({ command: 'aikoql-mcp', args: ['serve', './kb'] }));
+const result = await client.callTool({ name: 'remember', arguments: { type_name: 'note', properties: { body: 'Hello' } } });
 ```
 
-### Python
-```python
-import aikoql_py
+### Go / Java / any language
 
-kernel = aikoql_py.Kernel.open("./aikoql.redb")
-koid = kernel.remember({"type_name": "note", "properties": {"body": "Hello"}})
-```
-
-### Go
-```go
-client := aikoql.NewClient("./aikoql-mcp")
-client.Connect()
-client.Remember(aikoql.RememberRequest{...})
-```
-
-### Java
-```java
-AikoqlClient client = new AikoqlClient("./aikoql-mcp");
-client.connect();
-String result = client.remember("{\"type_name\": \"note\", ...}");
-```
+Same pattern: run `aikoql-mcp serve` (stdio or TCP with `--tcp-token`) and
+use the standard MCP client for that ecosystem. See `docs/first-class-db-roadmap.md`
+for when first-party drivers return.
 
 ## Data Storage
 

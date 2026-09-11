@@ -9,7 +9,7 @@ description: Build, test and extend aikoql from source
 
 - **Rust** — stable toolchain. On Windows: MSVC (Build Tools) — the storage
   engine intentionally avoids asm-shim dependencies that fail on MSVC.
-- **Node.js** — only for the TypeScript SDK and npm packaging.
+- **Node.js** — only for npm packaging of the MCP plugin.
 - **Python 3.9+** — only for the PyO3 SDK (`crates/sdk/python`).
 
 No database server, no service dependencies. Everything is embedded.
@@ -56,8 +56,7 @@ crates/
 ├── engines/          graph, vector, scheduler
 ├── services/         api/mcp (MCP + REST + Studio), reasoning, semantic, ingestion
 ├── connectors/       postgres, sqlite, mongodb, neo4j
-├── sdk/              python, typescript, go, java
-└── cluster/proxy/    Multi-shard proxy
+├── sdk/              python (P3-M9: the one first-party SDK)
 ```
 
 See [Architecture](/docs/architecture) for the full crate map and the

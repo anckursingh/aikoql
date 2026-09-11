@@ -21,7 +21,7 @@ from aikoql.adapters.langgraph import AikoqlLangGraphSaver
 
 # PyO3 native module — may be unavailable in pure-MCP deployments.
 try:
-    from aikoql._aikoql import aikoql
+    from aikoql._aikoql import aikoql, __version__
 except ImportError:
     aikoql = None  # type: ignore
 

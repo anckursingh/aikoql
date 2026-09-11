@@ -398,5 +398,8 @@ impl Aikoql {
 #[pymodule]
 fn _aikoql(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Aikoql>()?;
+    // P3-M9 — version parity with the workspace (sdk001 pins it): the
+    // crate version IS the package version (maturin dynamic = ["version"]).
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

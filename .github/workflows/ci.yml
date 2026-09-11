@@ -314,6 +314,31 @@ jobs:
       - run: node scripts/certify.js --self-test
       - run: node scripts/certify.js --check
 
+  # P3-M9: the Python SDK is the adopted first-party SDK — its contract
+  # suite (sdk001 version parity + 8 mcp_client tests against the real
+  # binary) runs in CI so the client can never drift from the server again
+  # (the P3-M1 token-auth drift that broke all 8 tests was caught here).
+  python-sdk:
+    name: Python SDK contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build server binary (the contract target)
+        run: cargo build -p aikoql-mcp
+      - name: Build native module + run SDK suite
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          .venv/bin/pip install -q maturin pytest
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          "$VIRTUAL_ENV/bin/python" -m pytest tests/ -q
+
   dependency-dag:
     name: Verify Dependency DAG
     runs-on: ubuntu-latest
@@ -336,6 +361,20 @@ jobs:
               --exclude-dir=node_modules --exclude-dir=.github \
               . 2>/dev/null; then
             echo "DAG VIOLATION: reference to a deleted P3-M0 harness"
+            exit 1
+          fi
+          # P3-M9 (sdk002-deletions): the deleted Go/TS/Java SDKs and the
+          # cluster proxy must stay deleted — MCP is the blessed surface
+          # (docs/sdk-proxy-decision.md). No workspace code or doc may
+          # reference them again. (examples/hello-agent.ts lives again —
+          # rewritten on @modelcontextprotocol/sdk; wave31_oss pins its
+          # existence and content.)
+          echo "Checking deleted SDK/proxy references..."
+          if grep -rni 'crates/cluster/proxy\|crates/sdk/go\|crates/sdk/typescript\|crates/sdk/java\|aikoql-sdk\|AikoqlClient' \
+              --exclude='sdk-proxy-decision.md' \
+              --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.github \
+              . 2>/dev/null; then
+            echo "DAG VIOLATION: reference to a deleted P3-M9 SDK or cluster proxy"
             exit 1
           fi
           echo "Dependency DAG OK"
