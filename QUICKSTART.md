@@ -291,6 +291,7 @@ Shipped binaries download from `https://github.com/anckursingh/aikoql/releases` 
 
 ## Next Steps
 
+- Read [AGENTIC-QUICKSTART.md](AGENTIC-QUICKSTART.md) — aikoql for coding agents (Claude Code, Codex, Cursor): harness wiring, a validated first-session flow, and a harness test checklist
 - Open **http://127.0.0.1:9191/studio** — explore the Studio UI
 - Read [MRFC-0050](docs/MRFC-0050-Document-OCR-HLD-LLD.md) — document pipeline design
 - Read [MRFC-0040](docs/MRFC-0040-Agent-Experience-Improvements.md) — agent runtime improvements
