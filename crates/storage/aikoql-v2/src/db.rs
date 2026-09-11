@@ -54,7 +54,9 @@ use crate::placement::{BlockId, SegmentId};
 use crate::segment::{
     SegmentAttach, SegmentEntry, SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT,
 };
-use crate::stats::{record_latency_us, DbStats, ReadPathStats, SegmentStats, Stats, WriteStats};
+use crate::stats::{
+    record_latency_us, DbStats, ReadPathStats, ReadTraceRecord, SegmentStats, Stats, WriteStats,
+};
 use crate::wal::{encode_frame, replay_frames, Op};
 use aikoql_kernel::knowledge::kom::sha256;
 use std::cmp::Reverse;
@@ -105,6 +107,10 @@ const DEFAULT_MERGE_CHUNK_BYTES: usize = 64 * 1024 * 1024;
 /// ~16 MiB at any scale while the measured 100K-object directory history
 /// (14.7 MB, SE2-M39) stays below the trigger — existing pins hold.
 const DEFAULT_CHECKPOINT_BYTES: usize = 16 * 1024 * 1024;
+/// P4-M5 — the per-request read trace keeps at most this many records;
+/// once full, new records are dropped (sampling is for operators, not
+/// correctness — a ring would just evict the samples you asked for).
+const MAX_TRACE_RECORDS: usize = 65_536;
 
 pub fn manifest_path(dir: &Path, generation: u64) -> PathBuf {
     dir.join(format!("MANIFEST-{generation:06}"))
@@ -162,6 +168,10 @@ pub struct Config {
     /// SE2-M40 — directory checkpoint trigger in accumulated delta-log
     /// bytes (see DEFAULT_CHECKPOINT_BYTES). 0 disables checkpoints.
     pub checkpoint_bytes: usize,
+    /// P4-M5 — read trace sampling rate: one record every Nth read request
+    /// (get/get_many), 1 = every request. 0 (the default) disables the
+    /// trace entirely — the read path then never snapshots, never locks.
+    pub trace_every: u64,
 }
 
 impl Config {
@@ -179,6 +189,7 @@ impl Config {
             l0_tier_ratio: DEFAULT_L0_TIER_RATIO,
             merge_chunk_bytes: DEFAULT_MERGE_CHUNK_BYTES,
             checkpoint_bytes: DEFAULT_CHECKPOINT_BYTES,
+            trace_every: 0,
         }
     }
 }
@@ -260,6 +271,43 @@ pub struct Db {
     /// P3-M2 — write-path instrumentation (design §21), shared with the
     /// committer thread in GroupCommit mode.
     wstats: Arc<WriteStats>,
+    /// P4-M5 — the sampled per-request read trace (empty while disabled).
+    trace: TraceState,
+}
+
+/// P4-M5 — bounded, sampled per-request read trace. `record` assigns the
+/// request sequence and keeps the record only when the Nth-request sample
+/// fires; callers never touch this while `trace_every == 0` (the wrapper
+/// guards), so a disabled trace costs nothing.
+#[derive(Debug)]
+struct TraceState {
+    inner: Mutex<TraceInner>,
+}
+
+#[derive(Debug, Default)]
+struct TraceInner {
+    next_seq: u64,
+    records: Vec<ReadTraceRecord>,
+}
+
+impl TraceState {
+    fn new() -> Self {
+        TraceState {
+            inner: Mutex::new(TraceInner::default()),
+        }
+    }
+
+    fn record(&self, every: u64, rec: ReadTraceRecord) {
+        let mut t = self.inner.lock().unwrap();
+        let seq = t.next_seq;
+        t.next_seq += 1;
+        if !seq.is_multiple_of(every) {
+            return;
+        }
+        if t.records.len() < MAX_TRACE_RECORDS {
+            t.records.push(ReadTraceRecord { seq, ..rec });
+        }
+    }
 }
 
 /// P3-M2 — the checkpoint_now admin surface (design §22): the publication
@@ -646,6 +694,7 @@ impl Db {
             cache,
             stats,
             wstats,
+            trace: TraceState::new(),
         })
     }
 
@@ -1139,10 +1188,20 @@ impl Db {
     /// the clone is get work, not attribution residual.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, FormatError> {
         let t_wall = Instant::now();
+        // P4-M5 — the trace is a delta of aggregates: snapshot before,
+        // snapshot after, publish when sampling fires. Disabled = the
+        // pre-M5 body exactly (one plain load).
+        let before = (self.config.trace_every != 0).then(|| self.stats.snapshot());
         let out = self.get_inner(key);
         self.stats
             .get_wall_ns
             .fetch_add(t_wall.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        if let Some(before) = before {
+            self.trace.record(
+                self.config.trace_every,
+                self.stats.snapshot().delta_of(&before),
+            );
+        }
         out
     }
 
@@ -1155,10 +1214,18 @@ impl Db {
     /// (newest PUT wins, a DELETE shadows everything older).
     pub fn get_many(&self, keys: &[&[u8]]) -> Result<Vec<Option<Vec<u8>>>, FormatError> {
         let t_wall = Instant::now();
+        // P4-M5 — one record per request (a batch is one request).
+        let before = (self.config.trace_every != 0).then(|| self.stats.snapshot());
         let out = self.get_many_inner(keys);
         self.stats
             .get_wall_ns
             .fetch_add(t_wall.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        if let Some(before) = before {
+            self.trace.record(
+                self.config.trace_every,
+                self.stats.snapshot().delta_of(&before),
+            );
+        }
         out
     }
 
@@ -1351,6 +1418,18 @@ impl Db {
     /// included — a compaction's I/O is not a point read).
     pub fn read_path_stats(&self) -> ReadPathStats {
         self.stats.snapshot()
+    }
+
+    /// P4-M5 — records currently held by the read trace (0 while disabled).
+    pub fn trace_len(&self) -> usize {
+        self.trace.inner.lock().unwrap().records.len()
+    }
+
+    /// P4-M5 — take the accumulated trace records (request order) and
+    /// reset the ring. Draining never affects reads.
+    pub fn drain_trace(&self) -> Vec<ReadTraceRecord> {
+        let mut t = self.trace.inner.lock().unwrap();
+        std::mem::take(&mut t.records)
     }
 
     /// SE2-M7 — block cache metrics; all zeros when the cache is off

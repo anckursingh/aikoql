@@ -111,6 +111,75 @@ impl Stats {
 }
 
 // ---------------------------------------------------------------------------
+// P4-M5 — the per-request read trace. One record per read request when
+// sampling fires: the delta of the cumulative ReadPathStats across the
+// request. Value-opaque (no user bytes leave the engine) and zero-cost when
+// disabled (the wrapper never snapshots, never locks). Deltas are
+// best-effort under concurrent readers — counters interleave, so a record
+// attributes its request, it never gates an answer.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadTraceRecord {
+    pub seq: u64,
+    pub wall_ns: u64,
+    pub lock_wait_ns: u64,
+    pub memtable_lookup_ns: u64,
+    pub memtable_hits: u64,
+    pub segments_considered: u64,
+    pub segments_range_skipped: u64,
+    pub segments_bloom_skipped: u64,
+    pub segments_index_searched: u64,
+    pub index_lookup_ns: u64,
+    pub block_cache_lookup_ns: u64,
+    pub block_cache_hits: u64,
+    pub block_cache_misses: u64,
+    pub block_io_ns: u64,
+    pub block_decode_ns: u64,
+    pub blocks_read: u64,
+    pub bytes_read: u64,
+    pub entries_decoded: u64,
+    pub bloom_probe_ns: u64,
+    /// True when the request needed no new block reads (block cache or
+    /// memtable served it).
+    pub cache_hit: bool,
+}
+
+impl ReadPathStats {
+    /// P4-M5 — per-request delta against a before-snapshot. `seq` is 0
+    /// here; the trace assigns the real request sequence on record.
+    pub fn delta_of(&self, before: &ReadPathStats) -> ReadTraceRecord {
+        macro_rules! d {
+            ($f:ident) => {
+                self.$f.saturating_sub(before.$f)
+            };
+        }
+        ReadTraceRecord {
+            seq: 0,
+            wall_ns: d!(get_wall_ns),
+            lock_wait_ns: d!(lock_wait_ns),
+            memtable_lookup_ns: d!(memtable_lookup_ns),
+            memtable_hits: d!(memtable_hits),
+            segments_considered: d!(segments_considered),
+            segments_range_skipped: d!(segments_range_skipped),
+            segments_bloom_skipped: d!(segments_bloom_skipped),
+            segments_index_searched: d!(segments_index_searched),
+            index_lookup_ns: d!(index_lookup_ns),
+            block_cache_lookup_ns: d!(block_cache_lookup_ns),
+            block_cache_hits: d!(block_cache_hits),
+            block_cache_misses: d!(block_cache_misses),
+            block_io_ns: d!(block_io_ns),
+            block_decode_ns: d!(block_decode_ns),
+            blocks_read: d!(blocks_read),
+            bytes_read: d!(bytes_read),
+            entries_decoded: d!(entries_decoded),
+            bloom_probe_ns: d!(bloom_probe_ns),
+            cache_hit: self.blocks_read == before.blocks_read,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // P3-M2 (design §21) — write-path instrumentation. Same discipline as the
 // read path: cumulative relaxed atomics that move only with real
 // operations; a snapshot struct for callers. The gauges
