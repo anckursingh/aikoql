@@ -3641,3 +3641,106 @@ fn t_exe6_limit_offset_paginates_without_duplicates_or_skips() {
         "offset into the middle"
     );
 }
+
+// ---------------------------------------------------------------------------
+// §11 Class-B async jobs (P3-M7, MRFC-0011 §6.10-6.13, §7, §8, §10.2)
+// ---------------------------------------------------------------------------
+
+/// §10.2: admission emits an Audit KE in the hash-chained journal; the job
+/// completes without touching the journal again (Class B stays out of the
+/// committed stream until approval — §7).
+#[test]
+fn t11_class_b_admission_is_audited_and_out_of_the_class_a_stream() {
+    let (k, _c) = mk();
+    let mut req = RememberRequest::create(alice(), meta("sensor"));
+    req.properties
+        .insert("zone".into(), Value::Text("a".into()));
+    k.remember(req).unwrap();
+    let seq_before = k.journal_head().unwrap().0;
+
+    let job = k
+        .reason(
+            "sensor",
+            [("zone".into(), Value::Text("a".into()))]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+    let (seq_after_admit, _) = k.journal_head().unwrap();
+    assert_eq!(
+        seq_after_admit,
+        seq_before + 1,
+        "admission is exactly one audit KE"
+    );
+
+    // Wait for completion (bounded poll — the wait itself never journals).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if k.job_status(job.job_id).unwrap() == JobStatus::Completed {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "job never completed");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        k.journal_head().unwrap().0,
+        seq_after_admit,
+        "job completion must not touch the Class-A journal"
+    );
+    assert_eq!(k.job_result(job.job_id).unwrap().len(), 1);
+
+    // Approval is the §7 bridge: one committed claim, provable chain. The
+    // claim commits under the kernel's admin context, so it is read back as
+    // an admin (alice, a role-less subject, cannot read it — expected).
+    let approved = k.approve_job(job.job_id).unwrap();
+    assert_eq!(approved.len(), 1);
+    assert!(
+        k.prove(Subject::with_roles("root", &["admin"]), &approved[0].koid)
+            .unwrap()
+            .chain_valid,
+        "the approved claim links into the hash-chained stream"
+    );
+}
+
+/// §6.10 + the epistemic transition: claims commit as origin=Reason,
+/// epistemic=Inferred — the kernel-stamped status for that origin, never
+/// caller-supplied (KERNEL_MANAGED_EXTENSIONS).
+#[test]
+fn t11_approval_commits_reason_claims_as_inferred() {
+    let (k, _c) = mk();
+    let mut req = RememberRequest::create(alice(), meta("sensor"));
+    req.properties
+        .insert("zone".into(), Value::Text("a".into()));
+    k.remember(req).unwrap();
+
+    let job = k
+        .reason(
+            "sensor",
+            [("zone".into(), Value::Text("a".into()))]
+                .into_iter()
+                .collect(),
+        )
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if k.job_status(job.job_id).unwrap() == JobStatus::Completed {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    k.approve_job(job.job_id).unwrap();
+
+    // The claim commits under the kernel's admin context — read as an admin.
+    let claims = k
+        .scan_by_type(&Subject::with_roles("root", &["admin"]), "sensor-claim")
+        .unwrap();
+    assert_eq!(claims.len(), 1);
+    let c = &claims[0];
+    assert_eq!(c.lifecycle.origin, Origin::Reason);
+    assert_eq!(c.epistemic_status(), EpistemicStatus::Inferred);
+    assert!(
+        c.properties.contains_key("reasoned_from"),
+        "provenance back to the premise"
+    );
+}

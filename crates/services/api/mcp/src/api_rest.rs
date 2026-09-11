@@ -298,6 +298,14 @@ fn route_inner(
             need_auth()?;
             tool_predict(k, &args())
         }
+        ("POST", "/api/v1/job-status") => {
+            need_auth()?;
+            tool_job_status(k, &args())
+        }
+        ("POST", "/api/v1/approve-job") => {
+            need_auth()?;
+            tool_approve_job(k, &args())
+        }
         ("POST", "/api/v1/documents") => {
             need_auth()?;
             tool_document_ingest(k, &args(), db_path)

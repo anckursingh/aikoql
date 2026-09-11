@@ -20,6 +20,9 @@
 use crate::embedding::EmbeddingProvider;
 use crate::event::EventManager;
 use crate::index::coordinator::IndexCoordinator;
+use crate::jobs::{
+    JobHandle, JobKind, JobRecord, JobScheduler, JobStatus, DEFAULT_MAX_RUNNING_JOBS,
+};
 use crate::knowledge::authority::Authority;
 use crate::knowledge::codec::{self, Enc};
 use crate::knowledge::kom::*;
@@ -626,6 +629,9 @@ pub struct Kernel {
     encryption_policies: Arc<RwLock<HashMap<String, EncryptionPolicy>>>,
     /// Optional embedding provider for query-time ANN search (USING EMBEDDING).
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+    /// P3-M7 — the Class-B job scheduler (MRFC-0011 §6.10–6.13): persisted
+    /// job table + admission control in the raw store.
+    jobs: Arc<JobScheduler>,
 }
 
 impl Kernel {
@@ -677,6 +683,11 @@ impl Kernel {
             })?;
             schemas.write().unwrap().register(schema);
         }
+        // P3-M7 — Class-B job scheduler (recover marks interrupted jobs).
+        let jobs = Arc::new(JobScheduler::recover(
+            store.clone(),
+            DEFAULT_MAX_RUNNING_JOBS,
+        )?);
         Ok(Kernel {
             repo,
             store,
@@ -699,6 +710,7 @@ impl Kernel {
             field_crypto: None,
             encryption_policies: Arc::new(RwLock::new(HashMap::new())),
             embedding_provider: None,
+            jobs,
         })
     }
 
@@ -854,9 +866,20 @@ impl Kernel {
             field_crypto: self.field_crypto.clone(),
             encryption_policies: self.encryption_policies.clone(),
             embedding_provider: self.embedding_provider.clone(),
+            jobs: self.jobs.clone(),
         }
     }
+}
 
+/// P3-M7 — a shared-handle clone for job workers (delegates to
+/// `clone_handle`, which shares every subsystem).
+impl Clone for Kernel {
+    fn clone(&self) -> Self {
+        self.clone_handle()
+    }
+}
+
+impl Kernel {
     /// Attach an index maintainer; `find_similar` routes through it afterwards.
     pub fn attach_indexes(&self, m: Arc<dyn crate::index::IndexMaintainerApi>) {
         *self.indexes.write().unwrap() = Some(IndexCoordinator::with_maintainer(m));
@@ -3256,7 +3279,10 @@ impl Kernel {
                     }
                 }
                 None => {
-                    if self.repo.get_tombstone(&ke.koid)?.is_none() {
+                    // P3-M7 — Audit KEs (job admissions, §10.2) carry
+                    // KOID::ZERO and no object version by design; they are
+                    // pure journal entries, protected by the chain link above.
+                    if ke.kind != EventKind::Audit && self.repo.get_tombstone(&ke.koid)?.is_none() {
                         valid = false;
                         break;
                     }
@@ -3952,26 +3978,239 @@ impl Kernel {
     }
 
     // ---- Class B syscalls (MRFC-0011 §5, §6.10-6.13) ----------------------
+    // P3-M7: these are ASYNC — they admit a job and return a handle. The
+    // computations themselves (`run_*`) stay private to the job worker, and
+    // results re-enter the Class-A store ONLY via `approve_job` (§7).
 
-    /// Execute a reasoning rule against the knowledge graph.
-    /// Returns provenance-tagged claims with `origin=Reason`.
-    /// ponytail: synchronous version for Phase 2; full async JobHandle in Phase 3.
-    pub fn reason(
+    /// MRFC-0011 §10.2 — every Class-B job admission emits an audit KE in
+    /// the hash-chained audit stream. No object version is written (the KE
+    /// carries KOID::ZERO); the admission itself is what is being audited.
+    pub(crate) fn record_audit(&self, note: &str) -> KResult<()> {
+        let mut pipe = self.pipe.lock().unwrap();
+        let commit_ts = self.hlc.now(self.clock.as_ref());
+        let seq = pipe.seq + 1;
+        let audit = audit_hash_of(
+            pipe.audit,
+            seq,
+            &KOID::ZERO,
+            0,
+            EventKind::Audit,
+            commit_ts,
+            &[0u8; 32],
+            None,
+            "kernel",
+            Some(note),
+        );
+        let ke = KnowledgeEvent {
+            seq,
+            koid: KOID::ZERO,
+            version: 0,
+            kind: EventKind::Audit,
+            origin: Origin::System,
+            actor: "kernel".into(),
+            commit_ts,
+            payload_hash: [0u8; 32],
+            prev_audit_hash: pipe.audit,
+            audit_hash: audit,
+            signature: None,
+            note: Some(note.into()),
+        };
+        let mut batch = WriteBatch::new();
+        self.repo.put_event(&mut batch, seq, &ke);
+        self.repo.put_journal(&mut batch, seq, audit, commit_ts);
+        self.repo.write_batch(&batch)?;
+        pipe.seq = seq;
+        pipe.audit = audit;
+        self.broadcast(&ke);
+        Ok(())
+    }
+
+    /// M7a — submit a reasoning job (MRFC-0011 §6.10). Returns the handle
+    /// immediately; poll with `job_status`, retrieve with `job_result`, and
+    /// commit the claims with `approve_job`. Over the admission limit this
+    /// is JOB_REJECTED (§8).
+    pub fn reason(&self, rule_type: &str, rule_props: PropertyMap) -> KResult<JobHandle> {
+        let mut e = Enc::new();
+        e.u8(JobKind::Reason.tag());
+        e.str(rule_type);
+        codec::enc_map(&mut e, &rule_props);
+        self.jobs.submit(
+            self,
+            JobKind::Reason,
+            sha256(&e.buf),
+            crate::jobs::JobWork::Reason {
+                rule_type: rule_type.into(),
+                rule_props,
+            },
+        )
+    }
+
+    /// M7b — submit an inference job (MRFC-0011 §6.11). The no-op AiProvider
+    /// is legal: the default worker is the in-process similarity executor.
+    pub fn infer(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        similarity_text: &str,
+    ) -> KResult<JobHandle> {
+        let mut e = Enc::new();
+        e.u8(JobKind::Infer.tag());
+        e.str(type_name);
+        e.str(similarity_text);
+        self.jobs.submit(
+            self,
+            JobKind::Infer,
+            sha256(&e.buf),
+            crate::jobs::JobWork::Infer {
+                subject: subject.clone(),
+                type_name: type_name.into(),
+                text: similarity_text.into(),
+            },
+        )
+    }
+
+    /// M7b — submit a prediction job (MRFC-0011 §6.12).
+    pub fn predict(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        target_props: &PropertyMap,
+        k: usize,
+    ) -> KResult<JobHandle> {
+        let mut e = Enc::new();
+        e.u8(JobKind::Predict.tag());
+        e.str(type_name);
+        codec::enc_map(&mut e, target_props);
+        e.u64(k as u64);
+        self.jobs.submit(
+            self,
+            JobKind::Predict,
+            sha256(&e.buf),
+            crate::jobs::JobWork::Predict {
+                subject: subject.clone(),
+                type_name: type_name.into(),
+                props: target_props.clone(),
+                k,
+            },
+        )
+    }
+
+    /// The persisted Class-B job table (status-tool surface).
+    pub fn jobs(&self) -> KResult<Vec<JobRecord>> {
+        self.jobs.list()
+    }
+
+    /// Poll one job (MRFC-0011 §6.10).
+    pub fn job_status(&self, job_id: u64) -> KResult<JobStatus> {
+        Ok(self.jobs.record(job_id)?.status)
+    }
+
+    /// cb001 — the job's claims. Only when Completed; a failed job surfaces
+    /// its error here instead.
+    pub fn job_result(&self, job_id: u64) -> KResult<Vec<KnowledgeObject>> {
+        let rec = self.jobs.record(job_id)?;
+        if rec.kind != JobKind::Reason {
+            return Err(KError::UnsupportedOperation(format!(
+                "job {job_id} is a {:?} job, not a reason job",
+                rec.kind
+            )));
+        }
+        crate::jobs::decode_reason_result(&self.jobs.result_blob(job_id)?)
+    }
+
+    /// M7b — an infer job's scored rows.
+    pub fn infer_job_result(&self, job_id: u64) -> KResult<Vec<ScoredKO>> {
+        let rec = self.jobs.record(job_id)?;
+        if rec.kind != JobKind::Infer {
+            return Err(KError::UnsupportedOperation(format!(
+                "job {job_id} is a {:?} job, not an infer job",
+                rec.kind
+            )));
+        }
+        crate::jobs::decode_infer_result(&self.jobs.result_blob(job_id)?)
+    }
+
+    /// M7b — a predict job's merged property map.
+    pub fn predict_job_result(&self, job_id: u64) -> KResult<PropertyMap> {
+        let rec = self.jobs.record(job_id)?;
+        if rec.kind != JobKind::Predict {
+            return Err(KError::UnsupportedOperation(format!(
+                "job {job_id} is a {:?} job, not a predict job",
+                rec.kind
+            )));
+        }
+        crate::jobs::decode_predict_result(&self.jobs.result_blob(job_id)?)
+    }
+
+    /// cb003 — the ONLY bridge from Class B to Class A (§7 Determinism Law):
+    /// commit the job's claims through the normal remember path, stamped
+    /// origin=Reason (the kernel stamps epistemic=Inferred, authority and
+    /// scope by origin). Per-claim idempotency keys make a repeated
+    /// approval exact-once.
+    pub fn approve_job(&self, job_id: u64) -> KResult<Vec<Remembered>> {
+        let rec = self.jobs.record(job_id)?;
+        if rec.kind != JobKind::Reason {
+            return Err(KError::UnsupportedOperation(format!(
+                "job {job_id} is a {:?} job, not a reason job",
+                rec.kind
+            )));
+        }
+        if rec.status != JobStatus::Completed {
+            return Err(KError::UnsupportedOperation(format!(
+                "job {job_id} is {:?} — only completed jobs can be approved",
+                rec.status
+            )));
+        }
+        let claims = crate::jobs::decode_reason_result(&self.jobs.result_blob(job_id)?)?;
+        let mut out = Vec::with_capacity(claims.len());
+        for (i, c) in claims.iter().enumerate() {
+            out.push(self.remember(RememberRequest {
+                context: KnowledgeContext::new(Subject::with_roles("kernel-reason", &["admin"])),
+                koid: None,
+                expected_version: None,
+                idempotency_key: Some(format!("job-{job_id}-{i}")),
+                metadata: c.metadata.clone(),
+                properties: c.properties.clone(),
+                semantic: None,
+                relationships: vec![],
+                security: None,
+                extensions: ExtensionMap::new(),
+                origin: Origin::Reason,
+                note: Some(format!("approved Class-B claim from job {job_id}")),
+                referential_policy: ReferentialPolicy::Permissive,
+            })?);
+        }
+        Ok(out)
+    }
+
+    /// M7 test hooks: admission bound (cb002) and worker park (cb002/cb004).
+    pub fn set_max_running_jobs(&self, n: usize) {
+        self.jobs.set_max_running(n);
+    }
+    pub fn set_job_park_ms(&self, ms: u64) {
+        self.jobs.set_park_ms(ms);
+    }
+
+    // ---- Class-B computations (job workers only; never public) ------------
+
+    /// The reason computation: scan objects matching the rule's conditions
+    /// and produce provenance-tagged claims with `origin=Reason`. Class B —
+    /// nothing here touches the Class-A store.
+    pub(crate) fn run_reason(
         &self,
         rule_type: &str,
-        rule_props: PropertyMap,
+        rule_props: &PropertyMap,
     ) -> KResult<Vec<KnowledgeObject>> {
         let subject = Subject {
             name: "kernel-reason".into(),
             roles: vec!["admin".into()],
             tenant: None,
         };
-        // Scan objects matching the rule's conditions and produce claims.
         let candidates = self.scan_by_type(&subject, rule_type)?;
         let mut claims = Vec::new();
         for ko in candidates {
             let mut match_count = 0usize;
-            for (key, expected) in &rule_props {
+            for (key, expected) in rule_props {
                 if let Some(v) = ko.properties.get(key) {
                     if v == expected {
                         match_count += 1;
@@ -4011,10 +4250,9 @@ impl Kernel {
         Ok(claims)
     }
 
-    /// Infer new knowledge from existing objects using similarity matching.
-    /// Takes a prototype type and properties, finds similar objects, and
-    /// returns them with provenance.
-    pub fn infer(
+    /// The infer computation: similarity matching against the committed
+    /// store. Returns scored rows with provenance.
+    pub(crate) fn run_infer(
         &self,
         subject: &Subject,
         type_name: &str,
@@ -4034,16 +4272,15 @@ impl Kernel {
         })
     }
 
-    /// Predict properties for a target object based on similar objects.
-    /// Returns a merged property map from the top-k most similar objects.
-    pub fn predict(
+    /// The predict computation: merge the top-k most similar objects'
+    /// properties.
+    pub(crate) fn run_predict(
         &self,
         subject: &Subject,
         type_name: &str,
         target_props: &PropertyMap,
         k: usize,
     ) -> KResult<PropertyMap> {
-        // Build similarity text from target properties.
         let text: String = target_props
             .values()
             .map(|v| match v {
@@ -4052,7 +4289,7 @@ impl Kernel {
             })
             .collect::<Vec<_>>()
             .join(" ");
-        let similar = self.infer(subject, type_name, &text)?;
+        let similar = self.run_infer(subject, type_name, &text)?;
         let mut merged = PropertyMap::new();
         for scored in similar.iter().take(k) {
             for (key, val) in &scored.ko.properties {

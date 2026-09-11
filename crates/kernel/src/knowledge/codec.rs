@@ -262,7 +262,7 @@ fn dec_value(d: &mut Dec) -> KResult<Value> {
     }
 }
 
-fn enc_map(e: &mut Enc, m: &BTreeMap<String, Value>) {
+pub(crate) fn enc_map(e: &mut Enc, m: &BTreeMap<String, Value>) {
     e.u64(m.len() as u64);
     for (k, v) in m {
         e.str(k);
@@ -270,7 +270,7 @@ fn enc_map(e: &mut Enc, m: &BTreeMap<String, Value>) {
     }
 }
 
-fn dec_map(d: &mut Dec) -> KResult<BTreeMap<String, Value>> {
+pub(crate) fn dec_map(d: &mut Dec) -> KResult<BTreeMap<String, Value>> {
     let n = d.u64()? as usize;
     let mut m = BTreeMap::new();
     for _ in 0..n {

@@ -5,9 +5,9 @@ use crate::helpers::*;
 use crate::session::*;
 use crate::{
     json, CardinalityConstraint, CheckConstraint, CheckExpression, ConstraintTiming,
-    EnforcementMode, Kernel, KnowledgeContext, Origin, ReferentialPolicy, RememberRequest, Schema,
-    SchemaProperty, TemporalConstraint, UniqueConstraint, UniquenessScope, Value,
-    ViolationSeverity, J, KOID,
+    EnforcementMode, JobKind, JobStatus, Kernel, KnowledgeContext, Origin, ReferentialPolicy,
+    RememberRequest, Schema, SchemaProperty, TemporalConstraint, UniqueConstraint, UniquenessScope,
+    Value, ViolationSeverity, J, KOID,
 };
 
 fn parse_mode(v: Option<&str>) -> Result<EnforcementMode, String> {
@@ -106,14 +106,14 @@ pub(crate) fn tool_reason(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(|v| v.as_str())
         .ok_or("missing: type_name")?;
     let rule_props = parse_properties(args)?;
-    let claims = k.reason(rule_type, rule_props).map_err(|e| e.to_string())?;
+    // P3-M7 breaking change: reason submits a Class-B job instead of
+    // returning claims inline — poll job_status, then approve_job.
+    let job = k.reason(rule_type, rule_props).map_err(|e| e.to_string())?;
     Ok(json!({
-        "claims": claims.iter().map(|c| json!({
-            "type_name": c.metadata.type_name,
-            "property_count": c.properties.len(),
-            "origin": format!("{:?}", c.lifecycle.origin),
-        })).collect::<Vec<_>>(),
-        "count": claims.len(),
+        "job_id": job.job_id,
+        "input_hash": hex(&job.input_hash),
+        "status": "running",
+        "next": "poll job_status {job_id}; commit claims with approve_job",
     }))
 }
 
@@ -123,16 +123,15 @@ pub(crate) fn tool_infer(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(|v| v.as_str())
         .ok_or("missing: type_name")?;
     let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
-    let results = k
+    // P3-M7: infer is a Class-B job — poll job_status for the results.
+    let job = k
         .infer(&subject_of(args), type_name, text)
         .map_err(|e| e.to_string())?;
     Ok(json!({
-        "results": results.iter().map(|s| json!({
-            "koid": s.ko.koid.to_hex(),
-            "score": s.score,
-            "type_name": s.ko.metadata.type_name,
-        })).collect::<Vec<_>>(),
-        "count": results.len(),
+        "job_id": job.job_id,
+        "input_hash": hex(&job.input_hash),
+        "status": "running",
+        "next": "poll job_status",
     }))
 }
 
@@ -143,12 +142,95 @@ pub(crate) fn tool_predict(kernel: &Kernel, args: &J) -> Result<J, String> {
         .ok_or("missing: type_name")?;
     let props = parse_properties(args)?;
     let top_k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
-    let merged = kernel
+    // P3-M7: predict is a Class-B job — poll job_status for the result.
+    let job = kernel
         .predict(&subject_of(args), type_name, &props, top_k)
         .map_err(|e| e.to_string())?;
     Ok(json!({
-        "predicted": merged.iter().map(|(key, val)| (key.clone(), value_to_json(val))).collect::<serde_json::Map<_,_>>(),
+        "job_id": job.job_id,
+        "input_hash": hex(&job.input_hash),
+        "status": "running",
+        "next": "poll job_status",
     }))
+}
+
+/// P3-M7 — poll a Class-B job: status, error when failed, and the result
+/// when completed (reason claims / infer rows / predicted properties).
+pub(crate) fn tool_job_status(k: &Kernel, args: &J) -> Result<J, String> {
+    let job_id = args
+        .get("job_id")
+        .and_then(|v| v.as_u64())
+        .ok_or("missing: job_id")?;
+    let recs = k.jobs().map_err(|e| e.to_string())?;
+    let rec = recs
+        .iter()
+        .find(|r| r.job_id == job_id)
+        .ok_or_else(|| format!("job {job_id} not found"))?;
+    let status = match rec.status {
+        JobStatus::Running => "running",
+        JobStatus::Completed => "completed",
+        JobStatus::Failed => "failed",
+    };
+    let mut out = json!({
+        "job_id": job_id,
+        "status": status,
+        "error": rec.error,
+        "input_hash": hex(&rec.input_hash),
+    });
+    if rec.status == JobStatus::Completed {
+        match rec.kind {
+            JobKind::Reason => {
+                let claims = k.job_result(job_id).map_err(|e| e.to_string())?;
+                out["claims"] = json!(claims
+                    .iter()
+                    .map(|c| json!({
+                        "type_name": c.metadata.type_name,
+                        "property_count": c.properties.len(),
+                        "origin": format!("{:?}", c.lifecycle.origin),
+                    }))
+                    .collect::<Vec<_>>());
+                out["count"] = json!(claims.len());
+            }
+            JobKind::Infer => {
+                let results = k.infer_job_result(job_id).map_err(|e| e.to_string())?;
+                out["results"] = json!(results
+                    .iter()
+                    .map(|s| json!({
+                        "koid": s.ko.koid.to_hex(),
+                        "score": s.score,
+                        "type_name": s.ko.metadata.type_name,
+                    }))
+                    .collect::<Vec<_>>());
+                out["count"] = json!(results.len());
+            }
+            JobKind::Predict => {
+                let merged = k.predict_job_result(job_id).map_err(|e| e.to_string())?;
+                out["predicted"] = json!(merged
+                    .iter()
+                    .map(|(key, val)| (key.clone(), value_to_json(val)))
+                    .collect::<serde_json::Map<_, _>>());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// P3-M7 — commit a completed reason job's claims into the store (§7
+/// Determinism Law: the ONLY bridge from Class B to Class A).
+pub(crate) fn tool_approve_job(k: &Kernel, args: &J) -> Result<J, String> {
+    let job_id = args
+        .get("job_id")
+        .and_then(|v| v.as_u64())
+        .ok_or("missing: job_id")?;
+    let committed = k.approve_job(job_id).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "committed": committed.iter().map(|r| r.koid.to_hex()).collect::<Vec<_>>(),
+        "count": committed.len(),
+    }))
+}
+
+fn hex(h: &[u8; 32]) -> String {
+    h.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// P3-M5 M5a: diagnostics surface for the constraint engine — the violation

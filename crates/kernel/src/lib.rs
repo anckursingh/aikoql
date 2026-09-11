@@ -23,6 +23,7 @@ pub mod eval;
 pub mod event;
 pub mod index;
 pub mod ir;
+pub mod jobs;
 pub mod object;
 pub mod relationship;
 
@@ -73,6 +74,7 @@ pub use index::{
     BruteForceVectorIndex, IndexCoordinator, IndexMaintainerApi, IndexStatus, IndexStatusKind,
     TextIndex, TokenTextIndex, VectorHealth, VectorIndex,
 };
+pub use jobs::{JobHandle, JobKind, JobRecord, JobScheduler, JobStatus, DEFAULT_MAX_RUNNING_JOBS};
 pub use knowledge::authority::{Authority, AuthorityRanking};
 pub use knowledge::evidence::{Evidence, EvidenceMethod};
 pub use knowledge::kom::{
