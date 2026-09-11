@@ -4,6 +4,8 @@ aikoql is a knowledge database with built-in encryption, hybrid vector+text sear
 
 ## 5-Second Start
 
+Get the binary from [GitHub Releases](https://github.com/anckursingh/aikoql/releases) (SHA-256 files alongside), or `npm i -g aikoql-mcp`:
+
 ```bash
 # Download and run (stdio mode — perfect for MCP clients like Claude Code):
 ./aikoql-mcp serve
