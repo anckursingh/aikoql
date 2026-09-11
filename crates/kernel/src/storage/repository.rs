@@ -681,17 +681,27 @@ impl KnowledgeRepository {
         Ok(out)
     }
 
-    pub fn get_object_at(&self, koid: &KOID, snap_ts: u64) -> KResult<Option<KnowledgeObject>> {
-        let entries = self.engine().scan(&obj_prefix(koid))?;
-        for (k, v) in entries.iter().rev() {
-            let ts_bytes: &[u8] = &k[k.len() - 8..];
+    /// P4-M4 — bounded predecessor lookup (TDD-KERNEL-002): the newest
+    /// version committed at or before `snap_ts`, via the engine's
+    /// `predecessor` seek — never a fetch-all-versions scan. One row in,
+    /// one row out.
+    pub fn get_version_at(
+        &self,
+        koid: &KOID,
+        snap_ts: u64,
+    ) -> KResult<Option<(u64, KnowledgeObject)>> {
+        let at = obj_key(koid, snap_ts);
+        if let Some((k, v)) = self.engine().predecessor(&obj_prefix(koid), &at)? {
+            let ts_bytes = &k[k.len() - 8..];
             let mut ts = [0u8; 8];
             ts.copy_from_slice(ts_bytes);
-            if u64::from_be_bytes(ts) <= snap_ts {
-                return Ok(Some(codec::decode_ko_wire(v)?));
-            }
+            return Ok(Some((u64::from_be_bytes(ts), codec::decode_ko_wire(&v)?)));
         }
         Ok(None)
+    }
+
+    pub fn get_object_at(&self, koid: &KOID, snap_ts: u64) -> KResult<Option<KnowledgeObject>> {
+        Ok(self.get_version_at(koid, snap_ts)?.map(|(_, ko)| ko))
     }
 
     pub fn put_object_version(
@@ -784,13 +794,17 @@ impl KnowledgeRepository {
         Ok(out)
     }
 
+    /// P4-M4 — event replay seeking (TDD-EVENT-001): `scan_from` lands at
+    /// the first seq past `after_seq` — no whole-journal scan, bounded by
+    /// the engine's seek. Identical answers to the old filter (ker004).
     pub fn scan_events_after(&self, after_seq: u64) -> KResult<Vec<KnowledgeEvent>> {
+        if after_seq == u64::MAX {
+            return Ok(Vec::new()); // seq > u64::MAX is empty — the old filter's edge
+        }
+        let start = ke_key(after_seq + 1);
         let mut out = Vec::new();
-        for (_, v) in self.engine().scan(P_KE)? {
-            let ke = codec::decode_ke(&v)?;
-            if ke.seq > after_seq {
-                out.push(ke);
-            }
+        for (_, v) in self.engine().scan_from(P_KE, &start)? {
+            out.push(codec::decode_ke(&v)?);
         }
         Ok(out)
     }

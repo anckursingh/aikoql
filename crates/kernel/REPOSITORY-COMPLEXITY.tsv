@@ -1,0 +1,53 @@
+# P4-M4 (TDD-KERNEL-001) — machine-readable classification of every public
+# KnowledgeRepository method, method<TAB>class. Class vocabulary:
+#   O(1)               point lookup / constant work
+#   O(log N)           seek-limited (bounded predecessor / range seek)
+#   O(log N + matches) seek to the first match, then only matching rows
+#   O(matches)         scan bounded by the answer set
+#   O(versions)        scan bounded by one object's version history
+#   O(N)               full-table scan
+#   O(batch)           linear in the caller's batch size
+# The test crates/kernel/tests/repository_seek.rs (ker001) pins this exact
+# method set and the hot-path classes — a new public method is a
+# compile-time-sized review against both.
+new	O(1)
+with_cache	O(1)
+write_batch	O(batch)
+write_rel_index	O(1)
+del_rel_index	O(1)
+scan_outbound	O(matches)
+scan_inbound	O(matches)
+write_type_index	O(1)
+delete_type_index	O(1)
+scan_type	O(matches)
+type_index_marker	O(1)
+put_type_index_marker	O(1)
+rebuild_derived_indexes	O(N)
+put_schema_row	O(1)
+schema_rows	O(N)
+current_seq	O(1)
+journal_head	O(1)
+put_journal	O(1)
+get_object_version	O(1)
+get_head	O(1)
+get_heads_many	O(batch)
+get_object_versions_many	O(batch)
+get_version_at	O(log N)
+get_object_at	O(log N)
+put_object_version	O(1)
+delete_object_version	O(1)
+put_head	O(1)
+delete_head	O(1)
+scan_heads	O(N)
+scan_object_versions	O(versions)
+put_event	O(1)
+get_event	O(1)
+scan_events	O(N)
+scan_events_after	O(log N + matches)
+put_idem	O(1)
+get_idem	O(1)
+put_tombstone	O(1)
+get_tombstone	O(1)
+put_subscription	O(1)
+delete_subscription	O(1)
+scan_subscriptions	O(N)
