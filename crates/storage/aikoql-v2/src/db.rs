@@ -1576,19 +1576,22 @@ impl Db {
                 SegmentWriter::new_v2(config.block_target)
             };
             // into_entries: the flushed table is consumed — keys/values
-            // move into the writer, no second copy (SE2-M15).
+            // move into the writer, no second copy (SE2-M15). TDD-STOR-006:
+            // `into_parts` splits the row on the enum — byte rows report
+            // replica 0, object rows their owning replica.
             for ((key, seq), e) in mem.into_entries() {
-                let flags = if e.value.is_some() {
+                let (value, replica_id) = e.into_parts();
+                let flags = if value.is_some() {
                     FLAG_PUT
                 } else {
                     FLAG_DELETE
                 };
                 writer.push(SegmentEntry {
                     key,
-                    value: e.value.unwrap_or_default(),
+                    value: value.unwrap_or_default(),
                     seq,
                     flags,
-                    replica_id: e.replica_id,
+                    replica_id,
                 });
             }
             let (file_size, checksum, seg_anchors) = writer.publish_with_anchors(&path)?;

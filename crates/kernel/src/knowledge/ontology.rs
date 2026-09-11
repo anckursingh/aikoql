@@ -12,7 +12,9 @@
 //! This module is std-only and free of I/O (same policy as `kom`).
 
 use crate::knowledge::kom::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// Type name used for ontology Knowledge Objects.
 pub const ONTOLOGY_TYPE: &str = "Ontology";
@@ -411,7 +413,13 @@ impl OntologyDef {
 pub struct OntologyRegistry {
     def: OntologyDef,
     /// (source, physical_type) → index into def.mappings
-    by_physical: std::collections::HashMap<(String, String), usize>,
+    by_physical: HashMap<(String, String), usize>,
+    /// physical_type → index of its FIRST mapping (first-wins, TDD-COMP-001)
+    by_physical_type: HashMap<String, usize>,
+    /// Audit counter: one increment per physical-type resolution. Pins O(1):
+    /// K lookups must cost K probes, never a mapping-vector scan.
+    /// Arc so the registry stays Clone (clones share the audit lineage).
+    probes: Arc<AtomicU64>,
 }
 
 impl OntologyRegistry {
@@ -427,17 +435,28 @@ impl OntologyRegistry {
                 property_defs: BTreeMap::new(),
                 mappings: Vec::new(),
             },
-            by_physical: std::collections::HashMap::new(),
+            by_physical: HashMap::new(),
+            by_physical_type: HashMap::new(),
+            probes: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub fn new(def: OntologyDef) -> Result<Self, String> {
         def.validate().map_err(|e| e.to_string())?;
-        let mut by_physical = std::collections::HashMap::new();
+        let mut by_physical = HashMap::new();
+        let mut by_physical_type = HashMap::new();
         for (i, me) in def.mappings.iter().enumerate() {
             by_physical.insert((me.source.clone(), me.physical_type.clone()), i);
+            by_physical_type
+                .entry(me.physical_type.clone())
+                .or_insert(i); // first mapping wins, matching the pre-index scan
         }
-        Ok(OntologyRegistry { def, by_physical })
+        Ok(OntologyRegistry {
+            def,
+            by_physical,
+            by_physical_type,
+            probes: Arc::new(AtomicU64::new(0)),
+        })
     }
 
     /// Resolve a class by name.
@@ -498,13 +517,25 @@ impl OntologyRegistry {
         self.def.mappings.get(*idx)
     }
 
+    /// The FIRST mapping entry for a physical type name, regardless of source.
+    /// TDD-COMP-001 (P4-M7): O(1) via the `by_physical_type` index — one hash
+    /// probe per call, never a mapping-vector scan.
+    pub fn mapping_for_physical(&self, physical_type: &str) -> Option<&MappingEntry> {
+        self.probes.fetch_add(1, Ordering::Relaxed);
+        let idx = self.by_physical_type.get(physical_type)?;
+        self.def.mappings.get(*idx)
+    }
+
     /// Find the ontology class for a physical type name, regardless of source.
     pub fn class_for_physical(&self, physical_type: &str) -> Option<&str> {
-        self.def
-            .mappings
-            .iter()
-            .find(|me| me.physical_type == physical_type)
+        self.mapping_for_physical(physical_type)
             .map(|me| me.class.as_str())
+    }
+
+    /// Total physical-type resolutions served (one probe each). The test pin
+    /// for O(1) average resolution.
+    pub fn resolution_probes(&self) -> u64 {
+        self.probes.load(Ordering::Relaxed)
     }
 
     /// Get all (source, physical_type) pairs that map to the given class,
@@ -650,25 +681,20 @@ pub fn discover_ontology(kos: &[KnowledgeObject]) -> OntologyDef {
 /// Tags the KO with `class:<class>`.
 /// Pure function — no I/O, no side effects. Idempotent (rename only).
 pub fn conform(ko: &mut KnowledgeObject, registry: &OntologyRegistry) {
-    let type_name = &ko.metadata.type_name;
-    // ponytail: scan all mappings to find matching physical_type. O(n).
-    // Build a reverse index if called per-KO in hot loops.
-    for me in &registry.def.mappings {
-        if me.physical_type == *type_name {
-            // Tag with the ontology class.
-            let tag = format!("class:{}", me.class);
-            if !ko.metadata.tags.contains(&tag) {
-                ko.metadata.tags.push(tag);
-            }
-            // Rename properties per the mapping.
-            let mut renamed = PropertyMap::new();
-            for (k, v) in std::mem::take(&mut ko.properties) {
-                let new_key = me.property_map.get(&k).cloned().unwrap_or(k);
-                renamed.insert(new_key, v);
-            }
-            ko.properties = renamed;
-            break; // one mapping per physical_type; first wins
+    // TDD-COMP-001: indexed lookup — per-KO conformance is one hash probe.
+    if let Some(me) = registry.mapping_for_physical(&ko.metadata.type_name) {
+        // Tag with the ontology class.
+        let tag = format!("class:{}", me.class);
+        if !ko.metadata.tags.contains(&tag) {
+            ko.metadata.tags.push(tag);
         }
+        // Rename properties per the mapping.
+        let mut renamed = PropertyMap::new();
+        for (k, v) in std::mem::take(&mut ko.properties) {
+            let new_key = me.property_map.get(&k).cloned().unwrap_or(k);
+            renamed.insert(new_key, v);
+        }
+        ko.properties = renamed;
     }
 }
 
@@ -1283,6 +1309,100 @@ mod tests {
         assert!(r.map_external("any", "thing").is_none());
         assert_eq!(r.physical_types_for_class("Anything").len(), 0);
         assert!(!r.is_subclass_of("A", "B"));
+    }
+
+    // ------------------------------------------------------------------
+    // TDD-COMP-001 (P4-M7): physical-type index — O(1) resolution
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn comp001_physical_type_index_answers_in_one_probe() {
+        // The probe counter pins O(1) average: each lookup costs exactly ONE
+        // indexed probe, hit or miss, independent of the mapping count.
+        let mut classes = BTreeMap::new();
+        classes.insert(
+            "C".into(),
+            ClassDef {
+                name: "C".into(),
+                parent: None,
+                description: None,
+            },
+        );
+        let mappings: Vec<MappingEntry> = (0..400)
+            .map(|i| MappingEntry {
+                source: "pg".into(),
+                physical_type: format!("emp_{i}"),
+                class: "C".into(),
+                property_map: BTreeMap::new(),
+            })
+            .collect();
+        let r = OntologyRegistry::new(OntologyDef {
+            namespace: "t".into(),
+            version: "1".into(),
+            classes,
+            relationships: BTreeMap::new(),
+            property_defs: BTreeMap::new(),
+            mappings,
+        })
+        .unwrap();
+
+        for i in 0..400 {
+            let me = r
+                .mapping_for_physical(&format!("emp_{i}"))
+                .expect("indexed hit");
+            assert_eq!(me.class, "C");
+        }
+        for i in 0..400 {
+            assert!(r.mapping_for_physical(&format!("nope_{i}")).is_none());
+        }
+        assert_eq!(
+            r.resolution_probes(),
+            800,
+            "800 lookups = 800 probes — O(1) average, never a mapping scan"
+        );
+
+        assert_eq!(r.class_for_physical("emp_7"), Some("C"));
+        assert_eq!(r.class_for_physical("nope_7"), None);
+        assert_eq!(r.resolution_probes(), 802);
+    }
+
+    #[test]
+    fn comp001_physical_type_index_first_mapping_wins() {
+        // Duplicate physical_type across sources: the index keeps the FIRST
+        // entry, matching the pre-index `.find()`/break-on-first semantics.
+        let mut classes = BTreeMap::new();
+        classes.insert(
+            "C".into(),
+            ClassDef {
+                name: "C".into(),
+                parent: None,
+                description: None,
+            },
+        );
+        let r = OntologyRegistry::new(OntologyDef {
+            namespace: "t".into(),
+            version: "1".into(),
+            classes,
+            relationships: BTreeMap::new(),
+            property_defs: BTreeMap::new(),
+            mappings: vec![
+                MappingEntry {
+                    source: "pg".into(),
+                    physical_type: "dup".into(),
+                    class: "C".into(),
+                    property_map: BTreeMap::new(),
+                },
+                MappingEntry {
+                    source: "mongo".into(),
+                    physical_type: "dup".into(),
+                    class: "C".into(),
+                    property_map: BTreeMap::new(),
+                },
+            ],
+        })
+        .unwrap();
+        assert_eq!(r.mapping_for_physical("dup").unwrap().source, "pg");
+        assert_eq!(r.class_for_physical("dup"), Some("C"));
     }
 
     #[test]

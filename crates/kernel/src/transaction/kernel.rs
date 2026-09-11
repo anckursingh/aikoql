@@ -86,6 +86,13 @@ impl Clock for ManualClock {
 }
 
 /// HLC packed as (millis << 16) | counter. Monotone even under clock regression.
+///
+/// Overflow (TDD-TIME-001, documented): within one millisecond the counter
+/// may exhaust — 0xFFFF steps the packed value into the NEXT ms slot, a
+/// forward jump that stays monotone and never re-issues a timestamp (the
+/// ms component then reads equal and the counter continues from 0). The ms
+/// component itself wraps only past 2^48 ms of wall time (~9 million
+/// years) — this packing does not handle that.
 struct Hlc {
     last: Mutex<u64>,
 }
@@ -4115,6 +4122,122 @@ mod tests {
         c.set(1); // regression
         let d = h.now(&c);
         assert!(d > b);
+    }
+
+    // --- P4-M7 (TDD-TIME-001) — time001: the six HLC property groups. ---
+
+    /// (1) Clock rollback: the packed value keeps moving forward.
+    #[test]
+    fn time001_rollback_keeps_timestamps_forward() {
+        let h = Hlc::new();
+        let c = ManualClock::new(500);
+        let a = h.now(&c);
+        c.set(1); // wall clock regresses
+        let b = h.now(&c);
+        assert!(b > a, "regression must not move timestamps backwards");
+    }
+
+    /// (2) Same-ms commits: each now() bumps the counter.
+    #[test]
+    fn time001_same_ms_commits_bump_the_counter() {
+        let h = Hlc::new();
+        let c = ManualClock::new(700);
+        let a = h.now(&c);
+        let b = h.now(&c);
+        assert_eq!(a >> 16, 700, "ms component comes from the clock");
+        assert_eq!(b, a + 1, "counter increments within the same ms");
+    }
+
+    /// (3) Restart: starting_at(seed) keeps every new timestamp above the
+    /// journal head, even when the wall clock reads behind the seed.
+    #[test]
+    fn time001_restart_reseeds_above_the_journal_head() {
+        let seed = (900u64 << 16) | 0xFFFF;
+        let h = Hlc::starting_at(seed);
+        let c = ManualClock::new(900); // clock == seed's ms
+        let a = h.now(&c);
+        assert!(
+            a > seed,
+            "first post-restart timestamp exceeds the journal head"
+        );
+        let c2 = ManualClock::new(50); // clock far behind the seed
+        let b = h.now(&c2);
+        assert!(b > a, "behind-seed clocks keep the sequence monotone");
+    }
+
+    /// (4) Max counter: at 0xFFFF within one ms the counter exhausts and
+    /// the value steps into the next ms slot (the documented overflow —
+    /// forward, monotone, never backwards).
+    #[test]
+    fn time001_max_counter_overflows_forward_one_ms() {
+        let h = Hlc::starting_at((1000u64 << 16) | 0xFFFF);
+        let c = ManualClock::new(1000); // frozen at the same ms
+        let a = h.now(&c);
+        assert_eq!(a, 1001u64 << 16, "0xFFFF + 1 steps into ms+1");
+        assert!(
+            a > (1000u64 << 16) | 0xFFFF,
+            "overflow never steps backwards"
+        );
+    }
+
+    /// (5) Concurrent writers: with a frozen clock the mutex-serialized
+    /// counter never resets — every value issued is distinct.
+    #[test]
+    fn time001_concurrent_writers_issue_distinct_timestamps() {
+        let h = Arc::new(Hlc::starting_at(0));
+        let c = Arc::new(ManualClock::new(42)); // frozen: counter path only
+        let out = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let h = h.clone();
+            let c = c.clone();
+            let out = out.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut mine = Vec::new();
+                for _ in 0..250 {
+                    mine.push(h.now(&*c));
+                }
+                for w in mine.windows(2) {
+                    assert!(w[1] > w[0], "each writer's own sequence is monotone");
+                }
+                out.lock().unwrap().extend(mine);
+            }));
+        }
+        for j in handles {
+            j.join().unwrap();
+        }
+        let mut all = out.lock().unwrap().clone();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(
+            all.len(),
+            2000,
+            "the frozen-ms counter never resets under contention"
+        );
+    }
+
+    /// (6) Determinism: the same clock script yields the same timestamp
+    /// sequence (conformance-replay requirement).
+    #[test]
+    fn time001_determinism_same_clock_script_same_timestamps() {
+        let script = || {
+            let h = Hlc::new();
+            let c = ManualClock::new(5);
+            let mut ts = Vec::new();
+            for _ in 0..3 {
+                ts.push(h.now(&c));
+            }
+            c.set(9);
+            ts.push(h.now(&c));
+            c.set(2); // regression
+            ts.push(h.now(&c));
+            ts
+        };
+        assert_eq!(
+            script(),
+            script(),
+            "replay must reproduce timestamps exactly"
+        );
     }
 
     #[test]

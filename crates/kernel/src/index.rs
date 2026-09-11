@@ -36,6 +36,55 @@ pub trait IndexMaintainerApi: Send + Sync {
     fn vectors(&self) -> &Arc<dyn VectorIndex>;
     /// Access the text index for full-text search.
     fn text(&self) -> &Arc<dyn TextIndex>;
+    /// P4-M7 (TDD-INDEX-001): lag semantics — applied/target seqs, lag,
+    /// status, last_error. The exact-vs-eventual choice lives at the
+    /// coordinator (`search` = eventual via the indexes when attached;
+    /// `search_exact` = committed state, zero lag).
+    fn status(&self, kernel: &Kernel) -> KResult<IndexStatus> {
+        let lag = self.lag(kernel)?;
+        let (head, _) = kernel.journal_head()?;
+        Ok(IndexStatus {
+            applied_event_seq: head.saturating_sub(lag),
+            target_event_seq: head,
+            lag,
+            status: if lag == 0 {
+                IndexStatusKind::CaughtUp
+            } else {
+                IndexStatusKind::Syncing
+            },
+            last_error: None,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IndexStatus — lag semantics shared by every index (TDD-INDEX-001)
+// ---------------------------------------------------------------------------
+
+/// P4-M7 (TDD-INDEX-001). The maintainer applies vector + text from the one
+/// event stream in ONE `apply` pass, so both indexes share one water — this
+/// struct IS the whole per-index status (fake per-index waters would lie).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexStatus {
+    /// Last event seq applied to the indexes.
+    pub applied_event_seq: u64,
+    /// Journal head — the seq a caught-up index would be at.
+    pub target_event_seq: u64,
+    /// `target - applied`: events committed but not yet applied.
+    pub lag: u64,
+    pub status: IndexStatusKind,
+    /// The last apply failure (cleared by a successful apply).
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexStatusKind {
+    /// lag > 0, no error — applying committed events.
+    Syncing,
+    /// lag == 0, no error.
+    CaughtUp,
+    /// The last apply failed; retried on the next event.
+    Error,
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +104,30 @@ pub trait VectorIndex: Send + Sync {
     fn checkpoint(&self, _dir: &std::path::Path) -> KResult<()> {
         Ok(())
     }
+    /// P4-M7 (TDD-VECTOR-002): health metrics. `None` for indexes without a
+    /// tombstone/physical split (the brute-force reference).
+    fn health(&self) -> Option<VectorHealth> {
+        None
+    }
+    /// P4-M7 (TDD-VECTOR-002): rebuild ONCE when the dead ratio crossed the
+    /// threshold. No-op for non-tombstone indexes. Returns whether a
+    /// rebuild ran. Called after maintenance applies (never inside `remove`
+    /// itself — a delete must stay O(1)).
+    fn maybe_rebuild(&self) -> bool {
+        false
+    }
+}
+
+/// P4-M7 (TDD-VECTOR-002) — tombstones vs physical nodes. `dead_ratio` is
+/// `tombstones / physical` (0 when `physical` is 0).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VectorHealth {
+    /// Live (koid, model) pairs the index answers for.
+    pub live: usize,
+    /// Nodes physically present in the graph (removes only tombstone).
+    pub physical: usize,
+    pub tombstones: usize,
+    pub dead_ratio: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +207,21 @@ pub trait TextIndex: Send + Sync {
     fn search(&self, tokens: &BTreeSet<String>, k: usize) -> KResult<Vec<(KOID, f32)>>;
     fn len(&self) -> usize;
     fn checkpoint(&self, _dir: &std::path::Path) -> KResult<()> {
+        Ok(())
+    }
+    /// P4-M7 (TDD-VECTOR-001): batch upsert — answers == per-item answers.
+    /// Default loops per item; Tantivy overrides to commit ONCE per batch.
+    fn upsert_many(&self, items: &[(KOID, BTreeSet<String>)]) -> KResult<()> {
+        for (koid, tokens) in items {
+            self.upsert(*koid, tokens)?;
+        }
+        Ok(())
+    }
+    /// P4-M7 (TDD-VECTOR-001): batch remove — answers == per-item removals.
+    fn remove_many(&self, koids: &[KOID]) -> KResult<()> {
+        for koid in koids {
+            self.remove(koid)?;
+        }
         Ok(())
     }
 }
@@ -237,9 +325,133 @@ impl TextIndex for TokenTextIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::store::MemoryEngine;
+    use crate::transaction::kernel::{
+        Fusion, ManualClock, RememberRequest, SimilarityQuery, Subject,
+    };
 
     fn kid(n: u8) -> KOID {
         KOID([n; KOID_LEN])
+    }
+
+    // --- P4-M7 (TDD-INDEX-001) — idx001: the unambiguous exact-vs-eventual
+    // choice. RED: `search_exact` does not exist yet (and the fake
+    // maintainer below will not build once `status()` lands on the trait).
+    // ---
+
+    /// A maintainer whose indexes deliberately lag the kernel: it has
+    /// indexed only `a`'s vector, and reports lag 1.
+    struct FakeMaintainer {
+        vectors: Arc<dyn VectorIndex>,
+        text: Arc<dyn TextIndex>,
+    }
+
+    impl IndexMaintainerApi for FakeMaintainer {
+        fn lag(&self, _kernel: &Kernel) -> KResult<u64> {
+            Ok(1)
+        }
+        fn vectors(&self) -> &Arc<dyn VectorIndex> {
+            &self.vectors
+        }
+        fn text(&self) -> &Arc<dyn TextIndex> {
+            &self.text
+        }
+    }
+
+    fn embed(k: &Kernel, subj: &Subject, vec: Vec<f32>) -> KOID {
+        k.remember(RememberRequest {
+            context: subj.clone().into(),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: None,
+            metadata: Metadata {
+                type_name: "fact".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: PropertyMap::new(),
+            semantic: Some(SemanticBlock {
+                embedding_model: Some("m".into()),
+                embedding: Some(vec),
+                confidence: None,
+                source: None,
+                summary: None,
+            }),
+            relationships: vec![],
+            security: None,
+            extensions: ExtensionMap::new(),
+            origin: Origin::Human,
+            note: None,
+            referential_policy: ReferentialPolicy::default(),
+        })
+        .unwrap()
+        .koid
+    }
+
+    /// A lagging maintainer scores from stale index data; the exact path
+    /// scores committed state. The choice must be visible at the call site.
+    #[test]
+    fn coordinator_exact_choice_is_unambiguous_against_a_lagging_maintainer() {
+        let clock = Arc::new(ManualClock::new(5_000));
+        let k = Kernel::open(Arc::new(MemoryEngine::new()), clock, 1).unwrap();
+        let alice = Subject::new("alice");
+        let a = embed(&k, &alice, vec![0.0, 1.0]);
+        let b = embed(&k, &alice, vec![1.0, 0.0]);
+
+        // The maintainer holds a STALE copy of a's vector ([1,1] instead of
+        // the committed [0,1]) and has never indexed b.
+        let vectors: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
+        vectors.upsert(a, "m", &[1.0, 1.0]);
+        let fake = Arc::new(FakeMaintainer {
+            vectors,
+            text: Arc::new(TokenTextIndex::new()),
+        });
+        let coord = IndexCoordinator::with_maintainer(fake);
+        let q = || {
+            SimilarityQuery::new(alice.clone(), 1, Fusion::VectorOnly).with_vector(vec![0.9, 0.1])
+        };
+
+        let eventual = coord.search(&k, q()).unwrap();
+        assert_eq!(
+            eventual[0].ko.koid, a,
+            "the lagging index scores only its stale copy — eventual answers may lag"
+        );
+        assert_eq!(
+            eventual[0].index_lag_ms, 1,
+            "the lag is surfaced on the result"
+        );
+
+        let exact = coord.search_exact(&k, q()).unwrap();
+        assert_eq!(
+            exact[0].ko.koid, b,
+            "the exact path scores committed state and wins"
+        );
+        assert_eq!(exact[0].index_lag_ms, 0, "the exact path consults no index");
+    }
+
+    /// With no maintainer attached, exact and eventual are the same path.
+    #[test]
+    fn exact_matches_search_when_no_maintainer_is_attached() {
+        let clock = Arc::new(ManualClock::new(5_000));
+        let k = Kernel::open(Arc::new(MemoryEngine::new()), clock, 1).unwrap();
+        let alice = Subject::new("alice");
+        let a = embed(&k, &alice, vec![0.0, 1.0]);
+        let b = embed(&k, &alice, vec![1.0, 0.0]);
+        assert_ne!(a, b);
+        let coord = IndexCoordinator::new();
+        let q = || {
+            SimilarityQuery::new(alice.clone(), 2, Fusion::VectorOnly).with_vector(vec![0.9, 0.1])
+        };
+        let via_search = coord.search(&k, q()).unwrap();
+        let via_exact = coord.search_exact(&k, q()).unwrap();
+        assert_eq!(via_search.len(), via_exact.len());
+        for (s, e) in via_search.iter().zip(&via_exact) {
+            assert_eq!(s.ko.koid, e.ko.koid);
+            assert_eq!(s.score, e.score);
+            assert_eq!(s.index_lag_ms, 0);
+            assert_eq!(e.index_lag_ms, 0);
+        }
     }
 
     #[test]

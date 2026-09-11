@@ -70,8 +70,8 @@ pub use eval::{
     EvalStalenessReport,
 };
 pub use index::{
-    BruteForceVectorIndex, IndexCoordinator, IndexMaintainerApi, TextIndex, TokenTextIndex,
-    VectorIndex,
+    BruteForceVectorIndex, IndexCoordinator, IndexMaintainerApi, IndexStatus, IndexStatusKind,
+    TextIndex, TokenTextIndex, VectorHealth, VectorIndex,
 };
 pub use knowledge::authority::{Authority, AuthorityRanking};
 pub use knowledge::evidence::{Evidence, EvidenceMethod};
@@ -144,7 +144,9 @@ pub use knowledge::kom::{
     SUPERSEDES,
     TESTED_BY,
 };
-pub use knowledge::ontology::{Cardinality, ClassDef, OntologyDef, OntologyRegistry, RelDef};
+pub use knowledge::ontology::{
+    Cardinality, ClassDef, MappingEntry, OntologyDef, OntologyRegistry, RelDef,
+};
 pub use knowledge::scope::{Scope, ScopeResolver};
 pub use storage::store::{ConstraintCapabilities, MemoryEngine, StorageEngine, WriteBatch};
 pub use storage::store_redb::RedbEngine;

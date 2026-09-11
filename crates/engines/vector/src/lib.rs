@@ -10,8 +10,9 @@
 //! from the Knowledge Event stream.
 
 use aikoql_kernel::knowledge::kom::*;
-use aikoql_kernel::{TextIndex, VectorIndex};
+use aikoql_kernel::{TextIndex, VectorHealth, VectorIndex};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, RwLock};
 use tantivy::collector::TopDocs;
 use tantivy::query::BooleanQuery;
@@ -26,6 +27,11 @@ pub use aikoql_kernel::{BruteForceVectorIndex, TokenTextIndex};
 // HnswVectorIndex — approximate nearest-neighbor (fast-hnsw)
 // ---------------------------------------------------------------------------
 
+/// P4-M7 (TDD-VECTOR-002): a delete tombstones (the graph keeps the node);
+/// once dead nodes pass this ratio of physical nodes, the next maintenance
+/// tick rebuilds the graph from the live set — ONCE, never per delete.
+const REBUILD_DEAD_RATIO: f64 = 0.3;
+
 /// HNSW-backed ANN index with model-namespaced partitioning (R7).
 /// Labels are `"{model}:{koid_hex}"` so the same KO with different embedding
 /// models produces independent HNSW entries.
@@ -33,25 +39,35 @@ pub struct HnswVectorIndex {
     dim: usize,
     capacity: usize,
     index: Mutex<hnsw::labeled::LabeledIndex<hnsw::distance::Cosine, String>>,
-    /// Track which (KOID, model) pairs are live.
-    model_map: RwLock<BTreeMap<(KOID, String), ()>>,
+    /// Live (KOID, model) pairs and their vectors (kept so a rebuild can
+    /// re-insert them; empty vectors mean a post-load entry not yet
+    /// re-upserted by the maintainer).
+    model_map: RwLock<BTreeMap<(KOID, String), Vec<f32>>>,
     tombstones: RwLock<BTreeSet<KOID>>,
+    /// Nodes physically in the graph (inserts; removes never shrink it).
+    physical: AtomicU64,
+    pending_rebuild: AtomicBool,
+}
+
+fn build_index(capacity: usize) -> hnsw::labeled::LabeledIndex<hnsw::distance::Cosine, String> {
+    hnsw::Builder::new()
+        .m(16)
+        .ef_construction(200)
+        .capacity(capacity)
+        .seed(42)
+        .build_labeled(hnsw::distance::Cosine)
 }
 
 impl HnswVectorIndex {
     pub fn new(dim: usize, capacity: usize) -> Self {
-        let index = hnsw::Builder::new()
-            .m(16)
-            .ef_construction(200)
-            .capacity(capacity)
-            .seed(42)
-            .build_labeled(hnsw::distance::Cosine);
         HnswVectorIndex {
             dim,
             capacity,
-            index: Mutex::new(index),
+            index: Mutex::new(build_index(capacity)),
             model_map: RwLock::new(BTreeMap::new()),
             tombstones: RwLock::new(BTreeSet::new()),
+            physical: AtomicU64::new(0),
+            pending_rebuild: AtomicBool::new(false),
         }
     }
 
@@ -77,7 +93,7 @@ impl HnswVectorIndex {
             .filter_map(|v| v.as_str().and_then(|s| KOID::from_hex(s).ok()))
             .collect();
         // R7: models stored as {koid_hex: [model1, model2, ...]}
-        let mut model_map: BTreeMap<(KOID, String), ()> = BTreeMap::new();
+        let mut model_map: BTreeMap<(KOID, String), Vec<f32>> = BTreeMap::new();
         if let Some(models_obj) = meta["models"].as_object() {
             for (koid_hex, models_val) in models_obj {
                 let koid = KOID::from_hex(koid_hex)
@@ -85,22 +101,69 @@ impl HnswVectorIndex {
                 if let Some(models_arr) = models_val.as_array() {
                     for m in models_arr {
                         if let Some(model) = m.as_str() {
-                            model_map.insert((koid, model.to_string()), ());
+                            model_map.insert((koid, model.to_string()), Vec::new());
                         }
                     }
                 } else if let Some(model) = models_val.as_str() {
                     // Backward-compat: old format had single model string.
-                    model_map.insert((koid, model.to_string()), ());
+                    model_map.insert((koid, model.to_string()), Vec::new());
                 }
             }
         }
+        let physical = meta["physical"].as_u64().unwrap_or(model_map.len() as u64);
         Ok(HnswVectorIndex {
             dim,
             capacity,
             index: Mutex::new(index),
             model_map: RwLock::new(model_map),
             tombstones: RwLock::new(tombstones),
+            physical: AtomicU64::new(physical),
+            pending_rebuild: AtomicBool::new(false),
         })
+    }
+
+    fn dead_ratio(&self) -> f64 {
+        let physical = self.physical.load(Ordering::Relaxed) as f64;
+        if physical == 0.0 {
+            return 0.0;
+        }
+        // justified: RwLock poison is unrecoverable
+        self.tombstones.read().unwrap().len() as f64 / physical
+    }
+
+    /// P4-M7 (TDD-VECTOR-002): rebuild ONCE when a past delete crossed the
+    /// dead ratio (a delete itself only flags — it stays O(1)). Re-upserts
+    /// that heal the ratio below the threshold cancel the pending rebuild.
+    pub fn maybe_rebuild(&self) -> bool {
+        if !self.pending_rebuild.swap(false, Ordering::Relaxed) {
+            return false;
+        }
+        if self.dead_ratio() <= REBUILD_DEAD_RATIO {
+            return false;
+        }
+        // justified: RwLock poison is unrecoverable
+        let live: Vec<(String, Vec<f32>)> = self
+            .model_map
+            .read()
+            .unwrap()
+            .iter()
+            .map(|((koid, model), v)| (format!("{model}:{}", koid.to_hex()), v.clone()))
+            .collect();
+        if live.iter().any(|(_, v)| v.is_empty()) {
+            // Post-load state: checkpoints store labels, not vectors — wait
+            // for the maintainer's catch-up re-upserts before rebuilding.
+            return false;
+        }
+        let mut fresh = build_index(self.capacity);
+        for (label, vec) in &live {
+            fresh.insert(vec.clone(), label.clone());
+        }
+        // justified: Mutex poison is unrecoverable
+        *self.index.lock().unwrap() = fresh;
+        self.physical.store(live.len() as u64, Ordering::Relaxed);
+        // justified: RwLock poison is unrecoverable
+        self.tombstones.write().unwrap().clear();
+        true
     }
 }
 
@@ -123,7 +186,8 @@ impl VectorIndex for HnswVectorIndex {
             .write()
             // justified: RwLock poison is unrecoverable
             .unwrap()
-            .insert((koid, model.to_string()), ());
+            .insert((koid, model.to_string()), vec.to_vec());
+        self.physical.fetch_add(1, Ordering::Relaxed);
         // justified: RwLock poison is unrecoverable
         self.tombstones.write().unwrap().remove(&koid);
     }
@@ -136,6 +200,11 @@ impl VectorIndex for HnswVectorIndex {
             // justified: RwLock poison is unrecoverable
             .unwrap()
             .retain(|(k, _), _| k != koid);
+        // P4-M7 (TDD-VECTOR-002): flag a rebuild when the dead ratio crosses
+        // the threshold — the delete itself stays O(1).
+        if self.dead_ratio() > REBUILD_DEAD_RATIO {
+            self.pending_rebuild.store(true, Ordering::Relaxed);
+        }
     }
 
     fn search(&self, qv: &[f32], k: usize, model: Option<&str>) -> Vec<(KOID, f32)> {
@@ -193,6 +262,19 @@ impl VectorIndex for HnswVectorIndex {
         self.model_map.read().unwrap().len()
     }
 
+    fn health(&self) -> Option<VectorHealth> {
+        Some(VectorHealth {
+            live: self.model_map.read().unwrap().len(),
+            physical: self.physical.load(Ordering::Relaxed) as usize,
+            tombstones: self.tombstones.read().unwrap().len(),
+            dead_ratio: self.dead_ratio(),
+        })
+    }
+
+    fn maybe_rebuild(&self) -> bool {
+        HnswVectorIndex::maybe_rebuild(self)
+    }
+
     fn checkpoint(&self, dir: &std::path::Path) -> KResult<()> {
         std::fs::create_dir_all(dir)
             .map_err(|e| KError::Store(format!("create hnsw checkpoint dir: {}", e)))?;
@@ -222,6 +304,7 @@ impl VectorIndex for HnswVectorIndex {
         let meta = serde_json::json!({
             "dim": self.dim,
             "capacity": self.capacity,
+            "physical": self.physical.load(Ordering::Relaxed),
             "tombstones": tombstones,
             "models": models_json,
         });
@@ -340,6 +423,55 @@ impl TextIndex for TantivyTextIndex {
             .map_err(|e| KError::Store(format!("tantivy commit: {}", e)))?;
         // justified: RwLock poison is unrecoverable
         self.docs.write().unwrap().insert(koid, tokens.clone());
+        Ok(())
+    }
+
+    /// P4-M7 (TDD-VECTOR-001): one delete pass + one add pass + ONE commit
+    /// for the whole batch. A repeated koid keeps its LAST write (one doc).
+    fn upsert_many(&self, items: &[(KOID, BTreeSet<String>)]) -> KResult<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let unique: BTreeMap<KOID, String> = items
+            .iter()
+            .map(|(k, t)| (*k, t.iter().cloned().collect::<Vec<_>>().join(" ")))
+            .collect();
+        // justified: Mutex poison is unrecoverable
+        let mut w = self.writer.lock().unwrap();
+        for koid in unique.keys() {
+            w.delete_term(Term::from_field_text(self.koid_field, &koid.to_hex()));
+        }
+        for (koid, text) in &unique {
+            w.add_document(doc!(
+                self.koid_field => koid.to_hex(),
+                self.tokens_field => text.as_str(),
+            ))
+            .map_err(|e| KError::Store(format!("tantivy batch add_document: {}", e)))?;
+        }
+        w.commit()
+            .map_err(|e| KError::Store(format!("tantivy batch commit: {}", e)))?;
+        // justified: RwLock poison is unrecoverable
+        self.docs.write().unwrap().extend(
+            unique
+                .iter()
+                .map(|(k, t)| (*k, t.split_whitespace().map(String::from).collect())),
+        );
+        Ok(())
+    }
+
+    fn remove_many(&self, koids: &[KOID]) -> KResult<()> {
+        if koids.is_empty() {
+            return Ok(());
+        }
+        // justified: Mutex poison is unrecoverable
+        let mut w = self.writer.lock().unwrap();
+        for koid in koids {
+            w.delete_term(Term::from_field_text(self.koid_field, &koid.to_hex()));
+        }
+        w.commit()
+            .map_err(|e| KError::Store(format!("tantivy batch commit: {}", e)))?;
+        // justified: RwLock poison is unrecoverable
+        self.docs.write().unwrap().retain(|k, _| !koids.contains(k));
         Ok(())
     }
 
@@ -500,5 +632,136 @@ mod tests {
             .search(&BTreeSet::from(["cats".to_string()]), 5)
             .unwrap()
             .is_empty());
+    }
+
+    // --- P4-M7 (TDD-VECTOR-001) — vec001: batch ops answer == per-item
+    // answers. RED: `upsert_many`/`remove_many` do not exist yet. ---
+
+    #[test]
+    fn vec001_upsert_many_answers_equal_per_item() {
+        let items = vec![
+            (
+                kid(1),
+                BTreeSet::from(["cats".to_string(), "dogs".to_string()]),
+            ),
+            (kid(2), BTreeSet::from(["birds".to_string()])),
+            (kid(3), BTreeSet::from(["fish".to_string()])),
+        ];
+        let batched = TantivyTextIndex::new().unwrap();
+        batched.upsert_many(&items).unwrap();
+        let per_item = TantivyTextIndex::new().unwrap();
+        for (k, t) in &items {
+            per_item.upsert(*k, t).unwrap();
+        }
+        assert_eq!(batched.len(), 3);
+        assert_eq!(batched.len(), per_item.len());
+        for probe in ["cats", "birds", "fish"] {
+            let q = BTreeSet::from([probe.to_string()]);
+            assert_eq!(
+                batched.search(&q, 5).unwrap(),
+                per_item.search(&q, 5).unwrap(),
+                "batch answers == per-item answers for {probe}"
+            );
+        }
+    }
+
+    #[test]
+    fn vec001_remove_many_answers_equal_per_item() {
+        let fill = |idx: &TantivyTextIndex| {
+            for i in 1..=3u8 {
+                idx.upsert(kid(i), &BTreeSet::from([format!("t{i}")]))
+                    .unwrap();
+            }
+        };
+        let batched = TantivyTextIndex::new().unwrap();
+        fill(&batched);
+        batched.remove_many(&[kid(1), kid(2)]).unwrap();
+        let per_item = TantivyTextIndex::new().unwrap();
+        fill(&per_item);
+        per_item.remove(&kid(1)).unwrap();
+        per_item.remove(&kid(2)).unwrap();
+        assert_eq!(batched.len(), 1);
+        assert_eq!(batched.len(), per_item.len());
+        assert!(batched
+            .search(&BTreeSet::from(["t1".to_string()]), 5)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            batched
+                .search(&BTreeSet::from(["t3".to_string()]), 5)
+                .unwrap(),
+            per_item
+                .search(&BTreeSet::from(["t3".to_string()]), 5)
+                .unwrap()
+        );
+    }
+
+    /// A repeated koid within one batch: the last write wins, one doc stays.
+    #[test]
+    fn vec001_batch_repeat_koid_last_write_wins() {
+        let idx = TantivyTextIndex::new().unwrap();
+        idx.upsert_many(&[
+            (kid(1), BTreeSet::from(["cats".to_string()])),
+            (kid(1), BTreeSet::from(["dogs".to_string()])),
+        ])
+        .unwrap();
+        assert_eq!(idx.len(), 1, "no duplicate docs for the same koid");
+        assert!(
+            idx.search(&BTreeSet::from(["cats".to_string()]), 5)
+                .unwrap()
+                .is_empty(),
+            "the earlier write is superseded"
+        );
+        assert_eq!(
+            idx.search(&BTreeSet::from(["dogs".to_string()]), 5)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    // --- P4-M7 (TDD-VECTOR-002) — vec002: HNSW health + dead-ratio rebuild.
+    // RED: `health`/`maybe_rebuild` do not exist yet. ---
+
+    #[test]
+    fn vec002_health_metrics_and_dead_ratio_rebuild_once() {
+        let idx = HnswVectorIndex::new(2, 100);
+        // Distinct directions: [i, 1] vectors are NOT collinear, so the
+        // cosine ranking is well-defined (collinear probes would tie).
+        for i in 1..=10u8 {
+            idx.upsert(kid(i), "m", &[i as f32, 1.0]);
+        }
+        for i in 1..=5u8 {
+            idx.remove(&kid(i));
+        }
+        let h = idx.health().expect("HNSW reports health");
+        assert_eq!(h.live, 5);
+        assert_eq!(
+            h.physical, 10,
+            "removes tombstone, the graph keeps the node"
+        );
+        assert_eq!(h.tombstones, 5);
+        assert_eq!(h.dead_ratio, 0.5);
+
+        assert!(idx.maybe_rebuild(), "ratio 0.5 > threshold — rebuild runs");
+        assert!(!idx.maybe_rebuild(), "the rebuild is ONCE, not per call");
+        let h2 = idx.health().unwrap();
+        assert_eq!(h2.tombstones, 0);
+        assert_eq!(h2.dead_ratio, 0.0);
+        assert_eq!(h2.live, 5);
+        assert_eq!(h2.physical, 5, "the graph shrank to the live set");
+
+        let r = idx.search(&[9.0, 1.0], 10, None);
+        assert!(
+            r.iter().all(|(k, _)| *k != kid(1)),
+            "dead entries stay excluded"
+        );
+        assert_eq!(r[0].0, kid(9), "live entries survive the rebuild");
+
+        idx.remove(&kid(6)); // 1/5 = 0.2 — below the threshold
+        assert!(
+            !idx.maybe_rebuild(),
+            "below-threshold deletes never rebuild"
+        );
     }
 }

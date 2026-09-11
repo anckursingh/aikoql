@@ -44,8 +44,26 @@ impl IndexCoordinator {
     }
 
     /// Hybrid recall: vector cosine + text Jaccard, ACL/type/state filtered,
-    /// with deterministic tie-breaking.
+    /// with deterministic tie-breaking. EVENTUALLY CONSISTENT when a
+    /// maintainer is attached — scores come from the async indexes and
+    /// `index_lag_ms` surfaces how far they lag (P4-M7, TDD-INDEX-001).
     pub fn search(&self, kernel: &Kernel, q: SimilarityQuery) -> KResult<Vec<ScoredKO>> {
+        self.search_inner(kernel, q, true)
+    }
+
+    /// P4-M7 (TDD-INDEX-001): the UNAMBIGUOUS exact choice — committed state
+    /// only, zero lag, no index reads even when a maintainer is attached.
+    /// Use when staleness is unacceptable; `search` is the eventual path.
+    pub fn search_exact(&self, kernel: &Kernel, q: SimilarityQuery) -> KResult<Vec<ScoredKO>> {
+        self.search_inner(kernel, q, false)
+    }
+
+    fn search_inner(
+        &self,
+        kernel: &Kernel,
+        q: SimilarityQuery,
+        use_indexes: bool,
+    ) -> KResult<Vec<ScoredKO>> {
         if q.k == 0 {
             return Err(KError::InvalidQuery("k must be >= 1".into()));
         }
@@ -67,22 +85,34 @@ impl IndexCoordinator {
 
         let q_tokens = q.text.as_ref().map(|t| tokenize(t));
 
-        let lag = match &self.maintainer {
-            Some(m) => m.lag(kernel)?,
-            None => 0,
+        let lag = if use_indexes {
+            match &self.maintainer {
+                Some(m) => m.lag(kernel)?,
+                None => 0,
+            }
+        } else {
+            0
         };
-        let vmap: Option<BTreeMap<KOID, f32>> = self.maintainer.as_ref().and_then(|m| {
-            q.vector.as_ref().map(|qv| {
-                m.vectors()
-                    .search(qv, usize::MAX, q.embedding_model.as_deref())
-                    .into_iter()
-                    .collect()
+        let vmap: Option<BTreeMap<KOID, f32>> = if use_indexes {
+            self.maintainer.as_ref().and_then(|m| {
+                q.vector.as_ref().map(|qv| {
+                    m.vectors()
+                        .search(qv, usize::MAX, q.embedding_model.as_deref())
+                        .into_iter()
+                        .collect()
+                })
             })
-        });
-        let tmap: Option<BTreeMap<KOID, f32>> = match (&self.maintainer, &q_tokens) {
-            // R4: text().search() returns KResult — propagate, don't swallow
-            (Some(m), Some(t)) => Some(m.text().search(t, usize::MAX)?.into_iter().collect()),
-            _ => None,
+        } else {
+            None
+        };
+        let tmap: Option<BTreeMap<KOID, f32>> = if use_indexes {
+            match (&self.maintainer, &q_tokens) {
+                // R4: text().search() returns KResult — propagate, don't swallow
+                (Some(m), Some(t)) => Some(m.text().search(t, usize::MAX)?.into_iter().collect()),
+                _ => None,
+            }
+        } else {
+            None
         };
 
         for (koid, _version, _ts, state) in &heads {
