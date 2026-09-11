@@ -1958,7 +1958,10 @@ impl Db {
             &state.placements,
         );
         let path = checkpoint_path(&config.dir, state.generation);
-        DirectoryCheckpoint::publish_staged(&path, &checkpoint, Some("CHECKPOINT"))?;
+        // P4-M6 — the streamed publish (no encoded buffer; same staging
+        // protocol and crash parks — cps001 pins the bytes, ckp004/cps002
+        // the windows).
+        DirectoryCheckpoint::publish_staged_streamed(&path, &checkpoint, Some("CHECKPOINT"))?;
         // Verify publication before anything depends on it: the history is
         // only pruned after the checkpoint proves decodable.
         let read_back = DirectoryCheckpoint::read(&path)?;

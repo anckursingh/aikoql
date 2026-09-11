@@ -41,12 +41,14 @@
 //! operator's evidence (the v1 closure's Q1 policy, verbatim).
 
 use crate::format::{
-    checksum8, crash_park, publish_atomic_staged, Cursor, FormatError, FORMAT_VERSION,
+    checksum8, crash_park, publish_atomic_staged, publish_atomic_writer_staged, Cursor,
+    FormatError, FORMAT_VERSION,
 };
 use crate::identity::directory::{identity_log_generation, IdentityRecord, ReplicaRecord};
 use crate::identity::{NodeId, LOCAL_NODE_ID};
 use crate::placement::directory::PlacementRecord;
 use crate::placement::{BlockId, Placement, SegmentId};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -118,9 +120,9 @@ impl DirectoryCheckpoint {
         }
     }
 
-    /// Encoded bytes — the exact byte length is the checkpoint's memory
-    /// footprint while publishing (Vec of records + this Vec; the maps stay
-    /// live). At the 1M-object ceiling: ~81 B × 1M ≈ 81 MB transient.
+    /// Encoded bytes — the materialized reference form (kept for decode
+    /// tests and cps001's byte-identity pin). P4-M6: it delegates to the
+    /// streaming writer, so the two forms can never drift apart.
     pub fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(
             HEADER_LEN
@@ -129,45 +131,66 @@ impl DirectoryCheckpoint {
                 + self.placements.len() * PLACEMENT_RECORD_LEN
                 + 8,
         );
-        bytes.extend_from_slice(CHECKPOINT_MAGIC);
-        bytes.extend_from_slice(&self.format_version.to_le_bytes());
-        bytes.extend_from_slice(&self.generation.to_le_bytes());
-        bytes.extend_from_slice(&(self.identities.len() as u32).to_le_bytes());
-        for r in &self.identities {
-            bytes.extend_from_slice(r.oid.as_bytes());
-            bytes.extend_from_slice(&r.lid.to_bytes());
-        }
-        bytes.extend_from_slice(&(self.replicas.len() as u32).to_le_bytes());
-        for r in &self.replicas {
-            bytes.extend_from_slice(&r.lid.to_bytes());
-            bytes.extend_from_slice(&r.node.to_bytes());
-            bytes.extend_from_slice(&r.rid.to_bytes());
-        }
-        bytes.extend_from_slice(&(self.placements.len() as u32).to_le_bytes());
-        for r in &self.placements {
-            bytes.extend_from_slice(&r.rid.to_bytes());
-            match r.placement {
-                Placement::Memtable { generation } => {
-                    bytes.push(1);
-                    bytes.extend_from_slice(&[0u8; 16]); // zeroed placement fields
-                    bytes.extend_from_slice(&generation.to_le_bytes());
-                }
-                Placement::Segment(loc) => {
-                    bytes.push(2);
-                    bytes.extend_from_slice(&loc.segment_id.to_bytes());
-                    bytes.extend_from_slice(&loc.block_id.to_bytes());
-                    bytes.extend_from_slice(&loc.entry_offset.to_le_bytes());
-                    bytes.extend_from_slice(&loc.generation.to_le_bytes());
-                }
-                Placement::Retired { generation } => {
-                    bytes.push(3);
-                    bytes.extend_from_slice(&[0u8; 16]); // zeroed placement fields
-                    bytes.extend_from_slice(&generation.to_le_bytes());
+        // A Vec write cannot fail; the streaming writer is the one writer.
+        self.write_streamed(&mut bytes)
+            .expect("write to Vec cannot fail");
+        bytes
+    }
+
+    /// P4-M6 — the one writer both paths use: header + sorted records
+    /// stream to any `io::Write`, feeding the whole-file sha256
+    /// incrementally (the checksum8 the decoder verifies) and appending its
+    /// first 8 bytes last. No full encoded buffer — the publish path
+    /// streams each fixed-width record (≤ 33 B) straight into the staged
+    /// temp, so publishing a 1M-object checkpoint never allocates its
+    /// ~81 MB encoded image.
+    pub fn write_streamed(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
+        let digest = {
+            let mut hasher = Sha256::new();
+            let mut w = |bytes: &[u8]| -> std::io::Result<()> {
+                hasher.update(bytes);
+                out.write_all(bytes)
+            };
+            w(CHECKPOINT_MAGIC)?;
+            w(&self.format_version.to_le_bytes())?;
+            w(&self.generation.to_le_bytes())?;
+            w(&(self.identities.len() as u32).to_le_bytes())?;
+            for r in &self.identities {
+                w(r.oid.as_bytes())?;
+                w(&r.lid.to_bytes())?;
+            }
+            w(&(self.replicas.len() as u32).to_le_bytes())?;
+            for r in &self.replicas {
+                w(&r.lid.to_bytes())?;
+                w(&r.node.to_bytes())?;
+                w(&r.rid.to_bytes())?;
+            }
+            w(&(self.placements.len() as u32).to_le_bytes())?;
+            for r in &self.placements {
+                w(&r.rid.to_bytes())?;
+                match r.placement {
+                    Placement::Memtable { generation } => {
+                        w(&[1u8])?;
+                        w(&[0u8; 16])?; // zeroed placement fields
+                        w(&generation.to_le_bytes())?;
+                    }
+                    Placement::Segment(loc) => {
+                        w(&[2u8])?;
+                        w(&loc.segment_id.to_bytes())?;
+                        w(&loc.block_id.to_bytes())?;
+                        w(&loc.entry_offset.to_le_bytes())?;
+                        w(&loc.generation.to_le_bytes())?;
+                    }
+                    Placement::Retired { generation } => {
+                        w(&[3u8])?;
+                        w(&[0u8; 16])?; // zeroed placement fields
+                        w(&generation.to_le_bytes())?;
+                    }
                 }
             }
-        }
-        bytes.extend_from_slice(&checksum8(&bytes));
-        bytes
+            hasher.finalize()
+        };
+        out.write_all(&digest[..8])
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
@@ -286,6 +309,18 @@ impl DirectoryCheckpoint {
         stage: Option<&str>,
     ) -> Result<(), FormatError> {
         publish_atomic_staged(path, &checkpoint.encode(), stage)
+    }
+
+    /// P4-M6 — publish through the streaming writer: the same staging
+    /// protocol (temp write → crash parks → fsync → rename), no encoded
+    /// buffer. The parks fire identically, so the M40 crash windows cover
+    /// the streamed path unchanged.
+    pub fn publish_staged_streamed(
+        path: &Path,
+        checkpoint: &Self,
+        stage: Option<&str>,
+    ) -> Result<(), FormatError> {
+        publish_atomic_writer_staged(path, stage, |f| checkpoint.write_streamed(f))
     }
 
     /// Read back + decode — the verify-publication step (review P0-2 step 7):
