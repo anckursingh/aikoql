@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use aikoql_compiler::parser::compile_with_subject;
 use aikoql_compiler::planner::Planner;
-use aikoql_kernel::ir::{IrOp, IrPlan, Predicate};
+use aikoql_kernel::ir::{IrOp, IrPlan};
 use aikoql_kernel::{
     ExtensionMap, Kernel, ManualClock, MemoryEngine, Metadata, Origin, PropertyMap,
     ReferentialPolicy, RememberRequest, Subject, Value,
@@ -60,13 +60,16 @@ fn create_ko(k: &Kernel, subj: &Subject, type_name: &str, props: PropertyMap) {
 fn seeded() -> Kernel {
     let k = mk();
     let alice = Subject::new("alice");
-    let kind = |k: &str| -> PropertyMap {
-        PropertyMap::from([("kind".to_string(), Value::Text(k.into()))])
+    let props = |kind: &str, temp: i64| -> PropertyMap {
+        PropertyMap::from([
+            ("kind".to_string(), Value::Text(kind.into())),
+            ("temp".to_string(), Value::Int(temp)),
+        ])
     };
-    create_ko(&k, &alice, "fact", kind("hot"));
-    create_ko(&k, &alice, "fact", kind("hot"));
-    create_ko(&k, &alice, "fact", kind("cold"));
-    create_ko(&k, &alice, "event", kind("hot"));
+    create_ko(&k, &alice, "fact", props("hot", 35));
+    create_ko(&k, &alice, "fact", props("hot", 35));
+    create_ko(&k, &alice, "fact", props("cold", 36));
+    create_ko(&k, &alice, "event", props("hot", 35));
     k
 }
 
@@ -179,8 +182,59 @@ fn gd003b_evil_predicate_drop_diverges() {
     );
 }
 
-// Keep Predicate imported even though gd003 compiles its evil plans from
-// query text — M1's corpus will build evil plans structurally (subject-swap,
-// tenant-swap) and needs the same import surface.
-#[allow(dead_code)]
-fn _m1_surface(_p: Predicate) {}
+mod proptest_corpus {
+    use super::*;
+    use aikoql_kernel::ir::Predicate;
+    use proptest::prelude::*;
+
+    /// One generated Filter: a temp range predicate (Int — hand-built plans
+    /// compare Int to Int fine; the Float-lowering defect is parser-side,
+    /// kq010) or a kind equality predicate (Text).
+    fn filter_strategy() -> impl Strategy<Value = IrOp> {
+        prop_oneof![
+            (prop_oneof!["eq", "gt", "lt"], 33i64..38).prop_map(|(op, n)| {
+                let p = match op.as_str() {
+                    "eq" => Predicate::eq("temp", Value::Int(n)),
+                    "gt" => Predicate::gt("temp", Value::Int(n)),
+                    _ => Predicate::lt("temp", Value::Int(n)),
+                };
+                IrOp::Filter {
+                    predicates: vec![p],
+                }
+            }),
+            prop_oneof!["hot", "cold"].prop_map(|kind: String| IrOp::Filter {
+                predicates: vec![Predicate::eq("kind", Value::Text(kind))],
+            })
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn alg002_optimize_is_result_preserving(
+            type_name in prop_oneof!["fact", "event"],
+            filters in proptest::collection::vec(filter_strategy(), 0..=2),
+        ) {
+            // alg002: optimize() over a generated Scan+Filter pipeline must
+            // leave the result set untouched — the gate-6 oracle over the
+            // generated corpus, divergence 0 (deterministic proptest seed).
+            let k = seeded();
+            let plan = IrPlan::new(
+                std::iter::once(scan(&type_name, "alice"))
+                    .chain(filters)
+                    .collect(),
+            );
+            let report = run(
+                &k,
+                &[OracleEntry {
+                    id: format!("alg002-{type_name}"),
+                    baseline: plan.clone(),
+                    candidate: Planner::optimize(&plan),
+                }],
+            );
+            let msg = format!("optimize changed the result set: {report:?}");
+            prop_assert_eq!(report.divergences, Vec::<String>::new(), "{}", msg);
+        }
+    }
+}

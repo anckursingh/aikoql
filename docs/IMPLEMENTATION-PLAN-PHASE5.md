@@ -54,7 +54,7 @@ TDD REDs: alg001 — algebra doc enumerates every rewrite with its precondition 
 
 Acceptance: proptest suite green in CI (seeded, deterministic); every documented rewrite has an executable test; optimize-vs-unoptimized corpus divergence = 0 (feeds the M0 oracle).
 
-Status: ⬜ Proposed
+Status: ✅ Shipped 2026-09-13 — alg001 RED→GREEN (doc-pin test fails on the missing `docs/compiler/operator-algebra.md`, then the doc ships: the three rewrites with preconditions, proof sketches, pinned-by test ids, and MUST-NOTs; `crates/compiler/tests/operator_algebra_pin.rs` keeps it honest — a rewrite without its section fails the build). alg002 compiler proptest 3/3 (512 cases each, deterministic proptest seed): dedup iff full-tuple match, output scan sequence = input with consecutive duplicates collapsed, Filter between scans blocks dedup — RED captured from an injected regression (tenant dropped from the dedup key → both scan-identity properties fail; restore → green). alg002 runtime oracle proptest (256 cases): generated Scan+Filter pipelines through `Planner::optimize` vs the unoptimized executor, divergence 0 — RED captured from an injected regression (merge_filters dropping the second predicate → caught after 9 cases). Every documented rewrite has a live test id (merge_two_filters, ppl006, ppl001–005, alg002). Suites: compiler 151/0 (84 lib + golden 13 + grammar 42 + doc pin + proptest 3 + 4/4 other), runtime 28/0; fmt + workspace clippy -D warnings green.
 
 ### P5-M2 — KOQL v1 remainder (ND-02)
 
