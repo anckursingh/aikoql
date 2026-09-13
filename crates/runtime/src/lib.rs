@@ -13,6 +13,8 @@ use aikoql_kernel::knowledge::scoring::{cosine, jaccard, ko_text, tokenize};
 use aikoql_kernel::transaction::kernel::{Kernel, KnowledgeContext, Subject};
 use std::cmp::Ordering;
 
+pub mod plan_oracle;
+
 // ---------------------------------------------------------------------------
 // Value comparison helper
 // ---------------------------------------------------------------------------

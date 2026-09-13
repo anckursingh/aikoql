@@ -377,4 +377,25 @@ jobs:
             echo "DAG VIOLATION: reference to a deleted P3-M9 SDK or cluster proxy"
             exit 1
           fi
+          # P5-M0 (gd001): the baseline-certification guard
+          # (.github/workflows/baseline-guard.yml) must stay wired — it runs
+          # the 1M v2 workload + gate-5 ratio on every change touching a
+          # protected path (storage/kernel/compiler/runtime).
+          echo "Checking P5-M0 baseline-guard wiring..."
+          GUARD=.github/workflows/baseline-guard.yml
+          if [ ! -f "$GUARD" ]; then
+            echo "DAG VIOLATION: $GUARD missing — the gate-5 baseline guard job must exist"
+            exit 1
+          fi
+          for path in crates/storage crates/kernel crates/compiler crates/runtime; do
+            if ! grep -q "$path" "$GUARD"; then
+              echo "DAG VIOLATION: $GUARD must trigger on $path"
+              exit 1
+            fi
+          done
+          if ! grep -q 'V2ADOPT_NIGHTLY=1m' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must run the 1M regime (V2ADOPT_NIGHTLY=1m)"
+            exit 1
+          fi
+          echo "P5-M0 baseline-guard wiring OK"
           echo "Dependency DAG OK"
