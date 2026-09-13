@@ -248,6 +248,7 @@ dependencies = [
  "aikoql-graph",
  "aikoql-kernel",
  "aikoql-semantic",
+ "proptest",
  "sha2 0.10.9",
  "tokio",
 ]

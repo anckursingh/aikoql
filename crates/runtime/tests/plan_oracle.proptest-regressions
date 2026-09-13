@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0aaae63cacccd66be722df2994d1223ed827e1b908d23cd96f4e36c6682e49f7 # shrinks to type_name = "fact", filters = [Filter { predicates: [Predicate { property: "temp", op: Lt, value: Int(36) }] }, Filter { predicates: [Predicate { property: "kind", op: Eq, value: Text("cold") }] }]
