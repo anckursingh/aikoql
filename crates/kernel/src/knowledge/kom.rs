@@ -165,7 +165,7 @@ impl IdGen {
 // ---------------------------------------------------------------------------
 
 /// Canonical property value. Map keys are sorted (BTreeMap) so encoding is canonical.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Null,
     Bool(bool),

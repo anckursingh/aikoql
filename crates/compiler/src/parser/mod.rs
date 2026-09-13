@@ -1,6 +1,10 @@
 //! Aikoql Text Parser — Lexer → AST → KIR per MRFC-0010.
 //!
-//! Entry point: `compile(source)` — tokenizes, parses, and compiles to `IrPlan`.
+//! Entry points: `compile_logical(source)` → `LogicalPlan` (the
+//! storage-independent pipeline), `compile_physical(source)` → `PhysicalPlan`
+//! (logical ops + per-operator strategies — what the runtime executes).
+//! `compile(source)` keeps its historical return type (`IrPlan` = the
+//! logical plan) so existing consumers stay untouched (P5-M3, ND-03).
 
 pub mod ast;
 pub mod diagnostics;
@@ -58,6 +62,19 @@ pub fn compile_with_subject(source: &str, subject: &str) -> Result<IrPlan, Strin
     let mut p = Parser::new(source);
     let stmt = p.parse_statement().map_err(|e| e.to_string())?;
     ast_to_ir(&stmt, &subject.into())
+}
+
+/// Compile into the logical plan — the storage-independent pipeline
+/// (P5-M3, qm001). Same operators `compile` has always produced.
+pub fn compile_logical(source: &str) -> Result<LogicalPlan, String> {
+    compile_with_subject(source, "query-user")
+}
+
+/// Compile into the executable physical plan: the logical pipeline plus a
+/// per-operator storage/index strategy (P5-M3, qm002/qm003). The runtime
+/// interpreter consumes this form; EXPLAIN prints its summary.
+pub fn compile_physical(source: &str) -> Result<PhysicalPlan, String> {
+    compile_logical(source).map(|p| crate::planner::Planner::physicalize(&p))
 }
 
 /// Compile with the full caller identity — subject name, roles, and tenant

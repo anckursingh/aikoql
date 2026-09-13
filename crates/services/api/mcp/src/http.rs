@@ -712,10 +712,12 @@ pub(crate) fn schema_endpoint(k: &Kernel) -> Result<String, String> {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn explain_endpoint(query: &str) -> Result<String, String> {
-    let plan = aikoql_compiler::parser::compile(query).map_err(|e| e.to_string())?;
+    // P5-M3: EXPLAIN shows the logical pipeline plus each operator's
+    // physical strategy (qm002) — one line per op via PhysicalPlan::summary.
+    let plan = aikoql_compiler::parser::compile_physical(query).map_err(|e| e.to_string())?;
     Ok(json!({
         "query": query,
-        "operators": plan.operators.iter().map(|op| format!("{:?}", op)).collect::<Vec<_>>(),
+        "operators": plan.summary(),
         "operator_count": plan.operators.len(),
     })
     .to_string())

@@ -140,6 +140,7 @@ dependencies = [
  "rand 0.8.7",
  "redb",
  "regex",
+ "serde",
  "sha2 0.10.9",
  "tokio",
 ]

@@ -104,8 +104,17 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
-    /// Execute a plan. Returns the final `RowSet`.
+    /// Execute a logical plan (P5-M3): physicalized at the boundary — the
+    /// historical entry point, kept so existing callers stay untouched.
     pub fn execute(kernel: &Kernel, plan: &IrPlan) -> KResult<RowSet> {
+        Interpreter::execute_physical(kernel, &PhysicalPlan::from_ops(plan.operators.clone()))
+    }
+
+    /// Execute the physical plan — the runtime's real entry point since
+    /// P5-M3. Each `PhysicalOp` carries its storage/index strategy alongside
+    /// the logical op (strategies are informational in v1: one per operator
+    /// kind; the executor dispatches on the op).
+    pub fn execute_physical(kernel: &Kernel, plan: &PhysicalPlan) -> KResult<RowSet> {
         let mut interp = Interpreter {
             cached_objects: None,
             cached_subject: None,
@@ -113,11 +122,11 @@ impl Interpreter {
             temporal_mode: plan
                 .operators
                 .iter()
-                .any(|op| matches!(op, IrOp::Temporal { .. })),
+                .any(|po| matches!(po.op, IrOp::Temporal { .. })),
         };
         let mut rows = RowSet::Objects(Vec::new());
-        for op in &plan.operators {
-            rows = interp.exec_op(kernel, op, rows)?;
+        for po in &plan.operators {
+            rows = interp.exec_op(kernel, &po.op, rows)?;
         }
         Ok(rows)
     }

@@ -14,7 +14,7 @@ use crate::knowledge::kom::{KError, KResult, Value};
 // Predicates
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PredOp {
     Eq,
     Neq,
@@ -24,7 +24,7 @@ pub enum PredOp {
     Lte,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Predicate {
     pub property: String,
     pub op: PredOp,
@@ -80,7 +80,7 @@ impl Predicate {
 // Fusion mode
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum FuseMode {
     Rrf { k0: usize },
     Weighted { wv: f32, wt: f32 },
@@ -96,7 +96,7 @@ pub enum FuseMode {
 /// MVCC reconstruction of the versions the kernel had committed. `Between`
 /// is valid time — rows whose [valid_from, valid_to) interval overlaps the
 /// half-open [from, to) window (timeless facts overlap any window).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TemporalOp {
     AsOf(u64),
     Between { from: u64, to: u64 },
@@ -108,13 +108,13 @@ pub enum TemporalOp {
 // ---------------------------------------------------------------------------
 
 /// One ORDER BY key. `desc` = DESC direction (ASC is the default).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SortKey {
     pub field: String,
     pub desc: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AggFunc {
     Count,
     Sum,
@@ -123,7 +123,7 @@ pub enum AggFunc {
     Max,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AggCall {
     pub func: AggFunc,
     /// `None` for `COUNT(*)`.
@@ -135,7 +135,7 @@ pub struct AggCall {
 // ---------------------------------------------------------------------------
 
 /// One node in the Knowledge IR operator DAG.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum IrOp {
     /// Scan all readable KOs of `type_name` as `subject`.
     /// R9: `roles`/`tenant` are the planner's authorization hints — the
@@ -220,17 +220,29 @@ pub enum IrOp {
 // IR Plan
 // ---------------------------------------------------------------------------
 
-/// A complete IR plan: a linear sequence of operators forming a pipeline.
-/// Each operator consumes the output of the previous operator.
-#[derive(Clone, Debug, PartialEq)]
-pub struct IrPlan {
+/// P5-M3 (ND-03): the logical plan — a linear sequence of operators
+/// forming a pipeline, storage-independent (qm004: no v2/engine types may
+/// appear here). Each operator consumes the output of the previous one.
+/// `version` stamps the serialized form (qm003).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LogicalPlan {
+    pub version: u32,
     pub operators: Vec<IrOp>,
     pub description: Option<String>,
 }
 
-impl IrPlan {
+/// The logical plan's wire-format version (qm003). Bump on any breaking
+/// plan-shape change.
+pub const PLAN_VERSION: u32 = 1;
+
+/// Pre-M3 name: the logical plan IS what `IrPlan` always was. The alias keeps
+/// every constructor site compiling; new code should say `LogicalPlan`.
+pub type IrPlan = LogicalPlan;
+
+impl LogicalPlan {
     pub fn new(operators: Vec<IrOp>) -> Self {
-        IrPlan {
+        LogicalPlan {
+            version: PLAN_VERSION,
             operators,
             description: None,
         }
@@ -244,73 +256,166 @@ impl IrPlan {
     /// Validate the plan structure. Returns `Ok(())` if the operator
     /// sequence is legal, or an error describing the first violation.
     pub fn validate(&self) -> KResult<()> {
-        if self.operators.is_empty() {
-            return Err(KError::InvalidQuery("IR plan has no operators".into()));
+        let ops: Vec<&IrOp> = self.operators.iter().collect();
+        validate_ops(&ops)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P5-M3 (ND-03): physical plan
+// ---------------------------------------------------------------------------
+
+/// Storage/index strategy for one operator. v1 has exactly one strategy per
+/// operator kind — the seam exists so P5-M9's CBO can add alternatives
+/// (e.g. full-scan vs index-lookup for Filter).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Strategy {
+    /// Scan all readable rows of a type (no index).
+    FullScan,
+    /// ANN vector similarity via the vector index.
+    VectorIndex,
+    /// Full-text search via the text index (BM25).
+    TextIndex,
+    /// In-memory row processing — no storage strategy.
+    Inline,
+}
+
+/// One physical operator: a logical op plus the strategy that executes it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PhysicalOp {
+    pub op: IrOp,
+    pub strategy: Strategy,
+}
+
+/// The executable plan: logical pipeline + per-operator strategy. The runtime
+/// interpreter consumes this form (P5-M3).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PhysicalPlan {
+    pub version: u32,
+    pub operators: Vec<PhysicalOp>,
+    pub description: Option<String>,
+}
+
+impl PhysicalPlan {
+    pub fn new(operators: Vec<PhysicalOp>) -> Self {
+        PhysicalPlan {
+            version: PLAN_VERSION,
+            operators,
+            description: None,
         }
-        let first = &self.operators[0];
-        match first {
-            IrOp::Scan { .. } | IrOp::Traverse { .. } | IrOp::Ingest { .. } => {}
-            _ => {
-                return Err(KError::InvalidQuery(
-                    "first IR operator must be Scan, Traverse or Ingest".into(),
-                ))
+    }
+
+    /// Lower a logical pipeline to the physical form using the v1 strategy
+    /// rules: Scan → FullScan, AnnSearch → VectorIndex, TextSearch →
+    /// TextIndex, everything else → Inline.
+    pub fn from_ops(operators: Vec<IrOp>) -> Self {
+        PhysicalPlan::new(
+            operators
+                .into_iter()
+                .map(|op| {
+                    let strategy = match op {
+                        IrOp::Scan { .. } => Strategy::FullScan,
+                        IrOp::AnnSearch { .. } => Strategy::VectorIndex,
+                        IrOp::TextSearch { .. } => Strategy::TextIndex,
+                        _ => Strategy::Inline,
+                    };
+                    PhysicalOp { op, strategy }
+                })
+                .collect(),
+        )
+    }
+
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
+        self
+    }
+
+    /// Validate the operator sequence (same rules as the logical plan).
+    pub fn validate(&self) -> KResult<()> {
+        let ops: Vec<&IrOp> = self.operators.iter().map(|p| &p.op).collect();
+        validate_ops(&ops)
+    }
+
+    /// One line per operator: the logical op plus its strategy — the EXPLAIN
+    /// surface (qm002: the strategy must be visible here).
+    pub fn summary(&self) -> Vec<String> {
+        self.operators
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let name = format!("{:?}", p.op);
+                let name = name.split('{').next().unwrap_or(&name).trim();
+                format!("{:>2}: {:<22} [{:?}]", i, name, p.strategy)
+            })
+            .collect()
+    }
+}
+
+/// Shared validation: first op Scan/Traverse/Ingest, one Scan, search ops
+/// after Scan, Fuse after a search op. (IrPlan::validate delegates here.)
+fn validate_ops(ops: &[&IrOp]) -> KResult<()> {
+    if ops.is_empty() {
+        return Err(KError::InvalidQuery("IR plan has no operators".into()));
+    }
+    let first = ops[0];
+    match first {
+        IrOp::Scan { .. } | IrOp::Traverse { .. } | IrOp::Ingest { .. } => {}
+        _ => {
+            return Err(KError::InvalidQuery(
+                "first IR operator must be Scan, Traverse or Ingest".into(),
+            ))
+        }
+    }
+    let seen_scan = matches!(first, IrOp::Scan { .. });
+    let mut seen_search = false;
+    for (i, op) in ops.iter().enumerate().skip(1) {
+        match op {
+            IrOp::Scan { .. } => {
+                return Err(KError::InvalidQuery(format!(
+                    "Scan at position {}: only one Scan allowed",
+                    i
+                )))
             }
-        }
-        let seen_scan = matches!(first, IrOp::Scan { .. });
-        let mut seen_search = false;
-        for (i, op) in self.operators.iter().enumerate().skip(1) {
-            match op {
-                IrOp::Scan { .. } => {
-                    return Err(KError::InvalidQuery(format!(
-                        "Scan at position {}: only one Scan allowed",
-                        i
-                    )))
-                }
-                IrOp::Traverse { .. } => {
-                    // Set-based Traverse after Scan is valid — empty start_koid
-                    // consumes the input RowSet. Standalone Traverse (first op) with
-                    // explicit start_koid is also valid.
-                }
-                IrOp::Filter { .. } if !seen_scan => {
-                    return Err(KError::InvalidQuery(format!(
-                        "Filter at position {}: requires Scan",
-                        i
-                    )))
-                }
-                IrOp::Temporal { .. }
-                | IrOp::EpistemicFilter { .. }
-                | IrOp::ProvenanceFilter { .. }
-                | IrOp::Limit { .. }
-                | IrOp::Sort { .. }
-                | IrOp::Aggregate { .. }
-                | IrOp::Join { .. }
-                    if !seen_scan =>
-                {
+            IrOp::Traverse { .. } => {}
+            IrOp::Filter { .. } if !seen_scan => {
+                return Err(KError::InvalidQuery(format!(
+                    "Filter at position {}: requires Scan",
+                    i
+                )))
+            }
+            IrOp::Temporal { .. }
+            | IrOp::EpistemicFilter { .. }
+            | IrOp::ProvenanceFilter { .. }
+            | IrOp::Limit { .. }
+            | IrOp::Sort { .. }
+            | IrOp::Aggregate { .. }
+            | IrOp::Join { .. }
+                if !seen_scan =>
+            {
+                return Err(KError::InvalidQuery(format!(
+                    "{:?} at position {}: requires Scan",
+                    op, i
+                )))
+            }
+            IrOp::AnnSearch { .. } | IrOp::TextSearch { .. } => {
+                if !seen_scan {
                     return Err(KError::InvalidQuery(format!(
                         "{:?} at position {}: requires Scan",
                         op, i
-                    )))
+                    )));
                 }
-                IrOp::AnnSearch { .. } | IrOp::TextSearch { .. } => {
-                    if !seen_scan {
-                        return Err(KError::InvalidQuery(format!(
-                            "{:?} at position {}: requires Scan",
-                            op, i
-                        )));
-                    }
-                    seen_search = true;
-                }
-                IrOp::Fuse { .. } if !seen_search => {
-                    return Err(KError::InvalidQuery(
-                        "Fuse requires at least one search operator".into(),
-                    ))
-                }
-                IrOp::Fuse { .. } => {} // ok
-                _ => {}                 // Filter, Traverse, etc. — validated above by position
+                seen_search = true;
             }
+            IrOp::Fuse { .. } if !seen_search => {
+                return Err(KError::InvalidQuery(
+                    "Fuse requires at least one search operator".into(),
+                ))
+            }
+            IrOp::Fuse { .. } => {}
+            _ => {}
         }
-        Ok(())
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

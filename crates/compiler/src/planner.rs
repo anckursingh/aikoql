@@ -15,6 +15,17 @@ use aikoql_kernel::ir::*;
 pub struct Planner;
 
 impl Planner {
+    /// Lower a logical plan to its physical form (P5-M3, ND-03): the v1
+    /// strategy rules — Scan→FullScan, AnnSearch→VectorIndex,
+    /// TextSearch→TextIndex, everything else→Inline. The seam P5-M9's CBO
+    /// replaces with cost-based choice; the logical plan itself never
+    /// changes here.
+    pub fn physicalize(plan: &LogicalPlan) -> PhysicalPlan {
+        let mut p = PhysicalPlan::from_ops(plan.operators.clone());
+        p.description = plan.description.clone();
+        p
+    }
+
     /// Optimize an IR plan. Returns a new plan (the input is unchanged).
     pub fn optimize(plan: &IrPlan) -> IrPlan {
         let mut ops = plan.operators.clone();
@@ -22,6 +33,7 @@ impl Planner {
         ops = Self::pushdown_filters(ops);
         ops = Self::dedup_scans(ops);
         IrPlan {
+            version: PLAN_VERSION,
             operators: ops,
             description: plan.description.clone(),
         }

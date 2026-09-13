@@ -25,7 +25,7 @@ Mirror discipline of `docs/TESTING-PLAN-PHASE3.md`: one row per milestone; statu
 | P5-M0 | Baseline certification guard | ND-00 | ✅ | gd001 pin RED→GREEN (dependency-dag requires baseline-guard.yml + the 4 protected paths + `V2ADOPT_NIGHTLY=1m`); baseline-guard.yml ships (windows-latest, path-triggered, 6h, 1m v2 leg); gd002 RED = E0432 on missing `plan_oracle` → module shipped; gd002/gd002b/gd003/gd003b 4/4; gate5-check.py on committed artifacts: W1 7.96× REDLINE, W2 5.81×, PASS; runtime 21+2+4 green; clippy -D warnings green. Pending push: the actual CI 1M run (not executable in-session) — first-PR evidence lands with it. |
 | P5-M1 | Planner semantics remainder | ND-01 | ✅ | alg001 doc pin RED→GREEN (operator-algebra.md ships: 3 rewrites × preconditions/proof/pinned-by); alg002 compiler proptest 3/3 seeded — RED from injected tenant-drop regression (2 properties fail, restore green); alg002 runtime oracle proptest 256 cases divergence 0 — RED from injected merge-drop regression (caught in 9 cases); compiler 151/0 + runtime 28/0; clippy -D warnings green |
 | P5-M2 | KOQL v1 remainder | ND-02 | ✅ | kq001–012 40/40 RED→GREEN (RED = 26 compile errors on the missing surface); compiler 201/0 (84 lib + golden 16 + grammar 49 + kq 40 + fuzz 4 + doc pin + proptest 3 + 4 other); full workspace green exit 0 (kernel, v2, runtime, mcp untouched-green); fmt + clippy -D warnings green |
-| P5-M3 | Logical/physical model | ND-03 | ⬜ | qm001–004; EXPLAIN shows logical + physical; plan serialization byte-pinned; compiler baseline 146/0 + additions green |
+| P5-M3 | Logical/physical model | ND-03 | ✅ | qm001–004 11/11 RED→GREEN (2026-09-13); EXPLAIN = compile_physical summary (per-op strategy, VectorIndex/FullScan visible); serialization byte-pinned (plan_golden.json exact-match); qm004 boundary pin: no storage/engine crate refs in the logical layer; compiler 212/0 incl. plan_model + kernel 257/0 + runtime green; full workspace green exit 0 (214 targets); fmt + clippy -D warnings green |
 | P5-M4 | Streaming/batch execution | ND-04 | ⬜ | st001–009; gate-7 RSS cell; W1/W2 cells re-run (gate 5); encrypted-DB parity |
 | P5-M5 | Aggregation + sorting | ND-05 | ⬜ | ag001–008; spill cell recorded; AS OF + authorization pins |
 | P5-M6 | Join engine | ND-06 | ⬜ | jn001–009; tenant fail-closed pin; oracle vs nested-loop |
@@ -43,7 +43,7 @@ Mirror discipline of `docs/TESTING-PLAN-PHASE3.md`: one row per milestone; statu
 - **P5-M0:** gd001–003 green; the guard job runs on the four protected paths; corpus reproducible from clean checkout.
 - **P5-M1:** alg001–002 green; proptest suite in CI; algebra doc committed and grep-pinned.
 - **P5-M2:** kq001–012 green (incl. kq009 fail-closed on both compile paths, kq010 Int literals, kq011 serde round-trip); existing compiler suites extended green (golden 16/16, grammar_coverage 49/49, fuzz 4/4); MCP `aikoql` tool untouched-green.
-- **P5-M3:** qm001–004 green; EXPLAIN shows both plans; serialization byte-pinned python-first.
+- **P5-M3:** ✅ 2026-09-13 — qm001–004 11/11; EXPLAIN shows the per-op strategy; serialization byte-pinned (plan_golden.json, exact-match).
 - **P5-M4:** st001–009 green; gate-7 cell recorded; gate-5 1M re-run green; encrypted-DB parity.
 - **P5-M5:** ag001–008 green; spill strategy documented + cell recorded; AS OF pins green.
 - **P5-M6:** jn001–009 green; cross-tenant JOIN fails closed; oracle green.
