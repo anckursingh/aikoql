@@ -23,6 +23,18 @@ fn token_name(t: &Token) -> String {
         Token::Embedding => "EMBEDDING".into(),
         Token::Traverse => "TRAVERSE".into(),
         Token::Depth => "DEPTH".into(),
+        Token::Order => "ORDER".into(),
+        Token::By => "BY".into(),
+        Token::Group => "GROUP".into(),
+        Token::Join => "JOIN".into(),
+        Token::On => "ON".into(),
+        Token::Asc => "ASC".into(),
+        Token::Desc => "DESC".into(),
+        Token::Count => "COUNT".into(),
+        Token::Sum => "SUM".into(),
+        Token::Avg => "AVG".into(),
+        Token::Min => "MIN".into(),
+        Token::Max => "MAX".into(),
         Token::Create => "CREATE".into(),
         Token::Update => "UPDATE".into(),
         Token::Delete => "DELETE".into(),
@@ -161,6 +173,9 @@ impl Parser {
         let mut provenance = None;
         let mut limit = None;
         let mut offset = None;
+        let mut order_by = None;
+        let mut group_by = None;
+        let mut join = None;
         loop {
             match &self.current {
                 Token::Where | Token::And | Token::Or => {
@@ -233,6 +248,27 @@ impl Parser {
                     return Err(unexpected(&self.current, self.line, self.col)
                         .with_hint("OFFSET requires LIMIT"));
                 }
+                Token::Order => {
+                    if order_by.is_some() {
+                        return Err(unexpected(&self.current, self.line, self.col)
+                            .with_hint("duplicate ORDER BY clause"));
+                    }
+                    order_by = Some(self.parse_order_by()?);
+                }
+                Token::Group => {
+                    if group_by.is_some() {
+                        return Err(unexpected(&self.current, self.line, self.col)
+                            .with_hint("duplicate GROUP BY clause"));
+                    }
+                    group_by = Some(self.parse_group_by()?);
+                }
+                Token::Join => {
+                    if join.is_some() {
+                        return Err(unexpected(&self.current, self.line, self.col)
+                            .with_hint("duplicate JOIN clause"));
+                    }
+                    join = Some(self.parse_join()?);
+                }
                 Token::Return => {
                     self.advance();
                     return Ok(MatchStatement {
@@ -245,6 +281,9 @@ impl Parser {
                         provenance,
                         limit,
                         offset,
+                        order_by,
+                        group_by,
+                        join,
                         projection: self.parse_projection()?,
                     });
                 }
@@ -253,7 +292,7 @@ impl Parser {
                 }
                 _ => {
                     return Err(unexpected(&self.current, self.line, self.col).with_hint(
-                        "expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, SOURCE, LIMIT, or RETURN",
+                        "expected WHERE, SIMILAR, TRAVERSE, AS_OF, BETWEEN, HISTORICAL, EPISTEMIC, SOURCE, LIMIT, ORDER, GROUP, JOIN, or RETURN",
                     ))
                 }
             }
@@ -283,6 +322,135 @@ impl Parser {
             }
             _ => unreachable!("parse_temporal_clause called on non-temporal token"),
         }
+    }
+
+    /// P5-M2 (ND-02): `ORDER BY <field> [ASC|DESC] [, <field> [ASC|DESC]]*`.
+    /// Direction binds to the key it follows (kq002).
+    fn parse_order_by(&mut self) -> Result<OrderByClause, ParseError> {
+        self.expect(Token::Order)?;
+        self.expect(Token::By)?;
+        let mut keys = vec![self.parse_order_key()?];
+        while let Token::Comma = &self.current {
+            self.advance();
+            keys.push(self.parse_order_key()?);
+        }
+        Ok(OrderByClause { keys })
+    }
+
+    fn parse_order_key(&mut self) -> Result<OrderKey, ParseError> {
+        let field = self.expect_ident("ORDER BY field")?;
+        let desc = match &self.current {
+            Token::Asc => {
+                self.advance();
+                false
+            }
+            Token::Desc => {
+                self.advance();
+                true
+            }
+            _ => false, // ASC is the default
+        };
+        Ok(OrderKey { field, desc })
+    }
+
+    /// P5-M2 (ND-02): `GROUP BY <item> [, <item>]*` where each item is a
+    /// grouping key (bare field) or an aggregate call `FUNC(field)` /
+    /// `COUNT(*)`. Mixed in one comma list, like the grammar ships.
+    fn parse_group_by(&mut self) -> Result<GroupByClause, ParseError> {
+        self.expect(Token::Group)?;
+        self.expect(Token::By)?;
+        let mut keys = Vec::new();
+        let mut aggs = Vec::new();
+        loop {
+            match &self.current {
+                Token::Ident(field) => {
+                    let field = field.clone();
+                    self.advance();
+                    if let Token::LParen = &self.current {
+                        // IDENT( — an aggregate call with an unknown function
+                        // name (kq003: precise rejection, not a silent key).
+                        return Err(expected_err(
+                            "aggregate function (COUNT, SUM, AVG, MIN, MAX)",
+                            &Token::Ident(field),
+                            self.line,
+                            self.col,
+                        ));
+                    }
+                    keys.push(field);
+                }
+                Token::Count | Token::Sum | Token::Avg | Token::Min | Token::Max => {
+                    aggs.push(self.parse_agg_call()?);
+                }
+                _ => {
+                    return Err(expected_err(
+                        "grouping field or aggregate call",
+                        &self.current,
+                        self.line,
+                        self.col,
+                    ))
+                }
+            }
+            if let Token::Comma = &self.current {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        Ok(GroupByClause { keys, aggs })
+    }
+
+    fn parse_agg_call(&mut self) -> Result<AggCall, ParseError> {
+        let func = match &self.current {
+            Token::Count => AggFunc::Count,
+            Token::Sum => AggFunc::Sum,
+            Token::Avg => AggFunc::Avg,
+            Token::Min => AggFunc::Min,
+            Token::Max => AggFunc::Max,
+            _ => unreachable!("parse_agg_call on non-aggregate token"),
+        };
+        self.advance();
+        self.expect(Token::LParen)?;
+        let field = match &self.current {
+            Token::Star => {
+                self.advance();
+                if func != AggFunc::Count {
+                    return Err(
+                        expected_err("field name", &Token::Star, self.line, self.col)
+                            .with_hint("only COUNT takes '*'"),
+                    );
+                }
+                None
+            }
+            Token::Ident(f) => {
+                let f = f.clone();
+                self.advance();
+                Some(f)
+            }
+            _ => {
+                return Err(expected_err(
+                    "field name or *",
+                    &self.current,
+                    self.line,
+                    self.col,
+                ))
+            }
+        };
+        self.expect(Token::RParen)?;
+        Ok(AggCall { func, field })
+    }
+
+    /// P5-M2 (ND-02): `JOIN <type> ON <left_field> == <right_field>`.
+    fn parse_join(&mut self) -> Result<JoinClause, ParseError> {
+        self.expect(Token::Join)?;
+        let right_type = self.expect_ident("JOIN type")?;
+        self.expect(Token::On)?;
+        let left = self.expect_ident("left-side field")?;
+        self.expect(Token::Eq)?;
+        let right = self.expect_ident("right-side field")?;
+        Ok(JoinClause {
+            right_type,
+            on: JoinOn { left, right },
+        })
     }
 
     /// A time argument: epoch millis (`Number`, integer) or an ISO instant

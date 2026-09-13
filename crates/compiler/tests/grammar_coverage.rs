@@ -435,3 +435,73 @@ fn cover_error_unexpected_eof() {
     let e = parser::parse("MATCH Person").unwrap_err();
     assert!(e.contains("AIKOQL1012"), "got: {}", e);
 }
+
+// ---------------------------------------------------------------------------
+// P5-M2 (ND-02): ORDER BY / GROUP BY + aggregates / JOIN ... ON
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cover_match_order_by() {
+    let m = match parser::parse("MATCH Fact ORDER BY severity DESC RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.order_by.as_ref().unwrap().keys[0].field, "severity");
+    assert!(m.order_by.as_ref().unwrap().keys[0].desc);
+}
+
+#[test]
+fn cover_match_order_by_asc_default() {
+    let m = match parser::parse("MATCH Fact ORDER BY ts RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert!(!m.order_by.as_ref().unwrap().keys[0].desc);
+}
+
+#[test]
+fn cover_match_group_by_keys() {
+    let m = match parser::parse("MATCH Fact GROUP BY kind, severity RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.group_by.as_ref().unwrap().keys.len(), 2);
+    assert!(m.group_by.as_ref().unwrap().aggs.is_empty());
+}
+
+#[test]
+fn cover_match_group_by_count_star() {
+    let m = match parser::parse("MATCH Fact GROUP BY COUNT(*) RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.group_by.as_ref().unwrap().aggs[0].field, None);
+}
+
+#[test]
+fn cover_match_group_by_aggregates() {
+    let m = match parser::parse(
+        "MATCH Fact GROUP BY SUM(temp), AVG(temp), MIN(temp), MAX(temp) RETURN *",
+    )
+    .unwrap()
+    {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.group_by.as_ref().unwrap().aggs.len(), 4);
+}
+
+#[test]
+fn cover_match_join_on() {
+    let m = match parser::parse("MATCH Employee JOIN Department ON id == dept RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.join.as_ref().unwrap().right_type, "Department");
+}
+
+#[test]
+fn cover_error_security_violation() {
+    let e = parser::compile("MATCH aikoql:role RETURN *").unwrap_err();
+    assert!(e.contains("AIKOQL1035"));
+}

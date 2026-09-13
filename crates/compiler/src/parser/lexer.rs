@@ -41,6 +41,19 @@ pub enum Token {
     Offset,
     // P3-M4 §62: TRAVERSE <rel> [DEPTH n]
     Depth,
+    // P5-M2 (ND-02): ORDER BY / GROUP BY / JOIN ... ON
+    Order,
+    By,
+    Group,
+    Join,
+    On,
+    Asc,
+    Desc,
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
     // Symbols
     Eq,     // ==
     Neq,    // !=
@@ -62,7 +75,7 @@ pub enum Token {
     Error(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Span {
     pub line: usize,
     pub col: usize,
@@ -157,6 +170,18 @@ impl Lexer {
             "EMBEDDING" => Token::Embedding,
             "TRAVERSE" => Token::Traverse,
             "DEPTH" => Token::Depth,
+            "ORDER" => Token::Order,
+            "BY" => Token::By,
+            "GROUP" => Token::Group,
+            "JOIN" => Token::Join,
+            "ON" => Token::On,
+            "ASC" => Token::Asc,
+            "DESC" => Token::Desc,
+            "COUNT" => Token::Count,
+            "SUM" => Token::Sum,
+            "AVG" => Token::Avg,
+            "MIN" => Token::Min,
+            "MAX" => Token::Max,
             "CREATE" => Token::Create,
             "UPDATE" => Token::Update,
             "DELETE" => Token::Delete,

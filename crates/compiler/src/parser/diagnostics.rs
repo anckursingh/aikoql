@@ -40,6 +40,9 @@ pub enum Code {
     TypeMismatch = 1032,
     /// Referenced relationship is not defined in the ontology.
     UnknownRelationship = 1033,
+    /// P5-M2 (ND-02): the query references a security object (role/policy) —
+    /// managed through their own APIs, never enumerable via MATCH/JOIN.
+    SecurityViolation = 1035,
 }
 
 impl Code {
@@ -60,6 +63,7 @@ impl Code {
             Code::UnknownProperty => "unknown property on entity",
             Code::TypeMismatch => "type mismatch in expression",
             Code::UnknownRelationship => "unknown relationship for entity",
+            Code::SecurityViolation => "security object referenced in a query",
         }
     }
 }
@@ -201,4 +205,15 @@ pub fn unknown_relationship(rel: &str, entity: &str, line: usize, col: usize) ->
         "register '{}' in the ontology for domain '{}'",
         rel, entity
     ))
+}
+
+/// P5-M2 (ND-02): security objects are not queryable — fail closed.
+pub fn security_violation(type_name: &str, line: usize, col: usize) -> Diagnostic {
+    Diagnostic::new(
+        Code::SecurityViolation,
+        format!("security type '{}' cannot be queried", type_name),
+        line,
+        col,
+    )
+    .with_hint("security objects are managed through their own APIs, not MATCH")
 }

@@ -49,10 +49,50 @@ impl<'a> SemanticAnalyzer<'a> {
     // ---- per-statement analyzers ----
 
     fn analyze_match(&self, m: &MatchStatement) -> Result<(), Diagnostic> {
+        // kq009 (ND-02): security objects fail closed BEFORE entity
+        // resolution — aikoql: names otherwise always pass. Checked on both
+        // sides of a JOIN.
+        if is_security_type(&m.entity) {
+            return Err(diagnostics::security_violation(&m.entity, 0, 0));
+        }
+        if let Some(ref j) = m.join {
+            if is_security_type(&j.right_type) {
+                return Err(diagnostics::security_violation(&j.right_type, 0, 0));
+            }
+        }
         let schema = self.resolve_entity(&m.entity)?;
         if let Some(schema) = schema {
             for pred in &m.predicates {
                 self.check_predicate_properties(pred, schema)?;
+            }
+            // P5-M2 (ND-02): precise errors for the new clauses — ORDER BY
+            // and GROUP BY fields, and aggregate arguments, must exist on a
+            // closed schema.
+            if let Some(ref ob) = m.order_by {
+                for key in &ob.keys {
+                    self.check_property(&key.field, schema)?;
+                }
+            }
+            if let Some(ref gb) = m.group_by {
+                for key in &gb.keys {
+                    self.check_property(key, schema)?;
+                }
+                for agg in &gb.aggs {
+                    if let Some(ref field) = agg.field {
+                        self.check_property(field, schema)?;
+                    }
+                }
+            }
+        }
+        // P5-M2 (ND-02): JOIN — the right side must resolve to a type, and
+        // both ON fields must exist on their sides.
+        if let Some(ref j) = m.join {
+            let right_schema = self.resolve_entity(&j.right_type)?;
+            if let Some(right) = right_schema {
+                self.check_property(&j.on.right, right)?;
+                if let Some(left) = schema {
+                    self.check_property(&j.on.left, left)?;
+                }
             }
         }
         // Validate TRAVERSE relationship against ontology.
@@ -157,6 +197,14 @@ impl<'a> SemanticAnalyzer<'a> {
         // Open-world schemas allow any property — skip.
         Ok(())
     }
+}
+
+/// kq009 (ND-02): the kernel's security-object types (role/policy) are
+/// managed through their own APIs, never queryable. Kept as one helper so
+/// both sides of a JOIN and both compile paths share the same set.
+fn is_security_type(name: &str) -> bool {
+    name == aikoql_kernel::security::auth::ROLE_TYPE
+        || name == aikoql_kernel::security::auth::POLICY_TYPE
 }
 
 #[cfg(test)]

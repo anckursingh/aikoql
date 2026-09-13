@@ -104,6 +104,33 @@ pub enum TemporalOp {
 }
 
 // ---------------------------------------------------------------------------
+// P5-M2 (ND-02) types: ordering, aggregation, join
+// ---------------------------------------------------------------------------
+
+/// One ORDER BY key. `desc` = DESC direction (ASC is the default).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SortKey {
+    pub field: String,
+    pub desc: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AggFunc {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AggCall {
+    pub func: AggFunc,
+    /// `None` for `COUNT(*)`.
+    pub field: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // IR operators
 // ---------------------------------------------------------------------------
 
@@ -162,6 +189,26 @@ pub enum IrOp {
     Limit { limit: usize, offset: usize },
     /// Project specific fields from the result set.
     Project { fields: Vec<String> },
+    /// P5-M2 (ND-02): ORDER BY — deterministic sort over the final row
+    /// order. Lands after Project, before Limit. Executes in P5-M5.
+    Sort { keys: Vec<SortKey> },
+    /// P5-M2 (ND-02): GROUP BY + aggregates — lands right after Filter
+    /// (filter-then-aggregate: grouping never sees rows the WHERE clause
+    /// removed, the authorization-safe order pinned by M5's ag008).
+    /// Executes in P5-M5.
+    Aggregate {
+        keys: Vec<String>,
+        aggs: Vec<AggCall>,
+    },
+    /// P5-M2 (ND-02): JOIN <right_type> ON <on_left> == <on_right> — always
+    /// INNER in the v1 grammar (LEFT JOIN arrives with P5-M6). Consumes the
+    /// left-side RowSet; the right side is scanned at execution time with
+    /// the caller's subject/roles/tenant. Executes in P5-M6.
+    Join {
+        right_type: String,
+        on_left: String,
+        on_right: String,
+    },
     /// Ingest an artifact into the knowledge base via the ingestion pipeline
     /// (§62): the runtime reads the artifact at `artifact_ref`, hashes it, and
     /// deploys the Document KO (`aikoql:document`). Standalone operator — an
@@ -234,6 +281,9 @@ impl IrPlan {
                 | IrOp::EpistemicFilter { .. }
                 | IrOp::ProvenanceFilter { .. }
                 | IrOp::Limit { .. }
+                | IrOp::Sort { .. }
+                | IrOp::Aggregate { .. }
+                | IrOp::Join { .. }
                     if !seen_scan =>
                 {
                     return Err(KError::InvalidQuery(format!(

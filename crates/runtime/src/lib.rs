@@ -485,6 +485,19 @@ impl Interpreter {
                 }
                 Ok(RowSet::Objects(kos))
             }
+            // P5-M2 (ND-02): these ops compile today and fail closed here
+            // with a precise error — Sort/Aggregate execute in P5-M5, Join
+            // in P5-M6. Not a silent passthrough: a plan that reaches the
+            // runtime with one of these is not silently wrong.
+            IrOp::Sort { .. } => Err(KError::UnsupportedOperation(
+                "Sort executes in P5-M5".into(),
+            )),
+            IrOp::Aggregate { .. } => Err(KError::UnsupportedOperation(
+                "Aggregate executes in P5-M5".into(),
+            )),
+            IrOp::Join { .. } => Err(KError::UnsupportedOperation(
+                "Join executes in P5-M6".into(),
+            )),
             IrOp::Ingest { artifact_ref } => {
                 // §62: dispatch to the existing ingestion pipeline — the
                 // read → hash → deploy_document flow document_ingest uses,

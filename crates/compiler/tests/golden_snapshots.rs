@@ -33,6 +33,9 @@ Match(
         provenance: None,
         limit: None,
         offset: None,
+        order_by: None,
+        group_by: None,
+        join: None,
         projection: Star,
     },
 )";
@@ -112,6 +115,66 @@ fn golden_match_multi_filter() {
             _ => panic!("expected Eq"),
         }
     }
+}
+
+#[test]
+fn golden_match_order_by() {
+    let stmt = parser::parse("MATCH Fact ORDER BY severity DESC, created ASC RETURN *").unwrap();
+    let m = as_match(&stmt);
+    let ob = m.order_by.as_ref().expect("order_by clause");
+    assert_eq!(ob.keys.len(), 2);
+    assert_eq!(
+        ob.keys[0],
+        OrderKey {
+            field: "severity".into(),
+            desc: true
+        }
+    );
+    assert_eq!(
+        ob.keys[1],
+        OrderKey {
+            field: "created".into(),
+            desc: false
+        }
+    );
+}
+
+#[test]
+fn golden_match_group_by() {
+    let stmt = parser::parse("MATCH Fact GROUP BY kind, COUNT(*), AVG(temp) RETURN *").unwrap();
+    let m = as_match(&stmt);
+    let gb = m.group_by.as_ref().expect("group_by clause");
+    assert_eq!(gb.keys, vec!["kind".to_string()]);
+    assert_eq!(gb.aggs.len(), 2);
+    assert_eq!(
+        gb.aggs[0],
+        AggCall {
+            func: AggFunc::Count,
+            field: None
+        }
+    );
+    assert_eq!(
+        gb.aggs[1],
+        AggCall {
+            func: AggFunc::Avg,
+            field: Some("temp".into())
+        }
+    );
+}
+
+#[test]
+fn golden_match_join() {
+    let stmt = parser::parse("MATCH Employee JOIN Department ON id == dept RETURN *").unwrap();
+    let m = as_match(&stmt);
+    let j = m.join.as_ref().expect("join clause");
+    assert_eq!(j.right_type, "Department");
+    assert_eq!(
+        j.on,
+        JoinOn {
+            left: "id".into(),
+            right: "dept".into()
+        }
+    );
 }
 
 #[test]

@@ -20,6 +20,17 @@ pub fn parse(source: &str) -> Result<ast::Statement, String> {
     p.parse_statement().map_err(|e| e.to_string())
 }
 
+/// Parse into the versioned AST — the stable-AST contract (P5-M2, kq011).
+/// Every parsed statement is stamped with `ast::AST_VERSION`.
+pub fn parse_versioned(source: &str) -> Result<ast::VersionedStatement, String> {
+    let mut p = Parser::new(source);
+    let statement = p.parse_statement().map_err(|e| e.to_string())?;
+    Ok(ast::VersionedStatement {
+        version: ast::AST_VERSION,
+        statement,
+    })
+}
+
 /// Caller identity carried into the plan's Scan operator (R9).
 #[derive(Clone, Debug, Default)]
 struct ScanSubject {
@@ -209,6 +220,28 @@ fn compile_delete(d: &ast::DeleteStatement, subject: &ScanSubject) -> Result<IrP
 fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPlan, String> {
     let mut ops = Vec::new();
 
+    // kq009 (ND-02): security objects are managed through their own APIs,
+    // never enumerable via MATCH/JOIN — fail closed on every compile entry
+    // point (compile_scoped included, since the MCP path runs no semantic
+    // analysis). The kernel's own constants stay the single source of truth.
+    let security = [
+        (m.entity.as_str(), "MATCH"),
+        (
+            m.join.as_ref().map(|j| j.right_type.as_str()).unwrap_or(""),
+            "JOIN",
+        ),
+    ];
+    for (type_name, via) in security {
+        if type_name == aikoql_kernel::security::auth::ROLE_TYPE
+            || type_name == aikoql_kernel::security::auth::POLICY_TYPE
+        {
+            return Err(format!(
+                "AIKOQL1035: security type '{}' cannot be queried via {}",
+                type_name, via
+            ));
+        }
+    }
+
     // Scan.
     ops.push(scan_op(&m.entity, subject));
 
@@ -245,6 +278,40 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
     let flat = flatten_predicates(&m.predicates);
     if !flat.is_empty() {
         ops.push(IrOp::Filter { predicates: flat });
+    }
+
+    // P5-M2 (ND-02): JOIN lands after Filter — the left side is filtered
+    // before it feeds the join. Executes in P5-M6.
+    if let Some(ref j) = m.join {
+        ops.push(IrOp::Join {
+            right_type: j.right_type.clone(),
+            on_left: j.on.left.clone(),
+            on_right: j.on.right.clone(),
+        });
+    }
+
+    // P5-M2 (ND-02): GROUP BY lands right after Filter/Join —
+    // filter-then-aggregate: grouping never sees rows the WHERE clause
+    // removed (the authorization-safe order pinned by M5's ag008).
+    // Executes in P5-M5.
+    if let Some(ref g) = m.group_by {
+        ops.push(IrOp::Aggregate {
+            keys: g.keys.clone(),
+            aggs: g
+                .aggs
+                .iter()
+                .map(|a| AggCall {
+                    func: match a.func {
+                        ast::AggFunc::Count => AggFunc::Count,
+                        ast::AggFunc::Sum => AggFunc::Sum,
+                        ast::AggFunc::Avg => AggFunc::Avg,
+                        ast::AggFunc::Min => AggFunc::Min,
+                        ast::AggFunc::Max => AggFunc::Max,
+                    },
+                    field: a.field.clone(),
+                })
+                .collect(),
+        });
     }
 
     // H2 strategy choice: temporal/epistemic queries are answered
@@ -315,8 +382,24 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
         }
     }
 
+    // P5-M2 (ND-02): ORDER BY lands after Project — it sorts the final
+    // projected row order — and before LIMIT (ordering runs before
+    // pagination, kq008). Executes in P5-M5.
+    if let Some(ref ob) = m.order_by {
+        ops.push(IrOp::Sort {
+            keys: ob
+                .keys
+                .iter()
+                .map(|k| SortKey {
+                    field: k.field.clone(),
+                    desc: k.desc,
+                })
+                .collect(),
+        });
+    }
+
     // EXE-006: LIMIT/OFFSET applies to the final deterministic row order —
-    // last operator in the pipeline (after Project/Traverse).
+    // last operator in the pipeline (after Project/Traverse/Sort).
     if let Some(limit) = m.limit {
         ops.push(IrOp::Limit {
             limit,
@@ -378,7 +461,18 @@ fn flatten_predicates(preds: &[ast::Predicate]) -> Vec<Predicate> {
 fn expr_to_value(e: &ast::Expr) -> Value {
     match e {
         ast::Expr::String(s) => Value::Text(s.clone()),
-        ast::Expr::Number(n) => Value::Float(*n),
+        // kq010 (ND-02): integral literals lower to Value::Int so
+        // `WHERE temp == 35` compares Int-to-Int against Int properties —
+        // cross-type comparison is fail-closed (None), so a Float literal
+        // silently emptied the result (found by the P5-M0 oracle).
+        ast::Expr::Number(n) => {
+            let n = *n;
+            if n.fract() == 0.0 && n >= -(2f64.powi(63)) && n < 2f64.powi(63) {
+                Value::Int(n as i64)
+            } else {
+                Value::Float(n)
+            }
+        }
         ast::Expr::Bool(b) => Value::Bool(*b),
         ast::Expr::Null => Value::Null,
     }
