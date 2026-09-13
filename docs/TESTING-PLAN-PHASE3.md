@@ -2,6 +2,8 @@
 
 Mirror of `docs/TESTING-PLAN.md` §13.2 for phase 3, same ledger discipline as `docs/TESTING-PLAN-V2.md`: one row per milestone; status flips to ✅ only with real evidence (test names + green counts + artifacts). Requirement numbering continues V2 (S52 was the v2 acceptance matrix — phase 3 starts at §53). Phase 4 rows (P4-M1..M7) carry the class-by-class review's TDD ids (2026-09-10, main@dbd8db4) — no spec sections are numbered past §73. TDD rules below are binding for every milestone.
 
+**Next program:** Phase 5 — Database 1.0 ledger lives in `docs/TESTING-PLAN-PHASE5.md` (2026-09-13; rules carried forward with phase-5 amendments, gates 6–9). This document is the SHIPPED ledger and stays closed.
+
 | # | Milestone | §§ | Status | Evidence |
 | --- | --- | --- | --- | --- |
 | P3-M0 | Estate hygiene | — | ⬜ | clb001–002; `cargo test --workspace` green; zero artifact diffs on a full local run |

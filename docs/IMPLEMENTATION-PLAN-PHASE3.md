@@ -2,6 +2,8 @@
 
 Source: architect review 2026-09-09 (storage / kernel / integration / testing surveys; see `docs/TESTING-PLAN-PHASE3.md` for the evidence ledger) + class-by-class main-branch review 2026-09-10 (`AIKOQL_Main_Branch_Class_by_Class_Next_Steps_TDD.md`, main@dbd8db4 — pre-Phase-3, does not reflect M0–M5). Branch `feature/phase3-enhancements` cut fresh from main (post-PR#5 dbd8db4). Commit per milestone, NO push (user pushes). TDD loop per milestone: PoV → RED (fail for the stated reason) → root-cause GREEN → regression → gates (`cargo fmt --all` + `cargo clippy --all-targets --all-features -- -D warnings`).
 
+**Next program:** Phase 5 — Database 1.0 (ND-00..ND-14, reviewed 2026-09-13): `docs/IMPLEMENTATION-PLAN-PHASE5.md` + `docs/TESTING-PLAN-PHASE5.md`. This document is the SHIPPED ledger and stays closed.
+
 ## Coder point of view (before implementation)
 
 **Verdict: the phase is P0-security + P1-observability, in that order; everything else sequences off them.** The storage engine is crash-matrix-certified and operationally sound; the serving surface is a shipped product with a default-insecure HTTP listener (`http.rs:413` hardcoded `admin/admin`, time+pid session tokens, `http.rs:426`; 11 of 79 REST arms skip `need_auth()`; `validate_listen` guards only MCP TCP, not HTTP/metrics — `main.rs:429`). That is a defect in a released artifact, not a feature request. M1 ships second, after estate hygiene, and nothing else blocks it.
