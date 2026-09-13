@@ -3208,6 +3208,8 @@ pub enum KError {
     },
     NotFound(KOID),
     UnsupportedOperation(String),
+    /// P5-M4 (ND-04): a streaming plan was cancelled mid-scan.
+    Cancelled,
     IndexLagExceeded,
     JobRejected(String),
     Store(String),
@@ -3244,6 +3246,7 @@ impl fmt::Display for KError {
             }
             KError::NotFound(k) => write!(f, "NOT_FOUND: {}", k),
             KError::UnsupportedOperation(m) => write!(f, "UNSUPPORTED_OPERATION: {}", m),
+            KError::Cancelled => write!(f, "CANCELLED"),
             KError::IndexLagExceeded => write!(f, "INDEX_LAG_EXCEEDED"),
             KError::JobRejected(m) => write!(f, "JOB_REJECTED: {}", m),
             KError::Store(m) => write!(f, "STORE: {}", m),

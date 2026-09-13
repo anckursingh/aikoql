@@ -14,6 +14,7 @@ use aikoql_kernel::transaction::kernel::{Kernel, KnowledgeContext, Subject};
 use std::cmp::Ordering;
 
 pub mod plan_oracle;
+pub mod streaming;
 
 // ---------------------------------------------------------------------------
 // Value comparison helper
@@ -40,6 +41,28 @@ fn compare_values(a: Option<&Value>, b: Option<&Value>) -> Option<Ordering> {
 /// pages concatenated in query order reconstruct the unpaged rowset.
 fn skip_take<T>(v: Vec<T>, offset: usize, limit: usize) -> Vec<T> {
     v.into_iter().skip(offset).take(limit).collect()
+}
+
+/// The shared predicate test for one KO — the materializing Filter arm and
+/// the P5-M4 streaming FilterOperator both route through here (one place).
+pub(crate) fn row_matches(ko: &KnowledgeObject, predicates: &[Predicate]) -> bool {
+    predicates.iter().all(|p| {
+        let val = ko.properties.get(&p.property);
+        match p.op {
+            PredOp::Eq => val == Some(&p.value),
+            PredOp::Neq => val != Some(&p.value),
+            PredOp::Gt => compare_values(val, Some(&p.value)) == Some(Ordering::Greater),
+            PredOp::Lt => compare_values(val, Some(&p.value)) == Some(Ordering::Less),
+            PredOp::Gte => matches!(
+                compare_values(val, Some(&p.value)),
+                Some(Ordering::Greater) | Some(Ordering::Equal)
+            ),
+            PredOp::Lte => matches!(
+                compare_values(val, Some(&p.value)),
+                Some(Ordering::Less) | Some(Ordering::Equal)
+            ),
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -182,33 +205,7 @@ impl Interpreter {
                 };
                 let filtered: Vec<KnowledgeObject> = kos
                     .into_iter()
-                    .filter(|ko| {
-                        predicates.iter().all(|p| {
-                            let val = ko.properties.get(&p.property);
-                            match p.op {
-                                PredOp::Eq => val == Some(&p.value),
-                                PredOp::Neq => val != Some(&p.value),
-                                PredOp::Gt => {
-                                    compare_values(val, Some(&p.value))
-                                        == Some(std::cmp::Ordering::Greater)
-                                }
-                                PredOp::Lt => {
-                                    compare_values(val, Some(&p.value))
-                                        == Some(std::cmp::Ordering::Less)
-                                }
-                                PredOp::Gte => matches!(
-                                    compare_values(val, Some(&p.value)),
-                                    Some(std::cmp::Ordering::Greater)
-                                        | Some(std::cmp::Ordering::Equal)
-                                ),
-                                PredOp::Lte => matches!(
-                                    compare_values(val, Some(&p.value)),
-                                    Some(std::cmp::Ordering::Less)
-                                        | Some(std::cmp::Ordering::Equal)
-                                ),
-                            }
-                        })
-                    })
+                    .filter(|ko| row_matches(ko, predicates))
                     .collect();
                 self.cached_objects = Some(filtered.clone());
                 Ok(RowSet::Objects(filtered))

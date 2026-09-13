@@ -3045,32 +3045,72 @@ impl Kernel {
     ) -> KResult<Vec<KnowledgeObject>> {
         let mut out = Vec::new();
         for koid in self.repo.scan_type(type_name)? {
-            let Some(ko) = self.head_object(&koid)? else {
+            let Some(ko) = self.readable_object(subject, type_name, &koid)? else {
                 continue;
             };
-            if ko.metadata.type_name != type_name {
-                continue; // stale index entry (type changed after indexing)
-            }
-            if ko.lifecycle.state == LifecycleState::Deleted {
-                continue;
-            }
             if let Some(want) = status {
                 if ko.epistemic_status() != want {
                     continue;
                 }
             }
-            if self
-                .auth
-                .read()
-                .unwrap()
-                .authorize(subject, &ko, Action::Read)
-                .is_err()
-            {
-                continue;
-            }
             out.push(ko);
         }
         Ok(out)
+    }
+
+    /// The index-backed koid list for a type, unfiltered — the streaming
+    /// scan's snapshot-at-open (P5-M4, ND-04): payload batches resolve from
+    /// this list via `scan_by_type_range`, so memory is bounded by the batch
+    /// size, not the result cardinality.
+    pub fn type_koids(&self, type_name: &str) -> KResult<Vec<KOID>> {
+        self.repo.scan_type(type_name)
+    }
+
+    /// Resolve a koid slice into readable KOs with the SAME per-object
+    /// filtering as `scan_by_type_filtered` (payload type re-check, Deleted
+    /// skip, ACL) — the one place the read filters live (P5-M4, ND-04).
+    pub fn scan_by_type_range(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        koids: &[KOID],
+    ) -> KResult<Vec<KnowledgeObject>> {
+        let mut out = Vec::new();
+        for koid in koids {
+            if let Some(ko) = self.readable_object(subject, type_name, koid)? {
+                out.push(ko);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Head read + the shared scan filters: payload type re-check (stale
+    /// index entry from a type change), Deleted skip, ACL Read check.
+    fn readable_object(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        koid: &KOID,
+    ) -> KResult<Option<KnowledgeObject>> {
+        let Some(ko) = self.head_object(koid)? else {
+            return Ok(None);
+        };
+        if ko.metadata.type_name != type_name {
+            return Ok(None); // stale index entry (type changed after indexing)
+        }
+        if ko.lifecycle.state == LifecycleState::Deleted {
+            return Ok(None);
+        }
+        if self
+            .auth
+            .read()
+            .unwrap()
+            .authorize(subject, &ko, Action::Read)
+            .is_err()
+        {
+            return Ok(None);
+        }
+        Ok(Some(ko))
     }
 
     /// Return all distinct type names from head objects. O(n) scan;

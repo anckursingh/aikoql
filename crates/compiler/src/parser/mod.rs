@@ -74,7 +74,14 @@ pub fn compile_logical(source: &str) -> Result<LogicalPlan, String> {
 /// per-operator storage/index strategy (P5-M3, qm002/qm003). The runtime
 /// interpreter consumes this form; EXPLAIN prints its summary.
 pub fn compile_physical(source: &str) -> Result<PhysicalPlan, String> {
-    compile_logical(source).map(|p| crate::planner::Planner::physicalize(&p))
+    compile_physical_with_subject(source, "query-user")
+}
+
+/// Physical compilation under an explicit subject — the streaming
+/// executor's entry point (P5-M4): the Scan op carries the subject, so
+/// per-subject streaming needs the same compile path as `compile`.
+pub fn compile_physical_with_subject(source: &str, subject: &str) -> Result<PhysicalPlan, String> {
+    compile_with_subject(source, subject).map(|p| crate::planner::Planner::physicalize(&p))
 }
 
 /// Compile with the full caller identity — subject name, roles, and tenant
