@@ -85,5 +85,17 @@ fn fingerprint(rows: &RowSet) -> String {
             keys.sort();
             format!("Traversal[{}]:{}", keys.len(), keys.join("|"))
         }
+        RowSet::Grouped(groups) => {
+            let mut keys: Vec<String> = groups
+                .iter()
+                .map(|m| {
+                    let mut kv: Vec<String> = m.iter().map(|(k, v)| format!("{k}={v:?}")).collect();
+                    kv.sort();
+                    kv.join("&")
+                })
+                .collect();
+            keys.sort();
+            format!("Grouped[{}]:{}", keys.len(), keys.join("|"))
+        }
     }
 }

@@ -428,6 +428,15 @@ fn execute_and_print(kernel: &Kernel, plan: &IrPlan, stdout: &mut dyn Write) {
                     .ok();
                 }
             }
+            // P5-M5: group rows — one line per group, key=value pairs.
+            aikoql_runtime::RowSet::Grouped(groups) => {
+                writeln!(stdout, "── {} group(s) ──", groups.len()).ok();
+                for g in &groups {
+                    let fields: Vec<String> =
+                        g.iter().map(|(k, v)| format!("{k}={v:?}")).collect();
+                    writeln!(stdout, "  {}", fields.join(" ")).ok();
+                }
+            }
         },
         Err(e) => {
             writeln!(stdout, "Error: {}", e).ok();

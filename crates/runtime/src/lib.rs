@@ -66,6 +66,113 @@ pub(crate) fn row_matches(ko: &KnowledgeObject, predicates: &[Predicate]) -> boo
 }
 
 // ---------------------------------------------------------------------------
+// P5-M5 (ND-05): aggregation helpers
+// ---------------------------------------------------------------------------
+
+/// The aggregate-call name in a group row: `count` for COUNT(*), `func(field)`
+/// otherwise (e.g. `sum(age)`).
+fn agg_name(func: &AggFunc, field: &Option<String>) -> String {
+    let f = match func {
+        AggFunc::Count => "count",
+        AggFunc::Sum => "sum",
+        AggFunc::Avg => "avg",
+        AggFunc::Min => "min",
+        AggFunc::Max => "max",
+    };
+    match field {
+        None => f.to_string(),
+        Some(field) => format!("{f}({field})"),
+    }
+}
+
+/// One aggregate call over one group's rows. SQL-style null handling:
+/// SUM/AVG/MIN/MAX ignore Null (missing fields included), COUNT(*) counts
+/// rows, COUNT(field) counts non-null values. Numeric folds promote Int+
+/// Float to Float; anything else fails closed (mixed types — ag004). No
+/// values for a numeric fold → Null (the null proxy).
+fn aggregate_value(
+    func: AggFunc,
+    field: &Option<String>,
+    rows: &[&KnowledgeObject],
+) -> KResult<Value> {
+    let vals: Vec<&Value> = match field {
+        Some(f) => rows
+            .iter()
+            .filter_map(|ko| ko.properties.get(f))
+            .filter(|v| **v != Value::Null)
+            .collect(),
+        None => Vec::new(),
+    };
+    match func {
+        AggFunc::Count => Ok(match field {
+            None => Value::Int(rows.len() as i64),
+            Some(_) => Value::Int(vals.len() as i64),
+        }),
+        AggFunc::Sum | AggFunc::Avg => {
+            let mut ints: i64 = 0;
+            let mut floats: f64 = 0.0;
+            let mut any_float = false;
+            let mut n: usize = 0;
+            for v in &vals {
+                match v {
+                    Value::Int(i) => {
+                        ints += i;
+                        n += 1;
+                    }
+                    Value::Float(f) => {
+                        floats += f;
+                        n += 1;
+                        any_float = true;
+                    }
+                    other => {
+                        return Err(KError::InvalidQuery(format!(
+                            "aggregate over mixed types: {} is not numeric",
+                            other.type_name()
+                        )))
+                    }
+                }
+            }
+            if n == 0 {
+                return Ok(Value::Null);
+            }
+            if func == AggFunc::Avg {
+                return Ok(Value::Float((ints as f64 + floats) / n as f64));
+            }
+            Ok(if any_float {
+                Value::Float(ints as f64 + floats)
+            } else {
+                Value::Int(ints)
+            })
+        }
+        AggFunc::Min | AggFunc::Max => {
+            let mut best: Option<&Value> = None;
+            for v in &vals {
+                match best {
+                    None => best = Some(v),
+                    Some(b) => match compare_values(Some(b), Some(v)) {
+                        Some(o)
+                            if (func == AggFunc::Min && o == Ordering::Greater)
+                                || (func == AggFunc::Max && o == Ordering::Less) =>
+                        {
+                            best = Some(v)
+                        }
+                        Some(_) => {}
+                        None => {
+                            return Err(KError::InvalidQuery(format!(
+                                "aggregate over mixed types: {} vs {}",
+                                b.type_name(),
+                                v.type_name()
+                            )))
+                        }
+                    },
+                }
+            }
+            Ok(best.cloned().unwrap_or(Value::Null))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Intermediate result set
 // ---------------------------------------------------------------------------
 
@@ -79,6 +186,10 @@ pub enum RowSet {
     Scored(Vec<(KOID, f32, String, u64)>),
     /// Traversal hits: (koid, rel_type, depth).
     Traversal(Vec<(KOID, String, usize)>),
+    /// P5-M5 (ND-05): aggregate output — one flat property map per group
+    /// (group keys plus one entry per aggregate call; `count` for COUNT(*),
+    /// `func(field)` otherwise), in first-encounter order.
+    Grouped(Vec<PropertyMap>),
 }
 
 impl RowSet {
@@ -99,6 +210,7 @@ impl RowSet {
     pub fn object_count(&self) -> usize {
         match self {
             RowSet::Objects(kos) => kos.len(),
+            RowSet::Grouped(g) => g.len(),
             _ => 0,
         }
     }
@@ -455,9 +567,25 @@ impl Interpreter {
                     RowSet::Objects(kos) => RowSet::Objects(skip_take(kos, *offset, *limit)),
                     RowSet::Scored(s) => RowSet::Scored(skip_take(s, *offset, *limit)),
                     RowSet::Traversal(t) => RowSet::Traversal(skip_take(t, *offset, *limit)),
+                    RowSet::Grouped(g) => RowSet::Grouped(skip_take(g, *offset, *limit)),
                 })
             }
             IrOp::Project { fields } => {
+                // P5-M5: projection over aggregate output strips each
+                // group's map to the requested fields.
+                if let RowSet::Grouped(g) = input {
+                    if fields.contains(&"*".to_string()) {
+                        return Ok(RowSet::Grouped(g));
+                    }
+                    return Ok(RowSet::Grouped(
+                        g.into_iter()
+                            .map(|mut m| {
+                                m.retain(|f, _| fields.contains(f));
+                                m
+                            })
+                            .collect(),
+                    ));
+                }
                 let mut kos = match input {
                     RowSet::Objects(kos) => kos,
                     // §63: Projection after Traverse — Traverse output is
@@ -491,16 +619,113 @@ impl Interpreter {
                 }
                 Ok(RowSet::Objects(kos))
             }
-            // P5-M2 (ND-02): these ops compile today and fail closed here
-            // with a precise error — Sort/Aggregate execute in P5-M5, Join
-            // in P5-M6. Not a silent passthrough: a plan that reaches the
-            // runtime with one of these is not silently wrong.
-            IrOp::Sort { .. } => Err(KError::UnsupportedOperation(
-                "Sort executes in P5-M5".into(),
-            )),
-            IrOp::Aggregate { .. } => Err(KError::UnsupportedOperation(
-                "Aggregate executes in P5-M5".into(),
-            )),
+            // P5-M5 (ND-05): stable multi-key sort over Objects or Grouped.
+            // Missing field = Null-first on ASC; incomparable values compare
+            // equal (the stable sort keeps their scan order — ag005).
+            IrOp::Sort { keys } => {
+                let cmp = |x: Option<&Value>, y: Option<&Value>| -> Ordering {
+                    match (x, y) {
+                        (Some(a), Some(b)) => {
+                            compare_values(Some(a), Some(b)).unwrap_or(Ordering::Equal)
+                        }
+                        (None, None) => Ordering::Equal,
+                        (None, Some(_)) => Ordering::Less,
+                        (Some(_), None) => Ordering::Greater,
+                    }
+                };
+                Ok(match input {
+                    RowSet::Objects(mut kos) => {
+                        kos.sort_by(|x, y| {
+                            for k in keys {
+                                let o = cmp(x.properties.get(&k.field), y.properties.get(&k.field));
+                                if o != Ordering::Equal {
+                                    return if k.desc { o.reverse() } else { o };
+                                }
+                            }
+                            Ordering::Equal
+                        });
+                        RowSet::Objects(kos)
+                    }
+                    RowSet::Grouped(mut g) => {
+                        g.sort_by(|x, y| {
+                            for k in keys {
+                                let o = cmp(x.get(&k.field), y.get(&k.field));
+                                if o != Ordering::Equal {
+                                    return if k.desc { o.reverse() } else { o };
+                                }
+                            }
+                            Ordering::Equal
+                        });
+                        RowSet::Grouped(g)
+                    }
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "Sort requires Object or Grouped input".into(),
+                        ))
+                    }
+                })
+            }
+            // P5-M5 (ND-05): filter-then-aggregate — grouping only ever sees
+            // rows that survived Filter (and thus authorization; ag008).
+            // Groups keep first-encounter order; a row missing a group key
+            // groups under Null; no keys = one global group over all rows
+            // (over empty input: one row, count=0, folds Null).
+            IrOp::Aggregate { keys, aggs } => {
+                let kos = match input {
+                    RowSet::Objects(kos) => kos,
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "Aggregate requires Object input".into(),
+                        ))
+                    }
+                };
+                let mut groups: Vec<(Vec<Value>, Vec<&KnowledgeObject>)> = Vec::new();
+                if keys.is_empty() {
+                    groups.push((Vec::new(), kos.iter().collect()));
+                } else {
+                    // Value is not Hash — key the map on the derived Debug
+                    // form (variant-tagged, injective per value). ponytail:
+                    // derive Hash on Value if key hashing ever shows up in a
+                    // profile.
+                    let mut idx: std::collections::HashMap<String, usize> =
+                        std::collections::HashMap::new();
+                    for ko in &kos {
+                        let key: Vec<Value> = keys
+                            .iter()
+                            .map(|k| ko.properties.get(k).cloned().unwrap_or(Value::Null))
+                            .collect();
+                        let khash = format!("{key:?}");
+                        let i = match idx.get(&khash) {
+                            Some(&i) => i,
+                            None => {
+                                idx.insert(khash, groups.len());
+                                groups.push((key, Vec::new()));
+                                groups.len() - 1
+                            }
+                        };
+                        groups[i].1.push(ko);
+                    }
+                }
+                let mut out = Vec::with_capacity(groups.len());
+                for (key, rows) in &groups {
+                    let mut row = PropertyMap::new();
+                    for (k, v) in keys.iter().zip(key) {
+                        row.insert(k.clone(), v.clone());
+                    }
+                    for call in aggs {
+                        row.insert(
+                            agg_name(&call.func, &call.field),
+                            aggregate_value(call.func, &call.field, rows)?,
+                        );
+                    }
+                    out.push(row);
+                }
+                Ok(RowSet::Grouped(out))
+            }
+            // P5-M2 (ND-02): Join compiles today and fails closed here with
+            // a precise error — it executes in P5-M6. Not a silent
+            // passthrough: a plan that reaches the runtime with one of these
+            // is not silently wrong.
             IrOp::Join { .. } => Err(KError::UnsupportedOperation(
                 "Join executes in P5-M6".into(),
             )),

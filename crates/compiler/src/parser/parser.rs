@@ -338,7 +338,16 @@ impl Parser {
     }
 
     fn parse_order_key(&mut self) -> Result<OrderKey, ParseError> {
-        let field = self.expect_ident("ORDER BY field")?;
+        // P5-M5 (ND-05): `count` is the COUNT(*) output name but lexes as a
+        // keyword — accept it as an ORDER BY field so aggregate output can
+        // be ordered. Other aggregate outputs (`sum(age)`, …) are not
+        // expressible in the v1 grammar (no quoting/aliases — documented).
+        let field = if let Token::Count = &self.current {
+            self.advance();
+            "count".to_string()
+        } else {
+            self.expect_ident("ORDER BY field")?
+        };
         let desc = match &self.current {
             Token::Asc => {
                 self.advance();

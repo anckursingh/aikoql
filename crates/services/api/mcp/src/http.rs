@@ -611,6 +611,14 @@ pub(crate) fn aikoql_endpoint(
                     }));
                 }
             }
+            // P5-M5: group rows carry properties only (no KO identity).
+            aikoql_runtime::RowSet::Grouped(groups) => {
+                for g in groups {
+                    all_kos.push(json!({
+                        "properties": g.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+                    }));
+                }
+            }
         }
     }
     Ok(json!({"results": all_kos}).to_string())

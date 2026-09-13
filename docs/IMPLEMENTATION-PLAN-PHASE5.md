@@ -94,15 +94,13 @@ Status: ✅ Shipped 2026-09-14 — st001–st009 RED→GREEN 9/9 (RED = 2 compil
 
 ### P5-M5 — Aggregation + sorting (ND-05)
 
-Current state: no aggregation surface in the compiler (verified 2026-09-13). PostgreSQL semantics are the oracle.
+Status: ✅ Shipped 2026-09-14 — ag001–008 RED→GREEN 8/8 (RED = 2 compile errors: no `RowSet::Grouped`). The roadmap's ND-05 RED list mapped: ag001 empty sets, ag002 duplicate values, ag003 nulls, ag004 mixed types, ag005 deterministic ordering, ag006 large groups, ag007 snapshots (AS OF), ag008 authorization before aggregation.
 
-Deliver: COUNT/SUM/AVG/MIN/MAX + GROUP BY + DISTINCT + ORDER BY executing on the M4 runtime; hash aggregation with a documented spill strategy (the roadmap requires it before any production claim — an env-gated spill cell, not a silent OOM); authorization BEFORE aggregation (filter-then-aggregate, pinned); temporal: aggregates run over the snapshot (amendment 5 — AS OF pins).
+Execution surface: the runtime's fail-closed Sort/Aggregate arms replaced with real executors. Aggregate emits a new `RowSet::Grouped(Vec<PropertyMap>)` — one flat map per group (group keys + one entry per aggregate call; `count` for COUNT(*), `func(field)` otherwise, e.g. `sum(age)`), groups in first-encounter order. SQL-style null handling: SUM/AVG/MIN/MAX ignore Null, COUNT(*) counts rows, COUNT(field) counts non-null, a missing group key groups under Null; global aggregate (no keys) over empty input = one row (count=0, folds Null), grouped over empty = zero rows. Mixed types fail closed with a precise error (`aggregate over mixed types: …`); Int+Float promotes to Float. Sort is a stable multi-key sort over Objects or Grouped (missing field = Null-first on ASC; incomparable values compare equal and keep scan order); Limit/Project gained Grouped arms; the plan-oracle fingerprint covers Grouped. Authorization-before-aggregation is by construction (filter-then-aggregate pipeline order, pinned by ag008); AS OF aggregates reconstruct the historical version set (ag007: v1 at the midpoint, v2 after the update). Grammar: ORDER BY accepts `count` (the COUNT(*) output name lexes as a keyword) — other aggregate outputs are not referenceable in the v1 grammar (no quoting/aliases), documented.
 
-TDD REDs: ag001 nulls (null key grouping, null payload skipped by AVG); ag002 empty set (COUNT = 0, SUM = NULL); ag003 duplicate values; ag004 mixed types (semantic-analysis error, fail-closed); ag005 large groups env-gated (memory bound holds — gate 7); ag006 deterministic ordering (stable sort, tie-break pinned); ag007 snapshot (AS OF aggregate ≡ materialized at that timestamp); ag008 authorization (aggregates never see unauthorized rows).
+Spill strategy (roadmap acceptance: defined before a production claim): v1 aggregates are hash-grouped in memory — O(groups) rows plus the scanned KO set, which P5-M4's streaming scan already bounds per batch; the spill-to-disk design (partitioned hash spill on the group table, reuse the storage v2 segment format) is the documented plan, NOT implemented — the env-gated spill/RSS cell rides with the W-suite sampler harness (same deferred cell as P5-M4's gate-7 row), so no production claim is made.
 
-Acceptance: the roadmap's ND-05 list; existing suites green; EXPLAIN shows the aggregation node.
-
-Status: ⬜ Proposed
+DISTINCT (the roadmap's ND-05 list item): not in the pre-declared ag list and no grammar clause exists — honest-ledger row below; lands with P5-M6 alongside joins or reopens on workload evidence.
 
 ### P5-M6 — Join engine (ND-06)
 
