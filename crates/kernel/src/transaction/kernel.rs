@@ -688,7 +688,7 @@ impl Kernel {
             store.clone(),
             DEFAULT_MAX_RUNNING_JOBS,
         )?);
-        Ok(Kernel {
+        let kernel = Kernel {
             repo,
             store,
             clock,
@@ -711,7 +711,11 @@ impl Kernel {
             encryption_policies: Arc::new(RwLock::new(HashMap::new())),
             embedding_provider: None,
             jobs,
-        })
+        };
+        // P5-M7 — database catalog: bootstrap/migrate the catalog rows, or
+        // fail the open closed on a corrupt/unsupported catalog version.
+        crate::catalog::ensure(&kernel)?;
+        Ok(kernel)
     }
 
     /// Enable at-rest HMAC-SHA256 version signatures. Idempotent and safe to
@@ -3058,6 +3062,25 @@ impl Kernel {
         Ok(out)
     }
 
+    /// P5-M7: canonical scan for catalog metadata — walks ko/ heads (the
+    /// authority), NOT the derived type index (catalog rows are deliberately
+    /// never indexed there; write_type_index guards it). Catalog rows are
+    /// few and metadata ops are rare, so the O(heads) walk is fine.
+    pub(crate) fn scan_catalog_rows(&self) -> KResult<Vec<KnowledgeObject>> {
+        let mut out = Vec::new();
+        for (koid, _version, ts, state) in self.repo.scan_heads()? {
+            if state == LifecycleState::Deleted {
+                continue;
+            }
+            if let Some(ko) = self.repo.get_object_version(&koid, ts)? {
+                if crate::catalog::is_catalog_type(&ko.metadata.type_name) {
+                    out.push(ko);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// The index-backed koid list for a type, unfiltered — the streaming
     /// scan's snapshot-at-open (P5-M4, ND-04): payload batches resolve from
     /// this list via `scan_by_type_range`, so memory is bounded by the batch
@@ -3122,7 +3145,11 @@ impl Kernel {
                 continue;
             }
             if let Some(ko) = self.head_object(&koid)? {
-                types.insert(ko.metadata.type_name);
+                // P5-M7: catalog rows are the database's own metadata, not
+                // user types — never surfaced by list_types.
+                if !crate::catalog::is_catalog_type(&ko.metadata.type_name) {
+                    types.insert(ko.metadata.type_name);
+                }
             }
         }
         Ok(types.into_iter().collect())

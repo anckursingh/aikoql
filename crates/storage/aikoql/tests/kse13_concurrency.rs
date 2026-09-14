@@ -39,6 +39,10 @@
 
 mod common;
 
+/// P5-M7: every kernel open bootstraps the catalog row as journal event #1 —
+/// raw ke/ (and ko/) scans count it, the user-level model does not.
+const CATALOG_PREAMBLE: usize = 1;
+
 use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
 use aikoql_kernel::transaction::kernel::ManualClock;
 use aikoql_kernel::{
@@ -320,7 +324,8 @@ fn sweep(k: &Kernel, engine: &dyn StorageEngine, m: &Model, bob_kos: &HashMap<KO
         .map(|mk| mk.version)
         .sum();
     assert_eq!(
-        events as u64, versions,
+        events as u64,
+        versions + CATALOG_PREAMBLE as u64,
         "journal events != committed versions"
     );
     let report = k.rebuild_derived_indexes().unwrap();

@@ -312,6 +312,12 @@ impl IndexMaintainer {
                 EventKind::Forgotten => removes.push(ke.koid),
                 _ => match kernel.raw_object_at(&ke.koid, ke.commit_ts)? {
                     Some(ko) if ko.lifecycle.state != LifecycleState::Deleted => {
+                        // P5-M7: catalog rows are the database's own metadata,
+                        // not user data — never derived-index them (mirrors
+                        // Kernel::list_types)
+                        if aikoql_kernel::is_catalog_type(&ko.metadata.type_name) {
+                            continue;
+                        }
                         if let Some(sem) = &ko.semantic {
                             if let (Some(model), Some(emb)) = (&sem.embedding_model, &sem.embedding)
                             {

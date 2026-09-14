@@ -405,6 +405,12 @@ impl KnowledgeRepository {
 
     /// Put one `type/<type_name>/<koid>` entry. Idempotent at the KV level.
     pub fn write_type_index(&self, batch: &mut WriteBatch, type_name: &str, koid: &KOID) {
+        // P5-M7: catalog rows are the database's own metadata, not user data
+        // — never derived-index them (mirrors Kernel::list_types and the
+        // scheduler maintainer's apply_batch guard).
+        if crate::catalog::is_catalog_type(type_name) {
+            return;
+        }
         batch.put(type_key(type_name, koid), vec![]);
     }
 
@@ -486,6 +492,12 @@ impl KnowledgeRepository {
                 new.insert(rel_in_key(&dst, &rel.rel_type, &src));
                 relo_rows += 1;
                 reli_rows += 1;
+            }
+            // P5-M7: the catalog KO's head is canonical state (heads_scanned
+            // counts it) but derives no user-facing rows — same guard as
+            // write_type_index.
+            if crate::catalog::is_catalog_type(&ko.metadata.type_name) {
+                continue;
             }
             new.insert(type_key(&ko.metadata.type_name, &koid));
             type_rows += 1;

@@ -10,6 +10,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// A fresh kernel journals the P5-M7 catalog version row at open — one
+/// system event precedes every user event. Journal-position pins below
+/// count it as entry #1.
+const CATALOG_PREAMBLE: u64 = 1;
+
 fn mk() -> (Kernel, Arc<MemoryEngine>, Arc<ManualClock>) {
     let clock = Arc::new(ManualClock::new(10_000));
     let store = Arc::new(MemoryEngine::new());
@@ -112,7 +117,11 @@ fn cb003_approval_commits_class_b_claim_with_epistemic_transition() {
     // §10.2: the admission itself is an audit KE — the journal advanced by
     // exactly the admission event (seed create = seq 1, admission = seq 2).
     let (seq, _) = k.journal_head().unwrap();
-    assert_eq!(seq, 2, "job admission must emit an audit KE in the journal");
+    assert_eq!(
+        seq,
+        2 + CATALOG_PREAMBLE,
+        "job admission must emit an audit KE in the journal"
+    );
 
     let st = wait_status(
         &k,

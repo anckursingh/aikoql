@@ -14,6 +14,11 @@ use aikoql_graph::{GraphEngineApi, RelateRequest};
 use aikoql_kernel::*;
 use std::sync::Arc;
 
+/// A fresh kernel journals the P5-M7 catalog version row at open — one
+/// system event precedes every user event. Journal-length pins below
+/// count it as entry #1.
+const CATALOG_PREAMBLE: usize = 1;
+
 fn mk() -> Kernel {
     Kernel::open(
         Arc::new(MemoryEngine::new()),
@@ -285,7 +290,7 @@ fn w2_know_008_failed_extraction_keeps_evidence_retrievable() {
     assert_eq!(doc_ko.evidence()[0].confidence, 0.99);
 
     // No partial fact was committed — the journal holds exactly the document.
-    assert_eq!(k.journal().unwrap().len(), 1);
+    assert_eq!(k.journal().unwrap().len(), 1 + CATALOG_PREAMBLE);
 }
 
 // ---------------------------------------------------------------------------

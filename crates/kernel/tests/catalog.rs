@@ -54,10 +54,13 @@ fn mk_shared() -> (Kernel, Arc<dyn StorageEngine>) {
     (k, engine)
 }
 
+/// Restart the engine. The clock advances across a restart — a real wall
+/// clock never rewinds — and koids are time-derived, so a same-time reopen
+/// would regenerate the original koid sequence and collide on writes.
 fn reopen(engine: &Arc<dyn StorageEngine>) -> KResult<Kernel> {
     Kernel::open(
         Arc::clone(engine),
-        Arc::new(ManualClock::new(10_000)),
+        Arc::new(ManualClock::new(20_000)),
         0xC0FFEE,
     )
 }
@@ -80,8 +83,9 @@ fn meta(t: &str) -> Metadata {
 }
 
 /// Write a raw catalog row through the ordinary remember path, the way a
-/// corrupt or foreign tool could — the fail-closed pins need one.
-fn raw_catalog_row(k: &Kernel, props: PropertyMap) {
+/// corrupt or foreign tool could — the fail-closed pins need one. Returns
+/// the row's koid (ct006b pins the in-place stamp on it).
+fn raw_catalog_row(k: &Kernel, props: PropertyMap) -> KOID {
     let mut req = RememberRequest::create(
         sys(),
         Metadata {
@@ -92,7 +96,7 @@ fn raw_catalog_row(k: &Kernel, props: PropertyMap) {
         },
     );
     req.properties = props;
-    k.remember(req).unwrap();
+    k.remember(req).unwrap().koid
 }
 
 // --- ct001 — type create/drop round-trips across restart ------------------------
@@ -101,7 +105,8 @@ fn raw_catalog_row(k: &Kernel, props: PropertyMap) {
 fn ct001_type_create_drop_roundtrips_across_restart() {
     let (k, engine) = mk_shared();
     assert_eq!(k.catalog_version().unwrap(), 1, "fresh open initializes v1");
-    k.catalog_create_type("Employee", &["name", "dept_id"]).unwrap();
+    k.catalog_create_type("Employee", &["name", "dept_id"])
+        .unwrap();
     k.catalog_create_type("Department", &["id"]).unwrap();
     assert_eq!(
         k.catalog_list_types().unwrap(),
@@ -120,7 +125,8 @@ fn ct001_type_create_drop_roundtrips_across_restart() {
     // The generic entry API round-trips alongside the type sugar.
     let mut props = PropertyMap::new();
     props.insert("target".into(), Value::Text("v2".into()));
-    k.catalog_create_entry("index", "emp_name", props.clone()).unwrap();
+    k.catalog_create_entry("index", "emp_name", props.clone())
+        .unwrap();
     assert_eq!(k.catalog_entry("index", "emp_name").unwrap(), Some(props));
 
     // Restart: everything persists.
@@ -160,7 +166,8 @@ fn ct002_add_property_persists_and_old_rows_read_unchanged() {
     k.catalog_create_type("Employee", &["name"]).unwrap();
     // A row written under the v1 schema.
     let mut req = RememberRequest::create(alice(), meta("Employee"));
-    req.properties.insert("name".into(), Value::Text("A".into()));
+    req.properties
+        .insert("name".into(), Value::Text("A".into()));
     let old = k.remember(req).unwrap().koid;
 
     k.catalog_add_property("Employee", "dept_id").unwrap();
@@ -170,12 +177,16 @@ fn ct002_add_property_persists_and_old_rows_read_unchanged() {
     );
     // New rows see the extended schema (write + read with the new property).
     let mut req = RememberRequest::create(alice(), meta("Employee"));
-    req.properties.insert("name".into(), Value::Text("B".into()));
+    req.properties
+        .insert("name".into(), Value::Text("B".into()));
     req.properties.insert("dept_id".into(), Value::Int(7));
     k.remember(req).unwrap();
     let rows = k.scan_by_type(&Subject::new("alice"), "Employee").unwrap();
     assert_eq!(rows.len(), 2);
-    let old_row = rows.iter().find(|r| r.koid == old).expect("old row readable");
+    let old_row = rows
+        .iter()
+        .find(|r| r.koid == old)
+        .expect("old row readable");
     assert_eq!(
         old_row.properties.len(),
         1,
@@ -206,7 +217,10 @@ fn ct003_corrupt_version_row_fails_open_closed() {
         Err(e) => e,
     };
     let msg = format!("{err}");
-    assert!(msg.contains("catalog"), "the error names the catalog: {msg}");
+    assert!(
+        msg.contains("catalog"),
+        "the error names the catalog: {msg}"
+    );
 }
 
 // --- ct004 — concurrent metadata changes serialize ----------------------------------
@@ -214,10 +228,11 @@ fn ct003_corrupt_version_row_fails_open_closed() {
 #[test]
 fn ct004_concurrent_catalog_writes_serialize_without_loss() {
     let k = mk();
+    let kref = &k;
     std::thread::scope(|s| {
         for i in 0..8 {
-            s.spawn(|| {
-                k.catalog_create_type(&format!("T{i}"), &["p"]).unwrap();
+            s.spawn(move || {
+                kref.catalog_create_type(&format!("T{i}"), &["p"]).unwrap();
             });
         }
     });
@@ -249,10 +264,13 @@ fn ct005_ensure_is_deterministic_and_idempotent() {
     );
     assert_eq!(k2.catalog_version().unwrap(), 1);
     // The fresh catalog row set is deterministic: exactly the version row.
-    let rows = k2
-        .scan_by_type(&Subject::new(SYSTEM), CATALOG_TYPE)
-        .unwrap();
-    assert_eq!(rows.len(), 1, "ensure adds nothing on a second run");
+    // Catalog rows are canonical-only (never in the derived type index), so
+    // the observable is the journal — a second open must add no events.
+    assert_eq!(
+        k2.journal().unwrap().len(),
+        1,
+        "ensure adds nothing on a second run"
+    );
 }
 
 // --- ct006 — version compatibility ----------------------------------------------------
@@ -261,26 +279,55 @@ fn ct005_ensure_is_deterministic_and_idempotent() {
 fn ct006_version_compatibility() {
     // (a) A pre-catalog database opens, re-initializes v1, and never
     // silently rewrites user data.
-    let (k, engine) = mk_shared();
-    let mut req = RememberRequest::create(alice(), meta("Employee"));
-    req.properties.insert("name".into(), Value::Text("A".into()));
-    k.remember(req).unwrap();
-    k.catalog_drop_entry("version", "catalog").unwrap(); // simulate a pre-M7 DB
-    let k2 = reopen(&engine).unwrap();
-    assert_eq!(k2.catalog_version().unwrap(), 1, "re-initialized at v1");
-    let rows = k2.scan_by_type(&Subject::new("alice"), "Employee").unwrap();
-    assert_eq!(rows.len(), 1, "user data untouched by the re-init");
+    {
+        let (k, engine) = mk_shared();
+        let mut req = RememberRequest::create(alice(), meta("Employee"));
+        req.properties
+            .insert("name".into(), Value::Text("A".into()));
+        k.remember(req).unwrap();
+        k.catalog_drop_entry("version", "catalog").unwrap(); // pre-M7 DB
+        let k2 = reopen(&engine).unwrap();
+        assert_eq!(k2.catalog_version().unwrap(), 1, "re-initialized at v1");
+        let rows = k2.scan_by_type(&Subject::new("alice"), "Employee").unwrap();
+        assert_eq!(rows.len(), 1, "user data untouched by the re-init");
+    }
 
-    // (b) A catalog version above what this build supports fails closed.
-    let mut props = PropertyMap::new();
-    props.insert("kind".into(), Value::Text("version".into()));
-    props.insert("name".into(), Value::Text("catalog".into()));
-    props.insert("version".into(), Value::Int(999));
-    raw_catalog_row(&k2, props);
-    let err = match reopen(&engine) {
-        Ok(_) => panic!("an unsupported catalog version must fail the open"),
-        Err(e) => e,
-    };
-    let msg = format!("{err}");
-    assert!(msg.contains("999"), "the error names the version: {msg}");
+    // (b) A database stamped at an old catalog version migrates in one
+    // open: the dispatch runs, the stamp updates the row in place — never
+    // duplicates it.
+    {
+        let (k, engine) = mk_shared();
+        k.catalog_drop_entry("version", "catalog").unwrap();
+        let mut oldv = PropertyMap::new();
+        oldv.insert("kind".into(), Value::Text("version".into()));
+        oldv.insert("name".into(), Value::Text("catalog".into()));
+        oldv.insert("version".into(), Value::Int(0));
+        let v0_koid = raw_catalog_row(&k, oldv);
+        let k2 = reopen(&engine).unwrap();
+        assert_eq!(k2.catalog_version().unwrap(), 1, "migrated v0 → v1");
+        // Catalog rows are canonical-only (never in the derived type index),
+        // so "no duplicate row" is pinned on the journal: the migration's
+        // only event is an UPDATE of the v0 row's own koid, not a create.
+        let journal = k2.journal().unwrap();
+        assert_eq!(journal.len(), 4, "one stamp event, nothing else");
+        let stamp = journal.last().unwrap();
+        assert_eq!(stamp.kind, EventKind::Updated, "stamp is an update");
+        assert_eq!(stamp.koid, v0_koid, "the stamp updated in place");
+    }
+
+    // (c) A catalog version above what this build supports fails closed.
+    {
+        let (k, engine) = mk_shared();
+        let mut props = PropertyMap::new();
+        props.insert("kind".into(), Value::Text("version".into()));
+        props.insert("name".into(), Value::Text("catalog".into()));
+        props.insert("version".into(), Value::Int(999));
+        raw_catalog_row(&k, props);
+        let err = match reopen(&engine) {
+            Ok(_) => panic!("an unsupported catalog version must fail the open"),
+            Err(e) => e,
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("999"), "the error names the version: {msg}");
+    }
 }

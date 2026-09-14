@@ -39,6 +39,11 @@ fn alice() -> Subject {
     Subject::new("alice")
 }
 
+/// A fresh kernel journals the P5-M7 catalog version row at open — one
+/// system event (kind Created, actor aikoql:system) precedes every user
+/// event. Journal-length and position pins below count it as entry #1.
+const CATALOG_PREAMBLE: usize = 1;
+
 fn ke_store_key(seq: u64) -> Vec<u8> {
     let mut v = b"ke/".to_vec();
     v.extend_from_slice(&seq.to_be_bytes());
@@ -115,9 +120,9 @@ fn t01_create_persists_all_blocks_and_emits_created() {
     assert_eq!(ko.event_refs.len(), 1);
 
     let journal = k.journal().unwrap();
-    assert_eq!(journal.len(), 1);
-    assert_eq!(journal[0].kind, EventKind::Created);
-    assert_eq!(journal[0].actor, "alice");
+    assert_eq!(journal.len(), 1 + CATALOG_PREAMBLE);
+    assert_eq!(journal[CATALOG_PREAMBLE].kind, EventKind::Created);
+    assert_eq!(journal[CATALOG_PREAMBLE].actor, "alice");
 }
 
 #[test]
@@ -181,7 +186,7 @@ fn t06_idempotent_retry_commits_exactly_once() {
     let r1 = k.remember(req.clone()).unwrap();
     let r2 = k.remember(req).unwrap(); // retry, e.g. after client timeout
     assert_eq!(r1, r2);
-    assert_eq!(k.journal().unwrap().len(), 1);
+    assert_eq!(k.journal().unwrap().len(), 1 + CATALOG_PREAMBLE);
 }
 
 #[test]
@@ -361,7 +366,7 @@ fn t06j_transact_creates_multiple_objects_atomically() {
     assert_eq!(res.len(), 2);
     assert_eq!(res[0].version, 1);
     assert_eq!(res[1].version, 1);
-    assert_eq!(k.journal().unwrap().len(), 2);
+    assert_eq!(k.journal().unwrap().len(), 2 + CATALOG_PREAMBLE);
     // both heads are readable
     assert!(k.get(alice(), &res[0].koid).is_ok());
     assert!(k.get(alice(), &res[1].koid).is_ok());
@@ -384,7 +389,7 @@ fn t06k_transact_is_all_or_nothing() {
         KError::VersionConflict { .. }
     ));
     // journal remains untouched
-    assert_eq!(k.journal().unwrap().len(), 1);
+    assert_eq!(k.journal().unwrap().len(), 1 + CATALOG_PREAMBLE);
 }
 
 #[test]
@@ -458,7 +463,7 @@ fn t08_evolve_emits_lifecycle_changed_with_actor_and_note() {
         .unwrap();
     assert_eq!(e.version, 2);
     let journal = k.journal().unwrap();
-    let ke = &journal[1];
+    let ke = &journal[1 + CATALOG_PREAMBLE];
     assert_eq!(ke.kind, EventKind::LifecycleChanged);
     assert_eq!(ke.actor, "alice");
     assert_eq!(ke.note.as_deref(), Some("promote"));
@@ -507,7 +512,7 @@ fn t10_forget_erase_removes_versions_but_keeps_proof_possible() {
 
     assert!(matches!(k.get(alice(), &victim), Err(KError::NotFound(_))));
     // journal retained (3 events: 2 creates + 1 forgotten)
-    assert_eq!(k.journal().unwrap().len(), 3);
+    assert_eq!(k.journal().unwrap().len(), 3 + CATALOG_PREAMBLE);
     // audit chain over the whole journal still verifies, via tombstone stub
     let proof = k.prove(alice(), &witness).unwrap();
     assert!(
@@ -800,9 +805,9 @@ fn t16_prove_valid_chain() {
 
     let proof = k.prove(alice(), &a).unwrap();
     assert!(proof.chain_valid);
-    assert_eq!(proof.events, 4);
+    assert_eq!(proof.events, 4 + CATALOG_PREAMBLE as u64);
     let (seq, audit) = k.journal_head().unwrap();
-    assert_eq!(seq, 4);
+    assert_eq!(seq, 4 + CATALOG_PREAMBLE as u64);
     assert_eq!(audit, proof.head_audit_hash);
 }
 
@@ -814,7 +819,10 @@ fn t17_prove_detects_tampered_event() {
         .unwrap();
 
     // attacker rewrites the note of event #1 in storage
-    let raw = store.get(&ke_store_key(1)).unwrap().unwrap();
+    let raw = store
+        .get(&ke_store_key(1 + CATALOG_PREAMBLE as u64))
+        .unwrap()
+        .unwrap();
     let mut ke = codec::decode_ke(&raw).unwrap();
     ke.note = Some("forged".into());
     let mut b = WriteBatch::new();
@@ -832,7 +840,8 @@ fn t17_prove_detects_tampered_event() {
 fn t18_prove_detects_tampered_object_payload() {
     let (k, store, _c) = mk_with_store();
     let id = create_fact(&k, &alice(), "fact");
-    let ts = k.journal().unwrap()[0].commit_ts;
+    // entry CATALOG_PREAMBLE: the catalog bootstrap row precedes the fact
+    let ts = k.journal().unwrap()[CATALOG_PREAMBLE].commit_ts;
 
     let key = obj_store_key(&id, ts);
     let mut bytes = store.get(&key).unwrap().unwrap();
@@ -859,8 +868,10 @@ fn t18b_prove_with_signing_key_verifies_signatures() {
     let proof = k.prove(alice(), &id).unwrap();
     assert!(proof.chain_valid);
     assert!(proof.signatures_verified);
-    // every event carries a signature
-    for ke in k.journal().unwrap() {
+    // every user event carries a signature; the catalog bootstrap row is
+    // journaled at open, before the signing key exists — legitimately
+    // unsigned, like any pre-signing history
+    for ke in k.journal().unwrap().into_iter().skip(CATALOG_PREAMBLE) {
         assert!(ke.signature.is_some(), "signed kernel must sign every KE");
     }
 }
@@ -874,7 +885,10 @@ fn t18c_prove_detects_tampered_signature() {
         .with_signing_key([0x22; 32]);
     let id = create_fact(&k, &alice(), "fact");
 
-    let raw = store.get(&ke_store_key(1)).unwrap().unwrap();
+    let raw = store
+        .get(&ke_store_key(1 + CATALOG_PREAMBLE as u64))
+        .unwrap()
+        .unwrap();
     let mut ke = codec::decode_ke(&raw).unwrap();
     ke.signature = ke.signature.map(|mut s| {
         s[0] ^= 0xFF;
@@ -1080,7 +1094,7 @@ fn t24_deterministic_replay_produces_identical_journal() {
         j1, j2,
         "identical script + clock schedule => identical journal"
     );
-    assert_eq!(j1.len(), 5);
+    assert_eq!(j1.len(), 5 + CATALOG_PREAMBLE);
     // byte-identical encodings too
     let b1: Vec<u8> = j1.iter().flat_map(codec::encode_ke).collect();
     let b2: Vec<u8> = j2.iter().flat_map(codec::encode_ke).collect();
@@ -1119,7 +1133,7 @@ fn t25_concurrent_creators_get_unique_koids_and_gapless_journal() {
     }
     assert_eq!(all.len(), 100);
     let journal = k.journal().unwrap();
-    assert_eq!(journal.len(), 100);
+    assert_eq!(journal.len(), 100 + CATALOG_PREAMBLE);
     // gapless sequence despite concurrency
     for (i, ke) in journal.iter().enumerate() {
         assert_eq!(ke.seq, (i + 1) as u64);
@@ -1188,7 +1202,7 @@ fn t25b_concurrent_readers_and_writers_see_only_committed_state() {
     // Every write landed exactly once: 1 seed + WRITERS×UPDATES entries,
     // gapless sequence, and the hot KO ends at 1 + (WRITERS×UPDATES/2).
     let journal = k.journal().unwrap();
-    assert_eq!(journal.len(), 1 + WRITERS * UPDATES);
+    assert_eq!(journal.len(), 1 + WRITERS * UPDATES + CATALOG_PREAMBLE);
     for (i, ke) in journal.iter().enumerate() {
         assert_eq!(ke.seq, (i + 1) as u64);
     }
@@ -1251,7 +1265,7 @@ fn t26_reopen_recovers_journal_head_and_continues_chain() {
         .unwrap();
     let proof = k2.prove(alice(), &id).unwrap();
     assert!(proof.chain_valid);
-    assert_eq!(proof.events, 2);
+    assert_eq!(proof.events, 2 + CATALOG_PREAMBLE as u64);
 }
 
 // ---------------------------------------------------------------------------

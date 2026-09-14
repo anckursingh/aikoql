@@ -32,6 +32,12 @@ fn alice() -> Subject {
     Subject::new("alice")
 }
 
+/// A fresh kernel journals the P5-M7 catalog version row at open — one
+/// system event precedes every user event, so the maintainer's journal
+/// water mark counts it. Index CONTENTS exclude it (the maintainer skips
+/// the reserved catalog type), water marks do not.
+const CATALOG_PREAMBLE: usize = 1;
+
 fn create_vec(k: &Kernel, body: &str, emb: Vec<f32>) -> KOID {
     let mut req = RememberRequest::create(alice(), meta("fact"));
     req.properties
@@ -72,7 +78,7 @@ fn i01_catchup_replay_indexes_existing_journal() {
     )
     .unwrap();
     // replay happened synchronously in start()
-    assert_eq!(m.water(), 2);
+    assert_eq!(m.water(), 2 + CATALOG_PREAMBLE as u64);
     assert_eq!(m.vectors().len(), 2);
     assert_eq!(m.text().len(), 2);
     let hits = m.vectors().search(&[1.0, 0.0], 1, None);
@@ -191,7 +197,7 @@ fn i05_maintainer_recovers_from_existing_data_on_restart() {
     )
     .unwrap();
     assert_eq!(m2.vectors().len(), 1);
-    assert_eq!(m2.water(), 1);
+    assert_eq!(m2.water(), 1 + CATALOG_PREAMBLE as u64);
     m2.shutdown();
 }
 
@@ -298,7 +304,7 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
     )
     .unwrap();
     m1.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
-    assert_eq!(m1.water(), 2);
+    assert_eq!(m1.water(), 2 + CATALOG_PREAMBLE as u64);
 
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -311,7 +317,7 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
     let water = IndexMaintainer::checkpoint_water(&checkpoint_dir)
         .unwrap()
         .expect("checkpoint must have a water mark");
-    assert_eq!(water, 2);
+    assert_eq!(water, 2 + CATALOG_PREAMBLE as u64);
 
     let vectors2: Arc<HnswVectorIndex> =
         Arc::new(HnswVectorIndex::load(&checkpoint_dir.join("vectors")).unwrap());
@@ -326,7 +332,7 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
     .unwrap();
     k.attach_indexes(m2.clone());
 
-    assert_eq!(m2.water(), 2);
+    assert_eq!(m2.water(), 2 + CATALOG_PREAMBLE as u64);
     assert_eq!(m2.vectors().len(), 2);
     assert_eq!(m2.text().len(), 2);
 
@@ -338,7 +344,7 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
 
     let _c = create_vec(&k, "cats everywhere", vec![0.95, 0.05]);
     m2.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
-    assert_eq!(m2.water(), 3);
+    assert_eq!(m2.water(), 3 + CATALOG_PREAMBLE as u64);
     assert_eq!(m2.vectors().len(), 3);
 
     m2.shutdown();

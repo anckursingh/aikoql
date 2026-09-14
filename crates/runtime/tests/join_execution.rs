@@ -238,14 +238,8 @@ fn jn007_deleted_right_rows_never_join() {
     let k = mk();
     let d = dept(&k, "Eng", 1);
     emp(&k, "A", Some(1));
-    k.forget(
-        Subject::new("alice"),
-        &d,
-        ForgetMode::Tombstone,
-        None,
-        None,
-    )
-    .unwrap();
+    k.forget(Subject::new("alice"), &d, ForgetMode::Tombstone, None, None)
+        .unwrap();
     let got = pairs(
         &k,
         "MATCH Employee JOIN Department ON dept_id == id RETURN *",

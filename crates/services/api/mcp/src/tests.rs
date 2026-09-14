@@ -713,10 +713,22 @@ fn met006_storage_compact_via_mcp_returns_stats_and_preserves_data() {
     let mut session = crate::session::McpSession::default();
 
     // Oracle baseline AFTER kernel open — the kernel writes its own
-    // meta/type_index record on open, and only compact-induced changes may
-    // differ after.
+    // meta/type_index record (and since P5-M7 the catalog rows) on open,
+    // and only compact-induced changes may differ after. Pin content, not
+    // the internal key count.
     let before: Vec<(Vec<u8>, Vec<u8>)> = scan_engine.scan(b"").unwrap();
-    assert_eq!(before.len(), 6, "oracle must see all 5 keys + type_index");
+    for i in 0..5 {
+        assert!(
+            before
+                .iter()
+                .any(|(key, _)| key == format!("k{i}").as_bytes()),
+            "oracle must see user key k{i}"
+        );
+    }
+    assert!(
+        before.iter().any(|(key, _)| key == b"meta/type_index"),
+        "oracle must see the type_index backfill marker"
+    );
     let path = dir.to_str().unwrap().to_string();
 
     let denied = crate::tool_registry::call_tool(

@@ -124,7 +124,7 @@ TDD REDs: ct001 create/drop type round-trips across restart; ct002 schema evolut
 
 Acceptance: the roadmap's ND-09 list, with the honesty amendment: only the entities needed by M8/M9 are transactional; the rest are schema rows (honest-ledger row).
 
-Status: ⬜ Proposed
+Status: ✅ Shipped — `crates/kernel/src/catalog.rs` (P5-M7, ND-09): the catalog is ordinary journaled KOs in the SAME engine — reserved row type `aikoql:catalog`, reserved tenant `aikoql:catalog`, owner `aikoql:system` (default owner-only ACL = the invisibility barrier; `list_types()` filters the reserved type out via `is_catalog_type`). One version row (kind `version`, name `catalog`, `version: Int`) drives open-time `ensure()`: absent → bootstrap at v1; below → vN→vN+1 dispatch loop then stamp-in-place (convergent); above or non-Int → open fails closed. Kernel surface: `catalog_create_entry/entry/drop_entry`, type sugar `catalog_create_type/drop_type/get_type/add_property/list_types`, `catalog_version()`. ct001–006 6/6 (RED fe53c51). The derived-index maintainer skips catalog rows (scheduler `apply_batch` guard) — catalog metadata never leaks into user-facing text/vector indexes. Spec migration: fresh kernels journal the catalog bootstrap row as entry #1, so conformance/durability/epistemic/jobs/indexes/qa2-concurrency/qa2-fault/qa2-knowledge journal pins now count a documented `CATALOG_PREAMBLE` (determinism law intact — the row is deterministic, t24 byte-equality holds). Honest-ledger: entity rows beyond type/index/statistics are schema rows with a documented gap (unchanged from the proposal); the migration dispatch is a seam with no v1 steps — the first real step ships with a v2 schema change.
 
 ### P5-M8 — Unified index subsystem (ND-07, on the catalog)
 

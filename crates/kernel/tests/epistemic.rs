@@ -30,6 +30,11 @@ fn meta(t: &str) -> Metadata {
     }
 }
 
+/// A fresh kernel journals the P5-M7 catalog version row at open — one
+/// system event (kind Created, actor aikoql:system) precedes every user
+/// event. Journal-length and -position pins below count it as entry #1.
+const CATALOG_PREAMBLE: usize = 1;
+
 fn alice() -> Subject {
     Subject::new("alice")
 }
@@ -241,10 +246,16 @@ fn happy_path_records_status_history_and_audit_event() {
 
     // Audit trail carries the EpistemicChanged event with actor.
     let journal = k.journal().unwrap();
-    assert_eq!(journal.len(), 2);
-    assert_eq!(journal[1].kind, EventKind::EpistemicChanged);
-    assert_eq!(journal[1].actor, "alice");
-    assert_eq!(journal[1].note.as_deref(), Some("manual review"));
+    assert_eq!(journal.len(), 2 + CATALOG_PREAMBLE);
+    assert_eq!(
+        journal[1 + CATALOG_PREAMBLE].kind,
+        EventKind::EpistemicChanged
+    );
+    assert_eq!(journal[1 + CATALOG_PREAMBLE].actor, "alice");
+    assert_eq!(
+        journal[1 + CATALOG_PREAMBLE].note.as_deref(),
+        Some("manual review")
+    );
 }
 
 #[test]

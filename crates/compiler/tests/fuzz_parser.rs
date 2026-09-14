@@ -13,39 +13,16 @@ use proptest::prelude::*;
 // ---------------------------------------------------------------------------
 
 fn ident_str() -> impl Strategy<Value = String> {
-    let keywords = &[
-        "match",
-        "where",
-        "and",
-        "or",
-        "return",
-        "similar",
-        "to",
-        "traverse",
-        "create",
-        "update",
-        "delete",
-        "ingest",
-        "depth",
-        "extract",
-        "tables",
-        "entities",
-        "build",
-        "relationships",
-        "commit",
-        "explain",
-        // v0.3 K2: temporal + epistemic keywords
-        "as_of",
-        "between",
-        "historical",
-        "epistemic",
-        "true",
-        "false",
-        "null",
-    ];
-    "[a-zA-Z_][a-zA-Z0-9_]{0,15}".prop_filter("not a keyword", move |s: &String| {
-        let lower = s.to_lowercase();
-        !keywords.contains(&lower.as_str())
+    // Reserved words are the LEXER's decision, not a hand-maintained list:
+    // a draw must tokenize as Ident, so any keyword the grammar adds later
+    // (ORDER/BY/GROUP/JOIN/ON — P5-M5/M6 — were missed by the old list,
+    // surfacing as draw-dependent fuzz_match_parses panics) is excluded
+    // automatically.
+    "[a-zA-Z_][a-zA-Z0-9_]{0,15}".prop_filter("not a keyword", |s: &String| {
+        matches!(
+            parser::lexer::Lexer::new(s).next_token(),
+            parser::lexer::Token::Ident(_)
+        )
     })
 }
 

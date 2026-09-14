@@ -40,6 +40,11 @@ fn alice() -> Subject {
     Subject::new("alice")
 }
 
+/// A fresh kernel journals the P5-M7 catalog version row at open — one
+/// system event (kind Created, actor aikoql:system) precedes every user
+/// event. Journal-length and -position pins below count it as entry #1.
+const CATALOG_PREAMBLE: usize = 1;
+
 fn kernel_at(path: &PathBuf, salt: u64) -> Kernel {
     let engine = RedbEngine::open(path).expect("open engine");
     Kernel::open(Arc::new(engine), Arc::new(SystemClock), salt).expect("open kernel")
@@ -68,7 +73,7 @@ fn d01_committed_mutations_survive_restart() {
     let ko = k2.get(alice(), &id).unwrap();
     assert_eq!(ko.version, 2);
     assert_eq!(ko.properties.get("n"), Some(&Value::Int(42)));
-    assert_eq!(k2.journal().unwrap().len(), 2);
+    assert_eq!(k2.journal().unwrap().len(), 2 + CATALOG_PREAMBLE);
     assert!(k2.prove(alice(), &id).unwrap().chain_valid);
     let _ = std::fs::remove_file(&path);
 }
@@ -94,10 +99,10 @@ fn d02_journal_seq_and_hlc_continue_after_reopen() {
     // HLC was re-seeded: the new commit_ts strictly exceeds the pre-restart one
     assert!(r.commit_ts > 0);
     let j = k2.journal().unwrap();
-    assert_eq!(j.len(), 2);
-    assert_eq!(j[1].seq, 2);
+    assert_eq!(j.len(), 2 + CATALOG_PREAMBLE);
+    assert_eq!(j[1 + CATALOG_PREAMBLE].seq, 2 + CATALOG_PREAMBLE as u64);
     assert!(
-        j[1].commit_ts > j[0].commit_ts,
+        j[1 + CATALOG_PREAMBLE].commit_ts > j[CATALOG_PREAMBLE].commit_ts,
         "commit_ts must be monotone across restarts"
     );
     assert!(k2.prove(alice(), &id).unwrap().chain_valid);
@@ -148,17 +153,23 @@ fn d04_abrupt_termination_preserves_all_commits() {
         .output()
         .expect("spawn crash_writer");
     let stdout = String::from_utf8_lossy(&out.stdout);
+    let expected_head = format!("COMMITTED_SEQ={}", 7 + CATALOG_PREAMBLE);
     assert!(
-        stdout.contains("COMMITTED_SEQ=7"),
+        stdout.contains(&expected_head),
         "unexpected writer output: {} (stderr: {})",
         stdout,
         String::from_utf8_lossy(&out.stderr)
     );
 
     // reopen after the "crash" and verify every commit + the audit chain
+    // (the head counts the catalog bootstrap row written at the writer's open)
     let k = kernel_at(&path, 7);
     let (seq, _) = k.journal_head().unwrap();
-    assert_eq!(seq, 7, "journal head must survive abrupt termination");
+    assert_eq!(
+        seq,
+        7 + CATALOG_PREAMBLE as u64,
+        "journal head must survive abrupt termination"
+    );
     let crasher = Subject::new("crasher");
     for i in 0..7u8 {
         let id = KOID::from_bytes([i; KOID_LEN]);
@@ -206,10 +217,13 @@ fn d04b_crash_fuzz_random_commit_boundaries() {
             String::from_utf8_lossy(&out.stderr)
         );
 
+        // the writer counts USER commits in COMMITTED_SEQ; the reopen head
+        // adds the catalog bootstrap row written at its open
         let k = kernel_at(&path, 7);
         let (seq, _) = k.journal_head().unwrap();
         assert_eq!(
-            seq, crash_after as u64,
+            seq,
+            crash_after as u64 + CATALOG_PREAMBLE as u64,
             "crash_after={}: committed prefix must survive",
             crash_after
         );
@@ -310,7 +324,7 @@ fn d06_concurrent_writers_gapless_journal_on_disk() {
         h.join().unwrap();
     }
     let j = k.journal().unwrap();
-    assert_eq!(j.len(), 50);
+    assert_eq!(j.len(), 50 + CATALOG_PREAMBLE);
     for (i, ke) in j.iter().enumerate() {
         assert_eq!(ke.seq, (i + 1) as u64);
     }

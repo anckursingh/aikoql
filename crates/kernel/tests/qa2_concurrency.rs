@@ -13,6 +13,11 @@ use aikoql_kernel::*;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 
+/// A fresh kernel journals the P5-M7 catalog version row at open — one
+/// system event precedes every user event. Journal-length pins below
+/// count it as entry #1.
+const CATALOG_PREAMBLE: usize = 1;
+
 fn mk() -> (Kernel, Arc<ManualClock>) {
     let clock = Arc::new(ManualClock::new(10_000));
     let k = Kernel::open(Arc::new(MemoryEngine::new()), clock.clone(), 0xC0FFEE).unwrap();
@@ -98,7 +103,7 @@ fn w2_conc_002a_concurrent_same_key_ingest_commits_exactly_once() {
     let journal = k.journal().unwrap();
     assert_eq!(
         journal.len(),
-        1 + DISTINCT,
+        1 + DISTINCT + CATALOG_PREAMBLE,
         "journal must hold exactly one entry per logical ingest (got {})",
         journal.len()
     );
@@ -155,7 +160,7 @@ fn w2_conc_003_concurrent_update_and_delete_never_hybrid() {
         }
         assert_eq!(
             k.journal().unwrap().len(),
-            2,
+            2 + CATALOG_PREAMBLE,
             "round {round}: seed + exactly one committed op"
         );
         assert!(
@@ -301,7 +306,10 @@ fn w2_conc_005_concurrent_overlapping_temporal_updates_keep_one_head() {
     // Every update committed exactly once, in a gapless chain — and there is
     // exactly ONE head: two versions can never both be current.
     let journal = k.journal().unwrap();
-    assert_eq!(journal.len(), 1 + (2 * PER_THREAD) as usize);
+    assert_eq!(
+        journal.len(),
+        1 + (2 * PER_THREAD) as usize + CATALOG_PREAMBLE
+    );
     for (i, ke) in journal.iter().enumerate() {
         assert_eq!(ke.seq, (i + 1) as u64, "gapless journal");
     }

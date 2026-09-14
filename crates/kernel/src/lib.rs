@@ -18,6 +18,7 @@
 //! outside, in the (future) scheduler domain.
 
 pub mod async_kernel;
+mod catalog;
 pub mod embedding;
 pub mod eval;
 pub mod event;
@@ -64,6 +65,7 @@ pub mod kernel {
     pub use crate::transaction::kernel::*;
 }
 
+pub use crate::catalog::is_catalog_type;
 pub use async_kernel::AsyncKernel;
 pub use embedding::EmbeddingProvider;
 pub use eval::{

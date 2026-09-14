@@ -10,6 +10,11 @@ use aikoql_kernel::*;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// A fresh kernel journals the P5-M7 catalog version row at open — one
+/// system event precedes every user event. Journal-length pins below
+/// count it as entry #1.
+const CATALOG_PREAMBLE: usize = 1;
+
 // Temp paths created by THIS thread, swept when the thread exits (the main
 // thread's destructor runs at process exit — statics are NOT dropped on
 // Windows MSVC, TLS is). Kill-harness children never register a path they
@@ -268,7 +273,7 @@ fn w2_conc_001_all_four_reader_shapes_see_only_committed_state() {
     // Every write landed exactly once, gapless: 5 creates + 2 chain
     // updates + 2*30 hot updates + 20 snapshot restates.
     let journal = k.journal().unwrap();
-    assert_eq!(journal.len(), 5 + 2 + 2 * 30 + 20);
+    assert_eq!(journal.len(), 5 + 2 + 2 * 30 + 20 + CATALOG_PREAMBLE);
     for (i, ke) in journal.iter().enumerate() {
         assert_eq!(ke.seq, (i + 1) as u64);
     }
