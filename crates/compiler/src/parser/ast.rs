@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use aikoql_kernel::ir::JoinKind;
+
 use super::lexer::Span;
 
 /// Stable-AST contract (ND-02): the version stamped on every parsed
@@ -115,12 +117,13 @@ pub struct AggCall {
     pub field: Option<String>,
 }
 
-/// P5-M2 (ND-02): `JOIN <right_type> ON <left> == <right>` — always INNER in
-/// the v1 grammar; LEFT JOIN arrives with the P5-M6 join engine.
+/// P5-M2 (ND-02): `JOIN <right_type> ON <left> == <right>` — INNER unless
+/// the P5-M6 (ND-06) `LEFT` prefix is present.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct JoinClause {
     pub right_type: String,
     pub on: JoinOn,
+    pub kind: JoinKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -311,6 +311,7 @@ fn compile_match(m: &ast::MatchStatement, subject: &ScanSubject) -> Result<IrPla
             right_type: j.right_type.clone(),
             on_left: j.on.left.clone(),
             on_right: j.on.right.clone(),
+            kind: j.kind,
         });
     }
 

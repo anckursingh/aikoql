@@ -45,6 +45,8 @@ pub enum Token {
     Order,
     By,
     Group,
+    // P5-M6 (ND-06): LEFT JOIN — the optional kind prefix.
+    Left,
     Join,
     On,
     Asc,
@@ -173,6 +175,7 @@ impl Lexer {
             "ORDER" => Token::Order,
             "BY" => Token::By,
             "GROUP" => Token::Group,
+            "LEFT" => Token::Left,
             "JOIN" => Token::Join,
             "ON" => Token::On,
             "ASC" => Token::Asc,

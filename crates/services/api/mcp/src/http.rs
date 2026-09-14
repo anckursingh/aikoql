@@ -619,6 +619,24 @@ pub(crate) fn aikoql_endpoint(
                     }));
                 }
             }
+            // P5-M6: one row per pair — left object plus the right match
+            // (or null on an unmatched LEFT row).
+            aikoql_runtime::RowSet::Joined(pairs) => {
+                for (l, r) in pairs {
+                    all_kos.push(json!({
+                        "koid": l.koid.to_hex(),
+                        "type_name": l.metadata.type_name,
+                        "version": l.version,
+                        "properties": l.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
+                        "joined": r.map(|ro| json!({
+                            "koid": ro.koid.to_hex(),
+                            "type_name": ro.metadata.type_name,
+                            "version": ro.version,
+                            "properties": ro.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+                        }))
+                    }));
+                }
+            }
         }
     }
     Ok(json!({"results": all_kos}).to_string())

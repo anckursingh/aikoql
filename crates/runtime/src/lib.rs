@@ -190,6 +190,12 @@ pub enum RowSet {
     /// (group keys plus one entry per aggregate call; `count` for COUNT(*),
     /// `func(field)` otherwise), in first-encounter order.
     Grouped(Vec<PropertyMap>),
+    /// P5-M6 (ND-06): join output — one pair per output row: the left object
+    /// plus its right-side match. The maps stay separate (no property-name
+    /// collision). INNER pairs always carry Some; LEFT keeps unmatched left
+    /// rows with None. Order: left rows in scan order, right matches in
+    /// right-scan order.
+    Joined(Vec<(KnowledgeObject, Option<KnowledgeObject>)>),
 }
 
 impl RowSet {
@@ -211,6 +217,7 @@ impl RowSet {
         match self {
             RowSet::Objects(kos) => kos.len(),
             RowSet::Grouped(g) => g.len(),
+            RowSet::Joined(p) => p.len(),
             _ => 0,
         }
     }
@@ -568,6 +575,7 @@ impl Interpreter {
                     RowSet::Scored(s) => RowSet::Scored(skip_take(s, *offset, *limit)),
                     RowSet::Traversal(t) => RowSet::Traversal(skip_take(t, *offset, *limit)),
                     RowSet::Grouped(g) => RowSet::Grouped(skip_take(g, *offset, *limit)),
+                    RowSet::Joined(p) => RowSet::Joined(skip_take(p, *offset, *limit)),
                 })
             }
             IrOp::Project { fields } => {
@@ -722,13 +730,48 @@ impl Interpreter {
                 }
                 Ok(RowSet::Grouped(out))
             }
-            // P5-M2 (ND-02): Join compiles today and fails closed here with
-            // a precise error — it executes in P5-M6. Not a silent
-            // passthrough: a plan that reaches the runtime with one of these
-            // is not silently wrong.
-            IrOp::Join { .. } => Err(KError::UnsupportedOperation(
-                "Join executes in P5-M6".into(),
-            )),
+            // P5-M6 (ND-06): nested-loop join — the v1 strategy. The left
+            // side is the filtered RowSet from the pipeline; the right side
+            // is scanned with the SAME subject/roles/tenant scope (the
+            // cross-tenant fail-closed pin, jn006). Null keys never match
+            // (SQL semantics, jn005). Hash join is the documented upgrade
+            // path — strategy selection lands with the P5-M9 CBO seam.
+            IrOp::Join {
+                right_type,
+                on_left,
+                on_right,
+                kind,
+            } => {
+                let left = match input {
+                    RowSet::Objects(kos) => kos,
+                    _ => return Err(KError::InvalidQuery("Join requires Object input".into())),
+                };
+                let subj = self
+                    .cached_subject
+                    .clone()
+                    .ok_or_else(|| KError::InvalidQuery("Join requires a Scan subject".into()))?;
+                let mut right = kernel.scan_by_type(&subj, right_type)?;
+                if !self.temporal_mode {
+                    let now = kernel.clock_now();
+                    right.retain(|ko| ko.valid_at(now));
+                }
+                let mut out = Vec::new();
+                for l in &left {
+                    let mut matched = false;
+                    for r in &right {
+                        let lk = l.properties.get(on_left);
+                        let rk = r.properties.get(on_right);
+                        if lk.is_some() && rk.is_some() && lk == rk {
+                            out.push((l.clone(), Some(r.clone())));
+                            matched = true;
+                        }
+                    }
+                    if !matched && *kind == JoinKind::Left {
+                        out.push((l.clone(), None));
+                    }
+                }
+                Ok(RowSet::Joined(out))
+            }
             IrOp::Ingest { artifact_ref } => {
                 // §62: dispatch to the existing ingestion pipeline — the
                 // read → hash → deploy_document flow document_ingest uses,

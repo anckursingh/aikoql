@@ -4,6 +4,7 @@
 use super::ast::*;
 use super::diagnostics::{self, Diagnostic};
 use super::lexer::{Lexer, Token};
+use aikoql_kernel::ir::JoinKind;
 
 pub type ParseError = Diagnostic;
 
@@ -11,6 +12,7 @@ pub type ParseError = Diagnostic;
 fn token_name(t: &Token) -> String {
     match t {
         Token::Match => "MATCH".into(),
+        Token::Left => "LEFT".into(),
         Token::Where => "WHERE".into(),
         Token::And => "AND".into(),
         Token::Or => "OR".into(),
@@ -262,6 +264,14 @@ impl Parser {
                     }
                     group_by = Some(self.parse_group_by()?);
                 }
+                // P5-M6 (ND-06): LEFT is the optional join-kind prefix.
+                Token::Left => {
+                    if join.is_some() {
+                        return Err(unexpected(&self.current, self.line, self.col)
+                            .with_hint("duplicate JOIN clause"));
+                    }
+                    join = Some(self.parse_join()?);
+                }
                 Token::Join => {
                     if join.is_some() {
                         return Err(unexpected(&self.current, self.line, self.col)
@@ -450,6 +460,13 @@ impl Parser {
 
     /// P5-M2 (ND-02): `JOIN <type> ON <left_field> == <right_field>`.
     fn parse_join(&mut self) -> Result<JoinClause, ParseError> {
+        // P5-M6 (ND-06): an optional LEFT prefix selects the outer kind.
+        let kind = if matches!(self.current, Token::Left) {
+            self.advance();
+            JoinKind::Left
+        } else {
+            JoinKind::Inner
+        };
         self.expect(Token::Join)?;
         let right_type = self.expect_ident("JOIN type")?;
         self.expect(Token::On)?;
@@ -459,6 +476,7 @@ impl Parser {
         Ok(JoinClause {
             right_type,
             on: JoinOn { left, right },
+            kind,
         })
     }
 

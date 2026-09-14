@@ -432,9 +432,45 @@ fn execute_and_print(kernel: &Kernel, plan: &IrPlan, stdout: &mut dyn Write) {
             aikoql_runtime::RowSet::Grouped(groups) => {
                 writeln!(stdout, "── {} group(s) ──", groups.len()).ok();
                 for g in &groups {
-                    let fields: Vec<String> =
-                        g.iter().map(|(k, v)| format!("{k}={v:?}")).collect();
+                    let fields: Vec<String> = g.iter().map(|(k, v)| format!("{k}={v:?}")).collect();
                     writeln!(stdout, "  {}", fields.join(" ")).ok();
+                }
+            }
+            // P5-M6: join rows — the left object plus its right match
+            // (or `-` on an unmatched LEFT row).
+            aikoql_runtime::RowSet::Joined(pairs) => {
+                writeln!(stdout, "── {} joined row(s) ──", pairs.len()).ok();
+                for (l, r) in pairs {
+                    let left_preview = ko_text(&l);
+                    match r {
+                        Some(ro) => {
+                            let right_preview = ko_text(&ro);
+                            writeln!(
+                                stdout,
+                                "  {}  v{}  {}  {}  |  {}  v{}  {}  {}",
+                                l.koid.to_hex(),
+                                l.version,
+                                l.metadata.type_name,
+                                left_preview,
+                                ro.koid.to_hex(),
+                                ro.version,
+                                ro.metadata.type_name,
+                                right_preview
+                            )
+                            .ok();
+                        }
+                        None => {
+                            writeln!(
+                                stdout,
+                                "  {}  v{}  {}  {}  |  -",
+                                l.koid.to_hex(),
+                                l.version,
+                                l.metadata.type_name,
+                                left_preview
+                            )
+                            .ok();
+                        }
+                    }
                 }
             }
         },

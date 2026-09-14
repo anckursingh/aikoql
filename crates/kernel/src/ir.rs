@@ -123,6 +123,14 @@ pub enum AggFunc {
     Max,
 }
 
+/// Join kind (P5-M6, ND-06): INNER drops unmatched left rows, LEFT keeps
+/// them with a None right side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum JoinKind {
+    Inner,
+    Left,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AggCall {
     pub func: AggFunc,
@@ -200,14 +208,16 @@ pub enum IrOp {
         keys: Vec<String>,
         aggs: Vec<AggCall>,
     },
-    /// P5-M2 (ND-02): JOIN <right_type> ON <on_left> == <on_right> — always
-    /// INNER in the v1 grammar (LEFT JOIN arrives with P5-M6). Consumes the
-    /// left-side RowSet; the right side is scanned at execution time with
-    /// the caller's subject/roles/tenant. Executes in P5-M6.
+    /// P5-M2/P5-M6 (ND-02/ND-06): JOIN <right_type> ON <on_left> ==
+    /// <on_right>. Consumes the left-side RowSet; the right side is scanned
+    /// at execution time with the caller's subject/roles/tenant — the join
+    /// can never see rows outside that scope (the cross-tenant fail-closed
+    /// pin, jn006). Executes in P5-M6.
     Join {
         right_type: String,
         on_left: String,
         on_right: String,
+        kind: JoinKind,
     },
     /// Ingest an artifact into the knowledge base via the ingestion pipeline
     /// (§62): the runtime reads the artifact at `artifact_ref`, hashes it, and
@@ -278,6 +288,10 @@ pub enum Strategy {
     TextIndex,
     /// In-memory row processing — no storage strategy.
     Inline,
+    /// Join executed as a nested loop over the (filtered) left side and a
+    /// scan of the right side (P5-M6, ND-06). Hash join is the documented
+    /// upgrade path — strategy selection lands with the P5-M9 CBO seam.
+    NestedLoop,
 }
 
 /// One physical operator: a logical op plus the strategy that executes it.
@@ -317,6 +331,8 @@ impl PhysicalPlan {
                         IrOp::Scan { .. } => Strategy::FullScan,
                         IrOp::AnnSearch { .. } => Strategy::VectorIndex,
                         IrOp::TextSearch { .. } => Strategy::TextIndex,
+                        // ND-06 acceptance: EXPLAIN exposes the join strategy.
+                        IrOp::Join { .. } => Strategy::NestedLoop,
                         _ => Strategy::Inline,
                     };
                     PhysicalOp { op, strategy }

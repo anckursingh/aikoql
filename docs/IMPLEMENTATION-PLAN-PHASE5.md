@@ -104,15 +104,15 @@ DISTINCT (the roadmap's ND-05 list item): not in the pre-declared ag list and no
 
 ### P5-M6 — Join engine (ND-06)
 
-Current state: no join surface (verified — one lexer token). Graph traversal ships (TRAVERSE) — joins are the relational complement, not a replacement.
+Status: ✅ Shipped 2026-09-14 — jn001–009 RED→GREEN 9/9 (RED committed first: 3 E0599 compile errors on the missing `RowSet::Joined` surface, 959ff73; jn002's layered REDs — the LEFT-token clause dispatch and the LEFT JOIN grammar — tripped in turn during implementation).
 
-Deliver: nested-loop + hash join on the M4 runtime (index join lands with P5-M8's property index — the strategy seam is P5-M3's); inner + left joins; cross-tenant join FAILS CLOSED at semantic analysis (the roadmap's tenant-boundary acceptance, implemented as an error, not a runtime filter); both sides pinned to one snapshot.
+Execution surface: the fail-closed Join arm becomes the nested-loop executor — the v1 strategy. The left side is the filtered RowSet from the pipeline (JOIN sits after Filter, P5-M2's placement); the right side is scanned at execution time with the SAME subject/roles/tenant scope as the left Scan — a join can never see rows outside the caller's scope (the cross-tenant acceptance is by construction, not a runtime filter; pinned by jn006 with kernel data). Output is a new `RowSet::Joined(Vec<(KnowledgeObject, Option<KnowledgeObject>)>)` — pairs keep the left and right maps separate (no property-name collision), INNER pairs always carry Some, LEFT keeps unmatched left rows with None. Deterministic order: left rows in scan order, right matches in right-scan order (jn001/jn004 pin it). Null keys never match — not even Null == Null (jn005, the `is_some()` guard; SQL semantics). The right side goes through the same scan filters as everything else: ACL (jn008), tombstones (jn007), temporal validity. Limit gained a Joined arm (shape-agnostic pagination); the plan-oracle fingerprint covers pairs by (left koid+version, right koid+version | none); MCP http/shell gained Joined renderers.
 
-TDD REDs: jn001 inner join baseline; jn002 left join preserves unmatched rows; jn003 empty side; jn004 duplicate keys (cartesian multiplication pinned); jn005 null keys (null never matches — documented semantics); jn006 tenant boundary (cross-tenant JOIN = error at analysis); jn007 snapshot boundary (both sides from one snapshot; relocation mid-join test); jn008 authorization (join cannot leak rows either side alone denies); jn009 skew (one hot key, env-gated, bounded — gate 7).
+Grammar: `LEFT` is now a keyword — `MATCH <T> LEFT JOIN <T2> ON <l> == <r> RETURN *` parses with `kind: JoinKind::Left` in both the AST clause and `IrOp::Join`; plain `JOIN` stays Inner. The MATCH-clause dispatch accepts the LEFT prefix. EXPLAIN exposes the strategy: `Strategy::NestedLoop` (new variant) in `PhysicalPlan::from_ops`.
 
-Acceptance: the roadmap's ND-06 list; strategy selection visible in EXPLAIN; correctness oracle = cross-check vs nested-loop on a seeded corpus.
+Honest ledger — deviations from the proposal: (1) hash join NOT implemented — nested loop is the sole v1 executor; hash join stays the documented upgrade path and strategy selection lands with the P5-M9 CBO seam; (2) the proposed "cross-tenant = error at semantic analysis" was moot: the v1 grammar cannot name a right-side tenant, so there is nothing for analysis to reject — the pin is by construction plus jn006 (if a tenant-qualified join ever enters the grammar, semantic analysis rejects a right tenant ≠ the left's); (3) jn009's skew is a 1 000-hot-key correctness pin (1 999 objects, in-memory) — the env-gated RSS/scale cell rides with the W-suite sampler as before; (4) jn007 pins tombstones, not concurrent-write pinning — both sides scan inside one execution, and the transaction contract (P5-M10) is where a multi-read snapshot gets pinned.
 
-Status: ⬜ Proposed
+Index join: still deferred to P5-M8's property index (unchanged from the proposal).
 
 ### P5-M7 — Database catalog (ND-09, moved ahead of ND-07/08)
 

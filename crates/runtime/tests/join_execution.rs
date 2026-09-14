@@ -49,7 +49,8 @@ fn meta(t: &str) -> Metadata {
 
 fn emp(k: &Kernel, name: &str, dept_id: Option<i64>) -> KOID {
     let mut req = RememberRequest::create(ctx("alice"), meta("Employee"));
-    req.properties.insert("name".into(), Value::Text(name.into()));
+    req.properties
+        .insert("name".into(), Value::Text(name.into()));
     if let Some(d) = dept_id {
         req.properties.insert("dept_id".into(), Value::Int(d));
     }
@@ -58,7 +59,8 @@ fn emp(k: &Kernel, name: &str, dept_id: Option<i64>) -> KOID {
 
 fn dept(k: &Kernel, title: &str, id: i64) -> KOID {
     let mut req = RememberRequest::create(ctx("alice"), meta("Department"));
-    req.properties.insert("title".into(), Value::Text(title.into()));
+    req.properties
+        .insert("title".into(), Value::Text(title.into()));
     req.properties.insert("id".into(), Value::Int(id));
     k.remember(req).unwrap().koid
 }
@@ -95,7 +97,10 @@ fn jn001_inner_join_matches_and_drops_unmatched() {
     emp(&k, "A", Some(1));
     emp(&k, "B", Some(2));
     emp(&k, "C", Some(99)); // unmatched
-    let got = pairs(&k, "MATCH Employee JOIN Department ON dept_id == id RETURN *");
+    let got = pairs(
+        &k,
+        "MATCH Employee JOIN Department ON dept_id == id RETURN *",
+    );
     assert_eq!(
         got,
         vec![
@@ -115,7 +120,10 @@ fn jn002_left_join_keeps_unmatched_left_rows_with_none() {
     let _ = dept(&k, "Eng", 1);
     emp(&k, "A", Some(1));
     emp(&k, "C", Some(99)); // unmatched — kept on the left, None on the right
-    let got = pairs(&k, "MATCH Employee LEFT JOIN Department ON dept_id == id RETURN *");
+    let got = pairs(
+        &k,
+        "MATCH Employee LEFT JOIN Department ON dept_id == id RETURN *",
+    );
     assert_eq!(
         got,
         vec![("A".into(), Some("Eng".into())), ("C".into(), None)],
@@ -130,13 +138,21 @@ fn jn003_empty_sides_produce_no_pairs() {
     let k = mk();
     let _ = dept(&k, "Eng", 1);
     assert!(
-        pairs(&k, "MATCH Employee JOIN Department ON dept_id == id RETURN *").is_empty(),
+        pairs(
+            &k,
+            "MATCH Employee JOIN Department ON dept_id == id RETURN *"
+        )
+        .is_empty(),
         "empty left side → no pairs"
     );
     let k2 = mk();
     emp(&k2, "A", Some(1));
     assert!(
-        pairs(&k2, "MATCH Employee JOIN Department ON dept_id == id RETURN *").is_empty(),
+        pairs(
+            &k2,
+            "MATCH Employee JOIN Department ON dept_id == id RETURN *"
+        )
+        .is_empty(),
         "empty right side → no pairs"
     );
 }
@@ -150,12 +166,18 @@ fn jn004_duplicate_keys_expand_to_all_combinations() {
     let _ = dept(&k, "Eng", 1);
     let _ = dept(&k, "Ops", 1);
     emp(&k, "A", Some(1));
-    let mut got = pairs(&k, "MATCH Employee JOIN Department ON dept_id == id RETURN *");
+    let mut got = pairs(
+        &k,
+        "MATCH Employee JOIN Department ON dept_id == id RETURN *",
+    );
     assert_eq!(got.len(), 2, "duplicate right keys → one pair each");
     got.sort();
     assert_eq!(
         got,
-        vec![("A".into(), Some("Eng".into())), ("A".into(), Some("Ops".into()))]
+        vec![
+            ("A".into(), Some("Eng".into())),
+            ("A".into(), Some("Ops".into()))
+        ]
     );
 }
 
@@ -167,8 +189,19 @@ fn jn005_null_keys_never_match() {
     let _ = dept(&k, "Eng", 1);
     emp(&k, "A", Some(1));
     emp(&k, "B", None); // dept_id missing → Null key
-    let got = pairs(&k, "MATCH Employee JOIN Department ON dept_id == id RETURN *");
-    assert_eq!(got, vec![("A".into(), Some("Eng".into()))], "Null key matches nothing");
+    let mut req = RememberRequest::create(ctx("alice"), meta("Department"));
+    req.properties
+        .insert("title".into(), Value::Text("NoId".into()));
+    k.remember(req).unwrap(); // id missing → Null key on the right side too
+    let got = pairs(
+        &k,
+        "MATCH Employee JOIN Department ON dept_id == id RETURN *",
+    );
+    assert_eq!(
+        got,
+        vec![("A".into(), Some("Eng".into()))],
+        "Null keys never match — not even Null == Null"
+    );
 }
 
 // --- jn006 — tenant boundaries --------------------------------------------------------
@@ -183,10 +216,14 @@ fn jn006_join_never_crosses_tenant_scope() {
         KnowledgeContext::new(Subject::new("bob").in_tenant("other")),
         meta("Department"),
     );
-    req.properties.insert("title".into(), Value::Text("Foreign".into()));
+    req.properties
+        .insert("title".into(), Value::Text("Foreign".into()));
     req.properties.insert("id".into(), Value::Int(1));
     k.remember(req).unwrap();
-    let got = pairs(&k, "MATCH Employee JOIN Department ON dept_id == id RETURN *");
+    let got = pairs(
+        &k,
+        "MATCH Employee JOIN Department ON dept_id == id RETURN *",
+    );
     assert_eq!(
         got,
         vec![("A".into(), Some("Eng".into()))],
@@ -201,9 +238,18 @@ fn jn007_deleted_right_rows_never_join() {
     let k = mk();
     let d = dept(&k, "Eng", 1);
     emp(&k, "A", Some(1));
-    k.forget(&Subject::new("alice"), &d, ForgetMode::Tombstone, None, None)
-        .unwrap();
-    let got = pairs(&k, "MATCH Employee JOIN Department ON dept_id == id RETURN *");
+    k.forget(
+        Subject::new("alice"),
+        &d,
+        ForgetMode::Tombstone,
+        None,
+        None,
+    )
+    .unwrap();
+    let got = pairs(
+        &k,
+        "MATCH Employee JOIN Department ON dept_id == id RETURN *",
+    );
     assert!(
         got.is_empty(),
         "a tombstoned right row is not a live join endpoint"
@@ -218,29 +264,44 @@ fn jn008_join_sees_only_rows_the_subject_can_read() {
     let bob_visible = SecurityDescriptor {
         owner: "alice".into(),
         acl: vec![
-            AclEntry { principal: "bob".into(), action: Action::Read, effect: Effect::Allow },
-            AclEntry { principal: "alice".into(), action: Action::Read, effect: Effect::Allow },
+            AclEntry {
+                principal: "bob".into(),
+                action: Action::Read,
+                effect: Effect::Allow,
+            },
+            AclEntry {
+                principal: "alice".into(),
+                action: Action::Read,
+                effect: Effect::Allow,
+            },
         ],
         classification: None,
     };
     // One employee + one department bob can read; one of each locked to alice.
     let mut e = RememberRequest::create(ctx("alice"), meta("Employee"));
-    e.properties.insert("name".into(), Value::Text("Open".into()));
+    e.properties
+        .insert("name".into(), Value::Text("Open".into()));
     e.properties.insert("dept_id".into(), Value::Int(1));
     e.security = Some(bob_visible.clone());
     k.remember(e).unwrap();
     let mut d = RememberRequest::create(ctx("alice"), meta("Department"));
-    d.properties.insert("title".into(), Value::Text("OpenDept".into()));
+    d.properties
+        .insert("title".into(), Value::Text("OpenDept".into()));
     d.properties.insert("id".into(), Value::Int(1));
     d.security = Some(bob_visible.clone());
     k.remember(d).unwrap();
     emp(&k, "Locked", Some(1)); // alice-only left row
     let mut d2 = RememberRequest::create(ctx("alice"), meta("Department"));
-    d2.properties.insert("title".into(), Value::Text("LockedDept".into()));
+    d2.properties
+        .insert("title".into(), Value::Text("LockedDept".into()));
     d2.properties.insert("id".into(), Value::Int(1));
     k.remember(d2).unwrap();
 
-    let plan = parser::compile_with_subject("MATCH Employee JOIN Department ON dept_id == id RETURN *", "bob").unwrap();
+    let plan = parser::compile_with_subject(
+        "MATCH Employee JOIN Department ON dept_id == id RETURN *",
+        "bob",
+    )
+    .unwrap();
     match Interpreter::execute(&k, &plan).unwrap() {
         RowSet::Joined(p) => {
             assert_eq!(p.len(), 1, "bob sees exactly the one readable pair");
@@ -266,7 +327,11 @@ fn jn009_skewed_distribution_matches_the_reference_nested_loop() {
     for i in 0..999 {
         emp(&k, &format!("cold{i}"), Some(8));
     }
-    let plan = parser::compile_with_subject("MATCH Employee JOIN Department ON dept_id == id RETURN *", "alice").unwrap();
+    let plan = parser::compile_with_subject(
+        "MATCH Employee JOIN Department ON dept_id == id RETURN *",
+        "alice",
+    )
+    .unwrap();
     let joined = match Interpreter::execute(&k, &plan).unwrap() {
         RowSet::Joined(p) => p,
         other => panic!("expected Joined, got {:?}", other),
@@ -274,7 +339,9 @@ fn jn009_skewed_distribution_matches_the_reference_nested_loop() {
     // The oracle: a reference nested loop over the kernel's own scans —
     // same read filters, same order contract.
     let left = k.scan_by_type(&Subject::new("alice"), "Employee").unwrap();
-    let right = k.scan_by_type(&Subject::new("alice"), "Department").unwrap();
+    let right = k
+        .scan_by_type(&Subject::new("alice"), "Department")
+        .unwrap();
     let mut expected = Vec::new();
     for l in &left {
         for r in &right {
@@ -284,5 +351,8 @@ fn jn009_skewed_distribution_matches_the_reference_nested_loop() {
         }
     }
     assert_eq!(joined.len(), expected.len(), "skew: 1000 hot pairs, 0 cold");
-    assert_eq!(joined, expected, "runtime join ≡ reference nested loop, row for row");
+    assert_eq!(
+        joined, expected,
+        "runtime join ≡ reference nested loop, row for row"
+    );
 }

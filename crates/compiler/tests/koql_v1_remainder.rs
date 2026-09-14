@@ -265,10 +265,12 @@ fn kq008_join_pipeline_position() {
             right_type,
             on_left,
             on_right,
+            kind,
         } => {
             assert_eq!(right_type, "Department");
             assert_eq!(on_left, "id");
             assert_eq!(on_right, "dept");
+            assert_eq!(*kind, JoinKind::Inner, "bare JOIN lowers to Inner");
         }
         other => panic!("expected Join, got {:?}", other),
     }

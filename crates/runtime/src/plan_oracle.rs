@@ -97,5 +97,24 @@ fn fingerprint(rows: &RowSet) -> String {
             keys.sort();
             format!("Grouped[{}]:{}", keys.len(), keys.join("|"))
         }
+        // P5-M6 (ND-06): a pair is (left koid+version, right koid+version |
+        // None) — the identity of both sides, not their property content.
+        RowSet::Joined(pairs) => {
+            let mut keys: Vec<String> = pairs
+                .iter()
+                .map(|(l, r)| {
+                    format!(
+                        "j:{:x?}:{}:{}",
+                        l.koid.0,
+                        l.version,
+                        r.as_ref()
+                            .map(|ro| format!("{:x?}:{}", ro.koid.0, ro.version))
+                            .unwrap_or_else(|| "none".into())
+                    )
+                })
+                .collect();
+            keys.sort();
+            format!("Joined[{}]:{}", keys.len(), keys.join("|"))
+        }
     }
 }
