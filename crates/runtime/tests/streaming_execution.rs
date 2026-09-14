@@ -397,3 +397,69 @@ fn st009_encrypted_db_streams_identical_rows() {
         "decrypted reads flow through the transparent path — identical rows"
     );
 }
+
+// --- idx2-008 (P5-M8) — property-index scans on the M4 read path ---------------
+
+#[test]
+fn idx2_008_index_assisted_scan_pins_the_index_snapshot_at_open() {
+    let k = mk();
+    k.catalog_create_index("by_name", "Person", &["name"]).unwrap();
+    let a = person(&k, "Alice");
+    let b = person(&k, "Bob");
+    // a matching row the index never saw — with the opt-in it stays invisible
+    // (eventual semantics, the visible choice), while the plain scan still
+    // answers the committed truth
+    let unindexed = person(&k, "Alice");
+    for id in [a, b] {
+        let ko = k.get(Subject::new("alice"), &id).unwrap();
+        for idx in k.property_indexes().unwrap() {
+            idx.upsert(id, &ko).unwrap();
+        }
+    }
+
+    let plan = parser::compile_physical_with_subject(
+        "MATCH Person WHERE name == \"Alice\" RETURN *",
+        "alice",
+    )
+    .unwrap();
+
+    let opts = StreamOptions {
+        batch_size: 4,
+        cancel: CancellationToken::new(),
+        use_indexes: true,
+    };
+    let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
+    let (rows, _) = collect(&mut pipe);
+    assert_eq!(
+        rows,
+        vec![a],
+        "the index scan answers exactly the indexed koids"
+    );
+
+    // control: without the opt-in, the scan answers the committed truth
+    let opts = StreamOptions {
+        batch_size: 4,
+        cancel: CancellationToken::new(),
+        use_indexes: false,
+    };
+    let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
+    let (rows, _) = collect(&mut pipe);
+    assert!(
+        rows.contains(&a) && rows.contains(&unindexed),
+        "the plain scan answers the committed truth"
+    );
+
+    // snapshot: a row created AFTER open never appears in either mode
+    // (the koid list is pinned at open — the ScanOperator contract)
+    let opts = StreamOptions {
+        batch_size: 4,
+        cancel: CancellationToken::new(),
+        use_indexes: true,
+    };
+    let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
+    let late = person(&k, "Alice");
+    assert!(
+        !collect(&mut pipe).0.contains(&late),
+        "rows created after open never appear"
+    );
+}

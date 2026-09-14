@@ -463,7 +463,7 @@ impl Drop for IndexMaintainer {
 mod tests {
     use super::*;
     use aikoql_kernel::{
-        BruteForceVectorIndex, IndexStatusKind, ManualClock, MemoryEngine, Metadata,
+        BruteForceVectorIndex, ForgetMode, IndexStatusKind, ManualClock, MemoryEngine, Metadata,
         RememberRequest, Subject, TextIndex, TokenTextIndex,
     };
     use std::collections::BTreeSet;
@@ -669,5 +669,156 @@ mod tests {
         let s = m.status(&k).unwrap();
         assert_eq!(s.status, IndexStatusKind::CaughtUp);
         assert_eq!(s.last_error, None, "a successful apply clears last_error");
+    }
+
+    // --- P5-M8 (ND-07) — idx2-003..007: the unified Index surface driven by
+    // the async maintainer. RED: the kernel's catalog index sugar and the
+    // property-index registry do not exist yet. ---
+
+    #[test]
+    fn idx2_003_insert_applies_async_off_the_commit_path() {
+        let k = mk();
+        k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+        let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
+        let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
+        let m = Arc::new(IndexMaintainer::new(v, t));
+        let a = Subject::new("alice");
+
+        // committed BEFORE any maintainer runs — the index must stay empty:
+        // index maintenance never rides the commit path
+        let id = create(&k, &a, "note", "cats and dogs");
+        assert!(
+            k.scan_index("by_body", &[Value::Text("cats and dogs".into())])
+                .unwrap()
+                .is_empty(),
+            "commit must not maintain indexes (the async-maintainer contract)"
+        );
+
+        SchedulerJob::start(&*m, &k).unwrap();
+        m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();
+        let got = k
+            .scan_index("by_body", &[Value::Text("cats and dogs".into())])
+            .unwrap();
+        assert_eq!(got, vec![id], "the maintainer fills the property index");
+        m.shutdown();
+    }
+
+    #[test]
+    fn idx2_004_update_moves_the_koid_between_keys() {
+        let k = mk();
+        k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+        let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
+        let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
+        let m = Arc::new(IndexMaintainer::new(v, t));
+        let a = Subject::new("alice");
+        SchedulerJob::start(&*m, &k).unwrap();
+
+        let id = create(&k, &a, "note", "cats");
+        m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            k.scan_index("by_body", &[Value::Text("cats".into())]).unwrap(),
+            vec![id]
+        );
+
+        // same KOID, new value — the entry must move keys
+        let mut upd = RememberRequest::update(
+            a.clone(),
+            id,
+            Metadata {
+                type_name: "note".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+        );
+        upd.properties.insert("body".into(), Value::Text("dogs".into()));
+        k.remember(upd).unwrap();
+        m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();
+        assert!(
+            k.scan_index("by_body", &[Value::Text("cats".into())])
+                .unwrap()
+                .is_empty(),
+            "the old key must stop answering"
+        );
+        assert_eq!(
+            k.scan_index("by_body", &[Value::Text("dogs".into())]).unwrap(),
+            vec![id],
+            "the new key answers"
+        );
+        m.shutdown();
+    }
+
+    #[test]
+    fn idx2_005_delete_removes_the_entry() {
+        let k = mk();
+        k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+        let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
+        let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
+        let m = Arc::new(IndexMaintainer::new(v, t));
+        let a = Subject::new("alice");
+        SchedulerJob::start(&*m, &k).unwrap();
+
+        let id = create(&k, &a, "note", "cats");
+        m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            k.scan_index("by_body", &[Value::Text("cats".into())]).unwrap(),
+            vec![id]
+        );
+
+        k.forget(a.clone(), &id, ForgetMode::Tombstone, None, None)
+            .unwrap();
+        m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();
+        assert!(
+            k.scan_index("by_body", &[Value::Text("cats".into())])
+                .unwrap()
+                .is_empty(),
+            "a tombstone must drop the index entry"
+        );
+        m.shutdown();
+    }
+
+    #[test]
+    fn idx2_007_recovery_replays_the_index_from_the_journal() {
+        let engine = Arc::new(MemoryEngine::new());
+        let clock = Arc::new(ManualClock::new(20_000));
+        let k = Kernel::open(engine.clone(), clock.clone(), 0xCAFE).unwrap();
+        k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+        let a = Subject::new("alice");
+        let id = create(&k, &a, "note", "recovered");
+
+        let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
+        let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
+        let m = Arc::new(IndexMaintainer::new(v, t));
+        SchedulerJob::start(&*m, &k).unwrap();
+        m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            k.scan_index("by_body", &[Value::Text("recovered".into())])
+                .unwrap(),
+            vec![id]
+        );
+        m.shutdown();
+        drop(k);
+
+        // reopen: the decl survives in the catalog, the contents do NOT — a
+        // fresh maintainer replay rebuilds them from the journal
+        let k2 = Kernel::open(engine, clock, 0x1D3C).unwrap();
+        assert!(
+            k2.scan_index("by_body", &[Value::Text("recovered".into())])
+                .unwrap()
+                .is_empty(),
+            "index contents are not persisted — they replay"
+        );
+        let v2: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
+        let t2: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
+        let m2 = Arc::new(IndexMaintainer::new(v2, t2));
+        SchedulerJob::start(&*m2, &k2).unwrap();
+        m2.wait_caught_up(&k2, Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            k2.scan_index("by_body", &[Value::Text("recovered".into())])
+                .unwrap(),
+            vec![id],
+            "the replay rebuilds the index from the journal"
+        );
+        m2.shutdown();
     }
 }
