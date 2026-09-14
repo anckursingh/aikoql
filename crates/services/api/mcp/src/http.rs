@@ -737,14 +737,18 @@ pub(crate) fn schema_endpoint(k: &Kernel) -> Result<String, String> {
 // Query explain — shows the IR plan before execution
 // ---------------------------------------------------------------------------
 
-pub(crate) fn explain_endpoint(query: &str) -> Result<String, String> {
+pub(crate) fn explain_endpoint(query: &str, k: &Kernel) -> Result<String, String> {
     // P5-M3: EXPLAIN shows the logical pipeline plus each operator's
     // physical strategy (qm002) — one line per op via PhysicalPlan::summary.
     let plan = aikoql_compiler::parser::compile_physical(query).map_err(|e| e.to_string())?;
+    // P5-M9 (ND-08): the cost lines show the CBO's per-op estimate and the
+    // statistics freshness behind the choice (EXPLAIN COST surface).
+    let cost = aikoql_runtime::cbo::explain_cost(k, query).map_err(|e| e.to_string())?;
     Ok(json!({
         "query": query,
         "operators": plan.summary(),
         "operator_count": plan.operators.len(),
+        "cost": cost,
     })
     .to_string())
 }
@@ -925,7 +929,7 @@ pub(crate) fn handle_http(
         {
             Some(_) => {
                 let query = parse_query_param(path, "query");
-                match explain_endpoint(&query) {
+                match explain_endpoint(&query, k) {
                     Ok(b) => ("200 OK", "application/json", b),
                     Err(e) => (
                         "400 Bad Request",

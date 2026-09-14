@@ -25,12 +25,25 @@ pub struct OracleReport {
 /// Run every entry against `kernel`. Equivalent plans (same fingerprint) are
 /// silent; every divergence becomes one human-readable line.
 pub fn run(kernel: &Kernel, entries: &[OracleEntry]) -> OracleReport {
+    run_impl(kernel, entries, false)
+}
+
+/// P5-M9 (ND-08, gate 6): the same equivalence check with the candidate
+/// executed through the CBO path (`Interpreter::execute_costed`) — the pin
+/// that cost-based plans never change results (cbo010).
+pub fn run_costed(kernel: &Kernel, entries: &[OracleEntry]) -> OracleReport {
+    run_impl(kernel, entries, true)
+}
+
+fn run_impl(kernel: &Kernel, entries: &[OracleEntry], costed: bool) -> OracleReport {
     let mut divergences = Vec::new();
     for e in entries {
-        match (
-            Interpreter::execute(kernel, &e.baseline),
-            Interpreter::execute(kernel, &e.candidate),
-        ) {
+        let candidate = if costed {
+            Interpreter::execute_costed(kernel, &e.candidate)
+        } else {
+            Interpreter::execute(kernel, &e.candidate)
+        };
+        match (Interpreter::execute(kernel, &e.baseline), candidate) {
             (Ok(b), Ok(c)) => {
                 let (fb, fc) = (fingerprint(&b), fingerprint(&c));
                 if fb != fc {

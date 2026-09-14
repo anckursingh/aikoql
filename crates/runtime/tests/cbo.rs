@@ -91,7 +91,7 @@ fn exec_ids(rows: &aikoql_runtime::RowSet) -> Vec<KOID> {
     }
 }
 
-fn plan_of(k: &Kernel, query: &str) -> IrPlan {
+fn plan_of(_k: &Kernel, query: &str) -> IrPlan {
     parser::compile_with_subject(query, "alice").unwrap()
 }
 
@@ -119,7 +119,8 @@ fn total_cpu(costs: &[aikoql_runtime::cbo::Cost]) -> u64 {
 #[test]
 fn cbo001_highly_selective_property_chooses_the_index_scan() {
     let k = mk();
-    k.catalog_create_index("by_name", "Person", &["name"]).unwrap();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
     for i in 0..100 {
         person(&k, &format!("P{i:03}"), "Eng");
     }
@@ -154,9 +155,14 @@ fn cbo001_highly_selective_property_chooses_the_index_scan() {
 #[test]
 fn cbo002_low_selectivity_prefers_the_full_scan() {
     let k = mk();
-    k.catalog_create_index("by_dept", "Person", &["dept"]).unwrap();
+    k.catalog_create_index("by_dept", "Person", &["dept"])
+        .unwrap();
     for i in 0..100 {
-        person(&k, &format!("P{i:03}"), if i % 2 == 0 { "Eng" } else { "Ops" });
+        person(
+            &k,
+            &format!("P{i:03}"),
+            if i % 2 == 0 { "Eng" } else { "Ops" },
+        );
     }
     catch_up_indexes(&k);
     k.analyze("Person").unwrap();
@@ -178,11 +184,16 @@ fn cbo002_low_selectivity_prefers_the_full_scan() {
 #[test]
 fn cbo003_high_fanout_makes_the_traversal_cost_geometric() {
     let k = mk();
-    let target = {
-        let mut req = RememberRequest::create(alice(), meta("Node"));
-        req.properties.insert("id".into(), Value::Int(1));
-        k.remember(req).unwrap().koid
-    };
+    // The relationship index is an EDGE SET — identical (src, rel_type, dst)
+    // triples collapse to one entry — so the fanout has to come from
+    // DISTINCT targets, not repeated edges.
+    let targets: Vec<KOID> = (0..10)
+        .map(|i| {
+            let mut req = RememberRequest::create(alice(), meta("Node"));
+            req.properties.insert("id".into(), Value::Int(i));
+            k.remember(req).unwrap().koid
+        })
+        .collect();
     for i in 0..10 {
         let id = {
             let mut req = RememberRequest::create(alice(), meta("Hub"));
@@ -190,10 +201,10 @@ fn cbo003_high_fanout_makes_the_traversal_cost_geometric() {
             k.remember(req).unwrap().koid
         };
         let mut req = RememberRequest::update(alice(), id, meta("Hub"));
-        for _ in 0..10 {
+        for target in &targets {
             req.relationships.push(RelationshipRef {
                 rel_type: "knows".into(),
-                target,
+                target: *target,
                 direction: Direction::Outbound,
             });
         }
@@ -208,7 +219,7 @@ fn cbo003_high_fanout_makes_the_traversal_cost_geometric() {
         let mut req = RememberRequest::update(alice(), id, meta("Leaf"));
         req.relationships.push(RelationshipRef {
             rel_type: "knows".into(),
-            target,
+            target: targets[0],
             direction: Direction::Outbound,
         });
         k.remember(req).unwrap();
@@ -372,11 +383,19 @@ fn cbo006_hybrid_pins_modality_order_and_costs_each_leg() {
 
     // The physical plan keeps the grammar order — ANN first, then text, Fuse
     // last — and the CBO never rewrites the fusion (scores are oracle bits).
-    assert!(matches!(report.plan.operators[1].op, IrOp::AnnSearch { .. }));
-    assert!(matches!(report.plan.operators[2].op, IrOp::TextSearch { .. }));
+    assert!(matches!(
+        report.plan.operators[1].op,
+        IrOp::AnnSearch { .. }
+    ));
+    assert!(matches!(
+        report.plan.operators[2].op,
+        IrOp::TextSearch { .. }
+    ));
     assert_eq!(
         report.plan.operators[3].op,
-        IrOp::Fuse { mode: weighted },
+        IrOp::Fuse {
+            mode: weighted.clone()
+        },
         "fusion untouched"
     );
     // Vector-heavy (density 0.5): the ANN leg dominates the text leg.
@@ -439,7 +458,8 @@ fn cbo007_temporal_plans_cost_the_version_reconstruction() {
 #[test]
 fn cbo008_stale_statistics_fall_back_to_the_rules() {
     let k = mk();
-    k.catalog_create_index("by_name", "Person", &["name"]).unwrap();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
     for i in 0..100 {
         person(&k, &format!("P{i:03}"), "Eng");
     }
@@ -464,7 +484,8 @@ fn cbo008_stale_statistics_fall_back_to_the_rules() {
 #[test]
 fn cbo008b_an_index_that_has_not_caught_up_is_not_used() {
     let k = mk();
-    k.catalog_create_index("by_name", "Person", &["name"]).unwrap();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
     for i in 0..10 {
         person(&k, &format!("P{i:03}"), "Eng");
     }
@@ -491,49 +512,55 @@ fn cbo008b_an_index_that_has_not_caught_up_is_not_used() {
 #[test]
 fn cbo009_explain_cost_shows_per_op_costs_and_stats_freshness() {
     let k = mk();
-    let lines = aikoql_runtime::cbo::explain_cost(
-        &k,
-        "MATCH Person WHERE name == \"P042\" RETURN *",
-    )
-    .unwrap();
+    let lines =
+        aikoql_runtime::cbo::explain_cost(&k, "MATCH Person WHERE name == \"P042\" RETURN *")
+            .unwrap();
     assert_eq!(lines[0], " 0: Scan [FullScan] rows=? cpu=?");
-    assert!(lines
-        .last()
-        .is_some_and(|l| l.contains("statistics: none")), "no stats → rule-based, visible");
+    assert!(
+        lines.last().is_some_and(|l| l.contains("statistics: none")),
+        "no stats → rule-based, visible"
+    );
 
     let k2 = mk();
-    k2.catalog_create_index("by_name", "Person", &["name"]).unwrap();
+    k2.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
     for i in 0..100 {
         person(&k2, &format!("P{i:03}"), "Eng");
     }
     catch_up_indexes(&k2);
     k2.analyze("Person").unwrap();
-    let lines = aikoql_runtime::cbo::explain_cost(
-        &k2,
-        "MATCH Person WHERE name == \"P042\" RETURN *",
-    )
-    .unwrap();
+    let lines =
+        aikoql_runtime::cbo::explain_cost(&k2, "MATCH Person WHERE name == \"P042\" RETURN *")
+            .unwrap();
     assert!(
         lines[0].contains("[PropertyIndex]"),
         "the assisted access path is visible: {}",
         lines[0]
     );
     assert!(lines[0].contains("rows=") && lines[0].contains("cpu="));
-    assert!(lines
-        .last()
-        .is_some_and(|l| l.contains("statistics: fresh")), "fresh stats, visible");
+    assert!(
+        lines
+            .last()
+            .is_some_and(|l| l.contains("statistics: fresh")),
+        "fresh stats, visible"
+    );
 
     // Stale case.
     person(&k2, "Late", "Eng");
-    let lines = aikoql_runtime::cbo::explain_cost(
-        &k2,
-        "MATCH Person WHERE name == \"P042\" RETURN *",
-    )
-    .unwrap();
-    assert!(lines[0].contains("[FullScan]"), "stale → fallback: {}", lines[0]);
-    assert!(lines
-        .last()
-        .is_some_and(|l| l.contains("statistics: stale")), "staleness is visible");
+    let lines =
+        aikoql_runtime::cbo::explain_cost(&k2, "MATCH Person WHERE name == \"P042\" RETURN *")
+            .unwrap();
+    assert!(
+        lines[0].contains("[FullScan]"),
+        "stale → fallback: {}",
+        lines[0]
+    );
+    assert!(
+        lines
+            .last()
+            .is_some_and(|l| l.contains("statistics: stale")),
+        "staleness is visible"
+    );
 }
 
 // --- cbo010 — gate-6 oracle over CBO scenarios ----------------------------------
@@ -541,9 +568,14 @@ fn cbo009_explain_cost_shows_per_op_costs_and_stats_freshness() {
 #[test]
 fn cbo010_plan_equivalence_oracle_green_over_cbo_scenarios() {
     let k = mk();
-    k.catalog_create_index("by_name", "Person", &["name"]).unwrap();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
     for i in 0..50 {
-        person(&k, &format!("P{i:03}"), if i % 2 == 0 { "Eng" } else { "Ops" });
+        person(
+            &k,
+            &format!("P{i:03}"),
+            if i % 2 == 0 { "Eng" } else { "Ops" },
+        );
     }
     catch_up_indexes(&k);
     k.analyze("Person").unwrap();
@@ -559,7 +591,7 @@ fn cbo010_plan_equivalence_oracle_green_over_cbo_scenarios() {
         q("MATCH Person RETURN *"),                        // no filter
         q("MATCH Person WHERE dept == \"Eng\" RETURN name, dept ORDER BY name LIMIT 10"),
         q("MATCH Person WHERE dept == \"Eng\" RETURN dept GROUP BY dept"),
-        q("MATCH Person AS OF 15000 RETURN *"),
+        q("MATCH Person AS_OF 15000 RETURN *"),
     ];
     let report = run_costed(&k, &entries);
     assert_eq!(

@@ -27,6 +27,7 @@ pub mod ir;
 pub mod jobs;
 pub mod object;
 pub mod relationship;
+pub mod statistics;
 
 pub mod knowledge {
     pub mod authority;
@@ -154,6 +155,7 @@ pub use knowledge::ontology::{
     Cardinality, ClassDef, MappingEntry, OntologyDef, OntologyRegistry, RelDef,
 };
 pub use knowledge::scope::{Scope, ScopeResolver};
+pub use statistics::Statistics;
 pub use storage::store::{ConstraintCapabilities, MemoryEngine, StorageEngine, WriteBatch};
 pub use storage::store_redb::RedbEngine;
 pub use transaction::kernel::{

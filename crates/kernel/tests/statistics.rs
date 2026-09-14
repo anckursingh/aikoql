@@ -94,6 +94,11 @@ fn cbo_a01_analyze_computes_every_statistic_exactly() {
         let id = emp(&k, n, d, s);
         if edges < 2 {
             let mut req = RememberRequest::update(alice(), id, meta("Employee"));
+            // Kernel update semantics REPLACE the property map (only
+            // extensions carry forward), so the update restates them.
+            req.properties.insert("name".into(), Value::Text(n.into()));
+            req.properties.insert("dept".into(), Value::Text(d.into()));
+            req.properties.insert("salary".into(), Value::Int(s));
             req.relationships.push(aikoql_kernel::RelationshipRef {
                 rel_type: "works-in".into(),
                 target: dept,
@@ -139,7 +144,10 @@ fn cbo_a01_analyze_computes_every_statistic_exactly() {
         (stats.selectivity("dept") - 0.5).abs() < 1e-9,
         "selectivity = match fraction 1/distinct (uniform)"
     );
-    assert!((stats.fanout - 2.0 / 5.0).abs() < 1e-9, "avg outbound degree");
+    assert!(
+        (stats.fanout - 2.0 / 5.0).abs() < 1e-9,
+        "avg outbound degree"
+    );
     assert!((stats.vector_density - 1.0 / 5.0).abs() < 1e-9);
     assert!((stats.temporal_density - 1.0 / 5.0).abs() < 1e-9);
     assert_eq!(stats.tenant_count, 1, "one distinct tenant (absent)");
@@ -179,7 +187,10 @@ fn cbo_a03_watermark_tracks_the_journal() {
     k.analyze("Employee").unwrap();
     let fresh_len = k.journal().unwrap().len() as u64;
     assert!(
-        !k.statistics("Employee").unwrap().unwrap().is_stale(fresh_len),
+        !k.statistics("Employee")
+            .unwrap()
+            .unwrap()
+            .is_stale(fresh_len),
         "fresh at capture"
     );
     emp(&k, "B", "Ops", 90); // any later event ⇒ stale
@@ -232,7 +243,10 @@ fn cbo_a05_never_analyzed_reads_none_and_empty_analyzes_to_zero() {
     assert!(k.statistics("Employee").unwrap().is_none());
     let stats = k.analyze("Employee").unwrap();
     assert_eq!(stats.row_count, 0, "an empty type analyzes to zero rows");
-    assert!(stats.selectivity("dept") == 0.0, "no distincts ⇒ no selectivity");
+    assert!(
+        stats.selectivity("dept") == 0.0,
+        "no distincts ⇒ no selectivity"
+    );
     assert!(stats.fanout == 0.0 && stats.vector_density == 0.0);
     assert!(!stats.is_stale(k.journal().unwrap().len() as u64));
 }

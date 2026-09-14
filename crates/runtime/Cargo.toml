@@ -8,11 +8,11 @@ repository.workspace = true
 
 [dependencies]
 aikoql-kernel = { path = "../kernel" }
+aikoql-compiler = { path = "../compiler" }
 sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 
 [dev-dependencies]
 aikoql-semantic = { path = "../engines/semantic" }
-aikoql-compiler = { path = "../compiler" }
 aikoql-graph = { path = "../engines/graph" }
 proptest = "1"

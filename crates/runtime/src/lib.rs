@@ -13,6 +13,7 @@ use aikoql_kernel::knowledge::scoring::{cosine, jaccard, ko_text, tokenize};
 use aikoql_kernel::transaction::kernel::{Kernel, KnowledgeContext, Subject};
 use std::cmp::Ordering;
 
+pub mod cbo;
 pub mod plan_oracle;
 pub mod streaming;
 
@@ -243,6 +244,9 @@ pub struct Interpreter {
     /// v0.3 K2: temporal plans own their time semantics (AS_OF/BETWEEN/
     /// HISTORICAL), so the Scan arm skips its default "valid now" filter.
     temporal_mode: bool,
+    /// P5-M9 (ND-08): the koid list a PropertyIndex Scan answers from —
+    /// precomputed per Scan op, consumed and cleared by the Scan arm.
+    assist: Option<Vec<KOID>>,
 }
 
 impl Interpreter {
@@ -254,8 +258,9 @@ impl Interpreter {
 
     /// Execute the physical plan — the runtime's real entry point since
     /// P5-M3. Each `PhysicalOp` carries its storage/index strategy alongside
-    /// the logical op (strategies are informational in v1: one per operator
-    /// kind; the executor dispatches on the op).
+    /// the logical op. P5-M9 (ND-08): a Scan flagged `PropertyIndex` answers
+    /// from the covering index (the CBO chose it, verified clean) — every
+    /// other strategy is informational and the executor dispatches on the op.
     pub fn execute_physical(kernel: &Kernel, plan: &PhysicalPlan) -> KResult<RowSet> {
         let mut interp = Interpreter {
             cached_objects: None,
@@ -265,12 +270,25 @@ impl Interpreter {
                 .operators
                 .iter()
                 .any(|po| matches!(po.op, IrOp::Temporal { .. })),
+            assist: None,
         };
         let mut rows = RowSet::Objects(Vec::new());
-        for po in &plan.operators {
+        for (i, po) in plan.operators.iter().enumerate() {
+            if po.strategy == Strategy::PropertyIndex {
+                interp.assist = cbo::scan_assist(kernel, &plan.operators, i)?;
+            }
             rows = interp.exec_op(kernel, &po.op, rows)?;
+            interp.assist = None;
         }
         Ok(rows)
+    }
+
+    /// Execute through the cost-based optimizer (P5-M9, ND-08): the plan is
+    /// cost-optimized (index-assisted where stats and a clean index allow)
+    /// and executed — the `run_costed` oracle arm.
+    pub fn execute_costed(kernel: &Kernel, plan: &IrPlan) -> KResult<RowSet> {
+        let report = cbo::cost_optimize(kernel, plan)?;
+        Interpreter::execute_physical(kernel, &report.plan)
     }
 
     /// Resolve input to objects: if Scored, use cached objects; otherwise use as-is.
@@ -312,6 +330,12 @@ impl Interpreter {
                 if !self.temporal_mode {
                     let now = kernel.clock_now();
                     kos.retain(|ko| ko.valid_at(now));
+                }
+                // P5-M9 (ND-08): the PropertyIndex assist narrows the scan
+                // to the index's koids (retain keeps the scan order, so the
+                // result matches the rule-based plan row for row).
+                if let Some(koids) = self.assist.take() {
+                    kos.retain(|ko| koids.contains(&ko.koid));
                 }
                 self.cached_objects = Some(kos.clone());
                 self.cached_subject = Some(subj);

@@ -282,6 +282,11 @@ impl LogicalPlan {
 pub enum Strategy {
     /// Scan all readable rows of a type (no index).
     FullScan,
+    /// Scan answered from a property index: the following Filter's Eq key
+    /// lookup (P5-M9, ND-08). Chosen only when the stats are fresh AND the
+    /// index verifies clean against the heads, so the assisted scan answers
+    /// exactly the committed truth.
+    PropertyIndex,
     /// ANN vector similarity via the vector index.
     VectorIndex,
     /// Full-text search via the text index (BM25).
