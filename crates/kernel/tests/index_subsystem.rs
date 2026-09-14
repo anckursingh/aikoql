@@ -12,8 +12,8 @@
 //! catalog-schema-only (the pre-declared non-goal row).
 
 use aikoql_kernel::{
-    ForgetMode, Index, KOID, KOID_LEN, Kernel, KnowledgeContext, ManualClock, MemoryEngine,
-    Metadata, PropertyMap, RememberRequest, Subject, Value,
+    ForgetMode, Index, Kernel, KnowledgeContext, ManualClock, MemoryEngine, Metadata, PropertyMap,
+    RememberRequest, Subject, Value, KOID, KOID_LEN,
 };
 use std::sync::Arc;
 
@@ -44,7 +44,8 @@ fn meta(t: &str) -> Metadata {
 /// Remember a note with the given `body`; returns its KOID.
 fn note(k: &Kernel, body: &str) -> KOID {
     let mut req = RememberRequest::create(alice(), meta("note"));
-    req.properties.insert("body".into(), Value::Text(body.into()));
+    req.properties
+        .insert("body".into(), Value::Text(body.into()));
     k.remember(req).unwrap().koid
 }
 
@@ -62,7 +63,8 @@ fn find(k: &Kernel, name: &str) -> Arc<dyn Index> {
 #[test]
 fn idx2_001_index_create_lists_and_dedupes() {
     let k = mk();
-    k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+    k.catalog_create_index("by_body", "note", &["body"])
+        .unwrap();
     // composite: a two-column key
     k.catalog_create_index("by_author_year", "note", &["author", "year"])
         .unwrap();
@@ -88,11 +90,15 @@ fn idx2_001_index_create_lists_and_dedupes() {
         .find(|d| d.name == "by_author_year")
         .unwrap();
     assert_eq!(decl.type_name, "note");
-    assert_eq!(decl.properties, vec!["author".to_string(), "year".to_string()]);
+    assert_eq!(
+        decl.properties,
+        vec!["author".to_string(), "year".to_string()]
+    );
 
     // duplicate (kind, name) fails closed
     assert!(
-        k.catalog_create_index("by_body", "note", &["body"]).is_err(),
+        k.catalog_create_index("by_body", "note", &["body"])
+            .is_err(),
         "a duplicate index name must fail closed"
     );
 }
@@ -102,7 +108,8 @@ fn idx2_001_index_create_lists_and_dedupes() {
 #[test]
 fn idx2_002_index_drop_removes_registry_and_scans_fail_closed() {
     let k = mk();
-    k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+    k.catalog_create_index("by_body", "note", &["body"])
+        .unwrap();
     k.catalog_drop_index("by_body").unwrap();
 
     assert!(
@@ -133,7 +140,7 @@ fn idx2_composite_scan_matches_the_full_key() {
     req.properties.insert("year".into(), Value::Int(2026));
     let id = k.remember(req).unwrap().koid;
 
-    let ko = k.get(&alice(), &id).unwrap();
+    let ko = k.get(alice(), &id).unwrap();
     let idx = find(&k, "by_author_year");
     idx.upsert(id, &ko).unwrap();
 
@@ -158,7 +165,8 @@ fn idx2_composite_scan_matches_the_full_key() {
 
     // a key with the wrong arity fails closed
     assert!(
-        k.scan_index("by_author_year", &[Value::Text("alice".into())]).is_err(),
+        k.scan_index("by_author_year", &[Value::Text("alice".into())])
+            .is_err(),
         "key arity mismatches must fail closed"
     );
 }
@@ -168,18 +176,23 @@ fn idx2_composite_scan_matches_the_full_key() {
 #[test]
 fn idx2_006_online_rebuild_reconciles_from_the_store() {
     let k = mk();
-    k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+    k.catalog_create_index("by_body", "note", &["body"])
+        .unwrap();
     let a = note(&k, "cats");
     let idx = find(&k, "by_body");
 
     // seed one real entry plus a stale one the store does not back
-    let ko = k.get(&alice(), &a).unwrap();
+    let ko = k.get(alice(), &a).unwrap();
     idx.upsert(a, &ko).unwrap();
     idx.upsert(KOID([0xEE; KOID_LEN]), &ko).unwrap();
     assert_eq!(idx.len(), 2, "real + garbage entries before rebuild");
 
     idx.rebuild(&k).unwrap();
-    assert_eq!(idx.len(), 1, "rebuild drops entries the store does not back");
+    assert_eq!(
+        idx.len(),
+        1,
+        "rebuild drops entries the store does not back"
+    );
     let got = k
         .scan_index("by_body", &[Value::Text("cats".into())])
         .unwrap();
@@ -191,7 +204,8 @@ fn idx2_006_online_rebuild_reconciles_from_the_store() {
 #[test]
 fn idx2_009_verify_reports_stale_and_missing_then_rebuild_heals() {
     let k = mk();
-    k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+    k.catalog_create_index("by_body", "note", &["body"])
+        .unwrap();
     let a = note(&k, "cats");
     let b = note(&k, "dogs");
     let c = note(&k, "birds");
@@ -199,10 +213,10 @@ fn idx2_009_verify_reports_stale_and_missing_then_rebuild_heals() {
 
     // a is indexed; b never was (missing); a garbage koid nobody backs
     // (stale); c is indexed then tombstoned (stale by deletion)
-    let ko_a = k.get(&alice(), &a).unwrap();
+    let ko_a = k.get(alice(), &a).unwrap();
     idx.upsert(a, &ko_a).unwrap();
     idx.upsert(KOID([0xEE; KOID_LEN]), &ko_a).unwrap();
-    let ko_c = k.get(&alice(), &c).unwrap();
+    let ko_c = k.get(alice(), &c).unwrap();
     idx.upsert(c, &ko_c).unwrap();
     k.forget(alice(), &c, ForgetMode::Tombstone, None, None)
         .unwrap();
@@ -218,8 +232,14 @@ fn idx2_009_verify_reports_stale_and_missing_then_rebuild_heals() {
         rep.stale.contains(&c),
         "a tombstoned head left in the index is stale"
     );
-    assert!(!rep.stale.contains(&a), "the good entry is neither stale nor missing");
-    assert!(!rep.missing.contains(&a), "the good entry is neither stale nor missing");
+    assert!(
+        !rep.stale.contains(&a),
+        "the good entry is neither stale nor missing"
+    );
+    assert!(
+        !rep.missing.contains(&a),
+        "the good entry is neither stale nor missing"
+    );
 
     // rebuild heals both directions
     idx.rebuild(&k).unwrap();
@@ -257,8 +277,5 @@ fn idx2_010_corrupt_index_row_fails_open_closed() {
 
     // the corrupt row must fail the NEXT open closed — never silently ignored
     let k2 = Kernel::open(engine, clock, 0x1D3C);
-    assert!(
-        k2.is_err(),
-        "a corrupt index row must fail the open closed"
-    );
+    assert!(k2.is_err(), "a corrupt index row must fail the open closed");
 }

@@ -73,6 +73,8 @@ pub use eval::{
     EvalStalenessReport,
 };
 pub use index::{
+    property::PropertyIndex,
+    unified::{Index, TextIndexAdapter, VectorIndexAdapter, VerifyReport},
     BruteForceVectorIndex, IndexCoordinator, IndexMaintainerApi, IndexStatus, IndexStatusKind,
     TextIndex, TokenTextIndex, VectorHealth, VectorIndex,
 };

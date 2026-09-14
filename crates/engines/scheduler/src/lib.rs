@@ -16,12 +16,11 @@ pub use compaction::CompactionJob;
 pub use key_rotation::KeyRotationJob;
 
 use aikoql_kernel::knowledge::kom::*;
-use aikoql_kernel::knowledge::scoring::{ko_text, tokenize};
 use aikoql_kernel::transaction::kernel::Kernel;
 use aikoql_kernel::{
-    EventFilter, IndexMaintainerApi, IndexStatus, IndexStatusKind, TextIndex, VectorIndex,
+    EventFilter, Index, IndexMaintainerApi, IndexStatus, IndexStatusKind, TextIndex,
+    TextIndexAdapter, VectorIndex, VectorIndexAdapter,
 };
-use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
@@ -152,6 +151,11 @@ const MAINTAINER_BATCH: usize = 64;
 pub struct IndexMaintainer {
     vectors: Arc<dyn VectorIndex>,
     text: Arc<dyn TextIndex>,
+    /// P5-M8 — the engines behind the unified `Index` surface the maintainer
+    /// applies through (plus the kernel's live property-index registry,
+    /// fetched fresh per batch so indexes created at runtime join in).
+    vector_idx: Arc<VectorIndexAdapter>,
+    text_idx: Arc<TextIndexAdapter>,
     inner: Arc<MaintainerInner>,
 }
 
@@ -160,6 +164,8 @@ impl IndexMaintainer {
     /// live subscription.
     pub fn new(vectors: Arc<dyn VectorIndex>, text: Arc<dyn TextIndex>) -> Self {
         IndexMaintainer {
+            vector_idx: Arc::new(VectorIndexAdapter::new(vectors.clone())),
+            text_idx: Arc::new(TextIndexAdapter::new(text.clone())),
             vectors,
             text,
             inner: Arc::new(MaintainerInner {
@@ -200,7 +206,12 @@ impl IndexMaintainer {
             None => {
                 let mut w = 0u64;
                 for ke in kernel.journal()? {
-                    Self::apply(kernel, &*self.vectors, &*self.text, &ke)?;
+                    Self::apply(
+                        kernel,
+                        self.vector_idx.as_ref(),
+                        self.text_idx.as_ref(),
+                        &ke,
+                    )?;
                     w = ke.seq;
                 }
                 w
@@ -210,8 +221,8 @@ impl IndexMaintainer {
 
         let rx = kernel.notify(EventFilter::default())?;
         let state = self.inner.clone();
-        let v = self.vectors.clone();
-        let t = self.text.clone();
+        let v = self.vector_idx.clone();
+        let t = self.text_idx.clone();
         let k = kernel.clone_handle();
         let handle = std::thread::spawn(move || {
             let mut pending: Vec<KnowledgeEvent> = Vec::new();
@@ -288,28 +299,34 @@ impl IndexMaintainer {
 
     fn apply(
         kernel: &Kernel,
-        vectors: &dyn VectorIndex,
-        text: &dyn TextIndex,
+        vector_idx: &dyn Index,
+        text_idx: &dyn Index,
         ke: &KnowledgeEvent,
     ) -> KResult<()> {
-        Self::apply_batch(kernel, vectors, text, std::slice::from_ref(ke))
+        Self::apply_batch(kernel, vector_idx, text_idx, std::slice::from_ref(ke))
     }
 
-    /// P4-M7 (TDD-VECTOR-001): apply a batch of events — per-item vector
-    /// ops (HNSW has no commit concept) + ONE `upsert_many`/`remove_many`
-    /// pair for the text index (a single Tantivy commit per batch). Event
-    /// order is preserved, so batch answers == per-item answers.
+    /// P5-M8 (ND-07): apply a batch through the unified `Index` surface — the
+    /// two engine adapters plus the kernel's live property-index registry.
+    /// Per-item ops during the event loop (event order preserved, so batch
+    /// answers == per-item answers); ONE `commit_batch` per applied batch
+    /// (the single Tantivy commit, P4-M7 TDD-VECTOR-001).
     fn apply_batch(
         kernel: &Kernel,
-        vectors: &dyn VectorIndex,
-        text: &dyn TextIndex,
+        vector_idx: &dyn Index,
+        text_idx: &dyn Index,
         events: &[KnowledgeEvent],
     ) -> KResult<()> {
-        let mut upserts: Vec<(KOID, BTreeSet<String>)> = Vec::new();
-        let mut removes: Vec<KOID> = Vec::new();
+        let props = kernel.property_indexes()?;
+        let mut all: Vec<&dyn Index> = vec![vector_idx, text_idx];
+        all.extend(props.iter().map(|p| p.as_ref()));
         for ke in events {
             match ke.kind {
-                EventKind::Forgotten => removes.push(ke.koid),
+                EventKind::Forgotten => {
+                    for idx in &all {
+                        idx.remove(&ke.koid)?;
+                    }
+                }
                 _ => match kernel.raw_object_at(&ke.koid, ke.commit_ts)? {
                     Some(ko) if ko.lifecycle.state != LifecycleState::Deleted => {
                         // P5-M7: catalog rows are the database's own metadata,
@@ -318,38 +335,33 @@ impl IndexMaintainer {
                         if aikoql_kernel::is_catalog_type(&ko.metadata.type_name) {
                             continue;
                         }
-                        if let Some(sem) = &ko.semantic {
-                            if let (Some(model), Some(emb)) = (&sem.embedding_model, &sem.embedding)
-                            {
-                                vectors.upsert(ke.koid, model, emb);
-                            }
+                        for idx in &all {
+                            idx.upsert(ke.koid, &ko)?;
                         }
-                        upserts.push((ke.koid, tokenize(&ko_text(&ko))));
                     }
-                    _ => removes.push(ke.koid),
+                    _ => {
+                        for idx in &all {
+                            idx.remove(&ke.koid)?;
+                        }
+                    }
                 },
             }
         }
-        for rid in &removes {
-            vectors.remove(rid);
+        for idx in &all {
+            idx.commit_batch()?;
         }
-        text.upsert_many(&upserts)?;
-        text.remove_many(&removes)?;
-        // P4-M7 (TDD-VECTOR-002): the dead-ratio rebuild trigger — fires at
-        // most once per threshold crossing, never per delete.
-        vectors.maybe_rebuild();
         Ok(())
     }
 
     /// Apply the batch and record the outcome on the shared state.
     fn drain_batch(
         kernel: &Kernel,
-        vectors: &dyn VectorIndex,
-        text: &dyn TextIndex,
+        vector_idx: &dyn Index,
+        text_idx: &dyn Index,
         events: &[KnowledgeEvent],
         state: &MaintainerInner,
     ) {
-        match Self::apply_batch(kernel, vectors, text, events) {
+        match Self::apply_batch(kernel, vector_idx, text_idx, events) {
             Ok(()) => {
                 if let Some(last) = events.last() {
                     state.water.store(last.seq, Ordering::Relaxed);
@@ -678,7 +690,8 @@ mod tests {
     #[test]
     fn idx2_003_insert_applies_async_off_the_commit_path() {
         let k = mk();
-        k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+        k.catalog_create_index("by_body", "note", &["body"])
+            .unwrap();
         let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
         let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
         let m = Arc::new(IndexMaintainer::new(v, t));
@@ -706,7 +719,8 @@ mod tests {
     #[test]
     fn idx2_004_update_moves_the_koid_between_keys() {
         let k = mk();
-        k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+        k.catalog_create_index("by_body", "note", &["body"])
+            .unwrap();
         let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
         let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
         let m = Arc::new(IndexMaintainer::new(v, t));
@@ -716,7 +730,8 @@ mod tests {
         let id = create(&k, &a, "note", "cats");
         m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();
         assert_eq!(
-            k.scan_index("by_body", &[Value::Text("cats".into())]).unwrap(),
+            k.scan_index("by_body", &[Value::Text("cats".into())])
+                .unwrap(),
             vec![id]
         );
 
@@ -731,7 +746,8 @@ mod tests {
                 tags: vec![],
             },
         );
-        upd.properties.insert("body".into(), Value::Text("dogs".into()));
+        upd.properties
+            .insert("body".into(), Value::Text("dogs".into()));
         k.remember(upd).unwrap();
         m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();
         assert!(
@@ -741,7 +757,8 @@ mod tests {
             "the old key must stop answering"
         );
         assert_eq!(
-            k.scan_index("by_body", &[Value::Text("dogs".into())]).unwrap(),
+            k.scan_index("by_body", &[Value::Text("dogs".into())])
+                .unwrap(),
             vec![id],
             "the new key answers"
         );
@@ -751,7 +768,8 @@ mod tests {
     #[test]
     fn idx2_005_delete_removes_the_entry() {
         let k = mk();
-        k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+        k.catalog_create_index("by_body", "note", &["body"])
+            .unwrap();
         let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
         let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
         let m = Arc::new(IndexMaintainer::new(v, t));
@@ -761,7 +779,8 @@ mod tests {
         let id = create(&k, &a, "note", "cats");
         m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();
         assert_eq!(
-            k.scan_index("by_body", &[Value::Text("cats".into())]).unwrap(),
+            k.scan_index("by_body", &[Value::Text("cats".into())])
+                .unwrap(),
             vec![id]
         );
 
@@ -782,7 +801,8 @@ mod tests {
         let engine = Arc::new(MemoryEngine::new());
         let clock = Arc::new(ManualClock::new(20_000));
         let k = Kernel::open(engine.clone(), clock.clone(), 0xCAFE).unwrap();
-        k.catalog_create_index("by_body", "note", &["body"]).unwrap();
+        k.catalog_create_index("by_body", "note", &["body"])
+            .unwrap();
         let a = Subject::new("alice");
         let id = create(&k, &a, "note", "recovered");
 

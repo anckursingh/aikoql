@@ -19,6 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
 
 pub mod coordinator;
+pub mod property;
+pub mod unified;
 
 pub use coordinator::IndexCoordinator;
 

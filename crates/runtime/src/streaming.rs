@@ -102,13 +102,37 @@ impl<'a> ScanOperator<'a> {
             opened: false,
         }
     }
+
+    /// A scan whose koid list is pinned at construction — the index-assisted
+    /// path (idx2-008). `open()` must not refetch it.
+    pub fn with_koids(
+        kernel: &'a Kernel,
+        subject: Subject,
+        type_name: &str,
+        batch_size: usize,
+        cancel: CancellationToken,
+        koids: Vec<KOID>,
+    ) -> Self {
+        ScanOperator {
+            kernel,
+            subject,
+            type_name: type_name.into(),
+            batch_size: batch_size.max(1),
+            cancel,
+            koids,
+            cursor: 0,
+            opened: true,
+        }
+    }
 }
 
 impl PhysicalOperator for ScanOperator<'_> {
     fn open(&mut self) -> KResult<()> {
-        self.koids = self.kernel.type_koids(&self.type_name)?;
+        if !self.opened {
+            self.koids = self.kernel.type_koids(&self.type_name)?;
+            self.opened = true;
+        }
         self.cursor = 0;
-        self.opened = true;
         Ok(())
     }
 
@@ -292,6 +316,13 @@ impl PhysicalOperator for StreamingPipeline<'_> {
 pub struct StreamOptions {
     pub batch_size: usize,
     pub cancel: CancellationToken,
+    /// P5-M8 (idx2-008): opt in to index-assisted scans — the first Eq
+    /// predicate over an indexed (type, property) is answered from the
+    /// property index. EVENTUAL semantics: the maintainer fills the index,
+    /// so never-indexed rows stay invisible. Off by default — the plain scan
+    /// answers the committed truth. The choice is visible at the call site
+    /// (the idx001 discipline).
+    pub use_indexes: bool,
 }
 
 /// Build and open a streaming pipeline for the supported shape
@@ -328,13 +359,45 @@ pub fn execute_streaming<'a>(
     if let Some(t) = tenant {
         subj = subj.in_tenant(t);
     }
-    let mut chain: Box<dyn PhysicalOperator + 'a> = Box::new(ScanOperator::new(
-        kernel,
-        subj,
-        type_name,
-        opts.batch_size,
-        opts.cancel.clone(),
-    ));
+    // P5-M8 (idx2-008): with the opt-in, the first Eq predicate over an
+    // indexed (type, property) is answered from the property index — an
+    // EVENTUAL scan (never-indexed rows stay invisible; the default scan
+    // answers the committed truth). The koids pin at construction, before
+    // the first pull.
+    let mut assist: Option<Vec<KOID>> = None;
+    if opts.use_indexes {
+        'outer: for po in &ops[1..] {
+            if let IrOp::Filter { predicates } = &po.op {
+                for p in predicates {
+                    if p.op == PredOp::Eq {
+                        for idx in kernel.property_indexes()? {
+                            if idx.covers(type_name, &p.property) {
+                                assist = Some(idx.scan_eq(std::slice::from_ref(&p.value))?);
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut chain: Box<dyn PhysicalOperator + 'a> = match assist {
+        Some(koids) => Box::new(ScanOperator::with_koids(
+            kernel,
+            subj,
+            type_name,
+            opts.batch_size,
+            opts.cancel.clone(),
+            koids,
+        )),
+        None => Box::new(ScanOperator::new(
+            kernel,
+            subj,
+            type_name,
+            opts.batch_size,
+            opts.cancel.clone(),
+        )),
+    };
     for po in &ops[1..] {
         match &po.op {
             IrOp::Filter { predicates } => {

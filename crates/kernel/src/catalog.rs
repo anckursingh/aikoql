@@ -19,9 +19,12 @@
 //! ships when a v2 schema change lands — the dispatch loop is the seam
 //! (P5-M7 honest-ledger row).
 
-use crate::knowledge::kom::{KError, KResult, KnowledgeObject, PropertyMap, Value};
+use crate::index::property::PropertyIndex;
+use crate::index::unified::Index;
+use crate::knowledge::kom::{KError, KResult, KnowledgeObject, PropertyMap, Value, KOID};
 use crate::transaction::kernel::{ForgetMode, Kernel, KnowledgeContext, RememberRequest, Subject};
 use crate::Metadata;
+use std::sync::Arc;
 
 pub const CATALOG_TYPE: &str = "aikoql:catalog";
 pub const CATALOG_TENANT: &str = "aikoql:catalog";
@@ -132,6 +135,85 @@ impl Kernel {
             None,
         )
         .map(|_| ())
+    }
+
+    // ---- index sugar (P5-M8) ----------------------------------------------------
+
+    /// Register a property/composite index in the catalog AND the live
+    /// registry. Fails closed on a duplicate name (idx2-001).
+    pub fn catalog_create_index(
+        &self,
+        name: &str,
+        type_name: &str,
+        properties: &[&str],
+    ) -> KResult<()> {
+        let mut props = PropertyMap::new();
+        props.insert("type_name".into(), Value::Text(type_name.into()));
+        props.insert(
+            "properties".into(),
+            Value::List(
+                properties
+                    .iter()
+                    .map(|p| Value::Text(p.to_string()))
+                    .collect(),
+            ),
+        );
+        self.catalog_create_entry("index", name, props)?;
+        // justified: RwLock poison is unrecoverable
+        self.property_indexes
+            .write()
+            .unwrap()
+            .push(Arc::new(PropertyIndex::new(name, type_name, properties)));
+        Ok(())
+    }
+
+    /// Drop a catalog index: the row is tombstoned and the live registry
+    /// entry removed (idx2-002).
+    pub fn catalog_drop_index(&self, name: &str) -> KResult<()> {
+        self.catalog_drop_entry("index", name)?;
+        // justified: RwLock poison is unrecoverable
+        self.property_indexes
+            .write()
+            .unwrap()
+            .retain(|i| i.name() != name);
+        Ok(())
+    }
+
+    /// Every catalog-registered index declaration (idx2-001). Corrupt payloads
+    /// fail closed.
+    pub fn catalog_list_indexes(&self) -> KResult<Vec<IndexDecl>> {
+        let mut out = Vec::new();
+        for ko in self.scan_catalog_rows()? {
+            if ko.properties.get("kind") != Some(&Value::Text("index".into())) {
+                continue;
+            }
+            let Some(Value::Text(name)) = ko.properties.get("name") else {
+                return Err(KError::Store(
+                    "catalog index row corrupt: missing name".into(),
+                ));
+            };
+            out.push(parse_index_decl(name, &ko.properties)?);
+        }
+        Ok(out)
+    }
+
+    /// The live property-index registry. Contents are never persisted — they
+    /// replay through the maintainer (idx2-007).
+    pub fn property_indexes(&self) -> KResult<Vec<Arc<dyn Index>>> {
+        // justified: RwLock poison is unrecoverable
+        Ok(self.property_indexes.read().unwrap().clone())
+    }
+
+    /// Equality scan on a registered index by name (idx2-composite). Unknown
+    /// names and wrong key arities fail closed.
+    pub fn scan_index(&self, name: &str, key: &[Value]) -> KResult<Vec<KOID>> {
+        // justified: RwLock poison is unrecoverable
+        let reg = self.property_indexes.read().unwrap();
+        let idx = reg
+            .iter()
+            .find(|i| i.name() == name)
+            .ok_or_else(|| KError::InvalidObject(format!("index '{name}' not found")))?;
+        idx.scan_eq(key)
     }
 
     // ---- type sugar -----------------------------------------------------------
@@ -288,4 +370,64 @@ impl Kernel {
         };
         self.update_catalog_row(&ko, version_props(version))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Index declarations (P5-M8) — parsing and the open-time registry load
+// ---------------------------------------------------------------------------
+
+/// A catalog-registered index declaration (kind "index").
+#[derive(Debug, Clone)]
+pub struct IndexDecl {
+    pub name: String,
+    pub type_name: String,
+    pub properties: Vec<String>,
+}
+
+/// Parse an index row's payload — corrupt rows fail closed (idx2-010).
+fn parse_index_decl(name: &str, props: &PropertyMap) -> KResult<IndexDecl> {
+    let Some(Value::Text(type_name)) = props.get("type_name") else {
+        return Err(KError::Store(format!(
+            "catalog index '{name}' corrupt: missing type_name"
+        )));
+    };
+    let Some(Value::List(items)) = props.get("properties") else {
+        return Err(KError::Store(format!(
+            "catalog index '{name}' corrupt: properties must be a list"
+        )));
+    };
+    let mut properties = Vec::new();
+    for item in items {
+        match item {
+            Value::Text(t) => properties.push(t.clone()),
+            other => {
+                return Err(KError::Store(format!(
+                    "catalog index '{name}' corrupt: property {other:?}"
+                )))
+            }
+        }
+    }
+    Ok(IndexDecl {
+        name: name.into(),
+        type_name: type_name.clone(),
+        properties,
+    })
+}
+
+/// Populate the live registry from the catalog at open. Corrupt index rows
+/// fail the open closed (idx2-010); contents start empty and replay through
+/// the maintainer (idx2-007).
+pub fn load_property_indexes(k: &Kernel) -> KResult<()> {
+    let mut indexes: Vec<Arc<dyn Index>> = Vec::new();
+    for decl in k.catalog_list_indexes()? {
+        let props: Vec<&str> = decl.properties.iter().map(|p| p.as_str()).collect();
+        indexes.push(Arc::new(PropertyIndex::new(
+            &decl.name,
+            &decl.type_name,
+            &props,
+        )));
+    }
+    // justified: RwLock poison is unrecoverable
+    *k.property_indexes.write().unwrap() = indexes;
+    Ok(())
 }

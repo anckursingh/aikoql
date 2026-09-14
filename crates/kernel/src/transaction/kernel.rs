@@ -20,6 +20,7 @@
 use crate::embedding::EmbeddingProvider;
 use crate::event::EventManager;
 use crate::index::coordinator::IndexCoordinator;
+use crate::index::unified::Index;
 use crate::jobs::{
     JobHandle, JobKind, JobRecord, JobScheduler, JobStatus, DEFAULT_MAX_RUNNING_JOBS,
 };
@@ -609,6 +610,10 @@ pub struct Kernel {
     events: Arc<Mutex<EventManager>>,
     auth: Arc<RwLock<AuthManager>>,
     indexes: Arc<RwLock<Option<Arc<IndexCoordinator>>>>,
+    /// P5-M8 — the live property-index registry: declarations load from the
+    /// catalog at open; contents replay through the async maintainer and are
+    /// never persisted (idx2-007).
+    pub(crate) property_indexes: Arc<RwLock<Vec<Arc<dyn Index>>>>,
     schemas: Arc<RwLock<SchemaRegistry>>,
     ontologies: Arc<RwLock<OntologyRegistry>>,
     constraint_eval: ConstraintEvaluator,
@@ -698,6 +703,7 @@ impl Kernel {
             events: Arc::new(Mutex::new(events)),
             auth: Arc::new(RwLock::new(auth)),
             indexes: Arc::new(RwLock::new(Some(IndexCoordinator::new()))),
+            property_indexes: Arc::new(RwLock::new(Vec::new())),
             schemas,
             ontologies: Arc::new(RwLock::new(OntologyRegistry::empty())),
             constraint_eval: ConstraintEvaluator::new(),
@@ -715,6 +721,9 @@ impl Kernel {
         // P5-M7 — database catalog: bootstrap/migrate the catalog rows, or
         // fail the open closed on a corrupt/unsupported catalog version.
         crate::catalog::ensure(&kernel)?;
+        // P5-M8 — index declarations into the live registry; a corrupt index
+        // row fails the open closed (idx2-010).
+        crate::catalog::load_property_indexes(&kernel)?;
         Ok(kernel)
     }
 
@@ -858,6 +867,7 @@ impl Kernel {
             events: self.events.clone(),
             auth: self.auth.clone(),
             indexes: self.indexes.clone(),
+            property_indexes: self.property_indexes.clone(),
             schemas: self.schemas.clone(),
             ontologies: self.ontologies.clone(),
             constraint_eval: self.constraint_eval.clone(),

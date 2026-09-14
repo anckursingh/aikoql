@@ -80,6 +80,7 @@ fn stream(k: &Kernel, query: &str, batch_size: usize) -> (Vec<KOID>, Vec<usize>)
     let opts = StreamOptions {
         batch_size,
         cancel: CancellationToken::new(),
+        use_indexes: false,
     };
     let mut pipe = execute_streaming(k, &plan, &opts).unwrap();
     collect(&mut pipe)
@@ -103,6 +104,7 @@ fn st001_empty_input_streams_zero_batches() {
     let opts = StreamOptions {
         batch_size: 4,
         cancel: CancellationToken::new(),
+        use_indexes: false,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     assert!(
@@ -121,6 +123,7 @@ fn st002_single_row_arrives_in_one_batch() {
     let opts = StreamOptions {
         batch_size: 16,
         cancel: CancellationToken::new(),
+        use_indexes: false,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     let first = pipe.next_batch().unwrap().expect("one batch");
@@ -243,6 +246,7 @@ fn st006_authorization_excludes_role_scoped_rows_identically() {
         let opts = StreamOptions {
             batch_size: 2,
             cancel: CancellationToken::new(),
+            use_indexes: false,
         };
         collect(&mut execute_streaming(&k, &plan, &opts).unwrap())
     };
@@ -274,6 +278,7 @@ fn st007_snapshot_pinned_at_open_zero_divergence() {
     let opts = StreamOptions {
         batch_size: 2,
         cancel: CancellationToken::new(),
+        use_indexes: false,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     let _first = pipe.next_batch().unwrap().unwrap(); // rows 0-1
@@ -318,6 +323,7 @@ fn st008_pull_model_backpressure_batches_never_exceed_bound() {
     let opts = StreamOptions {
         batch_size: 1,
         cancel: CancellationToken::new(),
+        use_indexes: false,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     while pipe.next_batch().unwrap().is_some() {}
@@ -403,7 +409,8 @@ fn st009_encrypted_db_streams_identical_rows() {
 #[test]
 fn idx2_008_index_assisted_scan_pins_the_index_snapshot_at_open() {
     let k = mk();
-    k.catalog_create_index("by_name", "Person", &["name"]).unwrap();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
     let a = person(&k, "Alice");
     let b = person(&k, "Bob");
     // a matching row the index never saw — with the opt-in it stays invisible

@@ -122,12 +122,15 @@ fn ct001_type_create_drop_roundtrips_across_restart() {
         k.catalog_create_type("Employee", &["x"]).is_err(),
         "duplicate create fails closed"
     );
-    // The generic entry API round-trips alongside the type sugar.
+    // The generic entry API round-trips alongside the type sugar. Kind
+    // "model" (a roadmap entity no milestone claims a transactional shape
+    // for yet) — kind "index" is P5-M8's decl-shaped sugar, not a generic
+    // payload target anymore.
     let mut props = PropertyMap::new();
     props.insert("target".into(), Value::Text("v2".into()));
-    k.catalog_create_entry("index", "emp_name", props.clone())
+    k.catalog_create_entry("model", "emp_name", props.clone())
         .unwrap();
-    assert_eq!(k.catalog_entry("index", "emp_name").unwrap(), Some(props));
+    assert_eq!(k.catalog_entry("model", "emp_name").unwrap(), Some(props));
 
     // Restart: everything persists.
     let k2 = reopen(&engine).unwrap();
@@ -140,16 +143,16 @@ fn ct001_type_create_drop_roundtrips_across_restart() {
         k2.catalog_get_type("Employee").unwrap(),
         Some(vec!["name".into(), "dept_id".into()])
     );
-    assert!(k2.catalog_entry("index", "emp_name").unwrap().is_some());
+    assert!(k2.catalog_entry("model", "emp_name").unwrap().is_some());
 
     // Drop round-trips too; dropping an unknown entry fails closed.
     k2.catalog_drop_type("Department").unwrap();
     assert_eq!(k2.catalog_get_type("Department").unwrap(), None);
     assert!(k2.catalog_drop_type("Department").is_err());
-    k2.catalog_drop_entry("index", "emp_name").unwrap();
+    k2.catalog_drop_entry("model", "emp_name").unwrap();
     let k3 = reopen(&engine).unwrap();
     assert_eq!(k3.catalog_list_types().unwrap(), vec!["Employee"]);
-    assert!(k3.catalog_entry("index", "emp_name").unwrap().is_none());
+    assert!(k3.catalog_entry("model", "emp_name").unwrap().is_none());
 
     // The reserved catalog row type never leaks into the user-facing list.
     assert!(
