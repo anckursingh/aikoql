@@ -26,6 +26,7 @@ members = [
     "crates/storage/rocksdb",
     "crates/storage/aikoql",
     "crates/storage/aikoql-v2",
+    "crates/certification",
 ]
 
 [workspace.package]
