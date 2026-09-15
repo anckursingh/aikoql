@@ -250,3 +250,38 @@ fn cbo_a05_never_analyzed_reads_none_and_empty_analyzes_to_zero() {
     assert!(stats.fanout == 0.0 && stats.vector_density == 0.0);
     assert!(!stats.is_stale(k.journal().unwrap().len() as u64));
 }
+
+// --- cbo_a06 — reads are cache-served, staleness stays watermark-judged ----------
+
+#[test]
+fn cbo_a06_statistics_reads_are_cache_served_and_reanalyze_refreshes() {
+    // P5-M17b: the default query path reads statistics per query, so the read
+    // must NOT re-walk the heads. The kernel serves the analyzed row from its
+    // cache; the journal watermark (not the catalog row's presence) judges
+    // freshness. A row tombstoned after capture still reads back with its
+    // captured watermark — stale, never silently fresh (fail-closed) — and a
+    // same-kernel re-analysis refreshes the cached read in place.
+    let k = mk();
+    emp(&k, "A", "Eng", 100);
+    let analyzed = k.analyze("Employee").unwrap();
+    assert_eq!(analyzed.row_count, 1);
+    assert_eq!(k.statistics("Employee").unwrap().unwrap().row_count, 1);
+
+    k.catalog_drop_entry("statistics", "Employee").unwrap();
+    let head = k.journal_head().unwrap().0;
+    let cached = k
+        .statistics("Employee")
+        .unwrap()
+        .expect("the drop must not un-cache the captured row");
+    assert_eq!(cached.row_count, 1);
+    assert!(cached.is_stale(head), "the drop advanced the journal ⇒ stale");
+
+    emp(&k, "B", "Ops", 90);
+    let re = k.analyze("Employee").unwrap();
+    assert_eq!(re.row_count, 2);
+    assert_eq!(
+        k.statistics("Employee").unwrap().unwrap().row_count,
+        2,
+        "the same-kernel read reflects the re-analysis"
+    );
+}
