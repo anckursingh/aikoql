@@ -25,7 +25,7 @@ use crate::jobs::{
     JobHandle, JobKind, JobRecord, JobScheduler, JobStatus, DEFAULT_MAX_RUNNING_JOBS,
 };
 use crate::knowledge::authority::Authority;
-use crate::knowledge::codec::{self, Enc};
+use crate::knowledge::codec::{self, Enc, ScoringRecord};
 use crate::knowledge::kom::*;
 use crate::knowledge::ontology::{Cardinality, OntologyRegistry};
 use crate::knowledge::scope::Scope;
@@ -42,7 +42,7 @@ pub use crate::storage::repository::DerivedIndexRebuild;
 use crate::storage::repository::KnowledgeRepository;
 use crate::storage::store::{ConstraintCapabilities, StorageEngine, WriteBatch};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 
 // v0.3 K4: knowledge transactions (observe/assert/verify/contradict/supersede/
@@ -645,6 +645,9 @@ pub struct Kernel {
     jobs: Arc<JobScheduler>,
     /// P5-M10 transaction counters — kernel-lifetime, shared across clones.
     txn_metrics: Arc<txn::TxnMetrics>,
+    /// P5-M16 — number of KOs fully materialized by `find_similar`'s top-k
+    /// candidate loop (the vs_scan probe seam). Kernel-lifetime, shared.
+    pub(crate) similarity_materializations: Arc<AtomicU64>,
 }
 
 impl Kernel {
@@ -726,6 +729,7 @@ impl Kernel {
             embedding_provider: None,
             jobs,
             txn_metrics: Arc::new(txn::TxnMetrics::default()),
+            similarity_materializations: Arc::new(AtomicU64::new(0)),
         };
         // P5-M7 — database catalog: bootstrap/migrate the catalog rows, or
         // fail the open closed on a corrupt/unsupported catalog version.
@@ -891,6 +895,7 @@ impl Kernel {
             embedding_provider: self.embedding_provider.clone(),
             jobs: self.jobs.clone(),
             txn_metrics: self.txn_metrics.clone(),
+            similarity_materializations: self.similarity_materializations.clone(),
         }
     }
 }
@@ -1179,6 +1184,18 @@ impl Kernel {
         self.objects.get_at(koid, snap_ts)
     }
 
+    /// P5-M16 — slim read for the vector leg of `find_similar`: the same
+    /// predecessor walk as `object_at` but only the scoring-relevant fields
+    /// are decoded (see `ScoringRecord`).
+    pub(crate) fn object_scoring(
+        &self,
+        koid: &KOID,
+        snap_ts: u64,
+        required: &[String],
+    ) -> KResult<Option<ScoringRecord>> {
+        self.objects.get_scoring(koid, snap_ts, required)
+    }
+
     pub fn scan_heads(&self) -> KResult<Vec<(KOID, u64, u64, LifecycleState)>> {
         self.objects.scan_heads()
     }
@@ -1203,6 +1220,31 @@ impl Kernel {
         action: Action,
     ) -> KResult<()> {
         self.auth.read().unwrap().authorize(subject, ko, action)
+    }
+
+    /// P5-M16 — the ACL pre-filter on the slim scoring record (same decision,
+    /// KO parts only). The full-KO `check_access` on the materialized top-k
+    /// stays the committed-bytes authority.
+    pub(crate) fn check_access_parts(
+        &self,
+        subject: &Subject,
+        rec: &ScoringRecord,
+        action: Action,
+    ) -> KResult<()> {
+        self.auth.read().unwrap().authorize_parts(
+            subject,
+            &rec.tenant,
+            rec.koid,
+            &rec.security,
+            &rec.type_name,
+            action,
+        )
+    }
+
+    /// P5-M16 probe — how many KOs `find_similar` fully materialized since
+    /// open (the vs_scan observability seam).
+    pub fn similarity_materializations(&self) -> u64 {
+        self.similarity_materializations.load(Ordering::Relaxed)
     }
 
     pub(crate) fn accessible_objects(

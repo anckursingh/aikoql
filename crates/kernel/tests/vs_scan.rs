@@ -106,9 +106,20 @@ fn vs_scan_001_ranking_parity_with_acl_denied_and_embeddingless_rows() {
         "the ACL-denied near-match never leaks"
     );
     // Scores are the committed truth, ~ hand-computed values.
-    assert!((hits[0].score - 0.9939).abs() < 1e-3, "score {}", hits[0].score);
-    assert!((hits[1].score - 0.7809).abs() < 1e-3, "score {}", hits[1].score);
-    assert!(hits.iter().all(|h| h.index_lag_ms == 0), "exact path: zero lag");
+    assert!(
+        (hits[0].score - 0.9939).abs() < 1e-3,
+        "score {}",
+        hits[0].score
+    );
+    assert!(
+        (hits[1].score - 0.7809).abs() < 1e-3,
+        "score {}",
+        hits[1].score
+    );
+    assert!(
+        hits.iter().all(|h| h.index_lag_ms == 0),
+        "exact path: zero lag"
+    );
 }
 
 // --- vs_scan_002 — the materialization-count probe (the pre-impl failing pin) ---
@@ -119,7 +130,12 @@ fn vs_scan_002_top_k_query_materializes_at_most_k_plus_margin() {
     let alice = ctx("alice");
     for i in 0..1000 {
         let angle = (i % 360) as f32 * std::f32::consts::PI / 180.0;
-        note(&k, &alice, &format!("n{i}"), Some([angle.cos(), angle.sin()]));
+        note(
+            &k,
+            &alice,
+            &format!("n{i}"),
+            Some([angle.cos(), angle.sin()]),
+        );
     }
     let before = k.similarity_materializations();
     let hits = k.find_similar(vector_only(&alice, [1.0, 0.0], 10)).unwrap();
@@ -141,7 +157,8 @@ fn vs_scan_003_index_lag_ms_keeps_the_exact_eventual_contract() {
 
     // Eventual: a maintainer whose vectors index holds the same committed
     // embeddings, lagging by 1 event — hits must carry the lag (P4-M7).
-    let vectors: Arc<dyn aikoql_kernel::index::VectorIndex> = Arc::new(BruteForceVectorIndex::new());
+    let vectors: Arc<dyn aikoql_kernel::index::VectorIndex> =
+        Arc::new(BruteForceVectorIndex::new());
     vectors.upsert(a, "bge-m3", &[1.0, 0.0]);
     vectors.upsert(b, "bge-m3", &[0.0, 1.0]);
     vectors.upsert(x, "bge-m3", &[0.99, 0.01]);
@@ -153,7 +170,10 @@ fn vs_scan_003_index_lag_ms_keeps_the_exact_eventual_contract() {
     let hits = k.find_similar(vector_only(&alice, [0.9, 0.1], 1)).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].ko.koid, a, "the index-assisted path ranks a first");
-    assert_eq!(hits[0].index_lag_ms, 1, "the eventual path surfaces its lag");
+    assert_eq!(
+        hits[0].index_lag_ms, 1,
+        "the eventual path surfaces its lag"
+    );
 }
 
 /// The P4-M7 fake from the index subsystem tests: indexes lag the kernel.

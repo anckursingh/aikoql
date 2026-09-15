@@ -28,7 +28,7 @@
 //! readers still verify the payload's `type_name` so stale entries from type
 //! changes are harmless.
 
-use crate::knowledge::codec::{self, Dec, Enc};
+use crate::knowledge::codec::{self, Dec, Enc, ScoringRecord};
 use crate::knowledge::kom::*;
 use crate::knowledge::notify::{EventFilter, SubscriptionRecord};
 use crate::storage::cache::KnowledgeCache;
@@ -738,6 +738,30 @@ impl KnowledgeRepository {
 
     pub fn get_object_at(&self, koid: &KOID, snap_ts: u64) -> KResult<Option<KnowledgeObject>> {
         Ok(self.get_version_at(koid, snap_ts)?.map(|(_, ko)| ko))
+    }
+
+    /// P5-M16 — the slim read behind vector recall: the same predecessor
+    /// walk as `get_version_at`, but only the scoring-relevant fields are
+    /// decoded out of the wire blob (the body after the 8-byte header).
+    /// `required` limits property decoding to the filter keys the query
+    /// asks for; everything else is skipped, never decoded.
+    pub(crate) fn get_object_scoring(
+        &self,
+        koid: &KOID,
+        snap_ts: u64,
+        required: &[String],
+    ) -> KResult<Option<ScoringRecord>> {
+        let at = obj_key(koid, snap_ts);
+        if let Some((_, v)) = self.engine().predecessor(&obj_prefix(koid), &at)? {
+            if v.len() < 8 {
+                return Err(KError::Codec(format!(
+                    "scoring blob for {} under 8 bytes",
+                    koid
+                )));
+            }
+            return Ok(Some(codec::decode_ko_scoring(&v[8..], required)?));
+        }
+        Ok(None)
     }
 
     pub fn put_object_version(

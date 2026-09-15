@@ -108,40 +108,62 @@ impl AuthManager {
         ko: &KnowledgeObject,
         action: Action,
     ) -> KResult<()> {
+        self.authorize_parts(
+            subject,
+            &ko.metadata.tenant,
+            ko.koid,
+            &ko.security,
+            &ko.metadata.type_name,
+            action,
+        )
+    }
+
+    /// The same decision on the KO's parts — P5-M16's slim read carries
+    /// exactly these fields (tenant, koid, security, type_name) without the
+    /// full object. The full-KO re-check on the materialized top-k keeps the
+    /// committed-bytes authority.
+    pub(crate) fn authorize_parts(
+        &self,
+        subject: &Subject,
+        tenant: &Option<String>,
+        koid: KOID,
+        security: &SecurityDescriptor,
+        type_name: &str,
+        action: Action,
+    ) -> KResult<()> {
         // R9: tenant scope confinement. A tenant-scoped subject may only touch
         // objects in that tenant; untenanted objects are shared and stay
         // visible. Checked first so not even ownership or admin bypasses it —
         // an unscoped subject (tenant None) keeps the pre-R9 behavior.
-        if let (Some(st), Some(kt)) = (&subject.tenant, &ko.metadata.tenant) {
+        if let (Some(st), Some(kt)) = (&subject.tenant, tenant) {
             if st != kt {
-                return Err(access_denied(subject, action, ko.koid));
+                return Err(access_denied(subject, action, koid));
             }
         }
-        let sec = &ko.security;
-        if subject.name == sec.owner || subject.is_admin() {
+        if subject.name == security.owner || subject.is_admin() {
             return Ok(());
         }
         let principals = self.effective_principals(subject);
         if principals.contains("admin") {
             return Ok(());
         }
-        if let Some(allowed) = Self::eval_acl(&sec.acl, &principals, action) {
+        if let Some(allowed) = Self::eval_acl(&security.acl, &principals, action) {
             return if allowed {
                 Ok(())
             } else {
-                Err(access_denied(subject, action, ko.koid))
+                Err(access_denied(subject, action, koid))
             };
         }
-        if let Some(rules) = self.policies.get(&ko.metadata.type_name) {
+        if let Some(rules) = self.policies.get(type_name) {
             if let Some(allowed) = Self::eval_acl(rules, &principals, action) {
                 return if allowed {
                     Ok(())
                 } else {
-                    Err(access_denied(subject, action, ko.koid))
+                    Err(access_denied(subject, action, koid))
                 };
             }
         }
-        Err(access_denied(subject, action, ko.koid))
+        Err(access_denied(subject, action, koid))
     }
 
     fn effective_principals(&self, subject: &Subject) -> HashSet<String> {

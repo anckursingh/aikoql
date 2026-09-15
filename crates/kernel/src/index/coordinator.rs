@@ -115,6 +115,109 @@ impl IndexCoordinator {
             None
         };
 
+        // P5-M16 — the vector-only leg ranks slim scoring records instead of
+        // materializing every head KO. The slim read decodes the same wire
+        // blob through the same predecessor walk as the full read, so it can
+        // never filter, authorize or score differently — only the top-k
+        // survivors are materialized (in rank order, full-KO ACL re-check),
+        // and the counter below makes that observable (vs_scan_002).
+        // ponytail: ceiling — text-bearing fusions (text scoring needs
+        // ko_text over the whole property map) and Exact keep the full loop
+        // below; extend the slim read only if those fusions need the win.
+        if q.text.is_none() && matches!(q.fusion, Fusion::VectorOnly) {
+            let required: Vec<String> = q
+                .filter
+                .as_ref()
+                .map(|f| f.required.iter().map(|(k, _)| k.clone()).collect())
+                .unwrap_or_default();
+            let mut ranked: Vec<(KOID, f32)> = Vec::new();
+            for (koid, _version, _ts, state) in &heads {
+                let Some(rec) = kernel.object_scoring(koid, snap, &required)? else {
+                    continue;
+                };
+                if kernel
+                    .check_access_parts(&q.context.subject, &rec, Action::Read)
+                    .is_err()
+                {
+                    continue; // ACL-filtered, silently (no existence leak)
+                }
+                if *state == LifecycleState::Deleted {
+                    continue;
+                }
+                if let Some(f) = &q.filter {
+                    if let Some(tn) = &f.type_name {
+                        if rec.type_name != *tn {
+                            continue;
+                        }
+                    }
+                    let mut ok = true;
+                    for (k, v) in &f.required {
+                        if rec.props.get(k) != Some(v) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if !ok {
+                        continue;
+                    }
+                }
+                let vscore = match &vmap {
+                    Some(m) => m.get(koid).copied().unwrap_or(0.0),
+                    None => match (&q.vector, &rec.embedding) {
+                        (Some(qv), Some(emb)) => cosine(qv, emb),
+                        _ => 0.0,
+                    },
+                };
+                ranked.push((*koid, vscore));
+            }
+            ranked.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            for (koid, score) in ranked {
+                if merged.len() >= q.k {
+                    break;
+                }
+                let Some(ko) = kernel.object_at(&koid, snap)? else {
+                    continue;
+                };
+                kernel
+                    .similarity_materializations
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // The full-KO re-check is the committed-bytes authority.
+                if kernel
+                    .check_access(&q.context.subject, &ko, Action::Read)
+                    .is_err()
+                {
+                    continue;
+                }
+                if let Some(f) = &q.filter {
+                    if let Some(tn) = &f.type_name {
+                        if ko.metadata.type_name != *tn {
+                            continue;
+                        }
+                    }
+                    let mut ok = true;
+                    for (k, v) in &f.required {
+                        if ko.properties.get(k) != Some(v) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if !ok {
+                        continue;
+                    }
+                }
+                merged.push(ScoredKO {
+                    ko,
+                    score,
+                    index_lag_ms: lag,
+                });
+            }
+            return Ok(merged);
+        }
+
         for (koid, _version, _ts, state) in &heads {
             let ko = match kernel.object_at(koid, snap)? {
                 Some(ko) => ko,

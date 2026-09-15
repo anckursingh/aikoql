@@ -543,6 +543,160 @@ pub fn decode_ko_wire(buf: &[u8]) -> KResult<KnowledgeObject> {
 }
 
 // ---------------------------------------------------------------------------
+// ScoringRecord — P5-M16: the slim per-object read behind vector recall
+// ---------------------------------------------------------------------------
+
+/// The fields `find_similar`'s vector leg needs to ACL-check, filter and
+/// score a row WITHOUT materializing the full KO: type/tenant, the
+/// required-filter properties only, the embedding, and the security block.
+/// Relationships, event refs, lifecycle and extensions stay in the blob —
+/// the full-KO ACL re-check on the materialized top-k re-validates the
+/// same bytes, so the slim read can never decide differently than the
+/// full one.
+pub(crate) struct ScoringRecord {
+    pub koid: KOID,
+    pub type_name: String,
+    pub tenant: Option<String>,
+    /// Only the keys the query's required-filter asks for.
+    pub props: BTreeMap<String, Value>,
+    pub embedding: Option<Vec<f32>>,
+    pub security: SecurityDescriptor,
+}
+
+fn skip_str(d: &mut Dec) -> KResult<()> {
+    let n = d.u64()? as usize;
+    d.raw(n).map(|_| ())
+}
+
+/// Skip one length-delimited Value by its tag, without decoding it.
+fn skip_value(d: &mut Dec) -> KResult<()> {
+    match d.u8()? {
+        0 => Ok(()),                   // Null
+        1 => d.u8().map(|_| ()),       // Bool
+        2 | 3 => d.raw(8).map(|_| ()), // Int(i64) | Float(f64)
+        4 => skip_str(d),              // Text
+        5 => {
+            // Bytes
+            let n = d.u64()? as usize;
+            d.raw(n).map(|_| ())
+        }
+        6 => {
+            // List
+            let n = d.u64()? as usize;
+            for _ in 0..n {
+                skip_value(d)?;
+            }
+            Ok(())
+        }
+        7 => {
+            // Map
+            let n = d.u64()? as usize;
+            for _ in 0..n {
+                skip_str(d)?;
+                skip_value(d)?;
+            }
+            Ok(())
+        }
+        t => Err(KError::Codec(format!("invalid value tag {t}"))),
+    }
+}
+
+/// Decode only the scoring-relevant fields of a canonical KO payload
+/// (the wire envelope's body). `required` keys are extracted from the
+/// properties map; every other property is skipped without decoding.
+/// Stops after the security block — lifecycle and extensions are never
+/// needed by the vector leg.
+pub(crate) fn decode_ko_scoring(buf: &[u8], required: &[String]) -> KResult<ScoringRecord> {
+    let mut d = Dec::new(buf);
+    let koid = d.koid()?;
+    let _version = d.u64()?;
+    let _commit_ts = d.u64()?;
+    let type_name = d.str()?;
+    let tenant = d.opt_str()?;
+    let _schema_version = d.u32()?;
+    let n_tags = d.u64()? as usize;
+    for _ in 0..n_tags {
+        d.str()?;
+    }
+    let mut props = BTreeMap::new();
+    let n_props = d.u64()? as usize;
+    for _ in 0..n_props {
+        let key = d.str()?;
+        if required.contains(&key) {
+            props.insert(key.to_string(), dec_value(&mut d)?);
+        } else {
+            skip_value(&mut d)?;
+        }
+    }
+    let embedding = match d.u8()? {
+        0 => None,
+        1 => {
+            d.opt_str()?; // embedding_model — the exact path scores any model
+            let emb = match d.u8()? {
+                0 => None,
+                1 => {
+                    let n = d.u64()? as usize;
+                    let mut v = Vec::with_capacity(n.min(1 << 20));
+                    for _ in 0..n {
+                        v.push(d.f32()?);
+                    }
+                    Some(v)
+                }
+                t => return Err(KError::Codec(format!("invalid embedding tag {t}"))),
+            };
+            match d.u8()? {
+                // confidence
+                0 => {}
+                1 => {
+                    d.f32()?;
+                }
+                t => return Err(KError::Codec(format!("invalid confidence tag {t}"))),
+            }
+            d.opt_str()?; // source
+            d.opt_str()?; // summary
+            emb
+        }
+        t => return Err(KError::Codec(format!("invalid semantic tag {t}"))),
+    };
+    let n_rels = d.u64()? as usize;
+    for _ in 0..n_rels {
+        d.str()?;
+        d.raw(KOID_LEN)?;
+        d.u8()?;
+    }
+    let n_ev = d.u64()? as usize;
+    for _ in 0..n_ev {
+        d.u64()?;
+        d.u8()?;
+        d.u64()?;
+    }
+    let security = SecurityDescriptor {
+        owner: d.str()?.to_string(),
+        acl: {
+            let n = d.u64()? as usize;
+            let mut v = Vec::with_capacity(n.min(4096));
+            for _ in 0..n {
+                v.push(AclEntry {
+                    principal: d.str()?.to_string(),
+                    action: dec_tag(&mut d, Action::from_tag, "action")?,
+                    effect: dec_tag(&mut d, Effect::from_tag, "effect")?,
+                });
+            }
+            v
+        },
+        classification: d.opt_str()?,
+    };
+    Ok(ScoringRecord {
+        koid,
+        type_name,
+        tenant,
+        props,
+        embedding,
+        security,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // KnowledgeEvent
 // ---------------------------------------------------------------------------
 
