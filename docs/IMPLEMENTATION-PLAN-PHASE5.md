@@ -222,7 +222,7 @@ TDD REDs: cbo-default suite — (1) default-path execution on an indexed+fresh k
 
 Acceptance: cbo-default pins green; the competitor harness structured_filter cell re-measured and republished; cert db-knowledge/db-agent suites untouched-green (their kernels declare no indexes — the guard must be a no-op there).
 
-Status: ✅ Shipped — `Interpreter::execute` routes through `cost_optimize` (execute_with_report is the pin seam; execute_costed is now an alias); run_costed's baseline arm executes the rule physicalization so gate-6 keeps teeth. cbo-default 4/4 (RED e08cc46: E0599 on the missing seam; 001 index selection + row-for-row identity, 002 lagging/stale guards, 003 no-index byte-identical plan, 004 gate-6 divergence 0). Runtime suites green; kernel+mcp+storage-v2 1027/0; cert 5/5 with all five DB-* artifacts re-stamped at 7c0d7e1. The streaming path keeps its separate EVENTUAL opt-in (StreamOptions.use_indexes, idx001 discipline). Competitor re-measure: after M16 lands (one harness run covers both) — the structured_filter cell expectation: ~2.5 ms from the property index vs PG 2.54.
+Status: ✅ Shipped — `Interpreter::execute` routes through `cost_optimize` (execute_with_report is the pin seam; execute_costed is now an alias); run_costed's baseline arm executes the rule physicalization so gate-6 keeps teeth. cbo-default 4/4 (RED e08cc46: E0599 on the missing seam; 001 index selection + row-for-row identity, 002 lagging/stale guards, 003 no-index byte-identical plan, 004 gate-6 divergence 0). Runtime suites green; kernel+mcp+storage-v2 1027/0; cert 5/5 with all five DB-* artifacts re-stamped at 7c0d7e1. The streaming path keeps its separate EVENTUAL opt-in (StreamOptions.use_indexes, idx001 discipline). Competitor re-measure (dc42b16 stamp): structured_filter 19.9 ms warm p50 — the ~2.5 ms expectation is FALSIFIED, and the root cause is a production gap, not the CBO: no SDK/MCP surface declares a property index, no production path starts the `IndexMaintainer` (the MCP scheduler runs only semantic enrichment), and `analyze` is only ever called in tests — so the freshness/verify guards correctly fall back to FullScan everywhere outside the cbo-default suite. The 8.6× harness gap closure is re-scheduled as **P5-M17b** below; M15 itself stays shipped (the default-path wiring is the milestone, and the guards doing their job in production is the designed behavior).
 
 ### P5-M16 — Vector recall without corpus materialization
 
@@ -245,6 +245,20 @@ Deliver: harness gains (a) scale runs at 100k/1M for the three degrading aikoql 
 TDD REDs: none (measurement-first milestone); the harness's own oracles stay the correctness pins — a scale run with a wrong oracle result fails the run.
 
 Acceptance: docs/certification/competitors/scale/result.json + REPORT.md update; the ANN decision (M18) made from the 100k vector numbers.
+
+Note: the filter scale numbers land pre-17b (the scan story — the product today ships no live property index in production); they are re-stamped when P5-M17b lands.
+
+Status: ⬜ Proposed
+
+### P5-M17b — Power the property index in production
+
+M15 wired the CBO into the default path; the harness re-measure exposed that the machinery is unpowered end-to-end: (a) no declaration surface — the Python SDK exposes no `create_index` and the MCP toolset has no `index_create` (only `Kernel::catalog_create_index` at the Rust level); (b) no maintenance — the property registry "replays through the async maintainer" (kernel.rs comment), but no production path starts an `IndexMaintainer` (the MCP scheduler runs only the semantic-enrichment engine, and embedded SDK kernels start none); (c) no stats — `analyze()` is called only in tests, so `statistics()` is always None and the CBO guard never even sees an index.
+
+Deliver: `create_index(name, type_name, properties)` on the SDK embedded surface + `index_create` MCP tool (same call shape); production index maintenance (maintainer started in the MCP server and in embedded kernels — the same KE-driven `IndexMaintainer` the scheduler crate already ships, or a synchronous upsert on the write path if that is cheaper); stats computed after declaration+maintenance (analyze behind the index_create/create_index call once the maintainer has caught up — the wait_idle pattern). Freshness/verify guards stay exactly as M9/M15 pinned them.
+
+TDD REDs: sdk parity test — create_index then `MATCH … WHERE eq-prop` returns identical rows before/after declaration (fails on the missing surface); mcp tool test — index_create via the tool registry, then a KOQL query through the tool path (fails on the missing tool); a cbo-default-style pin on the production shape: kernel + maintainer + create_index + analyze → the default path report shows `Strategy::PropertyIndex` with no manual catch-up.
+
+Acceptance: both surfaces green; the competitor harness structured_filter cell re-measured (~2.5 ms expectation, PG's indexed 2.54 ms the control); harness updated to declare the index exactly where PG runs its `CREATE INDEX`; the M17 scale filter numbers re-stamped with the index live.
 
 Status: ⬜ Proposed
 

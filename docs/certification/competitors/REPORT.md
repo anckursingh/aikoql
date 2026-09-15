@@ -1,11 +1,27 @@
 # AIKOQL vs competitors — benchmark report (P5-M14 supplement)
 
-**2026-09-16** · results: [`result.json`](result.json) · harness: `scripts/competitor_bench/bench.py` · measured at commit `c4931ed` (release SDK build)
+**2026-09-16** · **re-stamped 2026-09-15** · results: [`result.json`](result.json) · harness: `scripts/competitor_bench/bench.py` · measured at commit `c4931ed`, re-measured at `dc42b16` (release SDK build)
 
 This is a **published report, not a CI gate** (the ND-14 acceptance: competitor
 comparisons ship as reports). Same deterministic dataset in four engines, same
 workload cells on every side, every cell oracle-checked (`correct: true` for all
 22 measured cells).
+
+The re-stamp was taken after **P5-M15** (CBO on the default KOQL path) and
+**P5-M16** (vector recall without corpus materialization) shipped. It is the
+acceptance evidence for both milestones:
+
+- **vector_recall: 12.0 → 5.0 ms warm p50 (2.4×)** — M16's slim ranking pass.
+  aikoql now matches Qdrant at N=1 000 (5.0 vs 5.3 ms). Control cells
+  (point_read, graph, transactions) were flat run-to-run, so this is signal,
+  not machine drift.
+- **structured_filter: 21.9 → 19.9 ms warm p50 (−9%)** — the cell is still a
+  full scan, so this is noise-band movement, not M15's win. Root cause
+  (caveat 5): the property index exists (P5-M8) and the CBO is wired into the
+  default path (P5-M15), but no production surface declares an index, no
+  production path maintains one, and stats are never computed — the guards
+  correctly fall back to FullScan. Closing the gap end-to-end is scheduled as
+  P5-M17b; the harness cell is its acceptance.
 
 ## Method
 
@@ -22,24 +38,24 @@ workload cells on every side, every cell oracle-checked (`correct: true` for all
 | graph | `traverse(koid, "mentions", 1)` | — | `MATCH (n)-[:MENTIONS]->(e)` | — |
 | vector_recall | `find_similar(vector_only, k=10)` | — | — | `query_points` k=10 |
 
-## Results (warm cell: p50 / p95 / p99, ms; throughput ops/s)
+## Results (warm cell: p50 / p95 / p99, ms; throughput ops/s) — re-stamp `dc42b16`
 
 | workload | aikoql | PostgreSQL | Neo4j | Qdrant |
 |---|---|---|---|---|
-| point_read | **0.010 / 0.013 / 0.024** — 93 475 op/s | 1.63 / 2.72 / 2.97 — 578 op/s | — | — |
-| point_write | **1.20 / 3.88 / 6.15** — 591 op/s | 49.0 / 79.2 / 151.0 — 19 op/s | — | — |
-| structured_filter | 21.9 / 34.1 / 37.3 — 45 op/s | **2.54 / 3.44 / 10.6** — 361 op/s | — | — |
-| transactions | **1.39 / 4.94 / 8.20** — 500 op/s | 40.2 / 241 / 473 — 16 op/s | — | — |
-| graph | **0.023 / 0.036 / 0.068** — 38 426 op/s | — | 6.66 / 8.47 / 10.6 — 144 op/s | — |
-| vector_recall | 12.0 / 34.6 / 58.5 — 68 op/s | — | — | **5.81 / 6.68 / 22.2** — 156 op/s |
+| point_read | **0.009 / 0.011 / 0.011** — 102 522 op/s | 1.46 / 1.70 / 1.88 — 671 op/s | — | — |
+| point_write | **0.77 / 1.71 / 2.02** — 1 015 op/s | 40.1 / 304.5 / 591.1 — 15.5 op/s | — | — |
+| structured_filter | 19.9 / 23.6 / 25.5 — 49.4 op/s | **1.76 / 1.98 / 2.24** — 560 op/s | — | — |
+| transactions | **1.35 / 15.7 / 17.5** — 193 op/s | 40.2 / 74.3 / 104.8 — 21.8 op/s | — | — |
+| graph | **0.020 / 0.029 / 0.032** — 47 393 op/s | — | 6.54 / 9.08 / 11.2 — 145 op/s | — |
+| vector_recall | **5.0 / 5.9 / 6.3** — 194 op/s | — | — | 5.25 / 6.91 / 19.7 — 171 op/s |
 
 Footprint (after ingest + workload run):
 
 | | aikoql | PostgreSQL | Neo4j | Qdrant |
 |---|---|---|---|---|
-| RSS | 131 MB¹ | 59 MB | 819 MB | 196 MB |
-| disk | 2.6 MB | 48.5 MB | 541 MB | 0.5 MB |
-| ingest (1 000 notes + 500 events + 1 400 edges) | 2.5 s | 0.7 s | 4.1 s | 0.2 s |
+| RSS | 132 MB¹ | 59 MB | 883 MB | 194 MB |
+| disk | 2.6 MB | 48.5 MB | 542 MB | 0.5 MB |
+| ingest (1 000 notes + 500 events + 1 400 edges) | 2.2 s | 0.4 s | 3.9 s | 0.1 s |
 
 ¹ includes the Python harness interpreter; the other engines' numbers are the whole container process.
 
@@ -60,14 +76,20 @@ Footprint (after ingest + workload run):
    aikoql structured_filter 13.4→21.9 ms across back-to-back runs under the
    same workload). Numbers are one stamped run, like the ND-14 suites.
 5. **structured_filter is not symmetric.** PostgreSQL got its natural
-   `CREATE INDEX ON notes(topic)`; aikoql has **no property index** (SE2-M26
-   closed as a deliberate skip — candidate-bound scan) so this cell is a
-   linear scan of every note on the aikoql side. That is the honest current
-   state of the product, reported as such.
+   `CREATE INDEX ON notes(topic)`. aikoql *has* the machinery — the property
+   index shipped in P5-M8 and the CBO was wired into the default query path
+   in P5-M15 — but it is unpowered in production: no SDK/MCP surface declares
+   an index, no production path starts the index maintainer, and statistics
+   are never computed, so the CBO's freshness/verify guards fall back to a
+   linear scan of every note. That is the honest current state of the
+   product, reported as such. Closing it end-to-end is P5-M17b (declaration
+   surface + production maintenance + stats); the harness cell above is that
+   milestone's acceptance.
 6. **vector_recall is not symmetric either.** Qdrant runs an HNSW ANN index;
-   aikoql is brute-force cosine over the corpus. At N=1 000 they are the same
-   order of magnitude; Qdrant will widen the gap at scale. An ANN index for
-   aikoql is a known gap.
+   aikoql is brute-force cosine over the corpus. After M16's slim ranking pass
+   the two are at parity at N=1 000 (5.0 vs 5.3 ms warm p50); Qdrant is still
+   expected to widen the gap at scale. An ANN index for aikoql is the open
+   P5-M18, evidence-gated on the 100k/1M scale numbers (M17).
 7. **"transactions"** = one durable single-statement commit per op on both
    sides (aikoql: one journal commit + fsync; PG: autocommit update / explicit
    insert commit). Multi-statement transactions are not exercised.
