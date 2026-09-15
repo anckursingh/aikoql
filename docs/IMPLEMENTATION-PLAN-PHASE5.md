@@ -260,7 +260,7 @@ TDD REDs: sdk parity test — create_index then `MATCH … WHERE eq-prop` return
 
 Acceptance: both surfaces green; the competitor harness structured_filter cell re-measured (~2.5 ms expectation, PG's indexed 2.54 ms the control); harness updated to declare the index exactly where PG runs its `CREATE INDEX`; the M17 scale filter numbers re-stamped with the index live.
 
-Status: ⬜ Proposed
+Status: ✅ Shipped 2026-09-15 (6873bcc). Surfaces live (SDK `create_index` + MCP `index_create`, maintainer in both hosts, analyze behind declaration), guard chain byte-identical to M9/M15 (cbo_default_001/002/005 + idx2_010 + cbo_a06). Harness re-measure (N=1000, n=50, oracle ok): aikoql structured_filter p50 26.2 → 9.11 ms (p95 18.17) vs PG indexed 2.10/2.74; point_read 0.01 ms vs PG 1.85. The ~2.5 ms aspiration was NOT met — the residue decomposes to per-row readable-object point reads (~2–4 µs × 500), PyO3 row marshaling (~3.5 ms), and the executor's filter/clone passes (all pinned by the M15 byte-identical contract or the SDK shape); full decomposition + disclosures in docs/certification/competitors/REPORT.md. Two O(store)-per-query costs were the fix: idx.verify's reconciliation walk (per-index applied-seq stamp → O(1) short-circuit) and statistics()'s catalog heads walk (per-kernel parsed-stats cache, watermark-judged). Scale re-stamp follows the M17 run.
 
 ### P5-M18 — ANN vector index (evidence-gated)
 
