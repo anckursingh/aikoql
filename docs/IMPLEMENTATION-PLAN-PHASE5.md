@@ -234,7 +234,7 @@ TDD REDs: vs-scan suite — (1) ranking parity: brute-force reference vs the new
 
 Acceptance: vs-scan green; kernel vector suites (vec001/002) untouched-green; the competitor harness vector cell re-measured and republished (expect ~1 ms at N=1 000).
 
-Status: ⬜ Proposed
+Status: ✅ Shipped — the vector-only leg of `find_similar` ranks slim `ScoringRecord`s decoded straight from the wire blob (codec skip helpers; koid/type/tenant, required-filter properties only, embedding, security block) instead of materializing every head KO; `AuthManager::authorize` delegates to `authorize_parts` for the record-parts pre-filter; the top-k survivors materialize in rank order with the full-KO ACL re-check (the committed-bytes authority) and are counted by the `similarity_materializations` probe. Same predecessor walk, same blob bytes → the slim read can never filter, authorize or score differently; `valid_at` stays the post-filter (below-k quirk preserved). Text-bearing fusions and Exact keep the full loop (ponytail ceiling: text scoring needs ko_text over the whole property map). vs-scan 3/3 (RED 9f72539: E0599 on the probe; GREEN b257844: 001 ranking parity incl. ACL-denied near-match and embeddingless row, 002 probe ≤ k+margin over a 1 000-object corpus, 003 index_lag_ms contract). Kernel 37 suites green; aikoql-vector 7/0 untouched-green; storage-v2 64/0 (bkp002 timing pin flaked once, passes isolated + full rerun); runtime 10/0; mcp 8/0; cert 3/0 + artifacts re-stamped (1e07731; machine-drift note in the commit — back-to-back control exonerates M16). No engine trait changes — slim decode is kernel-only.
 
 ### P5-M17 — Benchmark scale-out + honest cells
 
