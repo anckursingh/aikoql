@@ -103,7 +103,7 @@ fn tx000_contract_doc_and_sync_commit_path() {
             "{name}: .await in the transaction path"
         );
     }
-    let doc = std::fs::read_to_string(format!("{manifest}/../docs/transaction-contract.md"))
+    let doc = std::fs::read_to_string(format!("{manifest}/../../docs/transaction-contract.md"))
         .expect("docs/transaction-contract.md");
     for needle in [
         "# Transaction Contract",
@@ -129,7 +129,10 @@ fn tx000_contract_doc_and_sync_commit_path() {
 #[test]
 fn tx001_write_write_conflict_is_a_deterministic_error() {
     let k = mk();
-    let koid = k.remember(create_req("alice", "Node", "i", 1)).unwrap().koid;
+    let koid = k
+        .remember(create_req("alice", "Node", "i", 1))
+        .unwrap()
+        .koid;
 
     // Both transactions pin the SAME snapshot (v1) at stage time.
     let mut t1 = k.begin_transaction(Subject::new("alice"), "tx1").unwrap();
@@ -173,9 +176,14 @@ fn tx001_write_write_conflict_is_a_deterministic_error() {
 #[test]
 fn tx002_snapshot_read_sees_pre_write_state() {
     let k = mk();
-    let koid = k.remember(create_req("alice", "Node", "i", 1)).unwrap().koid;
+    let koid = k
+        .remember(create_req("alice", "Node", "i", 1))
+        .unwrap()
+        .koid;
 
-    let t = k.begin_transaction(Subject::new("alice"), "reader").unwrap();
+    let t = k
+        .begin_transaction(Subject::new("alice"), "reader")
+        .unwrap();
 
     // A writer commits v2 AFTER the reader's snapshot is pinned.
     let mut u = RememberRequest::update(alice(), koid, meta("Node"));
@@ -188,7 +196,9 @@ fn tx002_snapshot_read_sees_pre_write_state() {
         Some(&Value::Int(1))
     );
     // …and a fresh transaction sees v2.
-    let t2 = k.begin_transaction(Subject::new("alice"), "reader2").unwrap();
+    let t2 = k
+        .begin_transaction(Subject::new("alice"), "reader2")
+        .unwrap();
     assert_eq!(
         t2.get(&koid).unwrap().properties.get("i"),
         Some(&Value::Int(2))
@@ -200,7 +210,10 @@ fn tx002_snapshot_read_sees_pre_write_state() {
 #[test]
 fn tx003_concurrent_readers_share_the_snapshot() {
     let k = Arc::new(mk());
-    let koid = k.remember(create_req("alice", "Node", "i", 1)).unwrap().koid;
+    let koid = k
+        .remember(create_req("alice", "Node", "i", 1))
+        .unwrap()
+        .koid;
 
     // Pin eight reader snapshots at v1.
     let readers: Vec<_> = (0..8)
@@ -217,7 +230,6 @@ fn tx003_concurrent_readers_share_the_snapshot() {
 
     let mut handles = Vec::new();
     for t in readers {
-        let k = Arc::clone(&k);
         handles.push(std::thread::spawn(move || {
             t.get(&koid).unwrap().properties.get("i") == Some(&Value::Int(1))
         }));
@@ -259,11 +271,16 @@ fn tx004_concurrent_writers_serialize() {
 #[test]
 fn tx005_rollback_leaves_zero_residue() {
     let k = mk();
-    let koid = k.remember(create_req("alice", "Node", "i", 1)).unwrap().koid;
+    let koid = k
+        .remember(create_req("alice", "Node", "i", 1))
+        .unwrap()
+        .koid;
     let seq_before = k.journal_head().unwrap().0;
     let count_before = node_count(&k);
 
-    let mut t = k.begin_transaction(Subject::new("alice"), "aborted").unwrap();
+    let mut t = k
+        .begin_transaction(Subject::new("alice"), "aborted")
+        .unwrap();
     t.stage(create_req("alice", "Node", "i", 2)).unwrap();
     let mut u = RememberRequest::update(alice(), koid, meta("Node"));
     u.properties.insert("i".into(), Value::Int(9));

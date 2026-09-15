@@ -554,6 +554,30 @@ impl KnowledgeRepository {
     }
 
     // -----------------------------------------------------------------------
+    // Transaction outcomes (P5-M10: the outcome row rides the SAME engine
+    // batch as the writes, so a retry after any crash re-reads it)
+    // -----------------------------------------------------------------------
+
+    /// Reserved key prefix for transaction outcome rows. ASCII — same
+    /// no-collision argument as `K_SCHEMA_PREFIX`.
+    pub const K_TXN_PREFIX: &[u8] = b"sys/txn/";
+
+    pub fn put_txn_record(&self, batch: &mut WriteBatch, txn_id: &str, bytes: &[u8]) {
+        let mut key = Vec::with_capacity(Self::K_TXN_PREFIX.len() + txn_id.len());
+        key.extend_from_slice(Self::K_TXN_PREFIX);
+        key.extend_from_slice(txn_id.as_bytes());
+        batch.put(key, bytes.to_vec());
+    }
+
+    /// The recorded outcome of `txn_id`, if the transaction ever committed.
+    pub fn txn_record(&self, txn_id: &str) -> KResult<Option<Vec<u8>>> {
+        let mut key = Vec::with_capacity(Self::K_TXN_PREFIX.len() + txn_id.len());
+        key.extend_from_slice(Self::K_TXN_PREFIX);
+        key.extend_from_slice(txn_id.as_bytes());
+        self.engine().get(&key)
+    }
+
+    // -----------------------------------------------------------------------
     // Journal
     // -----------------------------------------------------------------------
 

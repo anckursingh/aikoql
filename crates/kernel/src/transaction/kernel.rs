@@ -42,6 +42,7 @@ pub use crate::storage::repository::DerivedIndexRebuild;
 use crate::storage::repository::KnowledgeRepository;
 use crate::storage::store::{ConstraintCapabilities, StorageEngine, WriteBatch};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 
 // v0.3 K4: knowledge transactions (observe/assert/verify/contradict/supersede/
@@ -49,6 +50,11 @@ use std::sync::{mpsc, Arc, Mutex, RwLock};
 // kernel.rs's private fields (pipe/auth/clock) without widening their scope.
 mod ops;
 pub use ops::*;
+
+// P5-M10 (ND-10): the public transaction contract (begin/stage/commit/
+// rollback + idempotent retry + metrics). Child module — same pattern as ops.
+mod txn;
+pub use txn::{Transaction, TxnMetrics, TxnMetricsSnapshot};
 
 // ---------------------------------------------------------------------------
 // Clock & Hybrid Logical Clock (commit timestamps)
@@ -637,6 +643,8 @@ pub struct Kernel {
     /// P3-M7 — the Class-B job scheduler (MRFC-0011 §6.10–6.13): persisted
     /// job table + admission control in the raw store.
     jobs: Arc<JobScheduler>,
+    /// P5-M10 transaction counters — kernel-lifetime, shared across clones.
+    txn_metrics: Arc<txn::TxnMetrics>,
 }
 
 impl Kernel {
@@ -717,6 +725,7 @@ impl Kernel {
             encryption_policies: Arc::new(RwLock::new(HashMap::new())),
             embedding_provider: None,
             jobs,
+            txn_metrics: Arc::new(txn::TxnMetrics::default()),
         };
         // P5-M7 — database catalog: bootstrap/migrate the catalog rows, or
         // fail the open closed on a corrupt/unsupported catalog version.
@@ -881,6 +890,7 @@ impl Kernel {
             encryption_policies: self.encryption_policies.clone(),
             embedding_provider: self.embedding_provider.clone(),
             jobs: self.jobs.clone(),
+            txn_metrics: self.txn_metrics.clone(),
         }
     }
 }
@@ -1944,7 +1954,7 @@ impl Kernel {
     /// Idempotency keys inside transaction requests are not supported: a batch
     /// is already atomic and the caller can use an external idempotency token.
     pub fn transact(&self, ops: Vec<TransactionOp>) -> KResult<Vec<Remembered>> {
-        self.transact_with_schema_row(ops, None)
+        Ok(self.transact_inner(ops, None, None)?.0)
     }
 
     /// Internal: `transact` with an optional schema row folded into the same
@@ -1956,9 +1966,34 @@ impl Kernel {
         ops: Vec<TransactionOp>,
         schema_row: Option<&Schema>,
     ) -> KResult<Vec<Remembered>> {
-        if ops.is_empty() {
+        Ok(self.transact_inner(ops, schema_row, None)?.0)
+    }
+
+    /// P5-M10: commit a staged transaction. `txn_id` names the idempotency
+    /// record — the outcome row lands in the same batch as the writes, so a
+    /// retry after a crash re-reads it and re-applies nothing. The bool says
+    /// whether the outcome came from a recorded retry (deduped) rather than
+    /// a fresh commit.
+    pub(crate) fn transact_with_txn(
+        &self,
+        ops: Vec<TransactionOp>,
+        txn_id: &str,
+    ) -> KResult<(Vec<Remembered>, bool)> {
+        self.transact_inner(ops, None, Some(txn_id))
+    }
+
+    /// The shared commit pipeline. `txn_id.is_some()` arms the idempotent
+    /// outcome record and the tx006 park windows; the plain remember/transact
+    /// paths (txn_id None) stay unchanged — no record, no park.
+    fn transact_inner(
+        &self,
+        ops: Vec<TransactionOp>,
+        schema_row: Option<&Schema>,
+        txn_id: Option<&str>,
+    ) -> KResult<(Vec<Remembered>, bool)> {
+        if ops.is_empty() && txn_id.is_none() {
             let Some(schema) = schema_row else {
-                return Ok(Vec::new());
+                return Ok((Vec::new(), false));
             };
             // Idempotent re-apply with nothing left to migrate: persist the
             // schema row alone so the persisted registry never lags the
@@ -1968,9 +2003,26 @@ impl Kernel {
             self.repo
                 .put_schema_row(&mut batch, &schema.type_name, &bytes);
             self.repo.write_batch(&batch)?;
-            return Ok(Vec::new());
+            return Ok((Vec::new(), false));
         }
         let mut pipe = self.pipe.lock().unwrap();
+
+        // P5-M10: recorded retry. The check sits under the pipe lock so a
+        // concurrent same-id commit can never slip between the check and the
+        // record write — the second one always sees the outcome row. An empty
+        // staged set still falls through to record its (empty) outcome, so a
+        // re-begin of an already-committed id dedupes identically.
+        if let Some(tid) = txn_id {
+            if let Some(bytes) = self.repo.txn_record(tid)? {
+                self.txn_metrics
+                    .deduped_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                let results = txn::decode_txn_results(&bytes).map_err(|e| {
+                    KError::Store(format!("transaction record '{tid}' corrupt: {e}"))
+                })?;
+                return Ok((results, true));
+            }
+        }
 
         // Phase 1: resolve KOIDs and heads (snapshot before any write).
         struct Resolved {
@@ -2418,7 +2470,15 @@ impl Kernel {
             self.repo
                 .put_schema_row(&mut batch, &schema.type_name, &bytes);
         }
+        if let Some(tid) = txn_id {
+            txn::txn_park("pre_commit");
+            self.repo
+                .put_txn_record(&mut batch, tid, &txn::encode_txn_results(&results));
+        }
         self.repo.write_batch(&batch)?;
+        if txn_id.is_some() {
+            txn::txn_park("post_commit");
+        }
         pipe.seq = final_seq;
         pipe.audit = prev_audit;
         for ke in events {
@@ -2432,7 +2492,7 @@ impl Kernel {
         }) {
             self.refresh_auth_cache()?;
         }
-        Ok(results)
+        Ok((results, false))
     }
 
     // ---- evolve (MRFC-0011 §6.3) -------------------------------------------

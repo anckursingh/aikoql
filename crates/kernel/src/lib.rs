@@ -166,6 +166,6 @@ pub use transaction::kernel::{
     Lineage, ManualClock, MergeRequest, MergeStrategy, ObservationRequest, OfflineProof, Proof,
     PropertyFilter, RememberRequest, Remembered, ScoredKO, SimilarityQuery, SplitRequest,
     SplitResult, Subject, SubscriptionRecord, SummarizeConversationRequest, SupersedeRequest,
-    SupersedeResult, SystemClock, TransactionOp, VerificationRequest, VerificationResult,
-    VersionRecord,
+    SupersedeResult, SystemClock, Transaction, TransactionOp, TxnMetrics, TxnMetricsSnapshot,
+    VerificationRequest, VerificationResult, VersionRecord,
 };
