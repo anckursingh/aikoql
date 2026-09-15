@@ -230,12 +230,12 @@ fn cl01b_error_code_source_completeness() {
     ] {
         let src = std::fs::read_to_string(format!("{mcp}/{f}")).unwrap();
         let bytes = src.as_bytes();
-        for i in 0..bytes.len().saturating_sub(5) {
+        for i in 0..bytes.len().saturating_sub(6) {
             if bytes[i] == b'-'
                 && bytes[i + 1] == b'3'
-                && bytes[i + 2..i + 5].iter().all(|b| b.is_ascii_digit())
+                && bytes[i + 2..i + 6].iter().all(|b| b.is_ascii_digit())
             {
-                let code = src[i..i + 5].to_string();
+                let code = src[i..i + 6].to_string();
                 if !wire.contains(&code) {
                     wire.push(code);
                 }
@@ -251,11 +251,17 @@ fn cl01b_error_code_source_completeness() {
         );
     }
 
-    // Envelope codes: the as_str() literals in the classifier.
+    // Envelope codes: the as_str() literals in the classifier (scoped to the
+    // as_str() impl — suggestion() also matches "=> \"" but isn't a code table).
     let src = std::fs::read_to_string(format!("{mcp}/error_codes.rs")).unwrap();
+    let start = src.find("pub fn as_str").expect("as_str impl");
+    let end = src[start..]
+        .find("pub fn retryable")
+        .expect("retryable impl");
+    let region = &src[start..start + end];
     let mut envelope: Vec<String> = Vec::new();
-    for (i, _) in src.match_indices("=> \"") {
-        let rest = &src[i + 4..];
+    for (i, _) in region.match_indices("=> \"") {
+        let rest = &region[i + 4..];
         let end = rest.find('"').unwrap();
         envelope.push(rest[..end].to_string());
     }
@@ -272,8 +278,9 @@ fn cl01b_error_code_source_completeness() {
     }
 
     // Kernel tags: the ALL-CAPS prefixes inside the KError Display impl.
+    // (CARGO_MANIFEST_DIR is crates/services/api/mcp — three ups to crates/.)
     let kom = std::fs::read_to_string(format!(
-        "{}/../../../../kernel/src/knowledge/kom.rs",
+        "{}/../../../kernel/src/knowledge/kom.rs",
         env!("CARGO_MANIFEST_DIR")
     ))
     .unwrap();
@@ -287,7 +294,8 @@ fn cl01b_error_code_source_completeness() {
     let mut tags: Vec<String> = Vec::new();
     for (i, _) in region.match_indices('"') {
         let rest = &region[i + 1..];
-        let end = rest.find('"').unwrap();
+        // The region's final quote has no partner (it closes the last string).
+        let Some(end) = rest.find('"') else { break };
         let tag = rest[..end].split(':').next().unwrap_or("").to_string();
         if !tag.is_empty()
             && tag.len() >= 3
@@ -411,7 +419,10 @@ fn cl01f_envelope_producers() {
 
     // INTERNAL: a txn handle that was never opened.
     let begin = c.call_raw("txn_begin", json!({"txn_id": "cl01f-t1"}));
-    assert_eq!(begin["ok"], json!(true), "txn_begin must succeed: {begin}");
+    assert!(
+        begin["txn_id"].is_string(),
+        "txn_begin must succeed: {begin}"
+    );
     let r = c.call_raw("txn_commit", json!({"txn_id": "never-opened"}));
     assert_eq!(
         r["error"]["code"],

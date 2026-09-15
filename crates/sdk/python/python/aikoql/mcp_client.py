@@ -8,6 +8,22 @@ import socket
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+# P5-M12 (ND-12) version contract: the oldest server this SDK will talk to.
+# Pinned by tests/test_version_contract.py to the workspace version — a
+# workspace bump turns that test RED until this constant follows.
+MIN_SERVER_VERSION = "0.1.19"
+
+
+def _parse_version(v: str) -> Tuple[int, ...]:
+    """Dotted-int version tuple; non-numeric segments become -1 (never >=)."""
+    parts: List[int] = []
+    for seg in v.split("."):
+        try:
+            parts.append(int(seg))
+        except ValueError:
+            parts.append(-1)
+    return tuple(parts)
+
 
 class McpError(Exception):
     """Structured error from the MCP server (MRFC-0040 error codes)."""
@@ -105,7 +121,24 @@ class McpClient:
         }
         if self.token:
             params["token"] = self.token
-        return self._rpc("initialize", params)
+        result = self._rpc("initialize", params)
+        # P5-M12 (ND-12): fail fast on a server older than the contract
+        # minimum (docs/version-compatibility.md). A newer server is fine —
+        # forward-compatible optimism, no upper bound.
+        server_version = (
+            result.get("serverInfo", {}) or {}
+        ).get("version", "")
+        if _parse_version(server_version) < _parse_version(MIN_SERVER_VERSION):
+            raise McpError(
+                code="VERSION_MISMATCH",
+                message=(
+                    f"server version {server_version!r} is older than the SDK "
+                    f"minimum {MIN_SERVER_VERSION}"
+                ),
+                retryable=False,
+                suggestion="Upgrade the aikoql-mcp server to a supported version",
+            )
+        return result
 
     def session_init(self, agent_id: Optional[str] = None, run_id: Optional[str] = None,
                      tenant: Optional[str] = None, roles: Optional[List[str]] = None):

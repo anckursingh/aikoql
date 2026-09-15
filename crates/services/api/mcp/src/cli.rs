@@ -5,6 +5,8 @@ use crate::admin::*;
 use crate::imports::*;
 use crate::ingest::*;
 use crate::model::*;
+// P5-M12 (ND-12): the contract verbs reuse the tool implementations in-process.
+use crate::{json, Kernel, J};
 pub(crate) fn print_usage() {
     println!(concat!(
         "aikoql — Knowledge Database Suite\n",
@@ -18,6 +20,11 @@ pub(crate) fn print_usage() {
         "  restore BACKUP [DB]    Restore from a backup\n",
         "  audit [DB]             Print encryption compliance report\n",
         "  keygen [PATH]          Generate an encryption master key\n",
+        "  status [DB]            Health, metrics, and ABI version of a knowledge base\n",
+        "  query <AIKOQL> [DB]    Run one aikoql statement (CREATE/MATCH/...)\n",
+        "  explain <KOID> [DB]    Explain an object (provenance + evidence)\n",
+        "  index [DB]             Storage/index statistics\n",
+        "  schema [DB]            List types in the knowledge base\n",
         "  import <SOURCE> [ARGS]  Import from DB (postgres, pgvector, sqlite, mongodb, neo4j)\n",
         "  ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR] Ingest directory into knowledge base\n",
         "  report [PATH]          Print knowledge report for directory\n",
@@ -528,11 +535,89 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             run_keygen(arg_after.unwrap_or("./aikoql.key"));
             true
         }
+        // P5-M12 (ND-12): the five contract verbs are thin wrappers over the
+        // tool implementations the MCP surface already runs (cl03 dogfoods
+        // them through the repo-built binary).
+        Some("status") => {
+            let db = arg_after.unwrap_or("./aikoql.redb");
+            run_verb(db, |k, _admin| {
+                let health = crate::tools::admin::tool_health(k)?;
+                let metrics = crate::tools::admin::tool_metrics(k)?;
+                let abi = crate::tools::admin::tool_abi_version(k)?;
+                Ok(json!({"health": health, "metrics": metrics, "abi_version": abi}))
+            });
+            true
+        }
+        Some("query") => {
+            let Some(query) = arg_after else {
+                eprintln!("Usage: aikoql-mcp query <AIKOQL> [DB]");
+                std::process::exit(2);
+            };
+            let db = arg_after2.unwrap_or("./aikoql.redb");
+            run_verb(db, |k, _admin| {
+                crate::tools::query::tool_aikoql(k, &json!({"query": query, "subject": "cli"}))
+            });
+            true
+        }
+        Some("explain") => {
+            let Some(koid) = arg_after else {
+                eprintln!("Usage: aikoql-mcp explain <KOID> [DB]");
+                std::process::exit(2);
+            };
+            let db = arg_after2.unwrap_or("./aikoql.redb");
+            run_verb(db, |k, _admin| {
+                crate::tools::query::tool_explain(k, &json!({"koid": koid, "subject": "cli"}))
+            });
+            true
+        }
+        Some("index") => {
+            let db = arg_after.unwrap_or("./aikoql.redb");
+            run_verb(db, |_k, admin| {
+                crate::tools::admin::tool_storage_stats(admin)
+            });
+            true
+        }
+        Some("schema") => {
+            let db = arg_after.unwrap_or("./aikoql.redb");
+            run_verb(db, |k, _admin| {
+                crate::tools::agent_knowledge::tool_discover_schema(k)
+            });
+            true
+        }
         Some("help") => {
             print_usage();
             true
         }
         _ => false,
+    }
+}
+
+/// P5-M12 (ND-12) verb runner: open the db like shell/backup do, run one
+/// tool implementation in-process, print pretty JSON. Runtime errors go to
+/// stderr with exit 1 (cl03f pins the kernel tag rides along).
+fn run_verb(
+    db: &str,
+    f: impl FnOnce(
+        &Kernel,
+        Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+    ) -> Result<J, String>,
+) {
+    let (kernel, admin) = crate::engine::open_kernel_auto(db).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+    match f(&kernel, admin.as_deref()) {
+        Ok(v) => println!(
+            "{}",
+            serde_json::to_string_pretty(&v).unwrap_or_else(|e| {
+                eprintln!("serialize: {e}");
+                std::process::exit(1);
+            })
+        ),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
     }
 }
 

@@ -78,7 +78,15 @@ impl ErrorCode {
             ErrorCode::Timeout
         } else if lower.contains("not a program") {
             ErrorCode::NotAProgram
-        } else if lower.contains("compile") || lower.contains("parse") || lower.contains("syntax") {
+        } else if lower.contains("compile")
+            || lower.contains("parse")
+            || lower.contains("syntax")
+            // P5-M12 (ND-12): aikoql parser errors format as AIKOQL1xxx
+            // ("AIKOQL1010: unexpected ...") — no keyword above matches, so
+            // they used to classify INTERNAL. The code table (cl01f) pins
+            // them as COMPILE_ERROR.
+            || lower.contains("aikoql1")
+        {
             ErrorCode::CompileError
         } else {
             ErrorCode::Internal
