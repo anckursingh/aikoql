@@ -110,6 +110,10 @@ fn cert001b_same_seed_is_reproducible() {
     let out_a = out_dir("cert001b_a");
     let out_b = out_dir("cert001b_b");
     let a = std::fs::read_to_string(run_suite("db-oltp", &out_a).unwrap()).unwrap();
+    // A re-run into the SAME dir must succeed — the runner clears the suite
+    // dir (the deterministic seed regenerates identical KOIDs, which OCC
+    // rejects against a stale store).
+    run_suite("db-oltp", &out_a).expect("re-run over a fixed path must run clean");
     let b = std::fs::read_to_string(run_suite("db-oltp", &out_b).unwrap()).unwrap();
     let (va, vb): (serde_json::Value, serde_json::Value) = (
         serde_json::from_str(&a).unwrap(),

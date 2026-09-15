@@ -409,6 +409,15 @@ fn started_at() -> String {
 /// `<out_dir>/<suite>/result.json`. A correctness-parity mismatch is an
 /// `Err` and no artifact is written.
 pub fn run_suite(suite: &str, out_dir: &Path) -> Result<PathBuf, CertError> {
+    // Run from a clean checkout: the suite dir is removed first, otherwise a
+    // re-run over a fixed path reopens the previous store and deterministic
+    // KOIDs (HLC-encoded) collide as VersionConflict.
+    let suite_dir = out_dir.join(suite);
+    // Windows: remove_dir_all on a missing path is error 2, not a no-op.
+    match std::fs::remove_dir_all(&suite_dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(CertError::io(e)),
+        _ => {}
+    }
     let (specs, disk_root) = match suite {
         "db-oltp" => db_oltp(out_dir)?,
         "db-graph" => db_graph(),
