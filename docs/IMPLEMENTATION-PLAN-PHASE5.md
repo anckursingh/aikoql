@@ -222,7 +222,7 @@ TDD REDs: cbo-default suite — (1) default-path execution on an indexed+fresh k
 
 Acceptance: cbo-default pins green; the competitor harness structured_filter cell re-measured and republished; cert db-knowledge/db-agent suites untouched-green (their kernels declare no indexes — the guard must be a no-op there).
 
-Status: ⬜ Proposed
+Status: ✅ Shipped — `Interpreter::execute` routes through `cost_optimize` (execute_with_report is the pin seam; execute_costed is now an alias); run_costed's baseline arm executes the rule physicalization so gate-6 keeps teeth. cbo-default 4/4 (RED e08cc46: E0599 on the missing seam; 001 index selection + row-for-row identity, 002 lagging/stale guards, 003 no-index byte-identical plan, 004 gate-6 divergence 0). Runtime suites green; kernel+mcp+storage-v2 1027/0; cert 5/5 with all five DB-* artifacts re-stamped at 7c0d7e1. The streaming path keeps its separate EVENTUAL opt-in (StreamOptions.use_indexes, idx001 discipline). Competitor re-measure: after M16 lands (one harness run covers both) — the structured_filter cell expectation: ~2.5 ms from the property index vs PG 2.54.
 
 ### P5-M16 — Vector recall without corpus materialization
 
