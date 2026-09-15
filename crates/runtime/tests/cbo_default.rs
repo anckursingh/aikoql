@@ -141,7 +141,10 @@ fn cbo_default_002_lagging_or_stale_index_falls_back_on_the_default_path() {
     let query = "MATCH Person WHERE name == \"Unseen\" RETURN *";
     let plan = plan_of(&k, query);
     let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
-    assert!(report.stats_used, "stats fresh — the index is the rejected piece");
+    assert!(
+        report.stats_used,
+        "stats fresh — the index is the rejected piece"
+    );
     assert_eq!(report.plan.operators[0].strategy, Strategy::FullScan);
     assert_eq!(exec_ids(&rows), vec![unseen], "not silently wrong");
 
@@ -176,19 +179,33 @@ fn cbo_default_002_lagging_or_stale_index_falls_back_on_the_default_path() {
 fn cbo_default_003_no_declared_indexes_executes_byte_identical_to_pre_m15() {
     let k = mk();
     for i in 0..20 {
-        person(&k, &format!("P{i:03}"), if i % 2 == 0 { "Eng" } else { "Ops" });
+        person(
+            &k,
+            &format!("P{i:03}"),
+            if i % 2 == 0 { "Eng" } else { "Ops" },
+        );
     }
     let query = "MATCH Person WHERE dept == \"Eng\" RETURN *";
     let plan = plan_of(&k, query);
     let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
     // The plan is byte-identical to the pre-M15 physicalization.
     let rule_plan = PhysicalPlan::from_ops(plan.operators.clone());
-    assert_eq!(report.plan, rule_plan, "the optimizer is a no-op without indexes");
+    assert_eq!(
+        report.plan, rule_plan,
+        "the optimizer is a no-op without indexes"
+    );
     assert!(
-        report.plan.operators.iter().all(|po| po.strategy == Strategy::FullScan),
+        report
+            .plan
+            .operators
+            .iter()
+            .all(|po| po.strategy != Strategy::PropertyIndex),
         "no index was selected"
     );
-    assert!(!report.stats_used && !report.stats_stale, "no stats, not stale");
+    assert!(
+        !report.stats_used && !report.stats_stale,
+        "no stats, not stale"
+    );
     assert_eq!(exec_ids(&rows), rule_based(&k, &plan));
 }
 

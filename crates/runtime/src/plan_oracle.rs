@@ -6,7 +6,7 @@
 //! the oracle never reports equivalence through a failure.
 
 use super::{Interpreter, RowSet};
-use aikoql_kernel::ir::IrPlan;
+use aikoql_kernel::ir::{IrPlan, PhysicalPlan};
 use aikoql_kernel::transaction::kernel::Kernel;
 
 /// One baseline/candidate plan pair to compare.
@@ -28,9 +28,10 @@ pub fn run(kernel: &Kernel, entries: &[OracleEntry]) -> OracleReport {
     run_impl(kernel, entries, false)
 }
 
-/// P5-M9 (ND-08, gate 6): the same equivalence check with the candidate
-/// executed through the CBO path (`Interpreter::execute_costed`) — the pin
-/// that cost-based plans never change results (cbo010).
+/// P5-M9 (ND-08, gate 6): the baseline executes as the RULE physicalization
+/// (the pre-M15 default path) and the candidate through the default
+/// cost-optimized path (`Interpreter::execute` — P5-M15 made the CBO the
+/// default) — the pin that index-assisted plans never change results.
 pub fn run_costed(kernel: &Kernel, entries: &[OracleEntry]) -> OracleReport {
     run_impl(kernel, entries, true)
 }
@@ -38,12 +39,16 @@ pub fn run_costed(kernel: &Kernel, entries: &[OracleEntry]) -> OracleReport {
 fn run_impl(kernel: &Kernel, entries: &[OracleEntry], costed: bool) -> OracleReport {
     let mut divergences = Vec::new();
     for e in entries {
-        let candidate = if costed {
-            Interpreter::execute_costed(kernel, &e.candidate)
+        let baseline = if costed {
+            Interpreter::execute_physical(
+                kernel,
+                &PhysicalPlan::from_ops(e.baseline.operators.clone()),
+            )
         } else {
-            Interpreter::execute(kernel, &e.candidate)
+            Interpreter::execute(kernel, &e.baseline)
         };
-        match (Interpreter::execute(kernel, &e.baseline), candidate) {
+        let candidate = Interpreter::execute(kernel, &e.candidate);
+        match (baseline, candidate) {
             (Ok(b), Ok(c)) => {
                 let (fb, fc) = (fingerprint(&b), fingerprint(&c));
                 if fb != fc {

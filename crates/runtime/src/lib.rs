@@ -250,10 +250,25 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
-    /// Execute a logical plan (P5-M3): physicalized at the boundary — the
-    /// historical entry point, kept so existing callers stay untouched.
+    /// Execute a logical plan — the default entry point (MCP tool, shell,
+    /// SDK, certification). P5-M15: cost-optimized first, guarded by M9's
+    /// gates — only a covering, verified-clean, fresh-stats property index
+    /// over the first Eq filter is selected, and only when strictly cheaper.
+    /// Every other plan (incl. any kernel without declared indexes or stats)
+    /// executes byte-identical to the pre-M15 physicalization.
     pub fn execute(kernel: &Kernel, plan: &IrPlan) -> KResult<RowSet> {
-        Interpreter::execute_physical(kernel, &PhysicalPlan::from_ops(plan.operators.clone()))
+        Interpreter::execute_with_report(kernel, plan).map(|(rows, _)| rows)
+    }
+
+    /// The default path with its decision visible — the cbo-default pin seam
+    /// (P5-M15): the rows AND the cost report of the plan that executed.
+    pub fn execute_with_report(
+        kernel: &Kernel,
+        plan: &IrPlan,
+    ) -> KResult<(RowSet, cbo::CostReport)> {
+        let report = cbo::cost_optimize(kernel, plan)?;
+        let rows = Interpreter::execute_physical(kernel, &report.plan)?;
+        Ok((rows, report))
     }
 
     /// Execute the physical plan — the runtime's real entry point since
@@ -283,12 +298,10 @@ impl Interpreter {
         Ok(rows)
     }
 
-    /// Execute through the cost-based optimizer (P5-M9, ND-08): the plan is
-    /// cost-optimized (index-assisted where stats and a clean index allow)
-    /// and executed — the `run_costed` oracle arm.
+    /// The P5-M9 name for the CBO path — P5-M15 made it the default, so this
+    /// is now an alias for `execute`, kept for the existing callers.
     pub fn execute_costed(kernel: &Kernel, plan: &IrPlan) -> KResult<RowSet> {
-        let report = cbo::cost_optimize(kernel, plan)?;
-        Interpreter::execute_physical(kernel, &report.plan)
+        Interpreter::execute(kernel, plan)
     }
 
     /// Resolve input to objects: if Scored, use cached objects; otherwise use as-is.
