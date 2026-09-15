@@ -11,8 +11,14 @@
 //! provenance completeness over the seeded knowledge base.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use aikoql_certification::{agent_provenance_check, run_suite, SUITES};
+
+/// cert002's CERT_INJECT is a process-wide env var — parallel tests would
+/// observe the injection mid-run. Serialize the tests that run db-oltp /
+/// touch the injection knob.
+static INJECT_LOCK: Mutex<()> = Mutex::new(());
 
 fn out_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -29,17 +35,28 @@ fn out_dir(name: &str) -> PathBuf {
     dir
 }
 
+fn lock() -> std::sync::MutexGuard<'static, ()> {
+    INJECT_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// The five roadmap suite families (ND-14), in order.
 #[test]
 fn cert000_suite_names() {
     assert_eq!(
         SUITES,
-        ["db-oltp", "db-graph", "db-vector", "db-knowledge", "db-agent"]
+        [
+            "db-oltp",
+            "db-graph",
+            "db-vector",
+            "db-knowledge",
+            "db-agent"
+        ]
     );
 }
 
 #[test]
 fn cert001_every_suite_writes_a_machine_readable_artifact() {
+    let _guard = lock();
     for suite in SUITES {
         let out = out_dir("cert001");
         let path = run_suite(suite, &out).expect("suite must run from a clean checkout");
@@ -65,7 +82,10 @@ fn cert001_every_suite_writes_a_machine_readable_artifact() {
             assert!(w["name"].is_string(), "workload name: {w}");
             assert!(w["n"].as_u64().unwrap_or(0) > 0, "sample count: {w}");
             for key in ["p50_ms", "p95_ms", "p99_ms", "throughput_ops_s"] {
-                assert!(w[key].as_f64().is_some(), "{suite} {key} must be numeric: {w}");
+                assert!(
+                    w[key].as_f64().is_some(),
+                    "{suite} {key} must be numeric: {w}"
+                );
             }
             assert!(w["rss_kb"].as_u64().is_some(), "{suite} RSS: {w}");
             assert!(w["disk_bytes"].as_u64().is_some(), "{suite} disk: {w}");
@@ -86,12 +106,15 @@ fn cert001_every_suite_writes_a_machine_readable_artifact() {
 
 #[test]
 fn cert001b_same_seed_is_reproducible() {
+    let _guard = lock();
     let out_a = out_dir("cert001b_a");
     let out_b = out_dir("cert001b_b");
     let a = std::fs::read_to_string(run_suite("db-oltp", &out_a).unwrap()).unwrap();
     let b = std::fs::read_to_string(run_suite("db-oltp", &out_b).unwrap()).unwrap();
-    let (va, vb): (serde_json::Value, serde_json::Value) =
-        (serde_json::from_str(&a).unwrap(), serde_json::from_str(&b).unwrap());
+    let (va, vb): (serde_json::Value, serde_json::Value) = (
+        serde_json::from_str(&a).unwrap(),
+        serde_json::from_str(&b).unwrap(),
+    );
     // Timings are noise; the deterministic surface is the seed, the workload
     // list and the correctness oracle.
     assert_eq!(va["seed"], vb["seed"]);
@@ -114,6 +137,7 @@ fn cert001b_same_seed_is_reproducible() {
 
 #[test]
 fn cert002_injected_regression_fails_the_run() {
+    let _guard = lock();
     let out = out_dir("cert002");
     // Detection power: the certification data path must not write a green
     // artifact over an injected regression.

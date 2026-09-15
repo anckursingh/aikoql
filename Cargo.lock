@@ -79,6 +79,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aikoql-certification"
+version = "0.1.19"
+dependencies = [
+ "aikoql-compiler",
+ "aikoql-graph",
+ "aikoql-kernel",
+ "aikoql-runtime",
+ "aikoql-storage-v2",
+ "serde_json",
+]
+
+[[package]]
 name = "aikoql-compiler"
 version = "0.1.19"
 dependencies = [
