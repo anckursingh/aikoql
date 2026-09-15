@@ -119,35 +119,53 @@ class Agent:
                  note: Optional[str] = None, **kwargs) -> dict:
         if self._mode == "mcp":
             return self._backend.remember(type_name, properties, koid, subject, note, **kwargs)
-        return self._backend.remember(type_name, properties or {}, koid, subject, note, **kwargs)
+        if note is not None:
+            raise NotImplementedError("embedded remember: note is server-mode only")
+        # Embedded identity: the process owner. The native surface is
+        # subject-first: (subject, type_name, properties, semantic, roles, koid).
+        return self._backend.remember(subject or "owner", type_name, properties or {},
+                                      kwargs.get("semantic"), kwargs.get("roles"), koid)
 
     def get(self, koid: str, subject: Optional[str] = None) -> dict:
         if self._mode == "mcp":
             return self._backend.get(koid, subject)
-        return self._backend.get(koid, subject)
+        return self._backend.get(subject or "owner", koid)
 
     def find_similar(self, text: Optional[str] = None, vector: Optional[List[float]] = None,
-                     type_name: Optional[str] = None, k: int = 10, **kwargs) -> dict:
+                     type_name: Optional[str] = None, k: int = 10, **kwargs) -> list:
         if self._mode == "mcp":
-            return self._backend.find_similar(text, vector, type_name, k, **kwargs)
-        return self._backend.find_similar(text, vector, type_name, k, **kwargs)
+            return self._backend.find_similar(text, vector, type_name, k, **kwargs).get(
+                "results", [])
+        if type_name is not None:
+            raise NotImplementedError(
+                "embedded find_similar: type_name filter is server-mode only")
+        hits = self._backend.find_similar(kwargs.get("subject") or "owner", text, vector,
+                                          kwargs.get("embedding_model"), k,
+                                          kwargs.get("fusion", "rrf"))
+        # Native Scored shape -> MCP results-item shape (flat {koid, score, ...}):
+        # one Agent contract in both modes. The adapters use the native class
+        # directly and keep the nested {ko, ...} shape.
+        return [{"koid": h["ko"]["koid"], "score": h["score"],
+                 "index_lag_ms": h["index_lag_ms"],
+                 "type_name": h["ko"]["type_name"], "version": h["ko"]["version"]}
+                for h in hits]
 
     def aikoql(self, query: str, subject: Optional[str] = None) -> dict:
         if self._mode == "mcp":
             return self._backend.aikoql(query, subject)
-        return self._backend.aikoql(query, subject)
+        return self._backend.aikoql(query, subject or "owner")
 
     def relate(self, from_koid: str, to_koid: str, rel_type: str,
                subject: Optional[str] = None) -> dict:
         if self._mode == "mcp":
             return self._backend.relate(from_koid, to_koid, rel_type, subject)
-        return self._backend.relate(from_koid, to_koid, rel_type, subject)
+        return self._backend.relate(subject or "owner", from_koid, to_koid, rel_type)
 
     def traverse(self, koid: str, rel_type: Optional[str] = None,
                  depth: int = 1, subject: Optional[str] = None) -> dict:
         if self._mode == "mcp":
             return self._backend.traverse(koid, rel_type, depth, subject)
-        return self._backend.traverse(koid, rel_type, depth, subject)
+        return self._backend.traverse(subject or "owner", koid, rel_type, depth)
 
     def forget(self, koid: str, mode: str = "tombstone",
                subject: Optional[str] = None) -> dict:

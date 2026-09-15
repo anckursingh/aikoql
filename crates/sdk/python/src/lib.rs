@@ -177,7 +177,7 @@ impl Aikoql {
         })
     }
 
-    #[pyo3(signature = (subject, type_name, properties, semantic = None, roles = None))]
+    #[pyo3(signature = (subject, type_name, properties, semantic = None, roles = None, koid = None))]
     fn remember(
         &self,
         py: Python<'_>,
@@ -186,6 +186,7 @@ impl Aikoql {
         properties: &Bound<'_, PyDict>,
         semantic: Option<&Bound<'_, PyDict>>,
         roles: Option<Vec<String>>,
+        koid: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         // Extract all Python data while the GIL is held; the closure passed to
         // `allow_threads` must be `Send`, so it cannot borrow `Bound` handles.
@@ -197,21 +198,28 @@ impl Aikoql {
         }
         let semantic = semantic.map(semantic_from_py).transpose()?;
         let type_name = type_name.to_string();
+        // koid present = update (MCP parity); the kernel update REPLACES the
+        // property map, so callers must restate every field they keep.
+        let koid = koid
+            .map(KOID::from_hex)
+            .transpose()
+            .map_err(|e| PyValueError::new_err(format!("{}", e)))?;
 
         let res = py.detach(move || {
             let subject = Subject::with_roles(
                 subject,
                 &roles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
             );
-            let mut req = RememberRequest::create(
-                subject,
-                Metadata {
-                    type_name,
-                    tenant: None,
-                    schema_version: 1,
-                    tags: vec![],
-                },
-            );
+            let metadata = Metadata {
+                type_name,
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            };
+            let mut req = match koid {
+                Some(k) => RememberRequest::update(subject, k, metadata),
+                None => RememberRequest::create(subject, metadata),
+            };
             req.properties = prop_map;
             req.semantic = semantic;
             self.inner.remember(req).map_err(to_pyerr)
