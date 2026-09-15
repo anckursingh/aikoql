@@ -208,6 +208,54 @@ Acceptance: the roadmap's ND-14 list; results published in `docs/certification/`
 
 Status: ✅ Shipped — `crates/certification` (P5-M14, ND-14): the roadmap's five DB-* suites as a reproducible runner over a seeded AikoqlStorageEngineV2 kernel (the production storage shape), one `run_suite(suite, out_dir)` per suite writing `<out>/<suite>/result.json` with the pinned acceptance schema — deterministic seed + run-date + commit hash, per-workload name/n/p50/p95/p99/throughput_ops_s/rss_kb/disk_bytes/cold/warm/correct cells + suite-level correctness_parity, all oracles hand-computed against the shipped semantics (RRF ranks from the P5-M13 math, BFS traversal closures, AS_OF +1 millis visibility, ACL scoping, evidence insertion order). cert000–003 5/5 (RED 3fbbdf0 committed first: E0432 on the missing surface). cert001 pins the schema field-by-field for every suite; cert001b pins same-seed determinism (names/n/correctness shape); cert002 pins detection power — `CERT_INJECT=1` corrupts the seed topic, the point-read oracle fails, the run errs fail-fast and writes no green artifact; cert003 pins DB-AGENT evidence_coverage ∈ [0,1], provenance_complete, determinism. Workloads per the roadmap list with no cherry-picking: OLTP (point read/write, transactions, concurrency, recovery — disk v2, restart durability, 4 threads through one kernel), graph (one/two-hop, fanout, rel-type filter), vector (ingest, recall@k, filtered ANN), knowledge (structured filter, vector hits, relationship walk, temporal snapshot, evidence explain, authorization), agent (context retrieval, evidence coverage, provenance completeness, semantic relevance, authorization). Honest ledger: concurrency = threads over ONE `Arc<Kernel>` — multiple Kernel instances over one store contend on the store-global journal head (the mcp production shape; a fresh kernel at clock M cannot see versions written at M with counters > 0); recovery runs per-sample clocks (writer 10_001+i / reader 10_002+i) because KOIDs encode the HLC — regenerating the same clock+sequence regenerates the same koids and OCC rejects them (VersionConflict); the runtime's BFS pre-seeds `visited` with the start koids, so an edge back into the seed set is never emitted — the fixture carries a bird→e5 `derived_from` edge so the rel-filter oracle stays non-trivial; "transaction" = the kernel's single-op atomic unit (multi-statement batches have no kernel surface; crash-injection coverage is SE2-M36's certified d05/ci surface — the certification pins restart durability); CERT_INJECT is a process-wide env var, so cert001/cert001b/cert002 serialize behind a poison-tolerant mutex (parallel-test race observed while going green); competitor comparisons vs PostgreSQL/Neo4j/vector DBs remain published reports, not CI gates (CI pins AIKOQL-only regressions, per the acceptance). Published artifacts in `docs/certification/` (regenerate via `cargo run -p aikoql-certification --example generate`). Suites: cert 5/5 (26.6s); kernel/runtime/mcp/v2 green; Python SDK 22/22; fmt + clippy -D warnings green. **P5-M14 closes Phase 5 — Database 1.0 definition met** (roadmap §8 + the Chief Architect amendments: SNAPSHOT-only isolation, `aikoql-mcp` binary name, reopen-gate rows PG-wire/READ COMMITTED/rename documented).
 
+## Post-Phase-5 improvement program (2026-09-16 — from the competitor benchmark review)
+
+Phase 5 closed at M14, but the competitor benchmark (6487044) separated deployment-model wins from real engine gaps. Senior-architect review of `docs/certification/competitors/REPORT.md` produced this ordered program. Same rules: RED-first, one milestone = one commit, no push, honest ledger.
+
+### P5-M15 — CBO on the default KOQL query path
+
+The benchmark's structured_filter cell (21.9 ms vs PG-indexed 2.5 ms) measured the OFF switch: M8 shipped the property index and M9 shipped the CBO with freshness/verify guards, but index selection is opt-in (`StreamOptions.use_indexes` / `execute_costed`) — the default `execute()` path every caller (MCP tool, shell, SDK, certification) uses never cost-optimizes. An 8.6× measured gap closes by wiring shipped machinery into the default path.
+
+Deliver: `Interpreter::execute` cost-optimizes before executing, guarded by M9's existing gates — only a covering, verified-clean, fresh-stats property index over the first Eq filter is selected, and only when strictly cheaper; every other plan (incl. any kernel without declared indexes or stats) executes byte-identical to today. EVENTUAL semantics stay the M9 contract (optimize-time verify, no exec-time re-verification — the idx2-008 precedent).
+
+TDD REDs: cbo-default suite — (1) default-path execution on an indexed+fresh kernel returns row-for-row identical results to the FullScan plan AND the plan shows PropertyIndex; (2) stale stats / lagging index → FullScan, identical results; (3) no declared indexes → byte-identical plan and results to the pre-M15 path (regression pin); (4) the oracle row: run_costed over the same scenarios through the default path, divergence = 0 (gate 6).
+
+Acceptance: cbo-default pins green; the competitor harness structured_filter cell re-measured and republished; cert db-knowledge/db-agent suites untouched-green (their kernels declare no indexes — the guard must be a no-op there).
+
+Status: ⬜ Proposed
+
+### P5-M16 — Vector recall without corpus materialization
+
+The benchmark's vector_recall cell (12 ms for 1 000 × 2-d vectors ≈ 10 µs/object = point_read cost) shows `find_similar` materializes every KO (ACL check + deserialize) before scoring. Distance math over 1 000 stored 2-d embeddings is microseconds — the rest is waste. No ANN index needed to win this cell; stop reading objects the query will not return.
+
+Deliver: `Kernel::find_similar` scores the stored embeddings (the vector index's own representation, ACL-filtered) and materializes only the top-k KOs for the response. Same ranking, same ACL semantics (t22/t35 pins must stay green untouched).
+
+TDD REDs: vs-scan suite — (1) ranking parity: brute-force reference vs the new path over a seeded corpus (incl. ACL-denied rows and no-embedding rows), identical top-k; (2) a materialization-count probe: the new path reads ≤ top-k + margin objects for a k=10 query over a 1 000-object corpus (the old path reads 1 000 — the pin that fails pre-impl); (3) index_lag_ms semantics unchanged.
+
+Acceptance: vs-scan green; kernel vector suites (vec001/002) untouched-green; the competitor harness vector cell re-measured and republished (expect ~1 ms at N=1 000).
+
+Status: ⬜ Proposed
+
+### P5-M17 — Benchmark scale-out + honest cells
+
+N=1 000 is comfort food; the architecture questions live at scale. Also two cells were honest-but-weak: "transactions" = single-op commits (the multi-op P5-M10 surface is the real write story) and aikoql was measured embedded-only (MCP mode is the shared-service deployment).
+
+Deliver: harness gains (a) scale runs at 100k/1M for the three degrading aikoql cells (filter, vector, graph) plus point_read; (b) a multi-op transaction cell (batch of 10/100 via the P5-M10 surface, one commit) against PG's multi-statement txn; (c) one MCP-mode column (localhost aikoql-mcp server, same dataset, same cells) to complete the embedded-vs-wire story. Republished as a report, still not a CI gate.
+
+TDD REDs: none (measurement-first milestone); the harness's own oracles stay the correctness pins — a scale run with a wrong oracle result fails the run.
+
+Acceptance: docs/certification/competitors/scale/result.json + REPORT.md update; the ANN decision (M18) made from the 100k vector numbers.
+
+Status: ⬜ Proposed
+
+### P5-M18 — ANN vector index (evidence-gated)
+
+Decision point AFTER M17's 100k/1M vector numbers. Rule 11 (SE2-M25 discipline): no index ships without a cell showing a real gain. If brute-force-without-materialization (M16) holds the vector cell at scale, M18 closes as skip with the evidence row — the M26 precedent.
+
+Deliver: TBD at the decision point. Candidate: HNSW over the vector index's representation behind the existing `trait Index` + CBO strategy (the M9 seam), or closure row.
+
+Status: ⬜ Proposed (gated on M17)
+
 ## Gates (carried + new)
 
 - **Gate 5** (≤8× W1/W2 at 1M) — carried. W1 is REDLINE at 7.96× (0.04× headroom): every milestone touching storage/kernel/runtime re-runs the 1M matrix before merge (M0's CI job automates this).
