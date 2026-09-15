@@ -841,4 +841,80 @@ mod tests {
         );
         m2.shutdown();
     }
+
+    // --- P5-M17b (TDD) — idx2-010: the freshness stamp. RED: the kernel's
+    // `index_applied_seq` surface does not exist yet. The stamp is the
+    // verify gate's O(1) proof — rebuild stamps the head it reseeded from,
+    // a successful maintainer batch stamps the batch's last seq. stamp ==
+    // journal head ⟺ the index holds every committed event (the walk
+    // remains the fail-closed fallback whenever the stamp lags). ---
+
+    #[test]
+    fn idx2_010_property_index_stamps_applied_seq_for_the_verify_short_circuit() {
+        let k = mk();
+        let a = Subject::new("alice");
+
+        // Declaration: the synchronous rebuild stamps the head it reseeded
+        // from — an empty journal, so 0.
+        k.catalog_create_index("by_body", "note", &["body"])
+            .unwrap();
+        assert_eq!(
+            k.index_applied_seq("by_body").unwrap(),
+            0,
+            "a fresh declaration on an empty journal stamps head 0"
+        );
+
+        // A commit before any maintainer runs: the stamp must stay put —
+        // index maintenance never rides the commit path (idx2-003).
+        let id = create(&k, &a, "note", "cats and dogs");
+        assert_eq!(
+            k.index_applied_seq("by_body").unwrap(),
+            0,
+            "the commit path must not stamp"
+        );
+
+        // The maintainer stamps the index as it applies.
+        let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
+        let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
+        let m = Arc::new(IndexMaintainer::new(v, t));
+        SchedulerJob::start(&*m, &k).unwrap();
+        m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();
+        let (head, _) = k.journal_head().unwrap();
+        assert_eq!(
+            k.index_applied_seq("by_body").unwrap(),
+            head,
+            "a caught-up maintainer stamps the journal head — the verify gate's short-circuit proof"
+        );
+        assert_eq!(
+            k.scan_index("by_body", &[Value::Text("cats and dogs".into())])
+                .unwrap(),
+            vec![id],
+            "stamp == head ⟺ complete: the index answers the committed row"
+        );
+
+        // A commit after catch-up: stale until the maintainer applies it.
+        let second = create(&k, &a, "note", "second");
+        assert!(
+            k.index_applied_seq("by_body").unwrap()
+                < k.journal_head().unwrap().0,
+            "a committed-but-unapplied event keeps the stamp behind the head"
+        );
+        m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();
+        let (head2, _) = k.journal_head().unwrap();
+        assert_eq!(
+            k.index_applied_seq("by_body").unwrap(),
+            head2,
+            "the maintainer advances the stamp"
+        );
+        assert_eq!(
+            k.scan_index("by_body", &[Value::Text("second".into())])
+                .unwrap(),
+            vec![second],
+            "the new row is in the index"
+        );
+
+        // Unknown names fail closed.
+        assert!(k.index_applied_seq("nope").is_err());
+        m.shutdown();
+    }
 }
