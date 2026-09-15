@@ -731,6 +731,7 @@ fn met006_storage_compact_via_mcp_returns_stats_and_preserves_data() {
     );
     let path = dir.to_str().unwrap().to_string();
 
+    let txns: crate::tools::TxnRegistry = crate::Mutex::new(crate::HashMap::new());
     let denied = crate::tool_registry::call_tool(
         &k,
         "storage_compact",
@@ -738,6 +739,7 @@ fn met006_storage_compact_via_mcp_returns_stats_and_preserves_data() {
         &path,
         &mut session,
         None,
+        &txns,
     )
     .expect("call_tool answers (stdio passthrough)");
     assert_eq!(
@@ -757,6 +759,7 @@ fn met006_storage_compact_via_mcp_returns_stats_and_preserves_data() {
         &path,
         &mut session,
         Some(cap.as_ref()),
+        &txns,
     )
     .expect("storage_compact with cap");
     assert_eq!(out["isError"], false, "compact must succeed: {out}");

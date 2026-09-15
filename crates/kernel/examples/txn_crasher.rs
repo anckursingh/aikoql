@@ -31,7 +31,7 @@ fn main() {
     );
     req.properties.insert("i".into(), Value::Int(7));
     t.stage(req).expect("stage");
-    let r = t.commit().expect("commit");
+    let (r, _) = t.commit().expect("commit");
     // Reached only when no park fired (a plain run) — for manual checks.
     println!("committed {} result(s), version {}", r.len(), r[0].version);
 }

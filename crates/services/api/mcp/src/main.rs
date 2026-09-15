@@ -485,9 +485,24 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        run_tcp_listener(kernel, listener, auth, db_path, mcp_rate_limit, admin);
+        run_tcp_listener(
+            kernel,
+            listener,
+            auth,
+            db_path,
+            mcp_rate_limit,
+            admin,
+            cfg.request_timeout_secs,
+            cfg.max_connections,
+        );
     } else {
-        run_stdio(&kernel, &db_path, mcp_rate_limit, admin);
+        run_stdio(
+            &kernel,
+            &db_path,
+            mcp_rate_limit,
+            admin,
+            cfg.request_timeout_secs,
+        );
     }
 }
 

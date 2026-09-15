@@ -5,12 +5,22 @@ use crate::helpers::*;
 use crate::session::*;
 use crate::tools::*;
 use crate::{
-    error, info_span, json, warn, Arc, EventFilter, EventKind, HashSet, Kernel, Mutex, Write, J,
-    KOID, PROTOCOL_VERSION,
+    error, info_span, json, warn, Arc, EventFilter, EventKind, HashSet, Kernel, Mutex, Ordering,
+    Write, J, KOID, PROTOCOL_VERSION,
 };
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
+
+/// P5-M11 crash-window hook: ONE-SHOT per process — only the FIRST
+/// koql/query while armed parks. sv007 pins it: after the parked query is
+/// cancelled, the next client's query must get normal service, not park too.
+static PARK_ONESHOT: AtomicBool = AtomicBool::new(true);
 
 use crate::protocol::*;
 use crate::tool_registry::*;
+// P5-M11: the koql/query + koql/execute methods run through the timeout
+// wrapper; the shutdown flag stops the accept loop and closes connections.
+use crate::transport::{run_with_timeout, SHUTDOWN_FLAG};
 use aikoql_storage_v2::engine::StorageAdminApi;
 
 pub(crate) fn handle_message(
@@ -22,6 +32,8 @@ pub(crate) fn handle_message(
     session: &mut McpSession,
     msg: J,
     admin: Option<&dyn StorageAdminApi>,
+    request_timeout_secs: u64,
+    txns: &TxnRegistry,
 ) {
     let id = msg.get("id").cloned();
     let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
@@ -94,6 +106,69 @@ pub(crate) fn handle_message(
         "ping" => {
             if let Some(id) = id {
                 write_frame(&mut *out, json!({"jsonrpc":"2.0","id":id,"result":{}}));
+            }
+        }
+        "shutdown" => {
+            // P5-M11: ack first, then let the transport see the flag — the
+            // handler closes the connection right after this exchange, so
+            // the client reads {"shutting_down": true} and then EOF.
+            SHUTDOWN_FLAG.store(true, Ordering::Relaxed);
+            if let Some(id) = id {
+                write_frame(
+                    &mut *out,
+                    json!({"jsonrpc":"2.0","id":id,"result":{"shutting_down":true}}),
+                );
+            }
+        }
+        "koql/query" | "koql/execute" => {
+            drop(out); // release lock during query execution
+            let is_query = method == "koql/query";
+            let params = msg.get("params").cloned().unwrap_or(J::Null);
+            let params = inject_for_session(&params, session); // R9/PRR-2: session identity
+            let k = k.clone(); // P5-M11: the worker owns its kernel handle
+            let result = run_with_timeout(request_timeout_secs, move |token| {
+                if is_query {
+                    // Read-only guard: koql/query rejects write statements.
+                    let source = params.get("query").and_then(|q| q.as_str()).unwrap_or("");
+                    match aikoql_compiler::parser::parse(source) {
+                        Ok(aikoql_compiler::parser::ast::Statement::Match(_)) => {}
+                        Ok(_) => {
+                            return Err((
+                                -32602,
+                                "koql/query is read-only — use koql/execute for writes".into(),
+                            ))
+                        }
+                        Err(e) => return Err((-32602, format!("parse error: {e}"))),
+                    }
+                }
+                // P5-M11 crash-window hook: only koql/query parks (writes
+                // via koql/execute must stay fast — sv007 pins ack-before-park),
+                // and only the first query while armed — a cancelled parked
+                // query must not poison the next client (sv007 again).
+                if is_query
+                    && std::env::var("AIKOQL_QUERY_PARK").as_deref() == Ok("armed")
+                    && PARK_ONESHOT.swap(false, Ordering::Relaxed)
+                {
+                    if let Ok(m) = std::env::var("AIKOQL_QUERY_PARK_MARKER") {
+                        let _ = std::fs::write(&m, b"parked");
+                    }
+                    while !token.is_cancelled() {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    // Only a parked-and-cancelled query writes the exit marker.
+                    if let Ok(m) = std::env::var("AIKOQL_QUERY_EXIT_MARKER") {
+                        let _ = std::fs::write(&m, b"exited");
+                    }
+                }
+                tool_aikoql(&k, &params).map_err(|e| (-32603, e))
+            });
+            let mut out = stdout.lock().unwrap(); // justified: Mutex poison is unrecoverable
+            if let Some(id) = id {
+                let frame = match result {
+                    Ok(res) => json!({"jsonrpc":"2.0","id":id,"result":res}),
+                    Err((code, message)) => err_frame(&id, code, &message),
+                };
+                write_frame(&mut *out, frame);
             }
         }
         "aikoql/stream" => {
@@ -208,8 +283,8 @@ pub(crate) fn handle_message(
             let args = params.get("arguments").cloned().unwrap_or(J::Null);
             let args = inject_for_session(&args, session);
             let span = info_span!("tool_call", tool = %name);
-            let result =
-                span.in_scope(|| call_tool(k, &name, &args, db_path.as_ref(), session, admin));
+            let result = span
+                .in_scope(|| call_tool(k, &name, &args, db_path.as_ref(), session, admin, txns));
             if result.is_err() {
                 error!(tool = %name, "tool call failed");
             }

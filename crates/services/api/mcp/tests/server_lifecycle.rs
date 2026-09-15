@@ -84,14 +84,18 @@ fn tmp_db(name: &str) -> PathBuf {
         std::process::id(),
         stamp
     ));
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
     db
 }
 
 fn tmp_marker(name: &str) -> PathBuf {
     let mut m = std::env::temp_dir();
     let seq = PORT_SEQ.fetch_add(1, Ordering::Relaxed);
-    m.push(format!("aikoql_sv_{name}_{}_{}.marker", std::process::id(), seq));
+    m.push(format!(
+        "aikoql_sv_{name}_{}_{}.marker",
+        std::process::id(),
+        seq
+    ));
     let _ = std::fs::remove_file(&m);
     m
 }
@@ -105,7 +109,9 @@ fn hard_kill(child: &Child) {
     }
     #[cfg(not(windows))]
     {
-        let _ = Command::new("kill").args(["-9", &child.id().to_string()]).status();
+        let _ = Command::new("kill")
+            .args(["-9", &child.id().to_string()])
+            .status();
     }
 }
 
@@ -174,7 +180,10 @@ impl Server {
     fn crash(&mut self, what: &str) {
         hard_kill(&self.child);
         let st = self.child.wait().expect("reap child");
-        assert!(!st.success(), "{what}: child should have been killed, not exited");
+        assert!(
+            !st.success(),
+            "{what}: child should have been killed, not exited"
+        );
     }
 }
 
@@ -195,7 +204,8 @@ fn connect(port: u16) -> TcpStream {
     loop {
         match TcpStream::connect(("127.0.0.1", port)) {
             Ok(s) => {
-                s.set_read_timeout(Some(Duration::from_secs(30))).expect("read timeout");
+                s.set_read_timeout(Some(Duration::from_secs(30)))
+                    .expect("read timeout");
                 return s;
             }
             Err(_) if Instant::now() < deadline => {
@@ -249,30 +259,30 @@ impl Client {
         let id = self.send(method, params);
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
+            assert!(Instant::now() < deadline, "no response to {method} in 30s");
             match self.recv() {
                 Some(f) if f.get("id").and_then(|i| i.as_u64()) == Some(id) => return f,
                 Some(_) => continue,
                 None => panic!("connection EOF awaiting {method} response"),
             }
-            assert!(Instant::now() < deadline, "no response to {method} in 30s");
         }
     }
 
     fn init(&mut self, token: &str) {
         let r = self.call("initialize", json!({"token": token}));
-        assert!(
-            r.get("result").is_some(),
-            "initialize failed: {r}"
-        );
+        assert!(r.get("result").is_some(), "initialize failed: {r}");
     }
 }
 
 fn result_of(f: &J) -> &J {
-    f.get("result").unwrap_or_else(|| panic!("expected result frame, got {f}"))
+    f.get("result")
+        .unwrap_or_else(|| panic!("expected result frame, got {f}"))
 }
 
 fn error_code(f: &J) -> Option<i64> {
-    f.get("error").and_then(|e| e.get("code")).and_then(|c| c.as_i64())
+    f.get("error")
+        .and_then(|e| e.get("code"))
+        .and_then(|c| c.as_i64())
 }
 
 /// Poll the child until it exits; hard-kill if the deadline passes.
@@ -296,18 +306,21 @@ fn wait_for_marker(marker: &std::path::Path, server: &mut Server, what: &str) {
         if Instant::now() > deadline {
             let died = server.child.try_wait().ok().flatten();
             server.crash(what);
-            panic!("{what} never reached its marker (marker {:?} absent); child status: {died:?}", marker);
+            panic!(
+                "{what} never reached its marker (marker {:?} absent); child status: {died:?}",
+                marker
+            );
         }
         std::thread::sleep(Duration::from_millis(20));
     }
 }
 
-/// Reopen the store after a hard kill (Windows may release the file handle
-/// a beat after taskkill — the txn_contract retry pattern).
+/// Reopen the store after a hard kill (Windows may release the directory
+/// lock a beat after taskkill — the txn_contract retry pattern).
 fn reopen_after_kill(path: &std::path::Path) -> Kernel {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(engine) = RedbEngine::open(path) {
+        if let Ok(engine) = aikoql_storage_v2::AikoqlStorageEngineV2::open(path) {
             if let Ok(k) = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xBEEF) {
                 return k;
             }
@@ -320,8 +333,10 @@ fn reopen_after_kill(path: &std::path::Path) -> Kernel {
     }
 }
 
+// The server's default backend on a fresh path is aikoql-v2 (a database
+// DIRECTORY, not a redb file) — the reopen helper must match that format.
 fn reopen(path: &std::path::Path) -> Kernel {
-    let engine = RedbEngine::open(path).expect("reopen store");
+    let engine = aikoql_storage_v2::AikoqlStorageEngineV2::open(path).expect("reopen store");
     Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xBEEF).expect("reopen kernel")
 }
 
@@ -330,16 +345,21 @@ fn node_count(k: &Kernel) -> usize {
 }
 
 fn create_node(c: &mut Client, i: i64) -> J {
-    let r = c.call("koql/execute", json!({"query": format!("CREATE Node {{i: {i}}}")}));
+    let r = c.call(
+        "koql/execute",
+        json!({"query": format!("CREATE Node {{i: {i}}}")}),
+    );
     let res = result_of(&r);
     assert_eq!(res.get("version"), Some(&json!(1)), "create lost: {r}");
     res.clone()
 }
 
 fn query_nodes(c: &mut Client) -> usize {
-    let r = c.call("koql/query", json!({"query": "MATCH Node"}));
+    let r = c.call("koql/query", json!({"query": "MATCH Node RETURN *"}));
     let res = result_of(&r);
-    res.get("results").and_then(|a| a.as_array()).map(|a| a.len())
+    res.get("results")
+        .and_then(|a| a.as_array())
+        .map(|a| a.len())
         .unwrap_or_else(|| panic!("expected results array, got {r}"))
 }
 
@@ -378,24 +398,24 @@ fn sv001_clean_shutdown_is_zero_loss() {
     create_node(&mut c, 1);
 
     let r = c.call("shutdown", json!({}));
-    assert_eq!(result_of(&r).get("shutting_down"), Some(&json!(true)), "{r}");
+    assert_eq!(
+        result_of(&r).get("shutting_down"),
+        Some(&json!(true)),
+        "{r}"
+    );
 
-    // EOF follows the shutdown ack, then the process exits zero.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        match c.recv() {
-            None => break,
-            Some(f) => panic!("unexpected frame after shutdown: {f}"),
-        }
-        if Instant::now() > deadline {
-            panic!("no EOF after shutdown");
-        }
+    // EOF follows the shutdown ack, then the process exits zero. The
+    // contract: the ack is the LAST frame — anything after it is a failure.
+    // (recv's 30s read timeout bounds the wait; stop() below bounds exit.)
+    match c.recv() {
+        None => {}
+        Some(f) => panic!("unexpected frame after shutdown: {f}"),
     }
     server.stop("server after shutdown");
 
     let k = reopen(&db);
     assert_eq!(node_count(&k), 1, "acked write lost across clean shutdown");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
 }
 
 // --- sv002 — restart recovery ----------------------------------------------------
@@ -417,7 +437,7 @@ fn sv002_restart_recovery_sees_previous_writes() {
     assert_eq!(query_nodes(&mut c2), 1, "restart lost the write");
     c2.call("shutdown", json!({}));
     s2.stop("sv002 second server");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
 }
 
 // --- sv003 — multiple clients + connection limit ---------------------------------
@@ -451,7 +471,7 @@ fn sv003_concurrent_clients_are_isolated_and_limited() {
 
     a.call("shutdown", json!({}));
     server.stop("sv003 server");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
 }
 
 // --- sv004 — authentication --------------------------------------------------------
@@ -468,7 +488,7 @@ fn sv004_authentication_fails_closed() {
         reader: BufReader::new(stream),
         next_id: 1,
     };
-    raw.send("koql/query", json!({"query": "MATCH Node"}));
+    raw.send("koql/query", json!({"query": "MATCH Node RETURN *"}));
     let f = raw.recv().expect("fail-closed frame");
     assert_eq!(error_code(&f), Some(-32001), "{f}");
     // The connection is dropped — the next read is EOF.
@@ -494,7 +514,11 @@ fn sv004_authentication_fails_closed() {
         .arg(&db2)
         .output()
         .expect("spawn token-less serve");
-    assert_eq!(out.status.code(), Some(2), "token-less TCP serve must exit 2");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "token-less TCP serve must exit 2"
+    );
     let _ = std::fs::remove_file(&db2);
 
     // The real server is untouched by all of the above.
@@ -502,7 +526,7 @@ fn sv004_authentication_fails_closed() {
     assert_eq!(query_nodes(&mut ok), 0);
     ok.call("shutdown", json!({}));
     server.stop("sv004 server");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
 }
 
 // --- sv005 — authorization: tenant-scoped KOQL ------------------------------------
@@ -520,7 +544,7 @@ fn sv005_koql_query_is_tenant_scoped_by_the_token() {
 
     a.call("shutdown", json!({}));
     server.stop("sv005 server");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
 }
 
 // --- sv006 — malformed frames never crash the server -------------------------------
@@ -531,19 +555,15 @@ fn sv006_malformed_frames_never_crash() {
     let mut server = Server::spawn(&db, &["tok1:tenA:user"], &[]);
     let mut c = Client::new(server.port(), "tok1");
 
-    // Garbage line → -32700, and the connection survives.
+    // Garbage line → -32700, and the connection survives. No request is in
+    // flight, so the -32700 frame is deterministically the next one (the
+    // stream's 30s read timeout bounds the wait).
     writeln!(c.stream, "this is not json").unwrap();
     c.stream.flush().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let f = loop {
-        match c.recv() {
-            Some(f) if error_code(&f) == Some(-32700) => break f,
-            Some(f) => panic!("expected -32700, got {f}"),
-            None => panic!("EOF after garbage — must not drop"),
-        }
-        if Instant::now() > deadline {
-            panic!("no -32700 frame");
-        }
+    let f = match c.recv() {
+        Some(f) if error_code(&f) == Some(-32700) => f,
+        Some(f) => panic!("expected -32700, got {f}"),
+        None => panic!("EOF after garbage — must not drop"),
     };
     assert!(f.get("error").unwrap().get("message").is_some());
     // The same connection still works.
@@ -556,10 +576,12 @@ fn sv006_malformed_frames_never_crash() {
     let _ = result_of(&f);
 
     // An oversized line (over the frame cap) drops the connection — but the
-    // server keeps serving others.
+    // server keeps serving others. The server drops mid-line, so on Windows
+    // the write can fail with ConnectionReset (RST) — tolerated, the point
+    // is the drop, not the delivery.
     let big = "x".repeat(2 * 1024 * 1024);
-    writeln!(c.stream, "{big}").unwrap();
-    c.stream.flush().unwrap();
+    let _ = writeln!(c.stream, "{big}");
+    let _ = c.stream.flush();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if c.recv().is_none() {
@@ -570,11 +592,15 @@ fn sv006_malformed_frames_never_crash() {
         }
     }
     let mut d = Client::new(server.port(), "tok1");
-    assert_eq!(query_nodes(&mut d), 0, "server must still serve after malformed frames");
+    assert_eq!(
+        query_nodes(&mut d),
+        0,
+        "server must still serve after malformed frames"
+    );
 
     d.call("shutdown", json!({}));
     server.stop("sv006 server");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
 }
 
 // --- sv007 — disconnect cancels the in-flight query ---------------------------------
@@ -598,7 +624,7 @@ fn sv007_client_disconnect_cancels_the_query() {
     let mut a = Client::new(server.port(), "tok1");
     create_node(&mut a, 1);
     // This query parks inside the server.
-    a.send("koql/query", json!({"query": "MATCH Node"}));
+    a.send("koql/query", json!({"query": "MATCH Node RETURN *"}));
     wait_for_marker(&park, &mut server, "sv007 parked query");
     // Client disconnects without reading the response.
     drop(a);
@@ -607,15 +633,22 @@ fn sv007_client_disconnect_cancels_the_query() {
     // keeps serving new clients.
     let deadline = Instant::now() + Duration::from_secs(15);
     while !exited.exists() {
-        assert!(Instant::now() < deadline, "query never cancelled after disconnect");
+        assert!(
+            Instant::now() < deadline,
+            "query never cancelled after disconnect"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
     let mut b = Client::new(server.port(), "tok1");
-    assert_eq!(query_nodes(&mut b), 1, "server must keep serving after a cancelled query");
+    assert_eq!(
+        query_nodes(&mut b),
+        1,
+        "server must keep serving after a cancelled query"
+    );
 
     b.call("shutdown", json!({}));
     server.stop("sv007 server");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
     let _ = std::fs::remove_file(&park);
     let _ = std::fs::remove_file(&exited);
 }
@@ -630,17 +663,21 @@ fn sv008_slow_client_never_blocks_others() {
     // A slow client fires 30 queries and never reads a byte.
     let mut slow = Client::new(server.port(), "tok1");
     for _ in 0..30 {
-        slow.send("koql/query", json!({"query": "MATCH Node"}));
+        slow.send("koql/query", json!({"query": "MATCH Node RETURN *"}));
     }
 
     // A concurrent client gets full service.
     let mut fast = Client::new(server.port(), "tok1");
     create_node(&mut fast, 1);
-    assert_eq!(query_nodes(&mut fast), 1, "slow client must not stall the server");
+    assert_eq!(
+        query_nodes(&mut fast),
+        1,
+        "slow client must not stall the server"
+    );
 
     fast.call("shutdown", json!({}));
     server.stop("sv008 server");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
 }
 
 // --- sv009 — graceful shutdown mid-query -----------------------------------------------
@@ -664,7 +701,7 @@ fn sv009_shutdown_drains_and_cancels_mid_query() {
     // Connection A writes (acked) and then parks a query.
     let mut a = Client::new(server.port(), "tok1");
     create_node(&mut a, 9);
-    a.send("koql/query", json!({"query": "MATCH Node"}));
+    a.send("koql/query", json!({"query": "MATCH Node RETURN *"}));
     wait_for_marker(&park, &mut server, "sv009 parked query");
 
     // Connection B requests shutdown while A's query is in flight.
@@ -674,15 +711,22 @@ fn sv009_shutdown_drains_and_cancels_mid_query() {
     // The drain cancels the parked query and the process exits zero.
     let deadline = Instant::now() + Duration::from_secs(15);
     while !exited.exists() {
-        assert!(Instant::now() < deadline, "drain never cancelled the parked query");
+        assert!(
+            Instant::now() < deadline,
+            "drain never cancelled the parked query"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
     server.stop("sv009 server");
 
     // The acked write survived.
     let k = reopen(&db);
-    assert_eq!(node_count(&k), 1, "acked write lost across drained shutdown");
-    let _ = std::fs::remove_file(&db);
+    assert_eq!(
+        node_count(&k),
+        1,
+        "acked write lost across drained shutdown"
+    );
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
     let _ = std::fs::remove_file(&park);
     let _ = std::fs::remove_file(&exited);
 }
@@ -706,7 +750,7 @@ fn sv010_hard_kill_loses_no_acked_write() {
     // Acked write, then park a query in flight.
     let mut a = Client::new(server.port(), "tok1");
     create_node(&mut a, 10);
-    a.send("koql/query", json!({"query": "MATCH Node"}));
+    a.send("koql/query", json!({"query": "MATCH Node RETURN *"}));
     wait_for_marker(&park, &mut server, "sv010 parked query");
 
     server.crash("sv010");
@@ -714,7 +758,7 @@ fn sv010_hard_kill_loses_no_acked_write() {
     // The acked write is durable across the kill.
     let k = reopen_after_kill(&db);
     assert_eq!(node_count(&k), 1, "acked write lost across a hard kill");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
     let _ = std::fs::remove_file(&park);
 }
 
@@ -752,7 +796,9 @@ fn sv011_mcp_transaction_tools_round_trip() {
         json!({"name": "txn_commit", "arguments": {"txn_id": "sv011-t1"}}),
     );
     let res = result_of(&r);
-    let results = res.get("results").and_then(|a| a.as_array())
+    let results = res
+        .get("results")
+        .and_then(|a| a.as_array())
         .expect("commit results");
     assert_eq!(results.len(), 1, "{r}");
     assert_eq!(res.get("deduped"), Some(&json!(false)), "{r}");
@@ -803,5 +849,5 @@ fn sv011_mcp_transaction_tools_round_trip() {
 
     c.call("shutdown", json!({}));
     server.stop("sv011 server");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db); // v2 database = directory
 }

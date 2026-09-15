@@ -45,6 +45,12 @@ impl CancellationToken {
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst)
     }
+
+    /// Identity comparison — for registries that must remove the exact
+    /// token a query was registered with (clones share the same Arc).
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl Default for CancellationToken {

@@ -122,6 +122,11 @@ impl Transaction {
         Ok(())
     }
 
+    /// The MVCC snapshot pinned at begin.
+    pub fn snapshot_ts(&self) -> u64 {
+        self.snapshot_ts
+    }
+
     /// Snapshot read — the version visible at begin, ACL-checked against the
     /// transaction's subject. Staged writes are NOT visible (contract).
     pub fn get(&self, koid: &KOID) -> KResult<KnowledgeObject> {
@@ -136,7 +141,11 @@ impl Transaction {
     /// with the txn outcome record. A VersionConflict raises `conflicts`; a
     /// recorded retry (same id already committed) returns the original
     /// outcome and raises `deduped_retries` instead of `committed`.
-    pub fn commit(mut self) -> KResult<Vec<Remembered>> {
+    ///
+    /// Returns the remembered outcomes and whether this commit was a
+    /// recorded retry (`deduped`) — clients (the M11 server protocol)
+    /// must be able to tell a fresh apply from a no-op re-apply.
+    pub fn commit(mut self) -> KResult<(Vec<Remembered>, bool)> {
         let staged = std::mem::take(&mut self.staged);
         match self.kernel.transact_with_txn(staged, &self.id) {
             Ok((results, deduped)) => {
@@ -146,7 +155,7 @@ impl Transaction {
                         .committed
                         .fetch_add(1, Ordering::Relaxed);
                 }
-                Ok(results)
+                Ok((results, deduped))
             }
             Err(e) => {
                 if matches!(e, KError::VersionConflict { .. }) {

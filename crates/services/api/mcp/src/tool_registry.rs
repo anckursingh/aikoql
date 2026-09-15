@@ -58,6 +58,10 @@ pub(crate) fn tools_list() -> J {
             {"name": "infer", "description": "Submit a Class-B inference job (MRFC-0011 §6.11): find objects textually similar to a query within a type. Returns a job handle — poll with job_status.", "inputSchema": {"type": "object", "properties": {"type_name": {"type": "string"}, "text": {"type": "string"}}, "required": ["type_name"]}},
             {"name": "predict", "description": "Submit a Class-B prediction job (MRFC-0011 §6.12): predict properties for a target object based on top-k similar objects. Returns a job handle — poll with job_status.", "inputSchema": {"type": "object", "properties": {"type_name": {"type": "string"}, "properties": {"type": "object"}, "k": {"type": "integer"}}, "required": ["type_name"]}},
             {"name": "job_status", "description": "Poll a Class-B job: status (running/completed/failed), error when failed, and — for completed jobs — the result (reason claims / infer results / predicted properties).", "inputSchema": {"type": "object", "properties": {"job_id": {"type": "integer"}}, "required": ["job_id"]}},
+            {"name": "txn_begin", "description": "Begin a transaction on this connection: pin an MVCC snapshot and open a server-side handle (SNAPSHOT isolation; idempotent retry by txn_id).", "inputSchema": {"type": "object", "properties": {"txn_id": {"type": "string"}}, "required": ["txn_id"]}},
+            {"name": "txn_stage", "description": "Stage one write into an open transaction handle (create: {action, type_name, properties}; update: {action, koid, properties}). Nothing is visible before commit.", "inputSchema": {"type": "object", "properties": {"txn_id": {"type": "string"}, "op": {"type": "object"}}, "required": ["txn_id", "op"]}},
+            {"name": "txn_commit", "description": "Commit an open transaction: staged writes land atomically with the outcome record; a retry of a committed txn_id returns the recorded outcome with deduped=true.", "inputSchema": {"type": "object", "properties": {"txn_id": {"type": "string"}}, "required": ["txn_id"]}},
+            {"name": "txn_rollback", "description": "Roll back an open transaction: staged writes are discarded, storage is untouched.", "inputSchema": {"type": "object", "properties": {"txn_id": {"type": "string"}}, "required": ["txn_id"]}},
             {"name": "approve_job", "description": "Commit a completed reason job's claims into the knowledge store (MRFC-0011 §7 Determinism Law: Class-B outputs enter Class A only as approved claims). Stamps origin=reason, epistemic=inferred. Re-approval is exact-once.", "inputSchema": {"type": "object", "properties": {"job_id": {"type": "integer"}}, "required": ["job_id"]}},
             {"name": "abi_version", "description": "Return ABI version and exportable audit chain for offline verification.", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "deploy_program", "description": "Deploy an aikoql program as a versioned Knowledge Object (MRFC-0030).", "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "body": {"type": "string"}, "language": {"type": "string"}}, "required": ["name", "body"]}},
@@ -177,6 +181,7 @@ pub(crate) fn call_tool(
     db_path: &str,
     session: &mut McpSession,
     admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+    txns: &TxnRegistry,
 ) -> ToolResult {
     // PRR-2 defense in depth: a TCP session with no roles can never pass the
     // authz empty-roles passthrough. Startup rejects role-less token specs,
@@ -293,6 +298,11 @@ pub(crate) fn call_tool(
         "memory_update" => tool_memory_update(args),
         "memory_delete" => tool_memory_delete(args),
         "batch" => tool_batch(k, args),
+        // P5-M11 (ND-11): the P5-M10-deferred transaction tools — the
+        // handle registry is connection-scoped (sv011).
+        "txn_begin" | "txn_stage" | "txn_commit" | "txn_rollback" => {
+            return txn_dispatch(k, name, args, db_path, session, txns);
+        }
         "session_init" => tool_session_init(args, session),
         "decide" => tool_decide(k, args),
         "constraint_diagnostics" => tool_constraint_diagnostics(k, args),

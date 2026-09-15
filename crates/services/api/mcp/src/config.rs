@@ -47,6 +47,12 @@ pub(crate) struct RuntimeConfig {
     /// naming a backend resolves to `Some` here, so the detection never
     /// overrides an explicit choice.
     pub backend: Option<StorageBackend>,
+    /// P5-M11 (ND-11): KOQL request timeout in seconds — a query running
+    /// longer is cancelled and answered -32002.
+    pub request_timeout_secs: u64,
+    /// P5-M11 (ND-11): concurrent TCP connection cap — the accept loop
+    /// rejects the overflow with -32000.
+    pub max_connections: u64,
     /// The TOML path that took effect (for diagnostics).
     pub config_path: Option<String>,
 }
@@ -281,6 +287,8 @@ pub(crate) fn load(
             ..Default::default()
         },
         backend: None,
+        request_timeout_secs: 30,
+        max_connections: 64,
         config_path: None,
     };
 
@@ -538,6 +546,25 @@ pub(crate) fn load(
                 // Consumed by find_toml above; skip its value here.
                 i += 2;
             }
+            // P5-M11 (ND-11): request timeout + connection cap.
+            "--request-timeout-secs" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.request_timeout_secs = v.parse().map_err(|_| {
+                        format!("--request-timeout-secs requires a number of seconds, got {v:?}")
+                    })?;
+                    i += 2;
+                }
+                None => return Err("--request-timeout-secs requires a value".into()),
+            },
+            "--max-connections" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.max_connections = v
+                        .parse()
+                        .map_err(|_| format!("--max-connections requires a number, got {v:?}"))?;
+                    i += 2;
+                }
+                None => return Err("--max-connections requires a value".into()),
+            },
             _ if args[i].starts_with("--") => {
                 return Err(format!(
                     "Unknown option: {} (run `aikoql-mcp help`)",

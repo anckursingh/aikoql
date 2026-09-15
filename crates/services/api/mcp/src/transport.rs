@@ -1,8 +1,11 @@
-//! Extracted verbatim from server.rs (PRR-7). No behavior changes.
+//! Extracted verbatim from server.rs (PRR-7). P5-M11 (ND-11) adds the
+//! server lifecycle: graceful shutdown (drain → cancel → exit), the
+//! connection cap, capped frame reads, and the request-timeout wrapper.
 
 use crate::session::*;
+use crate::tools::TxnRegistry;
 use crate::{
-    error, info, thread, warn, Arc, AtomicU64, BufRead, BufReader, HashSet, Kernel, Mutex,
+    error, info, thread, warn, Arc, AtomicU64, BufRead, BufReader, HashMap, HashSet, Kernel, Mutex,
     Ordering, TcpListener, TcpStream, J, PROTOCOL_VERSION,
 };
 // Test-only (the stdio client below) — unused in the bin target.
@@ -11,10 +14,74 @@ use crate::{json, RedbEngine, SystemClock};
 
 use crate::dispatcher::*;
 use crate::protocol::*;
+use aikoql_runtime::streaming::CancellationToken;
 use aikoql_storage_v2::engine::StorageAdminApi;
+use std::sync::atomic::AtomicBool;
+use std::time::{Duration, Instant};
 
 pub(crate) static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static STREAM_ID: AtomicU64 = AtomicU64::new(0);
+/// P5-M11: live client sockets, keyed by stream id — the shutdown drain
+/// shutdown(Both)s them so idle handlers blocked in fill_buf wake and close
+/// instead of holding the drain to its deadline. Handlers remove their entry
+/// on exit, so the registry stays bounded.
+static CLIENT_STREAMS: Mutex<Vec<(u64, TcpStream)>> = Mutex::new(Vec::new());
+/// P5-M11: set by the `shutdown` method — stops the accept loop and makes
+/// every handler close its connection after its current exchange.
+pub(crate) static SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
+/// P5-M11: tokens of in-flight koql requests — the drain cancels all of
+/// them. `run_with_timeout` registers/unregisters; entries are per-query
+/// and removed on completion, so the registry stays bounded.
+static ACTIVE_QUERIES: Mutex<Vec<CancellationToken>> = Mutex::new(Vec::new());
+
+/// P5-M11: run one request with a wall-clock deadline. On timeout the token
+/// is cancelled and the caller gets -32002. The token is registered while
+/// the request runs so the shutdown drain can cancel it.
+///
+/// ponytail: the synchronous interpreter cannot be force-killed mid-query —
+/// a non-parking long query finishes on its own after the token is
+/// cancelled; the caller is already gone (the rx side was dropped).
+pub(crate) fn run_with_timeout<F, T>(request_timeout_secs: u64, f: F) -> Result<T, (i64, String)>
+where
+    F: FnOnce(CancellationToken) -> Result<T, (i64, String)> + Send + 'static,
+    T: Send + 'static,
+{
+    let token = CancellationToken::new();
+    {
+        let mut active = ACTIVE_QUERIES.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        active.push(token.clone());
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<Result<T, (i64, String)>>();
+    let worker_token = token.clone();
+    thread::spawn(move || {
+        let r = f(worker_token);
+        let _ = tx.send(r); // the waiter may already be gone (timeout)
+    });
+    match rx.recv_timeout(Duration::from_secs(request_timeout_secs)) {
+        Ok(r) => {
+            unregister(&token);
+            r
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            token.cancel();
+            unregister(&token);
+            Err((
+                -32002,
+                format!("request timed out after {request_timeout_secs}s and was cancelled"),
+            ))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            // The worker panicked or exited without sending.
+            unregister(&token);
+            Err((-32603, "request worker exited without a result".into()))
+        }
+    }
+}
+
+fn unregister(token: &CancellationToken) {
+    let mut active = ACTIVE_QUERIES.lock().unwrap(); // justified: Mutex poison is unrecoverable
+    active.retain(|t| !t.ptr_eq(token));
+}
 pub(crate) fn handle_tcp_client(
     kernel: &Arc<Kernel>,
     stream: TcpStream,
@@ -22,6 +89,7 @@ pub(crate) fn handle_tcp_client(
     auth: &Arc<TcpAuthTable>,
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
     admin: Option<Arc<dyn StorageAdminApi>>,
+    request_timeout_secs: u64,
 ) {
     let peer = stream
         .peer_addr()
@@ -30,11 +98,16 @@ pub(crate) fn handle_tcp_client(
         .unwrap_or_default();
     ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
     info!(%peer, "client connected");
+    // Register for the shutdown drain (active close wakes idle handlers).
+    let sid = STREAM_ID.fetch_add(1, Ordering::Relaxed);
+    if let Ok(reg_stream) = stream.try_clone() {
+        CLIENT_STREAMS.lock().unwrap().push((sid, reg_stream)); // justified: Mutex poison is unrecoverable
+    }
     let Ok(clone) = stream.try_clone() else {
         eprintln!("clone stream failed — dropping connection");
         return;
     };
-    let reader = BufReader::new(clone);
+    let mut reader = BufReader::new(clone);
     let writer = Arc::new(Mutex::new(stream));
     let mut sub_ids: HashSet<String> = HashSet::new();
     // R5 (review round 3): the limiter is process-shared and keyed by
@@ -44,12 +117,43 @@ pub(crate) fn handle_tcp_client(
         trust_mode: TrustMode::Tcp,
         ..Default::default()
     };
+    // P5-M11: connection-scoped transaction handles (sv011).
+    let txns: TxnRegistry = Mutex::new(HashMap::new());
     let mut authenticated = false;
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => break,
-        };
+    // P5-M11: capped frame reads — an oversized line drops the connection
+    // (bounded allocation, never a crash), and a trickling line can still
+    // complete. `reader.lines()` reads unbounded, so this replaces it.
+    const MAX_FRAME_BYTES: usize = 1024 * 1024;
+    let mut line_buf: Vec<u8> = Vec::new();
+    'conn: loop {
+        line_buf.clear();
+        loop {
+            let available = match reader.fill_buf() {
+                Ok(a) => a,
+                Err(_) => break 'conn,
+            };
+            if available.is_empty() {
+                break 'conn; // EOF
+            }
+            match available.iter().position(|&b| b == b'\n') {
+                Some(pos) => {
+                    line_buf.extend_from_slice(&available[..pos]);
+                    reader.consume(pos + 1);
+                    break; // one complete line in line_buf
+                }
+                None => {
+                    let len = available.len();
+                    line_buf.extend_from_slice(available);
+                    reader.consume(len);
+                    if line_buf.len() > MAX_FRAME_BYTES {
+                        warn!(%peer, bytes = line_buf.len(), "oversized frame — dropping connection");
+                        break 'conn;
+                    }
+                    // partial line — re-fill (blocks for the next bytes)
+                }
+            }
+        }
+        let line = String::from_utf8_lossy(&line_buf);
         if line.trim().is_empty() {
             continue;
         }
@@ -89,7 +193,7 @@ pub(crate) fn handle_tcp_client(
                             );
                         }
                         warn!(%peer, "TCP client rejected: invalid token");
-                        break;
+                        break 'conn;
                     }
                 }
             } else if method != "ping" {
@@ -105,7 +209,7 @@ pub(crate) fn handle_tcp_client(
                     );
                 }
                 warn!(%peer, method = %method, "TCP client rejected: unauthenticated");
-                break;
+                break 'conn;
             }
         }
         handle_message(
@@ -117,9 +221,17 @@ pub(crate) fn handle_tcp_client(
             &mut session,
             msg,
             admin.as_deref(),
+            request_timeout_secs,
+            &txns,
         );
+        // P5-M11: after a shutdown ack the handler closes its connection —
+        // the caller sees EOF right after {"shutting_down": true}.
+        if SHUTDOWN_FLAG.load(Ordering::Relaxed) {
+            break 'conn;
+        }
     }
     ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
+    CLIENT_STREAMS.lock().unwrap().retain(|(id, _)| *id != sid); // justified: Mutex poison is unrecoverable
     info!(%peer, "client disconnected");
 }
 pub(crate) fn run_tcp_listener(
@@ -129,31 +241,89 @@ pub(crate) fn run_tcp_listener(
     db_path: Arc<String>,
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
     admin: Option<Arc<dyn StorageAdminApi>>,
+    request_timeout_secs: u64,
+    max_connections: u64,
 ) {
     info!(
         addr = %listener.local_addr().map(|a| a.to_string()).unwrap_or_default(),
         db = %db_path,
         "aikoql-mcp TCP server ready (token auth required)"
     );
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
+    // P5-M11: nonblocking accept so the shutdown flag can stop the loop —
+    // `listener.incoming()` blocks forever and would hang sv001's exit wait.
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    while !SHUTDOWN_FLAG.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                // Windows accepts inherit nonblocking from the listener —
+                // the handler's reads must block, so reset it per socket.
+                let _ = stream.set_nonblocking(false);
+                // P5-M11 connection cap: reject over the limit with a -32000
+                // frame, then drop — sv003 pins the frame-before-drop order.
+                // ponytail: check-then-act race — two accepts can both pass
+                // the check; the cap is advisory unless that matters.
+                if ACTIVE_CONNECTIONS.load(Ordering::Relaxed) >= max_connections {
+                    let mut s = stream;
+                    write_frame(
+                        &mut s,
+                        err_frame(
+                            &J::Null,
+                            -32000,
+                            &format!("server connection limit reached ({max_connections})"),
+                        ),
+                    );
+                    drop(s);
+                    continue;
+                }
                 let k = kernel.clone();
                 let db = db_path.clone();
                 let auth = auth.clone();
                 let rl = rate_limit.clone();
                 let admin = admin.clone();
-                thread::spawn(move || handle_tcp_client(&k, stream, db, &auth, rl, admin));
+                thread::spawn(move || {
+                    handle_tcp_client(&k, stream, db, &auth, rl, admin, request_timeout_secs)
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(50));
             }
             Err(e) => error!("accept error: {}", e),
         }
     }
+    // P5-M11 drain: cancel in-flight queries, actively close every remaining
+    // socket (wakes idle handlers blocked in fill_buf), then wait for the
+    // handlers to exit. The deadline is a backstop only — the handlers are
+    // all unblocked now and close promptly.
+    {
+        let mut active = ACTIVE_QUERIES.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        for t in active.iter() {
+            t.cancel();
+        }
+        active.clear();
+    }
+    {
+        let streams = CLIENT_STREAMS.lock().unwrap(); // justified: Mutex poison is unrecoverable
+        for (_, s) in streams.iter() {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(request_timeout_secs);
+    while ACTIVE_CONNECTIONS.load(Ordering::Relaxed) > 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    info!(
+        connections = ACTIVE_CONNECTIONS.load(Ordering::Relaxed),
+        "TCP server drained and stopped"
+    );
 }
 pub(crate) fn run_stdio(
     kernel: &Arc<Kernel>,
     db_path: &Arc<String>,
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
     admin: Option<Arc<dyn StorageAdminApi>>,
+    request_timeout_secs: u64,
 ) {
     info!(db = %db_path, protocol = PROTOCOL_VERSION, "aikoql-mcp ready");
     // A bare terminal run looks like a hang — this is a server, not a REPL.
@@ -166,6 +336,8 @@ pub(crate) fn run_stdio(
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
     let mut sub_ids: HashSet<String> = HashSet::new();
     let mut session = McpSession::default();
+    // P5-M11: the stdio connection gets its own txn handle registry.
+    let txns: TxnRegistry = Mutex::new(HashMap::new());
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let line = match line {
@@ -195,7 +367,14 @@ pub(crate) fn run_stdio(
             &mut session,
             msg,
             admin.as_deref(),
+            request_timeout_secs,
+            &txns,
         );
+        // P5-M11: a shutdown ack ends the stdio loop too — the client's
+        // stdin close (EOF) then exits the process cleanly.
+        if SHUTDOWN_FLAG.load(Ordering::Relaxed) {
+            break;
+        }
     }
 }
 
@@ -238,7 +417,16 @@ mod tcp_auth_tests {
             max_per_minute,
         )));
         thread::spawn(move || {
-            run_tcp_listener(Arc::new(kernel), listener, auth, db_path, rate_limit, None)
+            run_tcp_listener(
+                Arc::new(kernel),
+                listener,
+                auth,
+                db_path,
+                rate_limit,
+                None,
+                30,
+                1000,
+            )
         });
         addr
     }

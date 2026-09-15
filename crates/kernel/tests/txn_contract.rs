@@ -144,12 +144,12 @@ fn tx001_write_write_conflict_is_a_deterministic_error() {
     t1.stage(u1).unwrap();
     t2.stage(u2).unwrap();
 
-    let r1 = t1.commit().unwrap();
+    let (r1, _) = t1.commit().unwrap();
     assert_eq!(r1[0].version, 2);
 
     // The loser gets the deterministic conflict: the version it pinned
     // against vs the winner's committed version.
-    match t2.commit() {
+    match t2.commit().map(|t| t.0) {
         Err(KError::VersionConflict {
             koid: got,
             expected,
@@ -254,7 +254,7 @@ fn tx004_concurrent_writers_serialize() {
                     .unwrap();
                 t.stage(create_req("alice", "Node", "i", (w * 10 + i) as i64))
                     .unwrap();
-                let r = t.commit().unwrap();
+                let (r, _) = t.commit().unwrap();
                 assert_eq!(r[0].version, 1, "writer {w}-{i} lost its create");
             }
         }));
@@ -421,7 +421,7 @@ fn tx006a_crash_before_commit_applies_nothing() {
         .begin_transaction(Subject::new("alice"), "crash-txn")
         .unwrap();
     t.stage(create_req("alice", "Node", "i", 7)).unwrap();
-    let r = t.commit().unwrap();
+    let (r, _) = t.commit().unwrap();
     assert_eq!(r[0].version, 1);
     assert_eq!(node_count(&k), 1);
 
@@ -431,7 +431,7 @@ fn tx006a_crash_before_commit_applies_nothing() {
         .begin_transaction(Subject::new("alice"), "crash-txn")
         .unwrap();
     t.stage(create_req("alice", "Node", "i", 99)).unwrap();
-    assert_eq!(t.commit().unwrap(), r);
+    assert_eq!(t.commit().unwrap().0, r);
     assert_eq!(node_count(&k), 1);
     assert_eq!(k.journal_head().unwrap().0, seq);
 
@@ -456,7 +456,7 @@ fn tx006b_crash_after_commit_keeps_the_commit_and_dedupes() {
         .begin_transaction(Subject::new("alice"), "crash-txn")
         .unwrap();
     t.stage(create_req("alice", "Node", "i", 99)).unwrap();
-    let r = t.commit().unwrap();
+    let (r, _) = t.commit().unwrap();
     assert_eq!(r[0].version, 1);
     assert_eq!(r[0].koid, koids[0]);
     assert_eq!(node_count(&k), 1);
@@ -475,7 +475,7 @@ fn tx007_idempotent_retry_is_a_recorded_noop() {
     let (k, engine) = mk_shared();
     let mut t = k.begin_transaction(Subject::new("alice"), "idem").unwrap();
     t.stage(create_req("alice", "Node", "i", 1)).unwrap();
-    let r1 = t.commit().unwrap();
+    let (r1, _) = t.commit().unwrap();
     assert_eq!(r1[0].version, 1);
 
     // Same id again: the staged op (a DIFFERENT create) is ignored and the
@@ -483,7 +483,7 @@ fn tx007_idempotent_retry_is_a_recorded_noop() {
     let seq = k.journal_head().unwrap().0;
     let mut t2 = k.begin_transaction(Subject::new("alice"), "idem").unwrap();
     t2.stage(create_req("alice", "Node", "i", 99)).unwrap();
-    assert_eq!(t2.commit().unwrap(), r1);
+    assert_eq!(t2.commit().unwrap().0, r1);
     assert_eq!(node_count(&k), 1);
     assert_eq!(k.journal_head().unwrap().0, seq);
 
@@ -495,6 +495,6 @@ fn tx007_idempotent_retry_is_a_recorded_noop() {
     let k2 = reopen(&engine).unwrap();
     let mut t3 = k2.begin_transaction(Subject::new("alice"), "idem").unwrap();
     t3.stage(create_req("alice", "Node", "i", 98)).unwrap();
-    assert_eq!(t3.commit().unwrap(), r1);
+    assert_eq!(t3.commit().unwrap().0, r1);
     assert_eq!(node_count(&k2), 1);
 }
