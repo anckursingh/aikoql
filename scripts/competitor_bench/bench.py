@@ -66,24 +66,26 @@ BODIES = [
 ]
 
 
-def gen_dataset():
+def gen_dataset(n_notes=N_NOTES, n_events=N_EVENTS):
+    """Seeded dataset; the M17 scale harness reuses this with n_notes=100k/1M
+    (same shapes, same seed — the defaults stay byte-identical to the M14 run)."""
     rng = random.Random(42)
     notes = [
         {"i": i, "topic": TOPICS[i % 2], "body": BODIES[i % 4][0],
          "vec": BODIES[i % 4][1]}
-        for i in range(N_NOTES)
+        for i in range(n_notes)
     ]
-    events = [{"i": j, "label": f"e{j}"} for j in range(N_EVENTS)]
-    # mentions: note i -> event[i % 500]; i < 200 gets a second edge. 1200 total.
-    mentions = [(i, i % N_EVENTS) for i in range(N_NOTES)] + \
-               [(i, (i + 1) % N_EVENTS) for i in range(200)]
-    # derived_from: note i -> note[999 - i] for i < 200.
-    derived = [(i, N_NOTES - 1 - i) for i in range(200)]
+    events = [{"i": j, "label": f"e{j}"} for j in range(n_events)]
+    # mentions: note i -> event[i % n_events]; i < 200 gets a second edge.
+    mentions = [(i, i % n_events) for i in range(n_notes)] + \
+               [(i, (i + 1) % n_events) for i in range(200)]
+    # derived_from: note i -> note[n_notes - 1 - i] for i < 200.
+    derived = [(i, n_notes - 1 - i) for i in range(200)]
     # workload sampling (separate stream — dataset stays byte-identical)
     rng7 = random.Random(7)
-    read_ids = [rng7.randrange(N_NOTES) for _ in range(N)]
+    read_ids = [rng7.randrange(n_notes) for _ in range(N)]
     write_ids = list(range(N))  # bodies of notes 0..49 become cats.v2
-    graph_ids = [rng7.randrange(N_NOTES) for _ in range(N)]
+    graph_ids = [rng7.randrange(n_notes) for _ in range(N)]
     return {"notes": notes, "events": events, "mentions": mentions,
             "derived": derived, "read_ids": read_ids,
             "write_ids": write_ids, "graph_ids": graph_ids}
@@ -113,22 +115,22 @@ def measure(op, warmup, n):
             "correct": ok}
 
 
-def cell(connect, close, build_op):
+def cell(connect, close, build_op, n=N):
     """cold = fresh connection, 0 warmup; warm = fresh connection + WARMUP."""
     c = connect()
     try:
-        cold = measure(build_op(c), 0, N)
+        cold = measure(build_op(c), 0, n)
     finally:
         close(c)
     c = connect()
     try:
-        warm = measure(build_op(c), WARMUP, N)
+        warm = measure(build_op(c), WARMUP, n)
     finally:
         close(c)
     return cold, warm
 
 
-def run_engine(connect, close, builders):
+def run_engine(connect, close, builders, n=N):
     """builders[i]: None = no analog, or fn(conn) -> op callable."""
     workloads = []
     for name, build in zip(NAMES, builders):
@@ -136,9 +138,9 @@ def run_engine(connect, close, builders):
             workloads.append({"name": name, "n": 0, "no_analog": True,
                               "correct": True})
             continue
-        cold, warm = cell(connect, close, build)
+        cold, warm = cell(connect, close, build, n)
         workloads.append({
-            "name": name, "n": N, "cold": cold, "warm": warm,
+            "name": name, "n": n, "cold": cold, "warm": warm,
             "p50_ms": warm["p50_ms"], "p95_ms": warm["p95_ms"],
             "p99_ms": warm["p99_ms"],
             "throughput_ops_s": warm["throughput_ops_s"],
@@ -149,14 +151,14 @@ def run_engine(connect, close, builders):
 
 # ---------------------------------------------------------------- aikoql
 
-def bench_aikoql(ds, kb):
+def bench_aikoql(ds, kb, n=N):
     agent = Agent.connect(str(kb))
     note_koids, event_koids = [], []
     t0 = time.perf_counter()
-    for n in ds["notes"]:
-        r = agent.remember("note", {"topic": n["topic"], "body": n["body"],
-                                    "seq": n["i"]},
-                           semantic={"embedding": n["vec"],
+    for note in ds["notes"]:
+        r = agent.remember("note", {"topic": note["topic"], "body": note["body"],
+                                    "seq": note["i"]},
+                           semantic={"embedding": note["vec"],
                                      "embedding_model": "bench-2d"})
         note_koids.append(r["koid"])
     for e in ds["events"]:
@@ -206,7 +208,7 @@ def bench_aikoql(ds, kb):
     def build_filter(agent):
         def op():
             out = agent.aikoql('MATCH note WHERE topic == "pet" RETURN *')
-            return len(out) == 500
+            return len(out) == len(ds["notes"]) // 2
 
         return op
 
@@ -243,7 +245,7 @@ def bench_aikoql(ds, kb):
     workloads = run_engine(
         connect, lambda c: c.close(),
         [build_read, build_write, build_filter, build_txn,
-         build_graph, build_vector])
+         build_graph, build_vector], n)
 
     rss_kb = psutil.Process(os.getpid()).memory_info().rss // 1024
     disk = sum(f.stat().st_size for f in kb.rglob("*") if f.is_file())
