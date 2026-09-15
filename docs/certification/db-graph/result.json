@@ -1,0 +1,101 @@
+{
+  "commit": "31f9bcd",
+  "correctness_parity": true,
+  "seed": "aikoql-cert-nd14-v1",
+  "started_at": "1789470028357",
+  "suite": "db-graph",
+  "workloads": [
+    {
+      "cold": {
+        "p50_ms": 0.3826,
+        "p95_ms": 0.699,
+        "p99_ms": 0.7853,
+        "throughput_ops_s": 2340.7326493192368
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "one_hop",
+      "p50_ms": 0.3826,
+      "p95_ms": 0.699,
+      "p99_ms": 0.7853,
+      "rss_kb": 8524,
+      "throughput_ops_s": 2340.7326493192368,
+      "warm": {
+        "p50_ms": 0.2512,
+        "p95_ms": 0.2922,
+        "p99_ms": 0.3962,
+        "throughput_ops_s": 3904.623073719283
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 0.2532,
+        "p95_ms": 0.5448999999999999,
+        "p99_ms": 0.5835,
+        "throughput_ops_s": 3239.60088117144
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "two_hop",
+      "p50_ms": 0.2532,
+      "p95_ms": 0.5448999999999999,
+      "p99_ms": 0.5835,
+      "rss_kb": 8524,
+      "throughput_ops_s": 3239.60088117144,
+      "warm": {
+        "p50_ms": 0.26659999999999995,
+        "p95_ms": 0.43770000000000003,
+        "p99_ms": 0.5777,
+        "throughput_ops_s": 3166.2603299243265
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 0.2496,
+        "p95_ms": 0.3675,
+        "p99_ms": 0.5169,
+        "throughput_ops_s": 3850.20149387818
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "fanout",
+      "p50_ms": 0.2496,
+      "p95_ms": 0.3675,
+      "p99_ms": 0.5169,
+      "rss_kb": 8524,
+      "throughput_ops_s": 3850.20149387818,
+      "warm": {
+        "p50_ms": 0.24439999999999998,
+        "p95_ms": 0.2876,
+        "p99_ms": 0.319,
+        "throughput_ops_s": 4181.476061049551
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 0.1712,
+        "p95_ms": 0.2713,
+        "p99_ms": 0.3373,
+        "throughput_ops_s": 5276.395166822029
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "rel_filter",
+      "p50_ms": 0.1712,
+      "p95_ms": 0.2713,
+      "p99_ms": 0.3373,
+      "rss_kb": 8524,
+      "throughput_ops_s": 5276.395166822029,
+      "warm": {
+        "p50_ms": 0.1678,
+        "p95_ms": 0.2092,
+        "p99_ms": 0.2118,
+        "throughput_ops_s": 5720.8237986270005
+      }
+    }
+  ]
+}

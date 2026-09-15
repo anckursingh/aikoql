@@ -1,0 +1,78 @@
+{
+  "commit": "31f9bcd",
+  "correctness_parity": true,
+  "seed": "aikoql-cert-nd14-v1",
+  "started_at": "1789470028416",
+  "suite": "db-vector",
+  "workloads": [
+    {
+      "cold": {
+        "p50_ms": 0.1459,
+        "p95_ms": 0.4571,
+        "p99_ms": 0.4691,
+        "throughput_ops_s": 5349.882302589343
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "ingest",
+      "p50_ms": 0.1459,
+      "p95_ms": 0.4571,
+      "p99_ms": 0.4691,
+      "rss_kb": 8668,
+      "throughput_ops_s": 5349.882302589343,
+      "warm": {
+        "p50_ms": 0.222,
+        "p95_ms": 0.2722,
+        "p99_ms": 0.35409999999999997,
+        "throughput_ops_s": 5022.265376502494
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 0.3968,
+        "p95_ms": 0.8863,
+        "p99_ms": 0.9634999999999999,
+        "throughput_ops_s": 2218.5410873809387
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "recall_at_k",
+      "p50_ms": 0.3968,
+      "p95_ms": 0.8863,
+      "p99_ms": 0.9634999999999999,
+      "rss_kb": 8668,
+      "throughput_ops_s": 2218.5410873809387,
+      "warm": {
+        "p50_ms": 0.25270000000000004,
+        "p95_ms": 0.41659999999999997,
+        "p99_ms": 0.4835,
+        "throughput_ops_s": 3510.7428731919676
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 0.25020000000000003,
+        "p95_ms": 0.39809999999999995,
+        "p99_ms": 0.4708,
+        "throughput_ops_s": 3436.2686703931095
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "filtered_ann",
+      "p50_ms": 0.25020000000000003,
+      "p95_ms": 0.39809999999999995,
+      "p99_ms": 0.4708,
+      "rss_kb": 8668,
+      "throughput_ops_s": 3436.2686703931095,
+      "warm": {
+        "p50_ms": 0.24689999999999998,
+        "p95_ms": 0.4233,
+        "p99_ms": 0.435,
+        "throughput_ops_s": 3570.111030453047
+      }
+    }
+  ]
+}
