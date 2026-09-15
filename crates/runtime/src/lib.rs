@@ -361,9 +361,13 @@ impl Interpreter {
                 let start_koids: Vec<KOID> = if start_koid.is_empty() {
                     match &input {
                         RowSet::Objects(kos) => kos.iter().map(|ko| ko.koid).collect(),
+                        // P5-M13 (ND-13): the similarity legs (SIMILAR/ANN/
+                        // Fuse) produce Scored rows — H2/H5/H6 walk the
+                        // graph from those hits.
+                        RowSet::Scored(s) => s.iter().map(|(koid, ..)| *koid).collect(),
                         _ => {
                             return Err(KError::InvalidQuery(
-                                "set-based Traverse requires Object input from Scan".into(),
+                                "set-based Traverse requires Object or Scored input".into(),
                             ))
                         }
                     }
@@ -867,7 +871,14 @@ impl Interpreter {
                 .then_with(|| a.0.cmp(&b.0))
         });
         scored.truncate(*k);
-        self.prev_scored = Some(scored.clone());
+        // P5-M13 (ND-13): Fuse pairs this leg with the PREVIOUS scored op
+        // (the ANN leg). Overwriting prev_scored here fused text-with-text
+        // and lost the vector scores (h1 RED). First writer wins: AnnSearch
+        // sets it when it runs first; the degrade path (AnnSearch →
+        // exec_text_search) has nothing set and records this list.
+        if self.prev_scored.is_none() {
+            self.prev_scored = Some(scored.clone());
+        }
         Ok(RowSet::Scored(scored))
     }
 
