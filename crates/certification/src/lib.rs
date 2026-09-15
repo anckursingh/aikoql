@@ -469,6 +469,12 @@ pub fn run_suite(suite: &str, out_dir: &Path) -> Result<PathBuf, CertError> {
     std::fs::create_dir_all(&dir).map_err(CertError::io)?;
     let path = dir.join("result.json");
     std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap()).map_err(CertError::io)?;
+    // The report is the artifact — the on-disk store is scratch and must not
+    // be published alongside it (best-effort: a failed run keeps it for
+    // diagnosis).
+    if let Some(root) = disk_root {
+        let _ = std::fs::remove_dir_all(root);
+    }
     Ok(path)
 }
 
