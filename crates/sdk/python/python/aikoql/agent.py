@@ -155,6 +155,17 @@ class Agent:
             return self._backend.aikoql(query, subject)
         return self._backend.aikoql(query, subject or "owner")
 
+    def create_index(self, name: str, type_name: str,
+                     properties: List[str]) -> dict:
+        """P5-M17b: declare a property index (and refresh its statistics).
+        MCP: the index_create tool; embedded: the native surface."""
+        if self._mode == "mcp":
+            return self._backend.call_tool(
+                "index_create",
+                {"name": name, "type_name": type_name, "properties": properties},
+            )
+        return self._backend.create_index(name, type_name, properties)
+
     def relate(self, from_koid: str, to_koid: str, rel_type: str,
                subject: Optional[str] = None) -> dict:
         if self._mode == "mcp":

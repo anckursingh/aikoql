@@ -20,8 +20,6 @@ use aikoql_kernel::{KError, KResult, Statistics};
 
 /// Candidate dimensions in the v1 cost model (bge-m3 class, P4-M7 evidence).
 pub const EMBEDDING_DIM: u64 = 768;
-/// Relative cost of one index probe/key comparison vs one scan row check.
-pub const INDEX_ROW_COST: u64 = 4;
 
 /// One operator's standalone cost: estimated output rows and cpu units.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,15 +107,18 @@ pub fn cost_plan(ops: &[PhysicalOp], stats: Option<&Statistics>) -> Vec<Cost> {
         };
         costs.push(match &po.op {
             IrOp::Scan { .. } if po.strategy == Strategy::PropertyIndex => {
-                // Rows = the uniform match count of the served Eq; the
-                // probe itself costs INDEX_ROW_COST per key comparison.
+                // Rows = the uniform match count of the served Eq. The
+                // probe is an O(1) hash lookup plus ONE point read per
+                // matched row (P5-M17b: scan_by_type_range materializes
+                // exactly the matched koids) — cpu per matched row, so the
+                // index wins whenever matched < the scan.
                 let matched = first_eq_after(ops, i)
                     .map(|p| (eq_selectivity(p, stats) * input as f64).ceil() as u64)
                     .unwrap_or(0)
                     .min(input);
                 Cost {
                     rows: matched,
-                    cpu: matched * INDEX_ROW_COST,
+                    cpu: matched,
                 }
             }
             IrOp::Scan { .. } => Cost {
@@ -196,7 +197,10 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
         Some(t) => kernel.statistics(t)?,
         None => None,
     };
-    let journal_len = kernel.journal()?.len() as u64;
+    // P5-M17b: the head seq IS the journal length (the append-only journal
+    // behind the M9 watermark contract) — O(1), not a whole-journal
+    // materialization per query.
+    let journal_len = kernel.journal_head()?.0;
     let stats_stale = stats.as_ref().is_some_and(|s| s.is_stale(journal_len));
     let stats_used = stats.is_some() && !stats_stale;
 

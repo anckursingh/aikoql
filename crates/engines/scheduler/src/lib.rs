@@ -347,8 +347,16 @@ impl IndexMaintainer {
                 },
             }
         }
+        // P5-M17b: after a successful flush, stamp every index with the
+        // batch's last seq — the verify gate's O(1) freshness proof. A
+        // failed flush early-returns before any stamp: the stamp only ever
+        // certifies what was really applied.
+        let last_seq = events.last().map(|e| e.seq);
         for idx in &all {
             idx.commit_batch()?;
+            if let Some(seq) = last_seq {
+                idx.set_applied_seq(seq);
+            }
         }
         Ok(())
     }
@@ -855,13 +863,15 @@ mod tests {
         let a = Subject::new("alice");
 
         // Declaration: the synchronous rebuild stamps the head it reseeded
-        // from — an empty journal, so 0.
+        // from — the declaration's own catalog rows land first, so that is
+        // the journal head, and stamp == head holds the declaration itself.
         k.catalog_create_index("by_body", "note", &["body"])
             .unwrap();
+        let (head0, _) = k.journal_head().unwrap();
         assert_eq!(
             k.index_applied_seq("by_body").unwrap(),
-            0,
-            "a fresh declaration on an empty journal stamps head 0"
+            head0,
+            "the declaration's rebuild stamps the journal head it reseeded from"
         );
 
         // A commit before any maintainer runs: the stamp must stay put —
@@ -869,7 +879,7 @@ mod tests {
         let id = create(&k, &a, "note", "cats and dogs");
         assert_eq!(
             k.index_applied_seq("by_body").unwrap(),
-            0,
+            head0,
             "the commit path must not stamp"
         );
 
@@ -895,8 +905,7 @@ mod tests {
         // A commit after catch-up: stale until the maintainer applies it.
         let second = create(&k, &a, "note", "second");
         assert!(
-            k.index_applied_seq("by_body").unwrap()
-                < k.journal_head().unwrap().0,
+            k.index_applied_seq("by_body").unwrap() < k.journal_head().unwrap().0,
             "a committed-but-unapplied event keeps the stamp behind the head"
         );
         m.wait_caught_up(&k, Duration::from_secs(1)).unwrap();

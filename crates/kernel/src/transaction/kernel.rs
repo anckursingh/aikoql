@@ -38,6 +38,7 @@ use crate::security::crypto::Crypto;
 use crate::security::envelope::{Envelope, CRYPTO_META_KEY, CRYPTO_META_V1, DEKS_STORAGE_KEY};
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
 use crate::security::tenant::TenantManager;
+use crate::statistics::Statistics;
 pub use crate::storage::repository::DerivedIndexRebuild;
 use crate::storage::repository::KnowledgeRepository;
 use crate::storage::store::{ConstraintCapabilities, StorageEngine, WriteBatch};
@@ -648,6 +649,12 @@ pub struct Kernel {
     /// P5-M16 — number of KOs fully materialized by `find_similar`'s top-k
     /// candidate loop (the vs_scan probe seam). Kernel-lifetime, shared.
     pub(crate) similarity_materializations: Arc<AtomicU64>,
+    /// P5-M17b — parsed statistics cache (type_name → Statistics). Populated
+    /// by `analyze` and by first-read misses; reads never re-walk the heads
+    /// (the default query path reads statistics per query). Freshness stays
+    /// watermark-judged against the journal head, so a cached row from an
+    /// earlier era reads stale — never silently fresh (cbo_a06).
+    pub(crate) statistics_cache: Arc<RwLock<HashMap<String, Statistics>>>,
 }
 
 impl Kernel {
@@ -730,6 +737,7 @@ impl Kernel {
             jobs,
             txn_metrics: Arc::new(txn::TxnMetrics::default()),
             similarity_materializations: Arc::new(AtomicU64::new(0)),
+            statistics_cache: Arc::new(RwLock::new(HashMap::new())),
         };
         // P5-M7 — database catalog: bootstrap/migrate the catalog rows, or
         // fail the open closed on a corrupt/unsupported catalog version.
@@ -896,6 +904,7 @@ impl Kernel {
             jobs: self.jobs.clone(),
             txn_metrics: self.txn_metrics.clone(),
             similarity_materializations: self.similarity_materializations.clone(),
+            statistics_cache: self.statistics_cache.clone(),
         }
     }
 }

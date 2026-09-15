@@ -45,6 +45,7 @@ pub(crate) fn tools_list() -> J {
             {"name": "restore", "description": "Restore the database from a backup directory.", "inputSchema": {"type": "object", "properties": {"backup": {"type": "string", "description": "Backup directory name"}}, "required": ["backup"]}},
             {"name": "storage_stats", "description": "Design §22 storage admin: write-path, segment, and cache statistics from the storage engine (v2 only).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "storage_compact", "description": "Design §22 storage admin: trigger a storage-engine compaction and report segment deltas (v2 only).", "inputSchema": {"type": "object", "properties": {}}},
+            {"name": "index_create", "description": "Declare a property index over a type's properties (P5-M17b): registers it, rebuilds it from committed state, waits for the maintainer to catch up, then analyzes statistics so the query optimizer can use it. Idempotent: re-declaring the same shape refreshes statistics. An index changes plans, never answers.", "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "description": "Index name (unique)"}, "type_name": {"type": "string", "description": "Type the index covers"}, "properties": {"type": "array", "items": {"type": "string"}, "description": "Property names the index keys on"}}, "required": ["name", "type_name", "properties"]}},
             {"name": "storage_checkpoint", "description": "Design §22 storage admin: force a storage-engine directory checkpoint (v2 only).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "constraint_diagnostics", "description": "Constraint engine diagnostics (MRFC-0060): the recent violation-event ring (constraint, message, severity, mode, timestamp, koid) plus evaluation counters (evaluated / skipped_disabled / skipped_unaffected).", "inputSchema": {"type": "object", "properties": {}}},
             {"name": "register_schema", "description": "Register a constraint-bearing type schema (MRFC-0060). Properties: [{name, value_type, required?, nullable?, provenance_required?}]; uniques: [{properties[], scope(Type|Tenant|Global), timing(Immediate|Deferred), mode(Enforced|Validated|Advisory|Disabled), severity(Error|Warning|Info)}]; checks: [{name, expr, timing?, mode?, severity?}] with expr parsed by CheckExpression::parse (e.g. \"age >= 18\"); cardinality: [{name, relationship_type, min?, max?, mode?, severity?}]; temporal: [{name, start, end, mode?, severity?}].", "inputSchema": {"type": "object", "properties": {"type_name": {"type": "string"}, "schema_version": {"type": "integer"}, "properties": {"type": "array"}, "uniques": {"type": "array"}, "checks": {"type": "array"}, "cardinality": {"type": "array"}, "temporal": {"type": "array"}}, "required": ["type_name"]}},
@@ -310,6 +311,9 @@ pub(crate) fn call_tool(
         "storage_stats" => tool_storage_stats(admin),
         "storage_compact" => tool_storage_compact(admin),
         "storage_checkpoint" => tool_storage_checkpoint(admin),
+        // P5-M17b (ND-14): declare a property index and analyze behind it —
+        // the same call shape as the embedded SDK's create_index.
+        "index_create" => tool_index_create(k, args),
         _ => Err(format!("unknown tool: {}", name)),
     };
     let wrapped = error_codes::wrap_result(res);

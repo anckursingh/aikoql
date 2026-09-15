@@ -17,6 +17,8 @@ aikoql-storage-v2 = { path = "../../storage/aikoql-v2" }
 aikoql-graph = { path = "../../engines/graph" }
 aikoql-compiler = { path = "../../compiler" }
 aikoql-runtime = { path = "../../runtime" }
+# P5-M17b (ND-14): the embedded production property-index maintainer.
+aikoql-scheduler = { path = "../../engines/scheduler" }
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
 
 [features]

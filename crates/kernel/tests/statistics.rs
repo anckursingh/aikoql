@@ -274,7 +274,10 @@ fn cbo_a06_statistics_reads_are_cache_served_and_reanalyze_refreshes() {
         .unwrap()
         .expect("the drop must not un-cache the captured row");
     assert_eq!(cached.row_count, 1);
-    assert!(cached.is_stale(head), "the drop advanced the journal ⇒ stale");
+    assert!(
+        cached.is_stale(head),
+        "the drop advanced the journal ⇒ stale"
+    );
 
     emp(&k, "B", "Ops", 90);
     let re = k.analyze("Employee").unwrap();

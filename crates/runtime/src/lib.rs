@@ -336,19 +336,22 @@ impl Interpreter {
                     Some(t) => subj.in_tenant(t),
                     None => subj,
                 };
-                let mut kos = kernel.scan_by_type(&subj, type_name)?;
+                // P5-M9/M17b: the PropertyIndex assist materializes ONLY the
+                // index's koids — per-koid reads through the same
+                // readable_object filters as the full scan (payload type
+                // re-check, Deleted skip, ACL). O(matched), not O(store);
+                // scan_by_type_range walks the type/ index so the koid order
+                // matches the full scan — row-for-row parity (cbo_default_001).
+                let mut kos = match self.assist.take() {
+                    Some(koids) => kernel.scan_by_type_range(&subj, type_name, &koids)?,
+                    None => kernel.scan_by_type(&subj, type_name)?,
+                };
                 // v0.3 K2: default MATCH answers with current truth — facts
                 // not valid at "now" stay out of relational results. Temporal
                 // plans (AS_OF/BETWEEN/HISTORICAL) handle time themselves.
                 if !self.temporal_mode {
                     let now = kernel.clock_now();
                     kos.retain(|ko| ko.valid_at(now));
-                }
-                // P5-M9 (ND-08): the PropertyIndex assist narrows the scan
-                // to the index's koids (retain keeps the scan order, so the
-                // result matches the rule-based plan row for row).
-                if let Some(koids) = self.assist.take() {
-                    kos.retain(|ko| koids.contains(&ko.koid));
                 }
                 self.cached_objects = Some(kos.clone());
                 self.cached_subject = Some(subj);

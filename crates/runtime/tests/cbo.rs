@@ -14,7 +14,7 @@
 //! document which alternatives do not exist yet.
 //!
 //! - cbo001 highly selective property → index scan over type scan
-//! - cbo002 low selectivity → scan over index
+//! - cbo002 zero selectivity gain (every row matches) → tie, scan stays
 //! - cbo003 high graph fanout → fanout-aware traversal cost
 //! - cbo004 vector-heavy → density-aware ANN cost
 //! - cbo005 text-heavy → text-path cost (BM25 delegation)
@@ -150,19 +150,20 @@ fn cbo001_highly_selective_property_chooses_the_index_scan() {
     assert_eq!(costed(&k, query), rule_based(&k, query));
 }
 
-// --- cbo002 — low selectivity → full scan ---------------------------------------
+// --- cbo002 — zero selectivity gain → tie, the scan stays -----------------------
 
+/// The M17b model prices the probe at ONE point read per matched row (the
+/// M15 INDEX_ROW_COST is gone — cbo_default_005 pins the 50%-selectivity
+/// production shape selecting the index). The remaining boundary: an Eq
+/// every row satisfies ties the scan, and the strictly-cheaper guard keeps
+/// the FullScan.
 #[test]
-fn cbo002_low_selectivity_prefers_the_full_scan() {
+fn cbo002_zero_selectivity_gain_ties_and_keeps_the_full_scan() {
     let k = mk();
     k.catalog_create_index("by_dept", "Person", &["dept"])
         .unwrap();
     for i in 0..100 {
-        person(
-            &k,
-            &format!("P{i:03}"),
-            if i % 2 == 0 { "Eng" } else { "Ops" },
-        );
+        person(&k, &format!("P{i:03}"), "Eng");
     }
     catch_up_indexes(&k);
     k.analyze("Person").unwrap();
@@ -173,7 +174,7 @@ fn cbo002_low_selectivity_prefers_the_full_scan() {
     assert_eq!(
         scan_strategy(&report),
         Strategy::FullScan,
-        "half the rows match one value — the scan wins"
+        "every row matches — probe + filter ties the scan, and the choice is strictly cheaper only"
     );
     assert!(report.index_used.is_none());
     assert_eq!(costed(&k, query), rule_based(&k, query));

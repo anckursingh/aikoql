@@ -528,3 +528,64 @@ pub(crate) fn tool_evidence_pack(k: &Kernel, args: &J) -> Result<J, String> {
         "encryption": encryption,
     }))
 }
+
+// ---------------------------------------------------------------------------
+// index_create — P5-M17b (ND-14): the production declaration surface
+// ---------------------------------------------------------------------------
+
+/// Declare a property index (catalog row + registry + synchronous rebuild),
+/// settle the maintainer, then analyze so the CBO can price the index.
+/// Same call shape as the embedded SDK's create_index. Idempotent on
+/// reopen: an existing declaration of the same shape rebuilds + re-analyzes
+/// (the harness re-declares per cell to refresh M9 stats); a different
+/// shape under the same name fails closed.
+pub(crate) fn tool_index_create(k: &Kernel, args: &J) -> Result<J, String> {
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("index_create: 'name' (string) required")?;
+    let type_name = args
+        .get("type_name")
+        .and_then(|v| v.as_str())
+        .ok_or("index_create: 'type_name' (string) required")?;
+    let properties: Vec<&str> = args
+        .get("properties")
+        .and_then(|v| v.as_array())
+        .ok_or("index_create: 'properties' (array of strings) required")?
+        .iter()
+        .map(|p| p.as_str().ok_or("index_create: properties must be strings"))
+        .collect::<Result<_, _>>()?;
+
+    if let Some(d) = k
+        .catalog_list_indexes()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|d| d.name == name)
+    {
+        if d.type_name != type_name || d.properties != properties {
+            return Err(format!(
+                "index_create: '{name}' already declared with a different shape"
+            ));
+        }
+        k.rebuild_index(name).map_err(|e| e.to_string())?;
+    } else {
+        k.catalog_create_index(name, type_name, &properties)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Settle the maintainer before analyze — a lagging re-apply can
+    // transiently overwrite the rebuild with an older version (the M17b
+    // wait_caught_up contract).
+    if let Some(m) = crate::MAINTAINER.get() {
+        m.wait_caught_up(k, std::time::Duration::from_secs(300))
+            .map_err(|e| e.to_string())?;
+    }
+
+    let stats = k.analyze(type_name).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "name": name,
+        "type_name": type_name,
+        "properties": properties,
+        "rows": stats.row_count,
+    }))
+}

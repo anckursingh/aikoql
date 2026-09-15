@@ -10,6 +10,7 @@ use crate::index::unified::{Index, VerifyReport};
 use crate::knowledge::kom::*;
 use crate::transaction::kernel::Kernel;
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
 pub struct PropertyIndex {
@@ -17,6 +18,11 @@ pub struct PropertyIndex {
     type_name: String,
     properties: Vec<String>,
     map: RwLock<HashMap<String, Vec<KOID>>>,
+    /// P5-M17b — the freshness stamp: the last committed event seq the
+    /// index has fully applied. Set by `rebuild` (the head it reseeded
+    /// from) and by the maintainer after a successful batch; 0 means no
+    /// proof, and `verify` then walks.
+    applied: AtomicU64,
 }
 
 impl PropertyIndex {
@@ -26,6 +32,7 @@ impl PropertyIndex {
             type_name: type_name.into(),
             properties: properties.iter().map(|p| p.to_string()).collect(),
             map: RwLock::new(HashMap::new()),
+            applied: AtomicU64::new(0),
         }
     }
 
@@ -100,7 +107,31 @@ impl Index for PropertyIndex {
         self.map.read().unwrap().values().map(|b| b.len()).sum()
     }
 
+    fn set_applied_seq(&self, seq: u64) {
+        self.applied.store(seq, Ordering::SeqCst);
+    }
+
+    fn applied_seq(&self) -> u64 {
+        self.applied.load(Ordering::SeqCst)
+    }
+
     fn verify(&self, kernel: &Kernel) -> KResult<VerifyReport> {
+        // P5-M17b — the O(1) freshness proof. rebuild stamps the head it
+        // reseeded from and the maintainer stamps the last seq of every
+        // successful batch, so stamp == head means every committed event
+        // was applied: nothing missing (all upserts/removes applied) and
+        // nothing stale (live rows are re-keyed by upsert, dead rows
+        // removed). Any other stamp state walks — fail-closed, the M9/M15
+        // exactness contract unchanged.
+        if self.applied_seq() == kernel.journal_head()?.0 {
+            return Ok(VerifyReport {
+                name: self.name.clone(),
+                indexed: self.len(),
+                missing: Vec::new(),
+                stale: Vec::new(),
+                verified: true,
+            });
+        }
         // justified: RwLock poison is unrecoverable
         let map = self.map.read().unwrap();
         let mut live: BTreeSet<KOID> = BTreeSet::new();
@@ -141,6 +172,14 @@ impl Index for PropertyIndex {
     }
 
     fn rebuild(&self, kernel: &Kernel) -> KResult<()> {
+        // P5-M17b: the stamp invalidates FIRST (0) so a concurrent query
+        // cannot short-circuit against a half-reseeded map, then the map
+        // reseeds, then the stamp lands on the head captured BEFORE the
+        // scan — every commit ≤ h0 is visible to the reseed; commits after
+        // h0 reach this index through the maintainer (the index is
+        // registered before rebuild), which stamps them as it applies them.
+        let h0 = kernel.journal_head()?.0;
+        self.applied.store(0, Ordering::SeqCst);
         // justified: RwLock poison is unrecoverable
         let mut map = self.map.write().unwrap();
         map.clear();
@@ -158,6 +197,7 @@ impl Index for PropertyIndex {
                 map.entry(key).or_default().push(koid);
             }
         }
+        self.applied.store(h0, Ordering::SeqCst);
         Ok(())
     }
 }

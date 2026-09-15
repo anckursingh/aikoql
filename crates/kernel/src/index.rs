@@ -321,6 +321,70 @@ impl TextIndex for TokenTextIndex {
 }
 
 // ---------------------------------------------------------------------------
+// NoopVectorIndex / NoopTextIndex — zero-cost slots (P5-M17b)
+// ---------------------------------------------------------------------------
+
+/// P5-M17b: the production maintainer's vector slot until M18 wires a real
+/// ANN index in. Accepts every upsert, answers nothing — nothing queries
+/// this slot today (the kernel never attaches the maintainer), and a real
+/// index at 1M×768 costs ~3 GB RSS that no caller pays yet.
+pub struct NoopVectorIndex;
+
+impl NoopVectorIndex {
+    pub fn new() -> Self {
+        NoopVectorIndex
+    }
+}
+
+impl Default for NoopVectorIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl VectorIndex for NoopVectorIndex {
+    fn upsert(&self, _koid: KOID, _model: &str, _vec: &[f32]) {}
+    fn remove(&self, _koid: &KOID) {}
+    fn search(&self, _qv: &[f32], _k: usize, _model: Option<&str>) -> Vec<(KOID, f32)> {
+        Vec::new()
+    }
+    fn len(&self) -> usize {
+        0
+    }
+}
+
+/// P5-M17b: the production maintainer's text slot — same M18 story as
+/// [`NoopVectorIndex`].
+pub struct NoopTextIndex;
+
+impl NoopTextIndex {
+    pub fn new() -> Self {
+        NoopTextIndex
+    }
+}
+
+impl Default for NoopTextIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TextIndex for NoopTextIndex {
+    fn upsert(&self, _koid: KOID, _tokens: &BTreeSet<String>) -> KResult<()> {
+        Ok(())
+    }
+    fn remove(&self, _koid: &KOID) -> KResult<()> {
+        Ok(())
+    }
+    fn search(&self, _tokens: &BTreeSet<String>, _k: usize) -> KResult<Vec<(KOID, f32)>> {
+        Ok(Vec::new())
+    }
+    fn len(&self) -> usize {
+        0
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests (lightweight impls only; HNSW/Tantivy tests live in aikoql-vector)
 // ---------------------------------------------------------------------------
 

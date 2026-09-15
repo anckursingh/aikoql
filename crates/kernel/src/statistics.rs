@@ -195,15 +195,38 @@ impl Kernel {
         props.insert("watermark".into(), Value::Int(stats.watermark as i64));
         props.insert("captured_at".into(), Value::Int(stats.captured_at as i64));
         self.catalog_create_entry("statistics", type_name, props)?;
+        // P5-M17b: refresh the read cache with the freshly computed snapshot
+        // (cbo_a06). A failed write leaves the old cached row in place —
+        // the journal advanced, so it reads stale, never silently fresh.
+        self.statistics_cache
+            .write()
+            .unwrap()
+            .insert(type_name.into(), stats.clone());
         Ok(stats)
     }
 
     /// Read the type's statistics row. None = never analyzed; a corrupt row
     /// fails closed (cbo_a04).
+    ///
+    /// P5-M17b: cache-served — the default query path reads statistics per
+    /// query, and the catalog lookup walks every head (measured ~3.5 ms on a
+    /// 1k store). A miss scans the catalog ONCE per kernel per type and
+    /// caches the parsed row; `analyze` refreshes the cache on write.
+    /// Staleness stays watermark-judged against the journal head, so cache
+    /// age can never promote a stale row (cbo_a06).
     pub fn statistics(&self, type_name: &str) -> KResult<Option<Statistics>> {
+        // justified: RwLock poison is unrecoverable
+        if let Some(s) = self.statistics_cache.read().unwrap().get(type_name) {
+            return Ok(Some(s.clone()));
+        }
         let Some(props) = self.catalog_entry("statistics", type_name)? else {
             return Ok(None);
         };
-        parse_statistics(type_name, &props).map(Some)
+        let parsed = parse_statistics(type_name, &props)?;
+        self.statistics_cache
+            .write()
+            .unwrap()
+            .insert(type_name.into(), parsed.clone());
+        Ok(Some(parsed))
     }
 }

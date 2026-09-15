@@ -164,7 +164,10 @@ impl Kernel {
             .write()
             .unwrap()
             .push(Arc::new(PropertyIndex::new(name, type_name, properties)));
-        Ok(())
+        // P5-M17b: the synchronous make-good — a just-declared index is
+        // seeded from the committed heads before analyze() prices it
+        // (idx2-008's manual catch-up is the declaration's own duty now).
+        self.rebuild_index(name)
     }
 
     /// Drop a catalog index: the row is tombstoned and the live registry
@@ -204,6 +207,21 @@ impl Kernel {
         Ok(self.property_indexes.read().unwrap().clone())
     }
 
+    /// Rebuild a registered property index from the committed heads —
+    /// the synchronous make-good behind a declaration (P5-M17b). A
+    /// lagging maintainer may still transiently re-apply older versions
+    /// after the rebuild; `wait_caught_up` before `analyze` settles that
+    /// (the M17b contract), and the verify gate covers any residual window.
+    /// Fails closed on an unknown name.
+    pub fn rebuild_index(&self, name: &str) -> KResult<()> {
+        let reg = self.property_indexes()?;
+        let idx = reg
+            .iter()
+            .find(|i| i.name() == name)
+            .ok_or_else(|| KError::InvalidObject(format!("index '{name}' not found")))?;
+        idx.rebuild(self)
+    }
+
     /// Equality scan on a registered index by name (idx2-composite). Unknown
     /// names and wrong key arities fail closed.
     pub fn scan_index(&self, name: &str, key: &[Value]) -> KResult<Vec<KOID>> {
@@ -214,6 +232,18 @@ impl Kernel {
             .find(|i| i.name() == name)
             .ok_or_else(|| KError::InvalidObject(format!("index '{name}' not found")))?;
         idx.scan_eq(key)
+    }
+
+    /// P5-M17b — an index's freshness stamp (the last committed event seq
+    /// it has fully applied). The CBO's verify gate short-circuits when
+    /// stamp == journal head (idx2-010). Unknown names fail closed.
+    pub fn index_applied_seq(&self, name: &str) -> KResult<u64> {
+        let reg = self.property_indexes()?;
+        let idx = reg
+            .iter()
+            .find(|i| i.name() == name)
+            .ok_or_else(|| KError::InvalidObject(format!("index '{name}' not found")))?;
+        Ok(idx.applied_seq())
     }
 
     // ---- type sugar -----------------------------------------------------------

@@ -232,6 +232,7 @@ dependencies = [
  "aikoql-graph",
  "aikoql-kernel",
  "aikoql-runtime",
+ "aikoql-scheduler",
  "aikoql-storage",
  "aikoql-storage-v2",
  "pyo3",

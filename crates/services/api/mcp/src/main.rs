@@ -76,6 +76,10 @@ pub(crate) use tracing::{error, info, info_span, warn};
 
 pub(crate) static SERVER_START: OnceLock<Instant> = OnceLock::new();
 pub(crate) static MEMORY_DIR: OnceLock<String> = OnceLock::new();
+/// P5-M17b (ND-14): the production property-index maintainer. Started on a
+/// worker thread at boot (full journal replay stays off the serve path);
+/// index_create settles it via wait_caught_up.
+pub(crate) static MAINTAINER: OnceLock<Arc<aikoql_scheduler::IndexMaintainer>> = OnceLock::new();
 
 /// PRR-3: semantic readiness — the enrichment worker thread updates this,
 /// tool_health and /health surface it.
@@ -371,6 +375,25 @@ fn main() {
                     format!("embeddings live (model {enrichment_model})"),
                 ),
                 Err(e) => set_semantic_status("unavailable", format!("enrichment failed: {e}")),
+            }
+        });
+    }
+
+    // P5-M17b (ND-14): production index maintenance, started unconditionally
+    // (the semantic-enrichment worker-thread pattern — the synchronous
+    // journal replay stays off the serve path). The vector/text slots are
+    // Noop: nothing queries them until M18, and a real index at 1M×768
+    // costs ~3 GB RSS no caller pays yet.
+    {
+        let kernel_work = kernel.clone();
+        thread::spawn(move || {
+            let vectors: Arc<dyn VectorIndex> = Arc::new(NoopVectorIndex::new());
+            let text: Arc<dyn TextIndex> = Arc::new(NoopTextIndex::new());
+            match aikoql_scheduler::IndexMaintainer::start(&kernel_work, vectors, text) {
+                Ok(m) => {
+                    MAINTAINER.set(m).ok();
+                }
+                Err(e) => warn!("index maintainer failed to start: {e}"),
             }
         });
     }

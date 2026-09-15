@@ -36,6 +36,13 @@ pub trait Index: Send + Sync {
         false
     }
     fn len(&self) -> usize;
+    /// P5-M17b — the freshness stamp: the last committed event seq this
+    /// index has fully applied. 0 = no proof; `verify` then walks.
+    fn set_applied_seq(&self, _seq: u64) {}
+    /// The current freshness stamp.
+    fn applied_seq(&self) -> u64 {
+        0
+    }
     /// Reconcile the index against the store. The default is an UNVERIFIED
     /// report — honest about having checked nothing.
     fn verify(&self, _kernel: &Kernel) -> KResult<VerifyReport> {

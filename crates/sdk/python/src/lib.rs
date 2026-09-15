@@ -9,9 +9,11 @@
 use aikoql_graph::{GraphEngineApi, RelateRequest, TraverseQuery};
 use aikoql_kernel::storage::store::StorageEngine;
 use aikoql_kernel::{
-    Fusion, Kernel, KnowledgeContext, Metadata, RedbEngine, RememberRequest, ScoredKO,
-    SemanticBlock, SimilarityQuery, Subject, SystemClock, Value, KOID,
+    Fusion, Kernel, KnowledgeContext, Metadata, NoopTextIndex, NoopVectorIndex, RedbEngine,
+    RememberRequest, ScoredKO, SemanticBlock, SimilarityQuery, Subject, SystemClock, TextIndex,
+    Value, VectorIndex, KOID,
 };
+use aikoql_scheduler::IndexMaintainer;
 use aikoql_storage::AikoqlStorageEngine;
 use aikoql_storage_v2::AikoqlStorageEngineV2;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -151,6 +153,10 @@ fn scored_ko_to_py(py: Python<'_>, s: &ScoredKO) -> Py<PyAny> {
 #[pyclass(name = "aikoql")]
 pub struct Aikoql {
     inner: Arc<Kernel>,
+    /// P5-M17b (ND-14): the embedded production property-index maintainer.
+    /// The maintainer's thread holds the inner state + a kernel handle, not
+    /// this Arc — dropping Aikoql stops it cleanly.
+    maintainer: Arc<IndexMaintainer>,
 }
 
 #[pymethods]
@@ -172,8 +178,20 @@ impl Aikoql {
             }
         };
         let kernel = Kernel::open(engine, Arc::new(SystemClock), salt).map_err(to_pyerr)?;
+        // P5-M17b: the embedded maintainer resumes at the journal head —
+        // Aikoql() must stay cheap (the competitor harness opens a fresh
+        // kernel per cell), so replay is live-only. Declared indexes stay
+        // empty until create_index re-declares (idempotent rebuild +
+        // analyze); the verify gate safely falls back meanwhile. The
+        // vector/text slots are Noop — nothing queries them until M18.
+        let (head, _) = kernel.journal_head().map_err(to_pyerr)?;
+        let vectors: Arc<dyn VectorIndex> = Arc::new(NoopVectorIndex::new());
+        let text: Arc<dyn TextIndex> = Arc::new(NoopTextIndex::new());
+        let maintainer =
+            IndexMaintainer::start_at(&kernel, vectors, text, Some(head)).map_err(to_pyerr)?;
         Ok(Aikoql {
             inner: Arc::new(kernel),
+            maintainer,
         })
     }
 
@@ -299,6 +317,54 @@ impl Aikoql {
             list.append(scored_ko_to_py(py, s)).unwrap();
         }
         Ok(list.into_py_any(py).unwrap())
+    }
+
+    /// P5-M17b (ND-14): the production declaration surface. Declare a
+    /// property index (catalog + registry + synchronous rebuild), settle
+    /// the maintainer, then analyze so the CBO can price it. Idempotent —
+    /// re-declaring the same shape rebuilds + re-analyzes (the harness
+    /// re-declares per cell to refresh M9 stats); a different shape under
+    /// the same name fails closed. An index changes plans, never answers.
+    #[pyo3(signature = (name, type_name, properties))]
+    fn create_index(
+        &self,
+        py: Python<'_>,
+        name: String,
+        type_name: String,
+        properties: Vec<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let dict = PyDict::new(py);
+        dict.set_item("name", &name).unwrap();
+        dict.set_item("type_name", &type_name).unwrap();
+        dict.set_item("properties", &properties).unwrap();
+        let rows = py.detach(move || {
+            let props: Vec<&str> = properties.iter().map(|p| p.as_str()).collect();
+            let declared = self.inner.catalog_list_indexes().map_err(to_pyerr)?;
+            if let Some(d) = declared.iter().find(|d| d.name == name) {
+                if d.type_name != type_name || d.properties != props {
+                    return Err(PyValueError::new_err(format!(
+                        "index '{name}' already declared with a different shape"
+                    )));
+                }
+                self.inner.rebuild_index(&name).map_err(to_pyerr)?;
+            } else {
+                self.inner
+                    .catalog_create_index(&name, &type_name, &props)
+                    .map_err(to_pyerr)?;
+            }
+            // Settle the maintainer before analyze — a lagging re-apply can
+            // transiently overwrite the rebuild with an older version (the
+            // M17b wait_caught_up contract).
+            self.maintainer
+                .wait_caught_up(&self.inner, std::time::Duration::from_secs(300))
+                .map_err(to_pyerr)?;
+            self.inner
+                .analyze(&type_name)
+                .map_err(to_pyerr)
+                .map(|s| s.row_count)
+        })?;
+        dict.set_item("rows", rows).unwrap();
+        Ok(dict.into_py_any(py).unwrap())
     }
 
     fn close(&self, _py: Python<'_>) -> PyResult<()> {

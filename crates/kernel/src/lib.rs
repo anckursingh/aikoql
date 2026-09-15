@@ -77,7 +77,7 @@ pub use index::{
     property::PropertyIndex,
     unified::{Index, TextIndexAdapter, VectorIndexAdapter, VerifyReport},
     BruteForceVectorIndex, IndexCoordinator, IndexMaintainerApi, IndexStatus, IndexStatusKind,
-    TextIndex, TokenTextIndex, VectorHealth, VectorIndex,
+    NoopTextIndex, NoopVectorIndex, TextIndex, TokenTextIndex, VectorHealth, VectorIndex,
 };
 pub use jobs::{JobHandle, JobKind, JobRecord, JobScheduler, JobStatus, DEFAULT_MAX_RUNNING_JOBS};
 pub use knowledge::authority::{Authority, AuthorityRanking};

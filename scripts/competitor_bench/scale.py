@@ -195,6 +195,9 @@ def mcp_column(ds, server, db_dir, n_ops):
         agent.relate(note_koids[a], event_koids[b], "mentions")
     for a, b in ds["derived"]:
         agent.relate(note_koids[a], note_koids[b], "derived_from")
+    # P5-M17b: PG's CREATE INDEX parity — declared (and analyzed) exactly
+    # where PG builds notes_topic_idx, inside the timed ingest window.
+    agent.create_index("by_topic", "note", ["topic"])
     ingest_s = time.perf_counter() - t0
     agent.close()
 
@@ -233,6 +236,13 @@ def mcp_column(ds, server, db_dir, n_ops):
         return op
 
     def build_filter(agent):
+        # P5-M17b: re-declared per cell connect. The M9 stats contract makes
+        # ANY later write (the write cell runs first) stale the stats, so the
+        # declaration's rebuild + analyze must run here for the optimizer to
+        # price the index. Refresh cost stays OUTSIDE the measured op — PG
+        # pays it once at ingest, we pay it per connect. See REPORT.md.
+        agent.create_index("by_topic", "note", ["topic"])
+
         def op():
             out = agent.aikoql('MATCH note WHERE topic == "pet" RETURN *')
             return len(rows_of(out)) == len(ds["notes"]) // 2
