@@ -15,6 +15,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 [dev-dependencies]
 aikoql-semantic = { path = "../engines/semantic" }
 aikoql-graph = { path = "../engines/graph" }
+# P5-M17b: the cbo-default production-shape pin drives the REAL
+# IndexMaintainer (no manual catch-up helper).
+aikoql-scheduler = { path = "../engines/scheduler" }
 proptest = "1"
 # P5-M13 (ND-13): machine-readable hybrid benchmark report (h7).
 serde_json = "1"

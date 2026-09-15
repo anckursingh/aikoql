@@ -246,3 +246,45 @@ fn cbo_default_004_gate6_oracle_divergence_zero_through_the_default_path() {
         "the default path never changes results (gate-6)"
     );
 }
+
+// --- cbo_default_005 — the production shape at the harness's selectivity -------
+
+/// P5-M17b RED: kernel + REAL maintainer (no manual catch-up) +
+/// create_index + analyze, at the competitor harness's shape — the Eq
+/// matches HALF the rows (topic == "pet" is 50% of the seed dataset). The
+/// M15 model priced the probe above the scan at this selectivity
+/// (INDEX_ROW_COST × matched > scan), so the default path fell back to the
+/// full scan even with every guard satisfied. The production shape must
+/// select the index AND stay row-for-row identical.
+#[test]
+fn cbo_default_005_production_shape_selects_the_index_at_harness_selectivity() {
+    let k = mk();
+    for i in 0..100 {
+        person(
+            &k,
+            &format!("P{i:03}"),
+            if i % 2 == 0 { "Eng" } else { "Ops" },
+        );
+    }
+    k.catalog_create_index("by_dept", "Person", &["dept"])
+        .unwrap();
+    let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
+    let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
+    let m = aikoql_scheduler::IndexMaintainer::start(&k, v, t).unwrap();
+    m.wait_caught_up(&k, std::time::Duration::from_secs(5))
+        .unwrap();
+    k.analyze("Person").unwrap();
+
+    let query = "MATCH Person WHERE dept == \"Eng\" RETURN *";
+    let plan = plan_of(&k, query);
+    let (rows, report) = Interpreter::execute_with_report(&k, &plan).unwrap();
+    assert!(report.stats_used, "fresh stats drive the decision");
+    assert_eq!(
+        report.plan.operators[0].strategy,
+        Strategy::PropertyIndex,
+        "the 50%-selectivity production shape uses the index (M17b)"
+    );
+    assert_eq!(report.index_used.as_deref(), Some("by_dept"));
+    // Row-for-row identical to the rule path — same rows, same order.
+    assert_eq!(exec_ids(&rows), rule_based(&k, &plan));
+}

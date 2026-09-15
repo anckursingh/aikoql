@@ -260,6 +260,7 @@ dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
  "aikoql-kernel",
+ "aikoql-scheduler",
  "aikoql-semantic",
  "proptest",
  "serde_json",
