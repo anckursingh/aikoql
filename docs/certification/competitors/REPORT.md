@@ -1,6 +1,6 @@
 # AIKOQL vs competitors — benchmark report (P5-M14 supplement)
 
-**2026-09-16** · **re-stamped 2026-09-15** · results: [`result.json`](result.json) · harness: `scripts/competitor_bench/bench.py` · measured at commit `c4931ed`, re-measured at `dc42b16` (release SDK build)
+**2026-09-16** · **re-stamped 2026-09-15** · **M17 scale re-stamp 2026-09-16 (`3152c5e`)** · results: [`result.json`](result.json) · harness: `scripts/competitor_bench/bench.py` + [`scale.py`](../../../scripts/competitor_bench/scale.py) · measured at commit `c4931ed`, re-measured at `dc42b16` (release SDK build)
 
 This is a **published report, not a CI gate** (the ND-14 acceptance: competitor
 comparisons ship as reports). Same deterministic dataset in four engines, same
@@ -61,6 +61,73 @@ pre-17b product and ~4.3× PG on this cell — while point_read remains ~185×
 faster than PG (0.010 vs 1.85 ms). The ~2.5 ms aspiration from the plan was
 not met; the number above is what the decomposition says is possible without
 breaking the pinned contracts.
+
+## P5-M17 — scale-out, the MCP column, and the defect it caught (re-stamp `3152c5e`, 2026-09-16)
+
+M17 extended the harness from the N=1 000 comfort zone to the architecture
+questions: 100k/1M scale runs, a multi-op transaction cell against PG, and a
+full MCP-mode column (same dataset, same cells, localhost aikoql-mcp). All 22
+cells oracle-correct; the run doubles as the M18 decision evidence.
+
+The MCP column caught a real defect. structured_filter over the wire measured
+**725 ms warm p50 at N=1 000** — 79× the embedded 9.11 ms for the same store
+and the same cell. Bisecting the path showed the frame writer serialized each
+JSON-RPC frame through `Display`, which emits one `write()` syscall per JSON
+token: 33 008 syscalls for one 127 KB frame, ~700–900 ms per frame on Windows.
+RED pinned the contract (one bounded write per frame — the
+`write_frame`-bounds-writes test), the fix serializes once and writes once
+(`3152c5e`), and the re-run dropped structured_filter to **18.1 ms warm p50
+(40×)**. Every other cell in the column dropped with it — the fix is on the
+shared write path (point_write 1.75 ms, transactions 1.60 ms, vector_recall
+13.4 ms warm p50).
+
+### Scale (embedded, warm p50 ms; all cells oracle-correct)
+
+| cell | 100k | 1M |
+|---|---|---|
+| point_read | 0.022 | 0.023 |
+| point_write | 0.96 | 0.63 |
+| structured_filter | 1 088 | 22 912 |
+| transactions | 0.61 | 0.60 |
+| graph | 0.062 | 0.069 |
+| vector_recall | 1 092 | 17 002 |
+| ingest (s) | 251.1 | 2 139.4 |
+| RSS / disk | 266 MB / 191.5 MB | 1 005 MB / 1 653 MB |
+
+Point ops, transactions, and graph are flat from 100k → 1M — the sublinear
+read paths hold. Filter and vector are still brute-force O(N) plus an
+N log N sort, and scale linearly-plus. Ingest and footprint are within noise
+of the previous stamp (212.9 s / 2 361.6 s, 270 MB, 191 MB).
+
+### Multi-op transaction cell (batch of N in one transaction; warm p50 ms, throughput ops/s)
+
+| batch | aikoql-mcp | PostgreSQL |
+|---|---|---|
+| 10 | **12.3 — 80.0 op/s** | 63.6 — 12.3 op/s |
+| 100 | **88.4 — 10.9 op/s** | 198.3 — 4.2 op/s |
+
+aikoql wins both batch sizes. The frame fix lifts this cell too — 58 → 12.3 ms
+(batch 10) and 338 → 88.4 ms (batch 100) between the two stamps; every
+transaction is 12/102 round-trips whose frames were previously
+token-fragmented. The PG side is noisier than usual: Docker Desktop needed a
+WSL2 recovery restart before this run, and PG's cells regressed without any
+engine change (51 → 63.6 ms on batch 10). Treat the PG columns as
+machine-bound; the aikoql improvement is the signal.
+
+### M18 decision — SHIP
+
+vector_recall warm p50: 5.0 ms @1k (`dc42b16`) → 1 092 ms @100k → 17 002 ms
+@1M. That is 15.6× time for 10× corpus — slightly superlinear, the top-k sort
+over the full head set — extrapolating to minutes per query at 10M. Brute
+force does not hold; the plan's decision point resolves to **ship an ANN
+index**. Two scope notes the measurement adds:
+
+- Attaching the HNSW alone is not enough: the coordinator's vector leg walks
+  every head to score, so a capacity-capped candidate set would rank
+  non-members as 0.0 above real negative-cosine neighbors ("vmap hole").
+  Ranking must become candidate-driven (pinned by the `ann001` RED).
+- The gain cell is vector_recall at 100k/1M. The N=1 000 column above
+  (13.4 ms over the wire) is write-path-bound, not search-bound.
 
 ## Method
 
@@ -128,9 +195,9 @@ Footprint (after ingest + workload run):
    which is exactly what P5-M17b shipped.)
 6. **vector_recall is not symmetric either.** Qdrant runs an HNSW ANN index;
    aikoql is brute-force cosine over the corpus. After M16's slim ranking pass
-   the two are at parity at N=1 000 (5.0 vs 5.3 ms warm p50); Qdrant is still
-   expected to widen the gap at scale. An ANN index for aikoql is the open
-   P5-M18, evidence-gated on the 100k/1M scale numbers (M17).
+   the two are at parity at N=1 000 (5.0 vs 5.3 ms warm p50); at 100k/1M the
+   brute force is linear-plus (1 092 ms @100k → 17 002 ms @1M) — the P5-M17
+   section above resolves the evidence gate to SHIP the ANN index (P5-M18).
 7. **"transactions"** = one durable single-statement commit per op on both
    sides (aikoql: one journal commit + fsync; PG: autocommit update / explicit
    insert commit). Multi-statement transactions are not exercised.

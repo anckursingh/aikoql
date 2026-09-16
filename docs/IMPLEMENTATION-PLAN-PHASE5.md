@@ -248,7 +248,7 @@ Acceptance: docs/certification/competitors/scale/result.json + REPORT.md update;
 
 Note: the filter scale numbers land pre-17b (the scan story — the product today ships no live property index in production); they are re-stamped when P5-M17b lands.
 
-Status: ⬜ Proposed
+Status: ✅ Shipped 2026-09-16 (stamp 3152c5e). Full run (100k + 1M + txn + MCP column) completed, all 22 oracles correct, exit 0. The MCP column caught a real defect: structured_filter 725 ms warm p50 over the wire at N=1 000 vs 9.11 ms embedded (79×) — `write_frame` serialized frames through `Display`, one write() syscall per JSON token (33 008 syscalls per 127 KB frame, ~700–900 ms on Windows). RED (bounds-writes pin, 504af08) → fix: serialize once, write_all once. Re-run: structured_filter 18.1 ms (40×); every cell in the column dropped (shared write path). Scale cells: filter 1 088 ms @100k → 22 912 ms @1M, vector 1 092 → 17 002 ms (15.6× time for 10× corpus, superlinear); point_read/txn/graph flat — the sublinear paths hold. Multi-op txn: aikoql txn_10 12.3 ms / txn_100 88.4 ms vs PG 63.6 / 198.3 (PG machine-bound this stamp — Docker WSL2 recovery restart, prior 51/197; the aikoql win 58→12.3 / 338→88.4 is the frame fix). M18 decision: SHIP — brute force extrapolates to minutes per query at 10M; scope note: attaching the HNSW alone is not enough, the coordinator's vector leg must become candidate-driven (vmap hole, ann001 RED). Full tables + honest caveats in REPORT.md.
 
 ### P5-M17b — Power the property index in production
 
@@ -266,9 +266,9 @@ Status: ✅ Shipped 2026-09-15 (6873bcc). Surfaces live (SDK `create_index` + MC
 
 Decision point AFTER M17's 100k/1M vector numbers. Rule 11 (SE2-M25 discipline): no index ships without a cell showing a real gain. If brute-force-without-materialization (M16) holds the vector cell at scale, M18 closes as skip with the evidence row — the M26 precedent.
 
-Deliver: TBD at the decision point. Candidate: HNSW over the vector index's representation behind the existing `trait Index` + CBO strategy (the M9 seam), or closure row.
+Deliver (decision made 2026-09-16: SHIP): HNSW behind the existing `trait Index` + CBO seam (the M9 pattern), wired into both production hosts (replace the M17b `NoopVectorIndex`/`NoopTextIndex`, config-driven dim/capacity, checkpoint/resume through the i08-proven machinery), AND the coordinator's vector leg made candidate-driven — attaching the index alone leaves the 0.0-hole ranking bug (heads outside the HNSW candidate set outrank real negatives; the `ann001` RED pins it).
 
-Status: ⬜ Proposed (gated on M17)
+Status: ⬜ Delivery — decision made 2026-09-16: SHIP. M17 evidence: vector_recall 1 092 ms @100k → 17 002 ms @1M warm p50 (15.6× time for 10× corpus — brute force does not hold).
 
 ## Gates (carried + new)
 
