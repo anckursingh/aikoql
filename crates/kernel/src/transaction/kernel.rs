@@ -919,6 +919,9 @@ impl Clone for Kernel {
 
 impl Kernel {
     /// Attach an index maintainer; `find_similar` routes through it afterwards.
+    /// The coordinator stores it WEAKLY (P5-M18): the caller must keep the
+    /// `Arc` alive for the indexes to live — the maintainer's thread holds a
+    /// kernel clone, so a strong edge here would never drop on either side.
     pub fn attach_indexes(&self, m: Arc<dyn crate::index::IndexMaintainerApi>) {
         *self.indexes.write().unwrap() = Some(IndexCoordinator::with_maintainer(m));
     }

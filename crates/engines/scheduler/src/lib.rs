@@ -477,6 +477,15 @@ impl IndexMaintainerApi for IndexMaintainer {
 impl Drop for IndexMaintainer {
     fn drop(&mut self) {
         self.inner.stop.store(true, Ordering::Relaxed);
+        // P5-M18: join synchronously — the thread holds a kernel clone, and
+        // the store lock releases only when that clone dies. Without the
+        // join, a close-then-reopen (the harness's per-cell connect) races
+        // the thread's next 25 ms tick and hits the aikoql-v2 WouldBlock
+        // lock. The thread holds no Arc<Self>, so the join cannot deadlock.
+        // justified: Mutex poison is unrecoverable
+        if let Some(h) = self.inner.handle.lock().unwrap().take() {
+            let _ = h.join();
+        }
     }
 }
 

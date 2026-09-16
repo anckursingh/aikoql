@@ -473,7 +473,11 @@ mod tests {
             vectors,
             text: Arc::new(TokenTextIndex::new()),
         });
-        let coord = IndexCoordinator::with_maintainer(fake);
+        let coord = IndexCoordinator::with_maintainer(fake.clone());
+        // P5-M18: the coordinator holds the maintainer WEAKLY (the strong edge
+        // is a drop cycle against the maintainer thread's kernel clone) — the
+        // owner keeps the Arc alive, exactly as the SDK/MCP hosts do.
+        let _owner = fake;
         let q = || {
             SimilarityQuery::new(alice.clone(), 1, Fusion::VectorOnly).with_vector(vec![0.9, 0.1])
         };

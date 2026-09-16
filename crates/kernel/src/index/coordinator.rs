@@ -9,7 +9,7 @@ use crate::knowledge::kom::{Action, KError, KResult, LifecycleState, KOID};
 use crate::knowledge::scoring::{cosine, jaccard, ko_text, tokenize};
 use crate::transaction::kernel::{Fusion, Kernel, ScoredKO, SimilarityQuery};
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 /// Similarity-search service. Holds an optional async index maintainer; when no
 /// maintainer is attached it falls back to the exact inline path (same scoring,
@@ -17,7 +17,12 @@ use std::sync::Arc;
 /// threads while still allowing pluggable ANN/BM25 indexes.
 #[derive(Default)]
 pub struct IndexCoordinator {
-    maintainer: Option<Arc<dyn IndexMaintainerApi>>,
+    /// P5-M18: WEAK — a strong edge here closes kernel→maintainer→thread→
+    /// kernel, a refcount cycle that keeps the store lock held after every
+    /// kernel and maintainer drop. The host owns the strong Arc (SDK
+    /// `Aikoql.maintainer`, MCP `MAINTAINER` static); a dead maintainer
+    /// degrades to the exact path.
+    maintainer: Option<Weak<dyn IndexMaintainerApi>>,
 }
 
 impl IndexCoordinator {
@@ -30,16 +35,16 @@ impl IndexCoordinator {
     /// Coordinate over an existing async maintainer (live ANN/BM25 indexes).
     pub fn with_maintainer(maintainer: Arc<dyn IndexMaintainerApi>) -> Arc<Self> {
         Arc::new(Self {
-            maintainer: Some(maintainer),
+            maintainer: Some(Arc::downgrade(&maintainer)),
         })
     }
 
     /// Attach or replace the maintainer.
     pub fn attach(&mut self, maintainer: Arc<dyn IndexMaintainerApi>) {
-        self.maintainer = Some(maintainer);
+        self.maintainer = Some(Arc::downgrade(&maintainer));
     }
 
-    pub fn maintainer(&self) -> Option<&Arc<dyn IndexMaintainerApi>> {
+    pub fn maintainer(&self) -> Option<&Weak<dyn IndexMaintainerApi>> {
         self.maintainer.as_ref()
     }
 
@@ -88,8 +93,12 @@ impl IndexCoordinator {
 
         let q_tokens = q.text.as_ref().map(|t| tokenize(t));
 
+        // One upgrade per search; the rest of this function treats `m` as
+        // `Option<Arc>` exactly as before the weak edge (P5-M18).
+        let m = self.maintainer.as_ref().and_then(|w| w.upgrade());
+
         let lag = if use_indexes {
-            match &self.maintainer {
+            match &m {
                 Some(m) => m.lag(kernel)?,
                 None => 0,
             }
@@ -97,9 +106,9 @@ impl IndexCoordinator {
             0
         };
         let vmap: Option<BTreeMap<KOID, f32>> = if use_indexes {
-            self.maintainer.as_ref().and_then(|m| {
+            m.as_ref().and_then(|mm| {
                 q.vector.as_ref().map(|qv| {
-                    m.vectors()
+                    mm.vectors()
                         .search(qv, usize::MAX, q.embedding_model.as_deref())
                         .into_iter()
                         .collect()
@@ -109,7 +118,7 @@ impl IndexCoordinator {
             None
         };
         let tmap: Option<BTreeMap<KOID, f32>> = if use_indexes {
-            match (&self.maintainer, &q_tokens) {
+            match (&m, &q_tokens) {
                 // R4: text().search() returns KResult — propagate, don't swallow
                 (Some(m), Some(t)) => Some(m.text().search(t, usize::MAX)?.into_iter().collect()),
                 _ => None,
