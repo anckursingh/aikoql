@@ -166,7 +166,10 @@ fn vs_scan_003_index_lag_ms_keeps_the_exact_eventual_contract() {
         vectors,
         text: Arc::new(TokenTextIndex::new()),
     });
-    k.attach_indexes(fake);
+    k.attach_indexes(fake.clone());
+    // P5-M18: the coordinator holds the maintainer WEAKLY — the owner keeps
+    // the Arc alive (the SDK/MCP hosts do exactly this).
+    let _owner = fake;
     let hits = k.find_similar(vector_only(&alice, [0.9, 0.1], 1)).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].ko.koid, a, "the index-assisted path ranks a first");
