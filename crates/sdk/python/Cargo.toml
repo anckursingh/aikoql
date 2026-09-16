@@ -19,6 +19,8 @@ aikoql-compiler = { path = "../../compiler" }
 aikoql-runtime = { path = "../../runtime" }
 # P5-M17b (ND-14): the embedded production property-index maintainer.
 aikoql-scheduler = { path = "../../engines/scheduler" }
+# P5-M18: real ANN/BM25 indexes behind the maintainer.
+aikoql-vector = { path = "../../engines/vector" }
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py39"] }
 
 [features]

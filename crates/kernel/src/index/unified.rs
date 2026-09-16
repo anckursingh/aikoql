@@ -104,7 +104,11 @@ impl Index for VectorIndexAdapter {
     }
     fn upsert(&self, koid: KOID, ko: &KnowledgeObject) -> KResult<()> {
         if let Some(sem) = &ko.semantic {
-            if let (Some(model), Some(emb)) = (&sem.embedding_model, &sem.embedding) {
+            if let Some(emb) = &sem.embedding {
+                // P5-M18 (ann002): model-less embeddings are ""-model entries
+                // (the R7 label stays "{model}:{koid_hex}") — the exact path
+                // scores them, the ANN must index them too.
+                let model = sem.embedding_model.as_deref().unwrap_or("");
                 self.inner.upsert(koid, model, emb);
             }
         }

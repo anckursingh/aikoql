@@ -12,7 +12,7 @@
 use aikoql_kernel::knowledge::kom::*;
 use aikoql_kernel::{TextIndex, VectorHealth, VectorIndex};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, RwLock};
 use tantivy::collector::TopDocs;
 use tantivy::query::BooleanQuery;
@@ -36,7 +36,9 @@ const REBUILD_DEAD_RATIO: f64 = 0.3;
 /// Labels are `"{model}:{koid_hex}"` so the same KO with different embedding
 /// models produces independent HNSW entries.
 pub struct HnswVectorIndex {
-    dim: usize,
+    /// 0 = adopt the first upsert's dim (P5-M18 vec003: enrichers and fixtures
+    /// disagree on dim, a fixed default would silently drop one).
+    dim: AtomicUsize,
     capacity: usize,
     index: Mutex<hnsw::labeled::LabeledIndex<hnsw::distance::Cosine, String>>,
     /// Live (KOID, model) pairs and their vectors (kept so a rebuild can
@@ -61,7 +63,7 @@ fn build_index(capacity: usize) -> hnsw::labeled::LabeledIndex<hnsw::distance::C
 impl HnswVectorIndex {
     pub fn new(dim: usize, capacity: usize) -> Self {
         HnswVectorIndex {
-            dim,
+            dim: AtomicUsize::new(dim),
             capacity,
             index: Mutex::new(build_index(capacity)),
             model_map: RwLock::new(BTreeMap::new()),
@@ -112,7 +114,7 @@ impl HnswVectorIndex {
         }
         let physical = meta["physical"].as_u64().unwrap_or(model_map.len() as u64);
         Ok(HnswVectorIndex {
-            dim,
+            dim: AtomicUsize::new(dim),
             capacity,
             index: Mutex::new(index),
             model_map: RwLock::new(model_map),
@@ -120,6 +122,10 @@ impl HnswVectorIndex {
             physical: AtomicU64::new(physical),
             pending_rebuild: AtomicBool::new(false),
         })
+    }
+
+    fn dim(&self) -> usize {
+        self.dim.load(Ordering::Relaxed)
     }
 
     fn dead_ratio(&self) -> f64 {
@@ -175,7 +181,11 @@ impl Default for HnswVectorIndex {
 
 impl VectorIndex for HnswVectorIndex {
     fn upsert(&self, koid: KOID, model: &str, vec: &[f32]) {
-        if vec.len() != self.dim {
+        // P5-M18 (vec003): dim 0 adopts the first vector's dim.
+        let dim = self.dim();
+        if dim == 0 {
+            self.dim.store(vec.len(), Ordering::Relaxed);
+        } else if vec.len() != dim {
             return;
         }
         // R7: label is "{model}:{koid_hex}" so different models produce distinct entries.
@@ -208,7 +218,8 @@ impl VectorIndex for HnswVectorIndex {
     }
 
     fn search(&self, qv: &[f32], k: usize, model: Option<&str>) -> Vec<(KOID, f32)> {
-        if qv.len() != self.dim || k == 0 {
+        let dim = self.dim();
+        if dim == 0 || qv.len() != dim || k == 0 {
             return Vec::new();
         }
         // justified: Mutex poison is unrecoverable
@@ -302,7 +313,7 @@ impl VectorIndex for HnswVectorIndex {
             .map(|k| k.to_hex())
             .collect();
         let meta = serde_json::json!({
-            "dim": self.dim,
+            "dim": self.dim(),
             "capacity": self.capacity,
             "physical": self.physical.load(Ordering::Relaxed),
             "tombstones": tombstones,

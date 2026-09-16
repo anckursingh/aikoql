@@ -70,15 +70,18 @@ impl IndexCoordinator {
         let snap = q.context.snapshot.unwrap_or_else(|| kernel.snapshot());
         // R9: a type-scoped query walks the type index instead of all heads.
         // The per-KO type filter below stays — it guards stale index entries.
-        let heads: Vec<(KOID, u64, u64, LifecycleState)> =
-            match q.filter.as_ref().and_then(|f| f.type_name.as_deref()) {
+        // M18: computed lazily — the ANN path ranks the index's own
+        // candidates and never needs this O(store) scan.
+        let heads = || -> KResult<Vec<(KOID, u64, u64, LifecycleState)>> {
+            Ok(match q.filter.as_ref().and_then(|f| f.type_name.as_deref()) {
                 Some(tn) => kernel
                     .heads_of_type(tn)?
                     .into_iter()
                     .map(|(koid, state)| (koid, 0, 0, state))
                     .collect(),
                 None => kernel.scan_heads()?,
-            };
+            })
+        };
         let mut vec_scored: Vec<(KOID, f32)> = Vec::new();
         let mut txt_scored: Vec<(KOID, f32)> = Vec::new();
         let mut merged: Vec<ScoredKO> = Vec::new();
@@ -131,23 +134,27 @@ impl IndexCoordinator {
                 .map(|f| f.required.iter().map(|(k, _)| k.clone()).collect())
                 .unwrap_or_default();
             let mut ranked: Vec<(KOID, f32)> = Vec::new();
-            for (koid, _version, _ts, state) in &heads {
+            // One guard chain for both legs; the score is always the
+            // committed cosine from the slim embedding — the index only
+            // nominates candidates, its own sim never becomes a published
+            // score.
+            let mut consider = |koid: &KOID, deleted: bool| -> KResult<()> {
+                if deleted {
+                    return Ok(());
+                }
                 let Some(rec) = kernel.object_scoring(koid, snap, &required)? else {
-                    continue;
+                    return Ok(());
                 };
                 if kernel
                     .check_access_parts(&q.context.subject, &rec, Action::Read)
                     .is_err()
                 {
-                    continue; // ACL-filtered, silently (no existence leak)
-                }
-                if *state == LifecycleState::Deleted {
-                    continue;
+                    return Ok(()); // ACL-filtered, silently (no existence leak)
                 }
                 if let Some(f) = &q.filter {
                     if let Some(tn) = &f.type_name {
                         if rec.type_name != *tn {
-                            continue;
+                            return Ok(());
                         }
                     }
                     let mut ok = true;
@@ -158,17 +165,36 @@ impl IndexCoordinator {
                         }
                     }
                     if !ok {
-                        continue;
+                        return Ok(());
                     }
                 }
-                let vscore = match &vmap {
-                    Some(m) => m.get(koid).copied().unwrap_or(0.0),
-                    None => match (&q.vector, &rec.embedding) {
-                        (Some(qv), Some(emb)) => cosine(qv, emb),
-                        _ => 0.0,
-                    },
+                let vscore = match (&q.vector, &rec.embedding) {
+                    (Some(qv), Some(emb)) => cosine(qv, emb),
+                    _ => 0.0,
                 };
                 ranked.push((*koid, vscore));
+                Ok(())
+            };
+            if let Some(vmap) = &vmap {
+                // M18 (ann001): candidate-driven ranking. The ANN index is
+                // capacity-capped, so rank ONLY the candidates it returned —
+                // scoring every head with vmap.get(koid).unwrap_or(0.0)
+                // hands non-candidates a 0.0 "hole" that outranks real
+                // negative-cosine neighbors. The index lags deletes
+                // (eventual): a tombstoned koid can still be a candidate,
+                // and its head state is the authority.
+                for koid in vmap.keys() {
+                    let deleted = match kernel.head_object(koid)? {
+                        Some(head) => head.lifecycle.state == LifecycleState::Deleted,
+                        None => true, // head erased — not a live candidate
+                    };
+                    consider(koid, deleted)?;
+                }
+            } else {
+                // Exact fallback: all heads, inline cosine (no index reads).
+                for (koid, _version, _ts, state) in &heads()? {
+                    consider(koid, *state == LifecycleState::Deleted)?;
+                }
             }
             ranked.sort_by(|a, b| {
                 b.1.partial_cmp(&a.1)
@@ -218,7 +244,7 @@ impl IndexCoordinator {
             return Ok(merged);
         }
 
-        for (koid, _version, _ts, state) in &heads {
+        for (koid, _version, _ts, state) in &heads()? {
             let ko = match kernel.object_at(koid, snap)? {
                 Some(ko) => ko,
                 None => continue,

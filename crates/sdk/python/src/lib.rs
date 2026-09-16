@@ -9,19 +9,21 @@
 use aikoql_graph::{GraphEngineApi, RelateRequest, TraverseQuery};
 use aikoql_kernel::storage::store::StorageEngine;
 use aikoql_kernel::{
-    Fusion, Kernel, KnowledgeContext, Metadata, NoopTextIndex, NoopVectorIndex, RedbEngine,
+    Fusion, IndexMaintainerApi, IndexStatusKind, Kernel, KnowledgeContext, Metadata, RedbEngine,
     RememberRequest, ScoredKO, SemanticBlock, SimilarityQuery, Subject, SystemClock, TextIndex,
     Value, VectorIndex, KOID,
 };
 use aikoql_scheduler::IndexMaintainer;
 use aikoql_storage::AikoqlStorageEngine;
 use aikoql_storage_v2::AikoqlStorageEngineV2;
+use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3::IntoPyObjectExt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 fn to_pyerr(e: aikoql_kernel::KError) -> PyErr {
     PyRuntimeError::new_err(format!("{}", e))
@@ -178,17 +180,18 @@ impl Aikoql {
             }
         };
         let kernel = Kernel::open(engine, Arc::new(SystemClock), salt).map_err(to_pyerr)?;
-        // P5-M17b: the embedded maintainer resumes at the journal head —
-        // Aikoql() must stay cheap (the competitor harness opens a fresh
-        // kernel per cell), so replay is live-only. Declared indexes stay
-        // empty until create_index re-declares (idempotent rebuild +
-        // analyze); the verify gate safely falls back meanwhile. The
-        // vector/text slots are Noop — nothing queries them until M18.
-        let (head, _) = kernel.journal_head().map_err(to_pyerr)?;
-        let vectors: Arc<dyn VectorIndex> = Arc::new(NoopVectorIndex::new());
-        let text: Arc<dyn TextIndex> = Arc::new(NoopTextIndex::new());
-        let maintainer =
-            IndexMaintainer::start_at(&kernel, vectors, text, Some(head)).map_err(to_pyerr)?;
+        // P5-M18: real ANN/BM25 indexes behind a FULL journal replay — a
+        // live-only maintainer (M17b) leaves the vector index permanently
+        // empty, and the candidate-driven coordinator ranks only what the
+        // index nominates (empty = no hits). The replay commits in batches
+        // (one Tantivy commit per 64 events), so open stays proportional;
+        // the harness's per-cell opens pay it outside the timed ops. The
+        // HNSW adopts the first vector's dim (SDK callers send arbitrary
+        // dims) and its capacity is an allocator hint only.
+        let vectors: Arc<dyn VectorIndex> = Arc::new(HnswVectorIndex::new(0, 10_000));
+        let text: Arc<dyn TextIndex> = Arc::new(TantivyTextIndex::new().map_err(to_pyerr)?);
+        let maintainer = IndexMaintainer::start(&kernel, vectors, text).map_err(to_pyerr)?;
+        kernel.attach_indexes(maintainer.clone());
         Ok(Aikoql {
             inner: Arc::new(kernel),
             maintainer,
@@ -311,6 +314,20 @@ impl Aikoql {
             k,
             fusion,
         };
+        // P5-M18: the ANN is eventually consistent — a query right after a
+        // write must not answer empty. Bounded wait for the maintainer to
+        // drain (a broken index is skipped; answers still come, lag is
+        // surfaced per hit).
+        let healthy = self
+            .maintainer
+            .status(&self.inner)
+            .map(|s| s.status != IndexStatusKind::Error)
+            .unwrap_or(true);
+        if healthy {
+            let _ = self
+                .maintainer
+                .wait_caught_up(&self.inner, Duration::from_secs(2));
+        }
         let hits = py.detach(|| self.inner.find_similar(q).map_err(to_pyerr))?;
         let list = PyList::empty(py);
         for s in hits.iter() {

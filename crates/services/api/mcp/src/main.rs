@@ -61,7 +61,7 @@ pub(crate) use aikoql_kernel::knowledge::ontology::{
 pub(crate) use aikoql_kernel::lifecycle::schema::SchemaRegistry;
 pub(crate) use aikoql_kernel::*;
 pub(crate) use aikoql_scheduler::Scheduler;
-#[cfg(feature = "embedding-openai")]
+pub(crate) use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};#[cfg(feature = "embedding-openai")]
 pub(crate) use aikoql_semantic::provider::OpenAiEmbeddingProvider;
 pub(crate) use aikoql_semantic::{EmbeddingEnricher, SemanticEngine};
 pub(crate) use serde_json::{json, Value as J};
@@ -379,18 +379,29 @@ fn main() {
         });
     }
 
-    // P5-M17b (ND-14): production index maintenance, started unconditionally
-    // (the semantic-enrichment worker-thread pattern — the synchronous
-    // journal replay stays off the serve path). The vector/text slots are
-    // Noop: nothing queries them until M18, and a real index at 1M×768
-    // costs ~3 GB RSS no caller pays yet.
+    // P5-M18 (ND-14): real ANN/BM25 indexes behind the maintainer (started
+    // unconditionally, off the serve path — the synchronous journal replay
+    // is batch-committed). The HNSW adopts the first vector's dim (the
+    // enricher emits 384-d all-MiniLM-L6-v2; a fixed default would silently
+    // drop it) and is capacity-capped at 10k physical nodes (allocator hint
+    // only — the coordinator ranks candidates against committed cosines).
     {
         let kernel_work = kernel.clone();
         thread::spawn(move || {
-            let vectors: Arc<dyn VectorIndex> = Arc::new(NoopVectorIndex::new());
-            let text: Arc<dyn TextIndex> = Arc::new(NoopTextIndex::new());
+            let text = match TantivyTextIndex::new() {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!("text index failed to init: {e}");
+                    return;
+                }
+            };
+            let vectors: Arc<dyn VectorIndex> = Arc::new(HnswVectorIndex::new(0, 10_000));
+            let text: Arc<dyn TextIndex> = Arc::new(text);
             match aikoql_scheduler::IndexMaintainer::start(&kernel_work, vectors, text) {
                 Ok(m) => {
+                    // M18: attach so find_similar ranks the ANN candidates
+                    // (the exact path stays available via search_exact).
+                    kernel_work.attach_indexes(m.clone());
                     MAINTAINER.set(m).ok();
                 }
                 Err(e) => warn!("index maintainer failed to start: {e}"),

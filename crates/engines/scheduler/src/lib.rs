@@ -204,17 +204,13 @@ impl IndexMaintainer {
         let water = match resume_water {
             Some(w) => w,
             None => {
-                let mut w = 0u64;
-                for ke in kernel.journal()? {
-                    Self::apply(
-                        kernel,
-                        self.vector_idx.as_ref(),
-                        self.text_idx.as_ref(),
-                        &ke,
-                    )?;
-                    w = ke.seq;
-                }
-                w
+                let events = kernel.journal()?;
+                Self::replay_batch(
+                    kernel,
+                    self.vector_idx.as_ref(),
+                    self.text_idx.as_ref(),
+                    &events,
+                )?
             }
         };
         self.inner.water.store(water, Ordering::Relaxed);
@@ -297,13 +293,22 @@ impl IndexMaintainer {
             .map_err(|e| KError::Store(format!("parse checkpoint water: {}", e)))
     }
 
-    fn apply(
+    /// P5-M18 (idx2-011): replay the journal in MAINTAINER_BATCH chunks —
+    /// one commit_batch (the single Tantivy commit) per chunk. The live
+    /// loop already batches; the replay loop must too, or a 1M-event
+    /// journal (SDK open on a grown store) pays a commit per event.
+    fn replay_batch(
         kernel: &Kernel,
         vector_idx: &dyn Index,
         text_idx: &dyn Index,
-        ke: &KnowledgeEvent,
-    ) -> KResult<()> {
-        Self::apply_batch(kernel, vector_idx, text_idx, std::slice::from_ref(ke))
+        events: &[KnowledgeEvent],
+    ) -> KResult<u64> {
+        let mut w = 0u64;
+        for chunk in events.chunks(MAINTAINER_BATCH) {
+            Self::apply_batch(kernel, vector_idx, text_idx, chunk)?;
+            w = chunk.last().map(|e| e.seq).unwrap_or(w);
+        }
+        Ok(w)
     }
 
     /// P5-M8 (ND-07): apply a batch through the unified `Index` surface — the
@@ -730,9 +735,7 @@ mod tests {
         for i in 0..n {
             create(&k, &a, "note", &format!("row {i}"));
         }
-        let plain: Arc<dyn Index> = Arc::new(VectorIndexAdapter::new(Arc::new(
-            BruteForceVectorIndex::new(),
-        )));
+        let plain: Arc<dyn Index> = Arc::new(TextIndexAdapter::new(Arc::new(TokenTextIndex::new())));
         let spy = Arc::new(CommitCountIndex {
             inner: Arc::new(VectorIndexAdapter::new(Arc::new(
                 BruteForceVectorIndex::new(),
@@ -744,7 +747,7 @@ mod tests {
                 .unwrap();
         let (head, _) = k.journal_head().unwrap();
         assert_eq!(w, head, "the replay water reaches the journal head");
-        assert_eq!(spy.len(), n, "every event applied");
+        assert_eq!(plain.len(), n, "every event applied");
         assert!(
             spy.commits.load(std::sync::atomic::Ordering::Relaxed)
                 <= n.div_ceil(MAINTAINER_BATCH),

@@ -4,9 +4,11 @@
 use crate::helpers::*;
 use crate::session::*;
 use crate::{
-    json, ExtensionMap, FuseMode, IrOp, IrPlan, KError, Kernel, Metadata, Ordering, Origin,
-    PropertyMap, ReferentialPolicy, RememberRequest, SimilarityQuery, Value, J, STREAM_ID,
+    json, ExtensionMap, FuseMode, IndexMaintainerApi, IndexStatusKind, IrOp, IrPlan, KError,
+    Kernel, Metadata, Ordering, Origin, PropertyMap, ReferentialPolicy, RememberRequest,
+    SimilarityQuery, Value, J, STREAM_ID,
 };
+use std::time::Duration;
 pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
     let source = args
         .get("query")
@@ -212,6 +214,19 @@ pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
     // Fallback: no type_name — use kernel's find_similar for cross-type search.
     let fusion = parse_fusion(args);
     let vector = parse_vector(args)?;
+    // P5-M18: the ANN is eventually consistent — a query right after a
+    // write must not answer empty. Bounded wait for the maintainer to
+    // drain (a broken index is skipped; answers still come, lag is
+    // surfaced per hit).
+    if let Some(m) = crate::MAINTAINER.get() {
+        let healthy = m
+            .status(k)
+            .map(|s| s.status != IndexStatusKind::Error)
+            .unwrap_or(true);
+        if healthy {
+            let _ = m.wait_caught_up(k, Duration::from_secs(2));
+        }
+    }
     let res = k
         .find_similar(SimilarityQuery {
             context: subject_of(args).into(),
