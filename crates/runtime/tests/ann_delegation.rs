@@ -12,7 +12,7 @@ use aikoql_kernel::ir::{IrOp, IrPlan};
 use aikoql_kernel::transaction::kernel::Kernel;
 use aikoql_kernel::{
     BruteForceVectorIndex, KResult, ManualClock, MemoryEngine, Metadata, RememberRequest,
-    SemanticBlock, Subject, TokenTextIndex, Value, KOID,
+    SemanticBlock, Subject, TokenTextIndex, KOID,
 };
 use aikoql_runtime::{Interpreter, RowSet};
 

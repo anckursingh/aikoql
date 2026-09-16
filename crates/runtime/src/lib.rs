@@ -10,7 +10,9 @@
 use aikoql_kernel::ir::*;
 use aikoql_kernel::knowledge::kom::*;
 use aikoql_kernel::knowledge::scoring::{cosine, jaccard, ko_text, tokenize};
-use aikoql_kernel::transaction::kernel::{Kernel, KnowledgeContext, Subject};
+use aikoql_kernel::transaction::kernel::{
+    Fusion, Kernel, KnowledgeContext, PropertyFilter, SimilarityQuery, Subject,
+};
 use std::cmp::Ordering;
 
 pub mod cbo;
@@ -247,6 +249,12 @@ pub struct Interpreter {
     /// P5-M9 (ND-08): the koid list a PropertyIndex Scan answers from —
     /// precomputed per Scan op, consumed and cleared by the Scan arm.
     assist: Option<Vec<KOID>>,
+    /// P5-M18 (ann003): the most recent Scan's type scope and final row count.
+    /// AnnSearch delegates to the coordinator only when its input is exactly
+    /// that un-narrowed Scan output (a Filter that dropped rows disables the
+    /// delegation — arbitrary predicates have no SimilarityQuery translation).
+    scan_type: Option<String>,
+    scan_len: Option<usize>,
 }
 
 impl Interpreter {
@@ -286,6 +294,8 @@ impl Interpreter {
                 .iter()
                 .any(|po| matches!(po.op, IrOp::Temporal { .. })),
             assist: None,
+            scan_type: None,
+            scan_len: None,
         };
         let mut rows = RowSet::Objects(Vec::new());
         for (i, po) in plan.operators.iter().enumerate() {
@@ -354,7 +364,11 @@ impl Interpreter {
                     kos.retain(|ko| ko.valid_at(now));
                 }
                 self.cached_objects = Some(kos.clone());
-                self.cached_subject = Some(subj);
+                self.cached_subject = Some(subj.clone());
+                // P5-M18 (ann003): the delegation baseline — the type scope
+                // and count of THIS scan's output, consumed by AnnSearch.
+                self.scan_type = Some(type_name.clone());
+                self.scan_len = Some(kos.len());
                 Ok(RowSet::Objects(kos))
             }
             IrOp::Filter { predicates } => {
@@ -468,6 +482,55 @@ impl Interpreter {
                 } else {
                     vector.clone()
                 };
+                // P5-M18 (ann003): delegate to the kernel's coordinator — the
+                // candidate-driven ANN/slim-read path — when the input is
+                // exactly the un-narrowed Scan output. The Scan's type scope,
+                // subject (roles/tenant), Deleted/ACL/valid-now guards are the
+                // coordinator's own. A Filter that dropped rows, or temporal
+                // plans (whose Scan keeps historical rows), keep brute force.
+                // Empty/err falls through to brute force — the recall guard,
+                // same pattern as the TextSearch BM25 arm.
+                let delegate = match (&input, &self.scan_type, &self.cached_subject) {
+                    (RowSet::Objects(kos), Some(tn), Some(subj))
+                        if !self.temporal_mode
+                            && self.scan_len == Some(kos.len())
+                            && *k > 0 =>
+                    {
+                        Some((tn.clone(), subj.clone()))
+                    }
+                    _ => None,
+                };
+                if let Some((tn, subj)) = delegate {
+                    let q = SimilarityQuery {
+                        context: KnowledgeContext::new(subj),
+                        filter: Some(PropertyFilter {
+                            type_name: Some(tn),
+                            required: Vec::new(),
+                        }),
+                        text: None,
+                        vector: Some(vector.clone()),
+                        embedding_model: embedding_model.clone(),
+                        k: *k,
+                        fusion: Fusion::VectorOnly,
+                    };
+                    if let Ok(results) = kernel.find_similar(q) {
+                        if !results.is_empty() {
+                            let scored: Vec<(KOID, f32, String, u64)> = results
+                                .into_iter()
+                                .map(|s| {
+                                    (
+                                        s.ko.koid,
+                                        s.score,
+                                        s.ko.metadata.type_name,
+                                        s.ko.version,
+                                    )
+                                })
+                                .collect();
+                            self.prev_scored = Some(scored.clone());
+                            return Ok(RowSet::Scored(scored));
+                        }
+                    }
+                }
                 // Shared cosine-scoring path (embedded + explicit vectors).
                 let kos = self.resolve_objects(&input)?;
                 let model = embedding_model.as_deref();
