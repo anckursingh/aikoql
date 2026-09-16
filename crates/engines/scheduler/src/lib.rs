@@ -691,6 +691,67 @@ mod tests {
         assert_eq!(s.last_error, None, "a successful apply clears last_error");
     }
 
+    // --- P5-M18 — idx2-011: the replay path batches like the live path.
+    // RED: `do_start` applies the journal one event per `apply` → one
+    // `commit_batch` (Tantivy commit) PER EVENT — a 1M-event replay (SDK
+    // open on a grown store) would pay a million commits. Pin: replay
+    // commits at most ceil(events / MAINTAINER_BATCH) times. ---
+
+    /// Test spy: counts `commit_batch` calls on an inner index.
+    struct CommitCountIndex {
+        inner: Arc<dyn Index>,
+        commits: std::sync::atomic::AtomicUsize,
+    }
+    impl Index for CommitCountIndex {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+        fn upsert(&self, koid: KOID, ko: &KnowledgeObject) -> KResult<()> {
+            self.inner.upsert(koid, ko)
+        }
+        fn remove(&self, koid: &KOID) -> KResult<()> {
+            self.inner.remove(koid)
+        }
+        fn commit_batch(&self) -> KResult<()> {
+            self.commits
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.inner.commit_batch()
+        }
+        fn len(&self) -> usize {
+            self.inner.len()
+        }
+    }
+
+    #[test]
+    fn idx2_011_replay_commits_in_batches_not_per_event() {
+        let k = mk();
+        let a = Subject::new("alice");
+        let n = MAINTAINER_BATCH * 2 + 10; // 138 events
+        for i in 0..n {
+            create(&k, &a, "note", &format!("row {i}"));
+        }
+        let plain: Arc<dyn Index> = Arc::new(VectorIndexAdapter::new(Arc::new(
+            BruteForceVectorIndex::new(),
+        )));
+        let spy = Arc::new(CommitCountIndex {
+            inner: Arc::new(VectorIndexAdapter::new(Arc::new(
+                BruteForceVectorIndex::new(),
+            ))),
+            commits: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let w =
+            IndexMaintainer::replay_batch(&k, plain.as_ref(), spy.as_ref(), &k.journal().unwrap())
+                .unwrap();
+        let (head, _) = k.journal_head().unwrap();
+        assert_eq!(w, head, "the replay water reaches the journal head");
+        assert_eq!(spy.len(), n, "every event applied");
+        assert!(
+            spy.commits.load(std::sync::atomic::Ordering::Relaxed)
+                <= n.div_ceil(MAINTAINER_BATCH),
+            "replay commits once per batch, not once per event"
+        );
+    }
+
     // --- P5-M8 (ND-07) — idx2-003..007: the unified Index surface driven by
     // the async maintainer. RED: the kernel's catalog index sugar and the
     // property-index registry do not exist yet. ---
