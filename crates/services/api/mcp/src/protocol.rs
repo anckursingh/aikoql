@@ -6,7 +6,13 @@ use crate::{json, Write, J};
 pub(crate) type ToolResult = Result<J, (i64, String)>;
 
 pub(crate) fn write_frame(out: &mut impl Write, frame: J) {
-    if writeln!(out, "{}", frame).is_err() || out.flush().is_err() {
+    // Serialize once, write_all once. Display-formatted JSON emits one write
+    // per token — 33 008 syscalls for a 127 KB frame (~700-900 ms on Windows,
+    // measured by the M17 mcp_mode column). Value is always valid JSON, so
+    // serialization cannot fail; keep the silent-drop contract for dead conns.
+    let mut line = serde_json::to_string(&frame).unwrap_or_default();
+    line.push('\n');
+    if out.write_all(line.as_bytes()).is_err() || out.flush().is_err() {
         // Connection died — the caller's next read ends the session.
     }
 }
