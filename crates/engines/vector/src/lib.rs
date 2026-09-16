@@ -613,6 +613,51 @@ mod tests {
             .all(|(k, _)| *k == b));
     }
 
+    // --- P5-M18 — vec003: data-driven dim (0 = adopt the first vector's).
+    // RED: HnswVectorIndex::new(0, _) still hard-fixes dim 0 — every upsert
+    // is silently dropped, every query empty. MCP enrichers emit 384-d,
+    // harness fixtures 2-d: a fixed default dim would silently drop one. ---
+
+    #[test]
+    fn vec003_zero_dim_adopts_first_upsert() {
+        let idx = HnswVectorIndex::new(0, 100);
+        let a = kid(1);
+        let b = kid(2);
+        idx.upsert(a, "m", &[1.0, 0.0, 0.5]); // 3-d wins
+        idx.upsert(b, "m", &[0.9, 0.1, 0.2]); // same dim — accepted
+        idx.upsert(kid(3), "m", &[0.5, 0.5]); // 2-d — dropped
+        assert_eq!(idx.len(), 2, "mismatched-dim upsert is dropped");
+        assert!(
+            idx.search(&[1.0, 0.0], 5, None).is_empty(),
+            "wrong-dim query answers empty"
+        );
+        let r = idx.search(&[1.0, 0.0, 0.5], 5, None);
+        assert_eq!(r.len(), 2, "adopted-dim query works");
+        assert_eq!(r[0].0, a);
+    }
+
+    #[test]
+    fn vec003_checkpoint_load_roundtrips_adopted_dim() {
+        // justified: test-thread names contain `::` (invalid on Windows paths)
+        let dir = std::env::temp_dir().join(format!("aikoql-vec003-b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let idx = HnswVectorIndex::new(0, 100);
+            idx.upsert(kid(1), "m", &[1.0, 0.0, 0.5]);
+            idx.checkpoint(&dir).unwrap();
+        }
+        let loaded = HnswVectorIndex::load(&dir).unwrap();
+        loaded.upsert(kid(2), "m", &[0.9, 0.1, 0.2]); // adopted dim survives load
+        loaded.upsert(kid(3), "m", &[0.5, 0.5]); // wrong dim — dropped
+        assert_eq!(loaded.len(), 2);
+        assert!(
+            loaded.search(&[1.0, 0.0], 5, None).is_empty(),
+            "wrong-dim query answers empty after load"
+        );
+        assert_eq!(loaded.search(&[1.0, 0.0, 0.5], 5, None).len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn tantivy_text_index_orders_and_removes() {
         let idx = TantivyTextIndex::new().unwrap();
