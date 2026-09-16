@@ -52,6 +52,75 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[test]
+fn ann002_model_less_embeddings_reach_the_ann() {
+    // The production shape: SDK/MCP remembers often carry an embedding with
+    // no embedding_model. The exact path scored those (the coordinator reads
+    // ko.semantic.embedding directly); the ANN adapter must not drop them —
+    // a model-less vector is a ""-model entry (R7 label ":<koid_hex>"),
+    // found by model-less queries and excluded by model-scoped ones.
+    let (k, _c) = mk();
+    let mut req = RememberRequest::create(alice(), meta("fact"));
+    req.properties.insert("body".into(), Value::Text("cats".into()));
+    req.semantic = Some(SemanticBlock {
+        embedding_model: None, // the production shape under test
+        embedding: Some(vec![1.0, 0.0]),
+        confidence: None,
+        source: None,
+        summary: None,
+    });
+    let a = k.remember(req).unwrap().koid;
+    let mut req = RememberRequest::create(alice(), meta("fact"));
+    req.properties.insert("body".into(), Value::Text("dogs".into()));
+    req.semantic = Some(SemanticBlock {
+        embedding_model: None,
+        embedding: Some(vec![0.0, 1.0]),
+        confidence: None,
+        source: None,
+        summary: None,
+    });
+    k.remember(req).unwrap();
+
+    let m = IndexMaintainer::start(
+        &k,
+        Arc::new(HnswVectorIndex::new(0, 100)),
+        Arc::new(TokenTextIndex::new()),
+    )
+    .unwrap();
+    k.attach_indexes(m.clone());
+    m.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+
+    let q = SimilarityQuery {
+        context: alice().into(),
+        filter: None,
+        text: None,
+        vector: Some(vec![1.0, 0.0]),
+        embedding_model: None,
+        k: 2,
+        fusion: Fusion::VectorOnly,
+    };
+    let got = k.find_similar(q).unwrap();
+    assert_eq!(got.len(), 2, "model-less vectors must reach the ANN");
+    assert_eq!(got[0].ko.koid, a, "the nearer vector ranks first");
+
+    // A model-scoped query must NOT return model-less entries.
+    let q = SimilarityQuery {
+        context: alice().into(),
+        filter: None,
+        text: None,
+        vector: Some(vec![1.0, 0.0]),
+        embedding_model: Some("m".into()),
+        k: 2,
+        fusion: Fusion::VectorOnly,
+    };
+    let got = k.find_similar(q).unwrap();
+    assert!(
+        got.is_empty(),
+        "model-scoped queries exclude model-less entries"
+    );
+    m.shutdown();
+}
+
+#[test]
 fn ann001_index_holes_never_outrank_real_candidates() {
     let (k, _c) = mk();
     // 4 objects near the query direction (cosines ≈ 1.0, 0.995, 0.98, 0.95)
