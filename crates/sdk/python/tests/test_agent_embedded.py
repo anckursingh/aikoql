@@ -73,3 +73,18 @@ def test_embedded_aikoql_sees_own_rows(db):
     out = db.aikoql('MATCH note WHERE topic == "pet" RETURN *')
     assert len(out) == 1
     assert out[0]["properties"]["body"] == "cats"
+
+
+def test_close_releases_store_lock_for_immediate_reopen(tmp_path):
+    # P5-M18: close() must release the store lock synchronously. The
+    # maintainer's live thread holds a kernel clone and exits at its next
+    # tick — up to 25 ms after close — so an immediate reopen (the
+    # competitor harness's per-cell connect pattern) hits the aikoql-v2
+    # WouldBlock lock. RED: the reopen fails with "held by another process".
+    p = str(tmp_path / "kb")
+    a1 = Agent.connect(p)
+    a1.remember("note", {"body": "first"})
+    a1.close()
+    a2 = Agent.connect(p)
+    assert a2.remember("note", {"body": "second"})["koid"]
+    a2.close()
