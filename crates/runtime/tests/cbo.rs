@@ -1,4 +1,4 @@
-//! P5-M9 (ND-08) — cost-based optimizer. cbo001–cbo012 + st011.
+//! P5-M9 (ND-08) — cost-based optimizer. cbo001–cbo012 + st011 + idx4-004.
 //!
 //! The CBO is cost-based where statistics exist, rule-based where they
 //! don't (never worse than today — the M0 plan-equivalence oracle pins it,
@@ -719,4 +719,63 @@ fn cbo012_a_non_adjacent_filter_is_never_index_assisted() {
         "no index assist for a non-adjacent Filter"
     );
     assert!(report.index_used.is_none());
+}
+
+// --- idx4-004 — a DROPPING index is never chosen by the CBO (PR6 P1-16) ---------
+
+/// The CBO's choice gate is the index's lifecycle state, not just fresh
+/// stats: a DROPPING index must never be chosen. The drop is parked after
+/// its durable mark and the statistics are re-analyzed INSIDE the window —
+/// fresh, so the stats gate alone admits the assist, and the registry entry
+/// is the only thing left to gate on. Today the dropped index serves the
+/// assist.
+#[test]
+fn idx4_004_a_dropping_index_is_never_chosen_by_the_cbo() {
+    let k = mk();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
+    for i in 0..100 {
+        person(&k, &format!("P{i:03}"), "Eng");
+    }
+    catch_up_indexes(&k);
+    k.analyze("Person").unwrap();
+
+    let query = "MATCH Person WHERE name == \"P042\" RETURN *";
+    let report = cost_optimize(&k, &plan_of(&k, query)).unwrap();
+    assert!(
+        report.index_used.is_some(),
+        "precondition: the optimizer chose the index assist"
+    );
+
+    std::env::set_var("INDEX_DROP_PARK", "1");
+    let h = k.clone_handle();
+    let dropper = std::thread::spawn(move || h.catalog_drop_index("by_name").unwrap());
+    let mut waited = 0u64;
+    while std::env::var_os("INDEX_DROP_PARK_AT").is_none() && waited < 10_000 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        waited += 10;
+    }
+    assert!(
+        std::env::var_os("INDEX_DROP_PARK_AT").is_some(),
+        "precondition: the drop is parked in the window"
+    );
+
+    // Fresh statistics inside the parked window — only the state gate can
+    // refuse the assist now.
+    k.analyze("Person").unwrap();
+    let during = cost_optimize(&k, &plan_of(&k, query)).unwrap();
+
+    std::env::remove_var("INDEX_DROP_PARK");
+    dropper.join().unwrap();
+    std::env::remove_var("INDEX_DROP_PARK_AT");
+
+    assert_eq!(
+        scan_strategy(&during),
+        Strategy::FullScan,
+        "a DROPPING index is never chosen by the CBO"
+    );
+    assert!(
+        during.index_used.is_none(),
+        "the assist names no dropping index"
+    );
 }

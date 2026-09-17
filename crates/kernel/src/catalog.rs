@@ -174,6 +174,17 @@ impl Kernel {
     /// entry removed (idx2-002).
     pub fn catalog_drop_index(&self, name: &str) -> KResult<()> {
         self.catalog_drop_entry("index", name)?;
+        // P5-M22 (idx4-004) test hook: park between the durable drop and the
+        // registry removal — the window a concurrent CBO could still see the
+        // index. (The RED ships the hook; the feat gates the window.)
+        if std::env::var_os("INDEX_DROP_PARK").is_some() {
+            std::env::set_var("INDEX_DROP_PARK_AT", "1");
+            let mut waited = 0u64;
+            while std::env::var_os("INDEX_DROP_PARK").is_some() && waited < 30_000 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                waited += 10;
+            }
+        }
         // justified: RwLock poison is unrecoverable
         self.property_indexes
             .write()
