@@ -268,7 +268,79 @@ Decision point AFTER M17's 100k/1M vector numbers. Rule 11 (SE2-M25 discipline):
 
 Deliver (decision made 2026-09-16: SHIP): HNSW behind the existing `trait Index` + CBO seam (the M9 pattern), wired into both production hosts (replace the M17b `NoopVectorIndex`/`NoopTextIndex`, config-driven dim/capacity, checkpoint/resume through the i08-proven machinery), AND the coordinator's vector leg made candidate-driven — attaching the index alone leaves the 0.0-hole ranking bug (heads outside the HNSW candidate set outrank real negatives; the `ann001` RED pins it).
 
-Status: ⬜ Delivery — decision made 2026-09-16: SHIP. M17 evidence: vector_recall 1 092 ms @100k → 17 002 ms @1M warm p50 (15.6× time for 10× corpus — brute force does not hold).
+Status: ✅ Shipped 2026-09-16 (cc34bc8 + ff466df + bee8751) — HnswVectorIndex (fast-hnsw, Cosine, M=16, ef_construction=200, ef=20, seed 42, labels `{model}:{koid_hex}`) behind `trait Index` + the coordinator seam, wired into BOTH production hosts (SDK + MCP); the coordinator's vector leg is candidate-driven (ann001); the lock-leak cycle fixed (coordinator edge is Weak, hosts own the strong Arc, Drop joins the thread — ff466df); IR AnnSearch delegates to `kernel.find_similar` when the input is the un-narrowed Scan, with recall-guard fallback (ann003); replay batches at 64 events/commit (idx2-011); model-less embeddings index as ""-model (ann002). Suites: ann001–003 3/3 + scheduler idx2-011 + kernel/runtime regressions green; fmt + clippy green. Honest ledger: the full 100k/1M evidence re-stamp is PENDING (the 2026-09-16 harness run was killed after 14h — the P5-M19/P5-M22 convergence + checkpoint milestones make it feasible); the PR #6 senior-architect review opened P0-10/P1-16/17/18 on this code (capacity evidence, checkpoint manifest, physical accounting, model-identity invariant) — scheduled as P5-M23.
+
+## PR #6 review remediation program (2026-09-17 — from the senior-architect review)
+
+`AIKOQL_PR6_Senior_Architect_Review_TDD.md` returns **REQUEST CHANGES** on PR #6 (88 commits, 535 paths). Verified line-by-line against head `fbba846` as Rust lead. Disposition of the P0s:
+
+- **P0-01 (dropped maintainer batches): CONFIRMED, worse than stated.** `drain_batch` clears `pending` on error (`crates/engines/scheduler/src/lib.rs`) and the M17b stamp short-circuit (idx2-010: `applied_seq == head ⇒ verified`) lets the NEXT successful batch certify completeness across the gap — status reports CaughtUp with events never applied, and idx001's own test pins that false-CaughtUp (it asserts status recovery, never index contents).
+- **P0-02 (replay→subscribe race): CONFIRMED.** `do_start` snapshots `journal()` then subscribes (`notify()`); a commit between the two lands in neither until restart. No cursor handshake.
+- **P0-03 (txn contract): SPLIT.** (a) certification's "read-your-writes" is scoped to the single-op cell — not a semantic conflict with txn.rs's staged-not-visible multi-op contract, but the two surfaces never cross-reference and db-oltp does not cover the M10 API; (b) txn-id reuse with a DIFFERENT body silently returns the original outcome — CONFIRMED gap (idempotency keyed on the id alone).
+- **P0-04/P0-05/P0-06 (jobs): CONFIRMED.** `running.load` + `fetch_add` admission (no CAS); audit-failure stranding (durable Running row + by_hash + running slot leak); `recover()` rebuilds `by_hash` from ALL records incl. Completed/Failed, contradicting the module's own in-memory comment.
+- **P0-07 (CBO snapshot): CONFIRMED as a real window** — verify at optimize, index read at exec without re-check (`cbo.rs scan_assist`). Honest under M9's EVENTUAL contract, but M15's default-path promotion widened exposure silently.
+- **P0-08/P0-09 (streaming): CONFIRMED** — the already-ledgered M4 deferral and idx2-008 opt-in, promoted to milestones.
+- **P0-10 (HNSW capacity): PARTIALLY CONFIRMED.** fast-hnsw capacity is a pre-allocation hint (the graph grows past it — "hard bound" is wrong), but there is no evidence cell past 10k and hard-coded `EMBEDDING_DIM=768` is wrong for the server's default 384-dim model. Evidence pin, not a panic fix.
+- **Hygiene P0 (tracked node_modules/.pyd): VERIFIED FALSE.** `git ls-files` shows none at head or ever added on the branch; the Go/Java/TS SDKs appear in the PR diff as DELETIONS (the P3-M9 decision), which the review read as additions. `examples/hello-agent.ts` remains deliberately. No action.
+- **Security (Class-B caller context): CONFIRMED.** `run_reason` executes as hard-coded `kernel-reason`/admin (kernel.rs) and no job record persists the caller's subject/tenant/roles.
+
+Same rules: RED-first, one milestone = one commit, no push, honest ledger. Work lands on the PR branch. The review's Wave A/B/C/D structure maps onto M19–M24 below.
+
+### P5-M19 — Secondary-index convergence (P0-01, P0-02, P1-01, P1-03, P1-04)
+
+Deliver: drain keeps the failed batch and retries with backoff — water and the applied-seq stamp advance ONLY over actually-applied events, and a persistent failure stays Error (never CaughtUp); subscribe-then-replay startup protocol (subscribe first, replay [water..head], skip live events ≤ replayed head) closing the snapshot/subscription window; PropertyIndex removes stale membership on re-type (upsert of a foreign type must remove, not no-op) plus a KOID→key reverse map; TextIndexAdapter `commit_batch` becomes retryable (drain pending only after both stages succeed); the unified `Index` trait gains an explicit consistency level (Exact/SnapshotExact/EventuallyConsistent/CandidateOnly) with verify/watermark meaning per class.
+
+TDD REDs: idx3-001 injected single-batch failure → after recovery the index equals the store and status never reports CaughtUp across the gap (fails today — idx001 pins the wrong behavior); idx3-002 barrier-controlled commit between journal-snapshot and subscription → the event lands in every index; idx3-003 re-type note→event→note → membership removed/re-added exactly once; idx3-004 text adapter second-stage failure → removes retry without loss; idx3-005 consistency-level table pinned (a CandidateOnly index can never serve an exact scan).
+
+Acceptance: the review's Wave A1 list (dropped batch, transient failure, permanent failure, startup race, restart during replay, type change, delete/recreate, duplicate events); no committed event silently abandoned; `stamp == head` means what it says.
+
+### P5-M20 — Transaction & job lifecycle coherence (P0-03, P0-04, P0-05, P0-06, security)
+
+Deliver: one transaction contract across docs/implementation/certification — the multi-op API is named a snapshot transaction (Option B: read-your-writes stays a reopen row; the M10 design is snapshot-first and the certification single-op cell is a different, already-honest surface) and db-oltp gains a multi-op txn cell over the M10 API; retry identity = txn_id + a deterministic body fingerprint (same id, different body fails closed); atomic job admission via CAS reservation with release on every abort path; audit failure compensates (no orphan Running row, by_hash entry, or slot); an explicit job idempotency state machine (which states deduplicate, and the persisted record carries enough identity) replacing the by_hash ambiguity; Class-B jobs persist the caller's subject/tenant/roles and run under that context (claims stay Class-B — the approve_job bridge is unchanged).
+
+TDD REDs: tx008 staged write then txn.get — pin the DOCUMENTED non-visibility (or flip the contract first); tx009 same txn_id + different body → fail closed; tx010 same txn_id + same body → recorded retry; job001 concurrent admission with max=1 → ≤1 worker (fails today); job002 audit-failure injection → no orphan Running row/hash/slot; job003 restart dedup policy pinned per state; job004 two tenants, identical Class-B submits → neither worker observes the other tenant's objects.
+
+Acceptance: the review's Waves A2+A3 acceptance lists; docs/cert/impl assert the same semantics.
+
+### P5-M21 — Query snapshot & index-assist contract (P0-07, P0-08, P0-09, P1-13)
+
+Deliver: the CBO pins the journal head at optimize and the executor re-pins it before serving an index assist — `applied_seq == pinned head` at exec time or the plan falls back to the full scan (O(1), keeps the M17b stamp short-circuit honest); ScanOperator pins a snapshot_ts at open and resolves batches via the existing `get_at` path (streaming ≡ materialized for the same snapshot); `use_indexes` becomes an explicit strategy contract (EXACT / EVENTUAL_INDEX) — no silent semantic variation; `first_eq_after` binds only to the Filter immediately after the Scan (positional adjacency pinned by a plan-shape test).
+
+TDD REDs: st010 write between open() and a later batch → all batches see the open snapshot (fails today — mixed-time reads); st011 EXPLAIN/plan carries the snapshot/freshness assumption; cbo011 write between optimize and execute → the assisted plan either serves the pinned head or falls back, never a silently incomplete set; cbo012 a plan with a non-adjacent Filter is never index-assisted.
+
+Acceptance: the review's Waves B1+B2; every index-assisted plan states its snapshot; EVENTUAL use is explicit.
+
+### P5-M22 — Index DDL lifecycle + checkpoint/resume (P1-07, P1-14, P1-15, P1-16)
+
+Deliver: catalog index DDL as one stateful lifecycle (DECLARED → BUILDING → READY / FAILED; DROPPING inverse) — the CBO may only choose READY; production hosts load `checkpoint_water` + `start_at(resume_water)` on open instead of full-journal replay, so restart cost ∝ events after the checkpoint (the review's P1-15 IS the pre-review M18b proposal — confirmed independently; this is the milestone that makes the 100k/1M harness feasible); the HNSW checkpoint pair gains a generation manifest published atomically last (loaders gate on it — the scheduler's tmp-dir + COMPLETE + rename protocol already covers the maintainer level, checkpoint_water refuses without COMPLETE); `MAINTAINER` OnceLock → an explicit ServerContext-owned DatabaseContext (one-DB-per-process stays the product invariant, named in the contract — not an accidental singleton).
+
+TDD REDs: idx4-001 crash between DDL persist and registry push → reopen converges to one state; idx4-002 checkpoint at H, commit N more, restart → replay applies only the N (commit-count spy, the idx2-011 pattern); idx4-003 manifest generation mismatch → load fails closed; idx4-004 a DROPPING index is never chosen by the CBO.
+
+Acceptance: startup replay cost ∝ events after the checkpoint; DDL and live registry never diverge durably.
+
+### P5-M23 — Production ANN hardening + evidence re-run (P0-10, P1-17, P1-18, P1-05)
+
+Deliver: an evidence cell inserting 10_001/100k/1M vectors through the production HnswVectorIndex — no panic, no drop, recall within the declared target, health reports real capacity/usage (the 100k/1M harness run IS this cell); physical accounting counts distinct labels (a re-upsert of the same (koid, model) does not inflate physical — dead-ratio stays meaningful); the one-embedding-per-KO invariant (KOID-level tombstones are identity-correct — the review's P1-18 is moot in the current data model) documented and pinned; EMBEDDING_DIM stops being a hard-coded 768 (derived from the index/embedding config); the CBO is renamed in docs as CBO v1 / cost-guided physicalization (P1-05 — one executable choice; the full statistics→cardinality→candidate-plans→selection pipeline lands as its own future milestone).
+
+TDD REDs: ann004 insert past capacity → recall + counts correct (evidence, env-gated at 1M); ann005 repeated same-(koid, model) upsert → physical stable; ann006 dim from config, cost rows reflect it.
+
+Acceptance: the review's D1 vector cell at 100k/1M; the killed 2026-09-16 harness run becomes feasible (M22's checkpoint/resume) and is re-run with the ANN live; REPORT.md re-stamped.
+
+### P5-M24 — Product defaults + execution-path scale (P1-21, P1-02, P1-09/10, P1-19/20, D-waves)
+
+Deliver: one canonical default-path story — CLI verbs stop defaulting to a misleading `./aikoql.redb` name (fresh default = the v2 directory, named honestly; explicit flag for legacy redb); PropertyIndex upsert/scan_eq cost cells at 1k/100k/1M (rule 11 — reverse-map re-key only if the cell shows a real gain); query-level resource governance contract (memory budget / spill / row limit / timeout / cancellation — the P1-09/10 materialization honesty already on the ledger becomes a product contract); the P1-19/P1-20 wordings move from code comments into the server contract (timeout = response deadline; the connection cap becomes a CAS admission gate — the P0-04 pattern); the D2/D3/D4 evidence (reader/concurrency matrix, memory governance, client-server competitor column) joins the certification plan.
+
+TDD REDs: cl04 fresh `aikoql-mcp shell` writes v2 and reopens v2 (fails today on the misleading default); idx4-005 scale cells recorded (measurement-first); sv012 connection cap never exceeded (CAS admission).
+
+Acceptance: the review's Wave D; competitor REPORT.md re-stamped in client-server mode.
+
+### P5-M25 — Block-cache hit path O(1) (SHIPPED 2026-09-17, f189184 + f87cda1)
+
+Deliver: the block cache's LRU recency move no longer walks every cached entry (~512 at 8 MiB / 16 KiB blocks) under the mutex on every hit — hits are O(1) hash + generation stamp; eviction is a min-generation scan on the miss path (O(n), amortized behind block I/O). Kills the entries/deque sync invariant entirely (one structure, no order to keep in step).
+
+TDD REDs: cache_hit_does_not_scan (scan-steps pin — fails 64 > 0 pre-fix, f189184); eviction_targets_least_recently_hit (LRU semantics guard across the refactor).
+
+Acceptance: storage-v2 suite green (RED→GREEN, one commit each).
 
 ## Gates (carried + new)
 
@@ -277,6 +349,8 @@ Status: ⬜ Delivery — decision made 2026-09-16: SHIP. M17 evidence: vector_re
 - **Gate 7** (new): bounded-memory streaming — RSS independent of result cardinality on the 100k-row cell (envelope set in M4).
 - **Gate 8** (new): certification reproducibility — every DB-* suite runs from clean checkout with pinned seeds.
 - **Gate 9** (new): tenant/security invariance — no optimizer or executor change may cross tenant/security boundaries (M1 proptest pins this).
+- **Gate 10** (new, P5-M19): secondary-index convergence — a committed event is never silently abandoned; `applied_seq == head` certifies only actually-applied events; a persistent failure surfaces as Error, never CaughtUp.
+- **Gate 11** (new, P5-M21): index-assist snapshot pinning — an index-assisted plan may not return a set incomplete relative to its declared snapshot; the exec path re-pins the head captured at optimize or falls back to the scan.
 
 ## Definition of 1.0
 
