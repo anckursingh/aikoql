@@ -41,6 +41,9 @@ struct State {
     entries: HashMap<(u64, u32), Arc<Vec<u8>>>,
     recency: VecDeque<(u64, u32)>,
     bytes: usize,
+    /// Total recency entries visited on the hit/miss paths — the RED pin
+    /// asserts a hit never moves it.
+    scan_steps: u64,
 }
 
 impl BlockCache {
@@ -71,6 +74,7 @@ impl BlockCache {
         };
         let hit = e.clone();
         self.hits.fetch_add(1, Ordering::Relaxed);
+        st.scan_steps += st.recency.len() as u64;
         st.recency.retain(|k| k != &key);
         st.recency.push_back(key);
         Some(hit)
@@ -85,6 +89,7 @@ impl BlockCache {
         let key = (id, block);
         if let Some(old) = st.entries.remove(&key) {
             st.bytes -= old.len();
+            st.scan_steps += st.recency.len() as u64;
             st.recency.retain(|k| k != &key);
         }
         while st.bytes + bytes > self.cap {
@@ -108,5 +113,51 @@ impl BlockCache {
             evictions: self.evictions.load(Ordering::Relaxed),
             bytes: self.state.lock().unwrap().bytes,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BLOCK: usize = 16 * 1024;
+
+    fn block() -> Arc<Vec<u8>> {
+        Arc::new(vec![0u8; BLOCK])
+    }
+
+    /// P5-M25 RED — a hit must be O(1): it may hash and stamp, but it must
+    /// not walk the cached entries. The current retain-based recency move
+    /// visits every entry per hit, which fails this pin.
+    #[test]
+    fn cache_hit_does_not_scan() {
+        let cache = BlockCache::new(64 * BLOCK);
+        for i in 0..64u32 {
+            cache.insert(1, i, block());
+        }
+        let before = cache.state.lock().unwrap().scan_steps;
+        assert!(cache.get(1, 0).is_some(), "recently inserted block hits");
+        let after = cache.state.lock().unwrap().scan_steps;
+        assert_eq!(
+            after, before,
+            "hit walked {} recency entries",
+            after - before
+        );
+    }
+
+    /// LRU semantics guard — survives the refactor: the least-recently-HIT
+    /// entry is the eviction victim, and a re-inserted key becomes MRU.
+    #[test]
+    fn eviction_targets_least_recently_hit() {
+        let cache = BlockCache::new(3 * BLOCK);
+        cache.insert(1, 0, block());
+        cache.insert(1, 1, block());
+        cache.insert(1, 2, block());
+        cache.get(1, 0).unwrap(); // 0 becomes MRU
+        cache.insert(1, 3, block()); // forces one eviction — must be 1
+        assert!(cache.get(1, 0).is_some());
+        assert!(cache.get(1, 1).is_none(), "least-recently-hit must be evicted");
+        assert!(cache.get(1, 2).is_some());
+        assert!(cache.get(1, 3).is_some());
     }
 }
