@@ -779,3 +779,85 @@ fn idx4_004_a_dropping_index_is_never_chosen_by_the_cbo() {
         "the assist names no dropping index"
     );
 }
+
+// --- ann006 — cost rows price the LIVE ANN dim (PR6 P1-05) --------------------
+
+/// The v1 cost model prices AnnSearch at rows × EMBEDDING_DIM (768,
+/// bge-m3 class). The constant is wrong the moment the attached ANN adopts
+/// any other dim — the row must price the live index's dim, and fall back
+/// to the 768 model default only when no maintainer is attached. Today the
+/// row is always 768: a live dim-2 index still prices rows × 768.
+#[test]
+fn ann006_cost_rows_use_the_live_ann_dim() {
+    let k = mk();
+    // One person with a 2-d embedding, one without — vector_density = 0.5.
+    let mut req = RememberRequest::create(alice(), meta("Person"));
+    req.properties
+        .insert("name".into(), Value::Text("Vec".into()));
+    req.semantic = Some(SemanticBlock {
+        embedding_model: Some("m".into()),
+        embedding: Some(vec![1.0, 0.0]),
+        confidence: None,
+        source: None,
+        summary: None,
+    });
+    k.remember(req).unwrap();
+    person(&k, "Plain", "Eng");
+    k.analyze("Person").unwrap();
+
+    let m = aikoql_scheduler::IndexMaintainer::start(
+        &k,
+        Arc::new(aikoql_vector::HnswVectorIndex::new(2, 100)),
+        Arc::new(TokenTextIndex::new()),
+    )
+    .unwrap();
+    k.attach_indexes(m.clone());
+
+    let plan = IrPlan::new(vec![
+        IrOp::Scan {
+            type_name: "Person".into(),
+            subject: "alice".into(),
+            roles: vec![],
+            tenant: None,
+        },
+        IrOp::AnnSearch {
+            vector: vec![1.0, 0.0],
+            query_text: None,
+            embedding_model: Some("m".into()),
+            k: 1,
+        },
+    ]);
+    let report = cost_optimize(&k, &plan).unwrap();
+    assert_eq!(report.costs.len(), 2, "one cost row per operator");
+    let ann = report.costs[1];
+    assert!(
+        ann.rows > 0,
+        "vector density must price a positive candidate set"
+    );
+    assert_eq!(
+        ann.cpu,
+        ann.rows * 2,
+        "cpu must price the live ANN dim 2 (got {} for {} rows)",
+        ann.cpu,
+        ann.rows
+    );
+    m.shutdown();
+
+    // Without a maintainer the 768 model default stays the fallback.
+    let k2 = mk();
+    let mut req = RememberRequest::create(alice(), meta("Person"));
+    req.semantic = Some(SemanticBlock {
+        embedding_model: Some("m".into()),
+        embedding: Some(vec![1.0, 0.0]),
+        confidence: None,
+        source: None,
+        summary: None,
+    });
+    k2.remember(req).unwrap();
+    person(&k2, "Plain", "Eng");
+    k2.analyze("Person").unwrap();
+    let report = cost_optimize(&k2, &plan).unwrap();
+    let ann = report.costs[1];
+    assert!(ann.rows > 0);
+    assert_eq!(ann.cpu, ann.rows * 768, "no live ANN → the 768 model default");
+}

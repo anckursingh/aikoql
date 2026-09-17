@@ -186,3 +186,60 @@ fn ann001_index_holes_never_outrank_real_candidates() {
     }
     m.shutdown();
 }
+
+#[test]
+fn ann004_insert_past_capacity_no_drop_full_answers() {
+    // PR6 P0-10 (capacity evidence): both hosts build capacity 10_000, and
+    // the review's D1 cell inserts 10_001/100k/1M through it. The capacity
+    // is an ALLOCATOR HINT, not a bound — but `search` caps the internal
+    // candidate pool at the INITIAL capacity, so a past-capacity graph
+    // answers fewer than k. Pin: insert 64 into capacity 8, query k=10 —
+    // today 8 come back.
+    let idx = Arc::new(HnswVectorIndex::new(2, 8));
+    for i in 0..64u8 {
+        let ang = (i as f32) * 2.0 * std::f32::consts::PI / 64.0;
+        idx.upsert(KOID::from_bytes([i; KOID_LEN]), "m", &[ang.cos(), ang.sin()]);
+    }
+    assert_eq!(idx.len(), 64, "no drop past capacity");
+    let h = idx.health().unwrap();
+    assert_eq!(h.physical, 64, "physical counts every inserted node");
+    assert_eq!(h.live, 64, "live tracks the distinct map");
+
+    // The recall pin: the query's own vector must rank first, and k=10
+    // must answer 10 — today the candidate pool caps at capacity 8.
+    let hits = idx.search(&[1.0, 0.0], 10, Some("m"));
+    assert_eq!(hits.len(), 10, "k=10 must answer 10 past capacity (got {})", hits.len());
+    assert_eq!(
+        hits[0].0,
+        KOID::from_bytes([0u8; KOID_LEN]),
+        "the query's own vector ranks first"
+    );
+}
+
+#[test]
+fn ann005_reupsert_same_koid_model_physical_stable() {
+    // PR6 P1-17 (physical accounting): the maintainer re-upserts every
+    // replay pass — a repeated (koid, model) must UPDATE the vector, not
+    // inflate the physical count (dead_ratio = tombstones/physical, so
+    // inflation hides real dead nodes). Today every upsert increments
+    // physical: the same pair twice reports 2.
+    let idx = Arc::new(HnswVectorIndex::new(2, 16));
+    let a = KOID::from_bytes([7u8; KOID_LEN]);
+    idx.upsert(a, "m", &[1.0, 0.0]);
+    idx.upsert(a, "m", &[0.0, 1.0]); // same (koid, model) — an update
+    assert_eq!(idx.len(), 1, "the map holds the distinct pair once");
+    let h = idx.health().unwrap();
+    assert_eq!(h.physical, 1, "re-upsert must not inflate physical (got {})", h.physical);
+    assert_eq!(h.live, 1);
+
+    // The update took: the re-upsert's vector answers.
+    let hits = idx.search(&[0.0, 1.0], 1, Some("m"));
+    assert_eq!(hits.len(), 1, "the re-upserted koid still answers");
+    assert_eq!(hits[0].0, a);
+
+    // A different model for the same koid IS a distinct entry.
+    idx.upsert(a, "n", &[1.0, 1.0]);
+    let h = idx.health().unwrap();
+    assert_eq!(h.physical, 2, "a new model is a new physical node");
+    assert_eq!(h.live, 2);
+}
