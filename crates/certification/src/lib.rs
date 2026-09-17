@@ -593,8 +593,8 @@ fn db_oltp(out_dir: &Path) -> Result<(Vec<WorkloadSpec>, Option<PathBuf>), CertE
     };
 
     // transactions: one atomic remember per object, five per sample, all
-    // read back. The kernel's public transactional unit is a single op —
-    // restart durability (recovery below) is what pins all-or-nothing.
+    // read back — the single-op transactional unit (the multi-op unit is
+    // the multi_txn cell below).
     let transactions = {
         let k = k.clone();
         let mut i = 0usize;
@@ -621,6 +621,48 @@ fn db_oltp(out_dir: &Path) -> Result<(Vec<WorkloadSpec>, Option<PathBuf>), CertE
                     }),
                     Err(_) => false,
                 }
+            }),
+        )
+    };
+
+    // multi_txn (P5-M20): the M10 multi-op unit — begin, stage five creates,
+    // commit: one atomic batch, five remembered outcomes, all read back.
+    let multi_txn = {
+        let k = k.clone();
+        let mut i = 0usize;
+        wl(
+            "multi_txn",
+            10,
+            Box::new(move || {
+                i += 1;
+                let mut t = match k.begin_transaction(Subject::new("alice"), format!("mtxn-{i}")) {
+                    Ok(t) => t,
+                    Err(_) => return false,
+                };
+                let staged = (0..5)
+                    .map(|j| {
+                        let label = format!("mtxn-{i}-{j}");
+                        let mut req = RememberRequest::create(ctx(), meta("txnitem"));
+                        req.properties
+                            .insert("label".into(), Value::Text(label.clone()));
+                        t.stage(req).map(|_| label)
+                    })
+                    .collect::<KResult<Vec<_>>>();
+                let labels = match staged {
+                    Ok(labels) => labels,
+                    Err(_) => return false,
+                };
+                let committed = match t.commit() {
+                    Ok((rs, _)) => rs,
+                    Err(_) => return false,
+                };
+                committed.len() == 5
+                    && committed.iter().enumerate().all(|(j, r)| {
+                        matches!(
+                            k.get(ctx(), &r.koid),
+                            Ok(ko) if matches!(ko.properties.get("label"), Some(Value::Text(l)) if *l == labels[j])
+                        )
+                    })
             }),
         )
     };
@@ -726,7 +768,14 @@ fn db_oltp(out_dir: &Path) -> Result<(Vec<WorkloadSpec>, Option<PathBuf>), CertE
     };
 
     Ok((
-        vec![point_read, point_write, transactions, concurrency, recovery],
+        vec![
+            point_read,
+            point_write,
+            transactions,
+            multi_txn,
+            concurrency,
+            recovery,
+        ],
         Some(root),
     ))
 }

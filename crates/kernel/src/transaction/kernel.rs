@@ -2061,20 +2061,29 @@ impl Kernel {
         }
         let mut pipe = self.pipe.lock().unwrap();
 
-        // P5-M10: recorded retry. The check sits under the pipe lock so a
-        // concurrent same-id commit can never slip between the check and the
-        // record write — the second one always sees the outcome row. An empty
-        // staged set still falls through to record its (empty) outcome, so a
-        // re-begin of an already-committed id dedupes identically.
+        // P5-M10/P5-M20: recorded retry. The check sits under the pipe lock
+        // so a concurrent same-id commit can never slip between the check and
+        // the record write — the second one always sees the outcome row. The
+        // retry identity is id + body fingerprint (P0-03): an identical body
+        // re-applies nothing; a different body fails closed (the id is
+        // spent). An empty staged set still falls through to record its
+        // (empty) outcome, so a re-begin of an already-committed id dedupes
+        // identically.
+        let body: Option<[u8; 32]> = txn_id.map(|_| txn::txn_body_fingerprint(&ops));
         if let Some(tid) = txn_id {
             if let Some(bytes) = self.repo.txn_record(tid)? {
-                self.txn_metrics
-                    .deduped_retries
-                    .fetch_add(1, Ordering::Relaxed);
-                let results = txn::decode_txn_results(&bytes).map_err(|e| {
+                let (recorded, results) = txn::decode_txn_record(&bytes).map_err(|e| {
                     KError::Store(format!("transaction record '{tid}' corrupt: {e}"))
                 })?;
-                return Ok((results, true));
+                if recorded == body {
+                    self.txn_metrics
+                        .deduped_retries
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Ok((results, true));
+                }
+                return Err(KError::InvalidObject(format!(
+                    "transaction id '{tid}' already committed with a different body"
+                )));
             }
         }
 
@@ -2524,10 +2533,10 @@ impl Kernel {
             self.repo
                 .put_schema_row(&mut batch, &schema.type_name, &bytes);
         }
-        if let Some(tid) = txn_id {
+        if let (Some(tid), Some(body)) = (txn_id, body.as_ref()) {
             txn::txn_park("pre_commit");
             self.repo
-                .put_txn_record(&mut batch, tid, &txn::encode_txn_results(&results));
+                .put_txn_record(&mut batch, tid, &txn::encode_txn_record(body, &results));
         }
         self.repo.write_batch(&batch)?;
         if txn_id.is_some() {
@@ -4219,10 +4228,23 @@ impl Kernel {
     /// M7a — submit a reasoning job (MRFC-0011 §6.10). Returns the handle
     /// immediately; poll with `job_status`, retrieve with `job_result`, and
     /// commit the claims with `approve_job`. Over the admission limit this
-    /// is JOB_REJECTED (§8).
-    pub fn reason(&self, rule_type: &str, rule_props: PropertyMap) -> KResult<JobHandle> {
+    /// is JOB_REJECTED (§8). P5-M20 (job004): the caller is part of the
+    /// job's identity — serialized into the dedup hash before the rule —
+    /// and the worker runs under the caller's context (tenant-confined).
+    pub fn reason(
+        &self,
+        subject: &Subject,
+        rule_type: &str,
+        rule_props: PropertyMap,
+    ) -> KResult<JobHandle> {
         let mut e = Enc::new();
         e.u8(JobKind::Reason.tag());
+        e.str(&subject.name);
+        e.u32(subject.roles.len() as u32);
+        for r in &subject.roles {
+            e.str(r);
+        }
+        e.opt_str(subject.tenant.as_deref());
         e.str(rule_type);
         codec::enc_map(&mut e, &rule_props);
         self.jobs.submit(
@@ -4230,6 +4252,7 @@ impl Kernel {
             JobKind::Reason,
             sha256(&e.buf),
             crate::jobs::JobWork::Reason {
+                subject: subject.clone(),
                 rule_type: rule_type.into(),
                 rule_props,
             },
@@ -4386,18 +4409,16 @@ impl Kernel {
 
     /// The reason computation: scan objects matching the rule's conditions
     /// and produce provenance-tagged claims with `origin=Reason`. Class B —
-    /// nothing here touches the Class-A store.
+    /// nothing here touches the Class-A store. P5-M20 (job004): the scan
+    /// runs under the CALLER's context — a tenant-scoped caller sees only
+    /// its tenant's objects (the claim shape is unchanged).
     pub(crate) fn run_reason(
         &self,
+        subject: &Subject,
         rule_type: &str,
         rule_props: &PropertyMap,
     ) -> KResult<Vec<KnowledgeObject>> {
-        let subject = Subject {
-            name: "kernel-reason".into(),
-            roles: vec!["admin".into()],
-            tenant: None,
-        };
-        let candidates = self.scan_by_type(&subject, rule_type)?;
+        let candidates = self.scan_by_type(subject, rule_type)?;
         let mut claims = Vec::new();
         for ko in candidates {
             let mut match_count = 0usize;

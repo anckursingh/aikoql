@@ -182,8 +182,55 @@ impl Transaction {
 // Outcome record codec (the reserved row sys/txn/<id>)
 // ---------------------------------------------------------------------------
 
+/// P5-M20 (P0-03): the retry identity is txn_id + the staged BODY. The
+/// fingerprint canonicalizes each op as subject + referential policy + note
+/// + the payload as a shadow KO through the one canonical body codec
+/// (`encode_ko`). `expected_version` is excluded — it is an OCC pin, not
+/// body identity, so a retry may re-pin from a moved snapshot and still
+/// dedupe. ponytail: the shadow lifecycle is a fixed constant — the state
+/// the commit pipeline would stamp is derivable from `origin` (which IS
+/// encoded) and irrelevant to identity.
+pub(crate) fn txn_body_fingerprint(ops: &[TransactionOp]) -> [u8; 32] {
+    let mut e = Enc::new();
+    e.u32(ops.len() as u32);
+    for op in ops {
+        let subj = &op.context.subject;
+        e.str(&subj.name);
+        e.u32(subj.roles.len() as u32);
+        for r in &subj.roles {
+            e.str(r);
+        }
+        e.opt_str(subj.tenant.as_deref());
+        e.u8(op.request.referential_policy.tag());
+        e.opt_str(op.request.note.as_deref());
+        let req = &op.request;
+        let shadow = KnowledgeObject {
+            koid: req.koid.unwrap_or(KOID::ZERO),
+            version: 0,
+            commit_ts: 0,
+            metadata: req.metadata.clone(),
+            properties: req.properties.clone(),
+            semantic: req.semantic.clone(),
+            relationships: req.relationships.clone(),
+            event_refs: Vec::new(),
+            security: req.security.clone().unwrap_or_else(|| SecurityDescriptor {
+                owner: req.context.subject.name.clone(),
+                acl: vec![],
+                classification: None,
+            }),
+            lifecycle: Lifecycle {
+                state: LifecycleState::Draft,
+                origin: req.origin.clone(),
+            },
+            extensions: req.extensions.clone(),
+        };
+        e.raw(&codec::encode_ko(&shadow));
+    }
+    sha256(&e.buf)
+}
+
 /// u32 count + per entry: 16-byte koid + u64 version + u64 commit_ts.
-pub(crate) fn encode_txn_results(results: &[Remembered]) -> Vec<u8> {
+fn encode_txn_results(results: &[Remembered]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4 + results.len() * (KOID_LEN + 16));
     out.extend_from_slice(&(results.len() as u32).to_be_bytes());
     for r in results {
@@ -224,6 +271,33 @@ pub(crate) fn decode_txn_results(bytes: &[u8]) -> Result<Vec<Remembered>, String
         });
     }
     Ok(out)
+}
+
+/// P5-M20: the outcome row is `1 + fingerprint(32) + results`. The tag byte
+/// 1 marks the fingerprinted format; any other first byte is a pre-M20
+/// results-only row — those carry no body, so the fingerprint decodes as
+/// `None` and the retry must fail closed (an unverifiable body is not the
+/// same body).
+pub(crate) fn encode_txn_record(fp: &[u8; 32], results: &[Remembered]) -> Vec<u8> {
+    let mut out = vec![1u8];
+    out.extend_from_slice(fp);
+    out.extend_from_slice(&encode_txn_results(results));
+    out
+}
+
+pub(crate) fn decode_txn_record(
+    bytes: &[u8],
+) -> Result<(Option<[u8; 32]>, Vec<Remembered>), String> {
+    if bytes.first() == Some(&1) {
+        if bytes.len() < 33 {
+            return Err("record too short for a fingerprint".into());
+        }
+        let mut fp = [0u8; 32];
+        fp.copy_from_slice(&bytes[1..33]);
+        Ok((Some(fp), decode_txn_results(&bytes[33..])?))
+    } else {
+        Ok((None, decode_txn_results(bytes)?))
+    }
 }
 
 // ---------------------------------------------------------------------------

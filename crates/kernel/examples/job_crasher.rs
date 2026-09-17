@@ -21,6 +21,7 @@ fn main() {
 
     let job = k
         .reason(
+            &Subject::with_roles("crasher", &["admin"]),
             "sensor",
             [("zone".to_string(), Value::Text("a".into()))]
                 .into_iter()

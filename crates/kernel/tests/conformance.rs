@@ -3674,6 +3674,7 @@ fn t11_class_b_admission_is_audited_and_out_of_the_class_a_stream() {
 
     let job = k
         .reason(
+            &alice(),
             "sensor",
             [("zone".into(), Value::Text("a".into()))]
                 .into_iter()
@@ -3729,6 +3730,7 @@ fn t11_approval_commits_reason_claims_as_inferred() {
 
     let job = k
         .reason(
+            &alice(),
             "sensor",
             [("zone".into(), Value::Text("a".into()))]
                 .into_iter()

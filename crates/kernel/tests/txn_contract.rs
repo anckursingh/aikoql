@@ -425,12 +425,13 @@ fn tx006a_crash_before_commit_applies_nothing() {
     assert_eq!(r[0].version, 1);
     assert_eq!(node_count(&k), 1);
 
-    // And a further re-apply with the same id is the recorded no-op.
+    // And a further re-apply with the same id and the SAME body is the
+    // recorded no-op (P5-M20: retry identity is id + body).
     let seq = k.journal_head().unwrap().0;
     let mut t = k
         .begin_transaction(Subject::new("alice"), "crash-txn")
         .unwrap();
-    t.stage(create_req("alice", "Node", "i", 99)).unwrap();
+    t.stage(create_req("alice", "Node", "i", 7)).unwrap();
     assert_eq!(t.commit().unwrap().0, r);
     assert_eq!(node_count(&k), 1);
     assert_eq!(k.journal_head().unwrap().0, seq);
@@ -449,13 +450,13 @@ fn tx006b_crash_after_commit_keeps_the_commit_and_dedupes() {
     let head = k.get(alice(), &koids[0]).unwrap();
     assert_eq!(head.properties.get("i"), Some(&Value::Int(7)));
 
-    // The retry with the same id re-applies nothing and returns the
-    // recorded outcome.
+    // The retry with the same id and the SAME body re-applies nothing and
+    // returns the recorded outcome (P5-M20: retry identity is id + body).
     let seq = k.journal_head().unwrap().0;
     let mut t = k
         .begin_transaction(Subject::new("alice"), "crash-txn")
         .unwrap();
-    t.stage(create_req("alice", "Node", "i", 99)).unwrap();
+    t.stage(create_req("alice", "Node", "i", 7)).unwrap();
     let (r, _) = t.commit().unwrap();
     assert_eq!(r[0].version, 1);
     assert_eq!(r[0].koid, koids[0]);
@@ -478,11 +479,11 @@ fn tx007_idempotent_retry_is_a_recorded_noop() {
     let (r1, _) = t.commit().unwrap();
     assert_eq!(r1[0].version, 1);
 
-    // Same id again: the staged op (a DIFFERENT create) is ignored and the
-    // recorded outcome returns.
+    // Same id again: the staged op (the SAME body — P5-M20: retry identity
+    // is id + body) is ignored and the recorded outcome returns.
     let seq = k.journal_head().unwrap().0;
     let mut t2 = k.begin_transaction(Subject::new("alice"), "idem").unwrap();
-    t2.stage(create_req("alice", "Node", "i", 99)).unwrap();
+    t2.stage(create_req("alice", "Node", "i", 1)).unwrap();
     assert_eq!(t2.commit().unwrap().0, r1);
     assert_eq!(node_count(&k), 1);
     assert_eq!(k.journal_head().unwrap().0, seq);
@@ -494,7 +495,7 @@ fn tx007_idempotent_retry_is_a_recorded_noop() {
     // The record survives a reopen — a retry after restart is still a no-op.
     let k2 = reopen(&engine).unwrap();
     let mut t3 = k2.begin_transaction(Subject::new("alice"), "idem").unwrap();
-    t3.stage(create_req("alice", "Node", "i", 98)).unwrap();
+    t3.stage(create_req("alice", "Node", "i", 1)).unwrap();
     assert_eq!(t3.commit().unwrap().0, r1);
     assert_eq!(node_count(&k2), 1);
 }

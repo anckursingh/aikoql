@@ -108,7 +108,9 @@ pub(crate) fn tool_reason(k: &Kernel, args: &J) -> Result<J, String> {
     let rule_props = parse_properties(args)?;
     // P3-M7 breaking change: reason submits a Class-B job instead of
     // returning claims inline — poll job_status, then approve_job.
-    let job = k.reason(rule_type, rule_props).map_err(|e| e.to_string())?;
+    let job = k
+        .reason(&subject_of(args), rule_type, rule_props)
+        .map_err(|e| e.to_string())?;
     Ok(json!({
         "job_id": job.job_id,
         "input_hash": hex(&job.input_hash),

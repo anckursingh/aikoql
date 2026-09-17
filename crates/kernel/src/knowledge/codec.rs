@@ -112,6 +112,12 @@ impl<'a> Dec<'a> {
         Ok(())
     }
 
+    /// P5-M20: bytes not yet consumed. Rows written before appended fields
+    /// existed (pre-M20 job rows without caller context) decode leniently.
+    pub fn remaining(&self) -> usize {
+        self.buf.len() - self.pos
+    }
+
     pub fn raw(&mut self, n: usize) -> KResult<&'a [u8]> {
         self.take(n, "bytes")
     }

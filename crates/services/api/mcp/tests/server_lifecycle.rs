@@ -804,7 +804,8 @@ fn sv011_mcp_transaction_tools_round_trip() {
     assert_eq!(res.get("deduped"), Some(&json!(false)), "{r}");
     assert_eq!(query_nodes(&mut c), 1, "committed write must be visible");
 
-    // The idempotent retry: same txn id, different op — recorded no-op.
+    // The idempotent retry: same txn id, SAME body (P5-M20: retry identity
+    // is id + body) — recorded no-op.
     let r = c.call(
         "tools/call",
         json!({"name": "txn_begin", "arguments": {"txn_id": "sv011-t1"}}),
@@ -814,7 +815,7 @@ fn sv011_mcp_transaction_tools_round_trip() {
         "tools/call",
         json!({"name": "txn_stage", "arguments": {
             "txn_id": "sv011-t1",
-            "op": {"action": "create", "type_name": "Node", "properties": {"i": 99}}
+            "op": {"action": "create", "type_name": "Node", "properties": {"i": 7}}
         }}),
     );
     let _ = result_of(&r);

@@ -29,6 +29,12 @@ fn sensor_props(zone: &str) -> PropertyMap {
         .collect()
 }
 
+/// The caller identity most reason-jobs run under (P5-M20: `reason` takes
+/// the caller — identical inputs from different callers are different jobs).
+fn tester() -> Subject {
+    Subject::with_roles("tester", &["admin"])
+}
+
 fn seed(k: &Kernel, type_name: &str, props: PropertyMap) -> KOID {
     k.remember(RememberRequest {
         metadata: Metadata {
@@ -59,7 +65,7 @@ fn seed(k: &Kernel, type_name: &str, props: PropertyMap) -> KOID {
 fn cb001_reason_returns_handle_status_progresses_result_retrievable() {
     let (k, _store, _clock) = mk();
     seed(&k, "sensor", sensor_props("a"));
-    let job = k.reason("sensor", sensor_props("a")).unwrap();
+    let job = k.reason(&tester(), "sensor", sensor_props("a")).unwrap();
     // Admission is durable and idempotency-hash-bearing from the start.
     let status = wait_status(
         &k,
@@ -89,12 +95,12 @@ fn cb002_over_admission_limit_is_job_rejected() {
     seed(&k, "sensor", sensor_props("a"));
     k.set_max_running_jobs(1);
     k.set_job_park_ms(500);
-    let j1 = k.reason("sensor", sensor_props("a")).unwrap();
+    let j1 = k.reason(&tester(), "sensor", sensor_props("a")).unwrap();
     // A DIFFERENT input — a same-input resubmit would legitimately dedup
     // (cb005) and never reach admission.
     assert!(
         matches!(
-            k.reason("sensor", sensor_props("b")),
+            k.reason(&tester(), "sensor", sensor_props("b")),
             Err(KError::JobRejected(_))
         ),
         "the second concurrent job must be rejected at admission"
@@ -103,7 +109,7 @@ fn cb002_over_admission_limit_is_job_rejected() {
     let st = wait_status(&k, j1.job_id, JobStatus::Completed, Duration::from_secs(10));
     assert_eq!(st, JobStatus::Completed);
     assert!(
-        k.reason("sensor", sensor_props("c")).is_ok(),
+        k.reason(&tester(), "sensor", sensor_props("c")).is_ok(),
         "admission must free up once the running job completes"
     );
 }
@@ -114,7 +120,7 @@ fn cb002_over_admission_limit_is_job_rejected() {
 fn cb003_approval_commits_class_b_claim_with_epistemic_transition() {
     let (k, _store, _clock) = mk();
     seed(&k, "sensor", sensor_props("a"));
-    let job = k.reason("sensor", sensor_props("a")).unwrap();
+    let job = k.reason(&tester(), "sensor", sensor_props("a")).unwrap();
     // §10.2: the admission itself is an audit KE — the journal advanced by
     // exactly the admission event (seed create = seq 1, admission = seq 2).
     let (seq, _) = k.journal_head().unwrap();
@@ -236,11 +242,11 @@ fn cb004_child_kill_between_accept_and_complete_marks_failed_on_reopen() {
 fn cb005_same_input_hash_returns_same_job() {
     let (k, _store, _clock) = mk();
     seed(&k, "sensor", sensor_props("a"));
-    let j1 = k.reason("sensor", sensor_props("a")).unwrap();
-    let j2 = k.reason("sensor", sensor_props("a")).unwrap();
+    let j1 = k.reason(&tester(), "sensor", sensor_props("a")).unwrap();
+    let j2 = k.reason(&tester(), "sensor", sensor_props("a")).unwrap();
     assert_eq!(j1.job_id, j2.job_id, "identical inputs are one job");
     assert_eq!(j1.input_hash, j2.input_hash);
-    let j3 = k.reason("sensor", sensor_props("b")).unwrap();
+    let j3 = k.reason(&tester(), "sensor", sensor_props("b")).unwrap();
     assert_ne!(j3.job_id, j1.job_id, "different inputs are different jobs");
     let st = wait_status(&k, j1.job_id, JobStatus::Completed, Duration::from_secs(10));
     assert_eq!(st, JobStatus::Completed);
@@ -352,8 +358,8 @@ fn hard_kill(child: &std::process::Child) {
 // ---------------------------------------------------------------------------
 // P5-M20 (PR6 P0-04/P0-05/P0-06, security) — REDs job001–004.
 // Failure injection lives in the engine (the FailingOnceText pattern), not in
-// the kernel: `arm_audit` fails the next event/journal batch (the admission
-// audit KE), `arm_scan` the next scan (the worker's type walk).
+// the kernel: `arm_audit` fails the next audit-KE batch (repo keys ke/ +
+// meta/journal), `arm_scan` the next scan (the worker's type walk).
 // ---------------------------------------------------------------------------
 
 /// job002/job003: armed one-shot engine failures over a MemoryEngine.
@@ -390,13 +396,15 @@ impl StorageEngine for FlakyEngine {
         self.inner.scan(prefix)
     }
     fn write_batch(&self, batch: &WriteBatch) -> KResult<()> {
-        // The admission audit KE is the batch carrying event/journal rows;
-        // the job's own Running-row batch carries only job/ rows.
+        // The admission audit KE is the batch carrying ke/journal rows (the
+        // repo's key space); the job's own Running-row batch carries only
+        // job/ rows. Only an audit batch consumes the arm — the Running-row
+        // write between arming and record_audit must not swallow it.
         let audit_rows = batch
             .puts
             .iter()
-            .any(|(k, _)| k.starts_with(b"event/") || k.starts_with(b"journal/"));
-        if self.fail_audit.swap(false, Ordering::SeqCst) && audit_rows {
+            .any(|(k, _)| k.starts_with(b"ke/") || k.starts_with(b"meta/journal"));
+        if audit_rows && self.fail_audit.swap(false, Ordering::SeqCst) {
             return Err(KError::Store("injected audit failure".into()));
         }
         self.inner.write_batch(batch)
@@ -459,7 +467,7 @@ fn job001_concurrent_admission_admits_at_most_one_worker() {
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
                 barrier.wait();
-                k.reason("sensor", sensor_props(&format!("zone-{i}")))
+                k.reason(&tester(), "sensor", sensor_props(&format!("zone-{i}")))
                     .map(|h| h.job_id)
             })
         })
@@ -477,7 +485,12 @@ fn job001_concurrent_admission_admits_at_most_one_worker() {
 
     let jobs = k.jobs().unwrap();
     assert_eq!(jobs.len(), 1, "the burst must leave exactly one job row");
-    let st = wait_status(&k, admitted[0], JobStatus::Completed, Duration::from_secs(10));
+    let st = wait_status(
+        &k,
+        admitted[0],
+        JobStatus::Completed,
+        Duration::from_secs(10),
+    );
     assert_eq!(st, JobStatus::Completed);
 }
 
@@ -494,7 +507,7 @@ fn job002_audit_failure_leaves_no_orphan_row_hash_or_slot() {
 
     engine.arm_audit();
     let err = k
-        .reason("sensor", sensor_props("a"))
+        .reason(&tester(), "sensor", sensor_props("a"))
         .expect_err("the audit failure must surface to the submitter");
     assert!(matches!(err, KError::Store(_)));
 
@@ -504,9 +517,18 @@ fn job002_audit_failure_leaves_no_orphan_row_hash_or_slot() {
     );
 
     // The same input resubmits fresh: no by_hash holdover, slot released.
-    let job = k.reason("sensor", sensor_props("a")).unwrap();
-    let st = wait_status(&k, job.job_id, JobStatus::Completed, Duration::from_secs(10));
-    assert_eq!(st, JobStatus::Completed, "the resubmit must run to completion");
+    let job = k.reason(&tester(), "sensor", sensor_props("a")).unwrap();
+    let st = wait_status(
+        &k,
+        job.job_id,
+        JobStatus::Completed,
+        Duration::from_secs(10),
+    );
+    assert_eq!(
+        st,
+        JobStatus::Completed,
+        "the resubmit must run to completion"
+    );
 }
 
 /// P5-M20 (PR6 P0-06): Failed jobs stay in by_hash (and recover rebuilds it
@@ -521,16 +543,16 @@ fn job003_failed_jobs_retry_fresh_and_completed_jobs_dedupe_across_restart() {
 
     // Two distinct inputs fail (the worker's scan fails once each).
     engine.arm_scan();
-    let j1 = k.reason("sensor", sensor_props("a")).unwrap();
+    let j1 = k.reason(&tester(), "sensor", sensor_props("a")).unwrap();
     let st = wait_status(&k, j1.job_id, JobStatus::Failed, Duration::from_secs(10));
     assert_eq!(st, JobStatus::Failed);
     engine.arm_scan();
-    let j2 = k.reason("sensor", sensor_props("b")).unwrap();
+    let j2 = k.reason(&tester(), "sensor", sensor_props("b")).unwrap();
     let st = wait_status(&k, j2.job_id, JobStatus::Failed, Duration::from_secs(10));
     assert_eq!(st, JobStatus::Failed);
 
     // In memory: the failed input resubmits fresh and completes.
-    let j3 = k.reason("sensor", sensor_props("a")).unwrap();
+    let j3 = k.reason(&tester(), "sensor", sensor_props("a")).unwrap();
     assert_ne!(
         j3.job_id, j1.job_id,
         "a failed job must not claim its input hash"
@@ -540,7 +562,7 @@ fn job003_failed_jobs_retry_fresh_and_completed_jobs_dedupe_across_restart() {
 
     // Restart (reopen over the same store): Completed still dedupes…
     let k2 = Kernel::open(engine.clone(), clock, 0xBEEF).unwrap();
-    let j4 = k2.reason("sensor", sensor_props("a")).unwrap();
+    let j4 = k2.reason(&tester(), "sensor", sensor_props("a")).unwrap();
     assert_eq!(
         j4.job_id, j3.job_id,
         "a completed job dedupes across restart"
@@ -548,12 +570,17 @@ fn job003_failed_jobs_retry_fresh_and_completed_jobs_dedupe_across_restart() {
 
     // …and the still-failed input retries fresh — it must run, not dedupe
     // onto the dead job recovered from the store.
-    let j5 = k2.reason("sensor", sensor_props("b")).unwrap();
+    let j5 = k2.reason(&tester(), "sensor", sensor_props("b")).unwrap();
     assert_ne!(
         j5.job_id, j2.job_id,
         "a failed job must not claim its input hash across restart"
     );
-    let st = wait_status(&k2, j5.job_id, JobStatus::Completed, Duration::from_secs(10));
+    let st = wait_status(
+        &k2,
+        j5.job_id,
+        JobStatus::Completed,
+        Duration::from_secs(10),
+    );
     assert_eq!(st, JobStatus::Completed);
 }
 
@@ -573,15 +600,19 @@ fn job004_reason_workers_are_confined_to_the_callers_tenant() {
                 tags: vec![],
             },
         );
-        req.properties.insert("zone".into(), Value::Text("x".into()));
+        req.properties
+            .insert("zone".into(), Value::Text("x".into()));
         k.remember(req).unwrap().koid
     };
     let a_koid = seed_tenant("A");
     let b_koid = seed_tenant("B");
 
-    // Identical submits from two tenants: each worker may see only its own.
-    let ja = k.reason("sensor", sensor_props("x")).unwrap();
-    let jb = k.reason("sensor", sensor_props("x")).unwrap();
+    // Identical submits from two tenants: distinct jobs (the caller is part
+    // of the identity), and each worker may see only its own tenant.
+    let subj_a = Subject::with_roles("A", &[]).in_tenant("A");
+    let subj_b = Subject::with_roles("B", &[]).in_tenant("B");
+    let ja = k.reason(&subj_a, "sensor", sensor_props("x")).unwrap();
+    let jb = k.reason(&subj_b, "sensor", sensor_props("x")).unwrap();
     let st = wait_status(&k, ja.job_id, JobStatus::Completed, Duration::from_secs(10));
     assert_eq!(st, JobStatus::Completed);
     let st = wait_status(&k, jb.job_id, JobStatus::Completed, Duration::from_secs(10));
