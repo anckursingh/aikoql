@@ -2950,6 +2950,14 @@ impl Kernel {
         self.clock.millis()
     }
 
+    /// The HLC timestamp "now" — the snapshot pin for open-time scans
+    /// (P5-M21, PR6 P0-08). The same source `begin_transaction` pins its
+    /// snapshot from, so a scan opened here sees the same version set a
+    /// transaction begun here would.
+    pub fn snapshot_now(&self) -> u64 {
+        self.hlc.now(self.clock.as_ref())
+    }
+
     /// Point-in-time (transaction-time) read: the version this kernel had
     /// committed as of wall-clock `at_millis`. Packs to the HLC layout
     /// (`millis << 16 | counter`) so the MVCC `<= snap` comparison selects
@@ -3240,6 +3248,26 @@ impl Kernel {
         Ok(out)
     }
 
+    /// `scan_by_type_range` at a snapshot: every koid resolves to the newest
+    /// version committed with `commit_ts <= snap_ts` (the `get_at` path), so
+    /// a stream pinned at open serves ONE consistent snapshot — not the
+    /// mixed-time set of live head reads (P5-M21, PR6 P0-08).
+    pub fn scan_by_type_range_at(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        koids: &[KOID],
+        snap_ts: u64,
+    ) -> KResult<Vec<KnowledgeObject>> {
+        let mut out = Vec::new();
+        for koid in koids {
+            if let Some(ko) = self.readable_object_at(subject, type_name, koid, snap_ts)? {
+                out.push(ko);
+            }
+        }
+        Ok(out)
+    }
+
     /// Head read + the shared scan filters: payload type re-check (stale
     /// index entry from a type change), Deleted skip, ACL Read check.
     fn readable_object(
@@ -3251,6 +3279,30 @@ impl Kernel {
         let Some(ko) = self.head_object(koid)? else {
             return Ok(None);
         };
+        self.readable_checks(subject, type_name, ko)
+    }
+
+    /// Snapshot read (`object_at`) + the same shared scan filters.
+    fn readable_object_at(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        koid: &KOID,
+        snap_ts: u64,
+    ) -> KResult<Option<KnowledgeObject>> {
+        let Some(ko) = self.object_at(koid, snap_ts)? else {
+            return Ok(None);
+        };
+        self.readable_checks(subject, type_name, ko)
+    }
+
+    /// The shared scan filters — one place, both read modes.
+    fn readable_checks(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        ko: KnowledgeObject,
+    ) -> KResult<Option<KnowledgeObject>> {
         if ko.metadata.type_name != type_name {
             return Ok(None); // stale index entry (type changed after indexing)
         }

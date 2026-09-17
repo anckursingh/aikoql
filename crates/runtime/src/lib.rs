@@ -298,8 +298,22 @@ impl Interpreter {
             scan_len: None,
         };
         let mut rows = RowSet::Objects(Vec::new());
+        // P5-M21 (PR6 P0-07): re-pin before serving an index assist — the
+        // head must be exactly the one the optimizer pinned (applied_seq ==
+        // pinned head) or the scan falls back to the full scan, which
+        // answers the committed truth. O(1): the head seq IS the journal
+        // length (the M17b watermark contract). pinned_head 0 = a plan the
+        // CBO never assisted, and PropertyIndex only ever appears with the
+        // pin set.
+        let exec_head = if plan.pinned_head != 0 {
+            Some(kernel.journal_head()?.0)
+        } else {
+            None
+        };
         for (i, po) in plan.operators.iter().enumerate() {
-            if po.strategy == Strategy::PropertyIndex {
+            if po.strategy == Strategy::PropertyIndex
+                && exec_head.is_some_and(|h| h == plan.pinned_head)
+            {
                 interp.assist = cbo::scan_assist(kernel, &plan.operators, i)?;
             }
             rows = interp.exec_op(kernel, &po.op, rows)?;

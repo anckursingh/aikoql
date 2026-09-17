@@ -313,6 +313,18 @@ pub struct PhysicalPlan {
     pub version: u32,
     pub operators: Vec<PhysicalOp>,
     pub description: Option<String>,
+    /// P5-M21 (PR6 P0-07): the journal head the optimizer pinned at optimize
+    /// time. The executor re-pins before serving an index assist —
+    /// `applied_seq == pinned_head` at exec time or the scan falls back to
+    /// the full scan. 0 = unpinned (a plan the CBO never assisted).
+    /// Executor-internal state: not on the wire (qm003 keeps its byte pin).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pinned_head: u64,
+}
+
+/// serde helper: 0 is the unpinned sentinel — it never needs the wire.
+fn is_zero(v: &u64) -> bool {
+    *v == 0
 }
 
 impl PhysicalPlan {
@@ -321,6 +333,7 @@ impl PhysicalPlan {
             version: PLAN_VERSION,
             operators,
             description: None,
+            pinned_head: 0,
         }
     }
 

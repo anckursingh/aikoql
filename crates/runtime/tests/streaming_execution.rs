@@ -11,10 +11,9 @@
 //!
 //! Honest ledger (st004/st007): the RSS cell (gate 7) lands with the W-suite
 //! sampler harness — the batch bound here is the structural half of the pin.
-//! Snapshot pinning is observable-level: the koid list is captured at open;
-//! per-row heads resolve through the live kernel, so divergence vs the
-//! materialized executor is pinned at zero (true ts-pinned reads need a
-//! kernel `head_object_at`, deferred).
+//! st010 (P5-M21): the open pin is version-level — the koid list AND a
+//! snapshot timestamp are captured at open, so every batch serves one
+//! consistent version set (st007 asserts the row set, st010 the payloads).
 
 use aikoql_compiler::parser;
 use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto, CryptoProvider};
@@ -24,7 +23,8 @@ use aikoql_kernel::security::kms::KeyManager;
 use aikoql_kernel::transaction::kernel::{KnowledgeContext, Subject};
 use aikoql_kernel::*;
 use aikoql_runtime::streaming::{
-    execute_streaming, CancellationToken, PhysicalOperator, ScanOperator, StreamOptions,
+    execute_streaming, CancellationToken, IndexStrategy, PhysicalOperator, ScanOperator,
+    StreamOptions,
 };
 use aikoql_runtime::Interpreter;
 use std::sync::{Arc, RwLock};
@@ -80,7 +80,7 @@ fn stream(k: &Kernel, query: &str, batch_size: usize) -> (Vec<KOID>, Vec<usize>)
     let opts = StreamOptions {
         batch_size,
         cancel: CancellationToken::new(),
-        use_indexes: false,
+        index_strategy: IndexStrategy::Scan,
     };
     let mut pipe = execute_streaming(k, &plan, &opts).unwrap();
     collect(&mut pipe)
@@ -104,7 +104,7 @@ fn st001_empty_input_streams_zero_batches() {
     let opts = StreamOptions {
         batch_size: 4,
         cancel: CancellationToken::new(),
-        use_indexes: false,
+        index_strategy: IndexStrategy::Scan,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     assert!(
@@ -123,7 +123,7 @@ fn st002_single_row_arrives_in_one_batch() {
     let opts = StreamOptions {
         batch_size: 16,
         cancel: CancellationToken::new(),
-        use_indexes: false,
+        index_strategy: IndexStrategy::Scan,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     let first = pipe.next_batch().unwrap().expect("one batch");
@@ -246,7 +246,7 @@ fn st006_authorization_excludes_role_scoped_rows_identically() {
         let opts = StreamOptions {
             batch_size: 2,
             cancel: CancellationToken::new(),
-            use_indexes: false,
+            index_strategy: IndexStrategy::Scan,
         };
         collect(&mut execute_streaming(&k, &plan, &opts).unwrap())
     };
@@ -278,7 +278,7 @@ fn st007_snapshot_pinned_at_open_zero_divergence() {
     let opts = StreamOptions {
         batch_size: 2,
         cancel: CancellationToken::new(),
-        use_indexes: false,
+        index_strategy: IndexStrategy::Scan,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     let _first = pipe.next_batch().unwrap().unwrap(); // rows 0-1
@@ -298,13 +298,17 @@ fn st007_snapshot_pinned_at_open_zero_divergence() {
     )
     .unwrap();
 
-    // The koid list was captured at open: the insert never appears, the
-    // tombstoned row is skipped, and the updated row still streams (its head
-    // reads live) — the pinned snapshot contract at the observable level.
+    // The koid list AND the version set were captured at open: the insert
+    // never appears, and rows alive at open still stream — the tombstone
+    // and the update happened after open, so they do not apply (their open
+    // versions stream instead; st010 pins the payload-level detail).
     let (rest, _) = collect(&mut pipe);
     assert!(!rest.contains(&new_id), "insert after open never appears");
-    assert!(!rest.contains(&ids[2]), "tombstoned row never appears");
-    assert_eq!(rest, vec![ids[3]], "updated row still streams");
+    assert_eq!(
+        rest,
+        vec![ids[2], ids[3]],
+        "rows alive at open stream, post-open writes never apply"
+    );
 }
 
 // --- st010 — snapshot at open, VERSION-level (PR6 P0-08) --------------------------
@@ -324,7 +328,7 @@ fn st010_all_batches_see_the_open_snapshot_payloads() {
     let opts = StreamOptions {
         batch_size: 2,
         cancel: CancellationToken::new(),
-        use_indexes: false,
+        index_strategy: IndexStrategy::Scan,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     let _first = pipe.next_batch().unwrap().unwrap(); // rows 0-1, emitted pre-write
@@ -361,7 +365,11 @@ fn st010_all_batches_see_the_open_snapshot_payloads() {
             _ => panic!("expected a name property"),
         }
     };
-    assert_eq!(name(&rest[0]), "P2", "the tombstone after open never applies");
+    assert_eq!(
+        name(&rest[0]),
+        "P2",
+        "the tombstone after open never applies"
+    );
     assert_eq!(name(&rest[1]), "P3", "the update after open never applies");
     let _ = new_id;
 }
@@ -382,7 +390,7 @@ fn st008_pull_model_backpressure_batches_never_exceed_bound() {
     let opts = StreamOptions {
         batch_size: 1,
         cancel: CancellationToken::new(),
-        use_indexes: false,
+        index_strategy: IndexStrategy::Scan,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     while pipe.next_batch().unwrap().is_some() {}
@@ -472,8 +480,8 @@ fn idx2_008_index_assisted_scan_pins_the_index_snapshot_at_open() {
         .unwrap();
     let a = person(&k, "Alice");
     let b = person(&k, "Bob");
-    // a matching row the index never saw — with the opt-in it stays invisible
-    // (eventual semantics, the visible choice), while the plain scan still
+    // a matching row the index never saw — under EventualIndex it stays
+    // invisible (the explicit eventual choice), while the plain scan still
     // answers the committed truth
     let unindexed = person(&k, "Alice");
     for id in [a, b] {
@@ -492,7 +500,7 @@ fn idx2_008_index_assisted_scan_pins_the_index_snapshot_at_open() {
     let opts = StreamOptions {
         batch_size: 4,
         cancel: CancellationToken::new(),
-        use_indexes: true,
+        index_strategy: IndexStrategy::EventualIndex,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     let (rows, _) = collect(&mut pipe);
@@ -502,11 +510,11 @@ fn idx2_008_index_assisted_scan_pins_the_index_snapshot_at_open() {
         "the index scan answers exactly the indexed koids"
     );
 
-    // control: without the opt-in, the scan answers the committed truth
+    // control: the plain Scan answers the open snapshot (committed truth)
     let opts = StreamOptions {
         batch_size: 4,
         cancel: CancellationToken::new(),
-        use_indexes: false,
+        index_strategy: IndexStrategy::Scan,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     let (rows, _) = collect(&mut pipe);
@@ -520,7 +528,7 @@ fn idx2_008_index_assisted_scan_pins_the_index_snapshot_at_open() {
     let opts = StreamOptions {
         batch_size: 4,
         cancel: CancellationToken::new(),
-        use_indexes: true,
+        index_strategy: IndexStrategy::EventualIndex,
     };
     let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
     let late = person(&k, "Alice");

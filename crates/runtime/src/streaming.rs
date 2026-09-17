@@ -3,11 +3,11 @@
 //! A pull-based pipeline (`PhysicalOperator::next_batch`) over the supported
 //! streaming shape: Scan → Filter → Project → Limit. Backpressure is by
 //! construction — a slow consumer stops pulling and no operator holds more
-//! than one batch. The Scan pins the koid list at `open()` (snapshot at open:
-//! rows created after open never appear) and resolves payload per batch via
-//! the kernel's `scan_by_type_range` — the SAME read filters as the
-//! materializing `scan_by_type` (ACL/Deleted/type re-check live in one place:
-//! `Kernel::readable_object`). Anything outside the supported shape fails
+//! than one batch. The Scan pins the koid list AND a snapshot timestamp at
+//! `open()` (rows created after open never appear, and every batch resolves
+//! through the kernel's `get_at` path at that timestamp — the SAME read
+//! filters as the materializing `scan_by_type`, so streaming ≡ materialized
+//! for the same snapshot). Anything outside the supported shape fails
 //! closed; the materializing executor (`Interpreter::execute_physical`) keeps
 //! handling full plans.
 //!
@@ -75,9 +75,10 @@ pub trait PhysicalOperator {
 // Scan
 // ---------------------------------------------------------------------------
 
-/// Streams a type scan: the koid list is captured at `open()` (the snapshot
-/// the runtime controls — rows created after open never appear), payload
-/// batches resolve through the kernel's shared read filters.
+/// Streams a type scan: the koid list AND a snapshot timestamp are captured
+/// at `open()` (the snapshot the runtime controls — rows created after open
+/// never appear, and every payload batch resolves through the `get_at` path
+/// at that timestamp: one consistent version set, not mixed-time heads).
 pub struct ScanOperator<'a> {
     kernel: &'a Kernel,
     subject: Subject,
@@ -87,6 +88,7 @@ pub struct ScanOperator<'a> {
     koids: Vec<KOID>,
     cursor: usize,
     opened: bool,
+    snapshot_ts: u64,
 }
 
 impl<'a> ScanOperator<'a> {
@@ -106,6 +108,7 @@ impl<'a> ScanOperator<'a> {
             koids: Vec::new(),
             cursor: 0,
             opened: false,
+            snapshot_ts: 0,
         }
     }
 
@@ -128,6 +131,7 @@ impl<'a> ScanOperator<'a> {
             koids,
             cursor: 0,
             opened: true,
+            snapshot_ts: 0,
         }
     }
 }
@@ -138,6 +142,9 @@ impl PhysicalOperator for ScanOperator<'_> {
             self.koids = self.kernel.type_koids(&self.type_name)?;
             self.opened = true;
         }
+        // The version-set pin: payloads resolve at this instant's HLC — the
+        // same snapshot `begin_transaction` would pin (P5-M21, PR6 P0-08).
+        self.snapshot_ts = self.kernel.snapshot_now();
         self.cursor = 0;
         Ok(())
     }
@@ -160,9 +167,12 @@ impl PhysicalOperator for ScanOperator<'_> {
             let end = (self.cursor + self.batch_size).min(self.koids.len());
             let slice = &self.koids[self.cursor..end];
             self.cursor = end;
-            let mut kos = self
-                .kernel
-                .scan_by_type_range(&self.subject, &self.type_name, slice)?;
+            let mut kos = self.kernel.scan_by_type_range_at(
+                &self.subject,
+                &self.type_name,
+                slice,
+                self.snapshot_ts,
+            )?;
             // Same freshness contract as the materializing executor: default
             // MATCH answers with current truth (facts not valid at "now" stay
             // out). Temporal plans fail closed below — they materialize.
@@ -318,17 +328,33 @@ impl PhysicalOperator for StreamingPipeline<'_> {
     }
 }
 
+/// The index-assist contract for a stream (PR6 P0-09) — explicit, so no
+/// `bool` silently varies the semantics of the same query shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum IndexStrategy {
+    /// No index assist — the type scan pins the koid list at open, so the
+    /// stream is exactly the open snapshot (exact by construction).
+    #[default]
+    Scan,
+    /// Index assist with a completeness guarantee for the open snapshot:
+    /// the index verifies clean and the journal head stays pinned from
+    /// verify through open, else the stream falls back to the Scan.
+    /// ponytail: the verify is O(index) per stream open — that is the
+    /// price of the guarantee; EventualIndex is the cheap path.
+    Exact,
+    /// Index assist, EVENTUAL by contract: the maintainer fills the index,
+    /// so never-indexed rows stay invisible. The visible choice for a
+    /// lagging index (the pre-P0-09 `use_indexes: true` semantics).
+    EventualIndex,
+}
+
 /// Execution options for a streaming plan.
 pub struct StreamOptions {
     pub batch_size: usize,
     pub cancel: CancellationToken,
-    /// P5-M8 (idx2-008): opt in to index-assisted scans — the first Eq
-    /// predicate over an indexed (type, property) is answered from the
-    /// property index. EVENTUAL semantics: the maintainer fills the index,
-    /// so never-indexed rows stay invisible. Off by default — the plain scan
-    /// answers the committed truth. The choice is visible at the call site
-    /// (the idx001 discipline).
-    pub use_indexes: bool,
+    /// The index-assist strategy for the Scan (PR6 P0-09). Default Scan:
+    /// no assist — the plain scan answers the committed open snapshot.
+    pub index_strategy: IndexStrategy,
 }
 
 /// Build and open a streaming pipeline for the supported shape
@@ -365,64 +391,106 @@ pub fn execute_streaming<'a>(
     if let Some(t) = tenant {
         subj = subj.in_tenant(t);
     }
-    // P5-M8 (idx2-008): with the opt-in, the first Eq predicate over an
-    // indexed (type, property) is answered from the property index — an
-    // EVENTUAL scan (never-indexed rows stay invisible; the default scan
-    // answers the committed truth). The koids pin at construction, before
-    // the first pull.
+    // PR6 P1-13: the assist binds only to the Filter IMMEDIATELY after the
+    // Scan — positional adjacency is the proven semantic dependency.
+    let adjacent_eq = match ops.get(1).map(|po| &po.op) {
+        Some(IrOp::Filter { predicates }) => predicates.iter().find(|p| p.op == PredOp::Eq),
+        _ => None,
+    };
+
+    // PR6 P0-09: the strategy contract. EXACT re-checks the journal head
+    // around verify + probe and once more after open — a commit anywhere in
+    // that window falls back to the Scan, which is complete for the open
+    // snapshot by construction.
     let mut assist: Option<Vec<KOID>> = None;
-    if opts.use_indexes {
-        'outer: for po in &ops[1..] {
-            if let IrOp::Filter { predicates } = &po.op {
-                for p in predicates {
-                    if p.op == PredOp::Eq {
-                        for idx in kernel.property_indexes()? {
-                            if idx.covers(type_name, &p.property) {
-                                assist = Some(idx.scan_eq(std::slice::from_ref(&p.value))?);
-                                break 'outer;
+    let mut exact_head: Option<u64> = None;
+    if let Some(p) = adjacent_eq {
+        if opts.index_strategy != IndexStrategy::Scan {
+            for idx in kernel.property_indexes()? {
+                if !idx.covers(type_name, &p.property) {
+                    continue;
+                }
+                match opts.index_strategy {
+                    IndexStrategy::Scan => {}
+                    IndexStrategy::EventualIndex => {
+                        assist = Some(idx.scan_eq(std::slice::from_ref(&p.value))?);
+                    }
+                    IndexStrategy::Exact => {
+                        let mut head = kernel.journal_head()?.0;
+                        for _ in 0..2 {
+                            let report = idx.verify(kernel)?;
+                            if !report.verified
+                                || !report.missing.is_empty()
+                                || !report.stale.is_empty()
+                            {
+                                break; // the index lags the store — Scan answers the truth
                             }
+                            let koids = idx.scan_eq(std::slice::from_ref(&p.value))?;
+                            let now = kernel.journal_head()?.0;
+                            if now == head {
+                                assist = Some(koids);
+                                exact_head = Some(head);
+                                break;
+                            }
+                            head = now; // a commit raced the attempt — retry once
                         }
                     }
                 }
+                break; // first covering index, same as the CBO
             }
         }
     }
-    let mut chain: Box<dyn PhysicalOperator + 'a> = match assist {
-        Some(koids) => Box::new(ScanOperator::with_koids(
-            kernel,
-            subj,
-            type_name,
-            opts.batch_size,
-            opts.cancel.clone(),
-            koids,
-        )),
-        None => Box::new(ScanOperator::new(
-            kernel,
-            subj,
-            type_name,
-            opts.batch_size,
-            opts.cancel.clone(),
-        )),
+    let build = |assist: Option<Vec<KOID>>| -> KResult<Box<dyn PhysicalOperator + 'a>> {
+        let mut chain: Box<dyn PhysicalOperator + 'a> = match assist {
+            Some(koids) => Box::new(ScanOperator::with_koids(
+                kernel,
+                subj.clone(),
+                type_name,
+                opts.batch_size,
+                opts.cancel.clone(),
+                koids,
+            )),
+            None => Box::new(ScanOperator::new(
+                kernel,
+                subj.clone(),
+                type_name,
+                opts.batch_size,
+                opts.cancel.clone(),
+            )),
+        };
+        for po in &ops[1..] {
+            match &po.op {
+                IrOp::Filter { predicates } => {
+                    chain = Box::new(FilterOperator::new(chain, predicates.clone()));
+                }
+                IrOp::Project { fields } => {
+                    chain = Box::new(ProjectOperator::new(chain, fields.clone()));
+                }
+                IrOp::Limit { limit, offset } => {
+                    chain = Box::new(LimitOperator::new(chain, *offset, *limit));
+                }
+                other => {
+                    let name = format!("{:?}", other);
+                    let name = name.split('{').next().unwrap_or(&name).trim();
+                    return Err(not_streaming(name));
+                }
+            }
+        }
+        Ok(chain)
     };
-    for po in &ops[1..] {
-        match &po.op {
-            IrOp::Filter { predicates } => {
-                chain = Box::new(FilterOperator::new(chain, predicates.clone()));
-            }
-            IrOp::Project { fields } => {
-                chain = Box::new(ProjectOperator::new(chain, fields.clone()));
-            }
-            IrOp::Limit { limit, offset } => {
-                chain = Box::new(LimitOperator::new(chain, *offset, *limit));
-            }
-            other => {
-                let name = format!("{:?}", other);
-                let name = name.split('{').next().unwrap_or(&name).trim();
-                return Err(not_streaming(name));
-            }
+    let mut pipe = StreamingPipeline {
+        inner: build(assist)?,
+    };
+    pipe.open()?; // pins the koid snapshot now, before the first pull
+                  // The [probe..open] window: the pinned koids must still be complete for
+                  // the open snapshot — a commit in between falls back to the type scan.
+    if let Some(head) = exact_head {
+        if kernel.journal_head()?.0 != head {
+            pipe = StreamingPipeline {
+                inner: build(None)?,
+            };
+            pipe.open()?;
         }
     }
-    let mut pipe = StreamingPipeline { inner: chain };
-    pipe.open()?; // pins the koid snapshot now, before the first pull
     Ok(pipe)
 }

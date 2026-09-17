@@ -540,9 +540,7 @@ fn cbo009_explain_cost_shows_per_op_costs_and_stats_freshness() {
     );
     assert!(lines[0].contains("rows=") && lines[0].contains("cpu="));
     assert!(
-        lines
-            .last()
-            .is_some_and(|l| l.contains("statistics: fresh")),
+        lines.iter().any(|l| l.contains("statistics: fresh")),
         "fresh stats, visible"
     );
 
@@ -627,10 +625,7 @@ fn st011_explain_states_the_snapshot_of_an_index_assist() {
         lines
     );
     let head = k.journal_head().unwrap().0;
-    let line = lines
-        .iter()
-        .find(|l| l.starts_with("snapshot: "))
-        .unwrap();
+    let line = lines.iter().find(|l| l.starts_with("snapshot: ")).unwrap();
     assert!(
         line.contains(&format!("{head}")),
         "the stated snapshot is the pinned journal head: {line}"
@@ -673,7 +668,11 @@ fn cbo011_write_between_optimize_and_execute_never_serves_an_incomplete_set() {
         ids.contains(&late),
         "the late committed row is never silently dropped"
     );
-    assert_eq!(ids.len(), 2, "the set is complete: the original row and the late one");
+    assert_eq!(
+        ids.len(),
+        2,
+        "the set is complete: the original row and the late one"
+    );
 }
 
 // --- cbo012 — positional adjacency (PR6 P1-13) ----------------------------------

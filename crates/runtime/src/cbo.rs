@@ -6,12 +6,14 @@
 //! carries an Eq predicate over a property index executes as an
 //! index-assisted scan (`Strategy::PropertyIndex`) — chosen only when the
 //! stats are fresh AND the covering index verifies clean against the
-//! canonical heads (missing == 0 ∧ stale == 0). Eq never matches a missing
-//! property, and PropertyIndex excludes missing-key rows — the two agree by
-//! construction, so a clean index answers exactly the committed truth.
-//! Everything else (traversal, search modalities, temporal) is cost-modeled
-//! from the statistics with the v1 strategies — the honest-ledger rows
-//! document which alternatives do not exist yet.
+//! canonical heads (missing == 0 ∧ stale == 0), and the executor re-pins the
+//! journal head captured at optimize before serving the assist (P5-M21:
+//! `applied_seq == pinned head` or full-scan fallback). Eq never matches a
+//! missing property, and PropertyIndex excludes missing-key rows — the two
+//! agree by construction, so a clean index answers exactly the committed
+//! truth. Everything else (traversal, search modalities, temporal) is
+//! cost-modeled from the statistics with the v1 strategies — the
+//! honest-ledger rows document which alternatives do not exist yet.
 
 use aikoql_compiler::parser;
 use aikoql_kernel::ir::{IrOp, IrPlan, PhysicalOp, PhysicalPlan, PredOp, Strategy};
@@ -42,16 +44,18 @@ pub struct CostReport {
     pub index_used: Option<String>,
 }
 
-/// The first Eq predicate in the first Filter after op `i` — the predicate
-/// an index-assisted scan would serve.
+/// The first Eq predicate in the Filter IMMEDIATELY after op `i` — the
+/// predicate an index-assisted scan would serve. PR6 P1-13: the binding is
+/// positional — only adjacency proves the semantic dependency, so an Eq
+/// behind any other op is never answered from an index.
 pub(crate) fn first_eq_after(
     ops: &[PhysicalOp],
     i: usize,
 ) -> Option<&aikoql_kernel::ir::Predicate> {
-    ops[i + 1..].iter().find_map(|po| match &po.op {
-        IrOp::Filter { predicates } => predicates.iter().find(|p| p.op == PredOp::Eq),
+    match ops.get(i + 1).map(|po| &po.op) {
+        Some(IrOp::Filter { predicates }) => predicates.iter().find(|p| p.op == PredOp::Eq),
         _ => None,
-    })
+    }
 }
 
 /// The uniform match fraction of that predicate: 1/distinct from the stats,
@@ -74,9 +78,9 @@ fn may_serve_exact(idx: &dyn aikoql_kernel::Index) -> bool {
 /// The executor's index assist for a Scan the CBO flagged `PropertyIndex`:
 /// the same derivation the optimizer used, so the flag's koid list comes
 /// from the covering index. A flag without an index falls back to the full
-/// scan — always the committed truth. ponytail: the index is NOT re-verified
-/// here; the optimizer's freshness watermark + clean verify gate the flag,
-/// and the assisted path is EVENTUAL by contract (idx2-008).
+/// scan — always the committed truth. The EXECUTOR gates the flag itself
+/// (P5-M21, PR6 P0-07): it re-pins the journal head and serves the assist
+/// only while `applied_seq == pinned head`.
 pub(crate) fn scan_assist(
     kernel: &Kernel,
     ops: &[PhysicalOp],
@@ -243,8 +247,17 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
         }
     }
     let costs = cost_plan(&ops, stats.as_ref());
+    // P5-M21 (PR6 P0-07): pin the journal head the decision was made at —
+    // the plan carries its snapshot; the executor re-pins before serving
+    // the assist and falls back to the full scan on a mismatch. Only
+    // index-assisted plans pin: every other plan stays byte-identical to
+    // the rules (cbo_default_003).
+    let mut plan = PhysicalPlan::new(ops);
+    if index_used.is_some() {
+        plan.pinned_head = journal_len;
+    }
     Ok(CostReport {
-        plan: PhysicalPlan::new(ops),
+        plan,
         costs,
         stats_used,
         stats_stale,
@@ -284,6 +297,14 @@ pub fn explain_cost(kernel: &Kernel, query: &str) -> KResult<Vec<String>> {
         "statistics: fresh"
     };
     lines.push(footer.to_string());
+    // PR6 P0-07: every index-assisted plan states its snapshot — the journal
+    // head the index read is assumed fresh at.
+    if report.index_used.is_some() {
+        lines.push(format!(
+            "snapshot: journal head pinned at {}",
+            report.plan.pinned_head
+        ));
+    }
     Ok(lines)
 }
 
