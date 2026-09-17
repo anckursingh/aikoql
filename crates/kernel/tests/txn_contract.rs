@@ -498,3 +498,82 @@ fn tx007_idempotent_retry_is_a_recorded_noop() {
     assert_eq!(t3.commit().unwrap().0, r1);
     assert_eq!(node_count(&k2), 1);
 }
+
+// --- tx008 — staged writes are invisible to the transaction's own reads -------
+
+/// The documented contract: `txn.get` reads the SNAPSHOT — a transaction
+/// never sees its own staged writes. Pinned here so a "read-your-writes
+/// convenience" cannot silently change the semantics.
+#[test]
+fn tx008_staged_write_is_invisible_to_the_transactions_own_reads() {
+    let k = mk();
+    let koid = k
+        .remember(create_req("alice", "Node", "i", 1))
+        .unwrap()
+        .koid;
+
+    let mut t = k.begin_transaction(Subject::new("alice"), "tx8").unwrap();
+    let mut u = RememberRequest::update(alice(), koid, meta("Node"));
+    u.properties.insert("i".into(), Value::Int(2));
+    t.stage(u).unwrap();
+
+    // Staged write is NOT visible to the transaction itself (contract).
+    assert_eq!(
+        t.get(&koid).unwrap().properties.get("i"),
+        Some(&Value::Int(1)),
+        "a transaction must not read its own staged writes"
+    );
+
+    let (r, _) = t.commit().unwrap();
+    assert_eq!(r[0].version, 2);
+    assert_eq!(
+        k.get(alice(), &koid).unwrap().properties.get("i"),
+        Some(&Value::Int(2))
+    );
+}
+
+// --- tx009 — retry identity: same id + different body fails closed ------------
+
+/// P5-M20 (PR6 P0-03): the recorded-retry check keys on the txn id alone —
+/// the SAME id with a DIFFERENT body silently replays the original outcome.
+/// A retry must fail closed instead: only the identical body is a retry.
+#[test]
+fn tx009_same_txn_id_with_a_different_body_fails_closed() {
+    let k = mk();
+    let mut t = k.begin_transaction(Subject::new("alice"), "spent").unwrap();
+    t.stage(create_req("alice", "Node", "i", 1)).unwrap();
+    let (r1, _) = t.commit().unwrap();
+    assert_eq!(r1[0].version, 1);
+
+    // Same id, DIFFERENT body: never replay the recorded outcome.
+    let mut t2 = k.begin_transaction(Subject::new("alice"), "spent").unwrap();
+    t2.stage(create_req("alice", "Node", "i", 99)).unwrap();
+    assert!(
+        t2.commit().is_err(),
+        "same txn_id with a different body must fail closed, not replay the recorded outcome"
+    );
+    assert_eq!(node_count(&k), 1, "the different body must not apply");
+    assert_eq!(k.transaction_metrics().committed, 1);
+}
+
+// --- tx010 — retry identity: same id + same body is the recorded retry --------
+
+/// The matching half of the retry identity: an IDENTICAL body re-submit is
+/// the recorded no-op (deduped=true, original outcome, deduped_retries).
+#[test]
+fn tx010_same_txn_id_with_the_same_body_is_a_recorded_retry() {
+    let k = mk();
+    let mut t = k.begin_transaction(Subject::new("alice"), "retry").unwrap();
+    t.stage(create_req("alice", "Node", "i", 1)).unwrap();
+    let (r1, deduped) = t.commit().unwrap();
+    assert!(!deduped);
+    assert_eq!(r1[0].version, 1);
+
+    let mut t2 = k.begin_transaction(Subject::new("alice"), "retry").unwrap();
+    t2.stage(create_req("alice", "Node", "i", 1)).unwrap();
+    let (r2, deduped) = t2.commit().unwrap();
+    assert!(deduped, "an identical body re-submit is the recorded retry");
+    assert_eq!(r2, r1, "the retry returns the original outcome");
+    assert_eq!(node_count(&k), 1);
+    assert_eq!(k.transaction_metrics().deduped_retries, 1);
+}

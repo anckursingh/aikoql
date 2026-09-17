@@ -7,6 +7,7 @@
 
 use aikoql_kernel::*;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -346,4 +347,256 @@ fn hard_kill(child: &std::process::Child) {
             .args(["-9", &child.id().to_string()])
             .status();
     }
+}
+
+// ---------------------------------------------------------------------------
+// P5-M20 (PR6 P0-04/P0-05/P0-06, security) — REDs job001–004.
+// Failure injection lives in the engine (the FailingOnceText pattern), not in
+// the kernel: `arm_audit` fails the next event/journal batch (the admission
+// audit KE), `arm_scan` the next scan (the worker's type walk).
+// ---------------------------------------------------------------------------
+
+/// job002/job003: armed one-shot engine failures over a MemoryEngine.
+struct FlakyEngine {
+    inner: MemoryEngine,
+    fail_audit: AtomicBool,
+    fail_scan: AtomicBool,
+}
+
+impl FlakyEngine {
+    fn new() -> Self {
+        FlakyEngine {
+            inner: MemoryEngine::new(),
+            fail_audit: AtomicBool::new(false),
+            fail_scan: AtomicBool::new(false),
+        }
+    }
+    fn arm_audit(&self) {
+        self.fail_audit.store(true, Ordering::SeqCst);
+    }
+    fn arm_scan(&self) {
+        self.fail_scan.store(true, Ordering::SeqCst);
+    }
+}
+
+impl StorageEngine for FlakyEngine {
+    fn get(&self, key: &[u8]) -> KResult<Option<Vec<u8>>> {
+        self.inner.get(key)
+    }
+    fn scan(&self, prefix: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        if self.fail_scan.swap(false, Ordering::SeqCst) {
+            return Err(KError::Store("injected scan failure".into()));
+        }
+        self.inner.scan(prefix)
+    }
+    fn write_batch(&self, batch: &WriteBatch) -> KResult<()> {
+        // The admission audit KE is the batch carrying event/journal rows;
+        // the job's own Running-row batch carries only job/ rows.
+        let audit_rows = batch
+            .puts
+            .iter()
+            .any(|(k, _)| k.starts_with(b"event/") || k.starts_with(b"journal/"));
+        if self.fail_audit.swap(false, Ordering::SeqCst) && audit_rows {
+            return Err(KError::Store("injected audit failure".into()));
+        }
+        self.inner.write_batch(batch)
+    }
+}
+
+/// job001: a write_batch park widens the admission window — the first
+/// submit's Running-row write stalls inside it while every other thread in
+/// the burst observes the (still zero) running counter.
+struct SlowEngine {
+    inner: MemoryEngine,
+    park_us: AtomicU64,
+}
+
+impl SlowEngine {
+    fn new() -> Self {
+        SlowEngine {
+            inner: MemoryEngine::new(),
+            park_us: AtomicU64::new(0),
+        }
+    }
+    fn set_write_park_us(&self, us: u64) {
+        self.park_us.store(us, Ordering::SeqCst);
+    }
+}
+
+impl StorageEngine for SlowEngine {
+    fn get(&self, key: &[u8]) -> KResult<Option<Vec<u8>>> {
+        self.inner.get(key)
+    }
+    fn scan(&self, prefix: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        self.inner.scan(prefix)
+    }
+    fn write_batch(&self, batch: &WriteBatch) -> KResult<()> {
+        let us = self.park_us.load(Ordering::SeqCst);
+        if us > 0 {
+            std::thread::sleep(Duration::from_micros(us));
+        }
+        self.inner.write_batch(batch)
+    }
+}
+
+/// P5-M20 (PR6 P0-04): admission is a load + fetch_add — a concurrent burst
+/// can admit past max_running. With max=1, at most one job may exist.
+#[test]
+fn job001_concurrent_admission_admits_at_most_one_worker() {
+    let engine = Arc::new(SlowEngine::new());
+    let clock = Arc::new(ManualClock::new(10_000));
+    let k = Arc::new(Kernel::open(engine.clone(), clock, 0xBEEF).unwrap());
+    seed(&k, "sensor", sensor_props("a"));
+    k.set_max_running_jobs(1);
+    k.set_job_park_ms(100);
+
+    const THREADS: usize = 16;
+    engine.set_write_park_us(5_000);
+    let barrier = Arc::new(std::sync::Barrier::new(THREADS));
+    let handles: Vec<_> = (0..THREADS)
+        .map(|i| {
+            let k = Arc::clone(&k);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                k.reason("sensor", sensor_props(&format!("zone-{i}")))
+                    .map(|h| h.job_id)
+            })
+        })
+        .collect();
+    let admitted: Vec<u64> = handles
+        .into_iter()
+        .filter_map(|h| h.join().unwrap().ok())
+        .collect();
+    engine.set_write_park_us(0);
+    assert_eq!(
+        admitted.len(),
+        1,
+        "max_running=1 must admit exactly one concurrent job, got {admitted:?}"
+    );
+
+    let jobs = k.jobs().unwrap();
+    assert_eq!(jobs.len(), 1, "the burst must leave exactly one job row");
+    let st = wait_status(&k, admitted[0], JobStatus::Completed, Duration::from_secs(10));
+    assert_eq!(st, JobStatus::Completed);
+}
+
+/// P5-M20 (PR6 P0-05): the audit KE is written with `?` AFTER the durable
+/// Running row, the by_hash entry, and the running increment — a failed
+/// audit strands all three.
+#[test]
+fn job002_audit_failure_leaves_no_orphan_row_hash_or_slot() {
+    let engine = Arc::new(FlakyEngine::new());
+    let clock = Arc::new(ManualClock::new(10_000));
+    let k = Kernel::open(engine.clone(), clock, 0xBEEF).unwrap();
+    k.set_max_running_jobs(1);
+    seed(&k, "sensor", sensor_props("a"));
+
+    engine.arm_audit();
+    let err = k
+        .reason("sensor", sensor_props("a"))
+        .expect_err("the audit failure must surface to the submitter");
+    assert!(matches!(err, KError::Store(_)));
+
+    assert!(
+        k.jobs().unwrap().is_empty(),
+        "no orphan Running row may survive the audit failure"
+    );
+
+    // The same input resubmits fresh: no by_hash holdover, slot released.
+    let job = k.reason("sensor", sensor_props("a")).unwrap();
+    let st = wait_status(&k, job.job_id, JobStatus::Completed, Duration::from_secs(10));
+    assert_eq!(st, JobStatus::Completed, "the resubmit must run to completion");
+}
+
+/// P5-M20 (PR6 P0-06): Failed jobs stay in by_hash (and recover rebuilds it
+/// from ALL records) — a failed input can never run again. Policy: Completed
+/// dedups (in memory AND across restart); Failed retries fresh.
+#[test]
+fn job003_failed_jobs_retry_fresh_and_completed_jobs_dedupe_across_restart() {
+    let engine = Arc::new(FlakyEngine::new());
+    let clock = Arc::new(ManualClock::new(10_000));
+    let k = Kernel::open(engine.clone(), clock.clone(), 0xBEEF).unwrap();
+    seed(&k, "sensor", sensor_props("a"));
+
+    // Two distinct inputs fail (the worker's scan fails once each).
+    engine.arm_scan();
+    let j1 = k.reason("sensor", sensor_props("a")).unwrap();
+    let st = wait_status(&k, j1.job_id, JobStatus::Failed, Duration::from_secs(10));
+    assert_eq!(st, JobStatus::Failed);
+    engine.arm_scan();
+    let j2 = k.reason("sensor", sensor_props("b")).unwrap();
+    let st = wait_status(&k, j2.job_id, JobStatus::Failed, Duration::from_secs(10));
+    assert_eq!(st, JobStatus::Failed);
+
+    // In memory: the failed input resubmits fresh and completes.
+    let j3 = k.reason("sensor", sensor_props("a")).unwrap();
+    assert_ne!(
+        j3.job_id, j1.job_id,
+        "a failed job must not claim its input hash"
+    );
+    let st = wait_status(&k, j3.job_id, JobStatus::Completed, Duration::from_secs(10));
+    assert_eq!(st, JobStatus::Completed);
+
+    // Restart (reopen over the same store): Completed still dedupes…
+    let k2 = Kernel::open(engine.clone(), clock, 0xBEEF).unwrap();
+    let j4 = k2.reason("sensor", sensor_props("a")).unwrap();
+    assert_eq!(
+        j4.job_id, j3.job_id,
+        "a completed job dedupes across restart"
+    );
+
+    // …and the still-failed input retries fresh — it must run, not dedupe
+    // onto the dead job recovered from the store.
+    let j5 = k2.reason("sensor", sensor_props("b")).unwrap();
+    assert_ne!(
+        j5.job_id, j2.job_id,
+        "a failed job must not claim its input hash across restart"
+    );
+    let st = wait_status(&k2, j5.job_id, JobStatus::Completed, Duration::from_secs(10));
+    assert_eq!(st, JobStatus::Completed);
+}
+
+/// P5-M20 (security): run_reason executes as hard-coded kernel-reason/admin
+/// with tenant None — every tenant's objects match every caller's rule. A
+/// Class-B worker must observe only its caller's tenant.
+#[test]
+fn job004_reason_workers_are_confined_to_the_callers_tenant() {
+    let (k, _store, _clock) = mk();
+    let seed_tenant = |t: &str| {
+        let mut req = RememberRequest::create(
+            KnowledgeContext::new(Subject::with_roles(t, &[]).in_tenant(t)),
+            Metadata {
+                type_name: "sensor".into(),
+                tenant: Some(t.into()),
+                schema_version: 1,
+                tags: vec![],
+            },
+        );
+        req.properties.insert("zone".into(), Value::Text("x".into()));
+        k.remember(req).unwrap().koid
+    };
+    let a_koid = seed_tenant("A");
+    let b_koid = seed_tenant("B");
+
+    // Identical submits from two tenants: each worker may see only its own.
+    let ja = k.reason("sensor", sensor_props("x")).unwrap();
+    let jb = k.reason("sensor", sensor_props("x")).unwrap();
+    let st = wait_status(&k, ja.job_id, JobStatus::Completed, Duration::from_secs(10));
+    assert_eq!(st, JobStatus::Completed);
+    let st = wait_status(&k, jb.job_id, JobStatus::Completed, Duration::from_secs(10));
+    assert_eq!(st, JobStatus::Completed);
+
+    let ca = k.job_result(ja.job_id).unwrap();
+    let cb = k.job_result(jb.job_id).unwrap();
+    assert_eq!(ca.len(), 1, "worker A must observe only tenant A");
+    assert_eq!(cb.len(), 1, "worker B must observe only tenant B");
+    assert_eq!(
+        ca[0].properties["reasoned_from"],
+        Value::Text(a_koid.to_hex())
+    );
+    assert_eq!(
+        cb[0].properties["reasoned_from"],
+        Value::Text(b_koid.to_hex())
+    );
 }
