@@ -201,3 +201,48 @@ impl Index for PropertyIndex {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ko(koid: KOID, type_name: &str) -> KnowledgeObject {
+        let mut ko = KnowledgeObject::new(
+            koid,
+            Metadata {
+                type_name: type_name.into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            SecurityDescriptor {
+                owner: "alice".into(),
+                acl: vec![],
+                classification: None,
+            },
+        );
+        ko.properties
+            .insert("title".into(), Value::Text("same title".into()));
+        ko
+    }
+
+    // --- P5-M19 — idx3-003 (PR6 P1-01): a foreign-type upsert must still
+    // sweep stale membership. RED: the early return leaves the koid in the
+    // buckets, so a re-typed row keeps answering scans for its old type. ---
+    #[test]
+    fn idx3_003_foreign_type_upsert_removes_stale_membership() {
+        let idx = PropertyIndex::new("by_title", "note", &["title"]);
+        let k1 = KOID::from_bytes([1u8; KOID_LEN]);
+        let k2 = KOID::from_bytes([2u8; KOID_LEN]);
+        idx.upsert(k1, &ko(k1, "note")).unwrap();
+        idx.upsert(k2, &ko(k2, "note")).unwrap();
+        idx.upsert(k2, &ko(k2, "memo")).unwrap(); // re-typed: must sweep
+        let found = idx.scan_eq(&[Value::Text("same title".into())]).unwrap();
+        assert_eq!(
+            found,
+            vec![k1],
+            "the re-typed row no longer answers note scans"
+        );
+        assert_eq!(idx.len(), 1);
+    }
+}

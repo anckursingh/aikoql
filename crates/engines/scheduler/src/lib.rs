@@ -215,6 +215,18 @@ impl IndexMaintainer {
         };
         self.inner.water.store(water, Ordering::Relaxed);
 
+        // P5-M19 (idx3-002) test hook: park between the replay snapshot and
+        // the live subscription so a RED can pin the P0-02 window — a
+        // commit here lands in neither replay nor subscription today.
+        if std::env::var_os("MAINTAINER_START_PARK").is_some() {
+            std::env::set_var("MAINTAINER_START_PARK_AT", "1");
+            let mut waited = 0u64;
+            while std::env::var_os("MAINTAINER_START_PARK").is_some() && waited < 30_000 {
+                std::thread::sleep(Duration::from_millis(10));
+                waited += 10;
+            }
+        }
+
         let rx = kernel.notify(EventFilter::default())?;
         let state = self.inner.clone();
         let v = self.vector_idx.clone();
@@ -703,6 +715,82 @@ mod tests {
         let s = m.status(&k).unwrap();
         assert_eq!(s.status, IndexStatusKind::CaughtUp);
         assert_eq!(s.last_error, None, "a successful apply clears last_error");
+    }
+
+    // --- P5-M19 — idx3-001 (PR6 P0-01): a failed batch is RETRIED, never
+    // dropped. RED: the live loop clears `pending` on apply failure, so the
+    // failed event never reaches the index; the NEXT event applies alone
+    // and the stamp then certifies a gap that was never applied. Pin: after
+    // recovery, EVERY committed event is in the index, and the status is
+    // CaughtUp with no error. ---
+
+    #[test]
+    fn idx3_001_failed_batch_is_retried_never_dropped() {
+        let k = mk();
+        let a = Subject::new("alice");
+        let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
+        let t: Arc<dyn TextIndex> = Arc::new(FailingOnceText {
+            inner: TokenTextIndex::new(),
+            fail: AtomicBool::new(true),
+        });
+        let m = Arc::new(IndexMaintainer::new(v, t.clone()));
+        SchedulerJob::start(&*m, &k).unwrap();
+
+        create(&k, &a, "note", "first fails");
+        create(&k, &a, "note", "second succeeds");
+        m.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+        let s = m.status(&k).unwrap();
+        assert_eq!(s.status, IndexStatusKind::CaughtUp);
+        assert_eq!(s.last_error, None);
+        assert_eq!(
+            t.len(),
+            2,
+            "the failed batch is retried, not dropped: both events are indexed"
+        );
+    }
+
+    // --- P5-M19 — idx3-002 (PR6 P0-02): the startup barrier. RED: do_start
+    // snapshots the journal, THEN subscribes — a commit between the two
+    // lands in neither (no replay, and the subscription opens after it).
+    // The MAINTAINER_START_PARK hook (do_start) holds the thread between
+    // the snapshot and the subscription while the test commits into the
+    // window; the pin: that commit is in the index once caught up. ---
+
+    #[test]
+    fn idx3_002_commit_during_startup_window_is_indexed() {
+        let k = mk();
+        let a = Subject::new("alice");
+        let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
+        let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
+        let m = Arc::new(IndexMaintainer::new(v, t.clone()));
+
+        std::env::set_var("MAINTAINER_START_PARK", "1");
+        std::env::remove_var("MAINTAINER_START_PARK_AT");
+        let mk2 = k.clone_handle();
+        let m2 = m.clone();
+        let h = std::thread::spawn(move || m2.do_start(&mk2, None));
+
+        // Wait for do_start to reach the hook: past the journal snapshot,
+        // before the subscription — the exact P0-02 window.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::env::var_os("MAINTAINER_START_PARK_AT").is_none() {
+            if std::time::Instant::now() >= deadline {
+                std::env::remove_var("MAINTAINER_START_PARK");
+                panic!("maintainer never reached the park hook");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        create(&k, &a, "note", "committed into the startup window");
+        std::env::remove_var("MAINTAINER_START_PARK");
+        h.join().unwrap().unwrap();
+
+        m.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            t.len(),
+            1,
+            "a commit between the snapshot and the subscription is applied"
+        );
+        std::env::remove_var("MAINTAINER_START_PARK_AT");
     }
 
     // --- P5-M18 — idx2-011: the replay path batches like the live path.

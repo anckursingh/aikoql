@@ -178,3 +178,72 @@ impl Index for TextIndexAdapter {
         self.inner.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Fails its first `remove_many`, then works (the P1-03 stage-2 shape).
+    struct FailingRemoveOnceText {
+        inner: crate::TokenTextIndex,
+        fail: AtomicBool,
+    }
+    impl TextIndex for FailingRemoveOnceText {
+        fn upsert(&self, koid: KOID, tokens: &BTreeSet<String>) -> KResult<()> {
+            self.inner.upsert(koid, tokens)
+        }
+        fn remove(&self, koid: &KOID) -> KResult<()> {
+            self.inner.remove(koid)
+        }
+        fn search(&self, tokens: &BTreeSet<String>, k: usize) -> KResult<Vec<(KOID, f32)>> {
+            self.inner.search(tokens, k)
+        }
+        fn len(&self) -> usize {
+            self.inner.len()
+        }
+        fn remove_many(&self, koids: &[KOID]) -> KResult<()> {
+            if !koids.is_empty() && self.fail.swap(false, Ordering::SeqCst) {
+                return Err(KError::Store("forced stage-2 failure".into()));
+            }
+            self.inner.remove_many(koids)
+        }
+    }
+
+    // --- P5-M19 — idx3-004 (PR6 P1-03): commit_batch takes BOTH pending
+    // halves before either stage runs — a stage-2 failure loses the removes
+    // forever. Pin: a retry flushes the removes with no caller re-queue. ---
+    #[test]
+    fn idx3_004_stage_two_failure_retries_without_loss() {
+        let inner = Arc::new(FailingRemoveOnceText {
+            inner: crate::TokenTextIndex::new(),
+            fail: AtomicBool::new(true),
+        });
+        let adapter = TextIndexAdapter::new(inner.clone());
+        let koid = KOID::from_bytes([1u8; KOID_LEN]);
+        let mut ko = KnowledgeObject::new(
+            koid,
+            Metadata {
+                type_name: "note".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            SecurityDescriptor {
+                owner: "alice".into(),
+                acl: vec![],
+                classification: None,
+            },
+        );
+        ko.properties
+            .insert("body".into(), Value::Text("retry me".into()));
+
+        adapter.upsert(koid, &ko).unwrap();
+        adapter.commit_batch().unwrap();
+        assert_eq!(adapter.len(), 1);
+        adapter.remove(&koid).unwrap();
+        assert!(adapter.commit_batch().is_err(), "stage 2 fails once");
+        adapter.commit_batch().unwrap();
+        assert_eq!(adapter.len(), 0, "the retry flushes the removes");
+    }
+}

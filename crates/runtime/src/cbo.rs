@@ -275,3 +275,59 @@ pub fn explain_cost(kernel: &Kernel, query: &str) -> KResult<Vec<String>> {
     lines.push(footer.to_string());
     Ok(lines)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aikoql_kernel::knowledge::kom::{KnowledgeObject, KOID};
+
+    /// A covering index whose consistency class the guard must judge.
+    struct FakeIndex {
+        consistency: aikoql_kernel::ConsistencyLevel,
+    }
+    impl aikoql_kernel::Index for FakeIndex {
+        fn name(&self) -> &str {
+            "fake"
+        }
+        fn upsert(&self, _koid: KOID, _ko: &KnowledgeObject) -> KResult<()> {
+            Ok(())
+        }
+        fn remove(&self, _koid: &KOID) -> KResult<()> {
+            Ok(())
+        }
+        fn len(&self) -> usize {
+            0
+        }
+        fn covers(&self, _type_name: &str, _property: &str) -> bool {
+            true
+        }
+        fn consistency(&self) -> aikoql_kernel::ConsistencyLevel {
+            self.consistency
+        }
+    }
+
+    // --- P5-M19 — idx3-005 (PR6 P1-04): consistency classes. RED: the
+    // runtime has no notion of an index's consistency level, so nothing can
+    // stop a CandidateOnly index from serving an exact scan. Pin: only a
+    // SnapshotExact (or stronger) declaration may serve; CandidateOnly is
+    // a post-filter candidate, never the scan's answer set. ---
+    #[test]
+    fn idx3_005_candidate_only_never_serves_exact() {
+        use aikoql_kernel::ConsistencyLevel;
+        assert!(may_serve_exact(&FakeIndex {
+            consistency: ConsistencyLevel::SnapshotExact
+        }));
+        assert!(may_serve_exact(&FakeIndex {
+            consistency: ConsistencyLevel::Exact
+        }));
+        assert!(may_serve_exact(&FakeIndex {
+            consistency: ConsistencyLevel::EventuallyConsistent
+        }));
+        assert!(
+            !may_serve_exact(&FakeIndex {
+                consistency: ConsistencyLevel::CandidateOnly
+            }),
+            "CandidateOnly never answers an exact scan"
+        );
+    }
+}
