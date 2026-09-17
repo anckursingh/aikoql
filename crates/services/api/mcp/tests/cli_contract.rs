@@ -12,7 +12,7 @@
 //! The binary must be built first: `cargo build --bin aikoql-mcp`
 //! (cargo test does NOT build bins).
 
-use serde_json::{json, Value as J};
+use serde_json::{Value as J, json};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -555,4 +555,59 @@ fn cl03g_usage_errors_exit_2() {
         Some(2),
         "explain without a koid is a usage error"
     );
+}
+
+// --- cl04 — the shell's fresh default is an honest v2 directory (PR6 P1-21) ------
+
+/// Today the shell's default is "./aikoql.redb" — a name that lies. A fresh
+/// open creates an aikoql-v2 DATABASE there (the missing-path default flip
+/// turns it into a DIRECTORY named like a redb file), and every default-path
+/// verb repeats the same misleading name. Pin: a fresh shell in an empty CWD
+/// creates "./aikoql-v2" — a v2 directory under an honest name — and a
+/// second run reopens it.
+#[test]
+fn cl04_fresh_shell_default_is_an_honest_v2_directory() {
+    let cwd = tmp_db("cl04");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let run_shell = |line: &str| -> (std::process::ExitStatus, String, String) {
+        let mut child = Command::new(server_bin())
+            .arg("shell")
+            .current_dir(&cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn aikoql-mcp shell");
+        let mut si = child.stdin.take().unwrap();
+        writeln!(si, "{line}").unwrap();
+        drop(si); // EOF — the shell exits
+        let out = child.wait_with_output().expect("shell exit");
+        (
+            out.status,
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+
+    let (st1, out1, err1) = run_shell("CREATE (n:Node {name: \"first\"})");
+    assert!(st1.success(), "fresh shell must exit 0: {st1} {err1}");
+    assert!(
+        out1.contains("Connected to: ./aikoql-v2"),
+        "the shell announces the honest v2 default: {out1}"
+    );
+    assert!(
+        cwd.join("aikoql-v2/CURRENT").is_file(),
+        "the default creates an aikoql-v2 database DIRECTORY"
+    );
+    assert!(
+        !cwd.join("aikoql.redb").exists(),
+        "the misleading ./aikoql.redb default is gone"
+    );
+
+    // A second run reopens the same v2 database (a write lands, no error).
+    let (st2, out2, err2) = run_shell("CREATE (n:Node {name: \"second\"})");
+    assert!(st2.success(), "reopen run must exit 0: {st2} {err2}");
+    assert!(out2.contains("Connected to: ./aikoql-v2"));
+
+    let _ = std::fs::remove_dir_all(&cwd);
 }

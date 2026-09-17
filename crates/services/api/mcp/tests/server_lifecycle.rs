@@ -40,12 +40,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use aikoql_kernel::*;
-use serde_json::{json, Value as J};
+use serde_json::{Value as J, json};
 
 // --- helpers ------------------------------------------------------------------
 
@@ -851,4 +851,39 @@ fn sv011_mcp_transaction_tools_round_trip() {
     c.call("shutdown", json!({}));
     server.stop("sv011 server");
     let _ = std::fs::remove_dir_all(&db); // v2 database = directory
+}
+
+// --- sv012 — the connection cap is CAS-admitted, never exceeded (PR6 P1-19) ------
+
+/// The accept loop checks `active >= max` and then spawns a handler that
+/// increments — a burst of queued accepts all passes the check before the
+/// first handler's increment lands, so the served count exceeds the cap (and
+/// the clone-failure early return inside the handler leaks the slot for
+/// good). Pin: the cap is reserved at admission (CAS) — a burst can never
+/// push the live count past max.
+#[test]
+fn sv012_connection_cap_is_never_exceeded() {
+    let db = tmp_db("sv012");
+    let mut server = Server::spawn(&db, &["tokA:tenA:user"], &["--max-connections", "2"]);
+    let mut a = Client::new(server.port(), "tokA");
+
+    // The burst: every socket connects before any handler can increment.
+    let burst: Vec<TcpStream> = (0..8).map(|_| connect(server.port())).collect();
+    // Let the handlers settle, then probe the live count via health.
+    std::thread::sleep(Duration::from_millis(400));
+    let h = a.call("tools/call", json!({"name": "health", "arguments": {}}));
+    let pool = result_of(&h)["connection_pool"]
+        .as_str()
+        .unwrap_or_else(|| panic!("health carries connection_pool: {h}"))
+        .to_string();
+    let served: u64 = pool.split('/').next().unwrap().parse().unwrap();
+    assert!(
+        served <= 2,
+        "the cap is never exceeded (served {served}): {pool}"
+    );
+
+    drop(burst);
+    a.call("shutdown", json!({}));
+    server.stop("sv012 server");
+    let _ = std::fs::remove_dir_all(&db);
 }
