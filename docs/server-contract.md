@@ -50,17 +50,46 @@ aikoql-mcp serve <db-path> \
   blocked reading — connections close promptly rather than waiting for
   their next frame. The wait is still bounded by `request_timeout_secs` as
   a backstop: the process never hangs forever.
-- **Request timeout**: each `koql/*` request runs in a worker thread; the
-  handler waits `request_timeout_secs`, then cancels the worker and replies
-  -32002. The synchronous interpreter cannot be force-killed mid-query, so
-  a non-parking query finishes on its own after cancellation; the caller is
-  already gone.
-- **Connection limit**: at `max_connections` concurrent connections the
-  next accept receives a -32000 frame and is dropped immediately
-  (check-then-act: two simultaneous accepts can both pass the check — the
-  cap is advisory at the margin).
-- **Frames are capped at 1 MiB**: an oversized line drops the connection
-  instead of growing unbounded.
+- **Request timeout = response deadline**: each `koql/*` request runs in a
+  worker thread; the handler waits `request_timeout_secs`, then cancels the
+  worker and replies -32002 — the deadline is a response contract, not a
+  kill switch. The synchronous interpreter cannot be force-killed
+  mid-query, so a non-parking query finishes on its own after cancellation;
+  the caller is already gone.
+- **Connection limit (CAS admission)**: `max_connections` is a hard bound,
+  not a check-then-act estimate — each handler RESERVES its slot with a
+  compare-and-swap on connect (the P0-04 admission pattern), so a burst of
+  simultaneous accepts can never push the served count over the cap
+  (sv012). The overflowing connection receives a -32000 frame and is
+  dropped without ever counting (sv003 pins the frame-before-drop order).
+- **Frames are capped at 1 MiB**: an oversized inbound line drops the
+  connection instead of growing unbounded. (Inbound only — responses carry
+  the complete result, see resource governance.)
+
+## Query resource governance (PR6 P1-09/P1-10)
+
+The v1 query path is honest about its bounds — each line below is the
+product contract, not an aspiration:
+
+- **Memory budget: none — full materialization.** `koql/*` executes the
+  plan and materializes the complete result (`Vec<KnowledgeObject>`) before
+  the first row is written to the client. The bound on a query's memory is
+  the size of its result; clients bound it at the query level (LIMIT,
+  TRAVERSE DEPTH, filter selectivity).
+- **Spill: strategy only, no shipped machinery.** Aggregates (GROUP BY)
+  build their group table in memory. The partitioned-hash spill strategy is
+  documented (P5-M5); the executor does not spill — a query whose group
+  table exceeds RSS fails the process rather than degrades. Plan aggregates
+  accordingly until spill ships.
+- **Row limit: none.** The server returns each query's complete result in
+  one response frame; results are never truncated or paged.
+- **Timeout = response deadline.** `request_timeout_secs` bounds the wait
+  for the response (see Lifecycle); the deadline fires -32002 and the
+  caller proceeds.
+- **Cancellation is cooperative.** Shutdown drain, client disconnect, and
+  timeout all cancel the query's token; the synchronous interpreter
+  finishes its current operation and observes the cancellation at the next
+  park point.
 
 ## Crash windows (test hooks)
 

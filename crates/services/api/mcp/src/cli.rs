@@ -6,6 +6,7 @@ use crate::imports::*;
 use crate::ingest::*;
 use crate::model::*;
 // P5-M12 (ND-12): the contract verbs reuse the tool implementations in-process.
+use crate::config::DEFAULT_DB_PATH;
 use crate::{json, Kernel, J};
 pub(crate) fn print_usage() {
     println!(concat!(
@@ -85,7 +86,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 eprintln!("Usage: aikoql-mcp shell [--tenant NAME] [DB_PATH]");
                 std::process::exit(2);
             };
-            let mut db = "./aikoql.redb";
+            let mut db = DEFAULT_DB_PATH;
             let mut tenant: Option<&str> = None;
             let tail_args: Vec<&str> = args.iter().skip(idx + 2).map(String::as_str).collect();
             let mut ti = 0;
@@ -109,7 +110,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             true
         }
         Some("backup") => {
-            run_backup(arg_after.unwrap_or("./aikoql.redb"));
+            run_backup(arg_after.unwrap_or(DEFAULT_DB_PATH));
             true
         }
         Some("restore") => {
@@ -117,21 +118,23 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 eprintln!("Usage: aikoql-mcp restore <BACKUP_DIR> [DB_PATH]");
                 std::process::exit(1);
             });
-            let target = arg_after2.unwrap_or("./aikoql.redb");
+            let target = arg_after2.unwrap_or(DEFAULT_DB_PATH);
             run_restore(backup, target);
             true
         }
         Some("audit") => {
-            run_audit(arg_after.unwrap_or("./aikoql.redb"));
+            run_audit(arg_after.unwrap_or(DEFAULT_DB_PATH));
             true
         }
         Some("ingest-dir") => {
             let Some(idx) = subcmd_idx else {
-                eprintln!("Usage: aikoql-mcp ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR]");
+                eprintln!(
+                    "Usage: aikoql-mcp ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR]"
+                );
                 std::process::exit(2);
             };
             let path = arg_after.unwrap_or(".");
-            let db = arg_after2.unwrap_or("./aikoql.redb");
+            let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
             let mut parallel = false;
             let mut incremental = false;
             let mut model_dir: Option<String> = None;
@@ -236,13 +239,19 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             if ti_args.is_empty() {
                 eprintln!("Usage: aikoql-mcp import <SOURCE> [ARGS...]");
                 eprintln!("Sources: postgres, pgvector, sqlite, mongodb, neo4j");
-                eprintln!("  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [--timeout-ms MS] [DB_PATH]");
-                eprintln!("  import pgvector <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [--timeout-ms MS] [DB_PATH]");
+                eprintln!(
+                    "  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [--timeout-ms MS] [DB_PATH]"
+                );
+                eprintln!(
+                    "  import pgvector <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [--timeout-ms MS] [DB_PATH]"
+                );
                 eprintln!("  import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
                 eprintln!(
                     "  import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [--run-id ID] [--timeout-ms MS] [DB_PATH]"
                 );
-                eprintln!("  import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [--run-id ID] [--timeout-ms MS] [DB_PATH]");
+                eprintln!(
+                    "  import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [--run-id ID] [--timeout-ms MS] [DB_PATH]"
+                );
                 std::process::exit(1);
             }
             match ti_args[0] {
@@ -250,7 +259,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 // provider parses vector columns to Value::List via ::text.
                 "postgres" | "pgvector" => {
                     let mut conn_str: Option<&str> = None;
-                    let mut target_db = "./aikoql.redb";
+                    let mut target_db = DEFAULT_DB_PATH;
                     let mut tenant: Option<&str> = None;
                     let mut table_filter: Option<&str> = None;
                     let mut run_id = fresh_run_id();
@@ -314,7 +323,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     let mut uri: Option<&str> = None;
                     let mut user = "neo4j";
                     let mut password = "password";
-                    let mut target_db = "./aikoql.redb";
+                    let mut target_db = DEFAULT_DB_PATH;
                     let mut tenant: Option<&str> = None;
                     let mut label_filter: Option<&str> = None;
                     let mut run_id = fresh_run_id();
@@ -402,7 +411,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 "mongodb" => {
                     let mut uri: Option<&str> = None;
                     let mut database: Option<&str> = None;
-                    let mut target_db = "./aikoql.redb";
+                    let mut target_db = DEFAULT_DB_PATH;
                     let mut tenant: Option<&str> = None;
                     let mut coll_filter: Option<&str> = None;
                     let mut run_id = fresh_run_id();
@@ -479,7 +488,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 }
                 "sqlite" => {
                     let mut source_file: Option<&str> = None;
-                    let mut target_db = "./aikoql.redb";
+                    let mut target_db = DEFAULT_DB_PATH;
                     let mut tenant: Option<&str> = None;
                     let mut table_filter: Option<&str> = None;
                     let mut si = 1;
@@ -539,7 +548,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
         // tool implementations the MCP surface already runs (cl03 dogfoods
         // them through the repo-built binary).
         Some("status") => {
-            let db = arg_after.unwrap_or("./aikoql.redb");
+            let db = arg_after.unwrap_or(DEFAULT_DB_PATH);
             run_verb(db, |k, _admin| {
                 let health = crate::tools::admin::tool_health(k)?;
                 let metrics = crate::tools::admin::tool_metrics(k)?;
@@ -553,7 +562,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 eprintln!("Usage: aikoql-mcp query <AIKOQL> [DB]");
                 std::process::exit(2);
             };
-            let db = arg_after2.unwrap_or("./aikoql.redb");
+            let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
             run_verb(db, |k, _admin| {
                 crate::tools::query::tool_aikoql(k, &json!({"query": query, "subject": "cli"}))
             });
@@ -564,21 +573,21 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 eprintln!("Usage: aikoql-mcp explain <KOID> [DB]");
                 std::process::exit(2);
             };
-            let db = arg_after2.unwrap_or("./aikoql.redb");
+            let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
             run_verb(db, |k, _admin| {
                 crate::tools::query::tool_explain(k, &json!({"koid": koid, "subject": "cli"}))
             });
             true
         }
         Some("index") => {
-            let db = arg_after.unwrap_or("./aikoql.redb");
+            let db = arg_after.unwrap_or(DEFAULT_DB_PATH);
             run_verb(db, |_k, admin| {
                 crate::tools::admin::tool_storage_stats(admin)
             });
             true
         }
         Some("schema") => {
-            let db = arg_after.unwrap_or("./aikoql.redb");
+            let db = arg_after.unwrap_or(DEFAULT_DB_PATH);
             run_verb(db, |k, _admin| {
                 crate::tools::agent_knowledge::tool_discover_schema(k)
             });

@@ -58,8 +58,9 @@ pub(crate) struct RuntimeConfig {
 }
 
 /// The storage backends the server can open (docs/STORAGE-BACKENDS.md).
-/// Redb is the default for new paths — the stable compatibility engine;
-/// aikoql and aikoql-v2 are explicit opt-ins.
+/// `None` = auto-detect at open: a missing path creates `aikoql-v2` (the
+/// canonical default); `redb`/`aikoql` are explicit opt-ins and legacy
+/// files keep opening via their named backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StorageBackend {
     Redb,
@@ -255,6 +256,12 @@ fn apply_toml_encryption(enc: &mut RuntimeEncryption, e: TomlEncryption) {
     }
 }
 
+/// The one canonical default database path (P1-21): a fresh default is the
+/// v2 DIRECTORY, named honestly — every verb that used to fall back to a
+/// file named `./aikoql.redb` now falls back to this. A legacy redb file is
+/// opened by passing its path (or `--backend redb`) explicitly.
+pub(crate) const DEFAULT_DB_PATH: &str = "./aikoql-v2";
+
 /// Layering: defaults → TOML → env → CLI. `subcmd == Some("serve")` skips
 /// the `serve` token when scanning flags/positionals (mirrors the old main.rs
 /// loop); bare `aikoql-mcp [DB]` still works.
@@ -264,7 +271,7 @@ pub(crate) fn load(
     subcmd_idx: Option<usize>,
 ) -> Result<RuntimeConfig, String> {
     let mut cfg = RuntimeConfig {
-        db_path: "./aikoql.redb".into(),
+        db_path: DEFAULT_DB_PATH.into(),
         listen_addr: None,
         metrics_addr: None,
         tcp_tokens: Vec::new(),
@@ -484,7 +491,7 @@ pub(crate) fn load(
                     i += 2;
                 }
                 None => {
-                    return Err("--tcp-token requires a value: TOKEN[:TENANT[:ROLE1,ROLE2]]".into())
+                    return Err("--tcp-token requires a value: TOKEN[:TENANT[:ROLE1,ROLE2]]".into());
                 }
             },
             "--metrics-addr" => {
@@ -713,7 +720,7 @@ mod tests {
     #[test]
     fn defaults_only() {
         let cfg = load_bare(&argv(&["aikoql-mcp"])).unwrap();
-        assert_eq!(cfg.db_path, "./aikoql.redb");
+        assert_eq!(cfg.db_path, DEFAULT_DB_PATH);
         assert!(cfg.listen_addr.is_none());
         assert!(cfg.embedding_provider.is_none());
         assert_eq!(cfg.log_level, "info");

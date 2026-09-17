@@ -12,7 +12,7 @@
 //! The binary must be built first: `cargo build --bin aikoql-mcp`
 //! (cargo test does NOT build bins).
 
-use serde_json::{Value as J, json};
+use serde_json::{json, Value as J};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};

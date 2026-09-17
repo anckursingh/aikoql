@@ -90,13 +90,34 @@ pub(crate) fn handle_tcp_client(
     rate_limit: Arc<Mutex<crate::rate_limiter::RateLimiter>>,
     admin: Option<Arc<dyn StorageAdminApi>>,
     request_timeout_secs: u64,
+    max_connections: u64,
 ) {
     let peer = stream
         .peer_addr()
         .map(|a| a.to_string())
         // justified: log-only cosmetic — unknown peer on failure
         .unwrap_or_default();
-    ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
+    // P1-19: CAS admission (the P0-04 pattern) — the slot is RESERVED
+    // atomically here, so an accept burst can never push the served count
+    // over the cap (sv012). Rejection keeps sv003's frame-before-drop order.
+    let admitted = ACTIVE_CONNECTIONS
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+            (cur < max_connections).then_some(cur + 1)
+        })
+        .is_ok();
+    if !admitted {
+        let mut s = stream;
+        write_frame(
+            &mut s,
+            err_frame(
+                &J::Null,
+                -32000,
+                &format!("server connection limit reached ({max_connections})"),
+            ),
+        );
+        warn!(%peer, "client rejected: connection limit reached ({max_connections})");
+        return;
+    }
     info!(%peer, "client connected");
     // Register for the shutdown drain (active close wakes idle handlers).
     let sid = STREAM_ID.fetch_add(1, Ordering::Relaxed);
@@ -105,6 +126,8 @@ pub(crate) fn handle_tcp_client(
     }
     let Ok(clone) = stream.try_clone() else {
         eprintln!("clone stream failed — dropping connection");
+        // The slot was reserved above — release it or the cap leaks.
+        ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
         return;
     };
     let mut reader = BufReader::new(clone);
@@ -189,7 +212,11 @@ pub(crate) fn handle_tcp_client(
                         if let Some(id) = msg.get("id").cloned() {
                             write_frame(
                                 &mut *out,
-                                err_frame(&id, -32001, "invalid or missing token — pass a --tcp-token value as params.token to initialize"),
+                                err_frame(
+                                    &id,
+                                    -32001,
+                                    "invalid or missing token — pass a --tcp-token value as params.token to initialize",
+                                ),
                             );
                         }
                         warn!(%peer, "TCP client rejected: invalid token");
@@ -260,30 +287,24 @@ pub(crate) fn run_tcp_listener(
                 // Windows accepts inherit nonblocking from the listener —
                 // the handler's reads must block, so reset it per socket.
                 let _ = stream.set_nonblocking(false);
-                // P5-M11 connection cap: reject over the limit with a -32000
-                // frame, then drop — sv003 pins the frame-before-drop order.
-                // ponytail: check-then-act race — two accepts can both pass
-                // the check; the cap is advisory unless that matters.
-                if ACTIVE_CONNECTIONS.load(Ordering::Relaxed) >= max_connections {
-                    let mut s = stream;
-                    write_frame(
-                        &mut s,
-                        err_frame(
-                            &J::Null,
-                            -32000,
-                            &format!("server connection limit reached ({max_connections})"),
-                        ),
-                    );
-                    drop(s);
-                    continue;
-                }
+                // P5-M11 connection cap: the handler admits via CAS — the
+                // -32000 frame (sv003) is sent from handle_tcp_client.
                 let k = kernel.clone();
                 let db = db_path.clone();
                 let auth = auth.clone();
                 let rl = rate_limit.clone();
                 let admin = admin.clone();
                 thread::spawn(move || {
-                    handle_tcp_client(&k, stream, db, &auth, rl, admin, request_timeout_secs)
+                    handle_tcp_client(
+                        &k,
+                        stream,
+                        db,
+                        &auth,
+                        rl,
+                        admin,
+                        request_timeout_secs,
+                        max_connections,
+                    )
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {

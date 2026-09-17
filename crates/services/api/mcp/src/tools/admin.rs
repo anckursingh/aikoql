@@ -1,10 +1,7 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::{
-    json, Kernel, LifecycleState, Ordering, Subject, ACTIVE_CONNECTIONS, J,
-    SERVER_START,
-};
+use crate::{json, Kernel, LifecycleState, Ordering, Subject, ACTIVE_CONNECTIONS, J, SERVER_START};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------

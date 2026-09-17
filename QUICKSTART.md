@@ -55,11 +55,15 @@ aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr
 For local use where you only need the Studio web interface and REST API (no MCP over TCP):
 
 ```
-aikoql-mcp serve ./aikoql.redb --metrics-addr 127.0.0.1:9191
+aikoql-mcp serve --metrics-addr 127.0.0.1:9191
 ```
 
 > **Note:** In metrics-only mode, the process must have an open stdin to stay alive.
-> Run with: `sleep 99999 | aikoql-mcp serve ./aikoql.redb --metrics-addr 127.0.0.1:9191`
+> Run with: `sleep 99999 | aikoql-mcp serve --metrics-addr 127.0.0.1:9191`
+
+(A fresh `serve` with no path creates the `./aikoql-v2` database directory —
+the canonical default. Name an existing redb file explicitly to keep using
+it.)
 
 Endpoints available on the metrics port:
 | Endpoint | Description |

@@ -40,12 +40,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use aikoql_kernel::*;
-use serde_json::{Value as J, json};
+use serde_json::{json, Value as J};
 
 // --- helpers ------------------------------------------------------------------
 
@@ -872,9 +872,16 @@ fn sv012_connection_cap_is_never_exceeded() {
     // Let the handlers settle, then probe the live count via health.
     std::thread::sleep(Duration::from_millis(400));
     let h = a.call("tools/call", json!({"name": "health", "arguments": {}}));
-    let pool = result_of(&h)["connection_pool"]
+    // The health tool returns its payload as a JSON string inside
+    // result.content[0].text — parse that, not the result frame itself.
+    let text = result_of(&h)["content"][0]["text"]
         .as_str()
-        .unwrap_or_else(|| panic!("health carries connection_pool: {h}"))
+        .unwrap_or_else(|| panic!("health carries text content: {h}"));
+    let body: J =
+        serde_json::from_str(text).unwrap_or_else(|e| panic!("health text is JSON: {e}: {text}"));
+    let pool = body["connection_pool"]
+        .as_str()
+        .unwrap_or_else(|| panic!("health carries connection_pool: {body}"))
         .to_string();
     let served: u64 = pool.split('/').next().unwrap().parse().unwrap();
     assert!(

@@ -227,13 +227,17 @@ fn seed(k: &Kernel) -> Koids {
 // ---------------------------------------------------------------------------
 
 struct WorkloadSpec {
-    name: &'static str,
+    name: String,
     n: usize,
     op: Box<dyn FnMut() -> bool>,
 }
 
-fn wl(name: &'static str, n: usize, op: Box<dyn FnMut() -> bool>) -> WorkloadSpec {
-    WorkloadSpec { name, n, op }
+fn wl(name: &str, n: usize, op: Box<dyn FnMut() -> bool>) -> WorkloadSpec {
+    WorkloadSpec {
+        name: name.into(),
+        n,
+        op,
+    }
 }
 
 fn run(k: &Kernel, q: &str, subject: &str) -> RowSet {
@@ -427,12 +431,15 @@ pub fn run_suite(suite: &str, out_dir: &Path) -> Result<PathBuf, CertError> {
         other => return Err(CertError(format!("unknown suite: {other}"))),
     };
 
-    let rss = self_rss_kb();
     let disk = disk_root.as_deref().map(dir_bytes).unwrap_or(0);
     let mut workloads = Vec::new();
     for mut spec in specs {
         let (cold, cold_ok) = measure_cell(spec.n, &mut spec.op);
         let (warm, warm_ok) = measure_cell(spec.n, &mut spec.op);
+        // Per-workload RSS (P5-M24 D3): sampled after the warm pass so each
+        // cell records the process footprint once that workload ran — one
+        // suite-wide sample told the memory story for no cell.
+        let rss = self_rss_kb();
         let correct = cold_ok && warm_ok;
         if !correct {
             // Fail fast with the workload name — detection power, and the
@@ -714,6 +721,41 @@ fn db_oltp(out_dir: &Path) -> Result<(Vec<WorkloadSpec>, Option<PathBuf>), CertE
         )
     };
 
+    // reader matrix (P5-M24 D2): T threads point-read the seeded koids
+    // through the ONE kernel — the read side of the concurrency matrix
+    // (the 4-thread write cell above is the write side: reads share the
+    // kernel's read path, writes serialize on the store-global head).
+    let read_matrix = [1usize, 2, 4, 8].map(|threads| {
+        let k = k.clone();
+        let (cats, dogs, fish, bird) = (f.cats, f.dogs, f.fish, f.bird);
+        wl(
+            &format!("read_{threads}t"),
+            5,
+            Box::new(move || {
+                let handles = (0..threads)
+                    .map(|_| {
+                        let k = k.clone();
+                        std::thread::spawn(move || {
+                            (0..25).all(|_| {
+                                let topic_ok = |koid: KOID, expect: &str| {
+                                    matches!(
+                                        k.get(ctx(), &koid),
+                                        Ok(ko) if matches!(ko.properties.get("topic"), Some(Value::Text(t)) if t == expect)
+                                    )
+                                };
+                                topic_ok(cats, "pet")
+                                    && topic_ok(dogs, "pet")
+                                    && topic_ok(fish, "pet")
+                                    && topic_ok(bird, "wild")
+                            })
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                handles.into_iter().all(|h| h.join().unwrap())
+            }),
+        )
+    });
+
     // recovery: a fresh kernel commits six objects over the same engine,
     // is dropped (clean restart), and a reopened kernel reads all six back.
     // KOIDs encode the HLC, so each sample uses a distinct clock — a rerun
@@ -775,7 +817,10 @@ fn db_oltp(out_dir: &Path) -> Result<(Vec<WorkloadSpec>, Option<PathBuf>), CertE
             multi_txn,
             concurrency,
             recovery,
-        ],
+        ]
+        .into_iter()
+        .chain(read_matrix)
+        .collect(),
         Some(root),
     ))
 }
@@ -1003,6 +1048,18 @@ fn db_knowledge() -> (Vec<WorkloadSpec>, Option<PathBuf>) {
         }) as Box<dyn FnMut() -> bool>
     };
 
+    // governance (P5-M24 D3): the v1 path materializes full results and
+    // bounds memory only at the query level — no server-side row limit
+    // (the full scan returns everything) and the client-side LIMIT caps
+    // the materialized rows. Pins the contract as shipped, not aspirational.
+    let governance = {
+        let k = k.clone();
+        Box::new(move || {
+            objects_set(run(&k, "MATCH note RETURN *", "alice")).len() == 4
+                && objects_set(run(&k, "MATCH note LIMIT 2 RETURN *", "alice")).len() == 2
+        }) as Box<dyn FnMut() -> bool>
+    };
+
     (
         vec![
             wl("structured_filter", 30, structured),
@@ -1011,6 +1068,7 @@ fn db_knowledge() -> (Vec<WorkloadSpec>, Option<PathBuf>) {
             wl("temporal_snapshot", 30, temporal),
             wl("evidence_explain", 30, evidence),
             wl("authorization", 30, authz),
+            wl("governance", 30, governance),
         ],
         None,
     )

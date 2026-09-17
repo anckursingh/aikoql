@@ -232,10 +232,7 @@ impl Kernel {
             )));
         };
         let mut props = ko.properties.clone();
-        props.insert(
-            "state".into(),
-            Value::Text(state.as_str().into()),
-        );
+        props.insert("state".into(), Value::Text(state.as_str().into()));
         self.update_catalog_row(&ko, props)
     }
 

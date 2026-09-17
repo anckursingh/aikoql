@@ -4,9 +4,9 @@
 use crate::helpers::*;
 use crate::session::*;
 use crate::{
-    json, ExtensionMap, FuseMode, IndexMaintainerApi, IndexStatusKind, IrOp, IrPlan, KError,
-    Kernel, Metadata, Ordering, Origin, PropertyMap, ReferentialPolicy, RememberRequest,
-    SimilarityQuery, Value, J, STREAM_ID,
+    json, ExtensionMap, FuseMode, IndexStatusKind, IrOp, IrPlan, KError, Kernel, Metadata,
+    Ordering, Origin, PropertyMap, ReferentialPolicy, RememberRequest, SimilarityQuery, Value, J,
+    STREAM_ID,
 };
 use std::time::Duration;
 pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {

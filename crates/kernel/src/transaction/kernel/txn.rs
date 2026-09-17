@@ -183,9 +183,9 @@ impl Transaction {
 // ---------------------------------------------------------------------------
 
 /// P5-M20 (P0-03): the retry identity is txn_id + the staged BODY. The
-/// fingerprint canonicalizes each op as subject + referential policy + note
-/// + the payload as a shadow KO through the one canonical body codec
-/// (`encode_ko`). `expected_version` is excluded — it is an OCC pin, not
+/// fingerprint canonicalizes each op as subject, referential policy, note,
+/// and the payload as a shadow KO through the one canonical body codec
+/// `encode_ko`, with `expected_version` excluded — it is an OCC pin, not
 /// body identity, so a retry may re-pin from a moved snapshot and still
 /// dedupe. ponytail: the shadow lifecycle is a fixed constant — the state
 /// the commit pipeline would stamp is derivable from `origin` (which IS

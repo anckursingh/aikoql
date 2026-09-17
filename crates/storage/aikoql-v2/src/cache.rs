@@ -109,11 +109,7 @@ impl BlockCache {
             *held -= old.bytes.len();
         }
         while *held + bytes > self.cap {
-            let Some(victim) = entries
-                .iter()
-                .min_by_key(|(_, e)| e.gen)
-                .map(|(k, _)| *k)
-            else {
+            let Some(victim) = entries.iter().min_by_key(|(_, e)| e.gen).map(|(k, _)| *k) else {
                 break;
             };
             *scan_steps += entries.len() as u64;
@@ -161,7 +157,8 @@ mod tests {
         assert!(cache.get(1, 0).is_some(), "recently inserted block hits");
         let after = cache.state.lock().unwrap().scan_steps;
         assert_eq!(
-            after, before,
+            after,
+            before,
             "hit walked {} recency entries",
             after - before
         );
@@ -178,7 +175,10 @@ mod tests {
         cache.get(1, 0).unwrap(); // 0 becomes MRU
         cache.insert(1, 3, block()); // forces one eviction — must be 1
         assert!(cache.get(1, 0).is_some());
-        assert!(cache.get(1, 1).is_none(), "least-recently-hit must be evicted");
+        assert!(
+            cache.get(1, 1).is_none(),
+            "least-recently-hit must be evicted"
+        );
         assert!(cache.get(1, 2).is_some());
         assert!(cache.get(1, 3).is_some());
     }
