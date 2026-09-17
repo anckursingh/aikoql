@@ -40,12 +40,28 @@ handle, so a finished transaction cannot be reused or double-finished.
 ## Idempotent retry
 
 Every committed transaction writes its outcome under the reserved row
-`sys/txn/<id>` in the SAME batch as its writes. A retry with the same id —
-in-process or after a crash/reopen — re-reads the record, re-applies
-nothing, and returns the original outcome; the journal sequence is
-unchanged. The record check runs under the pipe lock, so a concurrent
-same-id commit always dedupes. An empty transaction also records an empty
-outcome, so a re-begin of an already-committed id dedupes identically.
+`sys/txn/<id>` in the SAME batch as its writes. The outcome row is a
+versioned record: tag byte `1` + a 32-byte body fingerprint + the results
+(tx009/tx010). The fingerprint is a sha256 over the staged ops' canonical
+encoding — subject (name/roles/tenant), referential policy, note, and the
+payload through the one canonical body codec. `expected_version` is
+excluded: it is an OCC pin, not body identity.
+
+A retry with the same id — in-process or after a crash/reopen — re-reads
+the record and compares fingerprints:
+
+- same id, same body → re-applies nothing and returns the original
+  outcome; the journal sequence is unchanged (the recorded no-op);
+- same id, different body → fails closed with `InvalidObject` — an
+  idempotency-key collision is the caller's contract violation, never
+  silently re-applied;
+- a pre-fingerprint outcome row (tag byte != 1) decodes with NO
+  fingerprint — an unverifiable body is not the same body, so the retry
+  fails closed identically.
+
+The record check runs under the pipe lock, so a concurrent same-id commit
+always dedupes. An empty transaction also records an empty outcome, so a
+re-begin of an already-committed id dedupes identically.
 
 ## VersionConflict determinism
 
