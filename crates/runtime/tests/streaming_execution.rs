@@ -1,4 +1,4 @@
-//! P5-M4 (ND-04) — streaming/batch execution. st001–st009.
+//! P5-M4 (ND-04) — streaming/batch execution. st001–st010.
 //!
 //! The roadmap's ND-04 RED list verbatim: empty input, single row, batch
 //! boundaries, huge result, cancellation, authorization, snapshots,
@@ -305,6 +305,65 @@ fn st007_snapshot_pinned_at_open_zero_divergence() {
     assert!(!rest.contains(&new_id), "insert after open never appears");
     assert!(!rest.contains(&ids[2]), "tombstoned row never appears");
     assert_eq!(rest, vec![ids[3]], "updated row still streams");
+}
+
+// --- st010 — snapshot at open, VERSION-level (PR6 P0-08) --------------------------
+
+/// The open snapshot is a version contract, not just a koid-list contract:
+/// a write between open() and a later batch must not leak into that batch —
+/// the tombstoned row still streamed (it existed at open), the updated row
+/// streams as its OPEN payload, and the insert never appears. Today the
+/// payloads resolve live, so the updated row streams as its new value and
+/// the tombstoned row is skipped — mixed-time reads.
+#[test]
+fn st010_all_batches_see_the_open_snapshot_payloads() {
+    let k = mk();
+    let ids: Vec<KOID> = (0..4).map(|i| person(&k, &format!("P{i}"))).collect();
+
+    let plan = parser::compile_physical_with_subject("MATCH Person RETURN *", "alice").unwrap();
+    let opts = StreamOptions {
+        batch_size: 2,
+        cancel: CancellationToken::new(),
+        use_indexes: false,
+    };
+    let mut pipe = execute_streaming(&k, &plan, &opts).unwrap();
+    let _first = pipe.next_batch().unwrap().unwrap(); // rows 0-1, emitted pre-write
+
+    // Writes between open() and the next batch: update a not-yet-emitted row,
+    // tombstone another, insert a new one.
+    let mut upd = RememberRequest::update(ctx("alice"), ids[3], meta("Person"));
+    upd.properties
+        .insert("name".into(), Value::Text("P3-new".into()));
+    k.remember(upd).unwrap();
+    k.forget(
+        Subject::new("alice"),
+        &ids[2],
+        ForgetMode::Tombstone,
+        None,
+        None,
+    )
+    .unwrap();
+    let new_id = person(&k, "P-new");
+
+    let mut rest = Vec::new();
+    while let Some(batch) = pipe.next_batch().unwrap() {
+        rest.extend(batch);
+    }
+
+    assert_eq!(
+        rest.iter().map(|ko| ko.koid).collect::<Vec<_>>(),
+        vec![ids[2], ids[3]],
+        "the tombstoned row existed at open — it streams; the insert does not"
+    );
+    let name = |ko: &KnowledgeObject| -> String {
+        match ko.properties.get("name") {
+            Some(Value::Text(t)) => t.clone(),
+            _ => panic!("expected a name property"),
+        }
+    };
+    assert_eq!(name(&rest[0]), "P2", "the tombstone after open never applies");
+    assert_eq!(name(&rest[1]), "P3", "the update after open never applies");
+    let _ = new_id;
 }
 
 // --- st008 — backpressure (pull model) ---------------------------------------------

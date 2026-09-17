@@ -1,4 +1,4 @@
-//! P5-M9 (ND-08) — cost-based optimizer. cbo001–cbo010.
+//! P5-M9 (ND-08) — cost-based optimizer. cbo001–cbo012 + st011.
 //!
 //! The CBO is cost-based where statistics exist, rule-based where they
 //! don't (never worse than today — the M0 plan-equivalence oracle pins it,
@@ -600,4 +600,124 @@ fn cbo010_plan_equivalence_oracle_green_over_cbo_scenarios() {
         Vec::<String>::new(),
         "CBO plans never change results (gate-6)"
     );
+}
+
+// --- st011 — the assisted plan states its snapshot (PR6 P0-07) ------------------
+
+/// Every index-assisted plan must state the journal head it was optimized
+/// against — the snapshot its index read is assumed fresh at. Today EXPLAIN
+/// renders no such line, so the freshness assumption is invisible.
+#[test]
+fn st011_explain_states_the_snapshot_of_an_index_assist() {
+    let k = mk();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
+    for i in 0..100 {
+        person(&k, &format!("P{i:03}"), "Eng");
+    }
+    catch_up_indexes(&k);
+    k.analyze("Person").unwrap();
+
+    let lines =
+        aikoql_runtime::cbo::explain_cost(&k, "MATCH Person WHERE name == \"P042\" RETURN *")
+            .unwrap();
+    assert!(
+        lines.iter().any(|l| l.starts_with("snapshot: ")),
+        "an index-assisted plan states its snapshot: {:?}",
+        lines
+    );
+    let head = k.journal_head().unwrap().0;
+    let line = lines
+        .iter()
+        .find(|l| l.starts_with("snapshot: "))
+        .unwrap();
+    assert!(
+        line.contains(&format!("{head}")),
+        "the stated snapshot is the pinned journal head: {line}"
+    );
+}
+
+// --- cbo011 — write between optimize and execute (PR6 P0-07) --------------------
+
+/// The optimizer verifies the index at optimize time; a committed write
+/// between optimize and execute must not produce a silently incomplete set —
+/// the executor re-pins the journal head and falls back to the full scan.
+/// Today the stale assisted plan serves the index's answer and drops the
+/// late row.
+#[test]
+fn cbo011_write_between_optimize_and_execute_never_serves_an_incomplete_set() {
+    let k = mk();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
+    for i in 0..100 {
+        person(&k, &format!("P{i:03}"), "Eng");
+    }
+    catch_up_indexes(&k);
+    k.analyze("Person").unwrap();
+
+    let query = "MATCH Person WHERE name == \"P042\" RETURN *";
+    let report = cost_optimize(&k, &plan_of(&k, query)).unwrap();
+    assert!(
+        report.index_used.is_some(),
+        "precondition: the optimizer chose the index assist"
+    );
+
+    // A committed write the index never saw, between optimize and execute.
+    let late = person(&k, "P042", "Ops");
+
+    // Executing the OLD plan: the head moved, so the executor must fall back
+    // to the full scan — the committed row is never silently dropped.
+    let rows = Interpreter::execute_physical(&k, &report.plan).unwrap();
+    let ids = exec_ids(&rows);
+    assert!(
+        ids.contains(&late),
+        "the late committed row is never silently dropped"
+    );
+    assert_eq!(ids.len(), 2, "the set is complete: the original row and the late one");
+}
+
+// --- cbo012 — positional adjacency (PR6 P1-13) ----------------------------------
+
+/// The index assist binds only to the Filter immediately after the Scan —
+/// the plan-shape dependency is positional. A plan with a Project between
+/// Scan and Filter is never index-assisted, however covering the index.
+/// Today `first_eq_after` scans every later op for any Eq Filter and assists.
+#[test]
+fn cbo012_a_non_adjacent_filter_is_never_index_assisted() {
+    let k = mk();
+    k.catalog_create_index("by_name", "Person", &["name"])
+        .unwrap();
+    for i in 0..100 {
+        person(&k, &format!("P{i:03}"), "Eng");
+    }
+    catch_up_indexes(&k);
+    k.analyze("Person").unwrap();
+
+    // Plan shape: Scan → Project → Filter — the Eq predicate is not the op
+    // immediately after the Scan.
+    let plan = IrPlan::new(vec![
+        IrOp::Scan {
+            type_name: "Person".into(),
+            subject: "alice".into(),
+            roles: vec![],
+            tenant: None,
+        },
+        IrOp::Project {
+            fields: vec!["name".into()],
+        },
+        IrOp::Filter {
+            predicates: vec![Predicate {
+                property: "name".into(),
+                op: PredOp::Eq,
+                value: Value::Text("P042".into()),
+            }],
+        },
+    ]);
+    let report = cost_optimize(&k, &plan).unwrap();
+    assert_eq!(
+        scan_strategy(&report),
+        Strategy::FullScan,
+        "no index assist for a non-adjacent Filter"
+    );
+    assert!(report.index_used.is_none());
 }
