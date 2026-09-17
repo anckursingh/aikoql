@@ -71,6 +71,13 @@ pub trait IndexMaintainerApi: Send + Sync {
         }
         Ok(())
     }
+
+    /// P5-M23 (P1-05): the live ANN's dim — the cost model prices the
+    /// AnnSearch row from it. `None` for indexes without a health split
+    /// (the brute-force reference) or when no maintainer is attached.
+    fn vector_dim(&self) -> Option<usize> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +151,10 @@ pub struct VectorHealth {
     pub physical: usize,
     pub tombstones: usize,
     pub dead_ratio: f64,
+    /// P5-M23 (P0-10/P1-05): the configured dim (0 = adopts the first
+    /// vector) and capacity hint — health reports real capacity/usage.
+    pub dim: usize,
+    pub capacity: usize,
 }
 
 // ---------------------------------------------------------------------------

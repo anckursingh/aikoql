@@ -20,7 +20,8 @@ use aikoql_kernel::ir::{IrOp, IrPlan, PhysicalOp, PhysicalPlan, PredOp, Strategy
 use aikoql_kernel::transaction::kernel::Kernel;
 use aikoql_kernel::{KError, KResult, Statistics};
 
-/// Candidate dimensions in the v1 cost model (bge-m3 class, P4-M7 evidence).
+/// Model-default candidate dim (bge-m3 class, P4-M7 evidence) — the
+/// AnnSearch row falls back to it when no live ANN reports a dim (P5-M23).
 pub const EMBEDDING_DIM: u64 = 768;
 
 /// One operator's standalone cost: estimated output rows and cpu units.
@@ -109,7 +110,11 @@ pub(crate) fn scan_assist(
 /// Per-op standalone costs over the given plan and statistics. The rows of
 /// each op feed the next (costs[i-1].rows); the Scan seeds from the type's
 /// cardinality. Unknown statistics → every cost is 0 (unknown, not wrong).
-pub fn cost_plan(ops: &[PhysicalOp], stats: Option<&Statistics>) -> Vec<Cost> {
+pub fn cost_plan(
+    ops: &[PhysicalOp],
+    stats: Option<&Statistics>,
+    ann_dim: Option<usize>,
+) -> Vec<Cost> {
     let mut costs: Vec<Cost> = Vec::with_capacity(ops.len());
     for (i, po) in ops.iter().enumerate() {
         let input = if i == 0 {
@@ -167,9 +172,11 @@ pub fn cost_plan(ops: &[PhysicalOp], stats: Option<&Statistics>) -> Vec<Cost> {
             IrOp::AnnSearch { .. } => {
                 let rows =
                     (search_input as f64 * stats.map_or(0.0, |s| s.vector_density)).ceil() as u64;
+                // P5-M23 (P1-05): price the LIVE ANN dim; the 768
+                // model-default is the fallback when none is attached.
                 Cost {
                     rows,
-                    cpu: rows * EMBEDDING_DIM,
+                    cpu: rows * ann_dim.unwrap_or(EMBEDDING_DIM as usize) as u64,
                 }
             }
             IrOp::TextSearch { .. } => {
@@ -221,6 +228,9 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
     let journal_len = kernel.journal_head()?.0;
     let stats_stale = stats.as_ref().is_some_and(|s| s.is_stale(journal_len));
     let stats_used = stats.is_some() && !stats_stale;
+    // P5-M23 (P1-05): the live ANN's dim prices the AnnSearch row — the
+    // 768 model default applies only when no maintainer is attached.
+    let ann_dim = kernel.index_maintainer().and_then(|m| m.vector_dim());
 
     let mut index_used: Option<String> = None;
     if let Some(stats) = &stats {
@@ -243,8 +253,8 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
                     }
                     let mut cand_ops = ops.clone();
                     cand_ops[0].strategy = Strategy::PropertyIndex;
-                    if total_cpu(&cost_plan(&cand_ops, Some(stats)))
-                        < total_cpu(&cost_plan(&ops, Some(stats)))
+                    if total_cpu(&cost_plan(&cand_ops, Some(stats), ann_dim))
+                        < total_cpu(&cost_plan(&ops, Some(stats), ann_dim))
                     {
                         ops = cand_ops;
                         index_used = Some(idx.name().to_string());
@@ -254,7 +264,7 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
             }
         }
     }
-    let costs = cost_plan(&ops, stats.as_ref());
+    let costs = cost_plan(&ops, stats.as_ref(), ann_dim);
     // P5-M21 (PR6 P0-07): pin the journal head the decision was made at —
     // the plan carries its snapshot; the executor re-pins before serving
     // the assist and falls back to the full scan on a mismatch. Only

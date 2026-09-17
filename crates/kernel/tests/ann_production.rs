@@ -198,7 +198,13 @@ fn ann004_insert_past_capacity_no_drop_full_answers() {
     let idx = Arc::new(HnswVectorIndex::new(2, 8));
     for i in 0..64u8 {
         let ang = (i as f32) * 2.0 * std::f32::consts::PI / 64.0;
-        idx.upsert(KOID::from_bytes([i; KOID_LEN]), "m", &[ang.cos(), ang.sin()]);
+        // i+1: koid 0 is KOID::ZERO — the search skips it as a
+        // legacy/malformed label, and this pin is about capacity.
+        idx.upsert(
+            KOID::from_bytes([i + 1; KOID_LEN]),
+            "m",
+            &[ang.cos(), ang.sin()],
+        );
     }
     assert_eq!(idx.len(), 64, "no drop past capacity");
     let h = idx.health().unwrap();
@@ -208,10 +214,15 @@ fn ann004_insert_past_capacity_no_drop_full_answers() {
     // The recall pin: the query's own vector must rank first, and k=10
     // must answer 10 — today the candidate pool caps at capacity 8.
     let hits = idx.search(&[1.0, 0.0], 10, Some("m"));
-    assert_eq!(hits.len(), 10, "k=10 must answer 10 past capacity (got {})", hits.len());
+    assert_eq!(
+        hits.len(),
+        10,
+        "k=10 must answer 10 past capacity (got {})",
+        hits.len()
+    );
     assert_eq!(
         hits[0].0,
-        KOID::from_bytes([0u8; KOID_LEN]),
+        KOID::from_bytes([1u8; KOID_LEN]),
         "the query's own vector ranks first"
     );
 }
@@ -229,7 +240,11 @@ fn ann005_reupsert_same_koid_model_physical_stable() {
     idx.upsert(a, "m", &[0.0, 1.0]); // same (koid, model) — an update
     assert_eq!(idx.len(), 1, "the map holds the distinct pair once");
     let h = idx.health().unwrap();
-    assert_eq!(h.physical, 1, "re-upsert must not inflate physical (got {})", h.physical);
+    assert_eq!(
+        h.physical, 1,
+        "re-upsert must not inflate physical (got {})",
+        h.physical
+    );
     assert_eq!(h.live, 1);
 
     // The update took: the re-upsert's vector answers.
@@ -242,4 +257,77 @@ fn ann005_reupsert_same_koid_model_physical_stable() {
     let h = idx.health().unwrap();
     assert_eq!(h.physical, 2, "a new model is a new physical node");
     assert_eq!(h.live, 2);
+}
+
+/// P0-10 evidence cell (env-gated: AIKOQL_ANN_EVIDENCE=<N>): N vectors
+/// through the production index past its 10_000 capacity — no panic, no
+/// drop, health reports real capacity/usage, and recall vs the brute-force
+/// oracle holds. Gated because debug-mode HNSW inserts are slow at 100k+;
+/// the certification harness runs the big cells in release (M23
+/// acceptance). Unset → skipped; a value > 100_000 pins counts + self-recall
+/// only (a 1M brute-force oracle doubles the cell's cost for no extra
+/// evidence).
+#[test]
+fn ann004_evidence_cell_past_capacity() {
+    let target: usize = match std::env::var("AIKOQL_ANN_EVIDENCE") {
+        Ok(v) => v.parse().unwrap_or(10_001),
+        Err(_) => return,
+    };
+    let idx = Arc::new(HnswVectorIndex::new(8, 10_000));
+    let oracle = BruteForceVectorIndex::new();
+    // Deterministic LCG embeddings (no rand dep; the same seed → the same
+    // workload on every rerun). The full-period LCG also feeds the koids —
+    // every insert is a distinct (koid, model) pair.
+    let mut seed = 0x9E3779B97F4A7C15u64;
+    fn koid_of(s: u64) -> KOID {
+        let b = s.to_le_bytes();
+        KOID::from_bytes([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[0], b[1], b[2], b[3], b[4], b[5],
+            b[6], b[7],
+        ])
+    }
+    fn gen(seed: &mut u64, dims: usize) -> Vec<f32> {
+        let mut v = Vec::with_capacity(dims);
+        for _ in 0..dims {
+            *seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            v.push(((*seed >> 40) as f32 / (1u64 << 24) as f32) - 1.0);
+        }
+        v
+    }
+    let mut probe: Option<(KOID, Vec<f32>)> = None;
+    for i in 0..target {
+        let koid = koid_of(seed);
+        let v = gen(&mut seed, 8);
+        idx.upsert(koid, "m", &v);
+        oracle.upsert(koid, "m", &v);
+        if i == 7 {
+            probe = Some((koid, v.clone()));
+        }
+    }
+    assert_eq!(idx.len(), target, "no drop past capacity");
+    let h = idx.health().unwrap();
+    assert_eq!(h.capacity, 10_000, "health reports the configured capacity");
+    assert_eq!(h.physical, target, "health reports the real usage");
+    assert_eq!(h.live, target);
+
+    // The query's own vector must rank first past capacity.
+    let (pk, pv) = probe.expect("probe exists");
+    let hits = idx.search(&pv, 10, Some("m"));
+    assert_eq!(hits[0].0, pk, "self-recall past capacity");
+
+    // Recall vs the exact oracle (the declared target, ef=20/M=16).
+    if target <= 100_000 {
+        let truth: Vec<KOID> = oracle
+            .search(&pv, 10, Some("m"))
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        let found = hits.iter().filter(|(k, _)| truth.contains(k)).count();
+        assert!(
+            found >= 9,
+            "recall@10 vs the oracle: {found}/10 at {target} past capacity"
+        );
+    }
 }

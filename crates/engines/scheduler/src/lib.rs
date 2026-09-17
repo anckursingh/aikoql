@@ -540,6 +540,12 @@ impl IndexMaintainerApi for IndexMaintainer {
         &self.text
     }
 
+    /// P5-M23 (P1-05): the live ANN's dim from the engine health — the
+    /// cost model prices the AnnSearch row from it.
+    fn vector_dim(&self) -> Option<usize> {
+        self.vectors.health().map(|h| h.dim)
+    }
+
     /// P4-M7 (TDD-INDEX-001): the real status — water/head plus the live
     /// loop's `last_error` (the trait default cannot see the error).
     fn status(&self, kernel: &Kernel) -> KResult<IndexStatus> {

@@ -265,6 +265,7 @@ dependencies = [
  "aikoql-kernel",
  "aikoql-scheduler",
  "aikoql-semantic",
+ "aikoql-vector",
  "proptest",
  "serde_json",
  "sha2 0.10.9",

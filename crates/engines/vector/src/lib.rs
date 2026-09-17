@@ -216,12 +216,17 @@ impl VectorIndex for HnswVectorIndex {
         let label = format!("{}:{}", model, koid.to_hex());
         // justified: Mutex poison is unrecoverable
         self.index.lock().unwrap().insert(vec.to_vec(), label);
-        self.model_map
-            .write()
-            // justified: RwLock poison is unrecoverable
-            .unwrap()
-            .insert((koid, model.to_string()), vec.to_vec());
-        self.physical.fetch_add(1, Ordering::Relaxed);
+        // P5-M23 (P1-17): physical counts DISTINCT (koid, model) entries —
+        // a re-upsert updates the vector, it does not add a node (the
+        // maintainer re-upserts every replay pass, so inflation would hide
+        // real dead nodes behind dead_ratio = tombstones / physical). The
+        // stale graph node is deduped by the next rebuild.
+        // justified: RwLock poison is unrecoverable
+        let mut mm = self.model_map.write().unwrap();
+        if mm.insert((koid, model.to_string()), vec.to_vec()).is_none() {
+            self.physical.fetch_add(1, Ordering::Relaxed);
+        }
+        drop(mm);
         // justified: RwLock poison is unrecoverable
         self.tombstones.write().unwrap().remove(&koid);
     }
@@ -248,7 +253,17 @@ impl VectorIndex for HnswVectorIndex {
         }
         // justified: Mutex poison is unrecoverable
         let idx = self.index.lock().unwrap();
-        let internal_k = k.saturating_mul(4).min(self.capacity);
+        // P5-M23 (P0-10): capacity is an allocator hint — the graph grows
+        // past it. Bound the candidate pool by the NODES THAT EXIST, not
+        // the initial hint: k*4 keeps the recall margin, and the
+        // coordinator's usize::MAX (ann001) still lands on a finite,
+        // node-count-sized pool (fast-hnsw does ef = ef.max(k), so an
+        // unbounded k would allocate an unbounded heap).
+        let internal_k = k.saturating_mul(4).min(
+            self.physical
+                .load(Ordering::Relaxed)
+                .max(self.capacity as u64) as usize,
+        );
         let hits = idx.search(qv, internal_k.max(1), 20);
         // justified: RwLock poison is unrecoverable
         let dead = self.tombstones.read().unwrap();
@@ -303,6 +318,9 @@ impl VectorIndex for HnswVectorIndex {
             physical: self.physical.load(Ordering::Relaxed) as usize,
             tombstones: self.tombstones.read().unwrap().len(),
             dead_ratio: self.dead_ratio(),
+            // P5-M23 (P0-10): health reports real capacity/usage.
+            dim: self.dim(),
+            capacity: self.capacity,
         })
     }
 

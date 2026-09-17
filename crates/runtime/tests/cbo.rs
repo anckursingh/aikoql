@@ -138,6 +138,7 @@ fn cbo001_highly_selective_property_chooses_the_index_scan() {
     let baseline = cost_plan(
         &PhysicalPlan::from_ops(plan_of(&k, query).operators.clone()).operators,
         Some(&k.statistics("Person").unwrap().unwrap()),
+        None,
     );
     assert!(
         total_cpu(&report.costs) < total_cpu(&baseline),
@@ -859,5 +860,9 @@ fn ann006_cost_rows_use_the_live_ann_dim() {
     let report = cost_optimize(&k2, &plan).unwrap();
     let ann = report.costs[1];
     assert!(ann.rows > 0);
-    assert_eq!(ann.cpu, ann.rows * 768, "no live ANN → the 768 model default");
+    assert_eq!(
+        ann.cpu,
+        ann.rows * 768,
+        "no live ANN → the 768 model default"
+    );
 }
