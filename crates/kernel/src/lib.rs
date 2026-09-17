@@ -75,7 +75,7 @@ pub use eval::{
 };
 pub use index::{
     property::PropertyIndex,
-    unified::{ConsistencyLevel, Index, TextIndexAdapter, VectorIndexAdapter, VerifyReport},
+    unified::{ConsistencyLevel, Index, IndexState, TextIndexAdapter, VectorIndexAdapter, VerifyReport},
     BruteForceVectorIndex, IndexCoordinator, IndexMaintainerApi, IndexStatus, IndexStatusKind,
     NoopTextIndex, NoopVectorIndex, TextIndex, TokenTextIndex, VectorHealth, VectorIndex,
 };

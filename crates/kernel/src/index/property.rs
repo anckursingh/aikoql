@@ -6,7 +6,7 @@
 //! indexed. Contents are never persisted: they replay from the journal
 //! (idx2-007).
 
-use crate::index::unified::{ConsistencyLevel, Index, VerifyReport};
+use crate::index::unified::{ConsistencyLevel, Index, IndexState, VerifyReport};
 use crate::knowledge::kom::*;
 use crate::transaction::kernel::Kernel;
 use std::collections::{BTreeSet, HashMap};
@@ -23,6 +23,10 @@ pub struct PropertyIndex {
     /// from) and by the maintainer after a successful batch; 0 means no
     /// proof, and `verify` then walks.
     applied: AtomicU64,
+    /// P5-M22 — the DDL lifecycle state (P1-07/P1-16). The catalog row
+    /// carries the durable copy; this is the live registry's. Only `Ready`
+    /// indexes may be CBO-chosen (P1-16).
+    state: RwLock<IndexState>,
 }
 
 impl PropertyIndex {
@@ -33,6 +37,7 @@ impl PropertyIndex {
             properties: properties.iter().map(|p| p.to_string()).collect(),
             map: RwLock::new(HashMap::new()),
             applied: AtomicU64::new(0),
+            state: RwLock::new(IndexState::Declared),
         }
     }
 
@@ -50,6 +55,16 @@ impl PropertyIndex {
 impl Index for PropertyIndex {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn state(&self) -> IndexState {
+        // justified: RwLock poison is unrecoverable
+        *self.state.read().unwrap()
+    }
+
+    fn set_state(&self, state: IndexState) {
+        // justified: RwLock poison is unrecoverable
+        *self.state.write().unwrap() = state;
     }
 
     fn upsert(&self, koid: KOID, ko: &KnowledgeObject) -> KResult<()> {

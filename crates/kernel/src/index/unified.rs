@@ -36,12 +36,57 @@ pub enum ConsistencyLevel {
     CandidateOnly,
 }
 
+/// P5-M22 (PR6 P1-07/P1-16) — the DDL lifecycle of a catalog index. The
+/// durable states live on the catalog row; `Building` is in-memory only (a
+/// crash mid-build re-enters as `Declared` and is rebuilt at load). Only
+/// `Ready` indexes may be chosen by the CBO or answer an exact scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexState {
+    Declared,
+    Building,
+    Ready,
+    Failed,
+    Dropping,
+}
+
+impl IndexState {
+    /// The row payload spelling. Unknown spellings fail closed at parse.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IndexState::Declared => "declared",
+            IndexState::Building => "building",
+            IndexState::Ready => "ready",
+            IndexState::Failed => "failed",
+            IndexState::Dropping => "dropping",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "declared" => Some(IndexState::Declared),
+            "building" => Some(IndexState::Building),
+            "ready" => Some(IndexState::Ready),
+            "failed" => Some(IndexState::Failed),
+            "dropping" => Some(IndexState::Dropping),
+            _ => None,
+        }
+    }
+}
+
 /// The database-level index abstraction. `upsert`/`remove` carry the
 /// committed object; `commit_batch` is the one flush hook per applied batch
 /// (text engines commit once per batch); `scan_eq` is the equality surface
 /// property indexes answer; `verify`/`rebuild` reconcile against the store.
 pub trait Index: Send + Sync {
     fn name(&self) -> &str;
+    /// P5-M22 — the DDL lifecycle state. Indexes without a lifecycle story
+    /// (the engine adapters) are always Ready.
+    fn state(&self) -> IndexState {
+        IndexState::Ready
+    }
+    /// P5-M22 — move the live entry between lifecycle states. Default no-op
+    /// (the engine adapters have no lifecycle).
+    fn set_state(&self, _state: IndexState) {}
     fn upsert(&self, koid: KOID, ko: &KnowledgeObject) -> KResult<()>;
     fn remove(&self, koid: &KOID) -> KResult<()>;
     /// One flush point per applied batch (default: nothing to do).

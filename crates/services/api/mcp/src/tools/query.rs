@@ -218,7 +218,7 @@ pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
     // write must not answer empty. Bounded wait for the maintainer to
     // drain (a broken index is skipped; answers still come, lag is
     // surfaced per hit).
-    if let Some(m) = crate::MAINTAINER.get() {
+    if let Some(m) = k.index_maintainer() {
         let healthy = m
             .status(k)
             .map(|s| s.status != IndexStatusKind::Error)

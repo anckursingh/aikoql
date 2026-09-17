@@ -20,7 +20,7 @@
 //! (P5-M7 honest-ledger row).
 
 use crate::index::property::PropertyIndex;
-use crate::index::unified::Index;
+use crate::index::unified::{Index, IndexState};
 use crate::knowledge::kom::{KError, KResult, KnowledgeObject, PropertyMap, Value, KOID};
 use crate::transaction::kernel::{ForgetMode, Kernel, KnowledgeContext, RememberRequest, Subject};
 use crate::Metadata;
@@ -141,6 +141,10 @@ impl Kernel {
 
     /// Register a property/composite index in the catalog AND the live
     /// registry. Fails closed on a duplicate name (idx2-001).
+    ///
+    /// P5-M22 (P1-07): the row persists as DECLARED, the live entry joins
+    /// as BUILDING, and the synchronous make-good rebuild flips both to
+    /// READY — a crash in any window re-enters at load and converges.
     pub fn catalog_create_index(
         &self,
         name: &str,
@@ -158,25 +162,51 @@ impl Kernel {
                     .collect(),
             ),
         );
+        props.insert(
+            "state".into(),
+            Value::Text(IndexState::Declared.as_str().into()),
+        );
         self.catalog_create_entry("index", name, props)?;
         // justified: RwLock poison is unrecoverable
-        self.property_indexes
-            .write()
-            .unwrap()
-            .push(Arc::new(PropertyIndex::new(name, type_name, properties)));
+        let idx = Arc::new(PropertyIndex::new(name, type_name, properties));
+        idx.set_state(IndexState::Building);
+        self.property_indexes.write().unwrap().push(idx.clone());
         // P5-M17b: the synchronous make-good — a just-declared index is
         // seeded from the committed heads before analyze() prices it
         // (idx2-008's manual catch-up is the declaration's own duty now).
-        self.rebuild_index(name)
+        self.rebuild_index(name)?;
+        // P5-M22: durable READY after the successful build. A failed build
+        // leaves the row DECLARED and the live entry BUILDING — the state
+        // gate keeps the half-built index out of the CBO, and the next open
+        // retries the convergence.
+        self.set_index_state(name, IndexState::Ready)?;
+        idx.set_state(IndexState::Ready);
+        Ok(())
     }
 
     /// Drop a catalog index: the row is tombstoned and the live registry
     /// entry removed (idx2-002).
+    ///
+    /// P5-M22 (P1-07/P1-16): the row first flips DROPPING (durable), the
+    /// live entry is marked Dropping and removed, and only then is the row
+    /// tombstoned — a crash in any window converges at load (a dropping row
+    /// is completed, never re-registered), and the CBO's state gate refuses
+    /// the entry while it is still visible between the mark and the removal.
     pub fn catalog_drop_index(&self, name: &str) -> KResult<()> {
-        self.catalog_drop_entry("index", name)?;
+        self.set_index_state(name, IndexState::Dropping)?;
+        // The live entry flips Dropping FIRST — a concurrent CBO (the
+        // idx4-004 window) must see the mark, never a drop in progress.
+        // justified: RwLock poison is unrecoverable
+        let indexes = self.property_indexes.read().unwrap();
+        for i in indexes.iter() {
+            if i.name() == name {
+                i.set_state(IndexState::Dropping);
+            }
+        }
+        drop(indexes);
         // P5-M22 (idx4-004) test hook: park between the durable drop and the
         // registry removal — the window a concurrent CBO could still see the
-        // index. (The RED ships the hook; the feat gates the window.)
+        // index.
         if std::env::var_os("INDEX_DROP_PARK").is_some() {
             std::env::set_var("INDEX_DROP_PARK_AT", "1");
             let mut waited = 0u64;
@@ -190,7 +220,23 @@ impl Kernel {
             .write()
             .unwrap()
             .retain(|i| i.name() != name);
-        Ok(())
+        self.catalog_drop_entry("index", name)
+    }
+
+    /// P5-M22 — rewrite the index row's durable state (kind/name/type_name/
+    /// properties preserved, state replaced).
+    fn set_index_state(&self, name: &str, state: IndexState) -> KResult<()> {
+        let Some(ko) = self.catalog_entry_object("index", name)? else {
+            return Err(KError::InvalidObject(format!(
+                "catalog index '{name}' not found"
+            )));
+        };
+        let mut props = ko.properties.clone();
+        props.insert(
+            "state".into(),
+            Value::Text(state.as_str().into()),
+        );
+        self.update_catalog_row(&ko, props)
     }
 
     /// Every catalog-registered index declaration (idx2-001). Corrupt payloads
@@ -423,6 +469,9 @@ pub struct IndexDecl {
     pub name: String,
     pub type_name: String,
     pub properties: Vec<String>,
+    /// P5-M22 — the durable DDL state. Pre-M22 rows carry no state
+    /// property and parse as Declared (rebuilt at load).
+    pub state: IndexState,
 }
 
 /// Parse an index row's payload — corrupt rows fail closed (idx2-010).
@@ -448,25 +497,57 @@ fn parse_index_decl(name: &str, props: &PropertyMap) -> KResult<IndexDecl> {
             }
         }
     }
+    let state = match props.get("state") {
+        None => IndexState::Declared,
+        Some(Value::Text(s)) => IndexState::parse(s).ok_or_else(|| {
+            KError::Store(format!(
+                "catalog index '{name}' corrupt: unknown state '{s}'"
+            ))
+        })?,
+        Some(other) => {
+            return Err(KError::Store(format!(
+                "catalog index '{name}' corrupt: state {other:?}"
+            )))
+        }
+    };
     Ok(IndexDecl {
         name: name.into(),
         type_name: type_name.clone(),
         properties,
+        state,
     })
 }
 
 /// Populate the live registry from the catalog at open. Corrupt index rows
 /// fail the open closed (idx2-010); contents start empty and replay through
 /// the maintainer (idx2-007).
+///
+/// P5-M22 (P1-07): the load converges every DDL crash window — a DROPPING
+/// row is completed (tombstoned, never registered); a non-READY row
+/// (declared, building, or a pre-M22 row with no state) is registered,
+/// rebuilt from the committed heads and stamped READY on the row, so the
+/// crashed declaration answers without any maintainer replay (idx4-001).
 pub fn load_property_indexes(k: &Kernel) -> KResult<()> {
     let mut indexes: Vec<Arc<dyn Index>> = Vec::new();
     for decl in k.catalog_list_indexes()? {
+        if decl.state == IndexState::Dropping {
+            k.catalog_drop_entry("index", &decl.name)?;
+            continue;
+        }
         let props: Vec<&str> = decl.properties.iter().map(|p| p.as_str()).collect();
-        indexes.push(Arc::new(PropertyIndex::new(
-            &decl.name,
-            &decl.type_name,
-            &props,
-        )));
+        let idx = Arc::new(PropertyIndex::new(&decl.name, &decl.type_name, &props));
+        if decl.state != IndexState::Ready {
+            // ponytail: the open-time convergence is O(committed heads) per
+            // crashed declaration — bounded by the crash itself, not the
+            // journal.
+            idx.set_state(IndexState::Building);
+            idx.rebuild(k)?;
+            idx.set_state(IndexState::Ready);
+            k.set_index_state(&decl.name, IndexState::Ready)?;
+        } else {
+            idx.set_state(IndexState::Ready);
+        }
+        indexes.push(idx);
     }
     // justified: RwLock poison is unrecoverable
     *k.property_indexes.write().unwrap() = indexes;

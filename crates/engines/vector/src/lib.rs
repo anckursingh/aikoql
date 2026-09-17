@@ -49,6 +49,10 @@ pub struct HnswVectorIndex {
     /// Nodes physically in the graph (inserts; removes never shrink it).
     physical: AtomicU64,
     pending_rebuild: AtomicBool,
+    /// P5-M22 (P1-14): the checkpoint generation. `checkpoint` bumps it and
+    /// publishes `manifest.json` last; `load` gates on manifest == meta —
+    /// a pair torn across two checkpoints fails closed.
+    gen: AtomicU64,
 }
 
 fn build_index(capacity: usize) -> hnsw::labeled::LabeledIndex<hnsw::distance::Cosine, String> {
@@ -70,14 +74,33 @@ impl HnswVectorIndex {
             tombstones: RwLock::new(BTreeSet::new()),
             physical: AtomicU64::new(0),
             pending_rebuild: AtomicBool::new(false),
+            gen: AtomicU64::new(0),
         }
     }
 
     pub fn load(dir: &std::path::Path) -> KResult<Self> {
+        // P5-M22 (P1-14): the manifest is the gate — published atomically
+        // last by `checkpoint`, so its presence certifies a complete pair.
+        // A pair without one (or with mismatched generations) fails closed.
+        let manifest_str = std::fs::read_to_string(dir.join("manifest.json"))
+            .map_err(|e| KError::Store(format!("read hnsw manifest: {}", e)))?;
+        let manifest: serde_json::Value = serde_json::from_str(&manifest_str)
+            .map_err(|e| KError::Store(format!("parse hnsw manifest: {}", e)))?;
+        let manifest_gen = manifest["generation"]
+            .as_u64()
+            .ok_or_else(|| KError::Store("hnsw manifest generation".into()))?;
         let meta_str = std::fs::read_to_string(dir.join("meta.json"))
             .map_err(|e| KError::Store(format!("read hnsw meta: {}", e)))?;
         let meta: serde_json::Value = serde_json::from_str(&meta_str)
             .map_err(|e| KError::Store(format!("parse hnsw meta: {}", e)))?;
+        let meta_gen = meta["generation"]
+            .as_u64()
+            .ok_or_else(|| KError::Store("hnsw meta generation".into()))?;
+        if meta_gen != manifest_gen {
+            return Err(KError::Store(format!(
+                "hnsw checkpoint torn: meta generation {meta_gen} != manifest {manifest_gen}"
+            )));
+        }
         let dim = meta["dim"]
             .as_u64()
             .ok_or_else(|| KError::Store("hnsw meta dim".into()))? as usize;
@@ -121,6 +144,7 @@ impl HnswVectorIndex {
             tombstones: RwLock::new(tombstones),
             physical: AtomicU64::new(physical),
             pending_rebuild: AtomicBool::new(false),
+            gen: AtomicU64::new(meta_gen),
         })
     }
 
@@ -289,6 +313,8 @@ impl VectorIndex for HnswVectorIndex {
     fn checkpoint(&self, dir: &std::path::Path) -> KResult<()> {
         std::fs::create_dir_all(dir)
             .map_err(|e| KError::Store(format!("create hnsw checkpoint dir: {}", e)))?;
+        // P5-M22 (P1-14): every checkpoint is a new generation.
+        let generation = self.gen.fetch_add(1, Ordering::SeqCst) + 1;
         self.index
             .lock()
             // justified: Mutex poison is unrecoverable
@@ -318,9 +344,16 @@ impl VectorIndex for HnswVectorIndex {
             "physical": self.physical.load(Ordering::Relaxed),
             "tombstones": tombstones,
             "models": models_json,
+            // P5-M22 (P1-14): the generation binds the meta to the graph
+            // below; the manifest (published LAST) is the load gate.
+            "generation": generation,
         });
         std::fs::write(dir.join("meta.json"), meta.to_string())
             .map_err(|e| KError::Store(format!("write hnsw meta: {}", e)))?;
+        // Published atomically last — its presence certifies the pair.
+        let manifest = serde_json::json!({ "generation": generation });
+        std::fs::write(dir.join("manifest.json"), manifest.to_string())
+            .map_err(|e| KError::Store(format!("write hnsw manifest: {}", e)))?;
         Ok(())
     }
 }

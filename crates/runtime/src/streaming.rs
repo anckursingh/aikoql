@@ -407,6 +407,11 @@ pub fn execute_streaming<'a>(
     if let Some(p) = adjacent_eq {
         if opts.index_strategy != IndexStrategy::Scan {
             for idx in kernel.property_indexes()? {
+                // P5-M22 (P1-16): the DDL state gate — a non-Ready index is
+                // never the streaming dispatch's assist either.
+                if idx.state() != aikoql_kernel::IndexState::Ready {
+                    continue;
+                }
                 if !idx.covers(type_name, &p.property) {
                     continue;
                 }

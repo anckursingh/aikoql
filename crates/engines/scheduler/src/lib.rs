@@ -207,7 +207,38 @@ impl IndexMaintainer {
     fn do_start(&self, kernel: &Kernel, resume_water: Option<u64>) -> KResult<()> {
         let rx = kernel.notify(EventFilter::default())?;
         let water = match resume_water {
-            Some(w) => w,
+            Some(w) => {
+                // P5-M22 (P1-15): the checkpoint belongs to THIS journal or
+                // it fails closed — a water past the head means a foreign
+                // checkpoint, whose index files hold foreign data (idx4-002b).
+                let (head, _) = kernel.journal_head()?;
+                if w > head {
+                    return Err(KError::Store(format!(
+                        "checkpoint water {w} is past the journal head {head} — foreign checkpoint"
+                    )));
+                }
+                // The tail after the checkpoint: events committed after it
+                // but before shutdown were never subscribed — replay exactly
+                // those, so restart cost ∝ the tail, not the journal.
+                let events: Vec<_> = kernel
+                    .journal()?
+                    .into_iter()
+                    .filter(|e| e.seq > w)
+                    .collect();
+                let tail = Self::replay_batch(
+                    kernel,
+                    self.vector_idx.as_ref(),
+                    self.text_idx.as_ref(),
+                    &events,
+                )?;
+                // P5-M22 (P1-15): the property indexes are in-memory only
+                // (idx2-007) — the checkpoint cannot carry them, so the
+                // resume reseeds them from the committed heads. The tail
+                // replay above only proves events after the checkpoint; the
+                // rows before it exist nowhere else.
+                Self::rebuild_property_indexes(kernel)?;
+                tail.max(w)
+            }
             None => {
                 let events = kernel.journal()?;
                 Self::replay_batch(
@@ -349,6 +380,20 @@ impl IndexMaintainer {
             w = chunk.last().map(|e| e.seq).unwrap_or(w);
         }
         Ok(w)
+    }
+
+    /// P5-M22 (P1-15): reseed every registered property index from the
+    /// committed heads — the resume path's filler for the rows the
+    /// checkpoint cannot carry (property indexes are in-memory only,
+    /// idx2-007).
+    ///
+    /// ponytail: O(committed heads) per restart — persist the property
+    /// indexes in the checkpoint instead if resume profiles ever flag it.
+    fn rebuild_property_indexes(kernel: &Kernel) -> KResult<()> {
+        for idx in kernel.property_indexes()? {
+            idx.rebuild(kernel)?;
+        }
+        Ok(())
     }
 
     /// P5-M8 (ND-07): apply a batch through the unified `Index` surface — the
@@ -1059,13 +1104,19 @@ mod tests {
         // Declaration: the synchronous rebuild stamps the head it reseeded
         // from — the declaration's own catalog rows land first, so that is
         // the journal head, and stamp == head holds the declaration itself.
+        // P5-M22: the durable READY write lands AFTER the rebuild, so the
+        // stamp lags the head by exactly that one catalog event — the
+        // maintainer's first batch stamps it closed (catalog events are
+        // skipped per-item but stamped with the batch).
         k.catalog_create_index("by_body", "note", &["body"])
             .unwrap();
         let (head0, _) = k.journal_head().unwrap();
+        let stamp0 = k.index_applied_seq("by_body").unwrap();
         assert_eq!(
-            k.index_applied_seq("by_body").unwrap(),
-            head0,
-            "the declaration's rebuild stamps the journal head it reseeded from"
+            stamp0,
+            head0 - 1,
+            "the declaration's rebuild stamps the head it reseeded from; \
+             the durable READY write is the one event it cannot cover yet"
         );
 
         // A commit before any maintainer runs: the stamp must stay put —
@@ -1073,7 +1124,7 @@ mod tests {
         let id = create(&k, &a, "note", "cats and dogs");
         assert_eq!(
             k.index_applied_seq("by_body").unwrap(),
-            head0,
+            stamp0,
             "the commit path must not stamp"
         );
 

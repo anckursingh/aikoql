@@ -57,6 +57,20 @@ pub trait IndexMaintainerApi: Send + Sync {
             last_error: None,
         })
     }
+
+    /// P5-M22: bounded wait until the maintainer has applied every
+    /// committed event (polls `lag` — hosts and tools hold the trait
+    /// object, never the concrete type).
+    fn wait_caught_up(&self, kernel: &Kernel, timeout: std::time::Duration) -> KResult<()> {
+        let start = std::time::Instant::now();
+        while self.lag(kernel)? > 0 {
+            if start.elapsed() > timeout {
+                return Err(KError::IndexLagExceeded);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

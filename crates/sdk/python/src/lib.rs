@@ -159,6 +159,45 @@ pub struct Aikoql {
     /// The maintainer's thread holds the inner state + a kernel handle, not
     /// this Arc — dropping Aikoql stops it cleanly.
     maintainer: Arc<IndexMaintainer>,
+    /// P5-M22 (P1-15): the checkpoint directory (`{path}.ckpt`) — the open
+    /// resumes from it, the Drop writes it.
+    checkpoint_dir: std::path::PathBuf,
+}
+
+/// P5-M22 (P1-15): resume from `ckpt_dir` when a COMPLETE checkpoint is
+/// there — restart cost ∝ the events after it — and start fresh with a full
+/// replay otherwise. ANY load failure (a torn pair, P1-14; a foreign water,
+/// P1-15) falls back to a fresh start, never to an unavailable index.
+fn start_maintainer(
+    kernel: &Kernel,
+    ckpt_dir: &std::path::Path,
+) -> aikoql_kernel::KResult<Arc<IndexMaintainer>> {
+    if let Some(water) = IndexMaintainer::checkpoint_water(ckpt_dir)? {
+        if let (Ok(v), Ok(t)) = (
+            HnswVectorIndex::load(&ckpt_dir.join("vectors")),
+            TantivyTextIndex::load(&ckpt_dir.join("text")),
+        ) {
+            let vectors: Arc<dyn VectorIndex> = Arc::new(v);
+            let text: Arc<dyn TextIndex> = Arc::new(t);
+            if let Ok(m) = IndexMaintainer::start_at(kernel, vectors, text, Some(water)) {
+                return Ok(m);
+            }
+        }
+    }
+    IndexMaintainer::start(
+        kernel,
+        Arc::new(HnswVectorIndex::new(0, 10_000)),
+        Arc::new(TantivyTextIndex::new()?),
+    )
+}
+
+impl Drop for Aikoql {
+    fn drop(&mut self) {
+        // P5-M22 (P1-15): checkpoint on close — the next open resumes
+        // instead of replaying the whole journal. Best-effort: a failed
+        // checkpoint only costs the next open a full replay.
+        let _ = self.maintainer.checkpoint(&self.checkpoint_dir);
+    }
 }
 
 #[pymethods]
@@ -188,13 +227,16 @@ impl Aikoql {
         // the harness's per-cell opens pay it outside the timed ops. The
         // HNSW adopts the first vector's dim (SDK callers send arbitrary
         // dims) and its capacity is an allocator hint only.
-        let vectors: Arc<dyn VectorIndex> = Arc::new(HnswVectorIndex::new(0, 10_000));
-        let text: Arc<dyn TextIndex> = Arc::new(TantivyTextIndex::new().map_err(to_pyerr)?);
-        let maintainer = IndexMaintainer::start(&kernel, vectors, text).map_err(to_pyerr)?;
+        //
+        // P5-M22 (P1-15): the replay is paid once — a prior Drop left a
+        // checkpoint, and the open resumes from it instead.
+        let checkpoint_dir = std::path::PathBuf::from(format!("{path}.ckpt"));
+        let maintainer = start_maintainer(&kernel, &checkpoint_dir).map_err(to_pyerr)?;
         kernel.attach_indexes(maintainer.clone());
         Ok(Aikoql {
             inner: Arc::new(kernel),
             maintainer,
+            checkpoint_dir,
         })
     }
 

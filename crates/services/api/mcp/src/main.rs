@@ -77,10 +77,19 @@ pub(crate) use tracing::{error, info, info_span, warn};
 
 pub(crate) static SERVER_START: OnceLock<Instant> = OnceLock::new();
 pub(crate) static MEMORY_DIR: OnceLock<String> = OnceLock::new();
-/// P5-M17b (ND-14): the production property-index maintainer. Started on a
-/// worker thread at boot (full journal replay stays off the serve path);
-/// index_create settles it via wait_caught_up.
-pub(crate) static MAINTAINER: OnceLock<Arc<aikoql_scheduler::IndexMaintainer>> = OnceLock::new();
+
+/// P5-M22 (P1-15): the production maintainer's strong owner. The kernel's
+/// coordinator holds the maintainer WEAKLY (the P5-M18 Arc-cycle trap), so
+/// the strong Arc must live somewhere the process owns explicitly — the
+/// database context — not an accidental `OnceLock` singleton. One DB per
+/// process stays the product invariant (named here, not implied).
+pub(crate) struct DatabaseContext {
+    pub(crate) maintainer: Mutex<Option<Arc<aikoql_scheduler::IndexMaintainer>>>,
+}
+
+pub(crate) struct ServerContext {
+    pub(crate) db: DatabaseContext,
+}
 
 /// PRR-3: semantic readiness — the enrichment worker thread updates this,
 /// tool_health and /health surface it.
@@ -386,27 +395,34 @@ fn main() {
     // enricher emits 384-d all-MiniLM-L6-v2; a fixed default would silently
     // drop it) and is capacity-capped at 10k physical nodes (allocator hint
     // only — the coordinator ranks candidates against committed cosines).
+    //
+    // P5-M22 (P1-15): the maintainer resumes from `{db_path}.ckpt` when a
+    // COMPLETE checkpoint exists (restart cost ∝ events after it); any load
+    // failure — a torn pair, a foreign water — falls back to a fresh start
+    // with a full replay.
+    let server_ctx = Arc::new(ServerContext {
+        db: DatabaseContext {
+            maintainer: Mutex::new(None),
+        },
+    });
+    let ckpt_dir = std::path::PathBuf::from(format!("{db_path}.ckpt"));
     {
         let kernel_work = kernel.clone();
+        let server_work = server_ctx.clone();
+        let ckpt_work = ckpt_dir.clone();
         thread::spawn(move || {
-            let text = match TantivyTextIndex::new() {
-                Ok(t) => t,
+            let maintainer = match resume_or_start_maintainer(&kernel_work, &ckpt_work) {
+                Ok(m) => m,
                 Err(e) => {
-                    warn!("text index failed to init: {e}");
+                    warn!("index maintainer failed to start: {e}");
                     return;
                 }
             };
-            let vectors: Arc<dyn VectorIndex> = Arc::new(HnswVectorIndex::new(0, 10_000));
-            let text: Arc<dyn TextIndex> = Arc::new(text);
-            match aikoql_scheduler::IndexMaintainer::start(&kernel_work, vectors, text) {
-                Ok(m) => {
-                    // M18: attach so find_similar ranks the ANN candidates
-                    // (the exact path stays available via search_exact).
-                    kernel_work.attach_indexes(m.clone());
-                    MAINTAINER.set(m).ok();
-                }
-                Err(e) => warn!("index maintainer failed to start: {e}"),
-            }
+            // M18: attach so find_similar ranks the ANN candidates (the
+            // exact path stays available via search_exact).
+            kernel_work.attach_indexes(maintainer.clone());
+            // justified: Mutex poison is unrecoverable
+            *server_work.db.maintainer.lock().unwrap() = Some(maintainer);
         });
     }
 
@@ -538,7 +554,47 @@ fn main() {
             admin,
             cfg.request_timeout_secs,
         );
+        // P5-M22 (P1-15): stdio mode returns at stdin EOF — checkpoint the
+        // maintainer before the process exits. TCP mode never returns, so
+        // it has no shutdown-time checkpoint yet (honest ledger).
+        if let Some(m) = server_ctx.db.maintainer.lock().unwrap().as_ref() {
+            if let Err(e) = m.checkpoint(&ckpt_dir) {
+                warn!("maintainer checkpoint failed: {e}");
+            }
+        }
     }
+}
+
+/// P5-M22 (P1-15): resume from `ckpt_dir` when a COMPLETE checkpoint is
+/// there — restart cost ∝ the events after it — and start fresh with a full
+/// replay otherwise. ANY load failure (a torn pair, P1-14; a foreign water,
+/// P1-15) falls back to a fresh start, never to an unavailable index.
+fn resume_or_start_maintainer(
+    kernel: &Kernel,
+    ckpt_dir: &std::path::Path,
+) -> KResult<Arc<aikoql_scheduler::IndexMaintainer>> {
+    if let Some(water) = aikoql_scheduler::IndexMaintainer::checkpoint_water(ckpt_dir)? {
+        let vectors = HnswVectorIndex::load(&ckpt_dir.join("vectors"));
+        let text = TantivyTextIndex::load(&ckpt_dir.join("text"));
+        if let (Ok(v), Ok(t)) = (vectors, text) {
+            let vectors: Arc<dyn VectorIndex> = Arc::new(v);
+            let text: Arc<dyn TextIndex> = Arc::new(t);
+            if let Ok(m) =
+                aikoql_scheduler::IndexMaintainer::start_at(kernel, vectors, text, Some(water))
+            {
+                return Ok(m);
+            }
+        }
+        warn!(
+            "checkpoint at {} unusable — starting fresh with a full replay",
+            ckpt_dir.display()
+        );
+    }
+    aikoql_scheduler::IndexMaintainer::start(
+        kernel,
+        Arc::new(HnswVectorIndex::new(0, 10_000)),
+        Arc::new(TantivyTextIndex::new()?),
+    )
 }
 
 /// PRR-2 + R1 (review round 3): `--listen :9090` (empty host) binds

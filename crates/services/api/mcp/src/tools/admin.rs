@@ -1,7 +1,10 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
-use crate::{json, Kernel, LifecycleState, Ordering, Subject, ACTIVE_CONNECTIONS, J, SERVER_START};
+use crate::{
+    json, Kernel, LifecycleState, Ordering, Subject, ACTIVE_CONNECTIONS, J,
+    SERVER_START,
+};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -576,7 +579,7 @@ pub(crate) fn tool_index_create(k: &Kernel, args: &J) -> Result<J, String> {
     // Settle the maintainer before analyze — a lagging re-apply can
     // transiently overwrite the rebuild with an older version (the M17b
     // wait_caught_up contract).
-    if let Some(m) = crate::MAINTAINER.get() {
+    if let Some(m) = k.index_maintainer() {
         m.wait_caught_up(k, std::time::Duration::from_secs(300))
             .map_err(|e| e.to_string())?;
     }

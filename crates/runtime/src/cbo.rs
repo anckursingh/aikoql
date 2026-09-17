@@ -71,8 +71,11 @@ fn eq_selectivity(pred: &aikoql_kernel::ir::Predicate, stats: Option<&Statistics
 /// A CandidateOnly index is a post-filter candidate, never the scan's
 /// answer set — anything else (Exact, SnapshotExact, EventuallyConsistent)
 /// is allowed through; the optimizer's verify gate judges freshness.
+/// P5-M22 (P1-16): the DDL state gate — a non-Ready index (Declared,
+/// Building, Failed, Dropping) is never chosen, however fresh its stats.
 fn may_serve_exact(idx: &dyn aikoql_kernel::Index) -> bool {
     idx.consistency() != aikoql_kernel::ConsistencyLevel::CandidateOnly
+        && idx.state() == aikoql_kernel::IndexState::Ready
 }
 
 /// The executor's index assist for a Scan the CBO flagged `PropertyIndex`:
@@ -224,6 +227,11 @@ pub fn cost_optimize(kernel: &Kernel, plan: &IrPlan) -> KResult<CostReport> {
         if stats_used {
             if let Some(pred) = first_eq_after(&ops, 0) {
                 for idx in kernel.property_indexes()? {
+                    // P5-M22 (P1-16): the DDL state gate — a non-Ready index
+                    // is never chosen, however fresh the stats (idx4-004).
+                    if idx.state() != aikoql_kernel::IndexState::Ready {
+                        continue;
+                    }
                     if !idx.covers(&stats.type_name, &pred.property) {
                         continue;
                     }

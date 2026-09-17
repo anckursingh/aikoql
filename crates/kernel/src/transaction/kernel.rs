@@ -926,6 +926,19 @@ impl Kernel {
         *self.indexes.write().unwrap() = Some(IndexCoordinator::with_maintainer(m));
     }
 
+    /// P5-M22: upgrade the coordinator's weak maintainer edge — the
+    /// production accessor for hosts and tools. The host owns the strong
+    /// Arc (SDK `Aikoql.maintainer`, MCP `DatabaseContext`); a dead
+    /// maintainer degrades to the exact path (P5-M18).
+    pub fn index_maintainer(&self) -> Option<Arc<dyn crate::index::IndexMaintainerApi>> {
+        self.indexes
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.maintainer())
+            .and_then(|w| w.upgrade())
+    }
+
     /// Builder: attach an embedding provider for query-time ANN search
     /// (`MATCH ... USING EMBEDDING`).  Call after `Kernel::open()`.
     pub fn with_embedding_provider(mut self, p: Arc<dyn EmbeddingProvider>) -> Self {
