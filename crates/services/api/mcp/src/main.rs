@@ -61,9 +61,10 @@ pub(crate) use aikoql_kernel::knowledge::ontology::{
 pub(crate) use aikoql_kernel::lifecycle::schema::SchemaRegistry;
 pub(crate) use aikoql_kernel::*;
 pub(crate) use aikoql_scheduler::Scheduler;
-pub(crate) use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};#[cfg(feature = "embedding-openai")]
+#[cfg(feature = "embedding-openai")]
 pub(crate) use aikoql_semantic::provider::OpenAiEmbeddingProvider;
 pub(crate) use aikoql_semantic::{EmbeddingEnricher, SemanticEngine};
+pub(crate) use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};
 pub(crate) use serde_json::{json, Value as J};
 pub(crate) use std::collections::{HashMap, HashSet};
 pub(crate) use std::io::{BufRead, BufReader, Read, Write};

@@ -492,9 +492,7 @@ impl Interpreter {
                 // same pattern as the TextSearch BM25 arm.
                 let delegate = match (&input, &self.scan_type, &self.cached_subject) {
                     (RowSet::Objects(kos), Some(tn), Some(subj))
-                        if !self.temporal_mode
-                            && self.scan_len == Some(kos.len())
-                            && *k > 0 =>
+                        if !self.temporal_mode && self.scan_len == Some(kos.len()) && *k > 0 =>
                     {
                         Some((tn.clone(), subj.clone()))
                     }
@@ -518,12 +516,7 @@ impl Interpreter {
                             let scored: Vec<(KOID, f32, String, u64)> = results
                                 .into_iter()
                                 .map(|s| {
-                                    (
-                                        s.ko.koid,
-                                        s.score,
-                                        s.ko.metadata.type_name,
-                                        s.ko.version,
-                                    )
+                                    (s.ko.koid, s.score, s.ko.metadata.type_name, s.ko.version)
                                 })
                                 .collect();
                             self.prev_scored = Some(scored.clone());

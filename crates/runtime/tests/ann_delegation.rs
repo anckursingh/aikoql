@@ -105,11 +105,7 @@ fn ann003_ir_annsearch_consults_the_coordinator() {
     );
     assert_eq!(scored.len(), 1, "k=1 over two in-scope candidates");
     assert_eq!(scored[0].0, b, "committed cosine ranks B first");
-    assert!(
-        (scored[0].1 - 0.9939).abs() < 1e-3,
-        "score {}",
-        scored[0].1
-    );
+    assert!((scored[0].1 - 0.9939).abs() < 1e-3, "score {}", scored[0].1);
 }
 
 /// The delegation must not change the answer when NO maintainer is attached:

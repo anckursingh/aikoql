@@ -60,7 +60,8 @@ fn ann002_model_less_embeddings_reach_the_ann() {
     // found by model-less queries and excluded by model-scoped ones.
     let (k, _c) = mk();
     let mut req = RememberRequest::create(alice(), meta("fact"));
-    req.properties.insert("body".into(), Value::Text("cats".into()));
+    req.properties
+        .insert("body".into(), Value::Text("cats".into()));
     req.semantic = Some(SemanticBlock {
         embedding_model: None, // the production shape under test
         embedding: Some(vec![1.0, 0.0]),
@@ -70,7 +71,8 @@ fn ann002_model_less_embeddings_reach_the_ann() {
     });
     let a = k.remember(req).unwrap().koid;
     let mut req = RememberRequest::create(alice(), meta("fact"));
-    req.properties.insert("body".into(), Value::Text("dogs".into()));
+    req.properties
+        .insert("body".into(), Value::Text("dogs".into()));
     req.semantic = Some(SemanticBlock {
         embedding_model: None,
         embedding: Some(vec![0.0, 1.0]),

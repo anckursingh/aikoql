@@ -78,14 +78,16 @@ impl IndexCoordinator {
         // M18: computed lazily — the ANN path ranks the index's own
         // candidates and never needs this O(store) scan.
         let heads = || -> KResult<Vec<(KOID, u64, u64, LifecycleState)>> {
-            Ok(match q.filter.as_ref().and_then(|f| f.type_name.as_deref()) {
-                Some(tn) => kernel
-                    .heads_of_type(tn)?
-                    .into_iter()
-                    .map(|(koid, state)| (koid, 0, 0, state))
-                    .collect(),
-                None => kernel.scan_heads()?,
-            })
+            Ok(
+                match q.filter.as_ref().and_then(|f| f.type_name.as_deref()) {
+                    Some(tn) => kernel
+                        .heads_of_type(tn)?
+                        .into_iter()
+                        .map(|(koid, state)| (koid, 0, 0, state))
+                        .collect(),
+                    None => kernel.scan_heads()?,
+                },
+            )
         };
         let mut vec_scored: Vec<(KOID, f32)> = Vec::new();
         let mut txt_scored: Vec<(KOID, f32)> = Vec::new();

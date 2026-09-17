@@ -744,7 +744,8 @@ mod tests {
         for i in 0..n {
             create(&k, &a, "note", &format!("row {i}"));
         }
-        let plain: Arc<dyn Index> = Arc::new(TextIndexAdapter::new(Arc::new(TokenTextIndex::new())));
+        let plain: Arc<dyn Index> =
+            Arc::new(TextIndexAdapter::new(Arc::new(TokenTextIndex::new())));
         let spy = Arc::new(CommitCountIndex {
             inner: Arc::new(VectorIndexAdapter::new(Arc::new(
                 BruteForceVectorIndex::new(),
@@ -758,8 +759,7 @@ mod tests {
         assert_eq!(w, head, "the replay water reaches the journal head");
         assert_eq!(plain.len(), n, "every event applied");
         assert!(
-            spy.commits.load(std::sync::atomic::Ordering::Relaxed)
-                <= n.div_ceil(MAINTAINER_BATCH),
+            spy.commits.load(std::sync::atomic::Ordering::Relaxed) <= n.div_ceil(MAINTAINER_BATCH),
             "replay commits once per batch, not once per event"
         );
     }
