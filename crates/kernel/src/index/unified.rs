@@ -11,6 +11,31 @@ use crate::{TextIndex, VectorIndex};
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
 
+/// P1-04 (P5-M19 idx3-005) — the consistency class an index declares.
+/// The runtime judges what a scan may trust by this class, never by the
+/// implementation type:
+///
+/// | class                | who declares        | freshness story                          | may serve |
+/// |----------------------|---------------------|------------------------------------------|-----------|
+/// | Exact                | commit-path indexes | synchronous — applied at commit          | exact scans |
+/// | SnapshotExact        | property indexes    | stamp == head proves applied (verify)    | exact scans (verify-gated) |
+/// | EventuallyConsistent | vector/text engines | best-effort, converges behind the store  | candidates, post-filtered |
+/// | CandidateOnly        | the trait default   | no freshness proof at all                | never an exact scan |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsistencyLevel {
+    /// Maintained synchronously on the commit path; reads are exact.
+    Exact,
+    /// Asynchronous, but its freshness stamp + verify gate prove the
+    /// snapshot; clean-verified equality scans answer the committed truth.
+    SnapshotExact,
+    /// Asynchronous, converges behind the store; results are candidates
+    /// for ranking/post-filtering, never an exact answer set.
+    EventuallyConsistent,
+    /// No freshness story; usable only as a candidate source, always
+    /// re-checked against the store.
+    CandidateOnly,
+}
+
 /// The database-level index abstraction. `upsert`/`remove` carry the
 /// committed object; `commit_batch` is the one flush hook per applied batch
 /// (text engines commit once per batch); `scan_eq` is the equality surface
@@ -34,6 +59,12 @@ pub trait Index: Send + Sync {
     /// — the M4 read-path assist hook (idx2-008).
     fn covers(&self, _type_name: &str, _property: &str) -> bool {
         false
+    }
+    /// P1-04 — the index's consistency class (P5-M19 idx3-005). The default
+    /// is CandidateOnly: an index that does not declare a freshness story
+    /// is never allowed to answer an exact scan (fail closed).
+    fn consistency(&self) -> ConsistencyLevel {
+        ConsistencyLevel::CandidateOnly
     }
     fn len(&self) -> usize;
     /// P5-M17b — the freshness stamp: the last committed event seq this
@@ -127,6 +158,9 @@ impl Index for VectorIndexAdapter {
     fn len(&self) -> usize {
         self.inner.len()
     }
+    fn consistency(&self) -> ConsistencyLevel {
+        ConsistencyLevel::EventuallyConsistent
+    }
 }
 
 /// Text engine as an `Index`: buffers pending ops and flushes ONE
@@ -153,29 +187,43 @@ impl Index for TextIndexAdapter {
     }
     fn upsert(&self, koid: KOID, ko: &KnowledgeObject) -> KResult<()> {
         // justified: RwLock poison is unrecoverable
-        self.pending
-            .write()
-            .unwrap()
-            .0
-            .push((koid, tokenize(&ko_text(ko))));
+        let mut p = self.pending.write().unwrap();
+        // ponytail: one pending entry per koid — a batch retry (P0-01)
+        // re-pushes the same event; duplicates carry no information and
+        // would grow the buffer unboundedly under a persistent failure.
+        p.0.retain(|(k, _)| *k != koid);
+        p.0.push((koid, tokenize(&ko_text(ko))));
         Ok(())
     }
     fn remove(&self, koid: &KOID) -> KResult<()> {
         // justified: RwLock poison is unrecoverable
-        self.pending.write().unwrap().1.push(*koid);
+        let mut p = self.pending.write().unwrap();
+        p.1.retain(|k| k != koid);
+        p.1.push(*koid);
         Ok(())
     }
     fn commit_batch(&self) -> KResult<()> {
-        let (upserts, removes) = {
-            // justified: RwLock poison is unrecoverable
-            let mut p = self.pending.write().unwrap();
-            (std::mem::take(&mut p.0), std::mem::take(&mut p.1))
-        };
-        self.inner.upsert_many(&upserts)?;
-        self.inner.remove_many(&removes)
+        // P1-03: pending survives a failed flush — each stage runs against
+        // the retained buffer and clears only after it succeeds, so a
+        // stage-2 failure keeps the removes for the retry (and a stage-1
+        // failure keeps the upserts).
+        // justified: RwLock poison is unrecoverable
+        let mut p = self.pending.write().unwrap();
+        if !p.0.is_empty() {
+            self.inner.upsert_many(&p.0)?;
+            p.0.clear();
+        }
+        if !p.1.is_empty() {
+            self.inner.remove_many(&p.1)?;
+            p.1.clear();
+        }
+        Ok(())
     }
     fn len(&self) -> usize {
         self.inner.len()
+    }
+    fn consistency(&self) -> ConsistencyLevel {
+        ConsistencyLevel::EventuallyConsistent
     }
 }
 

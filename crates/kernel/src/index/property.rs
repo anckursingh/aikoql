@@ -6,7 +6,7 @@
 //! indexed. Contents are never persisted: they replay from the journal
 //! (idx2-007).
 
-use crate::index::unified::{Index, VerifyReport};
+use crate::index::unified::{ConsistencyLevel, Index, VerifyReport};
 use crate::knowledge::kom::*;
 use crate::transaction::kernel::Kernel;
 use std::collections::{BTreeSet, HashMap};
@@ -53,15 +53,17 @@ impl Index for PropertyIndex {
     }
 
     fn upsert(&self, koid: KOID, ko: &KnowledgeObject) -> KResult<()> {
-        if ko.metadata.type_name != self.type_name {
-            return Ok(());
-        }
         // justified: RwLock poison is unrecoverable
         let mut map = self.map.write().unwrap();
         // upsert = replace: the koid first drops from every key it may hold
-        // (an update moves the entry between keys — idx2-004)
+        // (an update moves the entry between keys — idx2-004). The sweep
+        // runs for foreign types too: a re-typed row must not keep
+        // answering scans for its old type (P1-01).
         for bucket in map.values_mut() {
             bucket.retain(|k| *k != koid);
+        }
+        if ko.metadata.type_name != self.type_name {
+            return Ok(());
         }
         if let Some(key) = self.key_of(ko) {
             map.entry(key).or_default().push(koid);
@@ -113,6 +115,13 @@ impl Index for PropertyIndex {
 
     fn applied_seq(&self) -> u64 {
         self.applied.load(Ordering::SeqCst)
+    }
+
+    /// P1-04: asynchronously maintained but stamp-verified — a fresh stamp
+    /// proves every committed event applied, so clean-verified scans answer
+    /// the committed truth (SnapshotExact).
+    fn consistency(&self) -> ConsistencyLevel {
+        ConsistencyLevel::SnapshotExact
     }
 
     fn verify(&self, kernel: &Kernel) -> KResult<VerifyReport> {

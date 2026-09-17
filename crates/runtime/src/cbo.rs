@@ -63,6 +63,14 @@ fn eq_selectivity(pred: &aikoql_kernel::ir::Predicate, stats: Option<&Statistics
         .map_or(1.0, |d| 1.0 / d as f64)
 }
 
+/// P1-04 (P5-M19 idx3-005): may this index answer an exact equality scan?
+/// A CandidateOnly index is a post-filter candidate, never the scan's
+/// answer set — anything else (Exact, SnapshotExact, EventuallyConsistent)
+/// is allowed through; the optimizer's verify gate judges freshness.
+fn may_serve_exact(idx: &dyn aikoql_kernel::Index) -> bool {
+    idx.consistency() != aikoql_kernel::ConsistencyLevel::CandidateOnly
+}
+
 /// The executor's index assist for a Scan the CBO flagged `PropertyIndex`:
 /// the same derivation the optimizer used, so the flag's koid list comes
 /// from the covering index. A flag without an index falls back to the full
@@ -81,6 +89,9 @@ pub(crate) fn scan_assist(
         return Ok(None);
     };
     for idx in kernel.property_indexes()? {
+        if !may_serve_exact(&*idx) {
+            continue; // CandidateOnly never answers an exact scan
+        }
         if idx.covers(type_name, &pred.property) {
             return Ok(Some(idx.scan_eq(std::slice::from_ref(&pred.value))?));
         }

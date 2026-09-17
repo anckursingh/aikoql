@@ -198,9 +198,14 @@ impl IndexMaintainer {
         Ok(m)
     }
 
-    /// Replay the journal from the current (or given) water mark, then
-    /// subscribe to live events.
+    /// Subscribe FIRST, then replay, then drain the overlap: the
+    /// subscription cursor registers every commit from this instant, the
+    /// replay fills everything before it, and the spawned loop discards the
+    /// events the replay already applied (seq <= water) — a commit between
+    /// the snapshot and the subscription can no longer land in neither
+    /// (P0-02).
     fn do_start(&self, kernel: &Kernel, resume_water: Option<u64>) -> KResult<()> {
+        let rx = kernel.notify(EventFilter::default())?;
         let water = match resume_water {
             Some(w) => w,
             None => {
@@ -216,8 +221,8 @@ impl IndexMaintainer {
         self.inner.water.store(water, Ordering::Relaxed);
 
         // P5-M19 (idx3-002) test hook: park between the replay snapshot and
-        // the live subscription so a RED can pin the P0-02 window — a
-        // commit here lands in neither replay nor subscription today.
+        // the live loop. The subscription opened BEFORE the snapshot, so a
+        // commit here is broadcast and applied — the window is closed.
         if std::env::var_os("MAINTAINER_START_PARK").is_some() {
             std::env::set_var("MAINTAINER_START_PARK_AT", "1");
             let mut waited = 0u64;
@@ -227,33 +232,56 @@ impl IndexMaintainer {
             }
         }
 
-        let rx = kernel.notify(EventFilter::default())?;
         let state = self.inner.clone();
         let v = self.vector_idx.clone();
         let t = self.text_idx.clone();
         let k = kernel.clone_handle();
         let handle = std::thread::spawn(move || {
             let mut pending: Vec<KnowledgeEvent> = Vec::new();
+            // P0-02: the subscription predates the replay, so the channel
+            // starts with events the replay already applied — discard them
+            // up to the water; the first event past it starts live.
+            let mut live = false;
+            // P0-01: a failed batch retries in place, never dropped — and
+            // no new events are received while a retry is pending.
+            let mut failed = false;
             loop {
                 if state.stop.load(Ordering::Relaxed) {
                     break;
                 }
+                if failed {
+                    std::thread::sleep(Duration::from_millis(25));
+                    if Self::drain_batch(&k, &*v, &*t, &pending, &state) {
+                        pending.clear();
+                        failed = false;
+                    }
+                    continue;
+                }
                 match rx.recv_timeout(Duration::from_millis(25)) {
                     Ok(ke) => {
+                        if !live {
+                            if ke.seq <= water {
+                                continue; // already applied by the replay
+                            }
+                            live = true;
+                        }
                         pending.push(ke);
                         if pending.len() < MAINTAINER_BATCH {
                             continue;
                         }
-                        // justified: async-secondary swallow — the maintainer
-                        // is a background service; a failed batch retries on
-                        // the next events and the kernel path is unaffected
-                        Self::drain_batch(&k, &*v, &*t, &pending, &state);
+                        if !Self::drain_batch(&k, &*v, &*t, &pending, &state) {
+                            failed = true;
+                            continue;
+                        }
                         pending.clear();
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                         if !pending.is_empty() {
-                            Self::drain_batch(&k, &*v, &*t, &pending, &state);
-                            pending.clear();
+                            if Self::drain_batch(&k, &*v, &*t, &pending, &state) {
+                                pending.clear();
+                            } else {
+                                failed = true;
+                            }
                         }
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -378,14 +406,17 @@ impl IndexMaintainer {
         Ok(())
     }
 
-    /// Apply the batch and record the outcome on the shared state.
+    /// Apply the batch and record the outcome on the shared state. Returns
+    /// whether the batch applied — the live loop retries a failed batch in
+    /// place (P0-01: a failed batch is never dropped, so the water mark and
+    /// the index stamps only ever advance past actually-applied events).
     fn drain_batch(
         kernel: &Kernel,
         vector_idx: &dyn Index,
         text_idx: &dyn Index,
         events: &[KnowledgeEvent],
         state: &MaintainerInner,
-    ) {
+    ) -> bool {
         match Self::apply_batch(kernel, vector_idx, text_idx, events) {
             Ok(()) => {
                 if let Some(last) = events.last() {
@@ -393,10 +424,12 @@ impl IndexMaintainer {
                 }
                 // justified: Mutex poison is unrecoverable
                 *state.last_error.lock().unwrap() = None;
+                true
             }
             Err(e) => {
                 // justified: Mutex poison is unrecoverable
                 *state.last_error.lock().unwrap() = Some(format!("{e}"));
+                false
             }
         }
     }
