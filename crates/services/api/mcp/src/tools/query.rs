@@ -141,6 +141,21 @@ pub(crate) fn compiler_expr_to_value(e: &aikoql_compiler::parser::ast::Expr) -> 
 }
 
 pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
+    // P5-M27 (IDX-P1-02): freshness is the client's choice. The default is
+    // query-now — index_lag_ms is reported per hit — and an explicit
+    // wait_for_freshness_ms waits here, once, ahead of both paths (a broken
+    // index is skipped; answers still come, lag is surfaced).
+    if let Some(ms) = args.get("wait_for_freshness_ms").and_then(|v| v.as_u64()) {
+        if let Some(m) = k.index_maintainer() {
+            let healthy = m
+                .status(k)
+                .map(|s| s.status != IndexStatusKind::Error)
+                .unwrap_or(true);
+            if healthy {
+                let _ = m.wait_caught_up(k, Duration::from_millis(ms));
+            }
+        }
+    }
     // IR path: when type_name is explicit, compile to IR and execute via runtime.
     if let Some(type_name) = args.get("type_name").and_then(|t| t.as_str()) {
         let subject = args
@@ -197,12 +212,17 @@ pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
         let raw = IrPlan::new(ops).with_description(format!("find_similar type={}", type_name));
         let plan = aikoql_compiler::planner::Planner::optimize(&raw);
         let result = aikoql_runtime::Interpreter::execute(k, &plan).map_err(|e| e.to_string())?;
+        // P5-M27 (IDX-P1-02): report the real maintainer lag, not a hardcoded 0.
+        let lag_ms = k
+            .index_maintainer()
+            .map(|m| m.lag(k).unwrap_or(0))
+            .unwrap_or(0);
         return match result {
             aikoql_runtime::RowSet::Scored(scored) => Ok(json!({
                 "results": scored.iter().map(|(koid, score, tn, version)| json!({
                     "koid": koid.to_hex(),
                     "score": score,
-                    "index_lag_ms": 0,
+                    "index_lag_ms": lag_ms,
                     "type_name": tn,
                     "version": version
                 })).collect::<Vec<_>>()
@@ -214,19 +234,6 @@ pub(crate) fn tool_find_similar(k: &Kernel, args: &J) -> Result<J, String> {
     // Fallback: no type_name — use kernel's find_similar for cross-type search.
     let fusion = parse_fusion(args);
     let vector = parse_vector(args)?;
-    // P5-M18: the ANN is eventually consistent — a query right after a
-    // write must not answer empty. Bounded wait for the maintainer to
-    // drain (a broken index is skipped; answers still come, lag is
-    // surfaced per hit).
-    if let Some(m) = k.index_maintainer() {
-        let healthy = m
-            .status(k)
-            .map(|s| s.status != IndexStatusKind::Error)
-            .unwrap_or(true);
-        if healthy {
-            let _ = m.wait_caught_up(k, Duration::from_secs(2));
-        }
-    }
     let res = k
         .find_similar(SimilarityQuery {
             context: subject_of(args).into(),
@@ -425,11 +432,7 @@ mod tests {
         fn text(&self) -> &Arc<dyn TextIndex> {
             &self.text
         }
-        fn wait_caught_up(
-            &self,
-            _k: &Kernel,
-            timeout: Duration,
-        ) -> aikoql_kernel::KResult<()> {
+        fn wait_caught_up(&self, _k: &Kernel, timeout: Duration) -> aikoql_kernel::KResult<()> {
             // justified: Mutex poison is unrecoverable
             self.waits.lock().unwrap().push(timeout);
             std::thread::sleep(timeout);
@@ -471,11 +474,8 @@ mod tests {
         );
 
         // The explicit policy: wait_for_freshness_ms is the client's bound.
-        let _ = tool_find_similar(
-            &k,
-            &json!({"text": "cat", "wait_for_freshness_ms": 500}),
-        )
-        .unwrap();
+        let _ =
+            tool_find_similar(&k, &json!({"text": "cat", "wait_for_freshness_ms": 500})).unwrap();
         // justified: Mutex poison is unrecoverable
         let waits = m.waits.lock().unwrap().clone();
         assert_eq!(waits, vec![Duration::from_millis(500)]);
