@@ -143,7 +143,10 @@ impl HnswVectorIndex {
             model_map: RwLock::new(model_map),
             tombstones: RwLock::new(tombstones),
             physical: AtomicU64::new(physical),
-            pending_rebuild: AtomicBool::new(false),
+            // P5-M27 (IDX-P1-04): restore the armed trigger (false for
+            // pre-M27 checkpoints — their dead ratio still crosses, but no
+            // flag means no rebuild until the next delete re-arms it).
+            pending_rebuild: AtomicBool::new(meta["pending"].as_bool().unwrap_or(false)),
             gen: AtomicU64::new(meta_gen),
         })
     }
@@ -180,8 +183,12 @@ impl HnswVectorIndex {
             .map(|((koid, model), v)| (format!("{model}:{}", koid.to_hex()), v.clone()))
             .collect();
         if live.iter().any(|(_, v)| v.is_empty()) {
-            // Post-load state: checkpoints store labels, not vectors — wait
-            // for the maintainer's catch-up re-upserts before rebuilding.
+            // P5-M27 (IDX-P1-04): post-load state — checkpoints store labels,
+            // not vectors, and empty vectors are not a rebuild. Keep the
+            // trigger armed and retry on a later tick (the catch-up re-upserts
+            // refill the map). Clearing it here would lose the trigger
+            // forever — no later delete crosses the ratio again.
+            self.pending_rebuild.store(true, Ordering::Relaxed);
             return false;
         }
         let mut fresh = build_index(self.capacity);
@@ -361,6 +368,10 @@ impl VectorIndex for HnswVectorIndex {
             "capacity": self.capacity,
             "physical": self.physical.load(Ordering::Relaxed),
             "tombstones": tombstones,
+            // P5-M27 (IDX-P1-04): the armed rebuild trigger is part of the
+            // generation — a crash between the delete and the rebuild must
+            // not disarm it (the dead ratio stays crossed post-load).
+            "pending": self.pending_rebuild.load(Ordering::Relaxed),
             "models": models_json,
             // P5-M22 (P1-14): the generation binds the meta to the graph
             // below; the manifest (published LAST) is the load gate.
