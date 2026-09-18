@@ -396,3 +396,88 @@ pub(crate) fn tool_prove(k: &Kernel, args: &J) -> Result<J, String> {
         "head_audit_hash": p.head_audit_hash
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aikoql_kernel::index::{IndexMaintainerApi, TextIndex, VectorIndex};
+    use aikoql_kernel::{BruteForceVectorIndex, ManualClock, MemoryEngine, TokenTextIndex};
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    /// A healthy-but-lagging maintainer whose wait_caught_up reproduces the
+    /// barrier (the real impl polls lag for up to the bound) and records
+    /// every bound the tool asks for.
+    struct RecordingMaintainer {
+        lag: AtomicU64,
+        waits: Mutex<Vec<Duration>>,
+        vectors: Arc<dyn VectorIndex>,
+        text: Arc<dyn TextIndex>,
+    }
+    impl IndexMaintainerApi for RecordingMaintainer {
+        fn lag(&self, _k: &Kernel) -> aikoql_kernel::KResult<u64> {
+            Ok(self.lag.load(AtomicOrdering::Relaxed))
+        }
+        fn vectors(&self) -> &Arc<dyn VectorIndex> {
+            &self.vectors
+        }
+        fn text(&self) -> &Arc<dyn TextIndex> {
+            &self.text
+        }
+        fn wait_caught_up(
+            &self,
+            _k: &Kernel,
+            timeout: Duration,
+        ) -> aikoql_kernel::KResult<()> {
+            // justified: Mutex poison is unrecoverable
+            self.waits.lock().unwrap().push(timeout);
+            std::thread::sleep(timeout);
+            Ok(())
+        }
+    }
+
+    /// P5-M27 (IDX-P1-02) — RED: the default find_similar blocks ~2s behind
+    /// a lagging maintainer; the explicit opt-in must be the client's
+    /// bound. Fails on the elapsed-time assertion with the current code.
+    #[test]
+    fn find_similar_default_has_no_hidden_catch_up_barrier() {
+        let k = Kernel::open(
+            Arc::new(MemoryEngine::new()),
+            Arc::new(ManualClock::new(10_000)),
+            0xBEEF,
+        )
+        .unwrap();
+        let m = Arc::new(RecordingMaintainer {
+            lag: AtomicU64::new(1), // healthy, but lagging
+            waits: Mutex::new(Vec::new()),
+            vectors: Arc::new(BruteForceVectorIndex::new()),
+            text: Arc::new(TokenTextIndex::default()),
+        });
+        k.attach_indexes(m.clone());
+
+        let t0 = Instant::now();
+        let res = tool_find_similar(&k, &json!({"text": "cat"})).unwrap();
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "the default path must not hide a 2s catch-up barrier (took {elapsed:?})"
+        );
+        assert!(res["results"].is_array());
+        // justified: Mutex poison is unrecoverable
+        assert!(
+            m.waits.lock().unwrap().is_empty(),
+            "no wait unless the client asked for one"
+        );
+
+        // The explicit policy: wait_for_freshness_ms is the client's bound.
+        let _ = tool_find_similar(
+            &k,
+            &json!({"text": "cat", "wait_for_freshness_ms": 500}),
+        )
+        .unwrap();
+        // justified: Mutex poison is unrecoverable
+        let waits = m.waits.lock().unwrap().clone();
+        assert_eq!(waits, vec![Duration::from_millis(500)]);
+    }
+}
