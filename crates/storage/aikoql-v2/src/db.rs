@@ -455,6 +455,16 @@ impl Db {
         // recovery is checkpoint + recent deltas, never the full history.
         let checkpoint = load_newest(&config.dir, current.manifest_generation)?;
         let checkpoint_generation = checkpoint.as_ref().map_or(0, |c| c.generation);
+        // PR6-001 — the checkpoint's floors bound every recomputed
+        // allocator from below: its prune deleted the history those
+        // recomputes would otherwise read (ckp009's burned generations).
+        let checkpoint_floors = checkpoint.as_ref().map_or((0, 0, 0), |c| {
+            (
+                c.next_logical_id,
+                c.next_replica_id,
+                c.next_placement_generation,
+            )
+        });
         let mut identity: HashMap<ObjectId, LogicalId> = HashMap::new();
         let mut replicas: HashMap<LogicalId, ReplicaId> = HashMap::new();
         if let Some(ckp) = &checkpoint {
@@ -706,8 +716,10 @@ impl Db {
         // SE2-M30 — the allocators recover past every id that ever existed
         // (logs + replayed WAL): ids are never reused after restart (§32
         // ID-014) or deletion (§49).
-        let next_logical_id = identity.values().map(|l| l.0).max().unwrap_or(0) + 1;
-        let next_replica_id = replicas.values().map(|r| r.0).max().unwrap_or(0) + 1;
+        let next_logical_id =
+            (identity.values().map(|l| l.0).max().unwrap_or(0) + 1).max(checkpoint_floors.0);
+        let next_replica_id =
+            (replicas.values().map(|r| r.0).max().unwrap_or(0) + 1).max(checkpoint_floors.1);
         // SE2-M32 — placement generations recover past the newest applied
         // record (logs + replayed WAL); the gate ignores anything older,
         // so the map maximum IS the maximum ever allocated. SE2-M40 — the
@@ -715,13 +727,14 @@ impl Db {
         // generation durably published in a state-C window is never
         // re-handed (INV-05), however invisible its records are to the
         // recovered map.
-        let next_placement_generation = placements
+        let next_placement_generation = (placements
             .values()
             .map(|p| p.generation())
             .max()
             .unwrap_or(0)
             .max(orphan_pgen_max)
-            + 1;
+            + 1)
+        .max(checkpoint_floors.2);
         // SE2-M40 — the checkpoint trigger's budget resumes from the bytes
         // published after the newest checkpoint (leftover pre-checkpoint
         // logs are dead weight the next prune sweeps, not replay work).
@@ -1916,6 +1929,9 @@ impl Db {
             &state.identity,
             &state.replicas,
             &state.placements,
+            state.next_logical_id,
+            state.next_replica_id,
+            state.next_placement_generation,
         );
         let path = checkpoint_path(&config.dir, state.generation);
         // P4-M6 — the streamed publish (no encoded buffer; same staging

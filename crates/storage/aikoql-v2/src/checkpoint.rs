@@ -68,6 +68,16 @@ pub struct DirectoryCheckpoint {
     pub identities: Vec<IdentityRecord>,
     pub replicas: Vec<ReplicaRecord>,
     pub placements: Vec<PlacementRecord>,
+    // PR6-001 — the allocator floors at publication. Pruning deletes the
+    // only historical source for old mutations (the orphan log's burned
+    // generations, ckp009), so "decode succeeded" is not completeness: the
+    // checkpoint must carry the floors, or a reopen recomputes them low and
+    // reuses ids/generations. next_seq/next_segment_id stay derivable — the
+    // prune never touches the WAL, manifest or segments their recovery
+    // reads.
+    pub next_logical_id: u64,
+    pub next_replica_id: u64,
+    pub next_placement_generation: u64,
 }
 
 pub fn checkpoint_path(dir: &Path, generation: u64) -> PathBuf {
@@ -91,6 +101,9 @@ impl DirectoryCheckpoint {
         identity: &HashMap<crate::identity::ObjectId, crate::identity::LogicalId>,
         replicas: &HashMap<crate::identity::LogicalId, crate::identity::ReplicaId>,
         placements: &HashMap<crate::identity::ReplicaId, Placement>,
+        next_logical_id: u64,
+        next_replica_id: u64,
+        next_placement_generation: u64,
     ) -> Self {
         let mut identities: Vec<IdentityRecord> = identity
             .iter()
@@ -117,6 +130,9 @@ impl DirectoryCheckpoint {
             identities,
             replicas,
             placements,
+            next_logical_id,
+            next_replica_id,
+            next_placement_generation,
         }
     }
 
@@ -188,6 +204,13 @@ impl DirectoryCheckpoint {
                     }
                 }
             }
+            // PR6-001 — the floors ride INSIDE the checksum, before it:
+            // an old binary reading this file fails the checksum, and a new
+            // binary reading an old file hits EOF before the checksum —
+            // both directions fail closed without a FORMAT_VERSION bump.
+            w(&self.next_logical_id.to_le_bytes())?;
+            w(&self.next_replica_id.to_le_bytes())?;
+            w(&self.next_placement_generation.to_le_bytes())?;
             hasher.finalize()
         };
         out.write_all(&digest[..8])
@@ -284,6 +307,9 @@ impl DirectoryCheckpoint {
             };
             placements.push(PlacementRecord { rid, placement });
         }
+        let next_logical_id = cur.u64()?;
+        let next_replica_id = cur.u64()?;
+        let next_placement_generation = cur.u64()?;
         let stored_ck = cur.take(8)?;
         if !cur.is_empty() {
             return Err(FormatError::Corrupt("checkpoint trailing bytes".into()));
@@ -297,6 +323,9 @@ impl DirectoryCheckpoint {
             identities,
             replicas,
             placements,
+            next_logical_id,
+            next_replica_id,
+            next_placement_generation,
         })
     }
 

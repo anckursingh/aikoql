@@ -50,7 +50,7 @@ fn sample_checkpoint() -> DirectoryCheckpoint {
             },
         );
     }
-    DirectoryCheckpoint::from_state(42, &identity, &replicas, &placements)
+    DirectoryCheckpoint::from_state(42, &identity, &replicas, &placements, 25, 124, 254)
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +243,8 @@ fn cps003_peak_rss_streamed_not_above_materialized() {
             replicas.insert(lid, rid);
             placements.insert(rid, Placement::Memtable { generation: 1 });
         }
-        let cp = DirectoryCheckpoint::from_state(1, &identity, &replicas, &placements);
+        let cp =
+            DirectoryCheckpoint::from_state(1, &identity, &replicas, &placements, n + 1, n + 1, 2);
         let held = cp.encode(); // the materialized path's transient buffer
         let encode_len = held.len() as u64;
         let mat_peak = self_peak_over(std::process::id(), 2500);

@@ -112,7 +112,8 @@ fn ckp001_format_golden_and_damage() {
     );
     placements.insert(ReplicaId(20), Placement::Retired { generation: 11 });
     placements.insert(ReplicaId(30), Placement::Memtable { generation: 4 });
-    let checkpoint = DirectoryCheckpoint::from_state(7, &identity, &replicas, &placements);
+    let checkpoint =
+        DirectoryCheckpoint::from_state(7, &identity, &replicas, &placements, 3, 30, 12);
     let encoded = checkpoint.encode();
     assert_eq!(DirectoryCheckpoint::decode(&encoded).unwrap(), checkpoint);
 
@@ -125,7 +126,8 @@ fn ckp001_format_golden_and_damage() {
          020000000000000001000000000000001400000000000000030000000a0000000000000002\
          050000000000000003000000070000000900000000000000140000000000000003\
          000000000000000000000000000000000b000000000000001e0000000000000001\
-         000000000000000000000000000000000400000000000000f948258a71a12d46"
+         0000000000000000000000000000000004000000000000000300000000000000\
+         1e000000000000000c00000000000000c94504babc427b1d"
     );
 
     let mut bad_magic = encoded.clone();
@@ -780,14 +782,17 @@ fn checkpoint_cannot_prune_when_allocator_state_is_not_represented() {
     assert!(orphan_max > 0, "the orphan carries generations");
 
     // Reopen #1 (the ckp006 recovery): the orphan scan lifts the allocator
-    // past the burned generations; the next flush crosses the tiny
-    // checkpoint trigger and PRUNES — deleting the orphan log, the last
-    // recompute source for those generations.
+    // past the burned generations. A delete allocates nothing (it rides the
+    // object's own rid, db.rs delete_object), so the next flush crosses the
+    // tiny checkpoint trigger WITHOUT moving any allocator, publishes at
+    // CURRENT past the orphan's gen, and PRUNES — deleting the orphan log,
+    // the last recompute source for those generations.
     let mut cfg = Config::new(d.clone());
     cfg.checkpoint_bytes = 256; // every flush crosses it
     cfg.l0_compact_trigger = 0;
     {
         let db = Db::open(cfg.clone()).unwrap();
+        db.delete_object(oid(1), b"k1").unwrap(); // dirties the memtable, allocates nothing
         db.flush().unwrap(); // checkpoint at CURRENT, prunes ≤ CURRENT
     }
     assert_eq!(
@@ -804,7 +809,9 @@ fn checkpoint_cannot_prune_when_allocator_state_is_not_represented() {
 
     // The checkpoint must carry the floors: with the orphan log gone, the
     // open's recompute sources for the burned generations are gone too.
-    // RED (compile): the floor fields do not exist yet.
+    // This IS the representation pin — a checkpoint format that drops the
+    // floors decodes them as 0 and fails here (and write_checkpoint's
+    // read-back equality fails publication closed).
     let cp = DirectoryCheckpoint::read(&checkpoint_path(&d, checkpoint_gens(&d)[0])).unwrap();
     assert!(
         cp.next_placement_generation > orphan_max,
@@ -813,9 +820,12 @@ fn checkpoint_cannot_prune_when_allocator_state_is_not_represented() {
     assert!(cp.next_logical_id > 0, "logical-id floor is represented");
     assert!(cp.next_replica_id > 0, "replica-id floor is represented");
 
-    // Reopen #2 — the crash after prune. Every fresh relocation generation
-    // must sit ABOVE everything that was ever durably published (INV-05),
-    // with the orphan log itself gone.
+    // Reopen #2 — the crash after prune. The acceptance pin: the recovered
+    // store is complete and every fresh relocation generation sits ABOVE
+    // everything that was ever durably published (INV-05), with the orphan
+    // log itself gone. (Not the discriminating assertion — the reopen's own
+    // orphan scan and first mutation re-pin the map above the burned space
+    // through the public API; the representation pin above is.)
     let mut cfg = Config::new(d.clone());
     cfg.checkpoint_bytes = 0;
     cfg.l0_compact_trigger = 0;
