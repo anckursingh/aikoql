@@ -277,6 +277,8 @@ name = "aikoql-scheduler"
 version = "0.1.19"
 dependencies = [
  "aikoql-kernel",
+ "aikoql-storage-v2",
+ "aikoql-vector",
 ]
 
 [[package]]
