@@ -1474,6 +1474,47 @@ fn mvp_rec_002_backup_destroy_restore_round_trip() {
     let _ = std::fs::remove_file(&db);
 }
 
+/// Removes the backend env var on drop — even when the test panics, so a
+/// global AIKOQL_BACKEND can never poison the other parallel tests.
+struct BackendEnvGuard;
+
+impl Drop for BackendEnvGuard {
+    fn drop(&mut self) {
+        std::env::remove_var("AIKOQL_BACKEND");
+    }
+}
+
+#[test]
+fn mcp_client_children_ignore_process_backend_env() {
+    // CI flake (2026-09-18, Windows job): p3m3_bkp005's redb leg set
+    // AIKOQL_BACKEND on the WHOLE test process, and every parallel test's
+    // child inherited it — a sibling's v2 directory opened as redb and
+    // died with "Access is denied". The harness must spawn children with
+    // a clean backend env, not leak the process-global one.
+    let db = tmp_db("envleak");
+    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
+    let _guard = BackendEnvGuard;
+    std::env::set_var("AIKOQL_BACKEND", "redb");
+    let mut c = McpClient::start(&db);
+    drop(_guard); // the child inherited at spawn; clean the process now
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note",
+            "properties": {"body": "backend env must not leak"}
+        }),
+    );
+    assert!(note["koid"].as_str().is_some());
+    let backup = c.call("backup", &json!({"subject": "admin"}));
+    assert_eq!(
+        backup["engine"], "aikoql-v2",
+        "McpClient::start leaked the process-global AIKOQL_BACKEND into the child: {backup}"
+    );
+    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
+}
+
 // P3-M3 bkp005 — MCP backup/restore route v2 backends through the
 // engine-native snapshot (§58–60): the backup dir holds the manifest +
 // segments + logs + torn-safe WAL and exactly one SNAPSHOT-{gen} marker
