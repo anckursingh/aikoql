@@ -139,7 +139,12 @@ impl McpClient {
 
         let mut response = String::new();
         self.reader.read_line(&mut response).unwrap();
-        let v: J = serde_json::from_str(&response).unwrap();
+        let v: J = serde_json::from_str(&response).unwrap_or_else(|e| {
+            panic!(
+                "MCP parse failure for {tool}: {e:?} — response={response:?}, child_status={:?}",
+                self.child.try_wait()
+            )
+        });
         if let Some(err) = v.get("error") {
             panic!("MCP error for {}: {:?}", tool, err);
         }
