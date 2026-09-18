@@ -1328,6 +1328,25 @@ impl Db {
         self.state.read().unwrap().placements.get(&rid).copied()
     }
 
+    /// PR6-003 — the full directory snapshot at the current generation
+    /// (identity + replica + placement maps, the checkpoint builder's own
+    /// view): the semantic-equivalence oracle — the live map must equal
+    /// the checkpoint/recovered map field for field, and building the
+    /// oracle from `DirectoryCheckpoint::from_state` guarantees it can
+    /// never drift apart from what gets published.
+    pub fn directory_snapshot(&self) -> DirectoryCheckpoint {
+        let s = self.state.read().unwrap();
+        DirectoryCheckpoint::from_state(
+            s.generation,
+            &s.identity,
+            &s.replicas,
+            &s.placements,
+            s.next_logical_id,
+            s.next_replica_id,
+            s.next_placement_generation,
+        )
+    }
+
     /// SE2-M38 §45 — the per-directory resident byte estimate: capacity ×
     /// slot size plus the Swiss-table control bytes (allocator overhead
     /// excluded). The memory-gate report's per-directory rows — the
