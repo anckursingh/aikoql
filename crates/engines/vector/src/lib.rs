@@ -871,4 +871,74 @@ mod tests {
             "below-threshold deletes never rebuild"
         );
     }
+
+    // --- P5-M27 (IDX-P1-04) — the rebuild trigger survives. RED: a post-load
+    // index bails on empty vectors but the flag is already consumed, so the
+    // rehydrated index never rebuilds; and a checkpoint round-trip loses the
+    // flag entirely (the dead ratio stays crossed, no later delete re-arms
+    // it). ---
+
+    #[test]
+    fn vec004_post_load_rebuild_trigger_survives_unavailable_vectors() {
+        // justified: test-thread names contain `::` (invalid on Windows paths)
+        let dir = std::env::temp_dir().join(format!("aikoql-vec004-a-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let idx = HnswVectorIndex::new(2, 100);
+            for i in 1..=10u8 {
+                idx.upsert(kid(i), "m", &[i as f32, 1.0]);
+            }
+            idx.checkpoint(&dir).unwrap();
+        }
+        let loaded = HnswVectorIndex::load(&dir).unwrap();
+        // Post-load state: the map knows the pairs, the vectors are empty.
+        for i in 1..=5u8 {
+            loaded.remove(&kid(i)); // 5/10 — crosses the rebuild ratio
+        }
+        assert!(
+            !loaded.maybe_rebuild(),
+            "vectors unavailable — the rebuild cannot run yet"
+        );
+        // The maintainer's catch-up re-upserts the LIVE entries only.
+        for i in 6..=10u8 {
+            loaded.upsert(kid(i), "m", &[i as f32, 1.0]);
+        }
+        assert!(
+            loaded.maybe_rebuild(),
+            "the trigger survived the unavailable-vectors bail — rebuild now"
+        );
+        let h = loaded.health().unwrap();
+        assert_eq!(h.tombstones, 0);
+        assert_eq!(h.physical, 5, "the graph shrank to the live set");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vec004_pending_rebuild_survives_checkpoint_roundtrip() {
+        // justified: test-thread names contain `::` (invalid on Windows paths)
+        let dir = std::env::temp_dir().join(format!("aikoql-vec004-b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let idx = HnswVectorIndex::new(2, 100);
+            for i in 1..=10u8 {
+                idx.upsert(kid(i), "m", &[i as f32, 1.0]);
+            }
+            for i in 1..=5u8 {
+                idx.remove(&kid(i)); // arms the trigger — no maintenance tick yet
+            }
+            idx.checkpoint(&dir).unwrap();
+        }
+        let loaded = HnswVectorIndex::load(&dir).unwrap();
+        for i in 6..=10u8 {
+            loaded.upsert(kid(i), "m", &[i as f32, 1.0]); // rehydrate the live
+        }
+        assert!(
+            loaded.maybe_rebuild(),
+            "the armed trigger survived the checkpoint round-trip"
+        );
+        let h = loaded.health().unwrap();
+        assert_eq!(h.tombstones, 0);
+        assert_eq!(h.physical, 5);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
