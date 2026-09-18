@@ -803,16 +803,43 @@ mod tests {
         }
     }
 
+    /// Fails every apply until the test flips `fail` off. idx001 needs the
+    /// Error state to persist while it is observed: a fail-once stub
+    /// recovers ~25ms after the failure (the live loop's retry sleep), a
+    /// transient window the 10ms status poll can miss under parallel test
+    /// load — the poll then never sees Error and the deadline trips.
+    struct FailingUntilReleasedText {
+        inner: TokenTextIndex,
+        fail: AtomicBool,
+    }
+    impl TextIndex for FailingUntilReleasedText {
+        fn upsert(&self, koid: KOID, tokens: &BTreeSet<String>) -> KResult<()> {
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(KError::Store("forced apply failure".into()));
+            }
+            self.inner.upsert(koid, tokens)
+        }
+        fn remove(&self, koid: &KOID) -> KResult<()> {
+            self.inner.remove(koid)
+        }
+        fn search(&self, tokens: &BTreeSet<String>, k: usize) -> KResult<Vec<(KOID, f32)>> {
+            self.inner.search(tokens, k)
+        }
+        fn len(&self) -> usize {
+            self.inner.len()
+        }
+    }
+
     #[test]
     fn idx001_status_records_last_error_and_recovers() {
         let k = mk();
         let a = Subject::new("alice");
         let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
-        let t: Arc<dyn TextIndex> = Arc::new(FailingOnceText {
+        let t = Arc::new(FailingUntilReleasedText {
             inner: TokenTextIndex::new(),
             fail: AtomicBool::new(true),
         });
-        let m = Arc::new(IndexMaintainer::new(v, t));
+        let m = Arc::new(IndexMaintainer::new(v, t.clone()));
         SchedulerJob::start(&*m, &k).unwrap();
 
         create(&k, &a, "note", "first fails");
@@ -833,6 +860,7 @@ mod tests {
             "the failed apply is surfaced as Error + last_error"
         );
 
+        t.fail.store(false, Ordering::SeqCst);
         create(&k, &a, "note", "second succeeds");
         m.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
         let s = m.status(&k).unwrap();
