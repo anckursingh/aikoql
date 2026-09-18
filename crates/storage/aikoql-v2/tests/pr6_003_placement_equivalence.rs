@@ -94,7 +94,10 @@ fn memtable_placement_round_trips() {
         let snap = db.directory_snapshot();
         assert!(matches!(
             snap.placements.as_slice(),
-            [PlacementRecord { placement: Placement::Memtable { .. }, .. }]
+            [PlacementRecord {
+                placement: Placement::Memtable { .. },
+                ..
+            }]
         ));
         snap
     };
@@ -141,7 +144,10 @@ fn retired_placement_round_trips() {
         db.compact().unwrap();
         assert!(matches!(
             db.directory_snapshot().placements.as_slice(),
-            [PlacementRecord { placement: Placement::Retired { .. }, .. }]
+            [PlacementRecord {
+                placement: Placement::Retired { .. },
+                ..
+            }]
         ));
         db.checkpoint_now().unwrap();
         let snap = db.directory_snapshot();

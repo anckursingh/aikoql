@@ -659,6 +659,9 @@ impl Db {
         // SE2-M40 — the seed also clears the orphan logs' burned
         // generations (Challenge C): a replayed flip must never re-hand a
         // number a state-C compaction already durably published.
+        // PR6-003 — a checkpoint-seeded Memtable already carries the flip
+        // the replayed op logged (replay_object_placement skips it):
+        // re-applying would displace the durably published generation.
         let mut replay_pgen = placements
             .values()
             .map(|p| p.generation())
@@ -676,7 +679,7 @@ impl Db {
                     // consulting the directories.
                     Op::PutObject(rid, k, v) => {
                         active.apply_object(k.clone(), frame.seq, Some(v.clone()), *rid);
-                        Self::apply_object_placement(
+                        Self::replay_object_placement(
                             &mut placements,
                             &mut pending_placements,
                             &mut replay_pgen,
@@ -685,7 +688,7 @@ impl Db {
                     }
                     Op::DeleteObject(rid, k) => {
                         active.apply_object(k.clone(), frame.seq, None, *rid);
-                        Self::apply_object_placement(
+                        Self::replay_object_placement(
                             &mut placements,
                             &mut pending_placements,
                             &mut replay_pgen,
@@ -1176,6 +1179,25 @@ impl Db {
         merge_placement(placements, rid, placement)?;
         pending.push(PlacementRecord { rid, placement });
         Ok(())
+    }
+
+    /// PR6-003 — the WAL-replay variant: a checkpoint-seeded `Memtable`
+    /// already holds the flip the replayed op logged (the snapshot was
+    /// taken after it), so re-applying it would allocate a fresh
+    /// generation over the durably published one. Segment/Retired entries
+    /// still flip — a move after the checkpoint is real state. With no
+    /// checkpoint the map starts empty and the skip never fires, so the
+    /// SE2-M39 re-pend behaviour is unchanged.
+    fn replay_object_placement(
+        placements: &mut HashMap<ReplicaId, Placement>,
+        pending: &mut Vec<PlacementRecord>,
+        next_generation: &mut u64,
+        rid: ReplicaId,
+    ) -> Result<(), FormatError> {
+        if matches!(placements.get(&rid), Some(Placement::Memtable { .. })) {
+            return Ok(());
+        }
+        Self::apply_object_placement(placements, pending, next_generation, rid)
     }
 
     /// SE2-M33 — the §14 write path: PUT resolves the ObjectId through the
