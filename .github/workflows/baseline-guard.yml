@@ -15,6 +15,11 @@
 
 name: Baseline Certification Guard
 
+# CodeQL actions/missing-workflow-permissions: the guard only reads the
+# repo and runs benchmarks — no contents: write anywhere.
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:
