@@ -8,3 +8,4 @@ repository.workspace = true
 
 [dependencies]
 aikoql-kernel = { path = "../../kernel" }
+aikoql-storage-v2 = { path = "../../storage/aikoql-v2" } # checkpoint crash-child harness (bin + tests)
