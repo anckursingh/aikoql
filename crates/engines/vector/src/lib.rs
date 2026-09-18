@@ -485,6 +485,18 @@ impl TantivyTextIndex {
             .map_err(|e| KError::Store(format!("tantivy reader: {}", e)))?;
         let searcher = reader.searcher();
         let num_docs = searcher.num_docs();
+        // An empty checkpoint is legal (the maintainer can checkpoint
+        // before the first note seeds tokens): TopDocs::with_limit(0)
+        // panics inside tantivy, so short-circuit the scan.
+        if num_docs == 0 {
+            return Ok(TantivyTextIndex {
+                koid_field,
+                tokens_field,
+                index,
+                writer: Mutex::new(writer),
+                docs: RwLock::new(BTreeMap::new()),
+            });
+        }
         let top_docs = searcher
             .search(
                 &tantivy::query::AllQuery,
@@ -1010,10 +1022,7 @@ mod tests {
         // justified: test-thread names contain `::` (invalid on Windows paths)
         let dir = std::env::temp_dir().join(format!("aikoql-tvec-empty-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        TantivyTextIndex::new()
-            .unwrap()
-            .checkpoint(&dir)
-            .unwrap();
+        TantivyTextIndex::new().unwrap().checkpoint(&dir).unwrap();
         let loaded = TantivyTextIndex::load(&dir).unwrap();
         assert!(
             loaded
