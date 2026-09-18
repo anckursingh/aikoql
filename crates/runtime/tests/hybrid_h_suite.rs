@@ -264,7 +264,7 @@ fn h4_temporal_to_provenance() {
     let rows = run(&s.k, H4, "alice");
     let koids: HashSet<KOID> = match rows {
         RowSet::Objects(objs) => objs.into_iter().map(|ko| ko.koid).collect(),
-        other => panic!("expected Objects, got {:?}", other),
+        other => panic!("expected Objects, got {}", other.shape()),
     };
     assert_eq!(koids, [s.cats, s.dogs, s.fish].into_iter().collect());
     let alice = KnowledgeContext::new(Subject::new("alice"));

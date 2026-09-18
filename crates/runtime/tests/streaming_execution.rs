@@ -91,7 +91,7 @@ fn materialized(k: &Kernel, query: &str, subject: &str) -> Vec<KOID> {
     let plan = parser::compile_with_subject(query, subject).unwrap();
     match Interpreter::execute(k, &plan).unwrap() {
         aikoql_runtime::RowSet::Objects(kos) => kos.into_iter().map(|ko| ko.koid).collect(),
-        other => panic!("expected Objects, got {:?}", other),
+        other => panic!("expected Objects, got {}", other.shape()),
     }
 }
 

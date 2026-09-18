@@ -224,6 +224,20 @@ impl RowSet {
             _ => 0,
         }
     }
+
+    /// P5-M27 (CodeQL): payload-free shape summary for diagnostics — variant
+    /// name + row count only. Panic/log messages must not dump full request
+    /// objects or KO payloads (cleartext-sensitive logging).
+    pub fn shape(&self) -> String {
+        let (name, n) = match self {
+            RowSet::Objects(v) => ("Objects", v.len()),
+            RowSet::Scored(v) => ("Scored", v.len()),
+            RowSet::Traversal(v) => ("Traversal", v.len()),
+            RowSet::Grouped(v) => ("Grouped", v.len()),
+            RowSet::Joined(v) => ("Joined", v.len()),
+        };
+        format!("{name} with {n} rows")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1809,8 +1823,24 @@ mod tests {
     fn objects(result: RowSet) -> Vec<KnowledgeObject> {
         match result {
             RowSet::Objects(kos) => kos,
-            other => panic!("expected Objects, got {:?}", other),
+            other => panic!("expected Objects, got {}", other.shape()),
         }
+    }
+
+    #[test]
+    fn shape_carries_no_payloads() {
+        let (k, clock) = mk_with_clock();
+        fact_with_validity(&k, &clock, "alice", "SECRET-MARKER", 42, None);
+        let kos = objects(Interpreter::execute(&k, &scan_plan()).unwrap());
+        let s = RowSet::Objects(kos).shape();
+        assert!(
+            !s.contains("SECRET-MARKER"),
+            "shape must stay payload-free: {s}"
+        );
+        assert!(
+            s.contains("Objects") && s.contains("1 rows"),
+            "shape names the variant and the row count: {s}"
+        );
     }
 
     #[test]

@@ -81,7 +81,7 @@ fn objects(k: &Kernel, query: &str) -> Vec<KnowledgeObject> {
     let plan = parser::compile_with_subject(query, "alice").unwrap();
     match Interpreter::execute(k, &plan).unwrap() {
         RowSet::Objects(kos) => kos,
-        other => panic!("expected Objects, got {:?}", other),
+        other => panic!("expected Objects, got {}", other.shape()),
     }
 }
 

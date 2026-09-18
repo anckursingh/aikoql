@@ -80,7 +80,7 @@ fn catch_up_indexes(k: &Kernel) {
 fn exec_ids(rows: &aikoql_runtime::RowSet) -> Vec<KOID> {
     match rows {
         aikoql_runtime::RowSet::Objects(kos) => kos.iter().map(|ko| ko.koid).collect(),
-        other => panic!("expected Objects, got {other:?}"),
+        other => panic!("expected Objects, got {}", other.shape()),
     }
 }
 
