@@ -1000,6 +1000,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // --- CI fix (Python SDK close→reopen) — an empty tantivy checkpoint
+    // (the maintainer checkpointed before the first note seeded tokens)
+    // loads without handing tantivy a limit of 0: TopDocs::with_limit(0)
+    // panics. RED: load() panics on the empty index. ---
+
+    #[test]
+    fn text_empty_checkpoint_loads_without_panicking() {
+        // justified: test-thread names contain `::` (invalid on Windows paths)
+        let dir = std::env::temp_dir().join(format!("aikoql-tvec-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        TantivyTextIndex::new()
+            .unwrap()
+            .checkpoint(&dir)
+            .unwrap();
+        let loaded = TantivyTextIndex::load(&dir).unwrap();
+        assert!(
+            loaded
+                .search(&BTreeSet::from(["anything".to_string()]), 5)
+                .unwrap()
+                .is_empty(),
+            "the empty checkpoint answers no documents"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // --- P5-M27 (IDX-P1-03) — dimension mismatches are observable. RED: the
     // health struct has no mismatch signal — E0609, the missing-seam RED (the
     // cbo_default_001 pattern). The wrong-dim drop is behavior-pinned at
