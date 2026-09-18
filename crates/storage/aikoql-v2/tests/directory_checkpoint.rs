@@ -734,6 +734,111 @@ fn ckp006_orphan_pgen_allocator_never_reuses() {
 }
 
 // ---------------------------------------------------------------------------
+// PR6-001 — a checkpoint that prunes must represent the allocator floors
+// (review P0: "decode succeeded" does not prove completeness; pruning
+// removes the only historical source for old mutations). ckp006 proved the
+// orphan scan recovers burned generations while the orphan log SURVIVES;
+// this pins that the CHECKPOINT carries the floors once the prune deletes
+// the orphan log itself. The read-back equality in write_checkpoint then
+// makes publication fail closed unless the floors round-trip.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn checkpoint_cannot_prune_when_allocator_state_is_not_represented() {
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let mut cfg = Config::new(child_dir());
+        cfg.checkpoint_bytes = 0;
+        cfg.l0_compact_trigger = 0;
+        let db = Db::open(cfg).unwrap();
+        for b in 0x01u8..=0x0A {
+            let a = oid(b);
+            db.put_object(a, b"k1", &[b, 1]).unwrap();
+            db.put_object(a, b"k2", &[b, 2]).unwrap();
+            if b % 5 == 0 {
+                db.flush().unwrap();
+            }
+        }
+        db.compact().unwrap(); // parks after the relocation log's publish
+        unreachable!("the parent kills the parked child");
+    }
+    let d = dir("ckp009");
+    let mut child = spawn_ckp_child(
+        "checkpoint_cannot_prune_when_allocator_state_is_not_represented",
+        &d,
+        COMPACT_ENV,
+        "after_location",
+    );
+    wait_for(&d.join("after_location"), Duration::from_secs(60));
+    child.kill().expect("kill child");
+    child.wait().expect("wait child");
+
+    // The §24 state-C window: the relocation log is an orphan whose
+    // durably-published generations the recovered map never sees (and the
+    // WAL never carries — relocation records do not ride it).
+    let current = Current::read(&d.join("CURRENT")).unwrap();
+    let orphan_max = orphan_placement_max_generation(&d, current.manifest_generation);
+    assert!(orphan_max > 0, "the orphan carries generations");
+
+    // Reopen #1 (the ckp006 recovery): the orphan scan lifts the allocator
+    // past the burned generations; the next flush crosses the tiny
+    // checkpoint trigger and PRUNES — deleting the orphan log, the last
+    // recompute source for those generations.
+    let mut cfg = Config::new(d.clone());
+    cfg.checkpoint_bytes = 256; // every flush crosses it
+    cfg.l0_compact_trigger = 0;
+    {
+        let db = Db::open(cfg.clone()).unwrap();
+        db.flush().unwrap(); // checkpoint at CURRENT, prunes ≤ CURRENT
+    }
+    assert_eq!(
+        checkpoint_gens(&d).len(),
+        1,
+        "the flush published a checkpoint"
+    );
+    let current = Current::read(&d.join("CURRENT")).unwrap();
+    assert_eq!(
+        orphan_placement_logs(&d, current.manifest_generation).len(),
+        0,
+        "the prune deleted the orphan log"
+    );
+
+    // The checkpoint must carry the floors: with the orphan log gone, the
+    // open's recompute sources for the burned generations are gone too.
+    // RED (compile): the floor fields do not exist yet.
+    let cp = DirectoryCheckpoint::read(&checkpoint_path(&d, checkpoint_gens(&d)[0])).unwrap();
+    assert!(
+        cp.next_placement_generation > orphan_max,
+        "the checkpoint represents the burned generations"
+    );
+    assert!(cp.next_logical_id > 0, "logical-id floor is represented");
+    assert!(cp.next_replica_id > 0, "replica-id floor is represented");
+
+    // Reopen #2 — the crash after prune. Every fresh relocation generation
+    // must sit ABOVE everything that was ever durably published (INV-05),
+    // with the orphan log itself gone.
+    let mut cfg = Config::new(d.clone());
+    cfg.checkpoint_bytes = 0;
+    cfg.l0_compact_trigger = 0;
+    let db = Db::open(cfg).unwrap();
+    db.compact().unwrap();
+    drop(db);
+    let current = Current::read(&d.join("CURRENT")).unwrap();
+    let logs = load_placement_logs(&d, current.manifest_generation).unwrap();
+    let relocations = logs
+        .iter()
+        .find(|l| l.generation == current.manifest_generation)
+        .expect("the relocation log rides the new manifest generation");
+    assert!(!relocations.records.is_empty());
+    for rec in &relocations.records {
+        assert!(
+            rec.placement.generation() > orphan_max,
+            "new placement generation {} reuses generation space the orphan published",
+            rec.placement.generation()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ckp007 — the randomized restart oracle: puts/deletes/flushes/compactions/
 // restarts against a live oracle, with a checkpoint trigger small enough to
 // fire constantly
