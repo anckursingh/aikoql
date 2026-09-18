@@ -344,7 +344,15 @@ pub struct Db {
     /// in GroupCommit mode the committer thread appends and flush may
     /// truncate — one mutex, always taken alone (never nested), so a
     /// flush can never interleave a group's append-and-apply window.
+    ///
+    /// GLOBAL LOCK ORDER (PR6-004): `state` → `wal`, and the wal lock is
+    /// innermost — no path may hold it while acquiring `state` (or any
+    /// lock a `state` holder could want). Write, flush, checkpoint and
+    /// the background compactor all follow it. The deadlock + ack matrix
+    /// in tests/pr6_004_concurrency.rs is the standing proof; extend it
+    /// (or fix the code) if a new path ever needs a second lock.
     pub(crate) wal: Arc<Mutex<File>>,
+    /// Outermost lock of the `state` → `wal` ordering — see `wal`.
     pub(crate) state: Arc<RwLock<State>>,
     /// GroupCommit mode only: the Db's own sender (dropping it makes the
     /// queue disconnect and lets the committer exit) and the committer
