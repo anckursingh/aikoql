@@ -279,3 +279,63 @@ fn idx2_010_corrupt_index_row_fails_open_closed() {
     let k2 = Kernel::open(engine, clock, 0x1D3C);
     assert!(k2.is_err(), "a corrupt index row must fail the open closed");
 }
+
+// --- P5-M26 — idx5-001 --------------------------------------------------------------
+//
+// rebuild is O(committed heads). The SDK re-declares the same-shape index on
+// every connect (the M17b contract), so at 1M rows every open pays the full
+// reseed. A caught-up rebuild must be a no-op; a stale index still rebuilds.
+
+/// True when the park hook fired before the deadline (the hook stamps
+/// INDEX_REBUILD_PARK_AT first thing inside the rebuild).
+fn idx5_parked(deadline_secs: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(deadline_secs);
+    while std::env::var_os("INDEX_REBUILD_PARK_AT").is_none() {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    true
+}
+
+#[test]
+fn idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds() {
+    let k = mk();
+    // a name unique to this test: the park hook is name-keyed, and env vars
+    // are process-global under parallel test binaries.
+    k.catalog_create_index("by_body_idx5", "note", &["body"])
+        .unwrap();
+    note(&k, "hello");
+    k.rebuild_index("by_body_idx5").unwrap(); // fresh: stamp == head
+    assert_eq!(
+        k.index_applied_seq("by_body_idx5").unwrap(),
+        k.journal_head().unwrap().0,
+        "precondition: the index is caught up"
+    );
+
+    std::env::remove_var("INDEX_REBUILD_PARK_AT");
+    std::env::set_var("INDEX_REBUILD_PARK", "by_body_idx5");
+    k.rebuild_index("by_body_idx5").unwrap();
+    assert!(
+        !idx5_parked(2),
+        "a caught-up rebuild_index must not re-run the O(heads) rebuild"
+    );
+    std::env::remove_var("INDEX_REBUILD_PARK");
+
+    // A stale index (a commit landed with no apply) still rebuilds.
+    note(&k, "world");
+    std::env::remove_var("INDEX_REBUILD_PARK_AT");
+    std::env::set_var("INDEX_REBUILD_PARK", "by_body_idx5");
+    k.rebuild_index("by_body_idx5").unwrap();
+    assert!(idx5_parked(2), "a stale index must still rebuild");
+    std::env::remove_var("INDEX_REBUILD_PARK");
+    std::env::remove_var("INDEX_REBUILD_PARK_AT");
+    assert_eq!(
+        k.scan_index("by_body_idx5", &[Value::Text("world".into())])
+            .unwrap()
+            .len(),
+        1,
+        "the stale rebuild heals the index"
+    );
+}

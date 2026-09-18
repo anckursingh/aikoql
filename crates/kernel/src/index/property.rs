@@ -196,6 +196,19 @@ impl Index for PropertyIndex {
     }
 
     fn rebuild(&self, kernel: &Kernel) -> KResult<()> {
+        // P5-M26 (idx5-001) test hook: park a rebuild for THIS index so a
+        // test can prove a caught-up rebuild is skipped entirely. The
+        // freshness guard lands ahead of the hook, so a skip never parks.
+        if std::env::var_os("INDEX_REBUILD_PARK").is_some_and(|v| v == self.name.as_str()) {
+            std::env::set_var("INDEX_REBUILD_PARK_AT", "1");
+            let mut waited = 0u64;
+            while std::env::var_os("INDEX_REBUILD_PARK").is_some_and(|v| v == self.name.as_str())
+                && waited < 500
+            {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                waited += 10;
+            }
+        }
         // P5-M17b: the stamp invalidates FIRST (0) so a concurrent query
         // cannot short-circuit against a half-reseeded map, then the map
         // reseeds, then the stamp lands on the head captured BEFORE the
@@ -268,5 +281,55 @@ mod tests {
             "the re-typed row no longer answers note scans"
         );
         assert_eq!(idx.len(), 1);
+    }
+
+    // --- P5-M26 — RED: index contents must survive a checkpoint → restore
+    // round-trip, binary-unsafe keys included (the Debug-derived key string
+    // can contain any byte). The trait defaults write nothing and restore
+    // nothing, so the scan comes back empty. ---
+    #[test]
+    fn m26_property_index_checkpoint_restore_round_trip() {
+        let idx = PropertyIndex::new("by_body", "note", &["body"]);
+        let k1 = KOID::from_bytes([1u8; KOID_LEN]);
+        let k2 = KOID::from_bytes([2u8; KOID_LEN]);
+        let mut ko1 = ko(k1, "note");
+        ko1.properties
+            .insert("body".into(), Value::Text("line one\nline two".into()));
+        let mut ko2 = ko(k2, "note");
+        ko2.properties
+            .insert("body".into(), Value::Text("tab\tand \"quotes\"".into()));
+        idx.upsert(k1, &ko1).unwrap();
+        idx.upsert(k2, &ko2).unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "aikoql-m26-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        idx.checkpoint(&dir).unwrap();
+
+        let idx2 = PropertyIndex::new("by_body", "note", &["body"]);
+        assert!(
+            idx2.restore(&dir, 7).unwrap(),
+            "a checkpointed index must restore its contents"
+        );
+        assert_eq!(
+            idx2.scan_eq(&[Value::Text("line one\nline two".into())])
+                .unwrap(),
+            vec![k1],
+            "binary-unsafe keys must round-trip"
+        );
+        assert_eq!(
+            idx2.scan_eq(&[Value::Text("tab\tand \"quotes\"".into())])
+                .unwrap(),
+            vec![k2],
+            "binary-unsafe keys must round-trip"
+        );
+        assert_eq!(idx2.applied_seq(), 7, "restore stamps the water");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

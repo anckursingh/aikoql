@@ -130,6 +130,19 @@ pub trait Index: Send + Sync {
             "this index does not support rebuild".into(),
         ))
     }
+    /// P5-M26 — persist the index contents into a checkpoint directory.
+    /// The default is a no-op: indexes without a persistence story replay
+    /// from the journal on resume.
+    fn checkpoint(&self, _dir: &std::path::Path) -> KResult<()> {
+        Ok(())
+    }
+    /// P5-M26 — restore the index from a checkpoint directory. `water` is
+    /// the journal seq the checkpoint captures (the caller replays the tail
+    /// after the restore). `Ok(false)` = no persisted contents to restore
+    /// (the default — nothing is ever written).
+    fn restore(&self, _dir: &std::path::Path, _water: u64) -> KResult<bool> {
+        Ok(false)
+    }
 }
 
 /// P5-M8 — the verify checker's reconciliation report (idx2-009).
