@@ -218,6 +218,36 @@ impl Default for HnswVectorIndex {
     }
 }
 
+/// P5-M27 (IDX-P0-02) test hook — mirror of the scheduler's checkpoint_park
+/// with the same env contract: CHECKPOINT_PARK_AT (stage name),
+/// CHECKPOINT_PARK_ACK (append "parked {stage}"), CHECKPOINT_PARK_RELEASE
+/// (file whose existence releases the park). Freezes the HNSW checkpoint
+/// between meta.json and manifest.json — the torn-pair window.
+fn checkpoint_park(stage: &str) {
+    if std::env::var_os("CHECKPOINT_PARK_AT")
+        .map(|s| s == stage)
+        .unwrap_or(false)
+    {
+        if let Some(ack) = std::env::var_os("CHECKPOINT_PARK_ACK") {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&ack)
+            {
+                let _ = writeln!(f, "parked {stage}");
+            }
+        }
+        let release = std::env::var_os("CHECKPOINT_PARK_RELEASE")
+            .expect("CHECKPOINT_PARK_RELEASE required with CHECKPOINT_PARK_AT");
+        let mut waited = 0u64;
+        while !std::path::Path::new(&release).exists() && waited < 60_000 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            waited += 10;
+        }
+    }
+}
+
 impl VectorIndex for HnswVectorIndex {
     fn upsert(&self, koid: KOID, model: &str, vec: &[f32]) {
         // P5-M18 (vec003): dim 0 adopts the first vector's dim.
@@ -391,6 +421,11 @@ impl VectorIndex for HnswVectorIndex {
         });
         std::fs::write(dir.join("meta.json"), meta.to_string())
             .map_err(|e| KError::Store(format!("write hnsw meta: {}", e)))?;
+        // P5-M27 (IDX-P0-02): the torn-pair window — meta written, the
+        // manifest (the load gate) not yet. Killed here, the generation is
+        // never loadable, and the funnel's COMPLETE gate keeps the half
+        // pair from publication; the crash matrix parks this window.
+        checkpoint_park("hnsw-manifest");
         // Published atomically last — its presence certifies the pair.
         let manifest = serde_json::json!({ "generation": generation });
         std::fs::write(dir.join("manifest.json"), manifest.to_string())

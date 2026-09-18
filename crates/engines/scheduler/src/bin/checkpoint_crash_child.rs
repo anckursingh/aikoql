@@ -9,10 +9,11 @@ use aikoql_kernel::transaction::kernel::{KnowledgeContext, RememberRequest, Subj
 use aikoql_kernel::*;
 use aikoql_scheduler::{IndexMaintainer, SchedulerJob};
 use aikoql_storage_v2::AikoqlStorageEngineV2;
+use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};
 use std::sync::Arc;
 use std::time::Duration;
 
-fn note(k: &Kernel, body: &str, tag: &str) -> KOID {
+fn note(k: &Kernel, body: &str, tag: &str, emb: &[f32]) -> KOID {
     let mut req = RememberRequest::create(
         KnowledgeContext::new(Subject::new("crash-child")),
         Metadata {
@@ -25,6 +26,13 @@ fn note(k: &Kernel, body: &str, tag: &str) -> KOID {
     req.properties
         .insert("body".into(), Value::Text(body.into()));
     req.properties.insert("tag".into(), Value::Text(tag.into()));
+    req.semantic = Some(SemanticBlock {
+        embedding_model: None,
+        embedding: Some(emb.to_vec()),
+        confidence: None,
+        source: None,
+        summary: None,
+    });
     k.remember(req).unwrap().koid
 }
 
@@ -49,11 +57,18 @@ fn main() {
         .unwrap();
     k.catalog_create_index("by_tag", "note", &["tag"]).unwrap();
     for i in 0..10 {
-        note(&k, &format!("seed-{i:02}"), "group-a");
+        note(
+            &k,
+            &format!("seed-{i:02}"),
+            "group-a",
+            &[i as f32, 0.5, 1.0, 2.0],
+        );
     }
 
-    let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
-    let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
+    // The production index generation: HNSW (dim 0 adopts the first
+    // vector's dim) + Tantivy — what the checkpoint really persists.
+    let v: Arc<dyn VectorIndex> = Arc::new(HnswVectorIndex::new(0, 10_000));
+    let t: Arc<dyn TextIndex> = Arc::new(TantivyTextIndex::new().unwrap());
     let m = Arc::new(IndexMaintainer::new(v, t));
     SchedulerJob::start(&*m, &k).unwrap();
     m.wait_caught_up(&k, Duration::from_secs(30)).unwrap();
@@ -66,7 +81,12 @@ fn main() {
     let ckpt2 = ckpt.clone();
     let writer = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(500));
-        note(&k2, "late-into-the-window", "group-b");
+        note(
+            &k2,
+            "late-into-the-window",
+            "group-b",
+            &[99.0, 0.5, 1.0, 2.0],
+        );
         std::fs::write(format!("{ckpt2}.late-committed"), b"1").unwrap();
         if release {
             std::fs::write(format!("{ckpt2}.release"), b"1").unwrap();

@@ -21,6 +21,7 @@
 use aikoql_kernel::transaction::kernel::{KnowledgeContext, RememberRequest, Subject};
 use aikoql_kernel::*;
 use aikoql_scheduler::{IndexMaintainer, SchedulerJob};
+use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -99,27 +100,60 @@ fn wait_for_ack_lines(p: &std::path::Path, n: usize, what: &str) {
     }
 }
 
-/// Reopen the SAME persistent db and start a fresh maintainer — from the
-/// checkpoint when COMPLETE exists (the production restart), else from the
-/// journal alone.
-fn restart(db: &std::path::Path, ckpt: Option<&std::path::Path>) -> (Kernel, Arc<IndexMaintainer>) {
+/// Reopen the SAME persistent db and start a fresh maintainer — the
+/// production restart (mcp resume_or_start_maintainer): a COMPLETE
+/// checkpoint resumes with the loaded HNSW + Tantivy generations; any load
+/// failure — or no checkpoint — falls back to fresh + full replay.
+fn restart(
+    db: &std::path::Path,
+    ckpt: Option<&std::path::Path>,
+) -> (
+    Kernel,
+    Arc<IndexMaintainer>,
+    Arc<dyn VectorIndex>,
+    Arc<dyn TextIndex>,
+) {
     let engine =
         Arc::new(aikoql_storage_v2::AikoqlStorageEngineV2::open(db.to_str().unwrap()).unwrap());
     let k = Kernel::open(engine, Arc::new(SystemClock), 0x5EED).unwrap();
-    let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
-    let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
-    let water = ckpt.and_then(|c| IndexMaintainer::checkpoint_water(c).unwrap());
+    let (v, t, water): (Arc<dyn VectorIndex>, Arc<dyn TextIndex>, Option<u64>) =
+        match ckpt.and_then(|c| IndexMaintainer::checkpoint_water(c).unwrap()) {
+            Some(w) => match (
+                HnswVectorIndex::load(&ckpt.unwrap().join("vectors")),
+                TantivyTextIndex::load(&ckpt.unwrap().join("text")),
+            ) {
+                (Ok(hv), Ok(tt)) => (Arc::new(hv), Arc::new(tt), Some(w)),
+                _ => (
+                    Arc::new(HnswVectorIndex::new(0, 10_000)),
+                    Arc::new(TantivyTextIndex::new().unwrap()),
+                    None,
+                ),
+            },
+            None => (
+                Arc::new(HnswVectorIndex::new(0, 10_000)),
+                Arc::new(TantivyTextIndex::new().unwrap()),
+                None,
+            ),
+        };
     let m = match water {
-        Some(w) => IndexMaintainer::start_at(&k, v, t, Some(w), ckpt).unwrap(),
-        None => IndexMaintainer::start_at(&k, v, t, None, None).unwrap(),
+        Some(w) => IndexMaintainer::start_at(&k, v.clone(), t.clone(), Some(w), ckpt).unwrap(),
+        None => IndexMaintainer::start_at(&k, v.clone(), t.clone(), None, None).unwrap(),
     };
     m.wait_caught_up(&k, Duration::from_secs(30)).unwrap();
-    (k, m)
+    (k, m, v, t)
 }
 
-/// The seeded contents (10 seeds + the window commit) in both property
-/// indexes — the crash-matrix completion oracle.
-fn assert_complete_contents(k: &Kernel) {
+/// The koid set of a full ANN sweep — the equality oracle for 023.
+fn ann_set(v: &Arc<dyn VectorIndex>) -> std::collections::BTreeSet<String> {
+    v.search(&[0.0, 0.0, 0.0, 0.0], 11, None)
+        .into_iter()
+        .map(|(k, _)| k.to_hex())
+        .collect()
+}
+
+/// The seeded contents (10 seeds + the window commit) across all three
+/// index types — the crash-matrix completion oracle.
+fn assert_complete_contents(k: &Kernel, v: &Arc<dyn VectorIndex>, t: &Arc<dyn TextIndex>) {
     assert_eq!(
         k.scan_index("by_body", &[Value::Text("late-into-the-window".into())])
             .unwrap()
@@ -141,6 +175,19 @@ fn assert_complete_contents(k: &Kernel) {
         10,
         "all seed rows are in by_tag"
     );
+    assert_eq!(
+        v.search(&[0.0, 0.0, 0.0, 0.0], 11, None).len(),
+        11,
+        "the HNSW generation holds every row"
+    );
+    // The window commit's own vector: an exact probe must land on it.
+    // The score is similarity (1.0 - distance) — 1.0 is the exact match.
+    let (_, score) = v.search(&[99.0, 0.5, 1.0, 2.0], 1, None)[0];
+    assert!(
+        (1.0 - score).abs() < 1e-6,
+        "the window commit's vector is searchable, score {score}"
+    );
+    assert_eq!(t.len(), 11, "the text index holds every row");
 }
 
 // --- IDX-TDD-021 — kill during the vector checkpoint --------------------------
@@ -163,8 +210,8 @@ fn idx_tdd_021_kill_during_vector_checkpoint_restarts_to_full_replay() {
         None,
         "a checkpoint killed mid-funnel publishes nothing"
     );
-    let (k, m) = restart(&d.join("db"), Some(&d.join("ckpt")));
-    assert_complete_contents(&k);
+    let (k, m, v, t) = restart(&d.join("db"), Some(&d.join("ckpt")));
+    assert_complete_contents(&k, &v, &t);
     m.shutdown();
     drop(k);
     let _ = std::fs::remove_dir_all(&d);
@@ -180,7 +227,14 @@ fn idx_tdd_021_kill_during_vector_checkpoint_restarts_to_full_replay() {
 /// sweeps it.
 #[test]
 fn idx_tdd_022_kill_after_every_checkpoint_stage_restarts_fail_closed() {
-    for stage in ["water", "vectors", "text", "properties", "finalize"] {
+    for stage in [
+        "water",
+        "vectors",
+        "hnsw-manifest",
+        "text",
+        "properties",
+        "finalize",
+    ] {
         let d = tmpdir(&format!("022-{stage}"));
         let mut child = spawn_crash_child(&d, stage, false);
         wait_for_ack_lines(&d.join("ckpt.ack"), 1, &format!("022 {stage} park"));
@@ -192,8 +246,8 @@ fn idx_tdd_022_kill_after_every_checkpoint_stage_restarts_fail_closed() {
             None,
             "killed at {stage}: no checkpoint is published"
         );
-        let (k, m) = restart(&d.join("db"), Some(&d.join("ckpt")));
-        assert_complete_contents(&k);
+        let (k, m, v, t) = restart(&d.join("db"), Some(&d.join("ckpt")));
+        assert_complete_contents(&k, &v, &t);
         m.shutdown();
         drop(k);
         let _ = std::fs::remove_dir_all(&d);
@@ -219,8 +273,8 @@ fn idx_tdd_022_kill_after_every_checkpoint_stage_restarts_fail_closed() {
         None,
         "the COMPLETE tmp beside a removed dir is never read"
     );
-    let (k, m) = restart(&d.join("db"), Some(&d.join("ckpt")));
-    assert_complete_contents(&k);
+    let (k, m, v, t) = restart(&d.join("db"), Some(&d.join("ckpt")));
+    assert_complete_contents(&k, &v, &t);
     // The stale .tmp (COMPLETE included) must not block the next publication.
     m.checkpoint(&k, &d.join("ckpt")).unwrap();
     assert!(
@@ -253,15 +307,47 @@ fn idx_tdd_023_commit_between_property_index_checkpoints_survives_restart_from_c
         "the released funnel publishes"
     );
 
-    let (k, m) = restart(&d.join("db"), Some(&d.join("ckpt")));
-    assert_complete_contents(&k);
+    let (k, m, v, t) = restart(&d.join("db"), Some(&d.join("ckpt")));
+    assert_complete_contents(&k, &v, &t);
     m.shutdown();
     drop(k);
 
-    let (k2, m2) = restart(&d.join("db"), None);
-    assert_complete_contents(&k2);
+    let (k2, m2, v2, t2) = restart(&d.join("db"), None);
+    assert_complete_contents(&k2, &v2, &t2);
+    assert_eq!(
+        ann_set(&v),
+        ann_set(&v2),
+        "checkpoint-resume and full-replay generations hold the same rows"
+    );
     m2.shutdown();
     drop(k2);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+// --- IDX-TDD-025 — torn HNSW checkpoint falls back to full replay ------------
+
+/// P0-02's named state: a COMPLETE checkpoint whose HNSW pair is torn (the
+/// manifest — the load gate — missing). The production restart must fall
+/// back to fresh + full replay; the assertions prove it, since a start_at
+/// from the stale water would skip the seeds.
+#[test]
+fn idx_tdd_025_torn_hnsw_checkpoint_falls_back_to_full_replay() {
+    let d = tmpdir("025");
+    let mut child = spawn_crash_child(&d, "none", false);
+    wait_for_file(&d.join("ckpt.done"), "the completed checkpoint");
+    child.wait().unwrap();
+    assert!(
+        IndexMaintainer::checkpoint_water(&d.join("ckpt"))
+            .unwrap()
+            .is_some(),
+        "the unparked funnel publishes"
+    );
+    std::fs::remove_file(d.join("ckpt").join("vectors").join("manifest.json")).unwrap();
+
+    let (k, m, v, t) = restart(&d.join("db"), Some(&d.join("ckpt")));
+    assert_complete_contents(&k, &v, &t);
+    m.shutdown();
+    drop(k);
     let _ = std::fs::remove_dir_all(&d);
 }
 
