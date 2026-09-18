@@ -109,3 +109,58 @@ jobs:
           path: target/criterion/**/ci/*.json
           overwrite: true
           if-no-files-found: error
+
+  # P5-M26: the FULL competitor scale harness (100k + 1M + MCP column +
+  # multi-op txn) lives here — the laptop runs only --quick, the big run is
+  # a scheduled/manual job (user directive 2026-09-18). PG is a service
+  # container (bench/bench @ 5433, the harness's PG_DSN); the aikoql sides
+  # use the repo's OWN release SDK (maturin develop) and release aikoql-mcp,
+  # so the fix under test is what gets measured. The result lands in the
+  # uploaded artifact — nothing is committed (P3-M0 rule 6). 360 = the
+  # GitHub-hosted job cap; if the 1M section ever needs more, split the
+  # sections into separate jobs.
+  competitor-scale:
+    name: Competitor scale harness (100k + 1M)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    services:
+      pg:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bench
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: bench
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release aikoql-mcp + native SDK
+        run: |
+          set -euo pipefail
+          cargo build --release -p aikoql-mcp
+          python -m venv .venv
+          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          cd "$GITHUB_WORKSPACE"
+      - name: Run the full scale harness (100k + 1M + MCP + txn)
+        run: |
+          set -euo pipefail
+          .venv/bin/python scripts/competitor_bench/scale.py \
+            --out "$RUNNER_TEMP/scale-result.json"
+          cp "$RUNNER_TEMP/scale-result.json" scale-result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scale-result
+          path: scale-result.json
+          if-no-files-found: error
