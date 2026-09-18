@@ -149,6 +149,37 @@ struct MaintainerInner {
 /// `upsert_many`/`remove_many` pair (a single Tantivy commit) per batch.
 const MAINTAINER_BATCH: usize = 64;
 
+/// P5-M27 (IDX-P0-01) test hook: freeze `checkpoint` at a named stage.
+/// The crash-matrix tests run in child processes (env hooks are
+/// process-global), announce the park via CHECKPOINT_PARK_ACK, and either
+/// kill the process — leaving the stage's half-written tmp behind — or
+/// create CHECKPOINT_PARK_RELEASE to let the funnel complete. No-op in
+/// production (one getenv per stage).
+fn checkpoint_park(stage: &str) {
+    if std::env::var_os("CHECKPOINT_PARK_AT")
+        .map(|s| s == stage)
+        .unwrap_or(false)
+    {
+        if let Some(ack) = std::env::var_os("CHECKPOINT_PARK_ACK") {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&ack)
+            {
+                let _ = writeln!(f, "parked {stage}");
+            }
+        }
+        let release = std::env::var_os("CHECKPOINT_PARK_RELEASE")
+            .expect("CHECKPOINT_PARK_RELEASE required with CHECKPOINT_PARK_AT");
+        let mut waited = 0u64;
+        while !std::path::Path::new(&release).exists() && waited < 60_000 {
+            std::thread::sleep(Duration::from_millis(10));
+            waited += 10;
+        }
+    }
+}
+
 pub struct IndexMaintainer {
     vectors: Arc<dyn VectorIndex>,
     text: Arc<dyn TextIndex>,
@@ -346,26 +377,32 @@ impl IndexMaintainer {
         // P0-01). Water after the writes could leave a concurrently applied
         // event in neither the files nor the tail.
         let water = self.water();
+        checkpoint_park("water");
         self.vectors
             .checkpoint(&tmp.join("vectors"))
             .map_err(|e| KError::Store(format!("checkpoint vectors: {}", e)))?;
+        checkpoint_park("vectors");
         self.text
             .checkpoint(&tmp.join("text"))
             .map_err(|e| KError::Store(format!("checkpoint text: {}", e)))?;
+        checkpoint_park("text");
         std::fs::create_dir_all(tmp.join("properties"))
             .map_err(|e| KError::Store(format!("create properties checkpoint dir: {}", e)))?;
         for idx in kernel.property_indexes()? {
             idx.checkpoint(&tmp.join("properties"))
                 .map_err(|e| KError::Store(format!("checkpoint property index: {}", e)))?;
+            checkpoint_park("properties");
         }
         std::fs::write(tmp.join("water.txt"), water.to_string())
             .map_err(|e| KError::Store(format!("write checkpoint water: {}", e)))?;
         std::fs::write(tmp.join("COMPLETE"), b"1")
             .map_err(|e| KError::Store(format!("write checkpoint complete marker: {}", e)))?;
+        checkpoint_park("finalize");
         if dir.exists() {
             std::fs::remove_dir_all(dir)
                 .map_err(|e| KError::Store(format!("remove old checkpoint: {}", e)))?;
         }
+        checkpoint_park("publish");
         std::fs::rename(&tmp, dir)
             .map_err(|e| KError::Store(format!("finalize checkpoint: {}", e)))?;
         Ok(())

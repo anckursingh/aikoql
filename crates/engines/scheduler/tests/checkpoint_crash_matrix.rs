@@ -39,8 +39,7 @@ fn note(k: &Kernel, body: &str, tag: &str) -> KOID {
     );
     req.properties
         .insert("body".into(), Value::Text(body.into()));
-    req.properties
-        .insert("tag".into(), Value::Text(tag.into()));
+    req.properties.insert("tag".into(), Value::Text(tag.into()));
     k.remember(req).unwrap().koid
 }
 
@@ -104,9 +103,8 @@ fn wait_for_ack_lines(p: &std::path::Path, n: usize, what: &str) {
 /// checkpoint when COMPLETE exists (the production restart), else from the
 /// journal alone.
 fn restart(db: &std::path::Path, ckpt: Option<&std::path::Path>) -> (Kernel, Arc<IndexMaintainer>) {
-    let engine = Arc::new(
-        aikoql_storage_v2::AikoqlStorageEngineV2::open(db.to_str().unwrap()).unwrap(),
-    );
+    let engine =
+        Arc::new(aikoql_storage_v2::AikoqlStorageEngineV2::open(db.to_str().unwrap()).unwrap());
     let k = Kernel::open(engine, Arc::new(SystemClock), 0x5EED).unwrap();
     let v: Arc<dyn VectorIndex> = Arc::new(BruteForceVectorIndex::new());
     let t: Arc<dyn TextIndex> = Arc::new(TokenTextIndex::new());
@@ -344,7 +342,7 @@ fn idx_tdd_030_concurrent_verify_pins_the_call_start_snapshot_rule() {
             std::thread::sleep(Duration::from_millis(2));
         }
         assert_eq!(
-            k.scan_index("by_body", &[Value::Text(format!("row-{i:03}").into())])
+            k.scan_index("by_body", &[Value::Text(format!("row-{i:03}"))])
                 .unwrap()
                 .len(),
             1,
@@ -371,7 +369,7 @@ fn idx_tdd_030_concurrent_verify_pins_the_call_start_snapshot_rule() {
     assert!(clean(&r), "the converged index verifies clean");
     for i in 30..55 {
         assert_eq!(
-            k.scan_index("by_body", &[Value::Text(format!("row-{i:03}").into())])
+            k.scan_index("by_body", &[Value::Text(format!("row-{i:03}"))])
                 .unwrap()
                 .len(),
             1,
