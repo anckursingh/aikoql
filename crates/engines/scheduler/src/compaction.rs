@@ -71,7 +71,7 @@ impl SchedulerJob for CompactionJob {
         }
     }
 
-    fn checkpoint(&self, _dir: &std::path::Path) -> KResult<()> {
+    fn checkpoint(&self, _kernel: &Kernel, _dir: &std::path::Path) -> KResult<()> {
         Ok(()) // stateless
     }
 

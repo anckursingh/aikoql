@@ -319,7 +319,7 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
         .unwrap()
         .as_nanos();
     let checkpoint_dir = std::env::temp_dir().join(format!("aikoql-i08-{}", stamp));
-    m1.checkpoint(&checkpoint_dir).unwrap();
+    m1.checkpoint(&k, &checkpoint_dir).unwrap();
     m1.shutdown();
 
     let water = IndexMaintainer::checkpoint_water(&checkpoint_dir)
@@ -336,6 +336,7 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
         vectors2.clone() as Arc<dyn VectorIndex>,
         text2.clone() as Arc<dyn TextIndex>,
         Some(water),
+        Some(&checkpoint_dir),
     )
     .unwrap();
     k.attach_indexes(m2.clone());
@@ -387,7 +388,10 @@ fn i12_property_index_checkpoint_resume_answers_without_reseed() {
         .unwrap()
         .as_nanos();
     let checkpoint_dir = std::env::temp_dir().join(format!("aikoql-i12-{}", stamp));
-    m1.checkpoint(&checkpoint_dir).unwrap();
+    // An HNSW checkpoint with no vectors has no payload section (P1-14) —
+    // seed a dummy so the pair stays loadable (the idx4-002 idiom).
+    vectors.upsert(KOID::from_bytes([3u8; KOID_LEN]), "m", &[0.1, 0.2]);
+    m1.checkpoint(&k, &checkpoint_dir).unwrap();
     m1.shutdown();
 
     // RED: the property indexes are in-memory only (idx2-007) — the
@@ -414,6 +418,7 @@ fn i12_property_index_checkpoint_resume_answers_without_reseed() {
         vectors2.clone() as Arc<dyn VectorIndex>,
         text2.clone() as Arc<dyn TextIndex>,
         Some(water),
+        Some(&checkpoint_dir),
     )
     .unwrap();
 

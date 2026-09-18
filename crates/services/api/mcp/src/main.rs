@@ -558,7 +558,7 @@ fn main() {
         // maintainer before the process exits. TCP mode never returns, so
         // it has no shutdown-time checkpoint yet (honest ledger).
         if let Some(m) = server_ctx.db.maintainer.lock().unwrap().as_ref() {
-            if let Err(e) = m.checkpoint(&ckpt_dir) {
+            if let Err(e) = m.checkpoint(&kernel, &ckpt_dir) {
                 warn!("maintainer checkpoint failed: {e}");
             }
         }
@@ -579,9 +579,13 @@ fn resume_or_start_maintainer(
         if let (Ok(v), Ok(t)) = (vectors, text) {
             let vectors: Arc<dyn VectorIndex> = Arc::new(v);
             let text: Arc<dyn TextIndex> = Arc::new(t);
-            if let Ok(m) =
-                aikoql_scheduler::IndexMaintainer::start_at(kernel, vectors, text, Some(water))
-            {
+            if let Ok(m) = aikoql_scheduler::IndexMaintainer::start_at(
+                kernel,
+                vectors,
+                text,
+                Some(water),
+                Some(ckpt_dir),
+            ) {
                 return Ok(m);
             }
         }

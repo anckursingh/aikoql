@@ -136,12 +136,10 @@ fn idx4_001b_dropping_row_never_enters_the_registry() {
 
 /// Checkpoint at water H, commit N more, restart from the checkpoint: the
 /// resume must apply the N events after H. The vector/text slots come back
-/// from the checkpoint files, but the property indexes are in-memory only —
-/// the resume path must seed them, or rows committed before the checkpoint
-/// stop answering. Today the resume skips the replay ENTIRELY: the N events
-/// after H were committed before shutdown, so no broadcast ever carries
-/// them, the maintainer never catches up, the reloaded index stays empty
-/// and scan_index refuses (IndexLagExceeded).
+/// from the checkpoint files; the property indexes come back from their own
+/// checkpoint files (P5-M26, per-index — a missing file reseeds from the
+/// committed heads). The observable pin: rows committed before the
+/// checkpoint still answer, and the N events after H apply on resume.
 #[test]
 fn idx4_002_restart_replays_only_events_after_the_checkpoint() {
     let engine = Arc::new(MemoryEngine::new());
@@ -163,7 +161,7 @@ fn idx4_002_restart_replays_only_events_after_the_checkpoint() {
     vectors.upsert(KOID::from_bytes([3u8; KOID_LEN]), "m", &[0.1, 0.2]);
     let dir = std::env::temp_dir().join(format!("idx4_002_ckpt_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    m.checkpoint(&dir).unwrap();
+    m.checkpoint(&k, &dir).unwrap();
     assert!(dir.join("COMPLETE").exists());
 
     for i in 0..130 {
@@ -178,7 +176,7 @@ fn idx4_002_restart_replays_only_events_after_the_checkpoint() {
     let vectors2: Arc<dyn VectorIndex> =
         Arc::new(HnswVectorIndex::load(&dir.join("vectors")).unwrap());
     let text2: Arc<dyn TextIndex> = Arc::new(TantivyTextIndex::load(&dir.join("text")).unwrap());
-    let m2 = IndexMaintainer::start_at(&k2, vectors2, text2, Some(water)).unwrap();
+    let m2 = IndexMaintainer::start_at(&k2, vectors2, text2, Some(water), Some(&dir)).unwrap();
     // Give the live loop its chance — today nothing ever arrives (the tail
     // events predate the subscription and the resume skipped the replay).
     std::thread::sleep(Duration::from_millis(300));
@@ -213,7 +211,7 @@ fn idx4_002b_resume_water_past_the_head_fails_closed() {
     let vectors: Arc<dyn VectorIndex> = Arc::new(HnswVectorIndex::new(0, 10_000));
     let text: Arc<dyn TextIndex> = Arc::new(TantivyTextIndex::new().unwrap());
     assert!(
-        IndexMaintainer::start_at(&k, vectors, text, Some(1_000_000)).is_err(),
+        IndexMaintainer::start_at(&k, vectors, text, Some(1_000_000), None).is_err(),
         "a resume water beyond the journal head must fail closed"
     );
 }

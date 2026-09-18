@@ -45,8 +45,9 @@ pub trait SchedulerJob: Send + Sync {
     /// Stop the background thread and join it.
     fn shutdown(&self);
 
-    /// Persist job state to a checkpoint directory.
-    fn checkpoint(&self, dir: &std::path::Path) -> KResult<()>;
+    /// Persist job state to a checkpoint directory (P5-M26: the kernel is
+    /// in the signature — an index checkpoint reads the live registry).
+    fn checkpoint(&self, kernel: &Kernel, dir: &std::path::Path) -> KResult<()>;
 
     /// Current high-water mark (last applied event seq).
     fn water(&self) -> u64;
@@ -101,10 +102,10 @@ impl Scheduler {
     }
 
     /// Persist every job's state under `dir/<job_name>/`.
-    pub fn checkpoint_all(&self, dir: &std::path::Path) -> KResult<()> {
+    pub fn checkpoint_all(&self, kernel: &Kernel, dir: &std::path::Path) -> KResult<()> {
         // justified: RwLock poison is unrecoverable
         for job in self.jobs.read().unwrap().iter() {
-            job.checkpoint(&dir.join(job.name()))?;
+            job.checkpoint(kernel, &dir.join(job.name()))?;
         }
         Ok(())
     }
@@ -183,18 +184,21 @@ impl IndexMaintainer {
         vectors: Arc<dyn VectorIndex>,
         text: Arc<dyn TextIndex>,
     ) -> KResult<Arc<Self>> {
-        Self::start_at(kernel, vectors, text, None)
+        Self::start_at(kernel, vectors, text, None, None)
     }
 
-    /// Construct and start with an optional checkpoint water.
+    /// Construct and start with an optional checkpoint water. The property
+    /// indexes resume from `property_checkpoint` when the water resumes
+    /// from a checkpoint (P5-M26).
     pub fn start_at(
         kernel: &Kernel,
         vectors: Arc<dyn VectorIndex>,
         text: Arc<dyn TextIndex>,
         resume_water: Option<u64>,
+        property_checkpoint: Option<&std::path::Path>,
     ) -> KResult<Arc<Self>> {
         let m = Arc::new(Self::new(vectors, text));
-        m.do_start(kernel, resume_water)?;
+        m.do_start(kernel, resume_water, property_checkpoint)?;
         Ok(m)
     }
 
@@ -204,7 +208,12 @@ impl IndexMaintainer {
     /// events the replay already applied (seq <= water) — a commit between
     /// the snapshot and the subscription can no longer land in neither
     /// (P0-02).
-    fn do_start(&self, kernel: &Kernel, resume_water: Option<u64>) -> KResult<()> {
+    fn do_start(
+        &self,
+        kernel: &Kernel,
+        resume_water: Option<u64>,
+        property_checkpoint: Option<&std::path::Path>,
+    ) -> KResult<()> {
         let rx = kernel.notify(EventFilter::default())?;
         let water = match resume_water {
             Some(w) => {
@@ -217,6 +226,12 @@ impl IndexMaintainer {
                         "checkpoint water {w} is past the journal head {head} — foreign checkpoint"
                     )));
                 }
+                // P5-M26: the property indexes resume from the checkpoint —
+                // restored BEFORE the tail replay, which must apply to the
+                // restored contents. A missing file falls back to the P1-15
+                // reseed from the committed heads (pre-M26 checkpoints, and
+                // indexes declared after the checkpoint).
+                Self::restore_property_indexes(kernel, property_checkpoint, w)?;
                 // The tail after the checkpoint: events committed after it
                 // but before shutdown were never subscribed — replay exactly
                 // those, so restart cost ∝ the tail, not the journal.
@@ -231,12 +246,6 @@ impl IndexMaintainer {
                     self.text_idx.as_ref(),
                     &events,
                 )?;
-                // P5-M22 (P1-15): the property indexes are in-memory only
-                // (idx2-007) — the checkpoint cannot carry them, so the
-                // resume reseeds them from the committed heads. The tail
-                // replay above only proves events after the checkpoint; the
-                // rows before it exist nowhere else.
-                Self::rebuild_property_indexes(kernel)?;
                 tail.max(w)
             }
             None => {
@@ -324,7 +333,7 @@ impl IndexMaintainer {
         Ok(())
     }
 
-    pub fn checkpoint(&self, dir: &std::path::Path) -> KResult<()> {
+    pub fn checkpoint(&self, kernel: &Kernel, dir: &std::path::Path) -> KResult<()> {
         let tmp = std::path::PathBuf::from(format!("{}.tmp", dir.display()));
         if tmp.exists() {
             std::fs::remove_dir_all(&tmp)
@@ -332,13 +341,23 @@ impl IndexMaintainer {
         }
         std::fs::create_dir_all(&tmp)
             .map_err(|e| KError::Store(format!("create checkpoint tmp: {}", e)))?;
+        // P5-M26: capture the water FIRST — water ≤ contents means anything
+        // the files lack is in the tail replay (idempotent re-application,
+        // P0-01). Water after the writes could leave a concurrently applied
+        // event in neither the files nor the tail.
+        let water = self.water();
         self.vectors
             .checkpoint(&tmp.join("vectors"))
             .map_err(|e| KError::Store(format!("checkpoint vectors: {}", e)))?;
         self.text
             .checkpoint(&tmp.join("text"))
             .map_err(|e| KError::Store(format!("checkpoint text: {}", e)))?;
-        let water = self.water();
+        std::fs::create_dir_all(tmp.join("properties"))
+            .map_err(|e| KError::Store(format!("create properties checkpoint dir: {}", e)))?;
+        for idx in kernel.property_indexes()? {
+            idx.checkpoint(&tmp.join("properties"))
+                .map_err(|e| KError::Store(format!("checkpoint property index: {}", e)))?;
+        }
         std::fs::write(tmp.join("water.txt"), water.to_string())
             .map_err(|e| KError::Store(format!("write checkpoint water: {}", e)))?;
         std::fs::write(tmp.join("COMPLETE"), b"1")
@@ -383,15 +402,35 @@ impl IndexMaintainer {
     }
 
     /// P5-M22 (P1-15): reseed every registered property index from the
-    /// committed heads — the resume path's filler for the rows the
-    /// checkpoint cannot carry (property indexes are in-memory only,
-    /// idx2-007).
+    /// committed heads — the fallback when no property checkpoint exists
+    /// (or a file is missing from it).
     ///
-    /// ponytail: O(committed heads) per restart — persist the property
-    /// indexes in the checkpoint instead if resume profiles ever flag it.
+    /// ponytail: O(committed heads) — the checkpoint restore (P5-M26) is
+    /// the cheap path; this only runs on a first start or a missing file.
     fn rebuild_property_indexes(kernel: &Kernel) -> KResult<()> {
         for idx in kernel.property_indexes()? {
             idx.rebuild(kernel)?;
+        }
+        Ok(())
+    }
+
+    /// P5-M26 — restore the property indexes from the checkpoint directory
+    /// before the tail replay (which must apply to the restored contents).
+    /// `water` stamps the restored indexes: they are fresh exactly there,
+    /// and the tail's apply_batch stamps further. Per-index fallback: a
+    /// missing file reseeds that index; no directory at all reseeds all.
+    fn restore_property_indexes(
+        kernel: &Kernel,
+        dir: Option<&std::path::Path>,
+        water: u64,
+    ) -> KResult<()> {
+        let Some(dir) = dir else {
+            return Self::rebuild_property_indexes(kernel);
+        };
+        for idx in kernel.property_indexes()? {
+            if !idx.restore(dir, water)? {
+                idx.rebuild(kernel)?;
+            }
         }
         Ok(())
     }
@@ -510,15 +549,15 @@ impl SchedulerJob for IndexMaintainer {
     }
 
     fn start(&self, kernel: &Kernel) -> KResult<()> {
-        self.do_start(kernel, None)
+        self.do_start(kernel, None, None)
     }
 
     fn shutdown(&self) {
         self.shutdown();
     }
 
-    fn checkpoint(&self, dir: &std::path::Path) -> KResult<()> {
-        self.checkpoint(dir)
+    fn checkpoint(&self, kernel: &Kernel, dir: &std::path::Path) -> KResult<()> {
+        self.checkpoint(kernel, dir)
     }
 
     fn water(&self) -> u64 {
@@ -671,7 +710,7 @@ mod tests {
         // Checkpoint all.
         let dir = std::env::temp_dir().join("scheduler_test_checkpoint");
         let _ = std::fs::remove_dir_all(&dir);
-        sched.checkpoint_all(&dir).unwrap();
+        sched.checkpoint_all(&k, &dir).unwrap();
         assert!(dir.join("index-maintainer").join("COMPLETE").exists());
 
         sched.shutdown_all();
@@ -852,7 +891,7 @@ mod tests {
         std::env::remove_var("MAINTAINER_START_PARK_AT");
         let mk2 = k.clone_handle();
         let m2 = m.clone();
-        let h = std::thread::spawn(move || m2.do_start(&mk2, None));
+        let h = std::thread::spawn(move || m2.do_start(&mk2, None, None));
 
         // Wait for do_start to reach the hook: past the journal snapshot,
         // before the subscription — the exact P0-02 window.

@@ -3,8 +3,8 @@
 //! by the scheduler's IndexMaintainer — never on the commit path. The key is
 //! the Debug-derived string of the value tuple (Value is not Hash — the
 //! P5-M5 group-key precedent); ANY key property missing → the row is not
-//! indexed. Contents are never persisted: they replay from the journal
-//! (idx2-007).
+//! indexed. Contents replay from the journal (idx2-007) and are persisted
+//! in the maintainer checkpoint (P5-M26).
 
 use crate::index::unified::{ConsistencyLevel, Index, IndexState, VerifyReport};
 use crate::knowledge::kom::*;
@@ -49,6 +49,17 @@ impl PropertyIndex {
             vals.push(ko.properties.get(p)?.clone());
         }
         Some(format!("{vals:?}"))
+    }
+
+    /// P5-M26 — the checkpoint file name: the hex of the index name. Names
+    /// are user-controlled catalog strings (any byte, path separators
+    /// included); hex keeps them traversal- and collision-proof.
+    fn checkpoint_file(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let mut hex = String::with_capacity(name.len() * 2);
+        for b in name.as_bytes() {
+            hex.push_str(&format!("{b:02x}"));
+        }
+        dir.join(hex)
     }
 }
 
@@ -196,9 +207,20 @@ impl Index for PropertyIndex {
     }
 
     fn rebuild(&self, kernel: &Kernel) -> KResult<()> {
+        // P5-M26: the freshness guard — stamp == head proves every committed
+        // event applied (the M17b proof), so a caught-up rebuild is pure
+        // waste. The SDK re-declares the same-shape index on every connect;
+        // at 1M heads that reseed dominated the open cost. Sound: the stamp
+        // only ever advances past actually-applied events (P0-01) and the
+        // head only grows, so an equal stamp cannot miss a commit. The
+        // state gate keeps non-Ready indexes converging (P1-07).
+        let h0 = kernel.journal_head()?.0;
+        if self.applied_seq() == h0 && self.state() == IndexState::Ready {
+            return Ok(());
+        }
         // P5-M26 (idx5-001) test hook: park a rebuild for THIS index so a
         // test can prove a caught-up rebuild is skipped entirely. The
-        // freshness guard lands ahead of the hook, so a skip never parks.
+        // guard above runs first, so a skip never parks.
         if std::env::var_os("INDEX_REBUILD_PARK").is_some_and(|v| v == self.name.as_str()) {
             std::env::set_var("INDEX_REBUILD_PARK_AT", "1");
             let mut waited = 0u64;
@@ -215,7 +237,6 @@ impl Index for PropertyIndex {
         // scan — every commit ≤ h0 is visible to the reseed; commits after
         // h0 reach this index through the maintainer (the index is
         // registered before rebuild), which stamps them as it applies them.
-        let h0 = kernel.journal_head()?.0;
         self.applied.store(0, Ordering::SeqCst);
         // justified: RwLock poison is unrecoverable
         let mut map = self.map.write().unwrap();
@@ -236,6 +257,93 @@ impl Index for PropertyIndex {
         }
         self.applied.store(h0, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// P5-M26 — persist the index into `dir` (created on demand): "AKPI"
+    /// magic, then per bucket a length-prefixed key and its KOIDs — binary,
+    /// so Debug-derived keys of any byte content round-trip. The scheduler
+    /// wraps this in its tmp-dir + rename protocol, so torn writes cannot
+    /// reach the published checkpoint.
+    fn checkpoint(&self, dir: &std::path::Path) -> KResult<()> {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| KError::Store(format!("create property checkpoint dir: {}", e)))?;
+        // justified: RwLock poison is unrecoverable
+        let map = self.map.read().unwrap();
+        let mut out = Vec::new();
+        out.extend_from_slice(b"AKPI");
+        out.extend_from_slice(&(map.len() as u64).to_le_bytes());
+        for (key, bucket) in map.iter() {
+            out.extend_from_slice(&(key.len() as u64).to_le_bytes());
+            out.extend_from_slice(key.as_bytes());
+            out.extend_from_slice(&(bucket.len() as u64).to_le_bytes());
+            for koid in bucket {
+                out.extend_from_slice(koid.as_bytes());
+            }
+        }
+        std::fs::write(Self::checkpoint_file(dir, &self.name), out)
+            .map_err(|e| KError::Store(format!("write property checkpoint: {}", e)))
+    }
+
+    /// P5-M26 — restore the index from `dir`. `Ok(false)` = no file for
+    /// this index (the caller reseeds it). Parse is fail-closed: any
+    /// malformed stream errors, and the host falls back to a full replay —
+    /// never a half-restored index. The restored contents are stamped
+    /// exactly at `water`; the caller replays the tail on top.
+    fn restore(&self, dir: &std::path::Path, water: u64) -> KResult<bool> {
+        let path = Self::checkpoint_file(dir, &self.name);
+        if !path.exists() {
+            return Ok(false);
+        }
+        let bytes = std::fs::read(&path)
+            .map_err(|e| KError::Store(format!("read property checkpoint: {}", e)))?;
+        fn take<'a>(bytes: &'a [u8], pos: &mut usize, n: usize) -> KResult<&'a [u8]> {
+            if *pos + n > bytes.len() {
+                return Err(KError::Store(
+                    "property checkpoint corrupt: truncated".into(),
+                ));
+            }
+            let s = &bytes[*pos..*pos + n];
+            *pos += n;
+            Ok(s)
+        }
+        let mut pos = 0usize;
+        if take(&bytes, &mut pos, 4)? != b"AKPI" {
+            return Err(KError::Store(format!(
+                "property checkpoint '{}' corrupt: bad magic",
+                self.name
+            )));
+        }
+        let n_buckets = u64::from_le_bytes(take(&bytes, &mut pos, 8)?.try_into().unwrap()) as usize;
+        let mut map: HashMap<String, Vec<KOID>> = HashMap::new();
+        for _ in 0..n_buckets {
+            let key_len =
+                u64::from_le_bytes(take(&bytes, &mut pos, 8)?.try_into().unwrap()) as usize;
+            let key =
+                String::from_utf8(take(&bytes, &mut pos, key_len)?.to_vec()).map_err(|_| {
+                    KError::Store(format!(
+                        "property checkpoint '{}' corrupt: bad key",
+                        self.name
+                    ))
+                })?;
+            let n = u64::from_le_bytes(take(&bytes, &mut pos, 8)?.try_into().unwrap()) as usize;
+            let mut bucket = Vec::with_capacity(n);
+            for _ in 0..n {
+                let mut buf = [0u8; KOID_LEN];
+                buf.copy_from_slice(take(&bytes, &mut pos, KOID_LEN)?);
+                bucket.push(KOID::from_bytes(buf));
+            }
+            map.insert(key, bucket);
+        }
+        if pos != bytes.len() {
+            return Err(KError::Store(format!(
+                "property checkpoint '{}' corrupt: trailing bytes",
+                self.name
+            )));
+        }
+        // justified: RwLock poison is unrecoverable
+        *self.map.write().unwrap() = map;
+        self.applied.store(water, Ordering::SeqCst);
+        Ok(true)
     }
 }
 

@@ -179,7 +179,9 @@ fn start_maintainer(
         ) {
             let vectors: Arc<dyn VectorIndex> = Arc::new(v);
             let text: Arc<dyn TextIndex> = Arc::new(t);
-            if let Ok(m) = IndexMaintainer::start_at(kernel, vectors, text, Some(water)) {
+            if let Ok(m) =
+                IndexMaintainer::start_at(kernel, vectors, text, Some(water), Some(ckpt_dir))
+            {
                 return Ok(m);
             }
         }
@@ -196,7 +198,9 @@ impl Drop for Aikoql {
         // P5-M22 (P1-15): checkpoint on close — the next open resumes
         // instead of replaying the whole journal. Best-effort: a failed
         // checkpoint only costs the next open a full replay.
-        let _ = self.maintainer.checkpoint(&self.checkpoint_dir);
+        let _ = self
+            .maintainer
+            .checkpoint(&self.inner, &self.checkpoint_dir);
     }
 }
 
