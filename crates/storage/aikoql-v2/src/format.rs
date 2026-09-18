@@ -167,6 +167,13 @@ pub struct Manifest {
     pub generation: u64,
     pub segments: Vec<SegmentRecord>,
     pub wal_ids: Vec<u64>,
+    /// PR6-002 — per-family applied floors: the newest published delta-log
+    /// generation per family at this manifest's publication time (0 = none).
+    /// The coverage validator derives every REQUIRED post-checkpoint delta
+    /// generation from the floor raises across the manifest chain.
+    pub identity_floor: u64,
+    pub replica_floor: u64,
+    pub placement_floor: u64,
 }
 
 impl Manifest {
@@ -193,6 +200,13 @@ impl Manifest {
         for id in &self.wal_ids {
             bytes.extend_from_slice(&id.to_le_bytes());
         }
+        // PR6-002 — the floors ride INSIDE the checksum (the PR6-001
+        // precedent): an old binary reading this file fails the checksum, a
+        // new binary reading an old file hits EOF — both directions fail
+        // closed without a FORMAT_VERSION bump.
+        bytes.extend_from_slice(&self.identity_floor.to_le_bytes());
+        bytes.extend_from_slice(&self.replica_floor.to_le_bytes());
+        bytes.extend_from_slice(&self.placement_floor.to_le_bytes());
         bytes.extend_from_slice(&checksum8(&bytes));
         bytes
     }
@@ -253,6 +267,9 @@ impl Manifest {
         for _ in 0..wal_count {
             wal_ids.push(cur.u64()?);
         }
+        let identity_floor = cur.u64()?;
+        let replica_floor = cur.u64()?;
+        let placement_floor = cur.u64()?;
         let checksum = cur.take(8)?.to_vec();
         if !cur.is_empty() {
             return Err(FormatError::Corrupt("manifest trailing bytes".into()));
@@ -265,6 +282,9 @@ impl Manifest {
             generation,
             segments,
             wal_ids,
+            identity_floor,
+            replica_floor,
+            placement_floor,
         })
     }
 

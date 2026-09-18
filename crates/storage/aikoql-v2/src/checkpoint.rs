@@ -40,13 +40,17 @@
 //! surviving logs may not cover the pruned range. Fail closed preserves the
 //! operator's evidence (the v1 closure's Q1 policy, verbatim).
 
+use crate::db::manifest_path;
 use crate::format::{
     checksum8, crash_park, publish_atomic_staged, publish_atomic_writer_staged, Cursor,
-    FormatError, FORMAT_VERSION,
+    FormatError, Manifest, FORMAT_VERSION,
 };
-use crate::identity::directory::{identity_log_generation, IdentityRecord, ReplicaRecord};
+use crate::identity::directory::{
+    identity_log_generation, identity_log_path, replica_log_path, IdentityLog, IdentityRecord,
+    ReplicaLog, ReplicaRecord,
+};
 use crate::identity::{NodeId, LOCAL_NODE_ID};
-use crate::placement::directory::PlacementRecord;
+use crate::placement::directory::{placement_log_path, PlacementLog, PlacementRecord};
 use crate::placement::{BlockId, Placement, SegmentId};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -394,6 +398,83 @@ pub fn load_newest(
         )));
     }
     Ok(Some(checkpoint))
+}
+
+/// PR6-002 — post-checkpoint delta coverage (review P0 Recovery): a valid
+/// checkpoint plus an incomplete delta set is an invalid state, so the open
+/// fails closed when a REQUIRED authoritative delta generation is missing.
+/// Every manifest records the newest published log generation per family
+/// (the applied floors) at its publication time; a family published at
+/// generation G exactly when manifest-G raised its floor past manifest-(G-1)
+/// — every such generation must exist, be readable and be valid. Gaps are
+/// normal (a generation with no work for a family publishes no log) and
+/// raise no requirement; a missing INTERMEDIATE log (the review's
+/// PLACEMENT-113 with CURRENT=120) fails the walk exactly like a missing
+/// newest one, because the records in between are nowhere else. No
+/// checkpoint ⇒ no baseline to be incomplete relative to (the full delta
+/// history is the recovery source) — the walk is a no-op.
+pub fn validate_delta_coverage(
+    dir: &Path,
+    checkpoint_generation: u64,
+    current_generation: u64,
+) -> Result<(), FormatError> {
+    if checkpoint_generation == 0 || checkpoint_generation >= current_generation {
+        return Ok(());
+    }
+    let mut floors = floors_of(&Manifest::read(&manifest_path(dir, checkpoint_generation))?);
+    for g in checkpoint_generation + 1..=current_generation {
+        let next = floors_of(&Manifest::read(&manifest_path(dir, g))?);
+        if next.0 < floors.0 || next.1 < floors.1 || next.2 < floors.2 {
+            return Err(FormatError::Corrupt(format!(
+                "manifest {g} lowers the per-family delta floors ({floors:?} → {next:?})"
+            )));
+        }
+        if next.0 > floors.0 {
+            require_delta(dir, "IDENTITY", g)?;
+        }
+        if next.1 > floors.1 {
+            require_delta(dir, "REPLICA", g)?;
+        }
+        if next.2 > floors.2 {
+            require_delta(dir, "PLACEMENT", g)?;
+        }
+        floors = next;
+    }
+    Ok(())
+}
+
+fn floors_of(m: &Manifest) -> (u64, u64, u64) {
+    (m.identity_floor, m.replica_floor, m.placement_floor)
+}
+
+/// The required `{FAMILY}-{g:06}.log` must exist and decode with its
+/// generation agreeing with its name (the loaders' agreement rule, per
+/// file). Missing is Corrupt, not Io — the recovery SET on disk is invalid,
+/// which is semantic, not an OS failure.
+fn require_delta(dir: &Path, family: &str, g: u64) -> Result<(), FormatError> {
+    let path = match family {
+        "IDENTITY" => identity_log_path(dir, g),
+        "REPLICA" => replica_log_path(dir, g),
+        _ => placement_log_path(dir, g),
+    };
+    if !path.exists() {
+        return Err(FormatError::Corrupt(format!(
+            "required authoritative delta {family}-{g:06}.log missing (post-checkpoint coverage broken)"
+        )));
+    }
+    let bytes = std::fs::read(&path)
+        .map_err(|e| FormatError::Io(format!("read {}: {e}", path.display())))?;
+    let gen = match family {
+        "IDENTITY" => IdentityLog::decode(&bytes)?.generation,
+        "REPLICA" => ReplicaLog::decode(&bytes)?.generation,
+        _ => PlacementLog::decode(&bytes)?.generation,
+    };
+    if gen != g {
+        return Err(FormatError::Corrupt(format!(
+            "{family}-{g:06}.log carries generation {gen}"
+        )));
+    }
+    Ok(())
 }
 
 /// Delete every directory delta log at or below `generation` (fully

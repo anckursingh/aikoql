@@ -2,7 +2,8 @@
 //!
 //! The manifest is the authoritative topology: `AKMV | format_version u16 LE
 //! | generation u64 LE | segment_count u32 LE | segment records | wal_count
-//! u32 LE | wal ids | sha256-8 over everything before it`. Segment record:
+//! u32 LE | wal ids | per-family applied floors (3×u64 LE, PR6-002) |
+//! sha256-8 over everything before it`. Segment record:
 //! `segment_id u64 | level u8 | key_min_len u32 | key_min | key_max_len u32
 //! | key_max | seq_lo u64 | seq_hi u64 | record_count u64 | file_size u64 |
 //! segment_checksum u64`.
@@ -35,6 +36,9 @@ fn fixture_manifest() -> Manifest {
             checksum: 0x1122334455667788,
         }],
         wal_ids: vec![2],
+        identity_floor: 0,
+        replica_floor: 0,
+        placement_floor: 0,
     }
 }
 
@@ -43,9 +47,10 @@ fn manifest_golden_bytes() {
     let bytes = fixture_manifest().encode();
     assert_eq!(
         hex(&bytes),
-        "414b4d560100010000000000000001000000010000000000000000020000006131\
-         020000007a39050000000000000009000000000000006400000000000000001000\
-         00000000008877665544332211010000000200000000000000b31e9a0604b61761",
+        "414b4d5601000100000000000000010000000100000000000000000200000061\
+         31020000007a3905000000000000000900000000000000640000000000000000\
+         1000000000000088776655443322110100000002000000000000000000000000\
+         00000000000000000000000000000000000000ac3a340e91f3f951",
         "manifest golden bytes changed — format break"
     );
 }
@@ -76,6 +81,9 @@ fn manifest_empty_round_trip() {
         generation: 9,
         segments: vec![],
         wal_ids: vec![],
+        identity_floor: 0,
+        replica_floor: 0,
+        placement_floor: 0,
     };
     let decoded = Manifest::decode(&m.encode()).unwrap();
     assert_eq!(decoded.generation, 9);

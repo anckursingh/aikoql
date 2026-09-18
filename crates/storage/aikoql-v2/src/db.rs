@@ -30,7 +30,8 @@
 
 use crate::cache::{BlockCache, CacheStats};
 use crate::checkpoint::{
-    checkpoint_path, directory_log_bytes, load_newest, prune_deltas_before, DirectoryCheckpoint,
+    checkpoint_path, directory_log_bytes, load_newest, prune_deltas_before,
+    validate_delta_coverage, DirectoryCheckpoint,
 };
 use crate::compaction::{merge, CompactStats, KeepAll, RetentionPolicy};
 use crate::format::{
@@ -258,6 +259,13 @@ pub(crate) struct State {
     /// crosses `Config::checkpoint_bytes` publishes a checkpoint and
     /// prunes the subsumed history.
     bytes_since_checkpoint: u64,
+    /// PR6-002 — per-family applied floors: the newest delta-log generation
+    /// each family published (0 = none). The next manifest records them,
+    /// and the coverage validator derives the required post-checkpoint
+    /// deltas from their raises across the manifest chain.
+    identity_floor: u64,
+    replica_floor: u64,
+    placement_floor: u64,
 }
 
 /// One queued batch waiting on its group: the ops plus the ack channel
@@ -423,6 +431,10 @@ impl Db {
                     generation: 1,
                     segments: vec![],
                     wal_ids: vec![],
+                    // PR6-002 — nothing has published at the fresh open.
+                    identity_floor: 0,
+                    replica_floor: 0,
+                    placement_floor: 0,
                 };
                 Manifest::publish(&manifest_path(&config.dir, 1), &manifest)?;
                 let current = Current::new(FORMAT_VERSION, 1);
@@ -455,6 +467,15 @@ impl Db {
         // recovery is checkpoint + recent deltas, never the full history.
         let checkpoint = load_newest(&config.dir, current.manifest_generation)?;
         let checkpoint_generation = checkpoint.as_ref().map_or(0, |c| c.generation);
+        // PR6-002 — a valid checkpoint plus an incomplete delta set is an
+        // invalid state (review P0 Recovery): the coverage validator fails
+        // closed on any missing required post-checkpoint delta, per family,
+        // intermediate generations included.
+        validate_delta_coverage(
+            &config.dir,
+            checkpoint_generation,
+            current.manifest_generation,
+        )?;
         // PR6-001 — the checkpoint's floors bound every recomputed
         // allocator from below: its prune deleted the history those
         // recomputes would otherwise read (ckp009's burned generations).
@@ -759,6 +780,12 @@ impl Db {
             pending_placements,
             next_placement_generation,
             bytes_since_checkpoint,
+            // PR6-002 — the current manifest is authoritative: it records
+            // the newest published generation per family (monotone by
+            // construction, so nothing replayed can exceed it).
+            identity_floor: manifest.identity_floor,
+            replica_floor: manifest.replica_floor,
+            placement_floor: manifest.placement_floor,
         }));
         let fsyncs = Arc::new(AtomicU64::new(0));
         let (queue_tx, committer) = if config.durability == DurabilityMode::GroupCommit {
@@ -1804,6 +1831,7 @@ impl Db {
             // SE2-M40 — the checkpoint trigger's budget.
             state.bytes_since_checkpoint += log.encoded_len() as u64;
             IdentityLog::publish(&identity_log_path(&config.dir, state.generation), &log)?;
+            state.identity_floor = state.generation; // PR6-002
         }
         if !state.pending_replicas.is_empty() {
             let log = ReplicaLog {
@@ -1813,6 +1841,7 @@ impl Db {
             };
             state.bytes_since_checkpoint += log.encoded_len() as u64;
             ReplicaLog::publish(&replica_log_path(&config.dir, state.generation), &log)?;
+            state.replica_floor = state.generation; // PR6-002
         }
         if !state.pending_placements.is_empty() {
             let log = PlacementLog {
@@ -1822,6 +1851,7 @@ impl Db {
             };
             state.bytes_since_checkpoint += log.encoded_len() as u64;
             PlacementLog::publish(&placement_log_path(&config.dir, state.generation), &log)?;
+            state.placement_floor = state.generation; // PR6-002
         }
         crash_park("AIKOQL_V2_FLUSH_PARK", &config.dir, "after_identity");
         let manifest = Manifest {
@@ -1829,6 +1859,9 @@ impl Db {
             generation: state.generation,
             segments: state.segment_records.clone(),
             wal_ids: vec![],
+            identity_floor: state.identity_floor,
+            replica_floor: state.replica_floor,
+            placement_floor: state.placement_floor,
         };
         // P4-M3 — debug builds refuse to publish impossible metadata
         // (before the manifest lands, not after: the same check, earlier).
@@ -2082,6 +2115,7 @@ fn compact_impl(
             &log,
             Some("LOCATION"),
         )?;
+        state.placement_floor = state.generation; // PR6-002
     }
     crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_location");
     let manifest = Manifest {
@@ -2089,6 +2123,9 @@ fn compact_impl(
         generation: state.generation,
         segments: new_records.clone(),
         wal_ids: vec![],
+        identity_floor: state.identity_floor,
+        replica_floor: state.replica_floor,
+        placement_floor: state.placement_floor,
     };
     // P4-M3 — debug builds refuse to publish impossible metadata.
     #[cfg(debug_assertions)]
