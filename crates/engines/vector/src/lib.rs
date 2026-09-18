@@ -952,4 +952,23 @@ mod tests {
         assert_eq!(h.physical, 5);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // --- P5-M27 (IDX-P1-03) — dimension mismatches are observable. RED: the
+    // health struct has no mismatch signal — E0609, the missing-seam RED (the
+    // cbo_default_001 pattern). The wrong-dim drop is behavior-pinned at
+    // vec003; this pins the observability channel. ---
+
+    #[test]
+    fn vec005_dim_mismatch_is_observable_in_health() {
+        let idx = HnswVectorIndex::new(2, 100);
+        idx.upsert(kid(1), "m", &[1.0, 0.0]);
+        idx.upsert(kid(2), "m", &[0.5, 0.5, 0.25]); // wrong dim — dropped
+        idx.upsert(kid(3), "n", &[0.1, 0.9, 0.2]); // wrong dim — dropped
+        let h = idx.health().unwrap();
+        assert_eq!(
+            h.dropped_dim_mismatch, 2,
+            "mismatches are counted, never silently 'healthy'"
+        );
+        assert_eq!(h.live, 1, "only the adopted-dim vector is live");
+    }
 }
