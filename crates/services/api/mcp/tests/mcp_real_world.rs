@@ -61,6 +61,14 @@ struct McpClient {
 
 impl McpClient {
     fn start(db_path: &str) -> Self {
+        Self::start_with(db_path, None)
+    }
+
+    /// Spawns with an explicit backend override for THIS child only.
+    /// The default strips AIKOQL_BACKEND entirely: the process env is
+    /// shared by every parallel test in this binary, so a global set_var
+    /// in one test would leak into every sibling's children.
+    fn start_with(db_path: &str, backend: Option<&str>) -> Self {
         // Find binary relative to workspace root.
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -100,14 +108,17 @@ impl McpClient {
             _ => debug_bin,
         };
         eprintln!("Using binary: {}", bin.display());
-        let mut child = Command::new(&bin)
-            .arg("serve")
+        let mut cmd = Command::new(&bin);
+        cmd.arg("serve")
             .arg(db_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit()) // crash output lands in CI logs, not /dev/null
-            .spawn()
-            .expect("start MCP server");
+            .env_remove("AIKOQL_BACKEND");
+        if let Some(b) = backend {
+            cmd.env("AIKOQL_BACKEND", b);
+        }
+        let mut child = cmd.spawn().expect("start MCP server");
 
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
@@ -1609,11 +1620,12 @@ fn p3m3_bkp005_backup_restore_route_by_backend() {
     drop(c);
 
     // ── redb leg: trait-default scan unchanged (REC-002 untouched) ───────
-    std::env::set_var("AIKOQL_BACKEND", "redb");
+    // The backend rides the CHILD's env, never the test process's — a
+    // process-global set_var races every parallel test's children.
     let db2 = tmp_db("bkp005rb");
     let _ = std::fs::remove_file(&db2);
 
-    let mut c = McpClient::start(&db2);
+    let mut c = McpClient::start_with(&db2, Some("redb"));
     let note = c.call(
         "remember",
         &json!({
@@ -1659,7 +1671,7 @@ fn p3m3_bkp005_backup_restore_route_by_backend() {
     }
     assert!(removed, "destroy: redb file must be removable");
 
-    let mut c = McpClient::start(&db2);
+    let mut c = McpClient::start_with(&db2, Some("redb"));
     let restored = c.call(
         "restore",
         &json!({"subject": "admin", "backup": backup_dir.to_str().unwrap()}),
@@ -1669,12 +1681,11 @@ fn p3m3_bkp005_backup_restore_route_by_backend() {
         "redb restore unchanged: {restored}"
     );
     drop(c);
-    let mut c = McpClient::start(&db2);
+    let mut c = McpClient::start_with(&db2, Some("redb"));
     let fetched = c.call("get", &json!({"koid": &koid2, "subject": "admin"}));
     assert_eq!(
         fetched["properties"]["body"], "bkp005 redb path",
         "redb restored knowledge must read back: {fetched}"
     );
     drop(c);
-    std::env::remove_var("AIKOQL_BACKEND");
 }
