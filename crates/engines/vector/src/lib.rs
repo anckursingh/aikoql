@@ -48,6 +48,10 @@ pub struct HnswVectorIndex {
     tombstones: RwLock<BTreeSet<KOID>>,
     /// Nodes physically in the graph (inserts; removes never shrink it).
     physical: AtomicU64,
+    /// P5-M27 (IDX-P1-03): upserts dropped on a dimension mismatch (the
+    /// adopted dim is global — a second embedding model with a different
+    /// dim would drop every vector silently without this signal).
+    dropped_dim_mismatch: AtomicU64,
     pending_rebuild: AtomicBool,
     /// P5-M22 (P1-14): the checkpoint generation. `checkpoint` bumps it and
     /// publishes `manifest.json` last; `load` gates on manifest == meta —
@@ -73,6 +77,7 @@ impl HnswVectorIndex {
             model_map: RwLock::new(BTreeMap::new()),
             tombstones: RwLock::new(BTreeSet::new()),
             physical: AtomicU64::new(0),
+            dropped_dim_mismatch: AtomicU64::new(0),
             pending_rebuild: AtomicBool::new(false),
             gen: AtomicU64::new(0),
         }
@@ -143,6 +148,9 @@ impl HnswVectorIndex {
             model_map: RwLock::new(model_map),
             tombstones: RwLock::new(tombstones),
             physical: AtomicU64::new(physical),
+            // P5-M27 (IDX-P1-03): an ephemeral diagnostic — restarts the
+            // count, it is not part of the checkpointed generation.
+            dropped_dim_mismatch: AtomicU64::new(0),
             // P5-M27 (IDX-P1-04): restore the armed trigger (false for
             // pre-M27 checkpoints — their dead ratio still crosses, but no
             // flag means no rebuild until the next delete re-arms it).
@@ -217,6 +225,9 @@ impl VectorIndex for HnswVectorIndex {
         if dim == 0 {
             self.dim.store(vec.len(), Ordering::Relaxed);
         } else if vec.len() != dim {
+            // P5-M27 (IDX-P1-03): count the drop — a mismatch is a
+            // data-quality event, never silently "healthy" index state.
+            self.dropped_dim_mismatch.fetch_add(1, Ordering::Relaxed);
             return;
         }
         // R7: label is "{model}:{koid_hex}" so different models produce distinct entries.
@@ -328,6 +339,7 @@ impl VectorIndex for HnswVectorIndex {
             // P5-M23 (P0-10): health reports real capacity/usage.
             dim: self.dim(),
             capacity: self.capacity,
+            dropped_dim_mismatch: self.dropped_dim_mismatch.load(Ordering::Relaxed),
         })
     }
 

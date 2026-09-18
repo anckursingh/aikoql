@@ -155,6 +155,9 @@ pub struct VectorHealth {
     /// vector) and capacity hint — health reports real capacity/usage.
     pub dim: usize,
     pub capacity: usize,
+    /// P5-M27 (IDX-P1-03): upserts dropped because their vector length did
+    /// not match the adopted dim. A data-quality signal, never silent.
+    pub dropped_dim_mismatch: u64,
 }
 
 // ---------------------------------------------------------------------------
