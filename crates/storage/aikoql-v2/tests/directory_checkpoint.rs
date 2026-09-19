@@ -310,7 +310,11 @@ fn ckp003_orphan_checkpoint_ignored_and_recovered() {
     let ckp = DirectoryCheckpoint::read(&checkpoint_path(&d, gens[0])).unwrap();
     let mut orphan = ckp.clone();
     orphan.generation += 1;
-    std::fs::write(checkpoint_path(&d, gens[0] + 1), orphan.encode()).unwrap();
+    std::fs::write(
+        checkpoint_path(&d, gens[0] + 1),
+        test_support::encode_for_tests(&orphan),
+    )
+    .unwrap();
 
     let db = Db::open(cfg.clone()).unwrap();
     for b in 0x01u8..=0x0A {
@@ -347,7 +351,11 @@ fn ckp003_name_internal_generation_mismatch() {
     let ckp = DirectoryCheckpoint::read(&checkpoint_path(&d, gens[0])).unwrap();
     let mut lied = ckp.clone();
     lied.generation += 7;
-    std::fs::write(checkpoint_path(&d, gens[0]), lied.encode()).unwrap();
+    std::fs::write(
+        checkpoint_path(&d, gens[0]),
+        test_support::encode_for_tests(&lied),
+    )
+    .unwrap();
 
     let err = Db::open(Config::new(d.clone()))
         .err()

@@ -42,8 +42,8 @@
 
 use crate::db::manifest_path;
 use crate::format::{
-    checksum8, crash_park, publish_atomic_staged, publish_atomic_writer_staged, Cursor,
-    FormatError, Manifest, FORMAT_VERSION,
+    checksum8, crash_park, publish_atomic_writer_staged, Cursor, FormatError, Manifest,
+    FORMAT_VERSION,
 };
 use crate::identity::directory::{
     identity_log_generation, identity_log_path, replica_log_path, IdentityLog, IdentityRecord,
@@ -138,23 +138,6 @@ impl DirectoryCheckpoint {
             next_replica_id,
             next_placement_generation,
         }
-    }
-
-    /// Encoded bytes — the materialized reference form (kept for decode
-    /// tests and cps001's byte-identity pin). P4-M6: it delegates to the
-    /// streaming writer, so the two forms can never drift apart.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(
-            HEADER_LEN
-                + self.identities.len() * IDENTITY_RECORD_LEN
-                + self.replicas.len() * REPLICA_RECORD_LEN
-                + self.placements.len() * PLACEMENT_RECORD_LEN
-                + 8,
-        );
-        // A Vec write cannot fail; the streaming writer is the one writer.
-        self.write_streamed(&mut bytes)
-            .expect("write to Vec cannot fail");
-        bytes
     }
 
     /// P4-M6 — the one writer both paths use: header + sorted records
@@ -333,21 +316,13 @@ impl DirectoryCheckpoint {
         })
     }
 
-    /// Atomic publish. SE2-M40 — staged: the crash-window harness parks
-    /// inside the temp's write/fsync (`AIKOQL_V2_PLACE_PARK` naming
-    /// `FAIL_AFTER_CHECKPOINT_WRITE` / `_FSYNC`, the M36 plumbing).
-    pub fn publish_staged(
-        path: &Path,
-        checkpoint: &Self,
-        stage: Option<&str>,
-    ) -> Result<(), FormatError> {
-        publish_atomic_staged(path, &checkpoint.encode(), stage)
-    }
-
     /// P4-M6 — publish through the streaming writer: the same staging
     /// protocol (temp write → crash parks → fsync → rename), no encoded
     /// buffer. The parks fire identically, so the M40 crash windows cover
     /// the streamed path unchanged.
+    /// PR6-006 — this is the ONLY publish API: the materialized
+    /// encode()/publish_staged() forms are gone, so a production caller
+    /// cannot accidentally materialize a large checkpoint.
     pub fn publish_staged_streamed(
         path: &Path,
         checkpoint: &Self,
@@ -544,4 +519,33 @@ pub fn directory_log_bytes(dir: &Path, after_generation: u64) -> Result<u64, For
         }
     }
     Ok(bytes)
+}
+
+/// PR6-006 — the ONLY materialization surface, explicitly named so no
+/// production caller can claim it was an accident. `DirectoryCheckpoint`
+/// itself offers no `encode()`/materialized publish: the production API is
+/// `publish_staged_streamed` alone, and these functions exist purely as the
+/// byte-identity reference the test pins compare the streamed file against.
+#[doc(hidden)]
+pub mod test_support {
+    use super::{
+        DirectoryCheckpoint, HEADER_LEN, IDENTITY_RECORD_LEN, PLACEMENT_RECORD_LEN,
+        REPLICA_RECORD_LEN,
+    };
+
+    /// The materialized reference form — write_streamed into a Vec (the one
+    /// writer, so this can never drift from the published bytes).
+    pub fn encode_for_tests(cp: &DirectoryCheckpoint) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(
+            HEADER_LEN
+                + cp.identities.len() * IDENTITY_RECORD_LEN
+                + cp.replicas.len() * REPLICA_RECORD_LEN
+                + cp.placements.len() * PLACEMENT_RECORD_LEN
+                + 8,
+        );
+        // A Vec write cannot fail.
+        cp.write_streamed(&mut bytes)
+            .expect("write to Vec cannot fail");
+        bytes
+    }
 }
