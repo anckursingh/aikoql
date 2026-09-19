@@ -246,6 +246,29 @@ fn copy_hashed(src: &Path, dst: &Path) -> Result<(u64, [u8; 8]), FormatError> {
     Ok((size, full[..8].try_into().expect("sha256-8 slice")))
 }
 
+/// Stream a file while hashing it — restore verification must never hold
+/// the largest snapshot file in memory (PR6-R2-011). Same primitive as
+/// `copy_hashed`, without the destination.
+fn hash_streamed(path: &Path) -> Result<(u64, [u8; 8]), FormatError> {
+    let mut input = File::open(path)
+        .map_err(|e| FormatError::Io(format!("open {} for restore: {e}", path.display())))?;
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut hasher = Sha256::new();
+    let mut size = 0u64;
+    loop {
+        let n = input
+            .read(&mut buf)
+            .map_err(|e| FormatError::Io(format!("read {} for restore: {e}", path.display())))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        size += n as u64;
+    }
+    let full = hasher.finalize();
+    Ok((size, full[..8].try_into().expect("sha256-8 slice")))
+}
+
 /// The files a generation G pins: CURRENT, MANIFEST-G, the segments the
 /// manifest references, every identity/replica/placement/checkpoint log ≤ G,
 /// and the WAL. LOCK and stray temp files never enter the set.
@@ -361,15 +384,16 @@ impl Db {
         crash_park("AIKOQL_V2_SNAP_PARK", dir, "after_copy");
 
         // Verify: re-read every copied byte — the marker is only published
-        // over files that were just proven intact.
+        // over files that were just proven intact. PR6-R2-011 — streamed,
+        // so the verify never holds a whole file in memory.
         for f in &files {
-            let bytes = std::fs::read(dir.join(&f.name)).map_err(|e| {
+            let (size, sum) = hash_streamed(&dir.join(&f.name)).map_err(|e| {
                 FormatError::Corrupt(format!(
                     "snapshot verify: read {}: {e}",
                     dir.join(&f.name).display()
                 ))
             })?;
-            if bytes.len() as u64 != f.size || checksum8(&bytes) != f.checksum {
+            if size != f.size || sum != f.checksum {
                 return Err(FormatError::Corrupt(format!(
                     "snapshot verify: {} changed after copy",
                     f.name
@@ -507,9 +531,11 @@ pub fn restore_from(src: &Path, target: PathBuf) -> Result<Db, FormatError> {
                 f.name
             )));
         }
-        let bytes = std::fs::read(src.join(&f.name))
+        // PR6-R2-011 — streamed verify: peak restore memory is a fixed
+        // 64 KiB buffer, never the largest snapshot file.
+        let (size, sum) = hash_streamed(&src.join(&f.name))
             .map_err(|e| FormatError::Corrupt(format!("snapshot {} is missing: {e}", f.name)))?;
-        if bytes.len() as u64 != f.size || checksum8(&bytes) != f.checksum {
+        if size != f.size || sum != f.checksum {
             return Err(FormatError::Corrupt(format!(
                 "snapshot file {} failed integrity (size/checksum)",
                 f.name

@@ -24,6 +24,7 @@ use aikoql_storage_v2::snapshot::{
 use aikoql_storage_v2::wal::Op;
 use common::{dir, hex, report_write};
 use std::collections::BTreeMap;
+use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -764,4 +765,90 @@ fn p3m3_snapshot_copy_time_cell() {
         info.generation, info.file_count, info.bytes_copied,
     );
     report_write(std::path::Path::new(report), body);
+}
+
+// ---------------------------------------------------------------------------
+// PR6-R2-011 — restore verification must stream, never hold the largest
+// snapshot file in memory (review P1). Env-gated (RESTORE_NIGHTLY=1) RSS
+// cell, the mem001/cps003 precedent: a ~128 MiB segment snapshot restored
+// under a peak-RSS budget that only the streamed verify meets — the
+// pre-R2-011 `std::fs::read` verify peaks at baseline + file size.
+// ---------------------------------------------------------------------------
+
+#[cfg(windows)]
+fn self_peak_over(pid: u32, ms: u32) -> u64 {
+    let script = format!(
+        "while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ Write-Output (Get-Process -Id {pid}).WorkingSet64; Start-Sleep -Milliseconds 100 }}"
+    );
+    let mut sampler = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let out = sampler.stdout.take().unwrap();
+    let mut peak = 0u64;
+    for line in std::io::BufReader::new(out)
+        .lines()
+        .map_while(Result::ok)
+        .take(ms as usize / 100 + 1)
+    {
+        if let Ok(v) = line.trim().parse::<u64>() {
+            peak = peak.max(v);
+        }
+    }
+    // Self-sampling: PowerShell exits when THIS process exits, so waiting
+    // here deadlocks (its pipe fills, it blocks, we wait forever). Kill it.
+    let _ = sampler.kill();
+    let _ = sampler.wait();
+    peak
+}
+
+#[test]
+fn r2_011_restore_peak_rss_is_file_size_independent() {
+    if std::env::var_os("RESTORE_NIGHTLY").is_none() {
+        return; // strict opt-in: writes a ~128 MiB segment
+    }
+    #[cfg(not(windows))]
+    {
+        return; // WorkingSet64 polling is Windows-only (the mem001 precedent)
+    }
+    #[cfg(windows)]
+    {
+        let d = dir("r2-011-live");
+        let db = Db::open(Config::new(d.clone())).unwrap();
+        // 8 × 16 MiB values → one ~128 MiB segment after the flush.
+        let blob = vec![0xA5u8; 16 * 1024 * 1024];
+        for i in 0..8u64 {
+            db.put(&format!("blob{i:02}").into_bytes(), &blob).unwrap();
+        }
+        db.flush().unwrap();
+        let snap = dir("r2-011-snap");
+        let info = db.snapshot_to(&snap).unwrap();
+        drop(db);
+        let baseline = self_peak_over(std::process::id(), 2000);
+        // Restore on a helper thread while this process samples its own
+        // peak RSS: the streamed verify peaks at baseline + 64 KiB, the
+        // old read-based verify at baseline + ~128 MiB (4× above budget).
+        let snap2 = snap.clone();
+        let target_parent = dir("r2-011-targets");
+        let target = target_parent.join("target");
+        let handle = std::thread::spawn(move || restore_from(&snap2, target));
+        let peak = self_peak_over(std::process::id(), 8000);
+        let restored = handle.join().unwrap().unwrap();
+        assert_eq!(
+            restored.get(b"blob07").unwrap(),
+            Some(vec![0xA5u8; 16 * 1024 * 1024]),
+            "the large value survives the restore"
+        );
+        println!(
+            "R2-011 report: snapshot {} files / {} bytes; baseline {baseline} B, \
+             restore peak {peak} B",
+            info.file_count, info.bytes_copied
+        );
+        assert!(
+            peak < baseline + 32 * 1024 * 1024,
+            "restore peak RSS must not scale with the largest snapshot file: \
+             peak {peak} vs baseline {baseline} + 32 MiB budget"
+        );
+    }
 }
