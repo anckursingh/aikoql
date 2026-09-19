@@ -82,6 +82,20 @@ pub fn checksum8(bytes: &[u8]) -> [u8; 8] {
     full[..8].try_into().expect("sha256-8 slice")
 }
 
+/// PR6-R2-002 — the per-family publication chain: fold each published
+/// delta-log generation into one 64-bit value (the checksum8 idiom and
+/// threat model: an integrity fingerprint, not authenticity). The CURRENT
+/// manifest records the running fold; the checkpoint records the fold's
+/// value at publication. Together they let the coverage validator prove the
+/// post-checkpoint delta set complete — a missing intermediate log breaks
+/// the fold — without reading any historical manifest.
+pub fn chain_extend(prev: u64, generation: u64) -> u64 {
+    let mut buf = [0u8; 16];
+    buf[..8].copy_from_slice(&prev.to_le_bytes());
+    buf[8..].copy_from_slice(&generation.to_le_bytes());
+    u64::from_le_bytes(checksum8(&buf))
+}
+
 // ---------------------------------------------------------------------------
 // CURRENT
 
@@ -169,11 +183,18 @@ pub struct Manifest {
     pub wal_ids: Vec<u64>,
     /// PR6-002 — per-family applied floors: the newest published delta-log
     /// generation per family at this manifest's publication time (0 = none).
-    /// The coverage validator derives every REQUIRED post-checkpoint delta
-    /// generation from the floor raises across the manifest chain.
     pub identity_floor: u64,
     pub replica_floor: u64,
     pub placement_floor: u64,
+    /// PR6-R2-002 — per-family publication chains: the running
+    /// `chain_extend` fold over every generation each family published at
+    /// (seeded by the newest checkpoint, folded on at every publish). The
+    /// coverage validator recomputes the fold over the surviving
+    /// post-checkpoint delta files and requires it to land here exactly —
+    /// so recovery never reads an intermediate manifest.
+    pub identity_chain: u64,
+    pub replica_chain: u64,
+    pub placement_chain: u64,
 }
 
 impl Manifest {
@@ -203,10 +224,14 @@ impl Manifest {
         // PR6-002 — the floors ride INSIDE the checksum (the PR6-001
         // precedent): an old binary reading this file fails the checksum, a
         // new binary reading an old file hits EOF — both directions fail
-        // closed without a FORMAT_VERSION bump.
+        // closed without a FORMAT_VERSION bump. PR6-R2-002 — the chains
+        // follow the floors, same rule.
         bytes.extend_from_slice(&self.identity_floor.to_le_bytes());
         bytes.extend_from_slice(&self.replica_floor.to_le_bytes());
         bytes.extend_from_slice(&self.placement_floor.to_le_bytes());
+        bytes.extend_from_slice(&self.identity_chain.to_le_bytes());
+        bytes.extend_from_slice(&self.replica_chain.to_le_bytes());
+        bytes.extend_from_slice(&self.placement_chain.to_le_bytes());
         bytes.extend_from_slice(&checksum8(&bytes));
         bytes
     }
@@ -270,6 +295,9 @@ impl Manifest {
         let identity_floor = cur.u64()?;
         let replica_floor = cur.u64()?;
         let placement_floor = cur.u64()?;
+        let identity_chain = cur.u64()?;
+        let replica_chain = cur.u64()?;
+        let placement_chain = cur.u64()?;
         let checksum = cur.take(8)?.to_vec();
         if !cur.is_empty() {
             return Err(FormatError::Corrupt("manifest trailing bytes".into()));
@@ -285,6 +313,9 @@ impl Manifest {
             identity_floor,
             replica_floor,
             placement_floor,
+            identity_chain,
+            replica_chain,
+            placement_chain,
         })
     }
 

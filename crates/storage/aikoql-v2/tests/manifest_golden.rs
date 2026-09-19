@@ -3,6 +3,7 @@
 //! The manifest is the authoritative topology: `AKMV | format_version u16 LE
 //! | generation u64 LE | segment_count u32 LE | segment records | wal_count
 //! u32 LE | wal ids | per-family applied floors (3×u64 LE, PR6-002) |
+//! per-family publication chains (3×u64 LE, PR6-R2-002) |
 //! sha256-8 over everything before it`. Segment record:
 //! `segment_id u64 | level u8 | key_min_len u32 | key_min | key_max_len u32
 //! | key_max | seq_lo u64 | seq_hi u64 | record_count u64 | file_size u64 |
@@ -39,6 +40,9 @@ fn fixture_manifest() -> Manifest {
         identity_floor: 0,
         replica_floor: 0,
         placement_floor: 0,
+        identity_chain: 0,
+        replica_chain: 0,
+        placement_chain: 0,
     }
 }
 
@@ -50,7 +54,8 @@ fn manifest_golden_bytes() {
         "414b4d5601000100000000000000010000000100000000000000000200000061\
          31020000007a3905000000000000000900000000000000640000000000000000\
          1000000000000088776655443322110100000002000000000000000000000000\
-         00000000000000000000000000000000000000ac3a340e91f3f951",
+         0000000000000000000000000000000000000000000000000000000000000000\
+         00000000000000000000001b4a3b7692e869ea",
         "manifest golden bytes changed — format break"
     );
 }
@@ -84,6 +89,9 @@ fn manifest_empty_round_trip() {
         identity_floor: 0,
         replica_floor: 0,
         placement_floor: 0,
+        identity_chain: 0,
+        replica_chain: 0,
+        placement_chain: 0,
     };
     let decoded = Manifest::decode(&m.encode()).unwrap();
     assert_eq!(decoded.generation, 9);

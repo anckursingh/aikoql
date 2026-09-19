@@ -115,7 +115,7 @@ fn ckp001_format_golden_and_damage() {
     placements.insert(ReplicaId(20), Placement::Retired { generation: 11 });
     placements.insert(ReplicaId(30), Placement::Memtable { generation: 4 });
     let checkpoint =
-        DirectoryCheckpoint::from_state(7, &identity, &replicas, &placements, 3, 30, 12);
+        DirectoryCheckpoint::from_state(7, &identity, &replicas, &placements, 3, 30, 12, 0, 0, 0);
     let encoded = test_support::encode_for_tests(&checkpoint);
     assert_eq!(DirectoryCheckpoint::decode(&encoded).unwrap(), checkpoint);
 
@@ -129,7 +129,8 @@ fn ckp001_format_golden_and_damage() {
          050000000000000003000000070000000900000000000000140000000000000003\
          000000000000000000000000000000000b000000000000001e0000000000000001\
          0000000000000000000000000000000004000000000000000300000000000000\
-         1e000000000000000c00000000000000c94504babc427b1d"
+         1e000000000000000c0000000000000000000000000000000000000000000000\
+         0000000000000000e04946b22753d4e0"
     );
 
     let mut bad_magic = encoded.clone();

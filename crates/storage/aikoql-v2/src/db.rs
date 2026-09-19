@@ -35,8 +35,8 @@ use crate::checkpoint::{
 };
 use crate::compaction::{merge, CompactStats, KeepAll, RetentionPolicy};
 use crate::format::{
-    crash_park, validate_manifest, verify_pair, Current, FormatError, Manifest, SegmentRecord,
-    FORMAT_VERSION,
+    chain_extend, crash_park, validate_manifest, verify_pair, Current, FormatError, Manifest,
+    SegmentRecord, FORMAT_VERSION,
 };
 use crate::identity::directory::{
     identity_log_path, load_identity_logs, load_replica_logs, orphan_identity_logs,
@@ -270,12 +270,18 @@ pub(crate) struct State {
     /// prunes the subsumed history.
     bytes_since_checkpoint: u64,
     /// PR6-002 — per-family applied floors: the newest delta-log generation
-    /// each family published (0 = none). The next manifest records them,
-    /// and the coverage validator derives the required post-checkpoint
-    /// deltas from their raises across the manifest chain.
+    /// each family published (0 = none). The next manifest records them.
     identity_floor: u64,
     replica_floor: u64,
     placement_floor: u64,
+    /// PR6-R2-002 — per-family publication chains: the running
+    /// `chain_extend` fold, extended at every publish, seeded at open from
+    /// the manifest. The checkpoint snapshots them; the coverage validator
+    /// re-folds the surviving post-checkpoint delta files against them, so
+    /// no historical manifest is part of the recovery contract.
+    identity_chain: u64,
+    replica_chain: u64,
+    placement_chain: u64,
 }
 
 /// One queued batch waiting on its group: the ops plus the ack channel
@@ -457,6 +463,9 @@ impl Db {
                     identity_floor: 0,
                     replica_floor: 0,
                     placement_floor: 0,
+                    identity_chain: 0,
+                    replica_chain: 0,
+                    placement_chain: 0,
                 };
                 Manifest::publish(&manifest_path(&config.dir, 1), &manifest)?;
                 let current = Current::new(FORMAT_VERSION, 1);
@@ -492,12 +501,10 @@ impl Db {
         // PR6-002 — a valid checkpoint plus an incomplete delta set is an
         // invalid state (review P0 Recovery): the coverage validator fails
         // closed on any missing required post-checkpoint delta, per family,
-        // intermediate generations included.
-        validate_delta_coverage(
-            &config.dir,
-            checkpoint_generation,
-            current.manifest_generation,
-        )?;
+        // intermediate generations included. PR6-R2-002 — the scan reads
+        // only CURRENT's manifest and the checkpoint's chains, never a
+        // historical manifest.
+        validate_delta_coverage(&config.dir, checkpoint.as_ref(), &manifest)?;
         // PR6-001 — the checkpoint's floors bound every recomputed
         // allocator from below: its prune deleted the history those
         // recomputes would otherwise read (ckp009's burned generations).
@@ -807,10 +814,14 @@ impl Db {
             bytes_since_checkpoint,
             // PR6-002 — the current manifest is authoritative: it records
             // the newest published generation per family (monotone by
-            // construction, so nothing replayed can exceed it).
+            // construction, so nothing replayed can exceed it). PR6-R2-002
+            // — the chains ride the same authority.
             identity_floor: manifest.identity_floor,
             replica_floor: manifest.replica_floor,
             placement_floor: manifest.placement_floor,
+            identity_chain: manifest.identity_chain,
+            replica_chain: manifest.replica_chain,
+            placement_chain: manifest.placement_chain,
         }));
         let fsyncs = Arc::new(AtomicU64::new(0));
         let (queue_tx, committer) = if config.durability == DurabilityMode::GroupCommit {
@@ -1399,6 +1410,9 @@ impl Db {
             s.next_logical_id,
             s.next_replica_id,
             s.next_placement_generation,
+            s.identity_chain, // PR6-R2-002
+            s.replica_chain,
+            s.placement_chain,
         )
     }
 
@@ -1914,6 +1928,8 @@ impl Db {
             state.bytes_since_checkpoint += log.encoded_len() as u64;
             IdentityLog::publish(&identity_log_path(&config.dir, state.generation), &log)?;
             state.identity_floor = state.generation; // PR6-002
+            state.identity_chain = chain_extend(state.identity_chain, state.generation);
+            // PR6-R2-002
         }
         if !state.pending_replicas.is_empty() {
             let log = ReplicaLog {
@@ -1924,6 +1940,8 @@ impl Db {
             state.bytes_since_checkpoint += log.encoded_len() as u64;
             ReplicaLog::publish(&replica_log_path(&config.dir, state.generation), &log)?;
             state.replica_floor = state.generation; // PR6-002
+            state.replica_chain = chain_extend(state.replica_chain, state.generation);
+            // PR6-R2-002
         }
         if !state.pending_placements.is_empty() {
             let log = PlacementLog {
@@ -1934,6 +1952,8 @@ impl Db {
             state.bytes_since_checkpoint += log.encoded_len() as u64;
             PlacementLog::publish(&placement_log_path(&config.dir, state.generation), &log)?;
             state.placement_floor = state.generation; // PR6-002
+            state.placement_chain = chain_extend(state.placement_chain, state.generation);
+            // PR6-R2-002
         }
         crash_park("AIKOQL_V2_FLUSH_PARK", &config.dir, "after_identity");
         let manifest = Manifest {
@@ -1944,6 +1964,9 @@ impl Db {
             identity_floor: state.identity_floor,
             replica_floor: state.replica_floor,
             placement_floor: state.placement_floor,
+            identity_chain: state.identity_chain, // PR6-R2-002
+            replica_chain: state.replica_chain,
+            placement_chain: state.placement_chain,
         };
         // P4-M3 — debug builds refuse to publish impossible metadata
         // (before the manifest lands, not after: the same check, earlier).
@@ -2047,6 +2070,9 @@ impl Db {
             state.next_logical_id,
             state.next_replica_id,
             state.next_placement_generation,
+            state.identity_chain, // PR6-R2-002
+            state.replica_chain,
+            state.placement_chain,
         );
         let path = checkpoint_path(&config.dir, state.generation);
         // P4-M6 — the streamed publish (no encoded buffer; same staging
@@ -2198,6 +2224,8 @@ fn compact_impl(
             Some("LOCATION"),
         )?;
         state.placement_floor = state.generation; // PR6-002
+        state.placement_chain = chain_extend(state.placement_chain, state.generation);
+        // PR6-R2-002
     }
     crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_location");
     let manifest = Manifest {
@@ -2208,6 +2236,9 @@ fn compact_impl(
         identity_floor: state.identity_floor,
         replica_floor: state.replica_floor,
         placement_floor: state.placement_floor,
+        identity_chain: state.identity_chain, // PR6-R2-002
+        replica_chain: state.replica_chain,
+        placement_chain: state.placement_chain,
     };
     // P4-M3 — debug builds refuse to publish impossible metadata.
     #[cfg(debug_assertions)]

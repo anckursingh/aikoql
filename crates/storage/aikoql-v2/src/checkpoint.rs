@@ -40,10 +40,9 @@
 //! surviving logs may not cover the pruned range. Fail closed preserves the
 //! operator's evidence (the v1 closure's Q1 policy, verbatim).
 
-use crate::db::manifest_path;
 use crate::format::{
-    checksum8, crash_park, publish_atomic_writer_staged, Cursor, FormatError, Manifest,
-    FORMAT_VERSION,
+    chain_extend, checksum8, crash_park, publish_atomic_writer_staged, Cursor, FormatError,
+    Manifest, FORMAT_VERSION,
 };
 use crate::identity::directory::{
     identity_log_generation, identity_log_path, replica_log_path, IdentityLog, IdentityRecord,
@@ -85,6 +84,15 @@ pub struct DirectoryCheckpoint {
     pub next_logical_id: u64,
     pub next_replica_id: u64,
     pub next_placement_generation: u64,
+    // PR6-R2-002 — per-family publication chains at publication time (the
+    // chain_extend fold over every generation each family published at).
+    // The coverage validator recomputes the fold over the surviving
+    // post-checkpoint delta files and requires it to land on the CURRENT
+    // manifest's chain — recovery depends on CURRENT + checkpoint +
+    // authoritative deltas + WAL, never on a historical manifest.
+    pub identity_chain: u64,
+    pub replica_chain: u64,
+    pub placement_chain: u64,
 }
 
 pub fn checkpoint_path(dir: &Path, generation: u64) -> PathBuf {
@@ -103,6 +111,9 @@ impl DirectoryCheckpoint {
     /// Records are SORTED by key (oid/lid/rid) — HashMap iteration order
     /// is random, and identical workloads must produce byte-identical
     /// checkpoints (the M35 determinism rule).
+    // PR6-R2-002 — the ten arguments mirror the on-disk record shape 1:1;
+    // grouping the counters/chains into a struct would only bury the format.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_state(
         generation: u64,
         identity: &HashMap<crate::identity::ObjectId, crate::identity::LogicalId>,
@@ -111,6 +122,9 @@ impl DirectoryCheckpoint {
         next_logical_id: u64,
         next_replica_id: u64,
         next_placement_generation: u64,
+        identity_chain: u64,
+        replica_chain: u64,
+        placement_chain: u64,
     ) -> Self {
         let mut identities: Vec<IdentityRecord> = identity
             .iter()
@@ -140,6 +154,9 @@ impl DirectoryCheckpoint {
             next_logical_id,
             next_replica_id,
             next_placement_generation,
+            identity_chain,
+            replica_chain,
+            placement_chain,
         }
     }
 
@@ -198,9 +215,13 @@ impl DirectoryCheckpoint {
             // an old binary reading this file fails the checksum, and a new
             // binary reading an old file hits EOF before the checksum —
             // both directions fail closed without a FORMAT_VERSION bump.
+            // PR6-R2-002 — the chains follow the floors, same rule.
             w(&self.next_logical_id.to_le_bytes())?;
             w(&self.next_replica_id.to_le_bytes())?;
             w(&self.next_placement_generation.to_le_bytes())?;
+            w(&self.identity_chain.to_le_bytes())?;
+            w(&self.replica_chain.to_le_bytes())?;
+            w(&self.placement_chain.to_le_bytes())?;
             hasher.finalize()
         };
         out.write_all(&digest[..8])
@@ -300,6 +321,9 @@ impl DirectoryCheckpoint {
         let next_logical_id = cur.u64()?;
         let next_replica_id = cur.u64()?;
         let next_placement_generation = cur.u64()?;
+        let identity_chain = cur.u64()?;
+        let replica_chain = cur.u64()?;
+        let placement_chain = cur.u64()?;
         let stored_ck = cur.take(8)?;
         if !cur.is_empty() {
             return Err(FormatError::Corrupt("checkpoint trailing bytes".into()));
@@ -316,6 +340,9 @@ impl DirectoryCheckpoint {
             next_logical_id,
             next_replica_id,
             next_placement_generation,
+            identity_chain,
+            replica_chain,
+            placement_chain,
         })
     }
 
@@ -381,48 +408,112 @@ pub fn load_newest(
 /// PR6-002 — post-checkpoint delta coverage (review P0 Recovery): a valid
 /// checkpoint plus an incomplete delta set is an invalid state, so the open
 /// fails closed when a REQUIRED authoritative delta generation is missing.
-/// Every manifest records the newest published log generation per family
-/// (the applied floors) at its publication time; a family published at
-/// generation G exactly when manifest-G raised its floor past manifest-(G-1)
-/// — every such generation must exist, be readable and be valid. Gaps are
-/// normal (a generation with no work for a family publishes no log) and
-/// raise no requirement; a missing INTERMEDIATE log (the review's
-/// PLACEMENT-113 with CURRENT=120) fails the walk exactly like a missing
-/// newest one, because the records in between are nowhere else. No
-/// checkpoint ⇒ no baseline to be incomplete relative to (the full delta
-/// history is the recovery source) — the walk is a no-op.
+/// Gaps are normal (a generation with no work for a family publishes no
+/// log) and raise no requirement; a missing INTERMEDIATE log (the review's
+/// PLACEMENT-113 with CURRENT=120) fails exactly like a missing newest
+/// one, because the records in between are nowhere else. No checkpoint ⇒
+/// no baseline to be incomplete relative to — the scan is a no-op.
+///
+/// PR6-R2-002 (review P0 Recovery) — the scan reads NO historical
+/// manifest. The invariant:
+///
+/// > Recovery must depend only on CURRENT + checkpoint + authoritative
+/// > post-checkpoint deltas + WAL, not on an unbounded chain of manifests.
+///
+/// The checkpoint carries the per-family publication chains (the
+/// `chain_extend` fold over every generation each family published at);
+/// CURRENT's manifest carries the running folds. The validator scans the
+/// post-checkpoint delta files (the directory is the index), re-folds their
+/// generations from the checkpoint's base and requires the fold to land on
+/// CURRENT's manifest exactly — a deleted intermediate log breaks the fold
+/// — while the floor agreement names a missing NEWEST log precisely.
 pub fn validate_delta_coverage(
     dir: &Path,
-    checkpoint_generation: u64,
-    current_generation: u64,
+    checkpoint: Option<&DirectoryCheckpoint>,
+    manifest: &Manifest,
 ) -> Result<(), FormatError> {
-    if checkpoint_generation == 0 || checkpoint_generation >= current_generation {
+    let Some(ckp) = checkpoint else { return Ok(()) };
+    if ckp.generation >= manifest.generation {
         return Ok(());
     }
-    let mut floors = floors_of(&Manifest::read(&manifest_path(dir, checkpoint_generation))?);
-    for g in checkpoint_generation + 1..=current_generation {
-        let next = floors_of(&Manifest::read(&manifest_path(dir, g))?);
-        if next.0 < floors.0 || next.1 < floors.1 || next.2 < floors.2 {
-            return Err(FormatError::Corrupt(format!(
-                "manifest {g} lowers the per-family delta floors ({floors:?} → {next:?})"
-            )));
-        }
-        if next.0 > floors.0 {
-            require_delta(dir, "IDENTITY", g)?;
-        }
-        if next.1 > floors.1 {
-            require_delta(dir, "REPLICA", g)?;
-        }
-        if next.2 > floors.2 {
-            require_delta(dir, "PLACEMENT", g)?;
-        }
-        floors = next;
-    }
-    Ok(())
+    validate_family_coverage(
+        dir,
+        "IDENTITY",
+        ckp.generation,
+        manifest.generation,
+        ckp.identity_chain,
+        manifest.identity_chain,
+        manifest.identity_floor,
+    )?;
+    validate_family_coverage(
+        dir,
+        "REPLICA",
+        ckp.generation,
+        manifest.generation,
+        ckp.replica_chain,
+        manifest.replica_chain,
+        manifest.replica_floor,
+    )?;
+    validate_family_coverage(
+        dir,
+        "PLACEMENT",
+        ckp.generation,
+        manifest.generation,
+        ckp.placement_chain,
+        manifest.placement_chain,
+        manifest.placement_floor,
+    )
 }
 
-fn floors_of(m: &Manifest) -> (u64, u64, u64) {
-    (m.identity_floor, m.replica_floor, m.placement_floor)
+/// PR6-R2-002 — the scan body: the authoritative post-checkpoint delta
+/// files of one family (the directory listing IS the index — every file in
+/// range must decode with its generation agreeing with its name, the
+/// loaders' agreement rule), re-folded into the publication chain. The
+/// sorted fold is generation-monotone by construction; the chain equality
+/// catches a missing intermediate log, the floor agreement a missing newest
+/// one (and names it).
+fn validate_family_coverage(
+    dir: &Path,
+    family: &str,
+    checkpoint_generation: u64,
+    current_generation: u64,
+    base_chain: u64,
+    current_chain: u64,
+    current_floor: u64,
+) -> Result<(), FormatError> {
+    let mut gens: Vec<u64> = std::fs::read_dir(dir)
+        .map_err(|e| FormatError::Io(format!("scan delta logs in {}: {e}", dir.display())))?
+        .flatten()
+        .filter_map(|entry| {
+            let g = match family {
+                "IDENTITY" => identity_log_generation(&entry.file_name().to_string_lossy()),
+                "REPLICA" => crate::identity::directory::replica_log_generation(
+                    &entry.file_name().to_string_lossy(),
+                ),
+                _ => crate::placement::directory::placement_log_generation(
+                    &entry.file_name().to_string_lossy(),
+                ),
+            }?;
+            (g > checkpoint_generation && g <= current_generation).then_some(g)
+        })
+        .collect();
+    gens.sort_unstable();
+    let mut chain = base_chain;
+    for &g in &gens {
+        require_delta(dir, family, g)?;
+        chain = chain_extend(chain, g);
+    }
+    if current_floor > checkpoint_generation && gens.last().copied() != Some(current_floor) {
+        return Err(FormatError::Corrupt(format!(
+            "required authoritative delta {family}-{current_floor:06}.log missing (post-checkpoint coverage broken)"
+        )));
+    }
+    if chain != current_chain {
+        return Err(FormatError::Corrupt(format!(
+            "post-checkpoint {family} delta coverage incomplete (a published log is missing)"
+        )));
+    }
+    Ok(())
 }
 
 /// The required `{FAMILY}-{g:06}.log` must exist and decode with its

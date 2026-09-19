@@ -10,7 +10,7 @@
 
 mod common;
 
-use aikoql_storage_v2::db::{Config, Db};
+use aikoql_storage_v2::db::{manifest_path, Config, Db};
 use aikoql_storage_v2::identity::ObjectId;
 use common::dir;
 use std::path::{Path, PathBuf};
@@ -126,4 +126,53 @@ fn missing_placement_delta_fails_closed() {
     let d = build_checkpointed_db("pr6-002-missing-placement");
     std::fs::remove_file(d.join("PLACEMENT-000003.log")).unwrap();
     expect_open_fails(&d, "PLACEMENT");
+}
+
+// ---------------------------------------------------------------------------
+// PR6-R2-002 — the coverage validator must not make every historical
+// manifest part of the recovery contract (review P0 Recovery). The recovery
+// source is checkpoint + authoritative post-checkpoint deltas + WAL:
+// deleting an INTERMEDIATE manifest (not CURRENT) must not break reopen
+// while all authoritative post-checkpoint delta logs exist.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn recovery_does_not_require_intermediate_manifests_after_checkpoint() {
+    // 1. checkpoint at G = 2, plus one post-checkpoint generation (3).
+    let d = build_checkpointed_db("pr6-r2-002-manifests");
+    // 2. many subsequent generations: a flush per generation, 4 → 7.
+    {
+        let db = Db::open(reopen_cfg(&d)).unwrap();
+        for gen in 0..4u8 {
+            for i in 0..4u8 {
+                db.put_object(oid(0x40 + gen * 4 + i), b"k", &[gen, i])
+                    .unwrap();
+            }
+            db.flush().unwrap();
+        }
+    }
+    // 3. verify recovery (CURRENT = 7).
+    let verify = |d: &Path| {
+        let db = Db::open(reopen_cfg(d)).unwrap();
+        for i in 0x01u8..=0x0A {
+            assert_eq!(db.get_object(oid(i), b"k").unwrap(), Some(vec![i]));
+        }
+        for gen in 0..4u8 {
+            for i in 0..4u8 {
+                assert_eq!(
+                    db.get_object(oid(0x40 + gen * 4 + i), b"k").unwrap(),
+                    Some(vec![gen, i]),
+                    "generation-{} key lost across reopen",
+                    gen + 4
+                );
+            }
+        }
+    };
+    verify(&d);
+    // 4. delete an intermediate manifest, not CURRENT and not the
+    // checkpoint's: MANIFEST-5 of CURRENT = 7.
+    std::fs::remove_file(manifest_path(&d, 5)).unwrap();
+    // 5. recovery still succeeds — every authoritative post-checkpoint
+    // delta log is present; only the historical manifest chain is gone.
+    verify(&d);
 }

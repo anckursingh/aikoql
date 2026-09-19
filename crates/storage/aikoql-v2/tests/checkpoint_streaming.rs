@@ -52,7 +52,7 @@ fn sample_checkpoint() -> DirectoryCheckpoint {
             },
         );
     }
-    DirectoryCheckpoint::from_state(42, &identity, &replicas, &placements, 25, 124, 254)
+    DirectoryCheckpoint::from_state(42, &identity, &replicas, &placements, 25, 124, 254, 0, 0, 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -242,8 +242,18 @@ fn cps003_peak_rss_streamed_not_above_materialized() {
             replicas.insert(lid, rid);
             placements.insert(rid, Placement::Memtable { generation: 1 });
         }
-        let cp =
-            DirectoryCheckpoint::from_state(1, &identity, &replicas, &placements, n + 1, n + 1, 2);
+        let cp = DirectoryCheckpoint::from_state(
+            1,
+            &identity,
+            &replicas,
+            &placements,
+            n + 1,
+            n + 1,
+            2,
+            0,
+            0,
+            0,
+        );
         let held = test_support::encode_for_tests(&cp); // the materialized path's transient buffer
         let encode_len = held.len() as u64;
         let mat_peak = self_peak_over(std::process::id(), 2500);
@@ -303,7 +313,18 @@ fn cps004_streamed_writes_are_record_sized_not_image_sized() {
         replicas.insert(lid, rid);
         placements.insert(rid, Placement::Memtable { generation: 1 });
     }
-    let cp = DirectoryCheckpoint::from_state(1, &identity, &replicas, &placements, n + 1, n + 1, 2);
+    let cp = DirectoryCheckpoint::from_state(
+        1,
+        &identity,
+        &replicas,
+        &placements,
+        n + 1,
+        n + 1,
+        2,
+        0,
+        0,
+        0,
+    );
 
     let mut w = MaxCallWriter {
         bytes: 0,
@@ -312,9 +333,10 @@ fn cps004_streamed_writes_are_record_sized_not_image_sized() {
     cp.write_streamed(&mut w).unwrap();
 
     // magic 4 + version 2 + generation 8 + 3×count 4 + identity 24n +
-    // replica 24n + memtable placement 33n + floors 24 + checksum 8.
+    // replica 24n + memtable placement 33n + floors 24 + chains 24 (PR6-R2-002)
+    // + checksum 8.
     let expect: usize =
-        4 + 2 + 8 + 12 + 24 * n as usize + 24 * n as usize + 33 * n as usize + 24 + 8;
+        4 + 2 + 8 + 12 + 24 * n as usize + 24 * n as usize + 33 * n as usize + 48 + 8;
     assert_eq!(w.bytes, expect, "the streamed byte count is exact");
     assert!(
         w.max_call <= 33,
