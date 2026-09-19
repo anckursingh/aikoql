@@ -54,6 +54,7 @@ use crate::placement::directory::{placement_log_path, PlacementLog, PlacementRec
 use crate::placement::{BlockId, Placement, SegmentId};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::mem::size_of;
 use std::path::{Path, PathBuf};
 
 const CHECKPOINT_MAGIC: &[u8; 4] = b"AKCK";
@@ -63,7 +64,9 @@ const IDENTITY_RECORD_LEN: usize = 24;
 const REPLICA_RECORD_LEN: usize = 24;
 /// rid 8 + variant 1 + segment 8 + block 4 + entry 4 + generation 8.
 const PLACEMENT_RECORD_LEN: usize = 33;
-const HEADER_LEN: usize = 18; // magic 4 + version 2 + generation 8 + 3×count 4
+/// PR6-R2-009 — computed, so the constant can never drift from the
+/// on-disk shape above: magic 4 + version u16 + generation u64 + 3×count u32.
+const HEADER_LEN: usize = 4 + size_of::<u16>() + size_of::<u64>() + 3 * size_of::<u32>();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectoryCheckpoint {
