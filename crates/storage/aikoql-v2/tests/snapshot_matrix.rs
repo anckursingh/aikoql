@@ -212,9 +212,10 @@ fn snap_gen(name: &str) -> Option<u64> {
         .flatten()
 }
 
-/// row 3 — checkpoint during snapshot → no mixed generations: the snapshot
-/// carries only files of its pinned generation, even though the interleaved
-/// flush published a newer checkpoint in the live dir.
+/// row 3 — write+flush during snapshot → no mixed generations: the snapshot
+/// carries only files of its pinned generation. (The name says "checkpoint";
+/// the actual checkpoint-during-snapshot interleave is the row-3b test right
+/// below — kept separate per the Round-2 review.)
 #[test]
 fn sfm003_checkpoint_during_snapshot_no_mixed_generations() {
     let d = dir("sfm003-live");
@@ -256,6 +257,68 @@ fn sfm003_checkpoint_during_snapshot_no_mixed_generations() {
             .manifest_generation
             > g0
     );
+}
+
+/// row 3b — CHECKPOINT during snapshot (PR6-R2-004): a real
+/// `checkpoint_now()` — publish CHECKPOINT-{g}, prune older deltas — waits
+/// on the state lock the snapshot copy loop holds, so it can only land
+/// after the snapshot completed. The dangerous interaction the original
+/// review named (checkpoint prunes while the snapshot still needs ≤g
+/// files) is structurally impossible: pinned here, not assumed.
+#[test]
+fn sfm003_checkpoint_during_snapshot_preserves_pinned_generation() {
+    let d = dir("sfm003b-live");
+    let (db, _) = seed(&d, 40);
+    let db = Arc::new(db);
+    for i in 40..48 {
+        db.put(format!("k{i:03}").as_bytes(), format!("v{i}").as_bytes())
+            .unwrap();
+    }
+    let g0 = Current::read(&d.join("CURRENT"))
+        .unwrap()
+        .manifest_generation;
+    let before = walk(&db);
+    let ckps_in = |p: &Path| -> usize {
+        std::fs::read_dir(p)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("CHECKPOINT-"))
+            .count()
+    };
+    assert_eq!(ckps_in(&d), 0, "no checkpoint has been published yet");
+
+    let snap = dir("sfm003b-snap");
+    let info = interleave(&db, &snap, {
+        let db = Arc::clone(&db);
+        move || {
+            db.checkpoint_now().unwrap();
+        }
+    });
+
+    assert_eq!(
+        info.generation, g0,
+        "the snapshot pins the pre-checkpoint generation"
+    );
+    for e in std::fs::read_dir(&snap).unwrap().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if let Some(gen) = snap_gen(&name) {
+            assert!(
+                gen <= g0,
+                "mixed generation: {name} carries {gen} > pinned {g0}"
+            );
+        }
+    }
+    let restored = restore_from(&snap, dir("sfm003b-target")).unwrap();
+    assert_eq!(
+        walk(&restored),
+        before,
+        "the pinned generation restores exact at the pre-checkpoint state"
+    );
+    assert!(
+        ckps_in(&d) > 0,
+        "the checkpoint landed (published) after the snapshot"
+    );
+    assert_eq!(walk(&db), before, "the checkpoint changed no state");
 }
 
 /// row 4 — compaction during snapshot → the referenced segments remain
