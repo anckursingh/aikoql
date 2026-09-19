@@ -15,6 +15,7 @@ use aikoql_kernel::transaction::kernel::{
 };
 use std::cmp::Ordering;
 
+pub mod backend;
 pub mod cbo;
 pub mod plan_oracle;
 pub mod streaming;

@@ -7,15 +7,12 @@
 //! these primitives (`aikoql.checkpointer`).
 
 use aikoql_graph::{GraphEngineApi, RelateRequest, TraverseQuery};
-use aikoql_kernel::storage::store::StorageEngine;
 use aikoql_kernel::{
-    Fusion, IndexMaintainerApi, IndexStatusKind, Kernel, KnowledgeContext, Metadata, RedbEngine,
+    Fusion, IndexMaintainerApi, IndexStatusKind, Kernel, KnowledgeContext, Metadata,
     RememberRequest, ScoredKO, SemanticBlock, SimilarityQuery, Subject, SystemClock, TextIndex,
     Value, VectorIndex, KOID,
 };
 use aikoql_scheduler::IndexMaintainer;
-use aikoql_storage::AikoqlStorageEngine;
-use aikoql_storage_v2::AikoqlStorageEngineV2;
 use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -207,21 +204,22 @@ impl Drop for Aikoql {
 #[pymethods]
 impl Aikoql {
     #[new]
-    #[pyo3(signature = (path, salt = 0, backend = "aikoql-v2"))]
-    fn new(path: &str, salt: u64, backend: &str) -> PyResult<Self> {
-        // Default: aikoql-v2, the ratified production default (2026-09-07
-        // ADR). "aikoql" and "redb" open existing databases; the migration
-        // path is the REC-002 backup/restore flow.
-        let engine: Arc<dyn StorageEngine> = match backend {
-            "aikoql-v2" => Arc::new(AikoqlStorageEngineV2::open(path).map_err(to_pyerr)?),
-            "aikoql" => Arc::new(AikoqlStorageEngine::open(path).map_err(to_pyerr)?),
-            "redb" => Arc::new(RedbEngine::open(path).map_err(to_pyerr)?),
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown backend {other:?}: use \"aikoql-v2\", \"aikoql\" or \"redb\""
-                )))
+    #[pyo3(signature = (path, salt = 0, backend = None))]
+    fn new(path: &str, salt: u64, backend: Option<&str>) -> PyResult<Self> {
+        // PR6-005 — the ONE authoritative backend decision path
+        // (aikoql_runtime::backend): with no explicit backend the existing
+        // on-disk format is detected (redb file, native WAL, v2 directory);
+        // only a missing path defaults to a fresh aikoql-v2 (2026-09-07
+        // ADR). An unknown explicit value fails closed.
+        let backend = match backend {
+            Some(b) => {
+                Some(aikoql_runtime::backend::Backend::parse(b).map_err(PyValueError::new_err)?)
             }
+            None => None,
         };
+        let (engine, _admin) =
+            aikoql_runtime::backend::open_engine(std::path::Path::new(path), backend)
+                .map_err(to_pyerr)?;
         let kernel = Kernel::open(engine, Arc::new(SystemClock), salt).map_err(to_pyerr)?;
         // P5-M18: real ANN/BM25 indexes behind a FULL journal replay — a
         // live-only maintainer (M17b) leaves the vector index permanently

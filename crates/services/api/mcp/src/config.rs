@@ -41,11 +41,12 @@ pub(crate) struct RuntimeConfig {
     /// [encryption] — encryption-at-rest (MRFC-0020), wired in serve + all
     /// store-opening subcommands via engine::open_kernel.
     pub encryption: RuntimeEncryption,
-    /// Backend selection (PR#2 review SE-02): `None` = auto-detect at open
-    /// (redb for a fresh/redb path, the native engines for their own
-    /// formats — see engine::detect_backend). Any of TOML / env / CLI
-    /// naming a backend resolves to `Some` here, so the detection never
-    /// overrides an explicit choice.
+    /// Backend selection (PR#2 review SE-02, PR6-005): `None` = auto-detect
+    /// at open through the one authoritative path
+    /// (`aikoql_runtime::backend::detect_backend` — a redb file stays redb,
+    /// a native WAL stays aikoql, a v2 directory stays v2, a missing path
+    /// creates v2). Any of TOML / env / CLI naming a backend resolves to
+    /// `Some` here, so the detection never overrides an explicit choice.
     pub backend: Option<StorageBackend>,
     /// P5-M11 (ND-11): KOQL request timeout in seconds — a query running
     /// longer is cancelled and answered -32002.
@@ -58,28 +59,10 @@ pub(crate) struct RuntimeConfig {
 }
 
 /// The storage backends the server can open (docs/STORAGE-BACKENDS.md).
-/// `None` = auto-detect at open: a missing path creates `aikoql-v2` (the
-/// canonical default); `redb`/`aikoql` are explicit opt-ins and legacy
-/// files keep opening via their named backend.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StorageBackend {
-    Redb,
-    Aikoql,
-    AikoqlV2,
-}
-
-impl StorageBackend {
-    fn parse(v: &str) -> Result<StorageBackend, String> {
-        match v {
-            "redb" => Ok(StorageBackend::Redb),
-            "aikoql" => Ok(StorageBackend::Aikoql),
-            "aikoql-v2" => Ok(StorageBackend::AikoqlV2),
-            other => Err(format!(
-                "unknown storage backend {other:?}: use \"redb\", \"aikoql\" or \"aikoql-v2\""
-            )),
-        }
-    }
-}
+/// PR6-005 — owned by the runtime's one authoritative backend module
+/// (aikoql_runtime::backend): parsing, detection and opening all live
+/// there; this alias keeps the config pipeline typed against it.
+pub(crate) use aikoql_runtime::backend::Backend as StorageBackend;
 
 /// Merged encryption settings (MRFC-0020). Disabled by default.
 #[derive(Clone, Debug, Default)]
@@ -592,6 +575,12 @@ pub(crate) fn load(
 
     Ok(cfg)
 }
+
+/// Serializes env-mutating tests (process-global state). Shared with
+/// engine.rs's startup-path test, which also reads process env through
+/// load().
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {

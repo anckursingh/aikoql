@@ -265,6 +265,8 @@ dependencies = [
  "aikoql-kernel",
  "aikoql-scheduler",
  "aikoql-semantic",
+ "aikoql-storage",
+ "aikoql-storage-v2",
  "aikoql-vector",
  "proptest",
  "serde_json",

@@ -9,6 +9,7 @@ implicit rule (an existing redb database must keep opening and serve its
 data, never be re-opened as a fresh v2 store).
 """
 
+import gc
 import os
 import shutil
 import tempfile
@@ -30,6 +31,10 @@ def test_no_backend_autodetects_existing_redb(tmp_path_only):
     db = aikoql(path, salt=42, backend="redb")
     r = db.remember("alice", "fact", {"body": "pre-flip data"})
     db.close()
+    # redb holds an exclusive process-wide file lock; close() is a no-op in
+    # this revision (drop-on-GC), so release the handle deterministically.
+    del db
+    gc.collect()
 
     reopened = aikoql(path, salt=42)  # no explicit backend: detection must win
     try:
@@ -44,6 +49,8 @@ def test_no_backend_autodetects_existing_v1(tmp_path_only):
     db = aikoql(path, salt=42, backend="aikoql")
     r = db.remember("alice", "fact", {"body": "native wal data"})
     db.close()
+    del db
+    gc.collect()
 
     reopened = aikoql(path, salt=42)  # no explicit backend: detection must win
     try:
