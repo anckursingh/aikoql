@@ -20,6 +20,7 @@
 
 use crate::format::{checksum8, Cursor, FormatError};
 use crate::identity::{LogicalId, ObjectId, ReplicaId};
+use std::io::{Read, Seek, SeekFrom};
 
 pub const WAL_FORMAT_VERSION: u16 = 1;
 pub const FRAME_BATCH: u8 = 1;
@@ -171,6 +172,14 @@ pub fn decode_frame(bytes: &[u8]) -> Result<(WalFrame, usize), FormatError> {
         return Err(FormatError::Corrupt("WAL frame checksum mismatch".into()));
     }
 
+    let ops = decode_payload(payload)?;
+    Ok((WalFrame { seq, ops }, total))
+}
+
+/// Decode the op entries from a frame payload — the shared tail of
+/// `decode_frame` (in-memory replay path) and `validate_frame_at` (the
+/// streamed snapshot path); one definition keeps the two byte-identical.
+fn decode_payload(payload: &[u8]) -> Result<Vec<Op>, FormatError> {
     let mut pcur = Cursor::new(payload);
     let count = pcur.u32()? as usize;
     if count == 0 {
@@ -220,7 +229,7 @@ pub fn decode_frame(bytes: &[u8]) -> Result<(WalFrame, usize), FormatError> {
     if !pcur.is_empty() {
         return Err(FormatError::Corrupt("WAL payload trailing bytes".into()));
     }
-    Ok((WalFrame { seq, ops }, total))
+    Ok(ops)
 }
 
 /// Walk frames from the start. Returns the valid prefix and the byte count
@@ -261,4 +270,99 @@ pub fn replay_frames(bytes: &[u8]) -> Result<(Vec<WalFrame>, usize), FormatError
         }
     }
     Ok((frames, pos))
+}
+
+/// Validate ONE complete frame at `pos`: header, then payload + stored
+/// checksum as one contiguous read (so the sha256-8 is byte-identical to
+/// `decode_frame`'s), then the op decode. Memory is bounded by this one
+/// frame. Ok(None): no valid frame starts at `pos` (bad magic/version/type,
+/// truncation, checksum or op failure — every case `replay_frames` would
+/// probe past). Err: a real read failure.
+fn validate_frame_at(
+    r: &mut (impl Read + Seek),
+    pos: u64,
+    end: u64,
+) -> Result<Option<(u64, usize)>, FormatError> {
+    if pos + FRAME_HEADER_LEN as u64 > end {
+        return Ok(None); // torn header
+    }
+    r.seek(SeekFrom::Start(pos))
+        .map_err(|e| FormatError::Io(format!("WAL seek to {pos}: {e}")))?;
+    let mut head = [0u8; FRAME_HEADER_LEN];
+    if let Err(e) = r.read_exact(&mut head) {
+        return if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            Ok(None) // the WAL shrank under us (concurrent flush) — torn
+        } else {
+            Err(FormatError::Io(format!("WAL read at {pos}: {e}")))
+        };
+    }
+    if &head[..4] != WAL_MAGIC {
+        return Ok(None);
+    }
+    let version = u16::from_le_bytes(head[4..6].try_into().expect("2-byte slice"));
+    if version != WAL_FORMAT_VERSION || head[6] != FRAME_BATCH {
+        return Ok(None);
+    }
+    let seq = u64::from_le_bytes(head[7..15].try_into().expect("8-byte slice"));
+    let payload_len = u32::from_le_bytes(head[15..19].try_into().expect("4-byte slice")) as usize;
+    let total = FRAME_HEADER_LEN + payload_len + 8;
+    if pos + total as u64 > end {
+        return Ok(None); // truncated payload/checksum
+    }
+    let mut body = vec![0u8; total];
+    body[..FRAME_HEADER_LEN].copy_from_slice(&head);
+    if let Err(e) = r.read_exact(&mut body[FRAME_HEADER_LEN..]) {
+        return if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            Ok(None)
+        } else {
+            Err(FormatError::Io(format!("WAL read at {pos}: {e}")))
+        };
+    }
+    if checksum8(&body[..total - 8]) != body[total - 8..] {
+        return Ok(None);
+    }
+    decode_payload(&body[FRAME_HEADER_LEN..total - 8])?;
+    Ok(Some((seq, total)))
+}
+
+/// PR6-R3-003 — the streamed, bounded-memory WAL scan: the byte length of
+/// the torn-safe prefix, with EXACTLY `replay_frames`' semantics (a decode
+/// failure with nothing valid after it is a torn tail; damage followed by a
+/// valid frame is Corrupt; sequences must strictly increase). Reads one
+/// frame's bytes into memory at a time at most. The caller holds the wal
+/// mutex, so the file cannot grow between the probe and its use.
+pub fn valid_prefix_len(r: &mut (impl Read + Seek)) -> Result<u64, FormatError> {
+    let end = r
+        .seek(SeekFrom::End(0))
+        .map_err(|e| FormatError::Io(format!("WAL seek end: {e}")))?;
+    let mut pos = 0u64;
+    let mut last_seq: Option<u64> = None;
+    while pos < end {
+        match validate_frame_at(r, pos, end)? {
+            Some((seq, total)) => {
+                if let Some(prev) = last_seq {
+                    if seq <= prev {
+                        return Err(FormatError::Corrupt(format!(
+                            "WAL sequence must increase: {seq} after {prev}"
+                        )));
+                    }
+                }
+                last_seq = Some(seq);
+                pos += total as u64;
+            }
+            None => {
+                // The same probe as replay_frames, per-offset: O(n) seeks,
+                // memory bounded — the active WAL is small.
+                for probe in pos + 1..end {
+                    if validate_frame_at(r, probe, end)?.is_some() {
+                        return Err(FormatError::Corrupt(format!(
+                            "WAL damage at offset {pos} with valid frames after"
+                        )));
+                    }
+                }
+                return Ok(pos);
+            }
+        }
+    }
+    Ok(pos)
 }

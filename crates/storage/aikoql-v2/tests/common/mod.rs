@@ -168,6 +168,56 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Current process RSS in KiB, copied VERBATIM from
+/// `crates/certification/src/lib.rs` — one definition of the sampler so the
+/// sfm009 bounded-memory cell measures the same quantity the certification
+/// harness does. 0 = no sampler on this platform.
+#[cfg(windows)]
+pub fn self_rss_kb() -> u64 {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Pmc {
+        cb: u32,
+        _page_faults: u32,
+        _peak_ws: usize,
+        ws: usize,
+        _rest: [usize; 6],
+    }
+    extern "system" {
+        fn GetCurrentProcess() -> *mut core::ffi::c_void;
+        // K32GetProcessMemoryInfo is a kernel32 export (default-linked);
+        // psapi's GetProcessMemoryInfo would need an explicit link attr.
+        fn K32GetProcessMemoryInfo(p: *mut core::ffi::c_void, c: *mut Pmc, cb: u32) -> i32;
+    }
+    unsafe {
+        let mut pmc = std::mem::zeroed::<Pmc>();
+        pmc.cb = std::mem::size_of::<Pmc>() as u32;
+        if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb) == 0 {
+            0
+        } else {
+            (pmc.ws / 1024) as u64
+        }
+    }
+}
+
+#[cfg(all(not(windows), unix))]
+pub fn self_rss_kb() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmRSS:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<u64>().ok())
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(all(not(windows), not(unix)))]
+pub fn self_rss_kb() -> u64 {
+    0
+}
+
 // ---------------------------------------------------------------------------
 // Kernel measurement harness (CountingEngine / LogicalCounts / percentiles /
 // ctx), copied VERBATIM from `crates/storage/aikoql/tests/common/mod.rs` —

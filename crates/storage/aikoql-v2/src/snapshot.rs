@@ -19,7 +19,7 @@
 
 use crate::db::{manifest_path, Config, Db, WAL_FILE};
 use crate::format::{checksum8, crash_park, publish_atomic_writer_staged, Cursor, FormatError};
-use crate::wal::{replay_frames, Op};
+use crate::wal::Op;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::File;
@@ -269,6 +269,42 @@ fn hash_streamed(path: &Path) -> Result<(u64, [u8; 8]), FormatError> {
     Ok((size, full[..8].try_into().expect("sha256-8 slice")))
 }
 
+/// Validate the WAL (bounded memory) and copy the torn-safe prefix to
+/// `dst`, hashing on the way — PR6-R3-003: snapshot creation must not
+/// materialize the WAL, so the validation is streamed (`valid_prefix_len`
+/// holds one frame at a time) and the copy is a fixed 64 KiB buffer. The
+/// caller holds the wal mutex for the whole span, so the file cannot
+/// change between the two passes; the marker records the prefix size.
+fn copy_wal_prefix(wal: &mut File, dst: &Path) -> Result<(u64, [u8; 8]), FormatError> {
+    wal.seek(SeekFrom::Start(0))
+        .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
+    let wal_valid = crate::wal::valid_prefix_len(wal)?;
+    wal.seek(SeekFrom::Start(0))
+        .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
+    let mut out = File::create(dst)
+        .map_err(|e| FormatError::Io(format!("write snapshot {}: {e}", dst.display())))?;
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut hasher = Sha256::new();
+    let mut left = wal_valid;
+    while left > 0 {
+        let want = (buf.len() as u64).min(left) as usize;
+        let n = wal
+            .read(&mut buf[..want])
+            .map_err(|e| FormatError::Io(format!("WAL read: {e}")))?;
+        if n == 0 {
+            return Err(FormatError::Io("WAL shrank during snapshot copy".into()));
+        }
+        hasher.update(&buf[..n]);
+        out.write_all(&buf[..n])
+            .map_err(|e| FormatError::Io(format!("write snapshot {}: {e}", dst.display())))?;
+        left -= n as u64;
+    }
+    out.sync_all()
+        .map_err(|e| FormatError::Io(format!("sync snapshot {}: {e}", dst.display())))?;
+    let full = hasher.finalize();
+    Ok((wal_valid, full[..8].try_into().expect("sha256-8 slice")))
+}
+
 /// The files a generation G pins: CURRENT, MANIFEST-G, the segments the
 /// manifest references, every identity/replica/placement/checkpoint log ≤ G,
 /// and the WAL. LOCK and stray temp files never enter the set.
@@ -342,24 +378,16 @@ impl Db {
         let mut files = pinned_files(&self.config.dir, generation)?;
 
         // The WAL is the one mutable file in the set (GroupCommit's committer
-        // appends without the state lock): read it under the wal mutex and
-        // copy only the torn-safe prefix — a partial final frame never rides
-        // along. The marker records that prefix size, not the file's size.
-        let wal_bytes = {
-            let mut wal = self.wal.lock().expect("wal mutex");
-            let mut bytes = Vec::new();
-            wal.seek(SeekFrom::Start(0))
-                .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
-            wal.read_to_end(&mut bytes)
-                .map_err(|e| FormatError::Io(format!("WAL read: {e}")))?;
-            bytes
-        };
-        let (_, wal_valid) = replay_frames(&wal_bytes)?;
+        // appends without the state lock): the wal mutex is taken here and
+        // HELD for the whole files loop, so the committer cannot append
+        // between validation and copy. Only the torn-safe prefix rides along
+        // (a partial final frame never does), streamed — bounded memory,
+        // PR6-R3-003. The marker records that prefix size, not the file's.
+        let mut wal = self.wal.lock().expect("wal mutex");
 
         // Copy everything, hashing on the way. The WAL is special: it is
-        // copied from the already-validated in-memory prefix (a committer
-        // append after our locked read must never ride along), and the
-        // marker records that prefix size.
+        // validated and copied under the still-held wal mutex, and the
+        // marker records the prefix size.
         let mut bytes_copied = 0u64;
         for (i, f) in files.iter_mut().enumerate() {
             // PR6-007 — one file (CURRENT) is already copied: a kill here
@@ -371,9 +399,7 @@ impl Db {
                 crash_park("AIKOQL_V2_SNAP_PARK", dir, "during_copy");
             }
             let (size, checksum) = if f.name == WAL_FILE {
-                std::fs::write(dir.join(&f.name), &wal_bytes[..wal_valid])
-                    .map_err(|e| FormatError::Io(format!("write snapshot {}: {e}", WAL_FILE)))?;
-                (wal_valid as u64, checksum8(&wal_bytes[..wal_valid]))
+                copy_wal_prefix(&mut wal, &dir.join(&f.name))?
             } else {
                 copy_hashed(&self.config.dir.join(&f.name), &dir.join(&f.name))?
             };

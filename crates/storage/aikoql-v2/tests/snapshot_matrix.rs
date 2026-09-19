@@ -19,6 +19,7 @@ use common::dir;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -537,4 +538,57 @@ fn sfm008_corrupt_copied_file_restore_fails_closed() {
         "a corrupted copied file must fail closed"
     );
     assert!(!target.join("CURRENT").exists(), "no partial restore");
+}
+
+/// row 9 — large WAL snapshot has bounded RSS (PR6-R3-003): snapshot
+/// creation must not materialize the WAL. memtable_bytes is huge, so ~96 MiB
+/// of WAL stays unflushed; a sampler thread records peak process RSS across
+/// snapshot_to and the growth must stay under a fixed limit. The restore
+/// afterwards proves the bounded copy lost nothing.
+#[test]
+fn sfm009_large_wal_snapshot_has_bounded_rss() {
+    let _serial = PARK_LOCK.lock().unwrap();
+    let d = dir("sfm009-live");
+    let mut cfg = Config::new(d.clone());
+    cfg.memtable_bytes = 1 << 30; // 1 GiB: nothing auto-flushes the 96 MiB
+    cfg.checkpoint_bytes = 0;
+    cfg.compact_background = false;
+    let db = Db::open(cfg).unwrap();
+    let val = vec![b'v'; 4 << 20]; // 24 × 4 MiB = 96 MiB of unflushed WAL
+    for i in 0..24u64 {
+        db.put(format!("k{i:03}").as_bytes(), &val).unwrap();
+    }
+    let expected = walk(&db);
+
+    // Baseline after the writes, before any snapshot work. The sampler runs
+    // on a helper thread — sampling own RSS inline deadlocks (the P4-M6
+    // pipe trap), the helper never allocates into a channel either.
+    let base = common::self_rss_kb();
+    assert!(base > 0, "the RSS sampler returned 0 on this platform");
+    let peak = Arc::new(AtomicU64::new(base));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (p2, s2) = (Arc::clone(&peak), Arc::clone(&stop));
+    let sampler = std::thread::spawn(move || {
+        while !s2.load(Ordering::Relaxed) {
+            p2.fetch_max(common::self_rss_kb(), Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+
+    let snap = dir("sfm009-snap");
+    db.snapshot_to(&snap).unwrap();
+    stop.store(true, Ordering::Relaxed);
+    sampler.join().expect("sampler thread");
+
+    let growth_kb = peak.load(Ordering::Relaxed).saturating_sub(base);
+    assert!(
+        growth_kb < 48 << 10,
+        "snapshot copied the WAL into memory: RSS grew {growth_kb} KiB \
+         (peak {} KiB over base {base} KiB) — the streamed copy must stay \
+         far below the 48 MiB limit",
+        peak.load(Ordering::Relaxed)
+    );
+
+    let restored = restore_from(&snap, dir("sfm009-target")).unwrap();
+    assert_eq!(walk(&restored), expected, "the bounded copy lost nothing");
 }

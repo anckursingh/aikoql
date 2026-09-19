@@ -56,6 +56,10 @@ jobs:
       # the dev box on fsync-heavy tests). Per the rule above the
       # next-slowest tests moved to the skip list — the budget is NOT
       # raised. Remaining measured cost: ~30 min tests + ~14 min compile.
+      # sfm009_large_wal_snapshot_has_bounded_rss (PR6-R3-003) is skipped
+      # like kse19: a whole-process RSS cell, sibling tests in the same
+      # binary perturb the peak on CI runners — it stays in the local suite
+      # (RED 192700 KiB growth → GREEN bounded, both proven locally).
       - run: >-
           cargo test --workspace -- --skip load_encryption_overhead --skip kse120c_report
           --skip kse16_storage_amplification --skip kse17_write_amplification
@@ -64,6 +68,7 @@ jobs:
           --skip m7_workloads --skip v2_m7_workloads
           --skip multimodal_golden_suite --skip rule_baseline_retrieval_quality
           --skip semantic_extraction_quality
+          --skip sfm009_large_wal_snapshot_has_bounded_rss
         timeout-minutes: 60
       # DoD 19 (HLD §52/§53): golden PDF suite with visible per-stage
       # metrics — extraction/fragmentation/semantic/provenance/retrieval.
@@ -84,6 +89,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # sfm009_large_wal_snapshot_has_bounded_rss (PR6-R3-003): same RSS-cell
+      # gating as the Windows job — local-suite test, skipped on CI runners.
       - run: >-
           cargo test --workspace -- --skip load_encryption_overhead --skip kse120c_report
           --skip kse16_storage_amplification --skip kse17_write_amplification
@@ -92,6 +99,7 @@ jobs:
           --skip m7_workloads --skip v2_m7_workloads
           --skip multimodal_golden_suite --skip rule_baseline_retrieval_quality
           --skip semantic_extraction_quality
+          --skip sfm009_large_wal_snapshot_has_bounded_rss
         # Fast regression net. Only pure measurement is skipped (SE-06
         # classification — the same skip list as the Windows check job's
         # table, so the regression net is identical on both OSes); every
