@@ -191,6 +191,12 @@ pub struct Config {
     /// (get/get_many), 1 = every request. 0 (the default) disables the
     /// trace entirely — the read path then never snapshots, never locks.
     pub trace_every: u64,
+    /// PR6-R2-003 test hook — fail the NEXT Sync-path WAL append of this
+    /// db once (consumed on use, never armed by production code; the
+    /// per-db flag keeps it out of the process-wide env, which parallel
+    /// tests would race on). Lets a test observe an unacknowledged
+    /// reservation across a restart.
+    pub wal_fail_next: bool,
 }
 
 impl Config {
@@ -211,6 +217,7 @@ impl Config {
             merge_chunk_bytes: DEFAULT_MERGE_CHUNK_BYTES,
             checkpoint_bytes: DEFAULT_CHECKPOINT_BYTES,
             trace_every: 0,
+            wal_fail_next: false,
         }
     }
 }
@@ -234,9 +241,12 @@ pub(crate) struct State {
     /// open from the delta logs + the active WAL; every create applies
     /// before its ack), the pending delta records the next flush
     /// publishes in its publication window, and the monotonic allocators.
-    /// The allocators never decrease — deleted ids are never reused
-    /// (§16/§49); a crash between reservation and commit leaves a gap,
-    /// which is not reuse.
+    /// PR6-R2-003 — the reuse contract, stated exactly: an ACKNOWLEDGED
+    /// id is durable (its reservation rode the acked frame) and is never
+    /// reused — recovery re-derives the allocator past every durable
+    /// reservation. An UNACKNOWLEDGED reservation (the WAL append failed,
+    /// Err returned) was never observed by anyone and may be recycled
+    /// after a restart. The pins: tests/pr6_r2_003_reservation.rs.
     identity: HashMap<ObjectId, LogicalId>,
     replicas: HashMap<LogicalId, ReplicaId>,
     pending_identity: Vec<IdentityRecord>,
@@ -380,6 +390,10 @@ pub struct Db {
     compactor_signal: Arc<CompactorSignal>,
     /// P4-M5 — the sampled per-request read trace (empty while disabled).
     trace: TraceState,
+    /// PR6-R2-003 test hook — one-shot Sync-path WAL append failure,
+    /// armed from `Config::wal_fail_next` (consumed on the next frame;
+    /// production configs never arm it).
+    pub(crate) wal_fail_next: AtomicBool,
 }
 
 /// P4-M5 — bounded, sampled per-request read trace. `record` assigns the
@@ -841,6 +855,7 @@ impl Db {
         wstats
             .wal_replay_bytes
             .store(consumed as u64, Ordering::Relaxed);
+        let wal_fail_next_armed = config.wal_fail_next;
         Ok(Db {
             config,
             _lock: lock,
@@ -855,6 +870,7 @@ impl Db {
             compactor,
             compactor_signal,
             trace: TraceState::new(),
+            wal_fail_next: AtomicBool::new(wal_fail_next_armed),
         })
     }
 
@@ -927,6 +943,16 @@ impl Db {
             let mut wal = self.wal.lock().unwrap();
             wal.seek(SeekFrom::End(0))
                 .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
+            // PR6-R2-003 test hook — the frame is NOT appended: the
+            // reservations carried in `ops` never become durable. What
+            // happens to them across a restart is exactly the contract
+            // under test (acknowledged ids never reused; an unacknowledged
+            // reservation may recycle — nothing ever observed it).
+            if self.wal_fail_next.swap(false, Ordering::Relaxed) {
+                return Err(FormatError::Io(
+                    "injected WAL append failure (wal_fail_next)".into(),
+                ));
+            }
             wal.write_all(&frame)
                 .map_err(|e| FormatError::Io(format!("WAL append: {e}")))?;
             self.wstats
@@ -1116,9 +1142,12 @@ impl Db {
     /// first half): ObjectId → LogicalId → ReplicaId in ONE WAL frame,
     /// durable per the durability mode, resolvable immediately after the
     /// ack. The ids are reserved under the state lock before the write
-    /// commits, so concurrent creates never collide; a crash between
-    /// reservation and commit leaves a gap, which is not reuse (§16/§49 —
-    /// the allocators only advance). ObjectId = sha256(lid.to_le_bytes())
+    /// commits, so concurrent creates never collide. PR6-R2-003 — the
+    /// reuse contract: an acked create's reservation is durable in the
+    /// same frame and is never reused; a FAILED create (WAL append
+    /// failed, Err returned) left nothing durable, so the reservation
+    /// may be recycled after a restart — nothing ever observed it.
+    /// ObjectId = sha256(lid.to_le_bytes())
     /// [..16] — unique by the lid reservation, and batch-safe where a
     /// seq-derived id would collide for two creates in one batch; §6.1's
     /// future distributed generation = a documented per-node/instance
@@ -1145,11 +1174,13 @@ impl Db {
         Ok(oid)
     }
 
-    /// SE2-M33 — reserve the identity triple under the state lock (the
-    /// allocators only advance — §16/§49, no reuse): `create_object`
-    /// derives its ObjectId from the reserved lid; `put_object`'s
-    /// new-object arm stamps the caller's ObjectId onto the reserved
-    /// triple.
+    /// SE2-M33 — reserve the identity triple under the state lock
+    /// (PR6-R2-003: the reservation rides the caller's frame — an acked
+    /// frame makes it durable and never-reused; a failed frame leaves
+    /// nothing durable and the reservation may recycle after a restart):
+    /// `create_object` derives its ObjectId from the reserved lid;
+    /// `put_object`'s new-object arm stamps the caller's ObjectId onto
+    /// the reserved triple.
     fn reserve_identity(state: &mut State) -> (LogicalId, ReplicaId, u64) {
         let lid = LogicalId(state.next_logical_id);
         state.next_logical_id += 1;
@@ -1208,7 +1239,9 @@ impl Db {
     /// by construction: the existing-object arm resolves through views
     /// whose bodies are pure map reads). Two concurrent first-puts of the
     /// same fresh ObjectId fail closed (the second's reserved identity
-    /// conflicts with the first's at the merge gate).
+    /// conflicts with the first's at the merge gate). PR6-R2-003 — the
+    /// new-object arm's reservation is durable only if the frame is: an
+    /// acked first-put is never reused; a failed one may recycle.
     pub fn put_object(&self, oid: ObjectId, key: &[u8], value: &[u8]) -> Result<u64, FormatError> {
         let ops = match LocalIdentityDirectory::new(self).resolve(oid)? {
             Some(lid) => {
