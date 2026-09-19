@@ -50,3 +50,43 @@ correctness invariants are locked by tests."
   as the safety net. A decomposition is a refactor with its own RED/GREEN
   budget — bundling it into this remediation campaign would violate the
   one-milestone-one-commit discipline.
+
+## R2-008 — CodeQL threads: CLOSED (verified non-reproducing on current head)
+
+Response to the Round-2 review (PR6-R2-008): the PR carries 7 open review
+threads from github-advanced-security[bot] — 6 cleartext-logging on
+`crates/runtime/tests/{cbo,cbo_default,cpl_execution}.rs`, 1
+actions/missing-workflow-permissions on `.github/workflows/baseline-guard.yml`.
+
+Verification (current head = remote 7577e94; the 11 local commits stacked on
+top touch none of the flagged files):
+
+- Repo alert state: no alert for those paths exists in ANY state — open,
+  dismissed, closed, and fixed are all empty for the thread-linked alert
+  numbers 188–204.
+- PR CodeQL check: SUCCESS on the current PR head — the scan is green; the
+  threads are carry-over comments from earlier scan rounds (two of them are
+  already marked outdated by GitHub).
+- The three test files are byte-identical between the last bot review and
+  HEAD (`git diff 7577e94..HEAD` is empty for all three).
+
+Why false positives: the sinks are `panic!`/`assert!` diagnostics in tests
+that format kernel FIXTURE data (the taint source is the kernel's
+trusted-ingestion method, which the tests seed); no production secret
+reaches a log file on any of these paths. In-source suppression comments are
+not supported for Rust (CodeQL documents them for C/C++, C#, Go, Java/Kotlin,
+JS/TS, Python, Ruby only), so the disposition uses the review's other
+sanctioned path: explicit thread closure with this verification recorded.
+
+- The permissions finding was already fixed in code before this round: all
+  four workflows carry an explicit `permissions: contents: read` block
+  (baseline-guard.yml landed in c5ae76d).
+- Closure: each thread is resolved after the next push re-runs the scan
+  green — the reproducible current-head result the review requires — with
+  this document cited in the resolution comment.
+
+Out of scope, recorded for the record: 9 open `rust/cleartext-logging` and
+19 open `rust/hard-coded-cryptographic-value` repo alerts (created
+2026-08-31, pre-dating this round) on mcp/ingestion/kernel paths. They are
+not "findings in runtime tests"; they get their own disposition, not a
+bundled fix.
