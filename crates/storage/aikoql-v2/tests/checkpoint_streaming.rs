@@ -8,7 +8,9 @@
 
 mod common;
 
-use aikoql_storage_v2::checkpoint::{checkpoint_generation, checkpoint_path, DirectoryCheckpoint};
+use aikoql_storage_v2::checkpoint::{
+    checkpoint_generation, checkpoint_path, test_support, DirectoryCheckpoint,
+};
 use aikoql_storage_v2::db::{Config, Db};
 use aikoql_storage_v2::identity::{LogicalId, ObjectId, ReplicaId};
 use aikoql_storage_v2::placement::directory::{PhysicalLocation, Placement};
@@ -61,18 +63,15 @@ fn sample_checkpoint() -> DirectoryCheckpoint {
 fn cps001_streamed_equals_materialized_byte_for_byte() {
     let cp = sample_checkpoint();
     let d = dir("cps001");
-    let mat_path = d.join("materialized.log");
     let strm_path = d.join("streamed.log");
 
-    DirectoryCheckpoint::publish_staged(&mat_path, &cp, None).unwrap();
     DirectoryCheckpoint::publish_staged_streamed(&strm_path, &cp, None).unwrap();
 
-    let mat = std::fs::read(&mat_path).unwrap();
     let strm = std::fs::read(&strm_path).unwrap();
-    assert_eq!(mat, cp.encode(), "materialized publish == encode()");
     assert_eq!(
-        strm, mat,
-        "streamed publish is byte-identical to the materialized form"
+        strm,
+        test_support::encode_for_tests(&cp),
+        "streamed publish is byte-identical to the materialized reference form"
     );
     assert_eq!(
         DirectoryCheckpoint::read(&strm_path).unwrap(),
@@ -245,7 +244,7 @@ fn cps003_peak_rss_streamed_not_above_materialized() {
         }
         let cp =
             DirectoryCheckpoint::from_state(1, &identity, &replicas, &placements, n + 1, n + 1, 2);
-        let held = cp.encode(); // the materialized path's transient buffer
+        let held = test_support::encode_for_tests(&cp); // the materialized path's transient buffer
         let encode_len = held.len() as u64;
         let mat_peak = self_peak_over(std::process::id(), 2500);
         drop(held);

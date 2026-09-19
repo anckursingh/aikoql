@@ -10,7 +10,9 @@
 
 mod common;
 
-use aikoql_storage_v2::checkpoint::{checkpoint_generation, checkpoint_path, DirectoryCheckpoint};
+use aikoql_storage_v2::checkpoint::{
+    checkpoint_generation, checkpoint_path, test_support, DirectoryCheckpoint,
+};
 use aikoql_storage_v2::db::{Config, Db, DurabilityMode};
 use aikoql_storage_v2::format::{Current, FormatError, FORMAT_VERSION};
 use aikoql_storage_v2::identity::directory::{IdentityResolver, LocalIdentityDirectory};
@@ -114,7 +116,7 @@ fn ckp001_format_golden_and_damage() {
     placements.insert(ReplicaId(30), Placement::Memtable { generation: 4 });
     let checkpoint =
         DirectoryCheckpoint::from_state(7, &identity, &replicas, &placements, 3, 30, 12);
-    let encoded = checkpoint.encode();
+    let encoded = test_support::encode_for_tests(&checkpoint);
     assert_eq!(DirectoryCheckpoint::decode(&encoded).unwrap(), checkpoint);
 
     // The frozen golden — the only format-drift surface left to eyeballs.
