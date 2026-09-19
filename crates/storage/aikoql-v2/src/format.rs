@@ -477,9 +477,13 @@ pub(crate) fn crash_park(var: &str, dir: &Path, stage: &str) {
     if std::env::var(var).ok().as_deref() != Some(stage) {
         return;
     }
-    std::fs::write(dir.join(stage), b"1").ok();
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(60));
+    let marker = dir.join(stage);
+    std::fs::write(&marker, b"1").ok();
+    // Kill-based crash rows park forever (the test kills the process);
+    // interleave rows release by deleting the marker file — the marker is
+    // the handshake in both directions.
+    while marker.exists() {
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
 

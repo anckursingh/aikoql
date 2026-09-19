@@ -270,7 +270,15 @@ impl Db {
         // append after our locked read must never ride along), and the
         // marker records that prefix size.
         let mut bytes_copied = 0u64;
-        for f in &mut files {
+        for (i, f) in files.iter_mut().enumerate() {
+            // PR6-007 — one file (CURRENT) is already copied: a kill here
+            // leaves an unmarked dir (row 5); deleting the marker file
+            // releases the park for the interleave rows — write/flush/
+            // checkpoint/compaction issued while the state read lock below
+            // blocks them until this snapshot completes (rows 1–4).
+            if i == 1 {
+                crash_park("AIKOQL_V2_SNAP_PARK", dir, "during_copy");
+            }
             let (size, checksum) = if f.name == WAL_FILE {
                 std::fs::write(dir.join(&f.name), &wal_bytes[..wal_valid])
                     .map_err(|e| FormatError::Io(format!("write snapshot {}: {e}", WAL_FILE)))?;
@@ -311,6 +319,9 @@ impl Db {
         publish_atomic_writer_staged(&marker_path(dir, generation), Some("SNAPSHOT"), |w| {
             w.write_all(&marker_bytes)
         })?;
+        // PR6-007 — the marker is fully committed; a kill here must leave a
+        // restorable snapshot (row 6).
+        crash_park("AIKOQL_V2_SNAP_PARK", dir, "after_marker");
         drop(state);
 
         Ok(SnapshotInfo {

@@ -13,7 +13,7 @@
 mod common;
 
 use aikoql_storage_v2::db::{Config, Db};
-use aikoql_storage_v2::format::Current;
+use aikoql_storage_v2::format::{Current, FormatError};
 use aikoql_storage_v2::snapshot::{marker_path, restore_from, SnapshotInfo};
 use common::dir;
 use std::collections::BTreeMap;
@@ -74,8 +74,10 @@ fn seed(d: &Path, n: u64) -> (Db, BTreeMap<Vec<u8>, Vec<u8>>) {
 // ---------------------------------------------------------------------------
 
 /// The interleave rows arm AIKOQL_V2_SNAP_PARK in THIS process (env is
-/// process-wide and the harness runs tests in parallel) — serialize them and
-/// clear the arm on drop, so no sibling test ever sees it.
+/// process-wide and the harness runs tests in parallel). EVERY row holds
+/// this lock: rows 1–4 while their arm is live, rows 5–8 so a snapshot of
+/// theirs can never run inside a sibling's armed window and park by
+/// accident (the exact hang sfm007 caught). Cheap — the matrix is small.
 static PARK_LOCK: Mutex<()> = Mutex::new(());
 
 struct ParkArm;
@@ -119,7 +121,9 @@ fn sfm001_write_during_snapshot_stays_at_pinned_generation() {
     let d = dir("sfm001-live");
     let (db, before) = seed(&d, 40);
     let db = Arc::new(db);
-    let g0 = Current::read(&d.join("CURRENT")).unwrap().manifest_generation;
+    let g0 = Current::read(&d.join("CURRENT"))
+        .unwrap()
+        .manifest_generation;
 
     let snap = dir("sfm001-snap");
     let info = interleave(&db, &snap, {
@@ -133,7 +137,10 @@ fn sfm001_write_during_snapshot_stays_at_pinned_generation() {
         info.generation, g0,
         "the snapshot pins the pre-write generation"
     );
-    assert!(marker_path(&snap, g0).exists(), "the marker is the commit point");
+    assert!(
+        marker_path(&snap, g0).exists(),
+        "the marker is the commit point"
+    );
     let restored = restore_from(&snap, dir("sfm001-target")).unwrap();
     assert_eq!(
         walk(&restored),
@@ -159,7 +166,9 @@ fn sfm002_flush_during_snapshot_pins_complete_generation() {
         db.put(format!("k{i:03}").as_bytes(), format!("v{i}").as_bytes())
             .unwrap();
     }
-    let g0 = Current::read(&d.join("CURRENT")).unwrap().manifest_generation;
+    let g0 = Current::read(&d.join("CURRENT"))
+        .unwrap()
+        .manifest_generation;
     let before = walk(&db);
 
     let snap = dir("sfm002-snap");
@@ -171,7 +180,10 @@ fn sfm002_flush_during_snapshot_pins_complete_generation() {
         }
     });
 
-    assert_eq!(info.generation, g0, "the snapshot pins the pre-flush generation");
+    assert_eq!(
+        info.generation, g0,
+        "the snapshot pins the pre-flush generation"
+    );
     let restored = restore_from(&snap, dir("sfm002-target")).unwrap();
     assert_eq!(
         walk(&restored),
@@ -180,7 +192,10 @@ fn sfm002_flush_during_snapshot_pins_complete_generation() {
     );
     assert_eq!(db.get(b"late").unwrap(), Some(b"x".to_vec()));
     assert!(
-        Current::read(&d.join("CURRENT")).unwrap().manifest_generation > g0,
+        Current::read(&d.join("CURRENT"))
+            .unwrap()
+            .manifest_generation
+            > g0,
         "the flush landed after the snapshot"
     );
 }
@@ -209,7 +224,9 @@ fn sfm003_checkpoint_during_snapshot_no_mixed_generations() {
         db.put(format!("k{i:03}").as_bytes(), format!("v{i}").as_bytes())
             .unwrap();
     }
-    let g0 = Current::read(&d.join("CURRENT")).unwrap().manifest_generation;
+    let g0 = Current::read(&d.join("CURRENT"))
+        .unwrap()
+        .manifest_generation;
     let before = walk(&db);
 
     let snap = dir("sfm003-snap");
@@ -233,7 +250,12 @@ fn sfm003_checkpoint_during_snapshot_no_mixed_generations() {
     }
     let restored = restore_from(&snap, dir("sfm003-target")).unwrap();
     assert_eq!(walk(&restored), before);
-    assert!(Current::read(&d.join("CURRENT")).unwrap().manifest_generation > g0);
+    assert!(
+        Current::read(&d.join("CURRENT"))
+            .unwrap()
+            .manifest_generation
+            > g0
+    );
 }
 
 /// row 4 — compaction during snapshot → the referenced segments remain
@@ -245,7 +267,10 @@ fn sfm004_compaction_during_snapshot_referenced_segments_remain_available() {
     let (db, before) = seed(&d, 200);
     let db = Arc::new(db);
     let live_segs_before = segs_in(&d).len();
-    assert!(live_segs_before > 1, "the baseline must span several segments");
+    assert!(
+        live_segs_before > 1,
+        "the baseline must span several segments"
+    );
 
     let snap = dir("sfm004-snap");
     let _info = interleave(&db, &snap, {
@@ -304,6 +329,7 @@ fn sfm005_crash_during_copy_leaves_no_valid_marker() {
         db.snapshot_to(&child_snap_dir()).unwrap();
         unreachable!("the parent kills the parked child");
     }
+    let _serial = PARK_LOCK.lock().unwrap();
     let d = dir("sfm005-live");
     let (db, expected) = seed(&d, 40);
     drop(db); // the child needs the directory lock
@@ -350,6 +376,7 @@ fn sfm006_crash_after_marker_restores() {
         db.snapshot_to(&child_snap_dir()).unwrap();
         unreachable!("the parent kills the parked child");
     }
+    let _serial = PARK_LOCK.lock().unwrap();
     let d = dir("sfm006-live");
     let (db, expected) = seed(&d, 40);
     drop(db);
@@ -374,4 +401,77 @@ fn sfm006_crash_after_marker_restores() {
 
     let live = Db::open(Config::new(d)).unwrap();
     assert_eq!(walk(&live), expected, "the live db is untouched");
+}
+
+// ---------------------------------------------------------------------------
+// rows 7–8 — deterministic corruption windows (no crash harness needed)
+// ---------------------------------------------------------------------------
+
+/// row 7 — torn WAL tail → acknowledged state preserved: garbage appended
+/// past the acked frames (the exact bytes a crash mid-append leaves) never
+/// rides into the snapshot — only the torn-safe prefix is copied.
+#[test]
+fn sfm007_torn_wal_tail_preserves_acknowledged_state() {
+    let _serial = PARK_LOCK.lock().unwrap();
+    let d = dir("sfm007-live");
+    let (db, expected) = seed(&d, 40);
+    let wal = std::fs::read_dir(&d)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.file_name().unwrap().to_string_lossy().starts_with("WAL-"))
+        .expect("the WAL file");
+    // The flush in seed() drained the committer, so nothing can append
+    // between this garbage and the snapshot's locked WAL read.
+    let mut f = std::fs::OpenOptions::new().append(true).open(&wal).unwrap();
+    std::io::Write::write_all(&mut f, &[0xAB; 16]).unwrap();
+    drop(f);
+
+    let snap = dir("sfm007-snap");
+    db.snapshot_to(&snap).unwrap();
+    let restored = restore_from(&snap, dir("sfm007-target")).unwrap();
+    assert_eq!(walk(&restored), expected, "the torn tail never rides along");
+    let snap_wal = std::fs::metadata(snap.join(wal.file_name().unwrap()))
+        .unwrap()
+        .len();
+    let live_wal = std::fs::metadata(&wal).unwrap().len();
+    assert!(
+        snap_wal < live_wal,
+        "the snapshot carries only the torn-safe prefix ({snap_wal} of {live_wal} B)"
+    );
+}
+
+/// row 8 — corrupt copied file → restore fails closed (the matrix's own
+/// re-pin of the bkp004 property through the matrix machinery).
+#[test]
+fn sfm008_corrupt_copied_file_restore_fails_closed() {
+    let _serial = PARK_LOCK.lock().unwrap();
+    let d = dir("sfm008-live");
+    let db = Db::open(Config::new(d)).unwrap();
+    for i in 0..30u64 {
+        db.put(format!("k{i:03}").as_bytes(), b"v").unwrap();
+    }
+    db.flush().unwrap();
+
+    let snap = dir("sfm008-snap");
+    db.snapshot_to(&snap).unwrap();
+    let seg = segs_in(&snap)
+        .into_iter()
+        .next()
+        .expect("a segment was copied");
+    let p = snap.join(seg);
+    let mut b = std::fs::read(&p).unwrap();
+    let mid = b.len() / 2;
+    b[mid] ^= 0x01;
+    std::fs::write(&p, b).unwrap();
+
+    let target = dir("sfm008-target");
+    assert!(
+        matches!(
+            restore_from(&snap, target.clone()),
+            Err(FormatError::Corrupt(_))
+        ),
+        "a corrupted copied file must fail closed"
+    );
+    assert!(!target.join("CURRENT").exists(), "no partial restore");
 }
