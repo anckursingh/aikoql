@@ -326,6 +326,9 @@ def main():
         server.terminate()
         server.wait()
         shutil.rmtree(mcp_dir, ignore_errors=True)
+        # mcp audit.rs derives `{db_path}.audit.log` BESIDE the db dir — the
+        # rmtree above never reaches it.
+        Path(f"{mcp_dir}.audit.log").unlink(missing_ok=True)
 
     # The harness's own oracles are the correctness pins: any FAIL fails the run.
     bad = []

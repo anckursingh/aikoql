@@ -1,23 +1,5 @@
-import os
-import shutil
-import tempfile
-
-import pytest
-
 from aikoql import aikoql
 from aikoql.checkpointer import AikoqlCheckpointer
-
-
-@pytest.fixture
-def tmp_aikoql():
-    d = tempfile.mkdtemp(prefix="aikoql-py-test-")
-    path = os.path.join(d, "test.redb")
-    client = aikoql(path, salt=42)
-    try:
-        yield client
-    finally:
-        client.close()
-        shutil.rmtree(d, ignore_errors=True)
 
 
 def test_remember_and_get(tmp_aikoql):

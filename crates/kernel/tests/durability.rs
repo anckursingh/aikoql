@@ -12,7 +12,65 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+// Temp db paths written by THIS test thread, swept when the thread exits
+// (the main thread's destructor runs at process exit — statics are NOT
+// dropped on Windows MSVC, TLS is; killed runs are covered by the
+// startup purge in tmp_db).
+thread_local! {
+    static TEMP_PATHS: std::cell::RefCell<TempSweeper> =
+        const { std::cell::RefCell::new(TempSweeper { paths: Vec::new() }) };
+}
+
+struct TempSweeper {
+    paths: Vec<PathBuf>,
+}
+impl Drop for TempSweeper {
+    fn drop(&mut self) {
+        for p in &self.paths {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_dir_all(p);
+            // Sidecars next to the registered stem (`{stem}.redb.artifacts`).
+            let Some(name) = p.file_name() else { continue };
+            if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
+                let prefix = format!("{}.", name.to_string_lossy());
+                for e in rd.flatten() {
+                    if e.file_name().to_string_lossy().starts_with(&prefix) {
+                        let _ = std::fs::remove_file(e.path());
+                        let _ = std::fs::remove_dir_all(e.path());
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn tmp_db(name: &str) -> PathBuf {
+    // Killed runs never reach TLS drop — sweep their corpses at the next
+    // startup (only entries older than a day, so a concurrent live run's
+    // fresh files are untouched).
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("aikoql_dur_") {
+                continue;
+            }
+            let stale = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .is_some_and(|t| t < cutoff);
+            if stale {
+                let _ = std::fs::remove_file(e.path());
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    });
     let mut p = std::env::temp_dir();
     p.push(format!(
         "aikoql_dur_{}_{}_{}.redb",
@@ -24,6 +82,7 @@ fn tmp_db(name: &str) -> PathBuf {
             .as_nanos()
     ));
     let _ = std::fs::remove_file(&p);
+    TEMP_PATHS.with(|t| t.borrow_mut().paths.push(p.clone()));
     p
 }
 

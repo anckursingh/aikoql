@@ -182,6 +182,32 @@ pub fn report_write(path: &Path, contents: impl AsRef<[u8]>) {
 }
 
 pub fn tmp(tag: &str) -> PathBuf {
+    // Killed runs never reach the TLS sweep — purge their corpses at the
+    // next startup (only entries older than a day, so a concurrent live
+    // run's fresh files are untouched).
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("aikoql_kse_unit_") {
+                continue;
+            }
+            let stale = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .is_some_and(|t| t < cutoff);
+            if stale {
+                let _ = std::fs::remove_file(e.path());
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    });
     let mut p = std::env::temp_dir();
     p.push(format!("aikoql_kse_unit_{}_{}", tag, std::process::id()));
     let _ = std::fs::remove_file(&p);

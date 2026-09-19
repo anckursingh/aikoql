@@ -1,23 +1,6 @@
 import asyncio
-import os
-import shutil
-import tempfile
-
-import pytest
 
 from aikoql import aikoql, AikoqlCrewAIMemory, AikoqlLangGraphSaver
-
-
-@pytest.fixture
-def tmp_aikoql():
-    d = tempfile.mkdtemp(prefix="aikoql-py-test-")
-    path = os.path.join(d, "test.redb")
-    client = aikoql(path, salt=42)
-    try:
-        yield client
-    finally:
-        client.close()
-        shutil.rmtree(d, ignore_errors=True)
 
 
 def test_langgraph_saver_roundtrip(tmp_aikoql):

@@ -20,7 +20,52 @@ use aikoql_certification::{agent_provenance_check, run_suite, SUITES};
 /// touch the injection knob.
 static INJECT_LOCK: Mutex<()> = Mutex::new(());
 
+// Temp suite dirs written by THIS test thread, swept when the thread exits
+// (the main thread's destructor runs at process exit — statics are NOT
+// dropped on Windows MSVC, TLS is).
+thread_local! {
+    static TEMP_PATHS: std::cell::RefCell<TempSweeper> =
+        const { std::cell::RefCell::new(TempSweeper { paths: Vec::new() }) };
+}
+
+struct TempSweeper {
+    paths: Vec<PathBuf>,
+}
+impl Drop for TempSweeper {
+    fn drop(&mut self) {
+        for p in &self.paths {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
+}
+
 fn out_dir(name: &str) -> PathBuf {
+    // Killed runs never reach the TLS sweep — purge their corpses at the
+    // next startup (only entries older than a day, so a concurrent live
+    // run's fresh dirs are untouched).
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("aikoql_cert_") {
+                continue;
+            }
+            let stale = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .is_some_and(|t| t < cutoff);
+            if stale {
+                let _ = std::fs::remove_file(e.path());
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    });
     let dir = std::env::temp_dir().join(format!(
         "aikoql_cert_{}_{}_{}",
         name,
@@ -32,6 +77,7 @@ fn out_dir(name: &str) -> PathBuf {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    TEMP_PATHS.with(|t| t.borrow_mut().paths.push(dir.clone()));
     dir
 }
 

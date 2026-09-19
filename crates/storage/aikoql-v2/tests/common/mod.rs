@@ -129,6 +129,32 @@ pub fn report_write(path: &Path, contents: impl AsRef<[u8]>) {
 }
 
 pub fn dir(tag: &str) -> PathBuf {
+    // Killed runs (crash-injection children included) never reach the TLS
+    // sweep — purge their corpses at the next startup (only entries older
+    // than a day, so a concurrent live run's fresh dirs are untouched).
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("aikoql-v2-") {
+                continue;
+            }
+            let stale = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .is_some_and(|t| t < cutoff);
+            if stale {
+                let _ = std::fs::remove_file(e.path());
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    });
     let path = std::env::temp_dir().join(format!("aikoql-v2-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).unwrap();
