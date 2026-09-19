@@ -46,10 +46,15 @@ jobs:
           cargo_ver="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           npm_ver="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' npm-publish/package.json | head -1)"
           plugin_ver="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' .claude-plugin/plugin.json | head -1)"
+          # Python is version.workspace = true — resolve through cargo so the
+          # gate reads the RESOLVED version, not the literal (PR6-009: every
+          # release channel asserts against the tag).
+          py_ver="$(cargo pkgid -p aikoql-py | sed 's/.*@//')"
           fail=0
           [ "$tag" = "$cargo_ver" ] || { echo "::error::Cargo.toml version '$cargo_ver' != tag '$tag'"; fail=1; }
           [ "$tag" = "$npm_ver" ] || { echo "::error::npm version '$npm_ver' != tag '$tag'"; fail=1; }
           [ "$tag" = "$plugin_ver" ] || { echo "::error::plugin version '$plugin_ver' != tag '$tag'"; fail=1; }
+          [ "$tag" = "$py_ver" ] || { echo "::error::Python SDK version '$py_ver' != tag '$tag'"; fail=1; }
           grep -q "releases/download/v$tag/" website/index.html || { echo "::error::website/index.html not pinned to v$tag"; fail=1; }
           grep -q "releases/download/v$tag/" website/docs/getting-started.md || { echo "::error::getting-started.md not pinned to v$tag"; fail=1; }
           echo "version=$tag" >> "$GITHUB_OUTPUT"
@@ -448,7 +453,11 @@ jobs:
           pip install -q maturin
           cd crates/sdk/python
           maturin build --release --out dist
-          v="${GITHUB_REF_NAME#v}"
+          # PR6-009: the tag's version comes from the gate output — on
+          # workflow_dispatch GITHUB_REF_NAME is the BRANCH, so the old
+          # `GITHUB_REF_NAME#v` rescue path compared the wheel against
+          # garbage (or failed a legitimate rescue).
+          v="${{ needs.validate-versions.outputs.version }}"
           ls "dist/aikoql-${v}"-*.whl >/dev/null || {
             echo "::error::wheel version does not match tag '${v}' (sdk001 parity)"
             exit 1
@@ -456,3 +465,60 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: crates/sdk/python/dist/
+
+  # ── Post-publish identity verification (PR6-009) ────────────────
+  # The review's after-block: once a channel has published, it must answer
+  # with the tag's version. Runs on the rescue (dispatch) path too — a
+  # manual rescue must never silently create a mismatched release. Each
+  # check is gated on its channel's job having succeeded; if nothing
+  # published, the job passes with a notice (nothing to verify).
+  verify-release-identity:
+    name: Verify published identity vs tag
+    if: ${{ always() }}
+    needs: [validate-versions, github-release, npm-publish, pypi-publish, docker-manifest]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: npm version == tag
+        if: needs.npm-publish.result == 'success'
+        env:
+          V: ${{ needs.validate-versions.outputs.version }}
+        run: |
+          set -euo pipefail
+          got="$(npm view aikoql-mcp version)"
+          [ "$got" = "$V" ] || { echo "::error::npm aikoql-mcp version '$got' != tag '$V'"; exit 1; }
+          echo "::notice::npm aikoql-mcp@$got == tag"
+      - name: PyPI version == tag
+        if: needs.pypi-publish.result == 'success'
+        env:
+          V: ${{ needs.validate-versions.outputs.version }}
+        run: |
+          set -euo pipefail
+          got="$(curl -fsS https://pypi.org/pypi/aikoql/json | jq -r .info.version)"
+          [ "$got" = "$V" ] || { echo "::error::PyPI aikoql version '$got' != tag '$V'"; exit 1; }
+          echo "::notice::PyPI aikoql@$got == tag"
+      - name: GHCR OCI label == tag
+        if: needs.docker-manifest.result == 'success'
+        env:
+          V: ${{ needs.validate-versions.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker pull "ghcr.io/anckursingh/aikoql:${V}" >/dev/null
+          got="$(docker inspect "ghcr.io/anckursingh/aikoql:${V}" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')"
+          [ "$got" = "$V" ] || { echo "::error::GHCR :${V} image label '$got' != tag '$V'"; exit 1; }
+          echo "::notice::GHCR :${V} image label == tag"
+      - name: GitHub Release == tag
+        if: needs.github-release.result == 'success'
+        env:
+          V: ${{ needs.validate-versions.outputs.version }}
+        run: |
+          set -euo pipefail
+          got="$(gh api "repos/anckursingh/aikoql/releases/tags/v${V}" --jq .tag_name)"
+          [ "$got" = "v${V}" ] || { echo "::error::GitHub Release tag '$got' != 'v${V}'"; exit 1; }
+          echo "::notice::GitHub Release v${V} == tag"
+      - name: Nothing published
+        if: ${{ needs.npm-publish.result != 'success' && needs.pypi-publish.result != 'success' && needs.docker-manifest.result != 'success' && needs.github-release.result != 'success' }}
+        run: echo "::notice::no channel published — nothing to verify"
