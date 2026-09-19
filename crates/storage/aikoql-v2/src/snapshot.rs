@@ -105,6 +105,17 @@ impl SnapshotMarker {
                 "snapshot marker trailing bytes".into(),
             ));
         }
+        // PR6-R2-010 — the canonical form is the contract: entries are
+        // unique and strictly ascending by name (encode() is the only
+        // producer; decode rejects anything else instead of normalizing).
+        for w in files.windows(2) {
+            if w[0].name >= w[1].name {
+                return Err(FormatError::Corrupt(format!(
+                    "snapshot marker entries not strictly ascending ({} then {})",
+                    w[0].name, w[1].name
+                )));
+            }
+        }
         if checksum8(&bytes[..bytes.len() - 8]) != checksum[..] {
             return Err(FormatError::Corrupt(
                 "snapshot marker checksum mismatch".into(),

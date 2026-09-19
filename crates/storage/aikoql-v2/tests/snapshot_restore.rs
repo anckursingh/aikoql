@@ -598,6 +598,69 @@ fn bkp006_marker_golden_bytes() {
     );
 }
 
+// PR6-R2-010 — the encoder's canonical representation (unique names,
+// ascending order) is the decoder's accepted language: decode must reject
+// duplicates and noncanonical order, not normalize them silently.
+fn encode_unsorted(marker: &SnapshotMarker) -> Vec<u8> {
+    // encode() sorts — this local encoder emits entries in the GIVEN order,
+    // so a noncanonical byte stream is constructible for the RED.
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"AKSN");
+    bytes.extend_from_slice(&marker.format_version.to_le_bytes());
+    bytes.extend_from_slice(&marker.generation.to_le_bytes());
+    bytes.extend_from_slice(&(marker.files.len() as u32).to_le_bytes());
+    for f in &marker.files {
+        bytes.extend_from_slice(&(f.name.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(f.name.as_bytes());
+        bytes.extend_from_slice(&f.size.to_le_bytes());
+        bytes.extend_from_slice(&f.checksum);
+    }
+    bytes.extend_from_slice(&checksum8(&bytes));
+    bytes
+}
+
+#[test]
+fn marker_decode_rejects_duplicate_names() {
+    let file = |name: &str| SnapshotFile {
+        name: name.into(),
+        size: 1,
+        checksum: checksum8(name.as_bytes()),
+    };
+    let marker = SnapshotMarker {
+        format_version: 1,
+        generation: 1,
+        files: vec![file("CURRENT"), file("WAL-000001.log"), file("CURRENT")],
+    };
+    assert!(
+        matches!(
+            SnapshotMarker::decode(&marker.encode()),
+            Err(FormatError::Corrupt(_))
+        ),
+        "decode must reject duplicate file names"
+    );
+}
+
+#[test]
+fn marker_decode_rejects_noncanonical_order() {
+    let file = |name: &str| SnapshotFile {
+        name: name.into(),
+        size: 1,
+        checksum: checksum8(name.as_bytes()),
+    };
+    let marker = SnapshotMarker {
+        format_version: 1,
+        generation: 1,
+        files: vec![file("WAL-000001.log"), file("CURRENT")],
+    };
+    assert!(
+        matches!(
+            SnapshotMarker::decode(&encode_unsorted(&marker)),
+            Err(FormatError::Corrupt(_))
+        ),
+        "decode must reject noncanonical (non-ascending) file order"
+    );
+}
+
 #[test]
 fn bkp006_marker_round_trip_and_fail_closed() {
     let marker = SnapshotMarker {
