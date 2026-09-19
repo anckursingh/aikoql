@@ -121,11 +121,17 @@ fn run(p: &Path) -> Summary {
 
     let bytes = std::fs::read(p).unwrap();
     let offs = record_offsets(&bytes);
-    // bootstrap record + create A + transact(A→B with B created intra-batch)
-    assert_eq!(offs.len(), 3, "expected bootstrap + create + transact");
+    // engine bootstrap + catalog bootstrap (P5-M7) + create A +
+    // transact(A→B with B created intra-batch)
+    assert_eq!(
+        offs.len(),
+        4,
+        "expected bootstrap + catalog + create + transact"
+    );
+    let last = offs.len() - 1; // the transact record — always the last one
 
     // F1 — KSE-080 crash before commit: the last record never made it.
-    std::fs::write(p, &bytes[..offs[2].0]).unwrap();
+    std::fs::write(p, &bytes[..offs[last].0]).unwrap();
     let k = reopen(p);
     let pre_b2 = (
         k.get(alice(), &a).unwrap().version,
@@ -154,19 +160,19 @@ fn run(p: &Path) -> Summary {
     let torn = (
         k.get(alice(), &a).unwrap().version,
         k.get(alice(), &b).is_ok(),
-        std::fs::metadata(p).unwrap().len() == offs[2].0 as u64,
+        std::fs::metadata(p).unwrap().len() == offs[last].0 as u64,
     );
     drop(k);
 
     // F4 — corruption inside the last record's payload: fail closed.
     let mut bad = bytes.clone();
-    bad[offs[2].0 + 20] ^= 0xFF;
+    bad[offs[last].0 + 20] ^= 0xFF;
     std::fs::write(p, &bad).unwrap();
     let corrupt = AikoqlStorageEngine::open(p).is_err();
     let untouched = std::fs::read(p).unwrap() == bad;
 
     // F5 — KSE-083 recovery: truncate the bad record, clean reopen.
-    std::fs::write(p, &bytes[..offs[2].0]).unwrap();
+    std::fs::write(p, &bytes[..offs[last].0]).unwrap();
     let k = reopen(p);
     let healed = (
         k.get(alice(), &a).unwrap().version,

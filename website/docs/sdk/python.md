@@ -1,11 +1,12 @@
 ---
 title: Python SDK
-description: PyO3 native bindings for aikoql
+description: PyO3 native bindings + MCP client for aikoql
 ---
 
 # Python SDK
 
-Native Python bindings via PyO3. Direct access to the Knowledge Kernel.
+The first-party SDK (adopted P3-M9): PyO3 native bindings for embedded mode
+plus a pure-Python MCP client for server mode, unified behind `Agent.connect`.
 
 ## Installation
 
@@ -16,42 +17,25 @@ pip install aikoql
 ## Usage
 
 ```python
-import aikoql_py
-
-# Open a database — the default backend is aikoql-v2: a fresh path creates
-# a database directory. Existing .redb files still open as redb, and a v1
-# WAL still opens as v1 (auto-detection, never reinterpretation).
-kernel = aikoql_py.Kernel.open("./kb")
-
-# Create an object
-result = kernel.remember({
-    "type_name": "Employee",
-    "properties": {"name": "Alice", "role": "Architect"},
-    "tenant": "acme"
-})
-print(f"Created: {result.koid}")
-
-# Query
-results = kernel.find_similar({
-    "type_name": "Employee",
-    "text": "engineer"
-})
-for r in results:
-    print(f"{r.koid}: {r.score}")
-
-# aikoql
-result = kernel.aikoql("MATCH Employee RETURN name, role")
-```
-
-The unified `Agent` interface auto-detects its target the same way — any
-filesystem path is embedded mode (fresh paths included), `"host:port"` is
-server mode:
-
-```python
 from aikoql import Agent
 
-db = Agent.connect("./kb")          # embedded, aikoql-v2 by default
-db = Agent.connect("localhost:9090")  # MCP server over TCP
+# Embedded mode — a fresh path creates an aikoql-v2 database directory
+# (existing .redb files open as redb, a v1 WAL opens as v1 — auto-detection,
+# never reinterpretation):
+db = Agent.connect("./kb")
+
+# Server mode — MCP over TCP (P3-M1 servers require a --tcp-token):
+db = Agent.connect("localhost:9090", token="your-tcp-token")
+
+# Create an object
+result = db.remember("Employee", {"name": "Alice", "role": "Architect"})
+print(f"Created: {result['koid']}")
+
+# Hybrid search
+results = db.find_similar(text="engineer", type_name="Employee", k=5)
+
+# aikoql
+rows = db.aikoql("MATCH Employee RETURN *")
 ```
 
 ## LangGraph + CrewAI
@@ -59,8 +43,23 @@ db = Agent.connect("localhost:9090")  # MCP server over TCP
 Built-in adapters for AI agent frameworks:
 
 ```python
-from aikoql_py.adapters import LangGraphCheckpointer
+from aikoql.adapters.langgraph import AikoqlLangGraphSaver
+from aikoql.adapters.crewai import AikoqlCrewAIMemory
 
-checkpointer = LangGraphCheckpointer(kernel)
-# Use as LangGraph's checkpointer for agent state persistence
+checkpointer = AikoqlLangGraphSaver(db)
+memory = AikoqlCrewAIMemory(db)
 ```
+
+## Version parity (sdk001)
+
+The package version is the workspace version — `pyproject.toml` is
+`dynamic = ["version"]` (maturin reads the crate's `version.workspace`) and
+the module exports it:
+
+```python
+import aikoql
+aikoql.__version__  # == the Cargo workspace version, pinned by the sdk001 test
+```
+
+CI runs the full SDK suite (contract tests against the real aikoql-mcp
+binary) on every push; releases publish to PyPI via trusted publishing.

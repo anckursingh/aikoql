@@ -1295,7 +1295,7 @@ fn write_report(sections: &[Section], m: Mode) {
         .join("artifacts")
         .join("storage-engine-v2");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("scale-certification.md"), s).unwrap();
+    common::report_write(&dir.join("scale-certification.md"), s);
 }
 
 /// SE2-M17/M18 — tier-depth read probe: the same row shapes the QA matrix

@@ -12,6 +12,11 @@ use aikoql_kernel::*;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// A fresh kernel journals the P5-M7 catalog version row at open — one
+/// system event precedes every user event. Journal-length pins below
+/// count it as entry #1.
+const CATALOG_PREAMBLE: usize = 1;
+
 // Temp paths created by THIS thread, swept when the thread exits (the main
 // thread's destructor runs at process exit — statics are NOT dropped on
 // Windows MSVC, TLS is). Kill-harness children never register a path they
@@ -111,9 +116,9 @@ fn w2_fault_008_backup_failure_leaves_live_knowledge_unaffected() {
         k.get(alice(), &b).unwrap().properties.get("n"),
         Some(&Value::Int(2))
     );
-    assert_eq!(k.journal().unwrap().len(), 3);
+    assert_eq!(k.journal().unwrap().len(), 3 + CATALOG_PREAMBLE);
     let d = create(&k, "d", 4);
-    assert_eq!(k.journal().unwrap().len(), 4);
+    assert_eq!(k.journal().unwrap().len(), 4 + CATALOG_PREAMBLE);
 
     // The same live store backs up fine to a valid path afterwards — the
     // failures consumed nothing.
@@ -187,7 +192,7 @@ fn w2_fault_009_interrupted_restore_never_exposed_as_valid() {
             "live state must survive every failed restore"
         );
     }
-    assert_eq!(k.journal().unwrap().len(), 3);
+    assert_eq!(k.journal().unwrap().len(), 3 + CATALOG_PREAMBLE);
 
     // A KO written after the snapshot was taken (post-backup knowledge) —
     // the later valid restore must roll the store back to the snapshot.

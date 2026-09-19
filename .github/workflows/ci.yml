@@ -314,6 +314,31 @@ jobs:
       - run: node scripts/certify.js --self-test
       - run: node scripts/certify.js --check
 
+  # P3-M9: the Python SDK is the adopted first-party SDK — its contract
+  # suite (sdk001 version parity + 8 mcp_client tests against the real
+  # binary) runs in CI so the client can never drift from the server again
+  # (the P3-M1 token-auth drift that broke all 8 tests was caught here).
+  python-sdk:
+    name: Python SDK contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build server binary (the contract target)
+        run: cargo build -p aikoql-mcp
+      - name: Build native module + run SDK suite
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          .venv/bin/pip install -q maturin pytest
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          "$VIRTUAL_ENV/bin/python" -m pytest tests/ -q
+
   dependency-dag:
     name: Verify Dependency DAG
     runs-on: ubuntu-latest
@@ -327,4 +352,50 @@ jobs:
             echo "DAG VIOLATION: kernel must not depend on runtime/compiler"
             exit 1
           fi
+          # P3-M0 (clb002): the estate-hygiene deletions must stay deleted —
+          # no code or script may reference them again.
+          echo "Checking deleted harness references..."
+          if grep -rn 'tests/universal_test_harness\.py\|benchmarks/tests/load_test\.rs\|tests/e2e/' \
+              --include='*.rs' --include='*.py' --include='*.js' --include='*.yml' \
+              --include='*.yaml' --include='*.toml' --include='*.json' \
+              --exclude-dir=node_modules --exclude-dir=.github \
+              . 2>/dev/null; then
+            echo "DAG VIOLATION: reference to a deleted P3-M0 harness"
+            exit 1
+          fi
+          # P3-M9 (sdk002-deletions): the deleted Go/TS/Java SDKs and the
+          # cluster proxy must stay deleted — MCP is the blessed surface
+          # (docs/sdk-proxy-decision.md). No workspace code or doc may
+          # reference them again. (examples/hello-agent.ts lives again —
+          # rewritten on @modelcontextprotocol/sdk; wave31_oss pins its
+          # existence and content.)
+          echo "Checking deleted SDK/proxy references..."
+          if grep -rni 'crates/cluster/proxy\|crates/sdk/go\|crates/sdk/typescript\|crates/sdk/java\|aikoql-sdk\|AikoqlClient' \
+              --exclude='sdk-proxy-decision.md' \
+              --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.github \
+              . 2>/dev/null; then
+            echo "DAG VIOLATION: reference to a deleted P3-M9 SDK or cluster proxy"
+            exit 1
+          fi
+          # P5-M0 (gd001): the baseline-certification guard
+          # (.github/workflows/baseline-guard.yml) must stay wired — it runs
+          # the 1M v2 workload + gate-5 ratio on every change touching a
+          # protected path (storage/kernel/compiler/runtime).
+          echo "Checking P5-M0 baseline-guard wiring..."
+          GUARD=.github/workflows/baseline-guard.yml
+          if [ ! -f "$GUARD" ]; then
+            echo "DAG VIOLATION: $GUARD missing — the gate-5 baseline guard job must exist"
+            exit 1
+          fi
+          for path in crates/storage crates/kernel crates/compiler crates/runtime; do
+            if ! grep -q "$path" "$GUARD"; then
+              echo "DAG VIOLATION: $GUARD must trigger on $path"
+              exit 1
+            fi
+          done
+          if ! grep -q 'V2ADOPT_NIGHTLY=1m' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must run the 1M regime (V2ADOPT_NIGHTLY=1m)"
+            exit 1
+          fi
+          echo "P5-M0 baseline-guard wiring OK"
           echo "Dependency DAG OK"

@@ -661,5 +661,5 @@ fn kse161718_report() {
          get+facts+neighbors workloads above.\n",
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("amplification.md"), report).unwrap();
+    common::report_write(&dir.join("amplification.md"), report);
 }

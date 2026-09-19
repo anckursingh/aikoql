@@ -10,8 +10,15 @@
 use aikoql_kernel::ir::*;
 use aikoql_kernel::knowledge::kom::*;
 use aikoql_kernel::knowledge::scoring::{cosine, jaccard, ko_text, tokenize};
-use aikoql_kernel::transaction::kernel::{Kernel, KnowledgeContext, Subject};
+use aikoql_kernel::transaction::kernel::{
+    Fusion, Kernel, KnowledgeContext, PropertyFilter, SimilarityQuery, Subject,
+};
 use std::cmp::Ordering;
+
+pub mod backend;
+pub mod cbo;
+pub mod plan_oracle;
+pub mod streaming;
 
 // ---------------------------------------------------------------------------
 // Value comparison helper
@@ -40,6 +47,135 @@ fn skip_take<T>(v: Vec<T>, offset: usize, limit: usize) -> Vec<T> {
     v.into_iter().skip(offset).take(limit).collect()
 }
 
+/// The shared predicate test for one KO — the materializing Filter arm and
+/// the P5-M4 streaming FilterOperator both route through here (one place).
+pub(crate) fn row_matches(ko: &KnowledgeObject, predicates: &[Predicate]) -> bool {
+    predicates.iter().all(|p| {
+        let val = ko.properties.get(&p.property);
+        match p.op {
+            PredOp::Eq => val == Some(&p.value),
+            PredOp::Neq => val != Some(&p.value),
+            PredOp::Gt => compare_values(val, Some(&p.value)) == Some(Ordering::Greater),
+            PredOp::Lt => compare_values(val, Some(&p.value)) == Some(Ordering::Less),
+            PredOp::Gte => matches!(
+                compare_values(val, Some(&p.value)),
+                Some(Ordering::Greater) | Some(Ordering::Equal)
+            ),
+            PredOp::Lte => matches!(
+                compare_values(val, Some(&p.value)),
+                Some(Ordering::Less) | Some(Ordering::Equal)
+            ),
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// P5-M5 (ND-05): aggregation helpers
+// ---------------------------------------------------------------------------
+
+/// The aggregate-call name in a group row: `count` for COUNT(*), `func(field)`
+/// otherwise (e.g. `sum(age)`).
+fn agg_name(func: &AggFunc, field: &Option<String>) -> String {
+    let f = match func {
+        AggFunc::Count => "count",
+        AggFunc::Sum => "sum",
+        AggFunc::Avg => "avg",
+        AggFunc::Min => "min",
+        AggFunc::Max => "max",
+    };
+    match field {
+        None => f.to_string(),
+        Some(field) => format!("{f}({field})"),
+    }
+}
+
+/// One aggregate call over one group's rows. SQL-style null handling:
+/// SUM/AVG/MIN/MAX ignore Null (missing fields included), COUNT(*) counts
+/// rows, COUNT(field) counts non-null values. Numeric folds promote Int+
+/// Float to Float; anything else fails closed (mixed types — ag004). No
+/// values for a numeric fold → Null (the null proxy).
+fn aggregate_value(
+    func: AggFunc,
+    field: &Option<String>,
+    rows: &[&KnowledgeObject],
+) -> KResult<Value> {
+    let vals: Vec<&Value> = match field {
+        Some(f) => rows
+            .iter()
+            .filter_map(|ko| ko.properties.get(f))
+            .filter(|v| **v != Value::Null)
+            .collect(),
+        None => Vec::new(),
+    };
+    match func {
+        AggFunc::Count => Ok(match field {
+            None => Value::Int(rows.len() as i64),
+            Some(_) => Value::Int(vals.len() as i64),
+        }),
+        AggFunc::Sum | AggFunc::Avg => {
+            let mut ints: i64 = 0;
+            let mut floats: f64 = 0.0;
+            let mut any_float = false;
+            let mut n: usize = 0;
+            for v in &vals {
+                match v {
+                    Value::Int(i) => {
+                        ints += i;
+                        n += 1;
+                    }
+                    Value::Float(f) => {
+                        floats += f;
+                        n += 1;
+                        any_float = true;
+                    }
+                    other => {
+                        return Err(KError::InvalidQuery(format!(
+                            "aggregate over mixed types: {} is not numeric",
+                            other.type_name()
+                        )))
+                    }
+                }
+            }
+            if n == 0 {
+                return Ok(Value::Null);
+            }
+            if func == AggFunc::Avg {
+                return Ok(Value::Float((ints as f64 + floats) / n as f64));
+            }
+            Ok(if any_float {
+                Value::Float(ints as f64 + floats)
+            } else {
+                Value::Int(ints)
+            })
+        }
+        AggFunc::Min | AggFunc::Max => {
+            let mut best: Option<&Value> = None;
+            for v in &vals {
+                match best {
+                    None => best = Some(v),
+                    Some(b) => match compare_values(Some(b), Some(v)) {
+                        Some(o)
+                            if (func == AggFunc::Min && o == Ordering::Greater)
+                                || (func == AggFunc::Max && o == Ordering::Less) =>
+                        {
+                            best = Some(v)
+                        }
+                        Some(_) => {}
+                        None => {
+                            return Err(KError::InvalidQuery(format!(
+                                "aggregate over mixed types: {} vs {}",
+                                b.type_name(),
+                                v.type_name()
+                            )))
+                        }
+                    },
+                }
+            }
+            Ok(best.cloned().unwrap_or(Value::Null))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Intermediate result set
 // ---------------------------------------------------------------------------
@@ -54,6 +190,16 @@ pub enum RowSet {
     Scored(Vec<(KOID, f32, String, u64)>),
     /// Traversal hits: (koid, rel_type, depth).
     Traversal(Vec<(KOID, String, usize)>),
+    /// P5-M5 (ND-05): aggregate output — one flat property map per group
+    /// (group keys plus one entry per aggregate call; `count` for COUNT(*),
+    /// `func(field)` otherwise), in first-encounter order.
+    Grouped(Vec<PropertyMap>),
+    /// P5-M6 (ND-06): join output — one pair per output row: the left object
+    /// plus its right-side match. The maps stay separate (no property-name
+    /// collision). INNER pairs always carry Some; LEFT keeps unmatched left
+    /// rows with None. Order: left rows in scan order, right matches in
+    /// right-scan order.
+    Joined(Vec<(KnowledgeObject, Option<KnowledgeObject>)>),
 }
 
 impl RowSet {
@@ -74,8 +220,24 @@ impl RowSet {
     pub fn object_count(&self) -> usize {
         match self {
             RowSet::Objects(kos) => kos.len(),
+            RowSet::Grouped(g) => g.len(),
+            RowSet::Joined(p) => p.len(),
             _ => 0,
         }
+    }
+
+    /// P5-M27 (CodeQL): payload-free shape summary for diagnostics — variant
+    /// name + row count only. Panic/log messages must not dump full request
+    /// objects or KO payloads (cleartext-sensitive logging).
+    pub fn shape(&self) -> String {
+        let (name, n) = match self {
+            RowSet::Objects(v) => ("Objects", v.len()),
+            RowSet::Scored(v) => ("Scored", v.len()),
+            RowSet::Traversal(v) => ("Traversal", v.len()),
+            RowSet::Grouped(v) => ("Grouped", v.len()),
+            RowSet::Joined(v) => ("Joined", v.len()),
+        };
+        format!("{name} with {n} rows")
     }
 }
 
@@ -99,11 +261,45 @@ pub struct Interpreter {
     /// v0.3 K2: temporal plans own their time semantics (AS_OF/BETWEEN/
     /// HISTORICAL), so the Scan arm skips its default "valid now" filter.
     temporal_mode: bool,
+    /// P5-M9 (ND-08): the koid list a PropertyIndex Scan answers from —
+    /// precomputed per Scan op, consumed and cleared by the Scan arm.
+    assist: Option<Vec<KOID>>,
+    /// P5-M18 (ann003): the most recent Scan's type scope and final row count.
+    /// AnnSearch delegates to the coordinator only when its input is exactly
+    /// that un-narrowed Scan output (a Filter that dropped rows disables the
+    /// delegation — arbitrary predicates have no SimilarityQuery translation).
+    scan_type: Option<String>,
+    scan_len: Option<usize>,
 }
 
 impl Interpreter {
-    /// Execute a plan. Returns the final `RowSet`.
+    /// Execute a logical plan — the default entry point (MCP tool, shell,
+    /// SDK, certification). P5-M15: cost-optimized first, guarded by M9's
+    /// gates — only a covering, verified-clean, fresh-stats property index
+    /// over the first Eq filter is selected, and only when strictly cheaper.
+    /// Every other plan (incl. any kernel without declared indexes or stats)
+    /// executes byte-identical to the pre-M15 physicalization.
     pub fn execute(kernel: &Kernel, plan: &IrPlan) -> KResult<RowSet> {
+        Interpreter::execute_with_report(kernel, plan).map(|(rows, _)| rows)
+    }
+
+    /// The default path with its decision visible — the cbo-default pin seam
+    /// (P5-M15): the rows AND the cost report of the plan that executed.
+    pub fn execute_with_report(
+        kernel: &Kernel,
+        plan: &IrPlan,
+    ) -> KResult<(RowSet, cbo::CostReport)> {
+        let report = cbo::cost_optimize(kernel, plan)?;
+        let rows = Interpreter::execute_physical(kernel, &report.plan)?;
+        Ok((rows, report))
+    }
+
+    /// Execute the physical plan — the runtime's real entry point since
+    /// P5-M3. Each `PhysicalOp` carries its storage/index strategy alongside
+    /// the logical op. P5-M9 (ND-08): a Scan flagged `PropertyIndex` answers
+    /// from the covering index (the CBO chose it, verified clean) — every
+    /// other strategy is informational and the executor dispatches on the op.
+    pub fn execute_physical(kernel: &Kernel, plan: &PhysicalPlan) -> KResult<RowSet> {
         let mut interp = Interpreter {
             cached_objects: None,
             cached_subject: None,
@@ -111,13 +307,40 @@ impl Interpreter {
             temporal_mode: plan
                 .operators
                 .iter()
-                .any(|op| matches!(op, IrOp::Temporal { .. })),
+                .any(|po| matches!(po.op, IrOp::Temporal { .. })),
+            assist: None,
+            scan_type: None,
+            scan_len: None,
         };
         let mut rows = RowSet::Objects(Vec::new());
-        for op in &plan.operators {
-            rows = interp.exec_op(kernel, op, rows)?;
+        // P5-M21 (PR6 P0-07): re-pin before serving an index assist — the
+        // head must be exactly the one the optimizer pinned (applied_seq ==
+        // pinned head) or the scan falls back to the full scan, which
+        // answers the committed truth. O(1): the head seq IS the journal
+        // length (the M17b watermark contract). pinned_head 0 = a plan the
+        // CBO never assisted, and PropertyIndex only ever appears with the
+        // pin set.
+        let exec_head = if plan.pinned_head != 0 {
+            Some(kernel.journal_head()?.0)
+        } else {
+            None
+        };
+        for (i, po) in plan.operators.iter().enumerate() {
+            if po.strategy == Strategy::PropertyIndex
+                && exec_head.is_some_and(|h| h == plan.pinned_head)
+            {
+                interp.assist = cbo::scan_assist(kernel, &plan.operators, i)?;
+            }
+            rows = interp.exec_op(kernel, &po.op, rows)?;
+            interp.assist = None;
         }
         Ok(rows)
+    }
+
+    /// The P5-M9 name for the CBO path — P5-M15 made it the default, so this
+    /// is now an alias for `execute`, kept for the existing callers.
+    pub fn execute_costed(kernel: &Kernel, plan: &IrPlan) -> KResult<RowSet> {
+        Interpreter::execute(kernel, plan)
     }
 
     /// Resolve input to objects: if Scored, use cached objects; otherwise use as-is.
@@ -152,7 +375,16 @@ impl Interpreter {
                     Some(t) => subj.in_tenant(t),
                     None => subj,
                 };
-                let mut kos = kernel.scan_by_type(&subj, type_name)?;
+                // P5-M9/M17b: the PropertyIndex assist materializes ONLY the
+                // index's koids — per-koid reads through the same
+                // readable_object filters as the full scan (payload type
+                // re-check, Deleted skip, ACL). O(matched), not O(store);
+                // scan_by_type_range walks the type/ index so the koid order
+                // matches the full scan — row-for-row parity (cbo_default_001).
+                let mut kos = match self.assist.take() {
+                    Some(koids) => kernel.scan_by_type_range(&subj, type_name, &koids)?,
+                    None => kernel.scan_by_type(&subj, type_name)?,
+                };
                 // v0.3 K2: default MATCH answers with current truth — facts
                 // not valid at "now" stay out of relational results. Temporal
                 // plans (AS_OF/BETWEEN/HISTORICAL) handle time themselves.
@@ -161,7 +393,11 @@ impl Interpreter {
                     kos.retain(|ko| ko.valid_at(now));
                 }
                 self.cached_objects = Some(kos.clone());
-                self.cached_subject = Some(subj);
+                self.cached_subject = Some(subj.clone());
+                // P5-M18 (ann003): the delegation baseline — the type scope
+                // and count of THIS scan's output, consumed by AnnSearch.
+                self.scan_type = Some(type_name.clone());
+                self.scan_len = Some(kos.len());
                 Ok(RowSet::Objects(kos))
             }
             IrOp::Filter { predicates } => {
@@ -171,33 +407,7 @@ impl Interpreter {
                 };
                 let filtered: Vec<KnowledgeObject> = kos
                     .into_iter()
-                    .filter(|ko| {
-                        predicates.iter().all(|p| {
-                            let val = ko.properties.get(&p.property);
-                            match p.op {
-                                PredOp::Eq => val == Some(&p.value),
-                                PredOp::Neq => val != Some(&p.value),
-                                PredOp::Gt => {
-                                    compare_values(val, Some(&p.value))
-                                        == Some(std::cmp::Ordering::Greater)
-                                }
-                                PredOp::Lt => {
-                                    compare_values(val, Some(&p.value))
-                                        == Some(std::cmp::Ordering::Less)
-                                }
-                                PredOp::Gte => matches!(
-                                    compare_values(val, Some(&p.value)),
-                                    Some(std::cmp::Ordering::Greater)
-                                        | Some(std::cmp::Ordering::Equal)
-                                ),
-                                PredOp::Lte => matches!(
-                                    compare_values(val, Some(&p.value)),
-                                    Some(std::cmp::Ordering::Less)
-                                        | Some(std::cmp::Ordering::Equal)
-                                ),
-                            }
-                        })
-                    })
+                    .filter(|ko| row_matches(ko, predicates))
                     .collect();
                 self.cached_objects = Some(filtered.clone());
                 Ok(RowSet::Objects(filtered))
@@ -210,9 +420,13 @@ impl Interpreter {
                 let start_koids: Vec<KOID> = if start_koid.is_empty() {
                     match &input {
                         RowSet::Objects(kos) => kos.iter().map(|ko| ko.koid).collect(),
+                        // P5-M13 (ND-13): the similarity legs (SIMILAR/ANN/
+                        // Fuse) produce Scored rows — H2/H5/H6 walk the
+                        // graph from those hits.
+                        RowSet::Scored(s) => s.iter().map(|(koid, ..)| *koid).collect(),
                         _ => {
                             return Err(KError::InvalidQuery(
-                                "set-based Traverse requires Object input from Scan".into(),
+                                "set-based Traverse requires Object or Scored input".into(),
                             ))
                         }
                     }
@@ -297,6 +511,48 @@ impl Interpreter {
                 } else {
                     vector.clone()
                 };
+                // P5-M18 (ann003): delegate to the kernel's coordinator — the
+                // candidate-driven ANN/slim-read path — when the input is
+                // exactly the un-narrowed Scan output. The Scan's type scope,
+                // subject (roles/tenant), Deleted/ACL/valid-now guards are the
+                // coordinator's own. A Filter that dropped rows, or temporal
+                // plans (whose Scan keeps historical rows), keep brute force.
+                // Empty/err falls through to brute force — the recall guard,
+                // same pattern as the TextSearch BM25 arm.
+                let delegate = match (&input, &self.scan_type, &self.cached_subject) {
+                    (RowSet::Objects(kos), Some(tn), Some(subj))
+                        if !self.temporal_mode && self.scan_len == Some(kos.len()) && *k > 0 =>
+                    {
+                        Some((tn.clone(), subj.clone()))
+                    }
+                    _ => None,
+                };
+                if let Some((tn, subj)) = delegate {
+                    let q = SimilarityQuery {
+                        context: KnowledgeContext::new(subj),
+                        filter: Some(PropertyFilter {
+                            type_name: Some(tn),
+                            required: Vec::new(),
+                        }),
+                        text: None,
+                        vector: Some(vector.clone()),
+                        embedding_model: embedding_model.clone(),
+                        k: *k,
+                        fusion: Fusion::VectorOnly,
+                    };
+                    if let Ok(results) = kernel.find_similar(q) {
+                        if !results.is_empty() {
+                            let scored: Vec<(KOID, f32, String, u64)> = results
+                                .into_iter()
+                                .map(|s| {
+                                    (s.ko.koid, s.score, s.ko.metadata.type_name, s.ko.version)
+                                })
+                                .collect();
+                            self.prev_scored = Some(scored.clone());
+                            return Ok(RowSet::Scored(scored));
+                        }
+                    }
+                }
                 // Shared cosine-scoring path (embedded + explicit vectors).
                 let kos = self.resolve_objects(&input)?;
                 let model = embedding_model.as_deref();
@@ -447,11 +703,43 @@ impl Interpreter {
                     RowSet::Objects(kos) => RowSet::Objects(skip_take(kos, *offset, *limit)),
                     RowSet::Scored(s) => RowSet::Scored(skip_take(s, *offset, *limit)),
                     RowSet::Traversal(t) => RowSet::Traversal(skip_take(t, *offset, *limit)),
+                    RowSet::Grouped(g) => RowSet::Grouped(skip_take(g, *offset, *limit)),
+                    RowSet::Joined(p) => RowSet::Joined(skip_take(p, *offset, *limit)),
                 })
             }
             IrOp::Project { fields } => {
+                // P5-M5: projection over aggregate output strips each
+                // group's map to the requested fields.
+                if let RowSet::Grouped(g) = input {
+                    if fields.contains(&"*".to_string()) {
+                        return Ok(RowSet::Grouped(g));
+                    }
+                    return Ok(RowSet::Grouped(
+                        g.into_iter()
+                            .map(|mut m| {
+                                m.retain(|f, _| fields.contains(f));
+                                m
+                            })
+                            .collect(),
+                    ));
+                }
                 let mut kos = match input {
                     RowSet::Objects(kos) => kos,
+                    // §63: Projection after Traverse — Traverse output is
+                    // (koid, rel_type, depth) tuples; load the KOs before
+                    // projecting (pre-P3-M4 the compiler skipped Project
+                    // whenever Traverse was present).
+                    RowSet::Traversal(t) => {
+                        let subj = self
+                            .cached_subject
+                            .clone()
+                            .unwrap_or_else(|| Subject::new("system"));
+                        let mut out = Vec::with_capacity(t.len());
+                        for (koid, _, _) in &t {
+                            out.push(kernel.get(KnowledgeContext::new(subj.clone()), koid)?);
+                        }
+                        out
+                    }
                     _ => return Err(KError::InvalidQuery("Project requires Object input".into())),
                 };
                 if fields.contains(&"*".to_string()) {
@@ -467,6 +755,190 @@ impl Interpreter {
                     ko.properties = filtered;
                 }
                 Ok(RowSet::Objects(kos))
+            }
+            // P5-M5 (ND-05): stable multi-key sort over Objects or Grouped.
+            // Missing field = Null-first on ASC; incomparable values compare
+            // equal (the stable sort keeps their scan order — ag005).
+            IrOp::Sort { keys } => {
+                let cmp = |x: Option<&Value>, y: Option<&Value>| -> Ordering {
+                    match (x, y) {
+                        (Some(a), Some(b)) => {
+                            compare_values(Some(a), Some(b)).unwrap_or(Ordering::Equal)
+                        }
+                        (None, None) => Ordering::Equal,
+                        (None, Some(_)) => Ordering::Less,
+                        (Some(_), None) => Ordering::Greater,
+                    }
+                };
+                Ok(match input {
+                    RowSet::Objects(mut kos) => {
+                        kos.sort_by(|x, y| {
+                            for k in keys {
+                                let o = cmp(x.properties.get(&k.field), y.properties.get(&k.field));
+                                if o != Ordering::Equal {
+                                    return if k.desc { o.reverse() } else { o };
+                                }
+                            }
+                            Ordering::Equal
+                        });
+                        RowSet::Objects(kos)
+                    }
+                    RowSet::Grouped(mut g) => {
+                        g.sort_by(|x, y| {
+                            for k in keys {
+                                let o = cmp(x.get(&k.field), y.get(&k.field));
+                                if o != Ordering::Equal {
+                                    return if k.desc { o.reverse() } else { o };
+                                }
+                            }
+                            Ordering::Equal
+                        });
+                        RowSet::Grouped(g)
+                    }
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "Sort requires Object or Grouped input".into(),
+                        ))
+                    }
+                })
+            }
+            // P5-M5 (ND-05): filter-then-aggregate — grouping only ever sees
+            // rows that survived Filter (and thus authorization; ag008).
+            // Groups keep first-encounter order; a row missing a group key
+            // groups under Null; no keys = one global group over all rows
+            // (over empty input: one row, count=0, folds Null).
+            IrOp::Aggregate { keys, aggs } => {
+                let kos = match input {
+                    RowSet::Objects(kos) => kos,
+                    _ => {
+                        return Err(KError::InvalidQuery(
+                            "Aggregate requires Object input".into(),
+                        ))
+                    }
+                };
+                let mut groups: Vec<(Vec<Value>, Vec<&KnowledgeObject>)> = Vec::new();
+                if keys.is_empty() {
+                    groups.push((Vec::new(), kos.iter().collect()));
+                } else {
+                    // Value is not Hash — key the map on the derived Debug
+                    // form (variant-tagged, injective per value). ponytail:
+                    // derive Hash on Value if key hashing ever shows up in a
+                    // profile.
+                    let mut idx: std::collections::HashMap<String, usize> =
+                        std::collections::HashMap::new();
+                    for ko in &kos {
+                        let key: Vec<Value> = keys
+                            .iter()
+                            .map(|k| ko.properties.get(k).cloned().unwrap_or(Value::Null))
+                            .collect();
+                        let khash = format!("{key:?}");
+                        let i = match idx.get(&khash) {
+                            Some(&i) => i,
+                            None => {
+                                idx.insert(khash, groups.len());
+                                groups.push((key, Vec::new()));
+                                groups.len() - 1
+                            }
+                        };
+                        groups[i].1.push(ko);
+                    }
+                }
+                let mut out = Vec::with_capacity(groups.len());
+                for (key, rows) in &groups {
+                    let mut row = PropertyMap::new();
+                    for (k, v) in keys.iter().zip(key) {
+                        row.insert(k.clone(), v.clone());
+                    }
+                    for call in aggs {
+                        row.insert(
+                            agg_name(&call.func, &call.field),
+                            aggregate_value(call.func, &call.field, rows)?,
+                        );
+                    }
+                    out.push(row);
+                }
+                Ok(RowSet::Grouped(out))
+            }
+            // P5-M6 (ND-06): nested-loop join — the v1 strategy. The left
+            // side is the filtered RowSet from the pipeline; the right side
+            // is scanned with the SAME subject/roles/tenant scope (the
+            // cross-tenant fail-closed pin, jn006). Null keys never match
+            // (SQL semantics, jn005). Hash join is the documented upgrade
+            // path — strategy selection lands with the P5-M9 CBO seam.
+            IrOp::Join {
+                right_type,
+                on_left,
+                on_right,
+                kind,
+            } => {
+                let left = match input {
+                    RowSet::Objects(kos) => kos,
+                    _ => return Err(KError::InvalidQuery("Join requires Object input".into())),
+                };
+                let subj = self
+                    .cached_subject
+                    .clone()
+                    .ok_or_else(|| KError::InvalidQuery("Join requires a Scan subject".into()))?;
+                let mut right = kernel.scan_by_type(&subj, right_type)?;
+                if !self.temporal_mode {
+                    let now = kernel.clock_now();
+                    right.retain(|ko| ko.valid_at(now));
+                }
+                let mut out = Vec::new();
+                for l in &left {
+                    let mut matched = false;
+                    for r in &right {
+                        let lk = l.properties.get(on_left);
+                        let rk = r.properties.get(on_right);
+                        if lk.is_some() && rk.is_some() && lk == rk {
+                            out.push((l.clone(), Some(r.clone())));
+                            matched = true;
+                        }
+                    }
+                    if !matched && *kind == JoinKind::Left {
+                        out.push((l.clone(), None));
+                    }
+                }
+                Ok(RowSet::Joined(out))
+            }
+            IrOp::Ingest { artifact_ref } => {
+                // §62: dispatch to the existing ingestion pipeline — the
+                // read → hash → deploy_document flow document_ingest uses,
+                // minus the base64/artifact-store step (INGEST's source is
+                // already a file path). Extraction stays optional in that
+                // flow too; INGEST deploys the Document KO metadata.
+                let bytes = std::fs::read(artifact_ref)
+                    .map_err(|e| KError::Store(format!("INGEST read {}: {}", artifact_ref, e)))?;
+                let hash: String = {
+                    use sha2::{Digest, Sha256};
+                    Sha256::digest(&bytes)
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect()
+                };
+                let filename = std::path::Path::new(artifact_ref)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(artifact_ref.as_str())
+                    .to_string();
+                // ponytail: IngestOp carries no subject — deploy as "system";
+                // carry the Scan subject if a future INGEST plan embeds one.
+                let subj = self
+                    .cached_subject
+                    .clone()
+                    .unwrap_or_else(|| Subject::new("system"));
+                let r = kernel.deploy_document(
+                    &filename,
+                    "application/octet-stream",
+                    &hash,
+                    bytes.len() as i64,
+                    0,
+                    0,
+                    "ingested",
+                    &subj,
+                )?;
+                let ctx = KnowledgeContext::new(subj);
+                Ok(RowSet::Objects(vec![kernel.get(ctx, &r.koid)?]))
             }
         }
     }
@@ -500,7 +972,14 @@ impl Interpreter {
                 .then_with(|| a.0.cmp(&b.0))
         });
         scored.truncate(*k);
-        self.prev_scored = Some(scored.clone());
+        // P5-M13 (ND-13): Fuse pairs this leg with the PREVIOUS scored op
+        // (the ANN leg). Overwriting prev_scored here fused text-with-text
+        // and lost the vector scores (h1 RED). First writer wins: AnnSearch
+        // sets it when it runs first; the degrade path (AnnSearch →
+        // exec_text_search) has nothing set and records this list.
+        if self.prev_scored.is_none() {
+            self.prev_scored = Some(scored.clone());
+        }
         Ok(RowSet::Scored(scored))
     }
 
@@ -1345,8 +1824,24 @@ mod tests {
     fn objects(result: RowSet) -> Vec<KnowledgeObject> {
         match result {
             RowSet::Objects(kos) => kos,
-            other => panic!("expected Objects, got {:?}", other),
+            other => panic!("expected Objects, got {}", other.shape()),
         }
+    }
+
+    #[test]
+    fn shape_carries_no_payloads() {
+        let (k, clock) = mk_with_clock();
+        fact_with_validity(&k, &clock, "alice", "SECRET-MARKER", 42, None);
+        let kos = objects(Interpreter::execute(&k, &scan_plan()).unwrap());
+        let s = RowSet::Objects(kos).shape();
+        assert!(
+            !s.contains("SECRET-MARKER"),
+            "shape must stay payload-free: {s}"
+        );
+        assert!(
+            s.contains("Objects") && s.contains("1 rows"),
+            "shape names the variant and the row count: {s}"
+        );
     }
 
     #[test]

@@ -39,6 +39,23 @@ pub enum Token {
     // EXE-006: pagination (LIMIT n [OFFSET m])
     Limit,
     Offset,
+    // P3-M4 §62: TRAVERSE <rel> [DEPTH n]
+    Depth,
+    // P5-M2 (ND-02): ORDER BY / GROUP BY / JOIN ... ON
+    Order,
+    By,
+    Group,
+    // P5-M6 (ND-06): LEFT JOIN — the optional kind prefix.
+    Left,
+    Join,
+    On,
+    Asc,
+    Desc,
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
     // Symbols
     Eq,     // ==
     Neq,    // !=
@@ -60,7 +77,7 @@ pub enum Token {
     Error(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Span {
     pub line: usize,
     pub col: usize,
@@ -132,7 +149,9 @@ impl Lexer {
         let mut s = String::new();
         s.push(first);
         while let Some(c) = self.peek() {
-            if c.is_alphanumeric() || c == '_' {
+            // ':' joins ident segments — namespaced types like aikoql:document
+            // (P3-M4 follow-up). It appears nowhere else in the grammar.
+            if c.is_alphanumeric() || c == '_' || c == ':' {
                 s.push(c);
                 self.advance();
             } else {
@@ -152,6 +171,20 @@ impl Lexer {
             "USING" => Token::Using,
             "EMBEDDING" => Token::Embedding,
             "TRAVERSE" => Token::Traverse,
+            "DEPTH" => Token::Depth,
+            "ORDER" => Token::Order,
+            "BY" => Token::By,
+            "GROUP" => Token::Group,
+            "LEFT" => Token::Left,
+            "JOIN" => Token::Join,
+            "ON" => Token::On,
+            "ASC" => Token::Asc,
+            "DESC" => Token::Desc,
+            "COUNT" => Token::Count,
+            "SUM" => Token::Sum,
+            "AVG" => Token::Avg,
+            "MIN" => Token::Min,
+            "MAX" => Token::Max,
             "CREATE" => Token::Create,
             "UPDATE" => Token::Update,
             "DELETE" => Token::Delete,
@@ -281,6 +314,15 @@ mod tests {
         assert_eq!(ts[5], Token::StringLit("Visa".into()));
         assert_eq!(ts[6], Token::Return);
         assert_eq!(ts[7], Token::Star);
+    }
+
+    #[test]
+    fn lex_namespaced_type_ident() {
+        let ts = tokens("MATCH aikoql:document RETURN *");
+        assert_eq!(ts[0], Token::Match);
+        assert_eq!(ts[1], Token::Ident("aikoql:document".into()));
+        assert_eq!(ts[2], Token::Return);
+        assert_eq!(ts[3], Token::Star);
     }
 
     #[test]

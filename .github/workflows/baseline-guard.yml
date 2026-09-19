@@ -1,0 +1,60 @@
+# P5-M0 (gd001) — Baseline Certification Guard.
+#
+# Re-runs the 1M v2 adoption workload and asserts the gate-5 slow-down ratio
+# against the committed v1 baseline whenever a protected path changes:
+# crates/storage, crates/kernel, crates/compiler, crates/runtime.
+#
+# Ratio basis (SE2-M28 / gate 5): the committed `result-1m-aikoql.json` (v1,
+# Windows). The ratio is computed by scripts/gate5-check.py — single-backend
+# runs leave the harness's own gate verdict null BY DESIGN (the harness only
+# judges the full 4-backend matrix), so CI must compute it itself.
+#
+# Wired by the dependency-dag job's gd001 pin (ci.yml): deleting this file,
+# dropping a protected path from its triggers, or un-arming the 1M regime
+# fails CI.
+
+name: Baseline Certification Guard
+
+# CodeQL actions/missing-workflow-permissions: the guard only reads the
+# repo and runs benchmarks — no contents: write anywhere.
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - 'crates/storage/**'
+      - 'crates/kernel/**'
+      - 'crates/compiler/**'
+      - 'crates/runtime/**'
+      - '.github/workflows/baseline-guard.yml'
+      - 'scripts/gate5-check.py'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/storage/**'
+      - 'crates/kernel/**'
+      - 'crates/compiler/**'
+      - 'crates/runtime/**'
+      - '.github/workflows/baseline-guard.yml'
+      - 'scripts/gate5-check.py'
+  workflow_dispatch:
+
+jobs:
+  guard:
+    name: 1M gate-5 ratio (v2 vs v1 baseline)
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run 1M v2 workload
+        shell: bash
+        run: |
+          export V2ADOPT_NIGHTLY=1m
+          export V2ADOPT_BACKEND=aikoql-v2
+          export AIKOQL_REPORT_WRITE=1
+          cargo test -p aikoql-storage-v2 --release --test kse_m7_v2_workloads
+      - name: Gate-5 ratio check
+        shell: bash
+        run: python scripts/gate5-check.py

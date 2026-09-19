@@ -450,3 +450,12 @@ impl PlacementResolver for LocalPlacementResolver<'_> {
         Ok(self.db.resolve_placement(replica_id))
     }
 }
+
+/// P4-M2 — the Db-backed form is the live placement source a
+/// `HandleRegistry` re-validates against. The Db impl cannot error, so an
+/// error surface is treated as absent (and `location()` then fails closed).
+impl crate::placement::handles::PlacementSource for LocalPlacementResolver<'_> {
+    fn placement(&self, rid: ReplicaId) -> Option<Placement> {
+        PlacementResolver::resolve(self, rid).ok().flatten()
+    }
+}

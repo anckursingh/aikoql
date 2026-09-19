@@ -8,6 +8,22 @@ import socket
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+# P5-M12 (ND-12) version contract: the oldest server this SDK will talk to.
+# Pinned by tests/test_version_contract.py to the workspace version — a
+# workspace bump turns that test RED until this constant follows.
+MIN_SERVER_VERSION = "0.1.19"
+
+
+def _parse_version(v: str) -> Tuple[int, ...]:
+    """Dotted-int version tuple; non-numeric segments become -1 (never >=)."""
+    parts: List[int] = []
+    for seg in v.split("."):
+        try:
+            parts.append(int(seg))
+        except ValueError:
+            parts.append(-1)
+    return tuple(parts)
+
 
 class McpError(Exception):
     """Structured error from the MCP server (MRFC-0040 error codes)."""
@@ -32,9 +48,11 @@ class McpError(Exception):
 class McpClient:
     """JSON-RPC 2.0 client for aikoql-mcp over TCP."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9090):
+    def __init__(self, host: str = "127.0.0.1", port: int = 9090, token: Optional[str] = None):
         self.host = host
         self.port = port
+        # P3-M1 servers require a --tcp-token: it rides initialize params.
+        self.token = token
         self._sock: Optional[socket.socket] = None
         self._buf = b""
         self._next_id = 0
@@ -96,16 +114,42 @@ class McpClient:
     # -- MCP protocol ---------------------------------------------------
 
     def initialize(self, client_name: str = "aikoql-py", client_version: str = "0.1.0"):
-        return self._rpc("initialize", {
+        params = {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {"name": client_name, "version": client_version},
-        })
+        }
+        if self.token:
+            params["token"] = self.token
+        result = self._rpc("initialize", params)
+        # P5-M12 (ND-12): fail fast on a server older than the contract
+        # minimum (docs/version-compatibility.md). A newer server is fine —
+        # forward-compatible optimism, no upper bound.
+        server_version = (
+            result.get("serverInfo", {}) or {}
+        ).get("version", "")
+        if _parse_version(server_version) < _parse_version(MIN_SERVER_VERSION):
+            raise McpError(
+                code="VERSION_MISMATCH",
+                message=(
+                    f"server version {server_version!r} is older than the SDK "
+                    f"minimum {MIN_SERVER_VERSION}"
+                ),
+                retryable=False,
+                suggestion="Upgrade the aikoql-mcp server to a supported version",
+            )
+        return result
 
-    def session_init(self, agent_id: str, run_id: Optional[str] = None,
+    def session_init(self, agent_id: Optional[str] = None, run_id: Optional[str] = None,
                      tenant: Optional[str] = None, roles: Optional[List[str]] = None):
-        """Establish session identity (MRFC-0040). Subsequent calls inherit it."""
-        params: Dict[str, Any] = {"agent_id": agent_id}
+        """Establish session identity (MRFC-0040). Subsequent calls inherit it.
+
+        P3-M1: on TCP the identity is server-assigned by --tcp-token, so
+        agent_id must be omitted there (only run_id is per-session).
+        """
+        params: Dict[str, Any] = {}
+        if agent_id:
+            params["agent_id"] = agent_id
         if run_id:
             params["run_id"] = run_id
         if tenant:

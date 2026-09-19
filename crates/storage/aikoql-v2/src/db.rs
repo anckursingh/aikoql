@@ -30,11 +30,13 @@
 
 use crate::cache::{BlockCache, CacheStats};
 use crate::checkpoint::{
-    checkpoint_path, directory_log_bytes, load_newest, prune_deltas_before, DirectoryCheckpoint,
+    checkpoint_path, directory_log_bytes, load_newest, prune_deltas_before,
+    validate_delta_coverage, DirectoryCheckpoint,
 };
 use crate::compaction::{merge, CompactStats, KeepAll, RetentionPolicy};
 use crate::format::{
-    crash_park, verify_pair, Current, FormatError, Manifest, SegmentRecord, FORMAT_VERSION,
+    crash_park, validate_manifest, verify_pair, Current, FormatError, Manifest, SegmentRecord,
+    FORMAT_VERSION,
 };
 use crate::identity::directory::{
     identity_log_path, load_identity_logs, load_replica_logs, orphan_identity_logs,
@@ -53,7 +55,9 @@ use crate::placement::{BlockId, SegmentId};
 use crate::segment::{
     SegmentAttach, SegmentEntry, SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT,
 };
-use crate::stats::{ReadPathStats, Stats};
+use crate::stats::{
+    record_latency_us, DbStats, ReadPathStats, ReadTraceRecord, SegmentStats, Stats, WriteStats,
+};
 use crate::wal::{encode_frame, replay_frames, Op};
 use aikoql_kernel::knowledge::kom::sha256;
 use std::cmp::Reverse;
@@ -61,8 +65,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 pub const LOCK_FILE: &str = "LOCK";
@@ -79,6 +83,11 @@ const DEFAULT_BLOCK_TARGET: usize = 16 * 1024;
 const DEFAULT_GROUP_BATCH_OPS: usize = 4096;
 const DEFAULT_GROUP_BATCH_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_CACHE_BYTES: usize = 8 * 1024 * 1024;
+/// P3-M8 — the default hard bound (256 MiB): a write waits for an
+/// in-flight merge only once the L0 backlog passes this; below it the
+/// compactor is fire-and-forget.
+const DEFAULT_BACKLOG_HARD_BOUND_BYTES: u64 = 256 * 1024 * 1024;
+
 /// SE2-M10 — at least this many L0 segments triggers a KeepAll compaction
 /// on the write path (steady state: one L1 + the active L0).
 const DEFAULT_L0_COMPACT_TRIGGER: usize = 4;
@@ -104,6 +113,10 @@ const DEFAULT_MERGE_CHUNK_BYTES: usize = 64 * 1024 * 1024;
 /// ~16 MiB at any scale while the measured 100K-object directory history
 /// (14.7 MB, SE2-M39) stays below the trigger — existing pins hold.
 const DEFAULT_CHECKPOINT_BYTES: usize = 16 * 1024 * 1024;
+/// P4-M5 — the per-request read trace keeps at most this many records;
+/// once full, new records are dropped (sampling is for operators, not
+/// correctness — a ring would just evict the samples you asked for).
+const MAX_TRACE_RECORDS: usize = 65_536;
 
 pub fn manifest_path(dir: &Path, generation: u64) -> PathBuf {
     dir.join(format!("MANIFEST-{generation:06}"))
@@ -152,6 +165,19 @@ pub struct Config {
     /// flushes 4, 8, 16, 32… instead of every 4th — the bulk-seed write
     /// amplification drops from quadratic to ~O(n log n).
     pub l0_tier_ratio: usize,
+    /// P3-M8 — true (default) moves auto-triggered merges off the write
+    /// path onto a compactor thread: the triggering write returns without
+    /// waiting, and `compact()` stays synchronous (explicit request).
+    /// false restores the pre-M8 inline path — deterministic tests pin
+    /// their merge windows against it.
+    pub compact_background: bool,
+    /// P3-M8 — hard-bound backpressure: when a write arrives while a
+    /// merge is already in flight AND the L0 backlog exceeds this many
+    /// bytes, the write blocks until the compactor drains it. 0 disables
+    /// the block (kicks stay fire-and-forget). A failed merge always
+    /// clears the block, so the write path can never deadlock behind a
+    /// doomed merge.
+    pub backlog_hard_bound_bytes: u64,
     /// SE2-M20 — compaction merge chunk cap in estimated entry bytes: a
     /// merge publishes its output as a sequence of ~this-size segments
     /// (one manifest record each) so compaction memory is bounded by the
@@ -161,6 +187,10 @@ pub struct Config {
     /// SE2-M40 — directory checkpoint trigger in accumulated delta-log
     /// bytes (see DEFAULT_CHECKPOINT_BYTES). 0 disables checkpoints.
     pub checkpoint_bytes: usize,
+    /// P4-M5 — read trace sampling rate: one record every Nth read request
+    /// (get/get_many), 1 = every request. 0 (the default) disables the
+    /// trace entirely — the read path then never snapshots, never locks.
+    pub trace_every: u64,
 }
 
 impl Config {
@@ -176,14 +206,17 @@ impl Config {
             cache_bytes: DEFAULT_CACHE_BYTES,
             l0_compact_trigger: DEFAULT_L0_COMPACT_TRIGGER,
             l0_tier_ratio: DEFAULT_L0_TIER_RATIO,
+            compact_background: true,
+            backlog_hard_bound_bytes: DEFAULT_BACKLOG_HARD_BOUND_BYTES,
             merge_chunk_bytes: DEFAULT_MERGE_CHUNK_BYTES,
             checkpoint_bytes: DEFAULT_CHECKPOINT_BYTES,
+            trace_every: 0,
         }
     }
 }
 
 #[derive(Debug)]
-struct State {
+pub(crate) struct State {
     active: Memtable,
     immutables: Vec<Memtable>,
     /// Manifest order, oldest first. SE2-M10 — arc-vectored: a get clones
@@ -226,22 +259,101 @@ struct State {
     /// crosses `Config::checkpoint_bytes` publishes a checkpoint and
     /// prunes the subsumed history.
     bytes_since_checkpoint: u64,
+    /// PR6-002 — per-family applied floors: the newest delta-log generation
+    /// each family published (0 = none). The next manifest records them,
+    /// and the coverage validator derives the required post-checkpoint
+    /// deltas from their raises across the manifest chain.
+    identity_floor: u64,
+    replica_floor: u64,
+    placement_floor: u64,
 }
 
 /// One queued batch waiting on its group: the ops plus the ack channel
 /// (a fresh bounded(1) per batch — std has no oneshot).
 type Batch = (Vec<Op>, mpsc::SyncSender<Result<u64, FormatError>>);
 
+/// P3-M8 — the write path ↔ compactor handshake. `pending` = a kick was
+/// delivered (a merge is in flight or about to run); the compactor clears
+/// it and notifies when it drains (or fails). `kick` sets it and returns
+/// whether a merge was ALREADY in flight when this write arrived — that
+/// bit is the backpressure gate's "already behind" test. No lost
+/// wakeups: the predicate flips under the mutex and every notify follows
+/// a flip.
+struct CompactorSignal {
+    pending: Mutex<bool>,
+    cv: Condvar,
+    shutdown: AtomicBool,
+}
+
+impl CompactorSignal {
+    fn new() -> Arc<Self> {
+        Arc::new(CompactorSignal {
+            pending: Mutex::new(false),
+            cv: Condvar::new(),
+            shutdown: AtomicBool::new(false),
+        })
+    }
+
+    /// Arm a kick. Returns true when a merge was already pending — the
+    /// caller then applies the hard-bound block.
+    fn kick(&self) -> bool {
+        let mut pending = self.pending.lock().unwrap();
+        let already = *pending;
+        *pending = true;
+        self.cv.notify_one();
+        already
+    }
+
+    /// Block until the compactor drains (or shutdown). The compactor
+    /// clears `pending` on success AND on failure — the write path can
+    /// never wait forever behind a doomed merge.
+    fn wait_idle(&self) {
+        let mut pending = self.pending.lock().unwrap();
+        while *pending && !self.shutdown.load(Ordering::SeqCst) {
+            pending = self.cv.wait(pending).unwrap();
+        }
+    }
+
+    /// The compactor side: wait for a kick, or report shutdown.
+    fn wait_kick(&self) -> bool {
+        let mut pending = self.pending.lock().unwrap();
+        while !*pending && !self.shutdown.load(Ordering::SeqCst) {
+            pending = self.cv.wait(pending).unwrap();
+        }
+        !self.shutdown.load(Ordering::SeqCst)
+    }
+
+    fn clear_pending(&self) {
+        *self.pending.lock().unwrap() = false;
+        self.cv.notify_all();
+    }
+
+    /// Drop-side: release every waiter and wake the compactor so its join
+    /// terminates.
+    fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        self.clear_pending();
+    }
+}
+
 pub struct Db {
-    config: Config,
+    pub(crate) config: Config,
     /// Held forever — the OS lock (dropping the file releases it).
     _lock: File,
     /// Append-only handle; truncated at each flush publication. Shared:
     /// in GroupCommit mode the committer thread appends and flush may
     /// truncate — one mutex, always taken alone (never nested), so a
     /// flush can never interleave a group's append-and-apply window.
-    wal: Arc<Mutex<File>>,
-    state: Arc<RwLock<State>>,
+    ///
+    /// GLOBAL LOCK ORDER (PR6-004): `state` → `wal`, and the wal lock is
+    /// innermost — no path may hold it while acquiring `state` (or any
+    /// lock a `state` holder could want). Write, flush, checkpoint and
+    /// the background compactor all follow it. The deadlock + ack matrix
+    /// in tests/pr6_004_concurrency.rs is the standing proof; extend it
+    /// (or fix the code) if a new path ever needs a second lock.
+    pub(crate) wal: Arc<Mutex<File>>,
+    /// Outermost lock of the `state` → `wal` ordering — see `wal`.
+    pub(crate) state: Arc<RwLock<State>>,
     /// GroupCommit mode only: the Db's own sender (dropping it makes the
     /// queue disconnect and lets the committer exit) and the committer
     /// thread itself, joined on drop.
@@ -256,10 +368,65 @@ pub struct Db {
     /// SE2-M8 — read-path instrumentation (the QA spec's truth layer):
     /// cumulative atomics shared with every reader the Db opens.
     stats: Arc<Stats>,
+    /// P3-M2 — write-path instrumentation (design §21), shared with the
+    /// committer thread in GroupCommit mode.
+    wstats: Arc<WriteStats>,
+    /// P3-M8 — the background compactor thread (None when
+    /// `compact_background` is off or the trigger is 0) and its handshake.
+    /// The signal lives even without the thread so the write path and
+    /// `wait_compactor_idle` need no Option plumbing — an unarmed signal
+    /// is never pending.
+    compactor: Option<std::thread::JoinHandle<()>>,
+    compactor_signal: Arc<CompactorSignal>,
+    /// P4-M5 — the sampled per-request read trace (empty while disabled).
+    trace: TraceState,
+}
+
+/// P4-M5 — bounded, sampled per-request read trace. `record` assigns the
+/// request sequence and keeps the record only when the Nth-request sample
+/// fires; callers never touch this while `trace_every == 0` (the wrapper
+/// guards), so a disabled trace costs nothing.
+#[derive(Debug)]
+struct TraceState {
+    inner: Mutex<TraceInner>,
+}
+
+#[derive(Debug, Default)]
+struct TraceInner {
+    next_seq: u64,
+    records: Vec<ReadTraceRecord>,
+}
+
+impl TraceState {
+    fn new() -> Self {
+        TraceState {
+            inner: Mutex::new(TraceInner::default()),
+        }
+    }
+
+    fn record(&self, every: u64, rec: ReadTraceRecord) {
+        let mut t = self.inner.lock().unwrap();
+        let seq = t.next_seq;
+        t.next_seq += 1;
+        if !seq.is_multiple_of(every) {
+            return;
+        }
+        if t.records.len() < MAX_TRACE_RECORDS {
+            t.records.push(ReadTraceRecord { seq, ..rec });
+        }
+    }
+}
+
+/// P3-M2 — the checkpoint_now admin surface (design §22): the publication
+/// generation of the checkpoint just written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckpointInfo {
+    pub generation: u64,
 }
 
 impl Db {
     pub fn open(config: Config) -> Result<Db, FormatError> {
+        let open_t = Instant::now();
         let lock = lock_directory(&config.dir)?;
         let current_path = config.dir.join("CURRENT");
         let current = match Current::read(&current_path) {
@@ -272,6 +439,10 @@ impl Db {
                     generation: 1,
                     segments: vec![],
                     wal_ids: vec![],
+                    // PR6-002 — nothing has published at the fresh open.
+                    identity_floor: 0,
+                    replica_floor: 0,
+                    placement_floor: 0,
                 };
                 Manifest::publish(&manifest_path(&config.dir, 1), &manifest)?;
                 let current = Current::new(FORMAT_VERSION, 1);
@@ -282,6 +453,9 @@ impl Db {
         };
         let manifest = Manifest::read(&manifest_path(&config.dir, current.manifest_generation))?;
         verify_pair(&current, &manifest)?;
+        // P4-M3 — manifest invariants (TDD-STOR-005): impossible metadata
+        // fails closed before any reader opens.
+        validate_manifest(&manifest, &config.dir)?;
         // Orphan segments (a crash between segment publication and
         // manifest/CURRENT, or compaction leftovers): reported and ignored.
         // They are unreferenced data — a later flush may reuse the id,
@@ -301,6 +475,25 @@ impl Db {
         // recovery is checkpoint + recent deltas, never the full history.
         let checkpoint = load_newest(&config.dir, current.manifest_generation)?;
         let checkpoint_generation = checkpoint.as_ref().map_or(0, |c| c.generation);
+        // PR6-002 — a valid checkpoint plus an incomplete delta set is an
+        // invalid state (review P0 Recovery): the coverage validator fails
+        // closed on any missing required post-checkpoint delta, per family,
+        // intermediate generations included.
+        validate_delta_coverage(
+            &config.dir,
+            checkpoint_generation,
+            current.manifest_generation,
+        )?;
+        // PR6-001 — the checkpoint's floors bound every recomputed
+        // allocator from below: its prune deleted the history those
+        // recomputes would otherwise read (ckp009's burned generations).
+        let checkpoint_floors = checkpoint.as_ref().map_or((0, 0, 0), |c| {
+            (
+                c.next_logical_id,
+                c.next_replica_id,
+                c.next_placement_generation,
+            )
+        });
         let mut identity: HashMap<ObjectId, LogicalId> = HashMap::new();
         let mut replicas: HashMap<LogicalId, ReplicaId> = HashMap::new();
         if let Some(ckp) = &checkpoint {
@@ -349,6 +542,7 @@ impl Db {
         // stats.
         let cache = (config.cache_bytes > 0).then(|| BlockCache::new(config.cache_bytes));
         let stats = Arc::new(Stats::default());
+        let wstats = Arc::new(WriteStats::default());
         let mut segments = Vec::with_capacity(manifest.segments.len());
         let mut readers_by_segment: HashMap<u64, Arc<SegmentReader>> = HashMap::new();
         for rec in &manifest.segments {
@@ -358,6 +552,20 @@ impl Db {
                 cache.clone(),
                 Some(Arc::clone(&stats)),
             )?);
+            // P4-M3 — the manifest record must agree with the segment's own
+            // header metadata; a mismatch is corruption, not a read-time
+            // surprise.
+            if rec.key_min != reader.key_min()
+                || rec.key_max != reader.key_max()
+                || rec.seq_lo != reader.seq_lo()
+                || rec.seq_hi != reader.seq_hi()
+                || rec.record_count != reader.entry_count()
+            {
+                return Err(FormatError::Corrupt(format!(
+                    "manifest record for segment {} disagrees with the segment header",
+                    rec.segment_id
+                )));
+            }
             readers_by_segment.insert(rec.segment_id, Arc::clone(&reader));
             segments.push(reader);
         }
@@ -451,6 +659,9 @@ impl Db {
         // SE2-M40 — the seed also clears the orphan logs' burned
         // generations (Challenge C): a replayed flip must never re-hand a
         // number a state-C compaction already durably published.
+        // PR6-003 — a checkpoint-seeded Memtable already carries the flip
+        // the replayed op logged (replay_object_placement skips it):
+        // re-applying would displace the durably published generation.
         let mut replay_pgen = placements
             .values()
             .map(|p| p.generation())
@@ -468,7 +679,7 @@ impl Db {
                     // consulting the directories.
                     Op::PutObject(rid, k, v) => {
                         active.apply_object(k.clone(), frame.seq, Some(v.clone()), *rid);
-                        Self::apply_object_placement(
+                        Self::replay_object_placement(
                             &mut placements,
                             &mut pending_placements,
                             &mut replay_pgen,
@@ -477,7 +688,7 @@ impl Db {
                     }
                     Op::DeleteObject(rid, k) => {
                         active.apply_object(k.clone(), frame.seq, None, *rid);
-                        Self::apply_object_placement(
+                        Self::replay_object_placement(
                             &mut placements,
                             &mut pending_placements,
                             &mut replay_pgen,
@@ -537,8 +748,10 @@ impl Db {
         // SE2-M30 — the allocators recover past every id that ever existed
         // (logs + replayed WAL): ids are never reused after restart (§32
         // ID-014) or deletion (§49).
-        let next_logical_id = identity.values().map(|l| l.0).max().unwrap_or(0) + 1;
-        let next_replica_id = replicas.values().map(|r| r.0).max().unwrap_or(0) + 1;
+        let next_logical_id =
+            (identity.values().map(|l| l.0).max().unwrap_or(0) + 1).max(checkpoint_floors.0);
+        let next_replica_id =
+            (replicas.values().map(|r| r.0).max().unwrap_or(0) + 1).max(checkpoint_floors.1);
         // SE2-M32 — placement generations recover past the newest applied
         // record (logs + replayed WAL); the gate ignores anything older,
         // so the map maximum IS the maximum ever allocated. SE2-M40 — the
@@ -546,13 +759,14 @@ impl Db {
         // generation durably published in a state-C window is never
         // re-handed (INV-05), however invisible its records are to the
         // recovered map.
-        let next_placement_generation = placements
+        let next_placement_generation = (placements
             .values()
             .map(|p| p.generation())
             .max()
             .unwrap_or(0)
             .max(orphan_pgen_max)
-            + 1;
+            + 1)
+        .max(checkpoint_floors.2);
         // SE2-M40 — the checkpoint trigger's budget resumes from the bytes
         // published after the newest checkpoint (leftover pre-checkpoint
         // logs are dead weight the next prune sweeps, not replay work).
@@ -577,6 +791,12 @@ impl Db {
             pending_placements,
             next_placement_generation,
             bytes_since_checkpoint,
+            // PR6-002 — the current manifest is authoritative: it records
+            // the newest published generation per family (monotone by
+            // construction, so nothing replayed can exceed it).
+            identity_floor: manifest.identity_floor,
+            replica_floor: manifest.replica_floor,
+            placement_floor: manifest.placement_floor,
         }));
         let fsyncs = Arc::new(AtomicU64::new(0));
         let (queue_tx, committer) = if config.durability == DurabilityMode::GroupCommit {
@@ -588,14 +808,39 @@ impl Db {
                 let fsyncs = Arc::clone(&fsyncs);
                 let cache = cache.clone();
                 let stats = Arc::clone(&stats);
+                let wstats = Arc::clone(&wstats);
                 std::thread::spawn(move || {
-                    committer_loop(rx, wal, state, config, fsyncs, cache, stats)
+                    committer_loop(rx, wal, state, config, fsyncs, cache, stats, wstats)
                 })
             };
             (Some(tx), Some(handle))
         } else {
             (None, None)
         };
+        // P3-M8 — the background compactor (the committer-thread pattern):
+        // spawned whenever auto-compaction can ever fire, joined on drop.
+        let compactor_signal = CompactorSignal::new();
+        let compactor = if config.compact_background && config.l0_compact_trigger > 0 {
+            let state = Arc::clone(&state);
+            let config = config.clone();
+            let cache = cache.clone();
+            let stats = Arc::clone(&stats);
+            let wstats = Arc::clone(&wstats);
+            let signal = Arc::clone(&compactor_signal);
+            Some(std::thread::spawn(move || {
+                compactor_loop(config, state, cache, stats, wstats, signal)
+            }))
+        } else {
+            None
+        };
+        // P3-M2 — recovery surface (design §21): this open's wall time and
+        // the WAL bytes replayed.
+        wstats
+            .recovery_ms
+            .store(open_t.elapsed().as_millis() as u64, Ordering::Relaxed);
+        wstats
+            .wal_replay_bytes
+            .store(consumed as u64, Ordering::Relaxed);
         Ok(Db {
             config,
             _lock: lock,
@@ -606,6 +851,52 @@ impl Db {
             fsyncs,
             cache,
             stats,
+            wstats,
+            compactor,
+            compactor_signal,
+            trace: TraceState::new(),
+        })
+    }
+
+    /// P3-M2 (design §21) — the whole observable surface in one snapshot:
+    /// read path (SE2-M8), write path, segment inventory, cache.
+    pub fn stats(&self) -> DbStats {
+        let (count, bytes) = {
+            let state = self.state.read().unwrap();
+            let count = state.segments.len() as u64;
+            let bytes = state.segment_records.iter().map(|r| r.file_size).sum();
+            (count, bytes)
+        };
+        DbStats {
+            read: self.stats.snapshot(),
+            write: self.wstats.snapshot(self.fsyncs.load(Ordering::SeqCst)),
+            segments: SegmentStats { count, bytes },
+            cache: self.cache.as_ref().map(|c| c.stats()).unwrap_or_default(),
+        }
+    }
+
+    /// P3-M8 — block until the compactor drains: every kicked merge has
+    /// finished (or failed) and the write path's backpressure wait would
+    /// not block. No-op when the compactor is off (`compact_background`
+    /// false or trigger 0): an unarmed signal is never pending.
+    pub fn wait_compactor_idle(&self) {
+        self.compactor_signal.wait_idle();
+    }
+
+    /// P3-M8 — the last failed background merge's error text (None = none
+    /// yet, or the compactor is off).
+    pub fn last_compaction_error(&self) -> Option<String> {
+        self.wstats.compaction_error.lock().unwrap().clone()
+    }
+
+    /// P3-M2 — the admin checkpoint (design §22): publish the live
+    /// directory state NOW, at the current generation, outside the
+    /// checkpoint_bytes trigger.
+    pub fn checkpoint_now(&self) -> Result<CheckpointInfo, FormatError> {
+        let mut state = self.state.write().unwrap();
+        Self::write_checkpoint(&self.config, &mut state, &self.wstats)?;
+        Ok(CheckpointInfo {
+            generation: state.generation,
         })
     }
 
@@ -638,9 +929,17 @@ impl Db {
                 .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
             wal.write_all(&frame)
                 .map_err(|e| FormatError::Io(format!("WAL append: {e}")))?;
+            self.wstats
+                .wal_bytes
+                .fetch_add(frame.len() as u64, Ordering::Relaxed);
             if self.config.durability == DurabilityMode::Sync {
+                let t = Instant::now();
                 wal.sync_all()
                     .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
+                record_latency_us(
+                    &self.wstats.fsync_latency_us_buckets,
+                    t.elapsed().as_micros() as u64,
+                );
                 self.fsyncs.fetch_add(1, Ordering::SeqCst);
             }
         }
@@ -722,6 +1021,7 @@ impl Db {
                 &mut state,
                 &self.cache,
                 &self.stats,
+                &self.wstats,
             )?;
         }
         drop(state);
@@ -744,25 +1044,39 @@ impl Db {
         }
         let (l0, l0_bytes, l1_bytes) = {
             let state = self.state.read().unwrap();
-            let mut l0 = 0usize;
-            let mut l0_bytes = 0u64;
-            let mut l1_bytes = 0u64;
-            for r in &state.segment_records {
-                if r.level == 0 {
-                    l0 += 1;
-                    l0_bytes += r.file_size;
-                } else {
-                    l1_bytes += r.file_size;
-                }
-            }
-            (l0, l0_bytes, l1_bytes)
+            // P3-M2 — the scan is the backlog gauge's free ride: every
+            // write path refreshes what the compactor faces (met003).
+            let scan = scan_l0(&state);
+            self.wstats
+                .compaction_pending_segments
+                .store(scan.0 as u64, Ordering::Relaxed);
+            self.wstats
+                .compaction_backlog_bytes
+                .store(scan.1, Ordering::Relaxed);
+            scan
         };
         let triggered = l0 >= self.config.l0_compact_trigger;
         let tier_ok = self.config.l0_tier_ratio == 0
             || l1_bytes == 0
             || l0_bytes >= l1_bytes / self.config.l0_tier_ratio as u64;
-        if triggered && tier_ok {
+        if !triggered || !tier_ok {
+            return Ok(());
+        }
+        if !self.config.compact_background {
             self.compact()?;
+            return Ok(());
+        }
+        // P3-M8 — background: kick the compactor and return. Only a write
+        // that arrived while a merge was ALREADY in flight blocks, and
+        // only over the hard bound — the first triggering write never
+        // waits, tier-skips never block, and a failed merge clears the
+        // block (liveness by construction).
+        let already = self.compactor_signal.kick();
+        if already
+            && self.config.backlog_hard_bound_bytes > 0
+            && l0_bytes > self.config.backlog_hard_bound_bytes
+        {
+            self.compactor_signal.wait_idle();
         }
         Ok(())
     }
@@ -773,7 +1087,10 @@ impl Db {
     /// joins it) only once no sender remains.
     pub fn writer(&self) -> Result<CommitWriter, FormatError> {
         match &self.queue_tx {
-            Some(tx) => Ok(CommitWriter { tx: tx.clone() }),
+            Some(tx) => Ok(CommitWriter {
+                tx: tx.clone(),
+                wstats: Arc::clone(&self.wstats),
+            }),
             None => Err(FormatError::Invalid(
                 "writer handles require DurabilityMode::GroupCommit".into(),
             )),
@@ -862,6 +1179,25 @@ impl Db {
         merge_placement(placements, rid, placement)?;
         pending.push(PlacementRecord { rid, placement });
         Ok(())
+    }
+
+    /// PR6-003 — the WAL-replay variant: a checkpoint-seeded `Memtable`
+    /// already holds the flip the replayed op logged (the snapshot was
+    /// taken after it), so re-applying it would allocate a fresh
+    /// generation over the durably published one. Segment/Retired entries
+    /// still flip — a move after the checkpoint is real state. With no
+    /// checkpoint the map starts empty and the skip never fires, so the
+    /// SE2-M39 re-pend behaviour is unchanged.
+    fn replay_object_placement(
+        placements: &mut HashMap<ReplicaId, Placement>,
+        pending: &mut Vec<PlacementRecord>,
+        next_generation: &mut u64,
+        rid: ReplicaId,
+    ) -> Result<(), FormatError> {
+        if matches!(placements.get(&rid), Some(Placement::Memtable { .. })) {
+            return Ok(());
+        }
+        Self::apply_object_placement(placements, pending, next_generation, rid)
     }
 
     /// SE2-M33 — the §14 write path: PUT resolves the ObjectId through the
@@ -1014,6 +1350,25 @@ impl Db {
         self.state.read().unwrap().placements.get(&rid).copied()
     }
 
+    /// PR6-003 — the full directory snapshot at the current generation
+    /// (identity + replica + placement maps, the checkpoint builder's own
+    /// view): the semantic-equivalence oracle — the live map must equal
+    /// the checkpoint/recovered map field for field, and building the
+    /// oracle from `DirectoryCheckpoint::from_state` guarantees it can
+    /// never drift apart from what gets published.
+    pub fn directory_snapshot(&self) -> DirectoryCheckpoint {
+        let s = self.state.read().unwrap();
+        DirectoryCheckpoint::from_state(
+            s.generation,
+            &s.identity,
+            &s.replicas,
+            &s.placements,
+            s.next_logical_id,
+            s.next_replica_id,
+            s.next_placement_generation,
+        )
+    }
+
     /// SE2-M38 §45 — the per-directory resident byte estimate: capacity ×
     /// slot size plus the Swiss-table control bytes (allocator overhead
     /// excluded). The memory-gate report's per-directory rows — the
@@ -1051,10 +1406,20 @@ impl Db {
     /// the clone is get work, not attribution residual.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, FormatError> {
         let t_wall = Instant::now();
+        // P4-M5 — the trace is a delta of aggregates: snapshot before,
+        // snapshot after, publish when sampling fires. Disabled = the
+        // pre-M5 body exactly (one plain load).
+        let before = (self.config.trace_every != 0).then(|| self.stats.snapshot());
         let out = self.get_inner(key);
         self.stats
             .get_wall_ns
             .fetch_add(t_wall.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        if let Some(before) = before {
+            self.trace.record(
+                self.config.trace_every,
+                self.stats.snapshot().delta_of(&before),
+            );
+        }
         out
     }
 
@@ -1067,10 +1432,18 @@ impl Db {
     /// (newest PUT wins, a DELETE shadows everything older).
     pub fn get_many(&self, keys: &[&[u8]]) -> Result<Vec<Option<Vec<u8>>>, FormatError> {
         let t_wall = Instant::now();
+        // P4-M5 — one record per request (a batch is one request).
+        let before = (self.config.trace_every != 0).then(|| self.stats.snapshot());
         let out = self.get_many_inner(keys);
         self.stats
             .get_wall_ns
             .fetch_add(t_wall.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        if let Some(before) = before {
+            self.trace.record(
+                self.config.trace_every,
+                self.stats.snapshot().delta_of(&before),
+            );
+        }
         out
     }
 
@@ -1265,6 +1638,18 @@ impl Db {
         self.stats.snapshot()
     }
 
+    /// P4-M5 — records currently held by the read trace (0 while disabled).
+    pub fn trace_len(&self) -> usize {
+        self.trace.inner.lock().unwrap().records.len()
+    }
+
+    /// P4-M5 — take the accumulated trace records (request order) and
+    /// reset the ring. Draining never affects reads.
+    pub fn drain_trace(&self) -> Vec<ReadTraceRecord> {
+        let mut t = self.trace.inner.lock().unwrap();
+        std::mem::take(&mut t.records)
+    }
+
     /// SE2-M7 — block cache metrics; all zeros when the cache is off
     /// (cache_bytes = 0).
     pub fn cache_stats(&self) -> CacheStats {
@@ -1370,6 +1755,7 @@ impl Db {
             &mut state,
             &self.cache,
             &self.stats,
+            &self.wstats,
         )
     }
 
@@ -1382,6 +1768,7 @@ impl Db {
         state: &mut State,
         cache: &Option<Arc<BlockCache>>,
         stats: &Arc<Stats>,
+        wstats: &Arc<WriteStats>,
     ) -> Result<(), FormatError> {
         if !state.active.is_empty() {
             let fresh = std::mem::take(&mut state.active);
@@ -1390,6 +1777,7 @@ impl Db {
         if state.immutables.is_empty() {
             return Ok(());
         }
+        let flush_t = Instant::now();
         let mut new_segments = Vec::with_capacity(state.immutables.len());
         let mut anchors: HashMap<ReplicaId, (u64, SegmentId, BlockId, u32)> = HashMap::new();
         for mem in state.immutables.drain(..) {
@@ -1406,19 +1794,22 @@ impl Db {
                 SegmentWriter::new_v2(config.block_target)
             };
             // into_entries: the flushed table is consumed — keys/values
-            // move into the writer, no second copy (SE2-M15).
+            // move into the writer, no second copy (SE2-M15). TDD-STOR-006:
+            // `into_parts` splits the row on the enum — byte rows report
+            // replica 0, object rows their owning replica.
             for ((key, seq), e) in mem.into_entries() {
-                let flags = if e.value.is_some() {
+                let (value, replica_id) = e.into_parts();
+                let flags = if value.is_some() {
                     FLAG_PUT
                 } else {
                     FLAG_DELETE
                 };
                 writer.push(SegmentEntry {
                     key,
-                    value: e.value.unwrap_or_default(),
+                    value: value.unwrap_or_default(),
                     seq,
                     flags,
-                    replica_id: e.replica_id,
+                    replica_id,
                 });
             }
             let (file_size, checksum, seg_anchors) = writer.publish_with_anchors(&path)?;
@@ -1489,6 +1880,7 @@ impl Db {
             // SE2-M40 — the checkpoint trigger's budget.
             state.bytes_since_checkpoint += log.encoded_len() as u64;
             IdentityLog::publish(&identity_log_path(&config.dir, state.generation), &log)?;
+            state.identity_floor = state.generation; // PR6-002
         }
         if !state.pending_replicas.is_empty() {
             let log = ReplicaLog {
@@ -1498,6 +1890,7 @@ impl Db {
             };
             state.bytes_since_checkpoint += log.encoded_len() as u64;
             ReplicaLog::publish(&replica_log_path(&config.dir, state.generation), &log)?;
+            state.replica_floor = state.generation; // PR6-002
         }
         if !state.pending_placements.is_empty() {
             let log = PlacementLog {
@@ -1507,6 +1900,7 @@ impl Db {
             };
             state.bytes_since_checkpoint += log.encoded_len() as u64;
             PlacementLog::publish(&placement_log_path(&config.dir, state.generation), &log)?;
+            state.placement_floor = state.generation; // PR6-002
         }
         crash_park("AIKOQL_V2_FLUSH_PARK", &config.dir, "after_identity");
         let manifest = Manifest {
@@ -1514,7 +1908,14 @@ impl Db {
             generation: state.generation,
             segments: state.segment_records.clone(),
             wal_ids: vec![],
+            identity_floor: state.identity_floor,
+            replica_floor: state.replica_floor,
+            placement_floor: state.placement_floor,
         };
+        // P4-M3 — debug builds refuse to publish impossible metadata
+        // (before the manifest lands, not after: the same check, earlier).
+        #[cfg(debug_assertions)]
+        validate_manifest(&manifest, &config.dir)?;
         Manifest::publish(&manifest_path(&config.dir, state.generation), &manifest)?;
         Current::publish(
             &config.dir.join("CURRENT"),
@@ -1536,8 +1937,14 @@ impl Db {
         if config.checkpoint_bytes > 0
             && state.bytes_since_checkpoint >= config.checkpoint_bytes as u64
         {
-            Self::write_checkpoint(config, state)?;
+            Self::write_checkpoint(config, state, wstats)?;
         }
+        // P3-M2 — a real flush (a no-op flush never gets counted: the
+        // is_empty guard above returns first).
+        wstats.flush_count.fetch_add(1, Ordering::Relaxed);
+        wstats
+            .flush_latency_us
+            .fetch_add(flush_t.elapsed().as_micros() as u64, Ordering::Relaxed);
         Ok(())
     }
 
@@ -1578,170 +1985,14 @@ impl Db {
     /// only after CURRENT.
     pub fn compact_with(&self, policy: &dyn RetentionPolicy) -> Result<CompactStats, FormatError> {
         let mut state = self.state.write().unwrap();
-        if state.segments.is_empty() {
-            return Ok(CompactStats::default());
-        }
-        let mut next_id = state.next_segment_id;
-        let attach = SegmentAttach {
-            cache: self.cache.clone(),
-            stats: Some(Arc::clone(&self.stats)),
-        };
-        let (stats, chunks, relocations) = merge(
-            &state.segments,
-            self.config.block_target,
-            self.config.merge_chunk_bytes,
-            &self.config.dir,
-            &mut next_id,
+        compact_impl(
+            &self.config,
+            &mut state,
+            &self.cache,
+            &self.stats,
+            &self.wstats,
             policy,
-            &attach,
-        )?;
-        crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_segment");
-
-        // SE2-M35 — every Segment-placed replica relocates: a fresh §25
-        // generation per move, the relocation set's anchor as the new home,
-        // Retired when the merge dropped the replica's last live entry.
-        // Memtable-placed replicas keep theirs — the next flush moves them.
-        // SE2-M39 — the pending records (placement flips a put produced
-        // after the last flush) publish in THIS window too: the compaction
-        // removes the input segments from the manifest, and a flip whose
-        // last LOGGED record named one of them would otherwise resurrect a
-        // dangling Segment placement on reopen (M35: no surviving record
-        // may reference a removed segment). The flip's generation predates
-        // the relocation draws (one allocator), so the order never matters.
-        let mut placement_records: Vec<PlacementRecord> =
-            std::mem::take(&mut state.pending_placements);
-        let mut segment_rids: Vec<ReplicaId> = state
-            .placements
-            .iter()
-            .filter_map(|(&rid, p)| matches!(p, Placement::Segment(_)).then_some(rid))
-            .collect();
-        // SE2-M35 — sorted, so the fresh generations assign deterministically.
-        segment_rids.sort_unstable();
-        for rid in segment_rids {
-            let pgen = state.next_placement_generation;
-            state.next_placement_generation += 1;
-            let relocated = match relocations.get(&rid) {
-                Some(Some(loc)) => Placement::Segment(PhysicalLocation {
-                    segment_id: loc.0,
-                    block_id: loc.1,
-                    entry_offset: loc.2,
-                    generation: pgen,
-                }),
-                Some(None) => Placement::Retired { generation: pgen },
-                // Fail closed: the merge saw every entry of every input
-                // segment, so a Segment-placed replica missing from the set
-                // means the placement predates the input — never relocate
-                // what cannot be proven.
-                None => {
-                    return Err(FormatError::Corrupt(format!(
-                        "segment-placed replica {rid:?} absent from the relocation set"
-                    )))
-                }
-            };
-            placement_records.push(PlacementRecord {
-                rid,
-                placement: relocated,
-            });
-        }
-
-        let old_paths: Vec<PathBuf> = state
-            .segment_records
-            .iter()
-            .map(|r| segment_path(&self.config.dir, r.segment_id))
-            .collect();
-        let mut new_records = Vec::new();
-        let mut new_segments = Vec::new();
-        for (segment_id, (reader, file_size, checksum), _anchors) in chunks {
-            new_records.push(SegmentRecord {
-                segment_id,
-                level: 1,
-                key_min: reader.key_min().to_vec(),
-                key_max: reader.key_max().to_vec(),
-                seq_lo: reader.seq_lo(),
-                seq_hi: reader.seq_hi(),
-                record_count: reader.entry_count(),
-                file_size,
-                checksum,
-            });
-            new_segments.push(Arc::new(reader));
-        }
-        state.next_segment_id = next_id;
-        state.generation += 1;
-        // SE2-M35 — the relocation records publish at the NEW generation,
-        // before the manifest names it (the §23 order, mirroring flush):
-        // state-C — log durable, manifest not — keeps the old placements
-        // authoritative (the new log is an orphan past CURRENT), state-D
-        // applies them on reopen. A compaction that relocated nothing and
-        // drained no pending records publishes no log — gaps are normal.
-        if !placement_records.is_empty() {
-            let log = PlacementLog {
-                format_version: FORMAT_VERSION,
-                generation: state.generation,
-                records: placement_records.clone(),
-            };
-            // SE2-M40 — the checkpoint trigger's budget.
-            state.bytes_since_checkpoint += log.encoded_len() as u64;
-            // SE2-M36 — staged: the §38 LOCATION windows park inside.
-            PlacementLog::publish_staged(
-                &placement_log_path(&self.config.dir, state.generation),
-                &log,
-                Some("LOCATION"),
-            )?;
-        }
-        crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_location");
-        let manifest = Manifest {
-            format_version: FORMAT_VERSION,
-            generation: state.generation,
-            segments: new_records.clone(),
-            wal_ids: vec![],
-        };
-        // SE2-M36 — staged: the §38 MANIFEST windows park inside.
-        Manifest::publish_staged(
-            &manifest_path(&self.config.dir, state.generation),
-            &manifest,
-            Some("MANIFEST"),
-        )?;
-        crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_manifest");
-        Current::publish(
-            &self.config.dir.join("CURRENT"),
-            &Current::new(FORMAT_VERSION, state.generation),
-        )?;
-        crash_park(
-            "AIKOQL_V2_PLACE_PARK",
-            &self.config.dir,
-            "FAIL_AFTER_PUBLISH",
-        );
-        crash_park("AIKOQL_V2_COMPACT_PARK", &self.config.dir, "after_current");
-
-        // Swap readers before deleting: handles open with share-delete, so
-        // Windows marks the files delete-pending and any reader that still
-        // references an obsolete segment keeps its data alive (the
-        // Arc<Segment> lifetime guarantee, via the OS).
-        state.segments = Arc::new(new_segments);
-        state.segment_records = new_records;
-        for rec in &placement_records {
-            // Infallible in practice — the records carry fresh generations —
-            // but the gate stays the one path in.
-            merge_placement(&mut state.placements, rec.rid, rec.placement)?;
-        }
-        for p in &old_paths {
-            if let Err(e) = std::fs::remove_file(p) {
-                // Not fatal: the segment is unreferenced — a leftover is
-                // reported and ignored at the next open.
-                eprintln!(
-                    "aikoql-v2: obsolete segment {} not removed: {e}",
-                    p.display()
-                );
-            }
-        }
-        // SE2-M40 — the relocation log's bytes count toward the trigger;
-        // a compaction-heavy workload checkpoints without any flush.
-        if self.config.checkpoint_bytes > 0
-            && state.bytes_since_checkpoint >= self.config.checkpoint_bytes as u64
-        {
-            Self::write_checkpoint(&self.config, &mut state)?;
-        }
-        Ok(stats)
+        )
     }
 
     /// SE2-M40 — the checkpoint publication protocol (review P0-2):
@@ -1749,15 +2000,26 @@ impl Db {
     /// the file back → prune the subsumed delta history and older
     /// checkpoints. Runs inside the state lock at the end of the flush or
     /// compaction that crossed the trigger, at the CURRENT generation.
-    fn write_checkpoint(config: &Config, state: &mut State) -> Result<(), FormatError> {
+    fn write_checkpoint(
+        config: &Config,
+        state: &mut State,
+        wstats: &Arc<WriteStats>,
+    ) -> Result<(), FormatError> {
+        let ckp_t = Instant::now();
         let checkpoint = DirectoryCheckpoint::from_state(
             state.generation,
             &state.identity,
             &state.replicas,
             &state.placements,
+            state.next_logical_id,
+            state.next_replica_id,
+            state.next_placement_generation,
         );
         let path = checkpoint_path(&config.dir, state.generation);
-        DirectoryCheckpoint::publish_staged(&path, &checkpoint, Some("CHECKPOINT"))?;
+        // P4-M6 — the streamed publish (no encoded buffer; same staging
+        // protocol and crash parks — cps001 pins the bytes, ckp004/cps002
+        // the windows).
+        DirectoryCheckpoint::publish_staged_streamed(&path, &checkpoint, Some("CHECKPOINT"))?;
         // Verify publication before anything depends on it: the history is
         // only pruned after the checkpoint proves decodable.
         let read_back = DirectoryCheckpoint::read(&path)?;
@@ -1770,7 +2032,272 @@ impl Db {
         prune_deltas_before(&config.dir, state.generation)?;
         crash_park("AIKOQL_V2_CKP_PARK", &config.dir, "after_prune");
         state.bytes_since_checkpoint = 0;
+        // P3-M2 — a published+verified checkpoint counts; a failed one (the
+        // error paths above) doesn't.
+        wstats.checkpoint_count.fetch_add(1, Ordering::Relaxed);
+        wstats
+            .checkpoint_latency_us
+            .fetch_add(ckp_t.elapsed().as_micros() as u64, Ordering::Relaxed);
         Ok(())
+    }
+}
+
+/// The merge body shared by the synchronous `compact_with` and the
+/// background compactor (P3-M8) — free of `self` so both run the exact
+/// same publication protocol (segment → manifest → CURRENT → delete
+/// obsolete, the flush mirror; every crash park in between).
+#[allow(clippy::too_many_arguments)] // same handle-set mirror as committer_loop
+fn compact_impl(
+    config: &Config,
+    state: &mut State,
+    cache: &Option<Arc<BlockCache>>,
+    stats: &Arc<Stats>,
+    wstats: &Arc<WriteStats>,
+    policy: &dyn RetentionPolicy,
+) -> Result<CompactStats, FormatError> {
+    if state.segments.is_empty() {
+        return Ok(CompactStats::default());
+    }
+    let compact_t = Instant::now();
+    let mut next_id = state.next_segment_id;
+    let attach = SegmentAttach {
+        cache: cache.clone(),
+        stats: Some(Arc::clone(stats)),
+    };
+    let (stats, chunks, relocations) = merge(
+        &state.segments,
+        config.block_target,
+        config.merge_chunk_bytes,
+        &config.dir,
+        &mut next_id,
+        policy,
+        &attach,
+    )?;
+    crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_segment");
+
+    // SE2-M35 — every Segment-placed replica relocates: a fresh §25
+    // generation per move, the relocation set's anchor as the new home,
+    // Retired when the merge dropped the replica's last live entry.
+    // Memtable-placed replicas keep theirs — the next flush moves them.
+    // SE2-M39 — the pending records (placement flips a put produced
+    // after the last flush) publish in THIS window too: the compaction
+    // removes the input segments from the manifest, and a flip whose
+    // last LOGGED record named one of them would otherwise resurrect a
+    // dangling Segment placement on reopen (M35: no surviving record
+    // may reference a removed segment). The flip's generation predates
+    // the relocation draws (one allocator), so the order never matters.
+    let mut placement_records: Vec<PlacementRecord> = std::mem::take(&mut state.pending_placements);
+    let mut segment_rids: Vec<ReplicaId> = state
+        .placements
+        .iter()
+        .filter_map(|(&rid, p)| matches!(p, Placement::Segment(_)).then_some(rid))
+        .collect();
+    // SE2-M35 — sorted, so the fresh generations assign deterministically.
+    segment_rids.sort_unstable();
+    for rid in segment_rids {
+        let pgen = state.next_placement_generation;
+        state.next_placement_generation += 1;
+        let relocated = match relocations.get(&rid) {
+            Some(Some(loc)) => Placement::Segment(PhysicalLocation {
+                segment_id: loc.0,
+                block_id: loc.1,
+                entry_offset: loc.2,
+                generation: pgen,
+            }),
+            Some(None) => Placement::Retired { generation: pgen },
+            // Fail closed: the merge saw every entry of every input
+            // segment, so a Segment-placed replica missing from the set
+            // means the placement predates the input — never relocate
+            // what cannot be proven.
+            None => {
+                return Err(FormatError::Corrupt(format!(
+                    "segment-placed replica {rid:?} absent from the relocation set"
+                )))
+            }
+        };
+        placement_records.push(PlacementRecord {
+            rid,
+            placement: relocated,
+        });
+    }
+
+    let old_paths: Vec<PathBuf> = state
+        .segment_records
+        .iter()
+        .map(|r| segment_path(&config.dir, r.segment_id))
+        .collect();
+    let mut new_records = Vec::new();
+    let mut new_segments = Vec::new();
+    for (segment_id, (reader, file_size, checksum), _anchors) in chunks {
+        new_records.push(SegmentRecord {
+            segment_id,
+            level: 1,
+            key_min: reader.key_min().to_vec(),
+            key_max: reader.key_max().to_vec(),
+            seq_lo: reader.seq_lo(),
+            seq_hi: reader.seq_hi(),
+            record_count: reader.entry_count(),
+            file_size,
+            checksum,
+        });
+        new_segments.push(Arc::new(reader));
+    }
+    state.next_segment_id = next_id;
+    state.generation += 1;
+    // SE2-M35 — the relocation records publish at the NEW generation,
+    // before the manifest names it (the §23 order, mirroring flush):
+    // state-C — log durable, manifest not — keeps the old placements
+    // authoritative (the new log is an orphan past CURRENT), state-D
+    // applies them on reopen. A compaction that relocated nothing and
+    // drained no pending records publishes no log — gaps are normal.
+    if !placement_records.is_empty() {
+        let log = PlacementLog {
+            format_version: FORMAT_VERSION,
+            generation: state.generation,
+            records: placement_records.clone(),
+        };
+        // SE2-M40 — the checkpoint trigger's budget.
+        state.bytes_since_checkpoint += log.encoded_len() as u64;
+        // SE2-M36 — staged: the §38 LOCATION windows park inside.
+        PlacementLog::publish_staged(
+            &placement_log_path(&config.dir, state.generation),
+            &log,
+            Some("LOCATION"),
+        )?;
+        state.placement_floor = state.generation; // PR6-002
+    }
+    crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_location");
+    let manifest = Manifest {
+        format_version: FORMAT_VERSION,
+        generation: state.generation,
+        segments: new_records.clone(),
+        wal_ids: vec![],
+        identity_floor: state.identity_floor,
+        replica_floor: state.replica_floor,
+        placement_floor: state.placement_floor,
+    };
+    // P4-M3 — debug builds refuse to publish impossible metadata.
+    #[cfg(debug_assertions)]
+    validate_manifest(&manifest, &config.dir)?;
+    // SE2-M36 — staged: the §38 MANIFEST windows park inside.
+    Manifest::publish_staged(
+        &manifest_path(&config.dir, state.generation),
+        &manifest,
+        Some("MANIFEST"),
+    )?;
+    crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_manifest");
+    Current::publish(
+        &config.dir.join("CURRENT"),
+        &Current::new(FORMAT_VERSION, state.generation),
+    )?;
+    crash_park("AIKOQL_V2_PLACE_PARK", &config.dir, "FAIL_AFTER_PUBLISH");
+    crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_current");
+
+    // Swap readers before deleting: handles open with share-delete, so
+    // Windows marks the files delete-pending and any reader that still
+    // references an obsolete segment keeps its data alive (the
+    // Arc<Segment> lifetime guarantee, via the OS).
+    state.segments = Arc::new(new_segments);
+    state.segment_records = new_records;
+    for rec in &placement_records {
+        // Infallible in practice — the records carry fresh generations —
+        // but the gate stays the one path in.
+        merge_placement(&mut state.placements, rec.rid, rec.placement)?;
+    }
+    for p in &old_paths {
+        if let Err(e) = std::fs::remove_file(p) {
+            // Not fatal: the segment is unreferenced — a leftover is
+            // reported and ignored at the next open.
+            eprintln!(
+                "aikoql-v2: obsolete segment {} not removed: {e}",
+                p.display()
+            );
+        }
+    }
+    // SE2-M40 — the relocation log's bytes count toward the trigger;
+    // a compaction-heavy workload checkpoints without any flush.
+    if config.checkpoint_bytes > 0 && state.bytes_since_checkpoint >= config.checkpoint_bytes as u64
+    {
+        Db::write_checkpoint(config, state, wstats)?;
+    }
+    // P3-M2 — the merge drained L0 into L1: the backlog gauges drop to
+    // zero here (the maybe_compact scan would have refreshed them on
+    // the next write anyway — this keeps the admin view current).
+    wstats
+        .compaction_pending_segments
+        .store(0, Ordering::Relaxed);
+    wstats.compaction_backlog_bytes.store(0, Ordering::Relaxed);
+    wstats
+        .last_compaction_ms
+        .store(compact_t.elapsed().as_millis() as u64, Ordering::Relaxed);
+    Ok(stats)
+}
+
+/// The L0 pile one scan sees: (segment count, total bytes) plus the L1
+/// byte total the tier gate compares against. Shared by the write path
+/// (which refreshes the P3-M2 backlog gauges with it) and the compactor's
+/// re-evaluation (which doesn't — the write path owns the gauges, met003).
+fn scan_l0(state: &State) -> (usize, u64, u64) {
+    let mut l0 = 0usize;
+    let mut l0_bytes = 0u64;
+    let mut l1_bytes = 0u64;
+    for r in &state.segment_records {
+        if r.level == 0 {
+            l0 += 1;
+            l0_bytes += r.file_size;
+        } else {
+            l1_bytes += r.file_size;
+        }
+    }
+    (l0, l0_bytes, l1_bytes)
+}
+
+/// P3-M8 — the background compactor (the committer-thread pattern): wait
+/// for a kick, re-evaluate the SAME trigger gates the write path used
+/// (the scan is fresh — more flushes may have landed since the kick, and
+/// merging them too is always correct), and keep merging until the gates
+/// no longer hold. One merge failure records the error and clears the
+/// pending flag — a doomed merge must never stall the write path's
+/// backpressure wait forever. The `segments.len() > 1` floor mirrors
+/// compact()'s own no-op guard so a lone segment never loops.
+fn compactor_loop(
+    config: Config,
+    state: Arc<RwLock<State>>,
+    cache: Option<Arc<BlockCache>>,
+    stats: Arc<Stats>,
+    wstats: Arc<WriteStats>,
+    signal: Arc<CompactorSignal>,
+) {
+    while signal.wait_kick() {
+        loop {
+            if signal.shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            let (l0, l0_bytes, l1_bytes, len) = {
+                let state = state.read().unwrap();
+                let (l0, l0_bytes, l1_bytes) = scan_l0(&state);
+                (l0, l0_bytes, l1_bytes, state.segments.len())
+            };
+            let triggered = l0 >= config.l0_compact_trigger;
+            let tier_ok = config.l0_tier_ratio == 0
+                || l1_bytes == 0
+                || l0_bytes >= l1_bytes / config.l0_tier_ratio as u64;
+            if !triggered || !tier_ok || len <= 1 {
+                break;
+            }
+            let mut st = state.write().unwrap();
+            match compact_impl(&config, &mut st, &cache, &stats, &wstats, &KeepAll) {
+                Ok(_) => {}
+                Err(e) => {
+                    wstats
+                        .compaction_error_count
+                        .fetch_add(1, Ordering::Relaxed);
+                    *wstats.compaction_error.lock().unwrap() = Some(format!("{e}"));
+                    break;
+                }
+            }
+        }
+        signal.clear_pending();
     }
 }
 
@@ -1788,6 +2315,13 @@ impl Drop for Db {
         if let Some(handle) = self.committer.take() {
             let _ = handle.join();
         }
+        // P3-M8 — stop the compactor: release every waiter (a writer
+        // blocked on the hard bound must not join-drop forever), wake the
+        // compactor, and join it — an in-flight merge finishes first.
+        self.compactor_signal.shutdown();
+        if let Some(handle) = self.compactor.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -1801,6 +2335,8 @@ impl Drop for Db {
 #[derive(Clone)]
 pub struct CommitWriter {
     tx: mpsc::Sender<Batch>,
+    /// P3-M2 — the write_queue_depth gauge: submitted-but-unacked batches.
+    wstats: Arc<WriteStats>,
 }
 
 impl CommitWriter {
@@ -1811,14 +2347,25 @@ impl CommitWriter {
         if ops.is_empty() {
             return Err(FormatError::Invalid("empty write batch".into()));
         }
+        self.wstats
+            .write_queue_depth
+            .fetch_add(1, Ordering::Relaxed);
         let (ack_tx, ack_rx) = mpsc::sync_channel(1);
-        self.tx
+        let submitted = self
+            .tx
             .send((ops.to_vec(), ack_tx))
-            .map_err(|_| FormatError::Io("commit queue closed".into()))?;
-        match ack_rx.recv() {
-            Ok(result) => result,
-            Err(_) => Err(FormatError::Io("commit queue closed".into())),
-        }
+            .map_err(|_| FormatError::Io("commit queue closed".into()));
+        let result = match submitted {
+            Ok(()) => match ack_rx.recv() {
+                Ok(result) => result,
+                Err(_) => Err(FormatError::Io("commit queue closed".into())),
+            },
+            Err(e) => Err(e),
+        };
+        self.wstats
+            .write_queue_depth
+            .fetch_sub(1, Ordering::Relaxed);
+        result
     }
 }
 
@@ -1951,6 +2498,9 @@ fn merge_replica(
 /// The committer: drain the queue into groups bounded by the caps and
 /// the wait window, commit each group with ONE fsync, apply, ack. Exits
 /// when every sender is gone and nothing is pending.
+// ponytail: 8 params mirror the Db handle set (wstats added in P3-M2);
+// group into a struct if a third caller appears.
+#[allow(clippy::too_many_arguments)]
 fn committer_loop(
     rx: mpsc::Receiver<Batch>,
     wal: Arc<Mutex<File>>,
@@ -1959,6 +2509,7 @@ fn committer_loop(
     fsyncs: Arc<AtomicU64>,
     cache: Option<Arc<BlockCache>>,
     stats: Arc<Stats>,
+    wstats: Arc<WriteStats>,
 ) {
     let wait = config.max_wait_duration;
     let mut carry: Option<Batch> = None;
@@ -1992,7 +2543,9 @@ fn committer_loop(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        commit_group(&group, &wal, &state, &config, &fsyncs, &cache, &stats);
+        commit_group(
+            &group, &wal, &state, &config, &fsyncs, &cache, &stats, &wstats,
+        );
     }
 }
 
@@ -2001,6 +2554,7 @@ fn committer_loop(
 /// (SE-05), so a flush can never interleave the append-and-apply window.
 /// Lock order is always state → wal, and the wal lock is never held
 /// across a flush.
+#[allow(clippy::too_many_arguments)] // same handle-set mirror as committer_loop
 fn commit_group(
     group: &[Batch],
     wal: &Arc<Mutex<File>>,
@@ -2009,7 +2563,20 @@ fn commit_group(
     fsyncs: &Arc<AtomicU64>,
     cache: &Option<Arc<BlockCache>>,
     stats: &Arc<Stats>,
+    wstats: &Arc<WriteStats>,
 ) {
+    // P3-M2 — group shape (design §21): batches per group, ops per group,
+    // the widest group so far.
+    let group_ops: u64 = group.iter().map(|b| b.0.len() as u64).sum();
+    wstats
+        .group_commit_batches
+        .fetch_add(group.len() as u64, Ordering::Relaxed);
+    wstats
+        .group_commit_ops
+        .fetch_add(group_ops, Ordering::Relaxed);
+    wstats
+        .group_commit_max_ops
+        .fetch_max(group_ops, Ordering::Relaxed);
     let mut st = state.write().unwrap();
     let mut seqs: Vec<u64> = Vec::with_capacity(group.len());
     let mut outcome: Result<(), FormatError> = Ok(());
@@ -2033,10 +2600,18 @@ fn commit_group(
                 outcome = Err(FormatError::Io(format!("WAL append: {e}")));
                 break;
             }
+            wstats
+                .wal_bytes
+                .fetch_add(frame.len() as u64, Ordering::Relaxed);
         }
         if outcome.is_ok() {
-            if let Err(e) = wal.sync_all() {
-                outcome = Err(FormatError::Io(format!("WAL sync: {e}")));
+            let t = Instant::now();
+            match wal.sync_all() {
+                Ok(()) => record_latency_us(
+                    &wstats.fsync_latency_us_buckets,
+                    t.elapsed().as_micros() as u64,
+                ),
+                Err(e) => outcome = Err(FormatError::Io(format!("WAL sync: {e}"))),
             }
         }
     }
@@ -2133,7 +2708,7 @@ fn commit_group(
             }
         }
         if outcome.is_ok() && st.active.bytes() >= config.memtable_bytes {
-            if let Err(e) = Db::flush_locked_impl(config, wal, &mut st, cache, stats) {
+            if let Err(e) = Db::flush_locked_impl(config, wal, &mut st, cache, stats, wstats) {
                 outcome = Err(e);
             }
         }

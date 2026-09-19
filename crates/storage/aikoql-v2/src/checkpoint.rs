@@ -40,13 +40,19 @@
 //! surviving logs may not cover the pruned range. Fail closed preserves the
 //! operator's evidence (the v1 closure's Q1 policy, verbatim).
 
+use crate::db::manifest_path;
 use crate::format::{
-    checksum8, crash_park, publish_atomic_staged, Cursor, FormatError, FORMAT_VERSION,
+    checksum8, crash_park, publish_atomic_writer_staged, Cursor, FormatError, Manifest,
+    FORMAT_VERSION,
 };
-use crate::identity::directory::{identity_log_generation, IdentityRecord, ReplicaRecord};
+use crate::identity::directory::{
+    identity_log_generation, identity_log_path, replica_log_path, IdentityLog, IdentityRecord,
+    ReplicaLog, ReplicaRecord,
+};
 use crate::identity::{NodeId, LOCAL_NODE_ID};
-use crate::placement::directory::PlacementRecord;
+use crate::placement::directory::{placement_log_path, PlacementLog, PlacementRecord};
 use crate::placement::{BlockId, Placement, SegmentId};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -66,6 +72,16 @@ pub struct DirectoryCheckpoint {
     pub identities: Vec<IdentityRecord>,
     pub replicas: Vec<ReplicaRecord>,
     pub placements: Vec<PlacementRecord>,
+    // PR6-001 — the allocator floors at publication. Pruning deletes the
+    // only historical source for old mutations (the orphan log's burned
+    // generations, ckp009), so "decode succeeded" is not completeness: the
+    // checkpoint must carry the floors, or a reopen recomputes them low and
+    // reuses ids/generations. next_seq/next_segment_id stay derivable — the
+    // prune never touches the WAL, manifest or segments their recovery
+    // reads.
+    pub next_logical_id: u64,
+    pub next_replica_id: u64,
+    pub next_placement_generation: u64,
 }
 
 pub fn checkpoint_path(dir: &Path, generation: u64) -> PathBuf {
@@ -89,6 +105,9 @@ impl DirectoryCheckpoint {
         identity: &HashMap<crate::identity::ObjectId, crate::identity::LogicalId>,
         replicas: &HashMap<crate::identity::LogicalId, crate::identity::ReplicaId>,
         placements: &HashMap<crate::identity::ReplicaId, Placement>,
+        next_logical_id: u64,
+        next_replica_id: u64,
+        next_placement_generation: u64,
     ) -> Self {
         let mut identities: Vec<IdentityRecord> = identity
             .iter()
@@ -115,59 +134,73 @@ impl DirectoryCheckpoint {
             identities,
             replicas,
             placements,
+            next_logical_id,
+            next_replica_id,
+            next_placement_generation,
         }
     }
 
-    /// Encoded bytes — the exact byte length is the checkpoint's memory
-    /// footprint while publishing (Vec of records + this Vec; the maps stay
-    /// live). At the 1M-object ceiling: ~81 B × 1M ≈ 81 MB transient.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(
-            HEADER_LEN
-                + self.identities.len() * IDENTITY_RECORD_LEN
-                + self.replicas.len() * REPLICA_RECORD_LEN
-                + self.placements.len() * PLACEMENT_RECORD_LEN
-                + 8,
-        );
-        bytes.extend_from_slice(CHECKPOINT_MAGIC);
-        bytes.extend_from_slice(&self.format_version.to_le_bytes());
-        bytes.extend_from_slice(&self.generation.to_le_bytes());
-        bytes.extend_from_slice(&(self.identities.len() as u32).to_le_bytes());
-        for r in &self.identities {
-            bytes.extend_from_slice(r.oid.as_bytes());
-            bytes.extend_from_slice(&r.lid.to_bytes());
-        }
-        bytes.extend_from_slice(&(self.replicas.len() as u32).to_le_bytes());
-        for r in &self.replicas {
-            bytes.extend_from_slice(&r.lid.to_bytes());
-            bytes.extend_from_slice(&r.node.to_bytes());
-            bytes.extend_from_slice(&r.rid.to_bytes());
-        }
-        bytes.extend_from_slice(&(self.placements.len() as u32).to_le_bytes());
-        for r in &self.placements {
-            bytes.extend_from_slice(&r.rid.to_bytes());
-            match r.placement {
-                Placement::Memtable { generation } => {
-                    bytes.push(1);
-                    bytes.extend_from_slice(&[0u8; 16]); // zeroed placement fields
-                    bytes.extend_from_slice(&generation.to_le_bytes());
-                }
-                Placement::Segment(loc) => {
-                    bytes.push(2);
-                    bytes.extend_from_slice(&loc.segment_id.to_bytes());
-                    bytes.extend_from_slice(&loc.block_id.to_bytes());
-                    bytes.extend_from_slice(&loc.entry_offset.to_le_bytes());
-                    bytes.extend_from_slice(&loc.generation.to_le_bytes());
-                }
-                Placement::Retired { generation } => {
-                    bytes.push(3);
-                    bytes.extend_from_slice(&[0u8; 16]); // zeroed placement fields
-                    bytes.extend_from_slice(&generation.to_le_bytes());
+    /// P4-M6 — the one writer both paths use: header + sorted records
+    /// stream to any `io::Write`, feeding the whole-file sha256
+    /// incrementally (the checksum8 the decoder verifies) and appending its
+    /// first 8 bytes last. No full encoded buffer — the publish path
+    /// streams each fixed-width record (≤ 33 B) straight into the staged
+    /// temp, so publishing a 1M-object checkpoint never allocates its
+    /// ~81 MB encoded image.
+    pub fn write_streamed(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
+        let digest = {
+            let mut hasher = Sha256::new();
+            let mut w = |bytes: &[u8]| -> std::io::Result<()> {
+                hasher.update(bytes);
+                out.write_all(bytes)
+            };
+            w(CHECKPOINT_MAGIC)?;
+            w(&self.format_version.to_le_bytes())?;
+            w(&self.generation.to_le_bytes())?;
+            w(&(self.identities.len() as u32).to_le_bytes())?;
+            for r in &self.identities {
+                w(r.oid.as_bytes())?;
+                w(&r.lid.to_bytes())?;
+            }
+            w(&(self.replicas.len() as u32).to_le_bytes())?;
+            for r in &self.replicas {
+                w(&r.lid.to_bytes())?;
+                w(&r.node.to_bytes())?;
+                w(&r.rid.to_bytes())?;
+            }
+            w(&(self.placements.len() as u32).to_le_bytes())?;
+            for r in &self.placements {
+                w(&r.rid.to_bytes())?;
+                match r.placement {
+                    Placement::Memtable { generation } => {
+                        w(&[1u8])?;
+                        w(&[0u8; 16])?; // zeroed placement fields
+                        w(&generation.to_le_bytes())?;
+                    }
+                    Placement::Segment(loc) => {
+                        w(&[2u8])?;
+                        w(&loc.segment_id.to_bytes())?;
+                        w(&loc.block_id.to_bytes())?;
+                        w(&loc.entry_offset.to_le_bytes())?;
+                        w(&loc.generation.to_le_bytes())?;
+                    }
+                    Placement::Retired { generation } => {
+                        w(&[3u8])?;
+                        w(&[0u8; 16])?; // zeroed placement fields
+                        w(&generation.to_le_bytes())?;
+                    }
                 }
             }
-        }
-        bytes.extend_from_slice(&checksum8(&bytes));
-        bytes
+            // PR6-001 — the floors ride INSIDE the checksum, before it:
+            // an old binary reading this file fails the checksum, and a new
+            // binary reading an old file hits EOF before the checksum —
+            // both directions fail closed without a FORMAT_VERSION bump.
+            w(&self.next_logical_id.to_le_bytes())?;
+            w(&self.next_replica_id.to_le_bytes())?;
+            w(&self.next_placement_generation.to_le_bytes())?;
+            hasher.finalize()
+        };
+        out.write_all(&digest[..8])
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
@@ -261,6 +294,9 @@ impl DirectoryCheckpoint {
             };
             placements.push(PlacementRecord { rid, placement });
         }
+        let next_logical_id = cur.u64()?;
+        let next_replica_id = cur.u64()?;
+        let next_placement_generation = cur.u64()?;
         let stored_ck = cur.take(8)?;
         if !cur.is_empty() {
             return Err(FormatError::Corrupt("checkpoint trailing bytes".into()));
@@ -274,18 +310,25 @@ impl DirectoryCheckpoint {
             identities,
             replicas,
             placements,
+            next_logical_id,
+            next_replica_id,
+            next_placement_generation,
         })
     }
 
-    /// Atomic publish. SE2-M40 — staged: the crash-window harness parks
-    /// inside the temp's write/fsync (`AIKOQL_V2_PLACE_PARK` naming
-    /// `FAIL_AFTER_CHECKPOINT_WRITE` / `_FSYNC`, the M36 plumbing).
-    pub fn publish_staged(
+    /// P4-M6 — publish through the streaming writer: the same staging
+    /// protocol (temp write → crash parks → fsync → rename), no encoded
+    /// buffer. The parks fire identically, so the M40 crash windows cover
+    /// the streamed path unchanged.
+    /// PR6-006 — this is the ONLY publish API: the materialized
+    /// encode()/publish_staged() forms are gone, so a production caller
+    /// cannot accidentally materialize a large checkpoint.
+    pub fn publish_staged_streamed(
         path: &Path,
         checkpoint: &Self,
         stage: Option<&str>,
     ) -> Result<(), FormatError> {
-        publish_atomic_staged(path, &checkpoint.encode(), stage)
+        publish_atomic_writer_staged(path, stage, |f| checkpoint.write_streamed(f))
     }
 
     /// Read back + decode — the verify-publication step (review P0-2 step 7):
@@ -330,6 +373,83 @@ pub fn load_newest(
         )));
     }
     Ok(Some(checkpoint))
+}
+
+/// PR6-002 — post-checkpoint delta coverage (review P0 Recovery): a valid
+/// checkpoint plus an incomplete delta set is an invalid state, so the open
+/// fails closed when a REQUIRED authoritative delta generation is missing.
+/// Every manifest records the newest published log generation per family
+/// (the applied floors) at its publication time; a family published at
+/// generation G exactly when manifest-G raised its floor past manifest-(G-1)
+/// — every such generation must exist, be readable and be valid. Gaps are
+/// normal (a generation with no work for a family publishes no log) and
+/// raise no requirement; a missing INTERMEDIATE log (the review's
+/// PLACEMENT-113 with CURRENT=120) fails the walk exactly like a missing
+/// newest one, because the records in between are nowhere else. No
+/// checkpoint ⇒ no baseline to be incomplete relative to (the full delta
+/// history is the recovery source) — the walk is a no-op.
+pub fn validate_delta_coverage(
+    dir: &Path,
+    checkpoint_generation: u64,
+    current_generation: u64,
+) -> Result<(), FormatError> {
+    if checkpoint_generation == 0 || checkpoint_generation >= current_generation {
+        return Ok(());
+    }
+    let mut floors = floors_of(&Manifest::read(&manifest_path(dir, checkpoint_generation))?);
+    for g in checkpoint_generation + 1..=current_generation {
+        let next = floors_of(&Manifest::read(&manifest_path(dir, g))?);
+        if next.0 < floors.0 || next.1 < floors.1 || next.2 < floors.2 {
+            return Err(FormatError::Corrupt(format!(
+                "manifest {g} lowers the per-family delta floors ({floors:?} → {next:?})"
+            )));
+        }
+        if next.0 > floors.0 {
+            require_delta(dir, "IDENTITY", g)?;
+        }
+        if next.1 > floors.1 {
+            require_delta(dir, "REPLICA", g)?;
+        }
+        if next.2 > floors.2 {
+            require_delta(dir, "PLACEMENT", g)?;
+        }
+        floors = next;
+    }
+    Ok(())
+}
+
+fn floors_of(m: &Manifest) -> (u64, u64, u64) {
+    (m.identity_floor, m.replica_floor, m.placement_floor)
+}
+
+/// The required `{FAMILY}-{g:06}.log` must exist and decode with its
+/// generation agreeing with its name (the loaders' agreement rule, per
+/// file). Missing is Corrupt, not Io — the recovery SET on disk is invalid,
+/// which is semantic, not an OS failure.
+fn require_delta(dir: &Path, family: &str, g: u64) -> Result<(), FormatError> {
+    let path = match family {
+        "IDENTITY" => identity_log_path(dir, g),
+        "REPLICA" => replica_log_path(dir, g),
+        _ => placement_log_path(dir, g),
+    };
+    if !path.exists() {
+        return Err(FormatError::Corrupt(format!(
+            "required authoritative delta {family}-{g:06}.log missing (post-checkpoint coverage broken)"
+        )));
+    }
+    let bytes = std::fs::read(&path)
+        .map_err(|e| FormatError::Io(format!("read {}: {e}", path.display())))?;
+    let gen = match family {
+        "IDENTITY" => IdentityLog::decode(&bytes)?.generation,
+        "REPLICA" => ReplicaLog::decode(&bytes)?.generation,
+        _ => PlacementLog::decode(&bytes)?.generation,
+    };
+    if gen != g {
+        return Err(FormatError::Corrupt(format!(
+            "{family}-{g:06}.log carries generation {gen}"
+        )));
+    }
+    Ok(())
 }
 
 /// Delete every directory delta log at or below `generation` (fully
@@ -399,4 +519,33 @@ pub fn directory_log_bytes(dir: &Path, after_generation: u64) -> Result<u64, For
         }
     }
     Ok(bytes)
+}
+
+/// PR6-006 — the ONLY materialization surface, explicitly named so no
+/// production caller can claim it was an accident. `DirectoryCheckpoint`
+/// itself offers no `encode()`/materialized publish: the production API is
+/// `publish_staged_streamed` alone, and these functions exist purely as the
+/// byte-identity reference the test pins compare the streamed file against.
+#[doc(hidden)]
+pub mod test_support {
+    use super::{
+        DirectoryCheckpoint, HEADER_LEN, IDENTITY_RECORD_LEN, PLACEMENT_RECORD_LEN,
+        REPLICA_RECORD_LEN,
+    };
+
+    /// The materialized reference form — write_streamed into a Vec (the one
+    /// writer, so this can never drift from the published bytes).
+    pub fn encode_for_tests(cp: &DirectoryCheckpoint) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(
+            HEADER_LEN
+                + cp.identities.len() * IDENTITY_RECORD_LEN
+                + cp.replicas.len() * REPLICA_RECORD_LEN
+                + cp.placements.len() * PLACEMENT_RECORD_LEN
+                + 8,
+        );
+        // A Vec write cannot fail.
+        cp.write_streamed(&mut bytes)
+            .expect("write to Vec cannot fail");
+        bytes
+    }
 }

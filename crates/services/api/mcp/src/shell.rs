@@ -36,7 +36,7 @@ pub fn run_shell(db_path: &str, tenant: Option<&str>) {
             }
         }
         match engine::open_kernel_auto(db_path) {
-            Ok(e) => e,
+            Ok((e, _admin)) => e,
             Err(e) => {
                 eprintln!("open kernel: {}", e);
                 std::process::exit(1);
@@ -426,6 +426,51 @@ fn execute_and_print(kernel: &Kernel, plan: &IrPlan, stdout: &mut dyn Write) {
                         rel_type
                     )
                     .ok();
+                }
+            }
+            // P5-M5: group rows — one line per group, key=value pairs.
+            aikoql_runtime::RowSet::Grouped(groups) => {
+                writeln!(stdout, "── {} group(s) ──", groups.len()).ok();
+                for g in &groups {
+                    let fields: Vec<String> = g.iter().map(|(k, v)| format!("{k}={v:?}")).collect();
+                    writeln!(stdout, "  {}", fields.join(" ")).ok();
+                }
+            }
+            // P5-M6: join rows — the left object plus its right match
+            // (or `-` on an unmatched LEFT row).
+            aikoql_runtime::RowSet::Joined(pairs) => {
+                writeln!(stdout, "── {} joined row(s) ──", pairs.len()).ok();
+                for (l, r) in pairs {
+                    let left_preview = ko_text(&l);
+                    match r {
+                        Some(ro) => {
+                            let right_preview = ko_text(&ro);
+                            writeln!(
+                                stdout,
+                                "  {}  v{}  {}  {}  |  {}  v{}  {}  {}",
+                                l.koid.to_hex(),
+                                l.version,
+                                l.metadata.type_name,
+                                left_preview,
+                                ro.koid.to_hex(),
+                                ro.version,
+                                ro.metadata.type_name,
+                                right_preview
+                            )
+                            .ok();
+                        }
+                        None => {
+                            writeln!(
+                                stdout,
+                                "  {}  v{}  {}  {}  |  -",
+                                l.koid.to_hex(),
+                                l.version,
+                                l.metadata.type_name,
+                                left_preview
+                            )
+                            .ok();
+                        }
+                    }
                 }
             }
         },

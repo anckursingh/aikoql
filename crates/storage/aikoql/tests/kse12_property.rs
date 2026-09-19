@@ -54,6 +54,9 @@ use std::sync::Arc;
 
 const SEED: u64 = 0x12A0_0000;
 const TYPE: &str = "prop_ko";
+/// P5-M7: every kernel open bootstraps the catalog row as journal event #1 —
+/// raw ke/ (and ko/) scans count it, the user-level model does not.
+const CATALOG_PREAMBLE: usize = 1;
 /// Live-object cap — keeps per-op checks O(pool) so 10,000 sequences stay
 /// a nightly-sized job, not a weekend.
 const CAP: usize = 28;
@@ -358,7 +361,8 @@ fn sweep(k: &Kernel, engine: &dyn StorageEngine, m: &Model, op: usize) {
     let events = engine.scan(b"ke/").unwrap().len();
     let versions: u64 = m.kos.values().map(|mk| mk.version).sum();
     assert_eq!(
-        events as u64, versions,
+        events as u64,
+        versions + CATALOG_PREAMBLE as u64,
         "seed {SEED:#x} op {op}: journal events != committed versions"
     );
     let report = k.rebuild_derived_indexes().unwrap();

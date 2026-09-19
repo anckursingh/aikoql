@@ -12,7 +12,65 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+// Temp db paths written by THIS test thread, swept when the thread exits
+// (the main thread's destructor runs at process exit — statics are NOT
+// dropped on Windows MSVC, TLS is; killed runs are covered by the
+// startup purge in tmp_db).
+thread_local! {
+    static TEMP_PATHS: std::cell::RefCell<TempSweeper> =
+        const { std::cell::RefCell::new(TempSweeper { paths: Vec::new() }) };
+}
+
+struct TempSweeper {
+    paths: Vec<PathBuf>,
+}
+impl Drop for TempSweeper {
+    fn drop(&mut self) {
+        for p in &self.paths {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_dir_all(p);
+            // Sidecars next to the registered stem (`{stem}.redb.artifacts`).
+            let Some(name) = p.file_name() else { continue };
+            if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
+                let prefix = format!("{}.", name.to_string_lossy());
+                for e in rd.flatten() {
+                    if e.file_name().to_string_lossy().starts_with(&prefix) {
+                        let _ = std::fs::remove_file(e.path());
+                        let _ = std::fs::remove_dir_all(e.path());
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn tmp_db(name: &str) -> PathBuf {
+    // Killed runs never reach TLS drop — sweep their corpses at the next
+    // startup (only entries older than a day, so a concurrent live run's
+    // fresh files are untouched).
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("aikoql_dur_") {
+                continue;
+            }
+            let stale = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .is_some_and(|t| t < cutoff);
+            if stale {
+                let _ = std::fs::remove_file(e.path());
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    });
     let mut p = std::env::temp_dir();
     p.push(format!(
         "aikoql_dur_{}_{}_{}.redb",
@@ -24,6 +82,7 @@ fn tmp_db(name: &str) -> PathBuf {
             .as_nanos()
     ));
     let _ = std::fs::remove_file(&p);
+    TEMP_PATHS.with(|t| t.borrow_mut().paths.push(p.clone()));
     p
 }
 
@@ -39,6 +98,11 @@ fn meta(t: &str) -> Metadata {
 fn alice() -> Subject {
     Subject::new("alice")
 }
+
+/// A fresh kernel journals the P5-M7 catalog version row at open — one
+/// system event (kind Created, actor aikoql:system) precedes every user
+/// event. Journal-length and -position pins below count it as entry #1.
+const CATALOG_PREAMBLE: usize = 1;
 
 fn kernel_at(path: &PathBuf, salt: u64) -> Kernel {
     let engine = RedbEngine::open(path).expect("open engine");
@@ -68,7 +132,7 @@ fn d01_committed_mutations_survive_restart() {
     let ko = k2.get(alice(), &id).unwrap();
     assert_eq!(ko.version, 2);
     assert_eq!(ko.properties.get("n"), Some(&Value::Int(42)));
-    assert_eq!(k2.journal().unwrap().len(), 2);
+    assert_eq!(k2.journal().unwrap().len(), 2 + CATALOG_PREAMBLE);
     assert!(k2.prove(alice(), &id).unwrap().chain_valid);
     let _ = std::fs::remove_file(&path);
 }
@@ -94,10 +158,10 @@ fn d02_journal_seq_and_hlc_continue_after_reopen() {
     // HLC was re-seeded: the new commit_ts strictly exceeds the pre-restart one
     assert!(r.commit_ts > 0);
     let j = k2.journal().unwrap();
-    assert_eq!(j.len(), 2);
-    assert_eq!(j[1].seq, 2);
+    assert_eq!(j.len(), 2 + CATALOG_PREAMBLE);
+    assert_eq!(j[1 + CATALOG_PREAMBLE].seq, 2 + CATALOG_PREAMBLE as u64);
     assert!(
-        j[1].commit_ts > j[0].commit_ts,
+        j[1 + CATALOG_PREAMBLE].commit_ts > j[CATALOG_PREAMBLE].commit_ts,
         "commit_ts must be monotone across restarts"
     );
     assert!(k2.prove(alice(), &id).unwrap().chain_valid);
@@ -148,17 +212,23 @@ fn d04_abrupt_termination_preserves_all_commits() {
         .output()
         .expect("spawn crash_writer");
     let stdout = String::from_utf8_lossy(&out.stdout);
+    let expected_head = format!("COMMITTED_SEQ={}", 7 + CATALOG_PREAMBLE);
     assert!(
-        stdout.contains("COMMITTED_SEQ=7"),
+        stdout.contains(&expected_head),
         "unexpected writer output: {} (stderr: {})",
         stdout,
         String::from_utf8_lossy(&out.stderr)
     );
 
     // reopen after the "crash" and verify every commit + the audit chain
+    // (the head counts the catalog bootstrap row written at the writer's open)
     let k = kernel_at(&path, 7);
     let (seq, _) = k.journal_head().unwrap();
-    assert_eq!(seq, 7, "journal head must survive abrupt termination");
+    assert_eq!(
+        seq,
+        7 + CATALOG_PREAMBLE as u64,
+        "journal head must survive abrupt termination"
+    );
     let crasher = Subject::new("crasher");
     for i in 0..7u8 {
         let id = KOID::from_bytes([i; KOID_LEN]);
@@ -206,10 +276,13 @@ fn d04b_crash_fuzz_random_commit_boundaries() {
             String::from_utf8_lossy(&out.stderr)
         );
 
+        // the writer counts USER commits in COMMITTED_SEQ; the reopen head
+        // adds the catalog bootstrap row written at its open
         let k = kernel_at(&path, 7);
         let (seq, _) = k.journal_head().unwrap();
         assert_eq!(
-            seq, crash_after as u64,
+            seq,
+            crash_after as u64 + CATALOG_PREAMBLE as u64,
             "crash_after={}: committed prefix must survive",
             crash_after
         );
@@ -310,7 +383,7 @@ fn d06_concurrent_writers_gapless_journal_on_disk() {
         h.join().unwrap();
     }
     let j = k.journal().unwrap();
-    assert_eq!(j.len(), 50);
+    assert_eq!(j.len(), 50 + CATALOG_PREAMBLE);
     for (i, ke) in j.iter().enumerate() {
         assert_eq!(ke.seq, (i + 1) as u64);
     }

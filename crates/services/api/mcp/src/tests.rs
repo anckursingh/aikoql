@@ -361,3 +361,496 @@ fn execute_program_idempotency_execution_id_replays() {
     drop(k);
     let _ = std::fs::remove_file(&db);
 }
+
+// ---------------------------------------------------------------------------
+// P3-M1 (§53–55): auth surface — RED trio against today's behavior
+// ---------------------------------------------------------------------------
+
+/// auth002 RED: the session token must be a 256-bit CSPRNG hex string
+/// (64 chars). Today it is `{:x}{:x}` time-nanos + pid — short, predictable,
+/// and structurally derivable from the process start time.
+#[test]
+fn auth002_session_token_256bit_unpredictable() {
+    let auth = crate::http::AuthResolver::new(vec![], Some("admin"), 86_400);
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let body = serde_json::json!({"username": "admin", "password": "admin"}).to_string();
+    let t1 = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    let t2 = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    assert_eq!(t1.len(), 64, "token must be 256-bit hex (32 bytes)");
+    assert!(
+        t1.chars().all(|c| c.is_ascii_hexdigit()),
+        "token must be hex-encoded"
+    );
+    assert_ne!(t1, t2, "two logins must never share a token");
+}
+
+/// auth005 RED: every route outside the pinned allowlist (openapi.json,
+/// abi-version, metrics-info — health/metrics/login live outside route_v1)
+/// must refuse an unauthenticated caller. Today 11 arms serve anonymously.
+#[test]
+fn auth005_route_matrix_unauthenticated_401() {
+    let db = tmp_db("auth5");
+    let _ = std::fs::remove_file(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(crate::RedbEngine::open(&db).expect("open store")),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let rl = crate::Mutex::new(crate::rate_limiter::RateLimiter::new(true, 100_000));
+
+    // Allowlist stays open — any status except the auth failure counts.
+    for (method, path) in [
+        ("GET", "/api/v1/openapi.json"),
+        ("GET", "/api/v1/abi-version"),
+        ("GET", "/api/v1/metrics-info"),
+    ] {
+        let (status, _, _) =
+            crate::api_rest::route_v1(method, path, "", &k, &db, &sessions, None, &rl, None);
+        assert!(
+            !status.starts_with("401"),
+            "{method} {path} must stay on the allowlist, got {status}"
+        );
+    }
+
+    // Everything else must 401 without a session.
+    for (method, path) in [
+        ("GET", "/api/v1/audit"),
+        ("GET", "/api/v1/backups"),
+        ("POST", "/api/v1/discover-ontology"),
+        ("GET", "/api/v1/schema"),
+        ("GET", "/api/v1/graph"),
+        ("POST", "/api/v1/backup"),
+        ("POST", "/api/v1/restore"),
+        ("POST", "/api/v1/verify-backup"),
+        ("POST", "/api/v1/remember"),
+        ("GET", "/api/v1/get/deadbeef"),
+        ("POST", "/api/v1/aikoql"),
+        ("POST", "/api/v1/documents"),
+        ("POST", "/api/v1/agent/memory-search"),
+    ] {
+        let (status, _, body) =
+            crate::api_rest::route_v1(method, path, "", &k, &db, &sessions, None, &rl, None);
+        assert!(
+            status.starts_with("401"),
+            "{method} {path} unauthenticated must 401, got {status}: {body}"
+        );
+    }
+
+    drop(k);
+    let _ = std::fs::remove_file(&db);
+}
+
+/// auth008 (regression): the REST rate limiter keys per principal — an
+/// exhausted token bucket never bleeds into other tokens or "anon".
+#[test]
+fn auth008_rate_limiter_keys_per_principal() {
+    let mut rl = crate::rate_limiter::RateLimiter::new(true, 3);
+    for _ in 0..3 {
+        assert!(rl.check_at("tok-a", 1000).is_ok());
+    }
+    assert!(rl.check_at("tok-a", 1000).is_err(), "tok-a exhausted");
+    assert!(
+        rl.check_at("tok-b", 1000).is_ok(),
+        "separate principal bucket"
+    );
+    assert!(
+        rl.check_at("anon", 1000).is_ok(),
+        "anonymous bucket untouched"
+    );
+}
+
+/// auth001 RED: login verifies CONFIGURED credentials (argon2id) — no
+/// hardcoded admin/admin. The resolver here bootstraps admin from the
+/// AIKOQL_ADMIN_PASSWORD path; the second half pins [auth].users hashes.
+#[test]
+fn auth001_login_configured_creds_ok_wrong_401() {
+    let auth = crate::http::AuthResolver::new(vec![], Some("s3cret-pw"), 86400);
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let ok = serde_json::json!({"username": "admin", "password": "s3cret-pw"}).to_string();
+    assert!(
+        crate::http::handle_login(&ok, &sessions, &auth).is_ok(),
+        "bootstrap admin must log in"
+    );
+    let wrong = serde_json::json!({"username": "admin", "password": "admin"}).to_string();
+    assert!(
+        crate::http::handle_login(&wrong, &sessions, &auth).is_err(),
+        "the old hardcoded admin/admin pair must be dead"
+    );
+    let nobody = serde_json::json!({"username": "user", "password": "user"}).to_string();
+    assert!(crate::http::handle_login(&nobody, &sessions, &auth).is_err());
+
+    // [auth].users path: a configured hash verifies and maps to its roles.
+    use argon2::password_hash::PasswordHasher;
+    let salt =
+        argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+    let hash = argon2::Argon2::default()
+        .hash_password(b"cfg-pw", &salt)
+        .expect("hash")
+        .to_string();
+    let auth = crate::http::AuthResolver::new(
+        vec![crate::config::AuthUser {
+            username: "ops".into(),
+            hash,
+            roles: vec!["operator".into()],
+        }],
+        None,
+        86400,
+    );
+    let ok = serde_json::json!({"username": "ops", "password": "cfg-pw"}).to_string();
+    let tok = crate::http::handle_login(&ok, &sessions, &auth).expect("configured login");
+    let subj = crate::http::validate_token(Some(&tok), &sessions).expect("valid session");
+    assert_eq!(subj.name, "ops");
+    assert_eq!(subj.roles, vec!["operator".to_string()]);
+}
+
+/// auth003 RED: sessions carry the configured TTL and validate_token
+/// enforces it (TTL 0 = every session already expired).
+#[test]
+fn auth003_session_expiry_rejects_after_ttl() {
+    let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 0);
+    let sessions = crate::Mutex::new(crate::HashMap::new());
+    let body = serde_json::json!({"username": "admin", "password": "pw"}).to_string();
+    let tok = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    assert!(
+        crate::http::validate_token(Some(&tok), &sessions).is_none(),
+        "TTL 0 must expire immediately"
+    );
+
+    let auth = crate::http::AuthResolver::new(vec![], Some("pw"), 86_400);
+    let tok = crate::http::handle_login(&body, &sessions, &auth).expect("login");
+    assert!(crate::http::validate_token(Some(&tok), &sessions).is_some());
+}
+
+/// auth004 RED (unit): remote HTTP requires configured credentials, and the
+/// metrics listener is loopback-only unless armed — the same fail-closed
+/// reasoning as --listen. (Binary-level spawn pins live in auth_surface.rs.)
+#[test]
+fn auth004_remote_http_refused_without_auth() {
+    assert!(crate::remote_http_requires_auth(true, false).is_err());
+    assert!(crate::remote_http_requires_auth(true, true).is_ok());
+    assert!(crate::remote_http_requires_auth(false, false).is_ok());
+    assert!(crate::validate_http_listen("0.0.0.0:9091", false).is_err());
+    assert!(crate::validate_http_listen("0.0.0.0:9091", true).is_ok());
+    assert!(crate::validate_http_listen("127.0.0.1:9091", false).is_ok());
+    assert!(crate::validate_http_listen(":9091", false).is_ok());
+    assert!(crate::validate_http_listen("nonsense", false).is_err());
+}
+
+/// auth006 RED: graph_api executes as the CALLER's subject — a
+/// tenant-confined session sees nothing of another tenant's heads. A
+/// hardcoded admin context (today's graph-browser) would see everything.
+#[test]
+fn auth006_graph_runs_as_session_subject_not_hardcoded_admin() {
+    let db = tmp_db("auth6");
+    let _ = std::fs::remove_file(&db);
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(crate::RedbEngine::open(&db).expect("open store")),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+
+    // Seed one head under tenant "acme".
+    let seed = crate::Subject::with_roles("seed", &["admin"]);
+    let mut req = crate::RememberRequest::create(
+        seed,
+        crate::Metadata {
+            type_name: "Note".into(),
+            tenant: Some("acme".into()),
+            schema_version: 1,
+            tags: vec![],
+        },
+    );
+    req.properties
+        .insert("body".into(), crate::Value::Text("x".into()));
+    k.remember(req).expect("seed head");
+
+    // Confined subject: either an empty graph or a confinement error —
+    // never the acme head. (The pin: an internal admin ctx would see it.)
+    let confined = crate::Subject {
+        name: "bob".into(),
+        roles: vec![],
+        tenant: Some("other".into()),
+    };
+    // confined away is also not-hardcoded-admin
+    if let Ok(s) = crate::http::graph_api(&k, "/api/graph", &confined) {
+        let v: serde_json::Value = serde_json::from_str(&s).expect("graph json");
+        assert_eq!(
+            v["nodes"].as_array().map(|a| a.len()).unwrap_or(0),
+            0,
+            "confined subject must see no heads"
+        );
+    }
+
+    // An unscoped admin sees the head.
+    let free = crate::Subject {
+        name: "alice".into(),
+        roles: vec!["admin".into()],
+        tenant: None,
+    };
+    let s = crate::http::graph_api(&k, "/api/graph", &free).expect("admin graph");
+    let v: serde_json::Value = serde_json::from_str(&s).expect("graph json");
+    assert!(
+        v["nodes"].as_array().map(|a| a.len()).unwrap_or(0) >= 1,
+        "unscoped admin must see the seeded head"
+    );
+
+    drop(k);
+    let _ = std::fs::remove_file(&db);
+}
+
+// ---------------------------------------------------------------------------
+// P3-M2 (met004–006) — StorageAdmin surface REDs. met004 is behavioral:
+// the catalog and the role gate fail on today's code. met005/006 target the
+// planned API surface (StorageAdminApi in aikoql-storage-v2, call_tool's
+// admin param) — compile-level REDs, acceptable for new surface (rule 1).
+// ---------------------------------------------------------------------------
+
+/// met004 RED: the operator-gated storage admin surface — the catalog must
+/// list storage_stats/storage_compact/storage_checkpoint, and the capability
+/// gate admits only operator/admin. developer and auditor are denied on
+/// TCP; the stdio role-less passthrough (P1-10) still holds.
+#[test]
+fn met004_storage_admin_tools_exist_and_are_operator_gated() {
+    let names: Vec<String> = crate::tool_registry::tools_list()["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    for tool in ["storage_stats", "storage_compact", "storage_checkpoint"] {
+        assert!(names.contains(&tool.to_string()), "missing tool: {tool}");
+    }
+
+    use crate::authz::check_capability;
+    use crate::session::TrustMode;
+    let roles = |r: &[&str]| -> Vec<String> { r.iter().map(|s| s.to_string()).collect() };
+    for tool in ["storage_stats", "storage_compact", "storage_checkpoint"] {
+        assert!(check_capability(TrustMode::Tcp, &roles(&["operator"]), tool).is_ok());
+        assert!(check_capability(TrustMode::Tcp, &roles(&["admin"]), tool).is_ok());
+        assert!(
+            check_capability(TrustMode::Tcp, &roles(&["developer"]), tool).is_err(),
+            "developer must not run {tool}"
+        );
+        assert!(
+            check_capability(TrustMode::Tcp, &roles(&["auditor"]), tool).is_err(),
+            "auditor must not run {tool}"
+        );
+    }
+    // Stdio role-less passthrough (review P1-10) extends to the new tools.
+    assert!(check_capability(TrustMode::Stdio, &[], "storage_stats").is_ok());
+}
+
+/// met005 RED: the /metrics payload gains aikoql_storage_* series when a
+/// StorageAdminApi cap is present and stays bare without one. (Compile RED:
+/// StorageAdminApi and the prometheus_metrics admin param do not exist yet.)
+#[test]
+fn met005_metrics_carry_storage_series_only_with_cap() {
+    use aikoql_kernel::storage::store::StorageEngine;
+    use aikoql_storage_v2::engine::StorageAdminApi; // RED: new surface
+    use aikoql_storage_v2::AikoqlStorageEngineV2;
+    use std::sync::Arc;
+
+    let dir = std::env::temp_dir().join(format!("mnemo-met005-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let e = Arc::new(AikoqlStorageEngineV2::open(dir.to_str().unwrap()).unwrap());
+    let engine: Arc<dyn StorageEngine> = e.clone();
+    let cap: Arc<dyn StorageAdminApi> = e.clone(); // RED: trait missing
+    let k = crate::Kernel::open(engine, Arc::new(crate::SystemClock), 0).expect("open kernel");
+
+    let bare = crate::http::prometheus_metrics(&k, None);
+    assert!(
+        !bare.contains("aikoql_storage_"),
+        "no cap, no storage series:\n{bare}"
+    );
+
+    let with = crate::http::prometheus_metrics(&k, Some(cap.as_ref()));
+    for series in [
+        "aikoql_storage_wal_bytes",
+        "aikoql_storage_segment_bytes",
+        "aikoql_storage_compaction_backlog_bytes",
+    ] {
+        assert!(with.contains(series), "missing series {series} in:\n{with}");
+    }
+
+    drop(k);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// met006 RED: storage_compact through the MCP dispatcher returns
+/// CompactStats-shaped JSON and the oracle (engine.scan) re-verifies the
+/// database byte-equal afterwards; a call without the admin cap is refused,
+/// never silently ignored. (Compile RED: call_tool's admin param + the
+/// StorageAdminApi impl do not exist yet.)
+#[test]
+fn met006_storage_compact_via_mcp_returns_stats_and_preserves_data() {
+    use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
+    use aikoql_storage_v2::db::Config;
+    use aikoql_storage_v2::engine::StorageAdminApi; // RED: new surface
+    use aikoql_storage_v2::AikoqlStorageEngineV2;
+    use std::sync::Arc;
+
+    let dir = std::env::temp_dir().join(format!("mnemo-met006-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut c = Config::new(dir.clone());
+    c.memtable_bytes = 512; // force flushes so compact has segments to merge
+    c.l0_compact_trigger = 0;
+    c.checkpoint_bytes = 0;
+    let e = Arc::new(AikoqlStorageEngineV2::open_with_config(c).unwrap());
+    let kernel_engine: Arc<dyn StorageEngine> = e.clone();
+    let scan_engine: Arc<dyn StorageEngine> = e.clone();
+    let cap: Arc<dyn StorageAdminApi> = e.clone(); // RED: trait missing
+
+    for i in 0..5 {
+        let mut b = WriteBatch::new();
+        b.put(format!("k{i}").into_bytes(), vec![0x2e; 300]);
+        kernel_engine.write_batch(&b).unwrap();
+    }
+    let k = crate::Kernel::open(kernel_engine.clone(), Arc::new(crate::SystemClock), 0)
+        .expect("open kernel");
+    let mut session = crate::session::McpSession::default();
+
+    // Oracle baseline AFTER kernel open — the kernel writes its own
+    // meta/type_index record (and since P5-M7 the catalog rows) on open,
+    // and only compact-induced changes may differ after. Pin content, not
+    // the internal key count.
+    let before: Vec<(Vec<u8>, Vec<u8>)> = scan_engine.scan(b"").unwrap();
+    for i in 0..5 {
+        assert!(
+            before
+                .iter()
+                .any(|(key, _)| key == format!("k{i}").as_bytes()),
+            "oracle must see user key k{i}"
+        );
+    }
+    assert!(
+        before.iter().any(|(key, _)| key == b"meta/type_index"),
+        "oracle must see the type_index backfill marker"
+    );
+    let path = dir.to_str().unwrap().to_string();
+
+    let txns: crate::tools::TxnRegistry = crate::Mutex::new(crate::HashMap::new());
+    let denied = crate::tool_registry::call_tool(
+        &k,
+        "storage_compact",
+        &crate::json!({}),
+        &path,
+        &mut session,
+        None,
+        &txns,
+    )
+    .expect("call_tool answers (stdio passthrough)");
+    assert_eq!(
+        denied["isError"], true,
+        "no-cap call must be refused loudly"
+    );
+    let denied_text = denied["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        denied_text.contains("storage admin unavailable"),
+        "got: {denied_text}"
+    );
+
+    let out = crate::tool_registry::call_tool(
+        &k,
+        "storage_compact",
+        &crate::json!({}),
+        &path,
+        &mut session,
+        Some(cap.as_ref()),
+        &txns,
+    )
+    .expect("storage_compact with cap");
+    assert_eq!(out["isError"], false, "compact must succeed: {out}");
+    let text = out["content"][0]["text"].as_str().unwrap_or("");
+    let payload: serde_json::Value = serde_json::from_str(text).expect("compact payload is JSON");
+    assert!(
+        payload["segments_in"].as_u64().unwrap_or(0) >= 2,
+        "CompactStats-shaped result, merged the flushed pile: {payload}"
+    );
+
+    // The oracle re-verifies the db after the admin-triggered merge.
+    let after: Vec<(Vec<u8>, Vec<u8>)> = scan_engine.scan(b"").unwrap();
+    assert_eq!(before, after, "compact must preserve the key-value content");
+
+    drop((k, e, kernel_engine, scan_engine, cap));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// P3-M5 follow-up: register_schema over the tool surface drives the full
+/// constraint pipeline — advisory violations land in constraint_diagnostics
+/// with mode/severity/koid, enforced uniqueness still blocks.
+#[test]
+fn register_schema_tool_drives_constraint_diagnostics() {
+    use crate::tools::constraints::{tool_constraint_diagnostics, tool_register_schema};
+    let db = tmp_db("cst");
+    let _ = std::fs::remove_file(&db);
+    let engine = crate::RedbEngine::open(&db).expect("open store");
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(engine),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+
+    let args = serde_json::json!({
+        "type_name": "Person",
+        "checks": [{"name": "ck_age", "expr": "age >= 18", "mode": "Advisory", "severity": "Warning"}],
+        "uniques": [{"properties": ["email"], "scope": "Type", "mode": "Enforced", "severity": "Error"}],
+    });
+    let reg = tool_register_schema(&k, &args).expect("register");
+    assert_eq!(reg["registered"], serde_json::json!(true));
+
+    let person = |email: &str, age: i64, idem: &str| {
+        let mut props = crate::PropertyMap::new();
+        props.insert("age".into(), crate::Value::Int(age));
+        props.insert("email".into(), crate::Value::Text(email.into()));
+        crate::RememberRequest {
+            context: crate::KnowledgeContext::from(&crate::Subject::with_roles("test", &["admin"])),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: Some(idem.into()),
+            metadata: crate::Metadata {
+                type_name: "Person".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: crate::ExtensionMap::new(),
+            origin: crate::Origin::Human,
+            note: None,
+            referential_policy: crate::ReferentialPolicy::Permissive,
+        }
+    };
+
+    // age 15 violates ck_age but the mode is Advisory → write succeeds.
+    let r = k
+        .remember(person("ann@x.com", 15, "cst-1"))
+        .expect("advisory write succeeds");
+    let koid = r.koid;
+
+    // Same email under the Enforced unique → blocked.
+    assert!(
+        k.remember(person("ann@x.com", 30, "cst-2")).is_err(),
+        "enforced unique must block the duplicate"
+    );
+
+    // Diagnostics show the advisory event with mode + severity + koid.
+    let diag = tool_constraint_diagnostics(&k, &serde_json::json!({})).expect("diag");
+    let events = diag["events"].as_array().expect("events array");
+    let age_evt = events
+        .iter()
+        .find(|e| e["constraint"] == serde_json::json!("ck_age"))
+        .expect("ck_age event recorded");
+    assert_eq!(age_evt["mode"], serde_json::json!("Advisory"));
+    assert_eq!(age_evt["severity"], serde_json::json!("Warning"));
+    assert_eq!(age_evt["koid"], serde_json::json!(koid.to_hex()));
+
+    drop(k);
+    let _ = std::fs::remove_file(&db);
+}

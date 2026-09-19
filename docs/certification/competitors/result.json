@@ -1,0 +1,398 @@
+{
+  "commit": "dc42b16",
+  "started_at": 1789482829590,
+  "seed": 42,
+  "dataset": {
+    "notes": 1000,
+    "events": 500,
+    "mentions": 1200,
+    "derived_from": 200,
+    "embedding_dim": 2,
+    "n_per_cell": 50,
+    "warmup_ops": 10
+  },
+  "engine_versions": {
+    "aikoql": "0.1.19",
+    "pg": "postgres:16-alpine",
+    "neo4j": "neo4j:5-community",
+    "qdrant": "qdrant/qdrant:latest"
+  },
+  "engines": {
+    "aikoql": {
+      "workloads": [
+        {
+          "name": "point_read",
+          "n": 50,
+          "cold": {
+            "p50_ms": 0.0094,
+            "p95_ms": 0.0188,
+            "p99_ms": 0.0861,
+            "throughput_ops_s": 83263.94671107411,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 0.009,
+            "p95_ms": 0.0109,
+            "p99_ms": 0.0113,
+            "throughput_ops_s": 102522.0422390814,
+            "correct": true
+          },
+          "p50_ms": 0.009,
+          "p95_ms": 0.0109,
+          "p99_ms": 0.0113,
+          "throughput_ops_s": 102522.0422390814,
+          "correct": true
+        },
+        {
+          "name": "point_write",
+          "n": 50,
+          "cold": {
+            "p50_ms": 0.8365,
+            "p95_ms": 2.3146,
+            "p99_ms": 2.6084,
+            "throughput_ops_s": 928.9294645278994,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 0.7666,
+            "p95_ms": 1.7056,
+            "p99_ms": 2.0174,
+            "throughput_ops_s": 1014.8739932449988,
+            "correct": true
+          },
+          "p50_ms": 0.7666,
+          "p95_ms": 1.7056,
+          "p99_ms": 2.0174,
+          "throughput_ops_s": 1014.8739932449988,
+          "correct": true
+        },
+        {
+          "name": "structured_filter",
+          "n": 50,
+          "cold": {
+            "p50_ms": 21.713,
+            "p95_ms": 42.4448,
+            "p99_ms": 77.0526,
+            "throughput_ops_s": 39.28858431679863,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 19.9161,
+            "p95_ms": 23.5855,
+            "p99_ms": 25.5091,
+            "throughput_ops_s": 49.44816344081683,
+            "correct": true
+          },
+          "p50_ms": 19.9161,
+          "p95_ms": 23.5855,
+          "p99_ms": 25.5091,
+          "throughput_ops_s": 49.44816344081683,
+          "correct": true
+        },
+        {
+          "name": "transactions",
+          "n": 50,
+          "cold": {
+            "p50_ms": 1.144,
+            "p95_ms": 15.2783,
+            "p99_ms": 40.9907,
+            "throughput_ops_s": 186.44792099381218,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 1.3493,
+            "p95_ms": 15.7421,
+            "p99_ms": 17.5179,
+            "throughput_ops_s": 193.14519960783798,
+            "correct": true
+          },
+          "p50_ms": 1.3493,
+          "p95_ms": 15.7421,
+          "p99_ms": 17.5179,
+          "throughput_ops_s": 193.14519960783798,
+          "correct": true
+        },
+        {
+          "name": "graph",
+          "n": 50,
+          "cold": {
+            "p50_ms": 0.0253,
+            "p95_ms": 0.0453,
+            "p99_ms": 0.126,
+            "throughput_ops_s": 33308.90680167877,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 0.0196,
+            "p95_ms": 0.0289,
+            "p99_ms": 0.0317,
+            "throughput_ops_s": 47393.364928909956,
+            "correct": true
+          },
+          "p50_ms": 0.0196,
+          "p95_ms": 0.0289,
+          "p99_ms": 0.0317,
+          "throughput_ops_s": 47393.364928909956,
+          "correct": true
+        },
+        {
+          "name": "vector_recall",
+          "n": 50,
+          "cold": {
+            "p50_ms": 5.491,
+            "p95_ms": 13.2246,
+            "p99_ms": 15.7619,
+            "throughput_ops_s": 143.95585507330665,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 4.9885,
+            "p95_ms": 5.9439,
+            "p99_ms": 6.3161,
+            "throughput_ops_s": 193.81114499360615,
+            "correct": true
+          },
+          "p50_ms": 4.9885,
+          "p95_ms": 5.9439,
+          "p99_ms": 6.3161,
+          "throughput_ops_s": 193.81114499360615,
+          "correct": true
+        }
+      ],
+      "rss_kb": 131880,
+      "disk_bytes": 2647524,
+      "ingest_s": 2.19
+    },
+    "postgresql": {
+      "workloads": [
+        {
+          "name": "point_read",
+          "n": 50,
+          "cold": {
+            "p50_ms": 1.4843,
+            "p95_ms": 2.1339,
+            "p99_ms": 10.2131,
+            "throughput_ops_s": 580.5346724333111,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 1.4551,
+            "p95_ms": 1.6993,
+            "p99_ms": 1.8791,
+            "throughput_ops_s": 670.5343085584317,
+            "correct": true
+          },
+          "p50_ms": 1.4551,
+          "p95_ms": 1.6993,
+          "p99_ms": 1.8791,
+          "throughput_ops_s": 670.5343085584317,
+          "correct": true
+        },
+        {
+          "name": "point_write",
+          "n": 50,
+          "cold": {
+            "p50_ms": 40.0402,
+            "p95_ms": 50.5603,
+            "p99_ms": 129.1532,
+            "throughput_ops_s": 23.93549861832334,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 40.1114,
+            "p95_ms": 304.524,
+            "p99_ms": 591.1397,
+            "throughput_ops_s": 15.54519437260233,
+            "correct": true
+          },
+          "p50_ms": 40.1114,
+          "p95_ms": 304.524,
+          "p99_ms": 591.1397,
+          "throughput_ops_s": 15.54519437260233,
+          "correct": true
+        },
+        {
+          "name": "structured_filter",
+          "n": 50,
+          "cold": {
+            "p50_ms": 1.9053,
+            "p95_ms": 3.2079,
+            "p99_ms": 4.4833,
+            "throughput_ops_s": 495.3584909398932,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 1.7649,
+            "p95_ms": 1.984,
+            "p99_ms": 2.2438,
+            "throughput_ops_s": 559.5939586236227,
+            "correct": true
+          },
+          "p50_ms": 1.7649,
+          "p95_ms": 1.984,
+          "p99_ms": 2.2438,
+          "throughput_ops_s": 559.5939586236227,
+          "correct": true
+        },
+        {
+          "name": "transactions",
+          "n": 50,
+          "cold": {
+            "p50_ms": 40.2363,
+            "p95_ms": 58.441,
+            "p99_ms": 98.3891,
+            "throughput_ops_s": 22.23275264199581,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 40.1715,
+            "p95_ms": 74.328,
+            "p99_ms": 104.8209,
+            "throughput_ops_s": 21.83018222657293,
+            "correct": true
+          },
+          "p50_ms": 40.1715,
+          "p95_ms": 74.328,
+          "p99_ms": 104.8209,
+          "throughput_ops_s": 21.83018222657293,
+          "correct": true
+        },
+        {
+          "name": "graph",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        },
+        {
+          "name": "vector_recall",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        }
+      ],
+      "rss_kb": 59207,
+      "disk_bytes": 48594944,
+      "ingest_s": 0.36
+    },
+    "neo4j": {
+      "workloads": [
+        {
+          "name": "point_read",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        },
+        {
+          "name": "point_write",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        },
+        {
+          "name": "structured_filter",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        },
+        {
+          "name": "transactions",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        },
+        {
+          "name": "graph",
+          "n": 50,
+          "cold": {
+            "p50_ms": 5.3812,
+            "p95_ms": 6.4615,
+            "p99_ms": 20.5023,
+            "throughput_ops_s": 171.8745810557087,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 6.5415,
+            "p95_ms": 9.0792,
+            "p99_ms": 11.2357,
+            "throughput_ops_s": 144.99885885898078,
+            "correct": true
+          },
+          "p50_ms": 6.5415,
+          "p95_ms": 9.0792,
+          "p99_ms": 11.2357,
+          "throughput_ops_s": 144.99885885898078,
+          "correct": true
+        },
+        {
+          "name": "vector_recall",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        }
+      ],
+      "rss_kb": 883200,
+      "disk_bytes": 541609984,
+      "ingest_s": 3.91
+    },
+    "qdrant": {
+      "workloads": [
+        {
+          "name": "point_read",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        },
+        {
+          "name": "point_write",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        },
+        {
+          "name": "structured_filter",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        },
+        {
+          "name": "transactions",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        },
+        {
+          "name": "graph",
+          "n": 0,
+          "no_analog": true,
+          "correct": true
+        },
+        {
+          "name": "vector_recall",
+          "n": 50,
+          "cold": {
+            "p50_ms": 5.2494,
+            "p95_ms": 9.6939,
+            "p99_ms": 22.8788,
+            "throughput_ops_s": 159.5871162129339,
+            "correct": true
+          },
+          "warm": {
+            "p50_ms": 5.254,
+            "p95_ms": 6.9093,
+            "p99_ms": 19.6793,
+            "throughput_ops_s": 171.34736256999113,
+            "correct": true
+          },
+          "p50_ms": 5.254,
+          "p95_ms": 6.9093,
+          "p99_ms": 19.6793,
+          "throughput_ops_s": 171.34736256999113,
+          "correct": true
+        }
+      ],
+      "rss_kb": 194150,
+      "disk_bytes": 495616,
+      "ingest_s": 0.13
+    }
+  }
+}

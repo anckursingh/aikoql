@@ -18,6 +18,9 @@ services:
       # PRR-2: TCP serve requires a token — fail fast if unset rather than
       # crash-looping (set TCP_TOKEN=TOKEN[:TENANT[:ROLES]] in .env or shell).
       - AIKOQL_TCP_TOKEN=${TCP_TOKEN:?TCP_TOKEN must be set (TOKEN[:TENANT[:ROLE1,ROLE2]])}
+      # P3-M1: Studio HTTP login — bootstrap admin (dev-only default, like
+      # every other secret in this compose file; override in production).
+      - AIKOQL_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
     restart: unless-stopped
 
   # Optional: PostgreSQL + PGVector provider for federated queries

@@ -20,12 +20,16 @@
 use crate::embedding::EmbeddingProvider;
 use crate::event::EventManager;
 use crate::index::coordinator::IndexCoordinator;
+use crate::index::unified::Index;
+use crate::jobs::{
+    JobHandle, JobKind, JobRecord, JobScheduler, JobStatus, DEFAULT_MAX_RUNNING_JOBS,
+};
 use crate::knowledge::authority::Authority;
-use crate::knowledge::codec::{self, Enc};
+use crate::knowledge::codec::{self, Enc, ScoringRecord};
 use crate::knowledge::kom::*;
 use crate::knowledge::ontology::{Cardinality, OntologyRegistry};
 use crate::knowledge::scope::Scope;
-use crate::lifecycle::constraint::{ConstraintEvaluator, InferenceEngine};
+use crate::lifecycle::constraint::{ConstraintEvalStats, ConstraintEvaluator, InferenceEngine};
 use crate::lifecycle::schema::SchemaRegistry;
 use crate::object::ObjectManager;
 use crate::relationship::RelationshipManager;
@@ -34,10 +38,12 @@ use crate::security::crypto::Crypto;
 use crate::security::envelope::{Envelope, CRYPTO_META_KEY, CRYPTO_META_V1, DEKS_STORAGE_KEY};
 use crate::security::field_crypto::{ComplianceSummary, EncryptionPolicy, FieldCrypto};
 use crate::security::tenant::TenantManager;
+use crate::statistics::Statistics;
 pub use crate::storage::repository::DerivedIndexRebuild;
 use crate::storage::repository::KnowledgeRepository;
 use crate::storage::store::{ConstraintCapabilities, StorageEngine, WriteBatch};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 
 // v0.3 K4: knowledge transactions (observe/assert/verify/contradict/supersede/
@@ -45,6 +51,11 @@ use std::sync::{mpsc, Arc, Mutex, RwLock};
 // kernel.rs's private fields (pipe/auth/clock) without widening their scope.
 mod ops;
 pub use ops::*;
+
+// P5-M10 (ND-10): the public transaction contract (begin/stage/commit/
+// rollback + idempotent retry + metrics). Child module — same pattern as ops.
+mod txn;
+pub use txn::{Transaction, TxnMetrics, TxnMetricsSnapshot};
 
 // ---------------------------------------------------------------------------
 // Clock & Hybrid Logical Clock (commit timestamps)
@@ -86,6 +97,13 @@ impl Clock for ManualClock {
 }
 
 /// HLC packed as (millis << 16) | counter. Monotone even under clock regression.
+///
+/// Overflow (TDD-TIME-001, documented): within one millisecond the counter
+/// may exhaust — 0xFFFF steps the packed value into the NEXT ms slot, a
+/// forward jump that stays monotone and never re-issues a timestamp (the
+/// ms component then reads equal and the counter continues from 0). The ms
+/// component itself wraps only past 2^48 ms of wall time (~9 million
+/// years) — this packing does not handle that.
 struct Hlc {
     last: Mutex<u64>,
 }
@@ -599,9 +617,16 @@ pub struct Kernel {
     events: Arc<Mutex<EventManager>>,
     auth: Arc<RwLock<AuthManager>>,
     indexes: Arc<RwLock<Option<Arc<IndexCoordinator>>>>,
+    /// P5-M8 — the live property-index registry: declarations load from the
+    /// catalog at open; contents replay through the async maintainer and are
+    /// never persisted (idx2-007).
+    pub(crate) property_indexes: Arc<RwLock<Vec<Arc<dyn Index>>>>,
     schemas: Arc<RwLock<SchemaRegistry>>,
     ontologies: Arc<RwLock<OntologyRegistry>>,
     constraint_eval: ConstraintEvaluator,
+    /// Bounded in-memory ring of recorded violation events (MRFC-0060 §32
+    /// diagnostics surface; P3-M5 M5a). Shared across clones, oldest evicted.
+    violation_events: Arc<Mutex<VecDeque<ViolationEvent>>>,
     /// Backend-native constraint capabilities snapshot at open time (C7).
     constraint_caps: ConstraintCapabilities,
     relationships: Arc<RelationshipManager>,
@@ -616,6 +641,20 @@ pub struct Kernel {
     encryption_policies: Arc<RwLock<HashMap<String, EncryptionPolicy>>>,
     /// Optional embedding provider for query-time ANN search (USING EMBEDDING).
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
+    /// P3-M7 — the Class-B job scheduler (MRFC-0011 §6.10–6.13): persisted
+    /// job table + admission control in the raw store.
+    jobs: Arc<JobScheduler>,
+    /// P5-M10 transaction counters — kernel-lifetime, shared across clones.
+    txn_metrics: Arc<txn::TxnMetrics>,
+    /// P5-M16 — number of KOs fully materialized by `find_similar`'s top-k
+    /// candidate loop (the vs_scan probe seam). Kernel-lifetime, shared.
+    pub(crate) similarity_materializations: Arc<AtomicU64>,
+    /// P5-M17b — parsed statistics cache (type_name → Statistics). Populated
+    /// by `analyze` and by first-read misses; reads never re-walk the heads
+    /// (the default query path reads statistics per query). Freshness stays
+    /// watermark-judged against the journal head, so a cached row from an
+    /// earlier era reads stale — never silently fresh (cbo_a06).
+    pub(crate) statistics_cache: Arc<RwLock<HashMap<String, Statistics>>>,
 }
 
 impl Kernel {
@@ -667,7 +706,12 @@ impl Kernel {
             })?;
             schemas.write().unwrap().register(schema);
         }
-        Ok(Kernel {
+        // P3-M7 — Class-B job scheduler (recover marks interrupted jobs).
+        let jobs = Arc::new(JobScheduler::recover(
+            store.clone(),
+            DEFAULT_MAX_RUNNING_JOBS,
+        )?);
+        let kernel = Kernel {
             repo,
             store,
             clock,
@@ -677,9 +721,11 @@ impl Kernel {
             events: Arc::new(Mutex::new(events)),
             auth: Arc::new(RwLock::new(auth)),
             indexes: Arc::new(RwLock::new(Some(IndexCoordinator::new()))),
+            property_indexes: Arc::new(RwLock::new(Vec::new())),
             schemas,
             ontologies: Arc::new(RwLock::new(OntologyRegistry::empty())),
             constraint_eval: ConstraintEvaluator::new(),
+            violation_events: Arc::new(Mutex::new(VecDeque::new())),
             constraint_caps,
             relationships,
             objects,
@@ -688,7 +734,18 @@ impl Kernel {
             field_crypto: None,
             encryption_policies: Arc::new(RwLock::new(HashMap::new())),
             embedding_provider: None,
-        })
+            jobs,
+            txn_metrics: Arc::new(txn::TxnMetrics::default()),
+            similarity_materializations: Arc::new(AtomicU64::new(0)),
+            statistics_cache: Arc::new(RwLock::new(HashMap::new())),
+        };
+        // P5-M7 — database catalog: bootstrap/migrate the catalog rows, or
+        // fail the open closed on a corrupt/unsupported catalog version.
+        crate::catalog::ensure(&kernel)?;
+        // P5-M8 — index declarations into the live registry; a corrupt index
+        // row fails the open closed (idx2-010).
+        crate::catalog::load_property_indexes(&kernel)?;
+        Ok(kernel)
     }
 
     /// Enable at-rest HMAC-SHA256 version signatures. Idempotent and safe to
@@ -831,9 +888,11 @@ impl Kernel {
             events: self.events.clone(),
             auth: self.auth.clone(),
             indexes: self.indexes.clone(),
+            property_indexes: self.property_indexes.clone(),
             schemas: self.schemas.clone(),
             ontologies: self.ontologies.clone(),
             constraint_eval: self.constraint_eval.clone(),
+            violation_events: self.violation_events.clone(),
             constraint_caps: self.constraint_caps,
             relationships: self.relationships.clone(),
             objects: self.objects.clone(),
@@ -842,12 +901,42 @@ impl Kernel {
             field_crypto: self.field_crypto.clone(),
             encryption_policies: self.encryption_policies.clone(),
             embedding_provider: self.embedding_provider.clone(),
+            jobs: self.jobs.clone(),
+            txn_metrics: self.txn_metrics.clone(),
+            similarity_materializations: self.similarity_materializations.clone(),
+            statistics_cache: self.statistics_cache.clone(),
         }
     }
+}
 
+/// P3-M7 — a shared-handle clone for job workers (delegates to
+/// `clone_handle`, which shares every subsystem).
+impl Clone for Kernel {
+    fn clone(&self) -> Self {
+        self.clone_handle()
+    }
+}
+
+impl Kernel {
     /// Attach an index maintainer; `find_similar` routes through it afterwards.
+    /// The coordinator stores it WEAKLY (P5-M18): the caller must keep the
+    /// `Arc` alive for the indexes to live — the maintainer's thread holds a
+    /// kernel clone, so a strong edge here would never drop on either side.
     pub fn attach_indexes(&self, m: Arc<dyn crate::index::IndexMaintainerApi>) {
         *self.indexes.write().unwrap() = Some(IndexCoordinator::with_maintainer(m));
+    }
+
+    /// P5-M22: upgrade the coordinator's weak maintainer edge — the
+    /// production accessor for hosts and tools. The host owns the strong
+    /// Arc (SDK `Aikoql.maintainer`, MCP `DatabaseContext`); a dead
+    /// maintainer degrades to the exact path (P5-M18).
+    pub fn index_maintainer(&self) -> Option<Arc<dyn crate::index::IndexMaintainerApi>> {
+        self.indexes
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.maintainer())
+            .and_then(|w| w.upgrade())
     }
 
     /// Builder: attach an embedding provider for query-time ANN search
@@ -892,6 +981,36 @@ impl Kernel {
     ///
     /// Scans all committed objects of `new_schema.type_name` and runs every
     /// constraint (domain, check, unique) against each one.  Returns violations
+    /// Record detected violations on the bounded in-memory diagnostics ring
+    /// (MRFC-0060 §32; P3-M5 M5a — oldest evicted past 256 entries).
+    fn record_events<I>(&self, events: I)
+    where
+        I: IntoIterator<Item = ViolationEvent>,
+    {
+        let mut ring = self.violation_events.lock().unwrap();
+        for v in events {
+            if ring.len() >= 256 {
+                ring.pop_front();
+            }
+            ring.push_back(v);
+        }
+    }
+
+    /// Snapshot of the violation-event ring (MRFC-0060 §32 diagnostics surface).
+    pub fn violation_events(&self) -> Vec<ViolationEvent> {
+        self.violation_events
+            .lock()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Snapshot of the incremental constraint-evaluation counters (MRFC-0060 §36–37).
+    pub fn constraint_stats(&self) -> ConstraintEvalStats {
+        self.constraint_eval.stats()
+    }
+
     /// keyed by KOID so the caller can decide whether to proceed with the migration.
     pub fn validate_schema_migration(
         &self,
@@ -916,6 +1035,13 @@ impl Kernel {
                 None,
                 Some(*hkoid),
                 None,
+            );
+            self.record_events(
+                result
+                    .violations
+                    .iter()
+                    .chain(result.warnings.iter())
+                    .cloned(),
             );
             for v in result.violations {
                 violations.push(v);
@@ -1017,6 +1143,13 @@ impl Kernel {
             let result =
                 self.constraint_eval
                     .evaluate_full(new_schema, &props, None, Some(*hkoid), None);
+            self.record_events(
+                result
+                    .violations
+                    .iter()
+                    .chain(result.warnings.iter())
+                    .cloned(),
+            );
             if !result.violations.is_empty() {
                 return Err(KError::InvalidSchema(format!(
                     "schema migration of '{}' would violate constraints on {}: {}",
@@ -1076,6 +1209,18 @@ impl Kernel {
         self.objects.get_at(koid, snap_ts)
     }
 
+    /// P5-M16 — slim read for the vector leg of `find_similar`: the same
+    /// predecessor walk as `object_at` but only the scoring-relevant fields
+    /// are decoded (see `ScoringRecord`).
+    pub(crate) fn object_scoring(
+        &self,
+        koid: &KOID,
+        snap_ts: u64,
+        required: &[String],
+    ) -> KResult<Option<ScoringRecord>> {
+        self.objects.get_scoring(koid, snap_ts, required)
+    }
+
     pub fn scan_heads(&self) -> KResult<Vec<(KOID, u64, u64, LifecycleState)>> {
         self.objects.scan_heads()
     }
@@ -1100,6 +1245,31 @@ impl Kernel {
         action: Action,
     ) -> KResult<()> {
         self.auth.read().unwrap().authorize(subject, ko, action)
+    }
+
+    /// P5-M16 — the ACL pre-filter on the slim scoring record (same decision,
+    /// KO parts only). The full-KO `check_access` on the materialized top-k
+    /// stays the committed-bytes authority.
+    pub(crate) fn check_access_parts(
+        &self,
+        subject: &Subject,
+        rec: &ScoringRecord,
+        action: Action,
+    ) -> KResult<()> {
+        self.auth.read().unwrap().authorize_parts(
+            subject,
+            &rec.tenant,
+            rec.koid,
+            &rec.security,
+            &rec.type_name,
+            action,
+        )
+    }
+
+    /// P5-M16 probe — how many KOs `find_similar` fully materialized since
+    /// open (the vs_scan observability seam).
+    pub fn similarity_materializations(&self) -> u64 {
+        self.similarity_materializations.load(Ordering::Relaxed)
     }
 
     pub(crate) fn accessible_objects(
@@ -1562,7 +1732,8 @@ impl Kernel {
         }
         // MRFC-0060 Phase C6: compute write-set for incremental constraint evaluation.
         let write_set: Option<HashSet<String>> = if creating {
-            None // evaluate all constraints for creates
+            // A create writes exactly the request's properties — that IS the write-set.
+            Some(req.properties.keys().cloned().collect())
         } else {
             let head_props = &head.as_ref().unwrap().properties;
             let mut changed = HashSet::new();
@@ -1660,22 +1831,39 @@ impl Kernel {
             // MRFC-0060 Phase C4/C5/C7: domain + check constraint evaluation (skip if backend native)
             if !self.constraint_caps.check {
                 if let Some(schema) = schemas.get(&ko.metadata.type_name) {
-                    self.constraint_eval
-                        .evaluate_full(
+                    // P3-M5 M5a (cst007): all-Disabled schemas skip the evaluator
+                    // entirely — the zero-overhead path.
+                    if schema.has_enabled_constraints() {
+                        let mut result = self.constraint_eval.evaluate_full(
                             schema,
                             &ko.properties,
                             write_set.as_ref(),
                             Some(ko.koid),
                             ko.semantic.as_ref().and_then(|s| s.source.as_deref()),
-                        )
-                        .into_kresult()?;
+                        );
+                        // MRFC-0060 §16 (P3-M5 M5b): relationship cardinality.
+                        let cardinality = self.constraint_eval.evaluate_cardinality(
+                            schema,
+                            &ko.relationships,
+                            Some(ko.koid),
+                        );
+                        result.merge(&cardinality);
+                        self.record_events(
+                            result
+                                .violations
+                                .iter()
+                                .chain(result.warnings.iter())
+                                .cloned(),
+                        );
+                        result.into_kresult()?;
+                    }
                 }
             }
         }
         // MRFC-0060 Phase C2/C7: uniqueness check — skip if backend enforces unique natively
         if !self.constraint_caps.unique {
             let objects = &self.objects;
-            self.schemas.read().unwrap().check_uniqueness(
+            let events = self.schemas.read().unwrap().check_uniqueness(
                 &ko,
                 |scope, tenant, type_name, pairs, exclude_koid| {
                     uniqueness_conflict(objects, scope, tenant, type_name, pairs, exclude_koid)
@@ -1683,6 +1871,7 @@ impl Kernel {
                 false, // remember() checks all constraints including deferred
                 write_set.as_ref(),
             )?;
+            self.record_events(events);
         }
         // MRFC-0060 Phase C3: ontology relationship validation.
         if req.referential_policy == ReferentialPolicy::Enforced {
@@ -1832,7 +2021,7 @@ impl Kernel {
     /// Idempotency keys inside transaction requests are not supported: a batch
     /// is already atomic and the caller can use an external idempotency token.
     pub fn transact(&self, ops: Vec<TransactionOp>) -> KResult<Vec<Remembered>> {
-        self.transact_with_schema_row(ops, None)
+        Ok(self.transact_inner(ops, None, None)?.0)
     }
 
     /// Internal: `transact` with an optional schema row folded into the same
@@ -1844,9 +2033,34 @@ impl Kernel {
         ops: Vec<TransactionOp>,
         schema_row: Option<&Schema>,
     ) -> KResult<Vec<Remembered>> {
-        if ops.is_empty() {
+        Ok(self.transact_inner(ops, schema_row, None)?.0)
+    }
+
+    /// P5-M10: commit a staged transaction. `txn_id` names the idempotency
+    /// record — the outcome row lands in the same batch as the writes, so a
+    /// retry after a crash re-reads it and re-applies nothing. The bool says
+    /// whether the outcome came from a recorded retry (deduped) rather than
+    /// a fresh commit.
+    pub(crate) fn transact_with_txn(
+        &self,
+        ops: Vec<TransactionOp>,
+        txn_id: &str,
+    ) -> KResult<(Vec<Remembered>, bool)> {
+        self.transact_inner(ops, None, Some(txn_id))
+    }
+
+    /// The shared commit pipeline. `txn_id.is_some()` arms the idempotent
+    /// outcome record and the tx006 park windows; the plain remember/transact
+    /// paths (txn_id None) stay unchanged — no record, no park.
+    fn transact_inner(
+        &self,
+        ops: Vec<TransactionOp>,
+        schema_row: Option<&Schema>,
+        txn_id: Option<&str>,
+    ) -> KResult<(Vec<Remembered>, bool)> {
+        if ops.is_empty() && txn_id.is_none() {
             let Some(schema) = schema_row else {
-                return Ok(Vec::new());
+                return Ok((Vec::new(), false));
             };
             // Idempotent re-apply with nothing left to migrate: persist the
             // schema row alone so the persisted registry never lags the
@@ -1856,9 +2070,35 @@ impl Kernel {
             self.repo
                 .put_schema_row(&mut batch, &schema.type_name, &bytes);
             self.repo.write_batch(&batch)?;
-            return Ok(Vec::new());
+            return Ok((Vec::new(), false));
         }
         let mut pipe = self.pipe.lock().unwrap();
+
+        // P5-M10/P5-M20: recorded retry. The check sits under the pipe lock
+        // so a concurrent same-id commit can never slip between the check and
+        // the record write — the second one always sees the outcome row. The
+        // retry identity is id + body fingerprint (P0-03): an identical body
+        // re-applies nothing; a different body fails closed (the id is
+        // spent). An empty staged set still falls through to record its
+        // (empty) outcome, so a re-begin of an already-committed id dedupes
+        // identically.
+        let body: Option<[u8; 32]> = txn_id.map(|_| txn::txn_body_fingerprint(&ops));
+        if let Some(tid) = txn_id {
+            if let Some(bytes) = self.repo.txn_record(tid)? {
+                let (recorded, results) = txn::decode_txn_record(&bytes).map_err(|e| {
+                    KError::Store(format!("transaction record '{tid}' corrupt: {e}"))
+                })?;
+                if recorded == body {
+                    self.txn_metrics
+                        .deduped_retries
+                        .fetch_add(1, Ordering::Relaxed);
+                    return Ok((results, true));
+                }
+                return Err(KError::InvalidObject(format!(
+                    "transaction id '{tid}' already committed with a different body"
+                )));
+            }
+        }
 
         // Phase 1: resolve KOIDs and heads (snapshot before any write).
         struct Resolved {
@@ -1989,7 +2229,8 @@ impl Kernel {
             };
             // MRFC-0060 Phase C6: write-set for incremental constraint evaluation.
             let tx_write_set: Option<HashSet<String>> = if r.creating {
-                None
+                // A create writes exactly the request's properties — that IS the write-set.
+                Some(req.properties.keys().cloned().collect())
             } else {
                 let head_props = &r.head.as_ref().unwrap().properties;
                 let mut changed = HashSet::new();
@@ -2011,11 +2252,12 @@ impl Kernel {
                 // MRFC-0060 Phase C7: skip check constraint eval if backend native
                 if !self.constraint_caps.check {
                     if let Some(schema) = schemas.get(&ko.metadata.type_name) {
-                        self.constraint_eval.evaluate(
+                        let events = self.constraint_eval.evaluate(
                             schema,
                             &ko.properties,
                             tx_write_set.as_ref(),
                         )?;
+                        self.record_events(events);
                     }
                 }
             }
@@ -2026,7 +2268,7 @@ impl Kernel {
                 // MRFC-0060 Phase C7: skip immediate uniqueness check if backend native.
                 // Deferred unique constraints are always evaluated in-kernel.
                 if !self.constraint_caps.unique {
-                    schemas.check_uniqueness(
+                    let events = schemas.check_uniqueness(
                         &ko,
                         |scope, tenant, type_name, pairs, exclude_koid| {
                             uniqueness_conflict(
@@ -2041,6 +2283,7 @@ impl Kernel {
                         true, // skip deferred — collected below
                         tx_write_set.as_ref(),
                     )?;
+                    self.record_events(events);
                 }
                 // Deferred constraints are never pushed down (StorageEngine has no txn handles).
                 for (ci, pairs, scope) in schemas.collect_deferred_unique(&ko) {
@@ -2056,6 +2299,10 @@ impl Kernel {
                 if let Some(schema) = schemas.get(&ko.metadata.type_name) {
                     for (ci, cc) in schema.check_constraints.iter().enumerate() {
                         if cc.timing == ConstraintTiming::Deferred {
+                            // P3-M5 M5a: Disabled deferred constraints are never recorded.
+                            if cc.mode == EnforcementMode::Disabled {
+                                continue;
+                            }
                             // C6: skip deferred checks unaffected by write-set
                             if !crate::lifecycle::constraint::check_affected_by_write_set(
                                 cc,
@@ -2193,6 +2440,13 @@ impl Kernel {
                 },
                 0, // pre-commit — timestamp assigned in Phase 3
             );
+            self.record_events(
+                result
+                    .violations
+                    .iter()
+                    .chain(result.warnings.iter())
+                    .cloned(),
+            );
             result.into_kresult()?;
         }
 
@@ -2292,7 +2546,15 @@ impl Kernel {
             self.repo
                 .put_schema_row(&mut batch, &schema.type_name, &bytes);
         }
+        if let (Some(tid), Some(body)) = (txn_id, body.as_ref()) {
+            txn::txn_park("pre_commit");
+            self.repo
+                .put_txn_record(&mut batch, tid, &txn::encode_txn_record(body, &results));
+        }
         self.repo.write_batch(&batch)?;
+        if txn_id.is_some() {
+            txn::txn_park("post_commit");
+        }
         pipe.seq = final_seq;
         pipe.audit = prev_audit;
         for ke in events {
@@ -2306,7 +2568,7 @@ impl Kernel {
         }) {
             self.refresh_auth_cache()?;
         }
-        Ok(results)
+        Ok((results, false))
     }
 
     // ---- evolve (MRFC-0011 §6.3) -------------------------------------------
@@ -2701,6 +2963,14 @@ impl Kernel {
         self.clock.millis()
     }
 
+    /// The HLC timestamp "now" — the snapshot pin for open-time scans
+    /// (P5-M21, PR6 P0-08). The same source `begin_transaction` pins its
+    /// snapshot from, so a scan opened here sees the same version set a
+    /// transaction begun here would.
+    pub fn snapshot_now(&self) -> u64 {
+        self.hlc.now(self.clock.as_ref())
+    }
+
     /// Point-in-time (transaction-time) read: the version this kernel had
     /// committed as of wall-clock `at_millis`. Packs to the HLC layout
     /// (`millis << 16 | counter`) so the MVCC `<= snap` comparison selects
@@ -2933,32 +3203,135 @@ impl Kernel {
     ) -> KResult<Vec<KnowledgeObject>> {
         let mut out = Vec::new();
         for koid in self.repo.scan_type(type_name)? {
-            let Some(ko) = self.head_object(&koid)? else {
+            let Some(ko) = self.readable_object(subject, type_name, &koid)? else {
                 continue;
             };
-            if ko.metadata.type_name != type_name {
-                continue; // stale index entry (type changed after indexing)
-            }
-            if ko.lifecycle.state == LifecycleState::Deleted {
-                continue;
-            }
             if let Some(want) = status {
                 if ko.epistemic_status() != want {
                     continue;
                 }
             }
-            if self
-                .auth
-                .read()
-                .unwrap()
-                .authorize(subject, &ko, Action::Read)
-                .is_err()
-            {
-                continue;
-            }
             out.push(ko);
         }
         Ok(out)
+    }
+
+    /// P5-M7: canonical scan for catalog metadata — walks ko/ heads (the
+    /// authority), NOT the derived type index (catalog rows are deliberately
+    /// never indexed there; write_type_index guards it). Catalog rows are
+    /// few and metadata ops are rare, so the O(heads) walk is fine.
+    pub(crate) fn scan_catalog_rows(&self) -> KResult<Vec<KnowledgeObject>> {
+        let mut out = Vec::new();
+        for (koid, _version, ts, state) in self.repo.scan_heads()? {
+            if state == LifecycleState::Deleted {
+                continue;
+            }
+            if let Some(ko) = self.repo.get_object_version(&koid, ts)? {
+                if crate::catalog::is_catalog_type(&ko.metadata.type_name) {
+                    out.push(ko);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The index-backed koid list for a type, unfiltered — the streaming
+    /// scan's snapshot-at-open (P5-M4, ND-04): payload batches resolve from
+    /// this list via `scan_by_type_range`, so memory is bounded by the batch
+    /// size, not the result cardinality.
+    pub fn type_koids(&self, type_name: &str) -> KResult<Vec<KOID>> {
+        self.repo.scan_type(type_name)
+    }
+
+    /// Resolve a koid slice into readable KOs with the SAME per-object
+    /// filtering as `scan_by_type_filtered` (payload type re-check, Deleted
+    /// skip, ACL) — the one place the read filters live (P5-M4, ND-04).
+    pub fn scan_by_type_range(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        koids: &[KOID],
+    ) -> KResult<Vec<KnowledgeObject>> {
+        let mut out = Vec::new();
+        for koid in koids {
+            if let Some(ko) = self.readable_object(subject, type_name, koid)? {
+                out.push(ko);
+            }
+        }
+        Ok(out)
+    }
+
+    /// `scan_by_type_range` at a snapshot: every koid resolves to the newest
+    /// version committed with `commit_ts <= snap_ts` (the `get_at` path), so
+    /// a stream pinned at open serves ONE consistent snapshot — not the
+    /// mixed-time set of live head reads (P5-M21, PR6 P0-08).
+    pub fn scan_by_type_range_at(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        koids: &[KOID],
+        snap_ts: u64,
+    ) -> KResult<Vec<KnowledgeObject>> {
+        let mut out = Vec::new();
+        for koid in koids {
+            if let Some(ko) = self.readable_object_at(subject, type_name, koid, snap_ts)? {
+                out.push(ko);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Head read + the shared scan filters: payload type re-check (stale
+    /// index entry from a type change), Deleted skip, ACL Read check.
+    fn readable_object(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        koid: &KOID,
+    ) -> KResult<Option<KnowledgeObject>> {
+        let Some(ko) = self.head_object(koid)? else {
+            return Ok(None);
+        };
+        self.readable_checks(subject, type_name, ko)
+    }
+
+    /// Snapshot read (`object_at`) + the same shared scan filters.
+    fn readable_object_at(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        koid: &KOID,
+        snap_ts: u64,
+    ) -> KResult<Option<KnowledgeObject>> {
+        let Some(ko) = self.object_at(koid, snap_ts)? else {
+            return Ok(None);
+        };
+        self.readable_checks(subject, type_name, ko)
+    }
+
+    /// The shared scan filters — one place, both read modes.
+    fn readable_checks(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        ko: KnowledgeObject,
+    ) -> KResult<Option<KnowledgeObject>> {
+        if ko.metadata.type_name != type_name {
+            return Ok(None); // stale index entry (type changed after indexing)
+        }
+        if ko.lifecycle.state == LifecycleState::Deleted {
+            return Ok(None);
+        }
+        if self
+            .auth
+            .read()
+            .unwrap()
+            .authorize(subject, &ko, Action::Read)
+            .is_err()
+        {
+            return Ok(None);
+        }
+        Ok(Some(ko))
     }
 
     /// Return all distinct type names from head objects. O(n) scan;
@@ -2970,7 +3343,11 @@ impl Kernel {
                 continue;
             }
             if let Some(ko) = self.head_object(&koid)? {
-                types.insert(ko.metadata.type_name);
+                // P5-M7: catalog rows are the database's own metadata, not
+                // user types — never surfaced by list_types.
+                if !crate::catalog::is_catalog_type(&ko.metadata.type_name) {
+                    types.insert(ko.metadata.type_name);
+                }
             }
         }
         Ok(types.into_iter().collect())
@@ -3167,7 +3544,10 @@ impl Kernel {
                     }
                 }
                 None => {
-                    if self.repo.get_tombstone(&ke.koid)?.is_none() {
+                    // P3-M7 — Audit KEs (job admissions, §10.2) carry
+                    // KOID::ZERO and no object version by design; they are
+                    // pure journal entries, protected by the chain link above.
+                    if ke.kind != EventKind::Audit && self.repo.get_tombstone(&ke.koid)?.is_none() {
                         valid = false;
                         break;
                     }
@@ -3863,26 +4243,251 @@ impl Kernel {
     }
 
     // ---- Class B syscalls (MRFC-0011 §5, §6.10-6.13) ----------------------
+    // P3-M7: these are ASYNC — they admit a job and return a handle. The
+    // computations themselves (`run_*`) stay private to the job worker, and
+    // results re-enter the Class-A store ONLY via `approve_job` (§7).
 
-    /// Execute a reasoning rule against the knowledge graph.
-    /// Returns provenance-tagged claims with `origin=Reason`.
-    /// ponytail: synchronous version for Phase 2; full async JobHandle in Phase 3.
+    /// MRFC-0011 §10.2 — every Class-B job admission emits an audit KE in
+    /// the hash-chained audit stream. No object version is written (the KE
+    /// carries KOID::ZERO); the admission itself is what is being audited.
+    pub(crate) fn record_audit(&self, note: &str) -> KResult<()> {
+        let mut pipe = self.pipe.lock().unwrap();
+        let commit_ts = self.hlc.now(self.clock.as_ref());
+        let seq = pipe.seq + 1;
+        let audit = audit_hash_of(
+            pipe.audit,
+            seq,
+            &KOID::ZERO,
+            0,
+            EventKind::Audit,
+            commit_ts,
+            &[0u8; 32],
+            None,
+            "kernel",
+            Some(note),
+        );
+        let ke = KnowledgeEvent {
+            seq,
+            koid: KOID::ZERO,
+            version: 0,
+            kind: EventKind::Audit,
+            origin: Origin::System,
+            actor: "kernel".into(),
+            commit_ts,
+            payload_hash: [0u8; 32],
+            prev_audit_hash: pipe.audit,
+            audit_hash: audit,
+            signature: None,
+            note: Some(note.into()),
+        };
+        let mut batch = WriteBatch::new();
+        self.repo.put_event(&mut batch, seq, &ke);
+        self.repo.put_journal(&mut batch, seq, audit, commit_ts);
+        self.repo.write_batch(&batch)?;
+        pipe.seq = seq;
+        pipe.audit = audit;
+        self.broadcast(&ke);
+        Ok(())
+    }
+
+    /// M7a — submit a reasoning job (MRFC-0011 §6.10). Returns the handle
+    /// immediately; poll with `job_status`, retrieve with `job_result`, and
+    /// commit the claims with `approve_job`. Over the admission limit this
+    /// is JOB_REJECTED (§8). P5-M20 (job004): the caller is part of the
+    /// job's identity — serialized into the dedup hash before the rule —
+    /// and the worker runs under the caller's context (tenant-confined).
     pub fn reason(
         &self,
+        subject: &Subject,
         rule_type: &str,
         rule_props: PropertyMap,
+    ) -> KResult<JobHandle> {
+        let mut e = Enc::new();
+        e.u8(JobKind::Reason.tag());
+        e.str(&subject.name);
+        e.u32(subject.roles.len() as u32);
+        for r in &subject.roles {
+            e.str(r);
+        }
+        e.opt_str(subject.tenant.as_deref());
+        e.str(rule_type);
+        codec::enc_map(&mut e, &rule_props);
+        self.jobs.submit(
+            self,
+            JobKind::Reason,
+            sha256(&e.buf),
+            crate::jobs::JobWork::Reason {
+                subject: subject.clone(),
+                rule_type: rule_type.into(),
+                rule_props,
+            },
+        )
+    }
+
+    /// M7b — submit an inference job (MRFC-0011 §6.11). The no-op AiProvider
+    /// is legal: the default worker is the in-process similarity executor.
+    pub fn infer(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        similarity_text: &str,
+    ) -> KResult<JobHandle> {
+        let mut e = Enc::new();
+        e.u8(JobKind::Infer.tag());
+        e.str(type_name);
+        e.str(similarity_text);
+        self.jobs.submit(
+            self,
+            JobKind::Infer,
+            sha256(&e.buf),
+            crate::jobs::JobWork::Infer {
+                subject: subject.clone(),
+                type_name: type_name.into(),
+                text: similarity_text.into(),
+            },
+        )
+    }
+
+    /// M7b — submit a prediction job (MRFC-0011 §6.12).
+    pub fn predict(
+        &self,
+        subject: &Subject,
+        type_name: &str,
+        target_props: &PropertyMap,
+        k: usize,
+    ) -> KResult<JobHandle> {
+        let mut e = Enc::new();
+        e.u8(JobKind::Predict.tag());
+        e.str(type_name);
+        codec::enc_map(&mut e, target_props);
+        e.u64(k as u64);
+        self.jobs.submit(
+            self,
+            JobKind::Predict,
+            sha256(&e.buf),
+            crate::jobs::JobWork::Predict {
+                subject: subject.clone(),
+                type_name: type_name.into(),
+                props: target_props.clone(),
+                k,
+            },
+        )
+    }
+
+    /// The persisted Class-B job table (status-tool surface).
+    pub fn jobs(&self) -> KResult<Vec<JobRecord>> {
+        self.jobs.list()
+    }
+
+    /// Poll one job (MRFC-0011 §6.10).
+    pub fn job_status(&self, job_id: u64) -> KResult<JobStatus> {
+        Ok(self.jobs.record(job_id)?.status)
+    }
+
+    /// cb001 — the job's claims. Only when Completed; a failed job surfaces
+    /// its error here instead.
+    pub fn job_result(&self, job_id: u64) -> KResult<Vec<KnowledgeObject>> {
+        let rec = self.jobs.record(job_id)?;
+        if rec.kind != JobKind::Reason {
+            return Err(KError::UnsupportedOperation(format!(
+                "job {job_id} is a {:?} job, not a reason job",
+                rec.kind
+            )));
+        }
+        crate::jobs::decode_reason_result(&self.jobs.result_blob(job_id)?)
+    }
+
+    /// M7b — an infer job's scored rows.
+    pub fn infer_job_result(&self, job_id: u64) -> KResult<Vec<ScoredKO>> {
+        let rec = self.jobs.record(job_id)?;
+        if rec.kind != JobKind::Infer {
+            return Err(KError::UnsupportedOperation(format!(
+                "job {job_id} is a {:?} job, not an infer job",
+                rec.kind
+            )));
+        }
+        crate::jobs::decode_infer_result(&self.jobs.result_blob(job_id)?)
+    }
+
+    /// M7b — a predict job's merged property map.
+    pub fn predict_job_result(&self, job_id: u64) -> KResult<PropertyMap> {
+        let rec = self.jobs.record(job_id)?;
+        if rec.kind != JobKind::Predict {
+            return Err(KError::UnsupportedOperation(format!(
+                "job {job_id} is a {:?} job, not a predict job",
+                rec.kind
+            )));
+        }
+        crate::jobs::decode_predict_result(&self.jobs.result_blob(job_id)?)
+    }
+
+    /// cb003 — the ONLY bridge from Class B to Class A (§7 Determinism Law):
+    /// commit the job's claims through the normal remember path, stamped
+    /// origin=Reason (the kernel stamps epistemic=Inferred, authority and
+    /// scope by origin). Per-claim idempotency keys make a repeated
+    /// approval exact-once.
+    pub fn approve_job(&self, job_id: u64) -> KResult<Vec<Remembered>> {
+        let rec = self.jobs.record(job_id)?;
+        if rec.kind != JobKind::Reason {
+            return Err(KError::UnsupportedOperation(format!(
+                "job {job_id} is a {:?} job, not a reason job",
+                rec.kind
+            )));
+        }
+        if rec.status != JobStatus::Completed {
+            return Err(KError::UnsupportedOperation(format!(
+                "job {job_id} is {:?} — only completed jobs can be approved",
+                rec.status
+            )));
+        }
+        let claims = crate::jobs::decode_reason_result(&self.jobs.result_blob(job_id)?)?;
+        let mut out = Vec::with_capacity(claims.len());
+        for (i, c) in claims.iter().enumerate() {
+            out.push(self.remember(RememberRequest {
+                context: KnowledgeContext::new(Subject::with_roles("kernel-reason", &["admin"])),
+                koid: None,
+                expected_version: None,
+                idempotency_key: Some(format!("job-{job_id}-{i}")),
+                metadata: c.metadata.clone(),
+                properties: c.properties.clone(),
+                semantic: None,
+                relationships: vec![],
+                security: None,
+                extensions: ExtensionMap::new(),
+                origin: Origin::Reason,
+                note: Some(format!("approved Class-B claim from job {job_id}")),
+                referential_policy: ReferentialPolicy::Permissive,
+            })?);
+        }
+        Ok(out)
+    }
+
+    /// M7 test hooks: admission bound (cb002) and worker park (cb002/cb004).
+    pub fn set_max_running_jobs(&self, n: usize) {
+        self.jobs.set_max_running(n);
+    }
+    pub fn set_job_park_ms(&self, ms: u64) {
+        self.jobs.set_park_ms(ms);
+    }
+
+    // ---- Class-B computations (job workers only; never public) ------------
+
+    /// The reason computation: scan objects matching the rule's conditions
+    /// and produce provenance-tagged claims with `origin=Reason`. Class B —
+    /// nothing here touches the Class-A store. P5-M20 (job004): the scan
+    /// runs under the CALLER's context — a tenant-scoped caller sees only
+    /// its tenant's objects (the claim shape is unchanged).
+    pub(crate) fn run_reason(
+        &self,
+        subject: &Subject,
+        rule_type: &str,
+        rule_props: &PropertyMap,
     ) -> KResult<Vec<KnowledgeObject>> {
-        let subject = Subject {
-            name: "kernel-reason".into(),
-            roles: vec!["admin".into()],
-            tenant: None,
-        };
-        // Scan objects matching the rule's conditions and produce claims.
-        let candidates = self.scan_by_type(&subject, rule_type)?;
+        let candidates = self.scan_by_type(subject, rule_type)?;
         let mut claims = Vec::new();
         for ko in candidates {
             let mut match_count = 0usize;
-            for (key, expected) in &rule_props {
+            for (key, expected) in rule_props {
                 if let Some(v) = ko.properties.get(key) {
                     if v == expected {
                         match_count += 1;
@@ -3922,10 +4527,9 @@ impl Kernel {
         Ok(claims)
     }
 
-    /// Infer new knowledge from existing objects using similarity matching.
-    /// Takes a prototype type and properties, finds similar objects, and
-    /// returns them with provenance.
-    pub fn infer(
+    /// The infer computation: similarity matching against the committed
+    /// store. Returns scored rows with provenance.
+    pub(crate) fn run_infer(
         &self,
         subject: &Subject,
         type_name: &str,
@@ -3945,16 +4549,15 @@ impl Kernel {
         })
     }
 
-    /// Predict properties for a target object based on similar objects.
-    /// Returns a merged property map from the top-k most similar objects.
-    pub fn predict(
+    /// The predict computation: merge the top-k most similar objects'
+    /// properties.
+    pub(crate) fn run_predict(
         &self,
         subject: &Subject,
         type_name: &str,
         target_props: &PropertyMap,
         k: usize,
     ) -> KResult<PropertyMap> {
-        // Build similarity text from target properties.
         let text: String = target_props
             .values()
             .map(|v| match v {
@@ -3963,7 +4566,7 @@ impl Kernel {
             })
             .collect::<Vec<_>>()
             .join(" ");
-        let similar = self.infer(subject, type_name, &text)?;
+        let similar = self.run_infer(subject, type_name, &text)?;
         let mut merged = PropertyMap::new();
         for scored in similar.iter().take(k) {
             for (key, val) in &scored.ko.properties {
@@ -4035,6 +4638,122 @@ mod tests {
         assert!(d > b);
     }
 
+    // --- P4-M7 (TDD-TIME-001) — time001: the six HLC property groups. ---
+
+    /// (1) Clock rollback: the packed value keeps moving forward.
+    #[test]
+    fn time001_rollback_keeps_timestamps_forward() {
+        let h = Hlc::new();
+        let c = ManualClock::new(500);
+        let a = h.now(&c);
+        c.set(1); // wall clock regresses
+        let b = h.now(&c);
+        assert!(b > a, "regression must not move timestamps backwards");
+    }
+
+    /// (2) Same-ms commits: each now() bumps the counter.
+    #[test]
+    fn time001_same_ms_commits_bump_the_counter() {
+        let h = Hlc::new();
+        let c = ManualClock::new(700);
+        let a = h.now(&c);
+        let b = h.now(&c);
+        assert_eq!(a >> 16, 700, "ms component comes from the clock");
+        assert_eq!(b, a + 1, "counter increments within the same ms");
+    }
+
+    /// (3) Restart: starting_at(seed) keeps every new timestamp above the
+    /// journal head, even when the wall clock reads behind the seed.
+    #[test]
+    fn time001_restart_reseeds_above_the_journal_head() {
+        let seed = (900u64 << 16) | 0xFFFF;
+        let h = Hlc::starting_at(seed);
+        let c = ManualClock::new(900); // clock == seed's ms
+        let a = h.now(&c);
+        assert!(
+            a > seed,
+            "first post-restart timestamp exceeds the journal head"
+        );
+        let c2 = ManualClock::new(50); // clock far behind the seed
+        let b = h.now(&c2);
+        assert!(b > a, "behind-seed clocks keep the sequence monotone");
+    }
+
+    /// (4) Max counter: at 0xFFFF within one ms the counter exhausts and
+    /// the value steps into the next ms slot (the documented overflow —
+    /// forward, monotone, never backwards).
+    #[test]
+    fn time001_max_counter_overflows_forward_one_ms() {
+        let h = Hlc::starting_at((1000u64 << 16) | 0xFFFF);
+        let c = ManualClock::new(1000); // frozen at the same ms
+        let a = h.now(&c);
+        assert_eq!(a, 1001u64 << 16, "0xFFFF + 1 steps into ms+1");
+        assert!(
+            a > (1000u64 << 16) | 0xFFFF,
+            "overflow never steps backwards"
+        );
+    }
+
+    /// (5) Concurrent writers: with a frozen clock the mutex-serialized
+    /// counter never resets — every value issued is distinct.
+    #[test]
+    fn time001_concurrent_writers_issue_distinct_timestamps() {
+        let h = Arc::new(Hlc::starting_at(0));
+        let c = Arc::new(ManualClock::new(42)); // frozen: counter path only
+        let out = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let h = h.clone();
+            let c = c.clone();
+            let out = out.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut mine = Vec::new();
+                for _ in 0..250 {
+                    mine.push(h.now(&*c));
+                }
+                for w in mine.windows(2) {
+                    assert!(w[1] > w[0], "each writer's own sequence is monotone");
+                }
+                out.lock().unwrap().extend(mine);
+            }));
+        }
+        for j in handles {
+            j.join().unwrap();
+        }
+        let mut all = out.lock().unwrap().clone();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(
+            all.len(),
+            2000,
+            "the frozen-ms counter never resets under contention"
+        );
+    }
+
+    /// (6) Determinism: the same clock script yields the same timestamp
+    /// sequence (conformance-replay requirement).
+    #[test]
+    fn time001_determinism_same_clock_script_same_timestamps() {
+        let script = || {
+            let h = Hlc::new();
+            let c = ManualClock::new(5);
+            let mut ts = Vec::new();
+            for _ in 0..3 {
+                ts.push(h.now(&c));
+            }
+            c.set(9);
+            ts.push(h.now(&c));
+            c.set(2); // regression
+            ts.push(h.now(&c));
+            ts
+        };
+        assert_eq!(
+            script(),
+            script(),
+            "replay must reproduce timestamps exactly"
+        );
+    }
+
     #[test]
     fn create_then_head_and_snapshot_reads() {
         let (k, clock) = kernel();
@@ -4093,6 +4812,25 @@ mod tests {
     #[test]
     fn durable_subscription_survives_reopen() {
         let dir = std::env::temp_dir();
+        // The path is pid-only: a killed run's corpse is never removed by
+        // a different pid's start-remove — sweep stale siblings (>1 day,
+        // so a concurrent live run is untouched) instead.
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                let stale = name.starts_with("aikoql_sub_reopen_")
+                    && e.metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .is_some_and(|t| t < cutoff);
+                if stale {
+                    let _ = std::fs::remove_file(e.path());
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
         let path = dir.join(format!("aikoql_sub_reopen_{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&path);
 
@@ -4113,7 +4851,9 @@ mod tests {
         assert_eq!(replay.len(), 1);
         assert_eq!(replay[0].koid, r.koid);
 
+        drop(k2); // redb holds a live file lock — release before cleanup
         let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(format!("{}.artifacts", path.display()));
     }
 
     #[test]

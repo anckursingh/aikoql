@@ -281,11 +281,11 @@ tr:hover td { background: rgba(108,199,240,0.03); }
   <div class="login-card">
     <h1>Aikoql Studio</h1>
     <div class="sub">The Knowledge OS Desktop</div>
-    <input type="text" id="login-user" placeholder="Username" value="admin" autocomplete="off" />
-    <input type="password" id="login-pass" placeholder="Password" value="admin" />
+    <input type="text" id="login-user" placeholder="Username" autocomplete="off" />
+    <input type="password" id="login-pass" placeholder="Password" />
     <button onclick="doLogin()">Sign In</button>
     <div class="err" id="login-error"></div>
-    <div class="hint">Default credentials: admin / admin<br>Read-only: user / user</div>
+    <div class="hint">Credentials: [auth].users in aikoql.toml, or the AIKOQL_ADMIN_PASSWORD bootstrap</div>
   </div>
 </div>
 

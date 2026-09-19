@@ -43,6 +43,9 @@ pub(crate) struct HttpSession {
     pub username: String,
     pub roles: Vec<String>,
     pub created: Instant,
+    /// P3-M1 (§53): session TTL from [auth].session_ttl_seconds (default
+    /// 24h). validate_token enforces `elapsed < ttl`.
+    pub ttl_secs: u64,
 }
 
 // pub(crate) re-exports: this block is the crate prelude. Extracted modules
@@ -61,6 +64,7 @@ pub(crate) use aikoql_scheduler::Scheduler;
 #[cfg(feature = "embedding-openai")]
 pub(crate) use aikoql_semantic::provider::OpenAiEmbeddingProvider;
 pub(crate) use aikoql_semantic::{EmbeddingEnricher, SemanticEngine};
+pub(crate) use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};
 pub(crate) use serde_json::{json, Value as J};
 pub(crate) use std::collections::{HashMap, HashSet};
 pub(crate) use std::io::{BufRead, BufReader, Read, Write};
@@ -73,6 +77,19 @@ pub(crate) use tracing::{error, info, info_span, warn};
 
 pub(crate) static SERVER_START: OnceLock<Instant> = OnceLock::new();
 pub(crate) static MEMORY_DIR: OnceLock<String> = OnceLock::new();
+
+/// P5-M22 (P1-15): the production maintainer's strong owner. The kernel's
+/// coordinator holds the maintainer WEAKLY (the P5-M18 Arc-cycle trap), so
+/// the strong Arc must live somewhere the process owns explicitly — the
+/// database context — not an accidental `OnceLock` singleton. One DB per
+/// process stays the product invariant (named here, not implied).
+pub(crate) struct DatabaseContext {
+    pub(crate) maintainer: Mutex<Option<Arc<aikoql_scheduler::IndexMaintainer>>>,
+}
+
+pub(crate) struct ServerContext {
+    pub(crate) db: DatabaseContext,
+}
 
 /// PRR-3: semantic readiness — the enrichment worker thread updates this,
 /// tool_health and /health surface it.
@@ -130,6 +147,21 @@ use crate::session::TcpAuthTable;
 use crate::transport::*;
 
 #[allow(unused_assignments)]
+/// ANSI colors render on Windows only in terminals with VT processing
+/// (Windows Terminal, VS Code, mintty, CI). Legacy conhost — PowerShell 5.1's
+/// default console — prints the raw escapes as `←[2m` garbage, so fall back to
+/// plain logs there. (ponytail: env heuristic instead of a windows-sys dep;
+/// plain logs are never broken, colors just degrade.)
+fn use_ansi() -> bool {
+    if !cfg!(windows) {
+        return true;
+    }
+    std::env::var_os("WT_SESSION").is_some()
+        || std::env::var_os("TERM_PROGRAM").is_some()
+        || std::env::var_os("TERM").is_some_and(|t| !t.eq_ignore_ascii_case("dumb"))
+        || std::env::var_os("CI").is_some()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -164,7 +196,8 @@ fn main() {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&cfg.log_level)),
         )
-        .with_writer(std::io::stderr);
+        .with_writer(std::io::stderr)
+        .with_ansi(use_ansi());
     if cfg.log_format == "json" {
         subscriber.json().init();
     } else {
@@ -203,8 +236,32 @@ fn main() {
     let model_dir_flag = cfg.model_dir;
     MEMORY_DIR.set(memory_dir).ok();
 
-    let kernel = match engine::open_kernel(&db_path, &cfg.encryption, cfg.backend) {
-        Ok(k) => k,
+    // P3-M1 (§53–54): build the HTTP login resolver once — argon2id hashes
+    // verified per login, bootstrap admin hashed here (the plaintext then
+    // drops out of scope) — and fail closed on an armed-but-credentialless
+    // remote HTTP surface (auth004) and on non-loopback metrics binds.
+    let http_auth = Arc::new(crate::http::AuthResolver::new(
+        cfg.auth_users,
+        cfg.admin_password.as_deref(),
+        cfg.auth_session_ttl_secs,
+    ));
+    if let Err(msg) = remote_http_requires_auth(cfg.allow_remote_http, http_auth.is_configured()) {
+        eprintln!("{msg}");
+        std::process::exit(2);
+    }
+    let metrics_addr = match metrics_addr {
+        Some(a) => match validate_http_listen(&a, cfg.allow_remote_http) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        },
+        None => None,
+    };
+
+    let (kernel, admin) = match engine::open_kernel(&db_path, &cfg.encryption, cfg.backend) {
+        Ok((k, admin)) => (k, admin),
         Err(e) => {
             eprintln!("open kernel: {}", e);
             std::process::exit(1);
@@ -332,6 +389,43 @@ fn main() {
         });
     }
 
+    // P5-M18 (ND-14): real ANN/BM25 indexes behind the maintainer (started
+    // unconditionally, off the serve path — the synchronous journal replay
+    // is batch-committed). The HNSW adopts the first vector's dim (the
+    // enricher emits 384-d all-MiniLM-L6-v2; a fixed default would silently
+    // drop it) and is capacity-capped at 10k physical nodes (allocator hint
+    // only — the coordinator ranks candidates against committed cosines).
+    //
+    // P5-M22 (P1-15): the maintainer resumes from `{db_path}.ckpt` when a
+    // COMPLETE checkpoint exists (restart cost ∝ events after it); any load
+    // failure — a torn pair, a foreign water — falls back to a fresh start
+    // with a full replay.
+    let server_ctx = Arc::new(ServerContext {
+        db: DatabaseContext {
+            maintainer: Mutex::new(None),
+        },
+    });
+    let ckpt_dir = std::path::PathBuf::from(format!("{db_path}.ckpt"));
+    {
+        let kernel_work = kernel.clone();
+        let server_work = server_ctx.clone();
+        let ckpt_work = ckpt_dir.clone();
+        thread::spawn(move || {
+            let maintainer = match resume_or_start_maintainer(&kernel_work, &ckpt_work) {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!("index maintainer failed to start: {e}");
+                    return;
+                }
+            };
+            // M18: attach so find_similar ranks the ANN candidates (the
+            // exact path stays available via search_exact).
+            kernel_work.attach_indexes(maintainer.clone());
+            // justified: Mutex poison is unrecoverable
+            *server_work.db.maintainer.lock().unwrap() = Some(maintainer);
+        });
+    }
+
     let db_path = Arc::new(db_path);
     SERVER_START.set(Instant::now()).ok();
 
@@ -403,6 +497,8 @@ fn main() {
             addr.clone(),
             db_path.clone(),
             rest_rate_limit.clone(),
+            http_auth.clone(),
+            admin.clone(),
         );
     }
 
@@ -440,10 +536,69 @@ fn main() {
                 std::process::exit(1);
             }
         };
-        run_tcp_listener(kernel, listener, auth, db_path, mcp_rate_limit);
+        run_tcp_listener(
+            kernel,
+            listener,
+            auth,
+            db_path,
+            mcp_rate_limit,
+            admin,
+            cfg.request_timeout_secs,
+            cfg.max_connections,
+        );
     } else {
-        run_stdio(&kernel, &db_path, mcp_rate_limit);
+        run_stdio(
+            &kernel,
+            &db_path,
+            mcp_rate_limit,
+            admin,
+            cfg.request_timeout_secs,
+        );
+        // P5-M22 (P1-15): stdio mode returns at stdin EOF — checkpoint the
+        // maintainer before the process exits. TCP mode never returns, so
+        // it has no shutdown-time checkpoint yet (honest ledger).
+        if let Some(m) = server_ctx.db.maintainer.lock().unwrap().as_ref() {
+            if let Err(e) = m.checkpoint(&kernel, &ckpt_dir) {
+                warn!("maintainer checkpoint failed: {e}");
+            }
+        }
     }
+}
+
+/// P5-M22 (P1-15): resume from `ckpt_dir` when a COMPLETE checkpoint is
+/// there — restart cost ∝ the events after it — and start fresh with a full
+/// replay otherwise. ANY load failure (a torn pair, P1-14; a foreign water,
+/// P1-15) falls back to a fresh start, never to an unavailable index.
+fn resume_or_start_maintainer(
+    kernel: &Kernel,
+    ckpt_dir: &std::path::Path,
+) -> KResult<Arc<aikoql_scheduler::IndexMaintainer>> {
+    if let Some(water) = aikoql_scheduler::IndexMaintainer::checkpoint_water(ckpt_dir)? {
+        let vectors = HnswVectorIndex::load(&ckpt_dir.join("vectors"));
+        let text = TantivyTextIndex::load(&ckpt_dir.join("text"));
+        if let (Ok(v), Ok(t)) = (vectors, text) {
+            let vectors: Arc<dyn VectorIndex> = Arc::new(v);
+            let text: Arc<dyn TextIndex> = Arc::new(t);
+            if let Ok(m) = aikoql_scheduler::IndexMaintainer::start_at(
+                kernel,
+                vectors,
+                text,
+                Some(water),
+                Some(ckpt_dir),
+            ) {
+                return Ok(m);
+            }
+        }
+        warn!(
+            "checkpoint at {} unusable — starting fresh with a full replay",
+            ckpt_dir.display()
+        );
+    }
+    aikoql_scheduler::IndexMaintainer::start(
+        kernel,
+        Arc::new(HnswVectorIndex::new(0, 10_000)),
+        Arc::new(TantivyTextIndex::new()?),
+    )
 }
 
 /// PRR-2 + R1 (review round 3): `--listen :9090` (empty host) binds
@@ -473,6 +628,48 @@ fn validate_listen(addr: &str) -> Result<String, String> {
         ));
     }
     Ok(expanded)
+}
+
+/// P3-M1 (auth004): the HTTP/metrics listener carries login + the knowledge
+/// API — loopback-only unless allow_remote_http is armed (same fail-closed
+/// reasoning as validate_listen; arming itself is gated on credentials by
+/// remote_http_requires_auth).
+fn validate_http_listen(addr: &str, allow_remote: bool) -> Result<String, String> {
+    let expanded = match addr.rsplit_once(':') {
+        Some(("", port)) => format!("127.0.0.1:{port}"),
+        _ => addr.to_string(),
+    };
+    let resolved: Vec<std::net::SocketAddr> = expanded
+        .to_socket_addrs()
+        .map_err(|e| format!("invalid --metrics-addr address {expanded}: {e}"))?
+        .collect();
+    if resolved.is_empty() {
+        return Err(format!(
+            "--metrics-addr {expanded} did not resolve to any address"
+        ));
+    }
+    if !allow_remote && !resolved.iter().all(|a| a.ip().is_loopback()) {
+        return Err(format!(
+            "--metrics-addr {expanded} would serve the HTTP surface (login + knowledge API) \
+             on a non-loopback interface; bind 127.0.0.1 (or ::1), or set \
+             allow_remote_http = true together with [auth] credentials"
+        ));
+    }
+    Ok(expanded)
+}
+
+/// P3-M1 (auth004): a remote HTTP surface without configured credentials is
+/// an unauthenticated network API — refused at serve, never defaulted.
+fn remote_http_requires_auth(allow_remote: bool, auth_configured: bool) -> Result<(), String> {
+    if allow_remote && !auth_configured {
+        return Err(
+            "allow_remote_http = true requires HTTP credentials ([auth].users in aikoql.toml \
+             or AIKOQL_ADMIN_PASSWORD) — refusing to serve an unauthenticated HTTP surface \
+             on non-loopback interfaces"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

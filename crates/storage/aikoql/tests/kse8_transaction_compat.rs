@@ -25,6 +25,9 @@ use common::{tmp, CountingEngine, LogicalCounts};
 use std::sync::Arc;
 
 const SALT: u64 = 0xC0FFEE;
+/// P5-M7: every kernel open bootstraps the catalog row as journal event #1 —
+/// the journal counts it, the transactional scenario does not.
+const CATALOG_PREAMBLE: usize = 1;
 
 fn alice() -> Subject {
     Subject::new("alice")
@@ -187,7 +190,7 @@ fn kse070_074_transaction_compat() {
 
     // Contract pins (documented kernel semantics, not just parity).
     assert_eq!(memory.atomic_versions, vec![1, 1]);
-    assert_eq!(memory.atomic_journal, 3);
+    assert_eq!(memory.atomic_journal, 3 + CATALOG_PREAMBLE);
     assert_eq!(memory.atomic_batches, 1, "transact must commit one batch");
     assert_eq!(memory.rollback_err, "conflict:1");
     assert_eq!(memory.rollback_batches, 0, "aborted txn committed a batch");

@@ -75,6 +75,45 @@ impl StorageEngine for RedbEngine {
         Ok(out)
     }
 
+    /// P4-M4 — direct seek to `start`, prefix-limited (O(log n) + range).
+    fn scan_from(&self, prefix: &[u8], start: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        let tx = self.db.begin_read().map_err(se)?;
+        let t = tx.open_table(TABLE).map_err(se)?;
+        let range = t.range::<&[u8]>(start..).map_err(se)?;
+        let mut out = Vec::new();
+        for item in range {
+            let (k, v) = item.map_err(se)?;
+            let kb = k.value();
+            if !kb.starts_with(prefix) {
+                break;
+            }
+            out.push((kb.to_vec(), v.value().to_vec()));
+        }
+        Ok(out)
+    }
+
+    /// P4-M4 — bounded predecessor: seek to (prefix..=at) and take ONE
+    /// backward step. Prefix rows sort above non-prefix rows inside that
+    /// range, so a single step either finds the predecessor or proves
+    /// absence (O(log n) + one row — no materialization).
+    fn predecessor(&self, prefix: &[u8], at: &[u8]) -> KResult<Option<(Vec<u8>, Vec<u8>)>> {
+        if at < prefix {
+            return Ok(None);
+        }
+        let tx = self.db.begin_read().map_err(se)?;
+        let t = tx.open_table(TABLE).map_err(se)?;
+        let mut range = t.range::<&[u8]>(prefix..=at).map_err(se)?;
+        if let Some(item) = range.next_back() {
+            let (k, v) = item.map_err(se)?;
+            let kb = k.value();
+            if !kb.starts_with(prefix) {
+                return Ok(None);
+            }
+            return Ok(Some((kb.to_vec(), v.value().to_vec())));
+        }
+        Ok(None)
+    }
+
     fn write_batch(&self, batch: &WriteBatch) -> KResult<()> {
         let tx = self.db.begin_write().map_err(se)?;
         {
@@ -149,6 +188,50 @@ mod tests {
         assert_eq!(e.get(b"x").unwrap(), None);
         assert_eq!(e.get(b"y").unwrap(), Some(vec![2]));
         assert_eq!(e.get(b"z").unwrap(), Some(vec![3]));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn predecessor_is_bounded_and_prefix_exact() {
+        // P4-M4 pin: the single largest prefix row <= at. Other koids bound
+        // the range on both sides ("obj/AA" < prefix, "obj/CC" > at) and must
+        // never win; when `at` extends the prefix, every key inside
+        // [prefix, at] carries the prefix, so absence is provable in one step.
+        let p = tmp("pred");
+        let e = RedbEngine::open(&p).unwrap();
+        let mut b = WriteBatch::new();
+        for (k, v) in [
+            (b"obj/AA".as_slice(), 1u8), // smaller koid — below the range
+            (b"obj/CC\x00\x00\x00\x00\x00\x00\x00\x01".as_slice(), 2u8), // above the range
+            (b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x01".as_slice(), 10),
+            (b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x05".as_slice(), 30),
+            (b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x09".as_slice(), 50),
+        ] {
+            b.put(k.to_vec(), vec![v]);
+        }
+        e.write_batch(&b).unwrap();
+        let prefix = b"obj/BB";
+        let at = b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x07";
+        let got = e.predecessor(prefix, at).unwrap().unwrap();
+        assert_eq!(
+            got.1,
+            vec![30],
+            "largest prefix row <= at, not the smaller-koid row"
+        );
+        // exact hit returns the row itself
+        let got = e
+            .predecessor(prefix, b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x05")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.1, vec![30]);
+        // nothing at or before the first version -> None
+        assert_eq!(
+            e.predecessor(prefix, b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x00")
+                .unwrap(),
+            None
+        );
+        // at below the prefix -> None
+        assert_eq!(e.predecessor(prefix, b"obj/BA").unwrap(), None);
         let _ = std::fs::remove_file(&p);
     }
 

@@ -73,6 +73,34 @@ pub trait StorageEngine: Send + Sync {
     /// space (O(all-keys)). Backends that cannot support this (e.g. external
     /// stores without native prefix iteration) must document the limitation.
     fn scan(&self, prefix: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>>;
+    /// P4-M4 — bounded forward seek: ascending entries with the given
+    /// prefix whose keys are at or after `start`.
+    ///
+    /// Default filters a full scan (correct, unbounded); engines with real
+    /// range iterators override with a direct seek. Same MUST-seek contract
+    /// as `scan`.
+    fn scan_from(&self, prefix: &[u8], start: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>> {
+        Ok(self
+            .scan(prefix)?
+            .into_iter()
+            .filter(|(k, _)| k.as_slice() >= start)
+            .collect())
+    }
+    /// P4-M4 — bounded predecessor lookup: the single row with the given
+    /// prefix whose key is the largest key at or before `at` (the
+    /// predecessor of `at` when `at` itself is absent). `at` must extend
+    /// the prefix (every caller passes a key inside the prefix range);
+    /// None when no prefix-matching row exists at or before `at`.
+    ///
+    /// Default filters a full scan (correct, O(prefix-range)); engines with
+    /// reverse-capable range iterators override with a direct seek that
+    /// touches exactly one row.
+    fn predecessor(&self, prefix: &[u8], at: &[u8]) -> KResult<Option<(Vec<u8>, Vec<u8>)>> {
+        Ok(self
+            .scan(prefix)?
+            .into_iter()
+            .rfind(|(k, _)| k.as_slice() <= at))
+    }
     /// Atomically apply the batch (all-or-nothing).
     fn write_batch(&self, batch: &WriteBatch) -> KResult<()>;
     /// Native constraint support declared by this backend.
@@ -187,6 +215,19 @@ impl StorageEngine for MemoryEngine {
             .collect())
     }
 
+    /// P4-M4 — in-range prefix rows sort above non-prefix rows, so one
+    /// next_back step finds the predecessor or proves absence (O(log n)).
+    fn predecessor(&self, prefix: &[u8], at: &[u8]) -> KResult<Option<(Vec<u8>, Vec<u8>)>> {
+        if at < prefix {
+            return Ok(None); // std BTreeMap panics on inverted range bounds
+        }
+        let m = self.map.read().map_err(|_| poisoned())?;
+        Ok(m.range(prefix.to_vec()..=at.to_vec())
+            .next_back()
+            .filter(|(k, _)| k.starts_with(prefix))
+            .map(|(k, v)| (k.clone(), v.clone())))
+    }
+
     fn write_batch(&self, batch: &WriteBatch) -> KResult<()> {
         // Single write lock => atomic application; no failure modes mid-apply.
         let mut m = self.map.write().map_err(|_| poisoned())?;
@@ -240,5 +281,37 @@ mod tests {
     fn get_missing_returns_none() {
         let e = MemoryEngine::new();
         assert_eq!(e.get(b"nope").unwrap(), None);
+    }
+
+    #[test]
+    fn predecessor_boundary_cases() {
+        let e = MemoryEngine::new();
+        let mut b = WriteBatch::new();
+        for (k, v) in [
+            (b"obj/AA".as_slice(), 1u8), // other koids bound the range on both sides
+            (b"obj/CC\x00\x00\x00\x00\x00\x00\x00\x01".as_slice(), 2u8),
+            (b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x01".as_slice(), 10),
+            (b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x05".as_slice(), 30),
+            (b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x09".as_slice(), 50),
+        ] {
+            b.put(k.to_vec(), vec![v]);
+        }
+        e.write_batch(&b).unwrap();
+        let prefix = b"obj/BB";
+        let at = b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x07";
+        assert_eq!(e.predecessor(prefix, at).unwrap().unwrap().1, vec![30]);
+        assert_eq!(
+            e.predecessor(prefix, b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x05")
+                .unwrap()
+                .unwrap()
+                .1,
+            vec![30]
+        );
+        assert_eq!(
+            e.predecessor(prefix, b"obj/BB\x00\x00\x00\x00\x00\x00\x00\x00")
+                .unwrap(),
+            None
+        );
+        assert_eq!(e.predecessor(prefix, b"obj/BA").unwrap(), None);
     }
 }

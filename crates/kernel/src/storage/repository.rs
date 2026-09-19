@@ -28,7 +28,7 @@
 //! readers still verify the payload's `type_name` so stale entries from type
 //! changes are harmless.
 
-use crate::knowledge::codec::{self, Dec, Enc};
+use crate::knowledge::codec::{self, Dec, Enc, ScoringRecord};
 use crate::knowledge::kom::*;
 use crate::knowledge::notify::{EventFilter, SubscriptionRecord};
 use crate::storage::cache::KnowledgeCache;
@@ -405,6 +405,12 @@ impl KnowledgeRepository {
 
     /// Put one `type/<type_name>/<koid>` entry. Idempotent at the KV level.
     pub fn write_type_index(&self, batch: &mut WriteBatch, type_name: &str, koid: &KOID) {
+        // P5-M7: catalog rows are the database's own metadata, not user data
+        // — never derived-index them (mirrors Kernel::list_types and the
+        // scheduler maintainer's apply_batch guard).
+        if crate::catalog::is_catalog_type(type_name) {
+            return;
+        }
         batch.put(type_key(type_name, koid), vec![]);
     }
 
@@ -487,6 +493,12 @@ impl KnowledgeRepository {
                 relo_rows += 1;
                 reli_rows += 1;
             }
+            // P5-M7: the catalog KO's head is canonical state (heads_scanned
+            // counts it) but derives no user-facing rows — same guard as
+            // write_type_index.
+            if crate::catalog::is_catalog_type(&ko.metadata.type_name) {
+                continue;
+            }
             new.insert(type_key(&ko.metadata.type_name, &koid));
             type_rows += 1;
         }
@@ -539,6 +551,30 @@ impl KnowledgeRepository {
             out.push((name, v));
         }
         Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
+    // Transaction outcomes (P5-M10: the outcome row rides the SAME engine
+    // batch as the writes, so a retry after any crash re-reads it)
+    // -----------------------------------------------------------------------
+
+    /// Reserved key prefix for transaction outcome rows. ASCII — same
+    /// no-collision argument as `K_SCHEMA_PREFIX`.
+    pub const K_TXN_PREFIX: &[u8] = b"sys/txn/";
+
+    pub fn put_txn_record(&self, batch: &mut WriteBatch, txn_id: &str, bytes: &[u8]) {
+        let mut key = Vec::with_capacity(Self::K_TXN_PREFIX.len() + txn_id.len());
+        key.extend_from_slice(Self::K_TXN_PREFIX);
+        key.extend_from_slice(txn_id.as_bytes());
+        batch.put(key, bytes.to_vec());
+    }
+
+    /// The recorded outcome of `txn_id`, if the transaction ever committed.
+    pub fn txn_record(&self, txn_id: &str) -> KResult<Option<Vec<u8>>> {
+        let mut key = Vec::with_capacity(Self::K_TXN_PREFIX.len() + txn_id.len());
+        key.extend_from_slice(Self::K_TXN_PREFIX);
+        key.extend_from_slice(txn_id.as_bytes());
+        self.engine().get(&key)
     }
 
     // -----------------------------------------------------------------------
@@ -681,15 +717,49 @@ impl KnowledgeRepository {
         Ok(out)
     }
 
-    pub fn get_object_at(&self, koid: &KOID, snap_ts: u64) -> KResult<Option<KnowledgeObject>> {
-        let entries = self.engine().scan(&obj_prefix(koid))?;
-        for (k, v) in entries.iter().rev() {
-            let ts_bytes: &[u8] = &k[k.len() - 8..];
+    /// P4-M4 — bounded predecessor lookup (TDD-KERNEL-002): the newest
+    /// version committed at or before `snap_ts`, via the engine's
+    /// `predecessor` seek — never a fetch-all-versions scan. One row in,
+    /// one row out.
+    pub fn get_version_at(
+        &self,
+        koid: &KOID,
+        snap_ts: u64,
+    ) -> KResult<Option<(u64, KnowledgeObject)>> {
+        let at = obj_key(koid, snap_ts);
+        if let Some((k, v)) = self.engine().predecessor(&obj_prefix(koid), &at)? {
+            let ts_bytes = &k[k.len() - 8..];
             let mut ts = [0u8; 8];
             ts.copy_from_slice(ts_bytes);
-            if u64::from_be_bytes(ts) <= snap_ts {
-                return Ok(Some(codec::decode_ko_wire(v)?));
+            return Ok(Some((u64::from_be_bytes(ts), codec::decode_ko_wire(&v)?)));
+        }
+        Ok(None)
+    }
+
+    pub fn get_object_at(&self, koid: &KOID, snap_ts: u64) -> KResult<Option<KnowledgeObject>> {
+        Ok(self.get_version_at(koid, snap_ts)?.map(|(_, ko)| ko))
+    }
+
+    /// P5-M16 — the slim read behind vector recall: the same predecessor
+    /// walk as `get_version_at`, but only the scoring-relevant fields are
+    /// decoded out of the wire blob (the body after the 8-byte header).
+    /// `required` limits property decoding to the filter keys the query
+    /// asks for; everything else is skipped, never decoded.
+    pub(crate) fn get_object_scoring(
+        &self,
+        koid: &KOID,
+        snap_ts: u64,
+        required: &[String],
+    ) -> KResult<Option<ScoringRecord>> {
+        let at = obj_key(koid, snap_ts);
+        if let Some((_, v)) = self.engine().predecessor(&obj_prefix(koid), &at)? {
+            if v.len() < 8 {
+                return Err(KError::Codec(format!(
+                    "scoring blob for {} under 8 bytes",
+                    koid
+                )));
             }
+            return Ok(Some(codec::decode_ko_scoring(&v[8..], required)?));
         }
         Ok(None)
     }
@@ -784,13 +854,17 @@ impl KnowledgeRepository {
         Ok(out)
     }
 
+    /// P4-M4 — event replay seeking (TDD-EVENT-001): `scan_from` lands at
+    /// the first seq past `after_seq` — no whole-journal scan, bounded by
+    /// the engine's seek. Identical answers to the old filter (ker004).
     pub fn scan_events_after(&self, after_seq: u64) -> KResult<Vec<KnowledgeEvent>> {
+        if after_seq == u64::MAX {
+            return Ok(Vec::new()); // seq > u64::MAX is empty — the old filter's edge
+        }
+        let start = ke_key(after_seq + 1);
         let mut out = Vec::new();
-        for (_, v) in self.engine().scan(P_KE)? {
-            let ke = codec::decode_ke(&v)?;
-            if ke.seq > after_seq {
-                out.push(ke);
-            }
+        for (_, v) in self.engine().scan_from(P_KE, &start)? {
+            out.push(codec::decode_ke(&v)?);
         }
         Ok(out)
     }

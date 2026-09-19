@@ -219,8 +219,8 @@ pub(crate) fn run_ingest_dir(
     // Store the IR as production knowledge: one KO per entity with kernel
     // relationships between them. The summary KO below remains only as the
     // compile_context IR snapshot (tool_compile_context reads ir_json).
-    let kernel = match engine::open_kernel_auto(db_path) {
-        Ok(k) => k,
+    let (kernel, _admin) = match engine::open_kernel_auto(db_path) {
+        Ok((k, admin)) => (k, admin),
         Err(e) => {
             eprintln!("open kernel: {}", e);
             std::process::exit(1);

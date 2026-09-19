@@ -32,6 +32,12 @@ fn alice() -> Subject {
     Subject::new("alice")
 }
 
+/// A fresh kernel journals the P5-M7 catalog version row at open — one
+/// system event precedes every user event, so the maintainer's journal
+/// water mark counts it. Index CONTENTS exclude it (the maintainer skips
+/// the reserved catalog type), water marks do not.
+const CATALOG_PREAMBLE: usize = 1;
+
 fn create_vec(k: &Kernel, body: &str, emb: Vec<f32>) -> KOID {
     let mut req = RememberRequest::create(alice(), meta("fact"));
     req.properties
@@ -43,6 +49,14 @@ fn create_vec(k: &Kernel, body: &str, emb: Vec<f32>) -> KOID {
         source: None,
         summary: None,
     });
+    k.remember(req).unwrap().koid
+}
+
+/// A plain note (no semantic block) — the property-index rows.
+fn note(k: &Kernel, body: &str) -> KOID {
+    let mut req = RememberRequest::create(alice(), meta("note"));
+    req.properties
+        .insert("body".into(), Value::Text(body.into()));
     k.remember(req).unwrap().koid
 }
 
@@ -72,7 +86,7 @@ fn i01_catchup_replay_indexes_existing_journal() {
     )
     .unwrap();
     // replay happened synchronously in start()
-    assert_eq!(m.water(), 2);
+    assert_eq!(m.water(), 2 + CATALOG_PREAMBLE as u64);
     assert_eq!(m.vectors().len(), 2);
     assert_eq!(m.text().len(), 2);
     let hits = m.vectors().search(&[1.0, 0.0], 1, None);
@@ -191,7 +205,7 @@ fn i05_maintainer_recovers_from_existing_data_on_restart() {
     )
     .unwrap();
     assert_eq!(m2.vectors().len(), 1);
-    assert_eq!(m2.water(), 1);
+    assert_eq!(m2.water(), 1 + CATALOG_PREAMBLE as u64);
     m2.shutdown();
 }
 
@@ -298,20 +312,20 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
     )
     .unwrap();
     m1.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
-    assert_eq!(m1.water(), 2);
+    assert_eq!(m1.water(), 2 + CATALOG_PREAMBLE as u64);
 
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     let checkpoint_dir = std::env::temp_dir().join(format!("aikoql-i08-{}", stamp));
-    m1.checkpoint(&checkpoint_dir).unwrap();
+    m1.checkpoint(&k, &checkpoint_dir).unwrap();
     m1.shutdown();
 
     let water = IndexMaintainer::checkpoint_water(&checkpoint_dir)
         .unwrap()
         .expect("checkpoint must have a water mark");
-    assert_eq!(water, 2);
+    assert_eq!(water, 2 + CATALOG_PREAMBLE as u64);
 
     let vectors2: Arc<HnswVectorIndex> =
         Arc::new(HnswVectorIndex::load(&checkpoint_dir.join("vectors")).unwrap());
@@ -322,11 +336,12 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
         vectors2.clone() as Arc<dyn VectorIndex>,
         text2.clone() as Arc<dyn TextIndex>,
         Some(water),
+        Some(&checkpoint_dir),
     )
     .unwrap();
     k.attach_indexes(m2.clone());
 
-    assert_eq!(m2.water(), 2);
+    assert_eq!(m2.water(), 2 + CATALOG_PREAMBLE as u64);
     assert_eq!(m2.vectors().len(), 2);
     assert_eq!(m2.text().len(), 2);
 
@@ -338,8 +353,85 @@ fn i08_checkpoint_resume_skips_replay_and_keeps_live_apply() {
 
     let _c = create_vec(&k, "cats everywhere", vec![0.95, 0.05]);
     m2.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
-    assert_eq!(m2.water(), 3);
+    assert_eq!(m2.water(), 3 + CATALOG_PREAMBLE as u64);
     assert_eq!(m2.vectors().len(), 3);
+
+    m2.shutdown();
+    let _ = std::fs::remove_dir_all(&checkpoint_dir);
+}
+
+#[test]
+fn i12_property_index_checkpoint_resume_answers_without_reseed() {
+    let (k, _c) = mk();
+    k.catalog_create_index("by_body", "note", &["body"])
+        .unwrap();
+    let a = note(&k, "hello cats");
+    let b = note(&k, "hello dogs");
+
+    let vectors: Arc<HnswVectorIndex> = Arc::new(HnswVectorIndex::new(2, 100));
+    let text: Arc<TantivyTextIndex> = Arc::new(TantivyTextIndex::new().unwrap());
+    let m1 = IndexMaintainer::start(
+        &k,
+        vectors.clone() as Arc<dyn VectorIndex>,
+        text.clone() as Arc<dyn TextIndex>,
+    )
+    .unwrap();
+    m1.wait_caught_up(&k, Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        k.scan_index("by_body", &[Value::Text("hello cats".into())])
+            .unwrap(),
+        vec![a]
+    );
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let checkpoint_dir = std::env::temp_dir().join(format!("aikoql-i12-{}", stamp));
+    // An HNSW checkpoint with no vectors has no payload section (P1-14) —
+    // seed a dummy so the pair stays loadable (the idx4-002 idiom).
+    vectors.upsert(KOID::from_bytes([3u8; KOID_LEN]), "m", &[0.1, 0.2]);
+    m1.checkpoint(&k, &checkpoint_dir).unwrap();
+    m1.shutdown();
+
+    // RED: the property indexes are in-memory only (idx2-007) — the
+    // checkpoint carries nothing for them today, so there is no properties/
+    // directory at all.
+    let props = std::fs::read_dir(checkpoint_dir.join("properties"));
+    assert!(
+        props.is_ok(),
+        "the maintainer checkpoint must persist the property indexes"
+    );
+    assert_eq!(props.unwrap().count(), 1, "one file per property index");
+
+    let water = IndexMaintainer::checkpoint_water(&checkpoint_dir)
+        .unwrap()
+        .expect("checkpoint must have a water mark");
+    assert_eq!(water, k.journal_head().unwrap().0);
+
+    let vectors2: Arc<HnswVectorIndex> =
+        Arc::new(HnswVectorIndex::load(&checkpoint_dir.join("vectors")).unwrap());
+    let text2: Arc<TantivyTextIndex> =
+        Arc::new(TantivyTextIndex::load(&checkpoint_dir.join("text")).unwrap());
+    let m2 = IndexMaintainer::start_at(
+        &k,
+        vectors2.clone() as Arc<dyn VectorIndex>,
+        text2.clone() as Arc<dyn TextIndex>,
+        Some(water),
+        Some(&checkpoint_dir),
+    )
+    .unwrap();
+
+    // The observable pin (both mechanisms): rows committed before the
+    // checkpoint still answer after a resume restart.
+    assert_eq!(
+        k.scan_index("by_body", &[Value::Text("hello dogs".into())])
+            .unwrap(),
+        vec![b]
+    );
+    // P5-M26 contract: a restored index is stamped fresh at the water, so
+    // the verify gate short-circuits without a walk.
+    assert_eq!(k.index_applied_seq("by_body").unwrap(), water);
 
     m2.shutdown();
     let _ = std::fs::remove_dir_all(&checkpoint_dir);

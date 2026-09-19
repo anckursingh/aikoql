@@ -3,6 +3,77 @@
 
 use crate::{json, Kernel, LifecycleState, Ordering, Subject, ACTIVE_CONNECTIONS, J, SERVER_START};
 use std::sync::Arc;
+
+// ---------------------------------------------------------------------------
+// Design §22 storage admin tools — v2 backend only. A None capability means
+// the serving backend (redb/v1) has no admin surface: the tool answers with
+// an error inside the normal tool-result envelope, never a transport error.
+// ---------------------------------------------------------------------------
+
+pub(crate) fn tool_storage_stats(
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
+    let admin = admin.ok_or("storage admin unavailable on this backend")?;
+    let s = admin.storage_stats().map_err(|e| e.to_string())?;
+    Ok(json!({
+        "write": {
+            "wal_bytes": s.write.wal_bytes,
+            "flush_count": s.write.flush_count,
+            "flush_latency_us": s.write.flush_latency_us,
+            "fsync_count": s.write.fsync_count,
+            "fsync_latency_us_buckets": s.write.fsync_latency_us_buckets,
+            "compaction_backlog_bytes": s.write.compaction_backlog_bytes,
+            "compaction_pending_segments": s.write.compaction_pending_segments,
+            "checkpoint_count": s.write.checkpoint_count,
+            "checkpoint_latency_us": s.write.checkpoint_latency_us,
+            "write_queue_depth": s.write.write_queue_depth,
+            "group_commit_batches": s.write.group_commit_batches,
+            "group_commit_ops": s.write.group_commit_ops,
+            "group_commit_max_ops": s.write.group_commit_max_ops,
+            "last_compaction_ms": s.write.last_compaction_ms,
+            "compaction_error_count": s.write.compaction_error_count,
+            "recovery_ms": s.write.recovery_ms,
+            "wal_replay_bytes": s.write.wal_replay_bytes,
+        },
+        "segments": {
+            "count": s.segments.count,
+            "bytes": s.segments.bytes,
+        },
+        "cache": {
+            "hits": s.cache.hits,
+            "misses": s.cache.misses,
+            "evictions": s.cache.evictions,
+            "bytes": s.cache.bytes,
+        },
+        "read": {
+            "lookups": s.read.lookups,
+            "get_wall_ns": s.read.get_wall_ns,
+        },
+    }))
+}
+
+pub(crate) fn tool_storage_compact(
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
+    let admin = admin.ok_or("storage admin unavailable on this backend")?;
+    let c = admin.storage_compact().map_err(|e| e.to_string())?;
+    Ok(json!({
+        "segments_in": c.segments_in,
+        "segments_out": c.segments_out,
+        "entries_in": c.entries_in,
+        "entries_out": c.entries_out,
+        "entries_archived": c.entries_archived,
+    }))
+}
+
+pub(crate) fn tool_storage_checkpoint(
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
+    let admin = admin.ok_or("storage admin unavailable on this backend")?;
+    let c = admin.storage_checkpoint().map_err(|e| e.to_string())?;
+    Ok(json!({"generation": c.generation}))
+}
+
 pub(crate) fn tool_metrics(k: &Kernel) -> Result<J, String> {
     let (seq, _audit) = k.journal_head().map_err(|e| e.to_string())?;
     let heads = k.scan_heads().map_err(|e| e.to_string())?;
@@ -65,18 +136,40 @@ pub(crate) fn tool_metrics(k: &Kernel) -> Result<J, String> {
 // tools/list
 // ---------------------------------------------------------------------------
 
-pub(crate) fn tool_verify_backup(args: &J) -> Result<J, String> {
+/// A v2-native backup dir holds exactly one `SNAPSHOT-{gen}` marker — its
+/// presence is what routes restore/verify to the engine-native path.
+fn snapshot_marker_in(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().starts_with("SNAPSHOT-"))
+        .map(|e| e.path())
+}
+
+pub(crate) fn tool_verify_backup(
+    args: &J,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
     let backup = args
         .get("backup")
         .and_then(|b| b.as_str())
         .ok_or("missing argument: backup")?;
-    let data_path = backup_data_file(backup)?;
     let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
     let expected_seq = meta["journal_seq"].as_u64().unwrap_or(0);
     let expected_objects = meta["object_count"].as_u64().unwrap_or(0) as usize;
-    let ok = verify_backup_file(&data_path, expected_seq, expected_objects);
+    // P3-M3: a v2-native backup verifies through its marker (decode +
+    // checksum). Any other backup on a v2 server — or any backup on
+    // redb/v1 — verifies through the redb open below.
+    let ok = if let (Some(_), Some(marker)) =
+        (admin, snapshot_marker_in(std::path::Path::new(backup)))
+    {
+        aikoql_storage_v2::snapshot::SnapshotMarker::read(&marker).is_ok()
+    } else {
+        let data_path = backup_data_file(backup)?;
+        verify_backup_file(&data_path, expected_seq, expected_objects)
+    };
     Ok(json!({
         "backup": backup,
         "verified": ok,
@@ -128,7 +221,11 @@ pub(crate) fn tool_health(k: &Kernel) -> Result<J, String> {
     }))
 }
 
-pub(crate) fn tool_backup(k: &Kernel, db_path: &str) -> Result<J, String> {
+pub(crate) fn tool_backup(
+    k: &Kernel,
+    db_path: &str,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
@@ -140,6 +237,36 @@ pub(crate) fn tool_backup(k: &Kernel, db_path: &str) -> Result<J, String> {
         p.push(format!(".backup.{}", ts));
         PathBuf::from(p)
     };
+
+    // P3-M3 §58: a v2 backend takes the engine-native snapshot — pinned
+    // generation, verified byte-for-byte, marker published LAST (its
+    // presence IS the commit point, so `verified` needs no extra pass).
+    // Recovery-point metadata is read BEFORE the snapshot pins the
+    // generation: the reported seq is a point the snapshot contains.
+    if let Some(admin) = admin {
+        let (seq, _audit) = k.journal_head().map_err(|e| e.to_string())?;
+        let obj_count = k.scan_heads().map_err(|e| e.to_string())?.len();
+        let info = admin.snapshot_to(&backup_dir).map_err(|e| e.to_string())?;
+        let meta_path = backup_dir.join("meta.json");
+        std::fs::write(
+            &meta_path,
+            json!({
+                "timestamp": ts, "source": db_path, "journal_seq": seq,
+                "object_count": obj_count, "engine": "aikoql-v2",
+                "generation": info.generation, "file_count": info.file_count
+            })
+            .to_string(),
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(json!({
+            "backup": backup_dir, "timestamp": ts, "journal_seq": seq,
+            "object_count": obj_count, "verified": true, "engine": "aikoql-v2",
+            "generation": info.generation, "file_count": info.file_count,
+            "bytes_copied": info.bytes_copied
+        }));
+    }
+
+    // redb/v1 backends keep the REC-002 trait-default scan (untouched).
     std::fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
 
     // Snapshot the store through the kernel — the live file is region-locked
@@ -219,7 +346,11 @@ fn backup_data_file(backup: &str) -> Result<String, String> {
         .ok_or_else(|| "backup data file missing".into())
 }
 
-pub(crate) fn tool_restore(k: &Kernel, args: &J) -> Result<J, String> {
+pub(crate) fn tool_restore(
+    k: &Kernel,
+    args: &J,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> Result<J, String> {
     let backup = args
         .get("backup")
         .and_then(|b| b.as_str())
@@ -227,6 +358,29 @@ pub(crate) fn tool_restore(k: &Kernel, args: &J) -> Result<J, String> {
     let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
+    // P3-M3 §60: a v2-native backup (marker present) on a v2 server takes
+    // the engine-native path — verify, materialize, swap rows in one frame.
+    // A redb-format backup on a v2 server still restores through the
+    // trait-default scan below.
+    if let (Some(admin), Some(_marker)) = (admin, snapshot_marker_in(std::path::Path::new(backup)))
+    {
+        let info = admin
+            .restore_from(std::path::Path::new(backup))
+            .map_err(|e| e.to_string())?;
+        let pitr_seq = meta.get("journal_seq").and_then(|v| v.as_u64());
+        let pitr_ts = meta.get("timestamp").and_then(|v| v.as_u64());
+        return Ok(json!({
+            "restored": true,
+            "engine": "aikoql-v2",
+            "generation": info.generation,
+            "rows_restored": info.rows_restored,
+            "meta": meta,
+            "recovery_point": {
+                "journal_seq": pitr_seq,
+                "timestamp": pitr_ts,
+            }
+        }));
+    }
     let data_file = backup_data_file(backup)?;
     // Engine-level restore: the live file cannot be overwritten while the
     // server holds it open (region lock), so rows are swapped through the
@@ -372,5 +526,66 @@ pub(crate) fn tool_evidence_pack(k: &Kernel, args: &J) -> Result<J, String> {
             "purge_coverage": "expired objects are counted and purge-eligible; physical deletion is caller-side — the kernel has no purge op (MRFC-0020 Phase 4 honest row)",
         },
         "encryption": encryption,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// index_create — P5-M17b (ND-14): the production declaration surface
+// ---------------------------------------------------------------------------
+
+/// Declare a property index (catalog row + registry + synchronous rebuild),
+/// settle the maintainer, then analyze so the CBO can price the index.
+/// Same call shape as the embedded SDK's create_index. Idempotent on
+/// reopen: an existing declaration of the same shape rebuilds + re-analyzes
+/// (the harness re-declares per cell to refresh M9 stats); a different
+/// shape under the same name fails closed.
+pub(crate) fn tool_index_create(k: &Kernel, args: &J) -> Result<J, String> {
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("index_create: 'name' (string) required")?;
+    let type_name = args
+        .get("type_name")
+        .and_then(|v| v.as_str())
+        .ok_or("index_create: 'type_name' (string) required")?;
+    let properties: Vec<&str> = args
+        .get("properties")
+        .and_then(|v| v.as_array())
+        .ok_or("index_create: 'properties' (array of strings) required")?
+        .iter()
+        .map(|p| p.as_str().ok_or("index_create: properties must be strings"))
+        .collect::<Result<_, _>>()?;
+
+    if let Some(d) = k
+        .catalog_list_indexes()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|d| d.name == name)
+    {
+        if d.type_name != type_name || d.properties != properties {
+            return Err(format!(
+                "index_create: '{name}' already declared with a different shape"
+            ));
+        }
+        k.rebuild_index(name).map_err(|e| e.to_string())?;
+    } else {
+        k.catalog_create_index(name, type_name, &properties)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Settle the maintainer before analyze — a lagging re-apply can
+    // transiently overwrite the rebuild with an older version (the M17b
+    // wait_caught_up contract).
+    if let Some(m) = k.index_maintainer() {
+        m.wait_caught_up(k, std::time::Duration::from_secs(300))
+            .map_err(|e| e.to_string())?;
+    }
+
+    let stats = k.analyze(type_name).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "name": name,
+        "type_name": type_name,
+        "properties": properties,
+        "rows": stats.row_count,
     }))
 }

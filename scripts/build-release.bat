@@ -62,6 +62,6 @@ echo Archive: build\aikoql-windows-x86_64-%VERSION%.zip
 echo.
 echo Usage:
 echo   aikoql-mcp.exe shell               Interactive shell
-echo   aikoql-mcp.exe                     Start server (MCP TCP + HTTP metrics)
-echo   aikoql-mcp.exe --metrics-addr 127.0.0.1:9181 my.db
+echo   aikoql-mcp.exe                     Start MCP server (stdio mode)
+echo   aikoql-mcp.exe serve --listen 127.0.0.1:9090 --tcp-token TOKEN::admin --metrics-addr 127.0.0.1:9091 my.db
 echo   aikoql-mcp.exe import --help       Import data

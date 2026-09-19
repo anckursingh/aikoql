@@ -1,23 +1,5 @@
-import os
-import shutil
-import tempfile
-
-import pytest
-
 from aikoql import aikoql
 from aikoql.checkpointer import AikoqlCheckpointer
-
-
-@pytest.fixture
-def tmp_aikoql():
-    d = tempfile.mkdtemp(prefix="aikoql-py-test-")
-    path = os.path.join(d, "test.redb")
-    client = aikoql(path, salt=42)
-    try:
-        yield client
-    finally:
-        client.close()
-        shutil.rmtree(d, ignore_errors=True)
 
 
 def test_remember_and_get(tmp_aikoql):
@@ -103,3 +85,20 @@ def test_aikoql_match(tmp_aikoql):
     results = tmp_aikoql.aikoql("MATCH Person RETURN *", subject="alice")
     assert len(results) == 2
     assert results[0]["type_name"] == "Person"
+
+
+def test_create_index_declares_and_match_stays_parity(tmp_aikoql):
+    """P5-M17b: the production declaration surface. create_index must exist
+    on the embedded SDK, and MATCH rows must stay identical across the
+    declaration — an index changes plans, never answers."""
+    koids = [
+        tmp_aikoql.remember("alice", "note", {"topic": t, "body": "b"})["koid"]
+        for t in ["pet", "wild", "pet", "wild"]
+    ]
+    query = 'MATCH note WHERE topic == "pet" RETURN *'
+    before = tmp_aikoql.aikoql(query, subject="alice")
+    assert {r["koid"] for r in before} == {koids[0], koids[2]}
+    tmp_aikoql.create_index("by_topic", "note", ["topic"])
+    after = tmp_aikoql.aikoql(query, subject="alice")
+    assert {r["koid"] for r in after} == {koids[0], koids[2]}, (
+        "declaration must not change query answers")

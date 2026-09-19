@@ -32,12 +32,8 @@ crates/
 ├── ingestion/            ← Document ingestion pipeline (moved from services/)
 ├── services/
 │   └── api/mcp/          ← MCP server + REST API + Graph UI
-├── cluster/proxy/        ← Cluster proxy
-├── sdk/                  ← Language SDKs
-│   ├── python/
-│   ├── go/
-│   ├── java/
-│   └── typescript/
+├── sdk/                  ← Language SDKs (P3-M9: Python only — MCP is the
+│   └── python/              blessed surface for other languages)
 benchmarks/               ← Load + micro-benchmarks (moved from crates/)
 ```
 
@@ -45,14 +41,14 @@ benchmarks/               ← Load + micro-benchmarks (moved from crates/)
 
 | Metric | Value |
 |--------|-------|
-| Crates | 20 (kernel, graph, vector, scheduler, semantic, reasoning, compiler, runtime, ingestion, mcp, python-sdk, typescript-sdk, benchmarks, cluster/proxy, provider-sdk, rocksdb, 4 providers) |
+| Crates | 18 (kernel, graph, vector, scheduler, semantic, reasoning, compiler, runtime, ingestion, mcp, python-sdk, benchmarks, provider-sdk, rocksdb, 4 providers) |
 | Rust tests | 390+ (all green: 195 ingestion + 18 MCP integration + kernel/compiler/runtime/engines) |
 | MCP tools | 59 |
 | Storage backends | 3 (redb, RocksDB, Memory) — StorageEngine trait, 3 methods |
 | CLI subcommands | 7 (shell, serve, backup, restore, audit, keygen, import) |
 | Providers | 4 (PostgreSQL, SQLite, MongoDB, Neo4j) + Provider SDK trait |
 | Compiler pipeline | Lexer → Parser → AST → Semantic Analyzer → KIR → Planner — all 5 statement types, 6 operators |
-| SDKs | Python (PyO3 + MCP client), TypeScript, Java, Go — all compiling |
+| SDKs | Python (PyO3 + MCP client) — P3-M9: Go/TS/Java deleted (unversioned, untested; MCP is the blessed surface, re-adoption gated by docs/first-class-db-roadmap.md) |
 | Document pipeline | D1-D9: Physical Analysis → AST → Knowledge IR → Ontology → Resolution → Commit → Chunking → Compiler — 195 tests |
 | Studio | 13 panels + Document Explorer with full D1-D9 compile results UI + Playwright E2E |
 | Encryption status | AES-256-GCM + ChaCha20-Poly1305, Envelope encryption (KEK→DEK), LocalKMS, EncryptedStore, Field-level encryption, KeyAuditLog, ComplianceReport, KeyRotationJob — MRFC-0020 Phase 1–5 complete |

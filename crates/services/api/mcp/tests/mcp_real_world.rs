@@ -61,6 +61,14 @@ struct McpClient {
 
 impl McpClient {
     fn start(db_path: &str) -> Self {
+        Self::start_with(db_path, None)
+    }
+
+    /// Spawns with an explicit backend override for THIS child only.
+    /// The default strips AIKOQL_BACKEND entirely: the process env is
+    /// shared by every parallel test in this binary, so a global set_var
+    /// in one test would leak into every sibling's children.
+    fn start_with(db_path: &str, backend: Option<&str>) -> Self {
         // Find binary relative to workspace root.
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -100,14 +108,17 @@ impl McpClient {
             _ => debug_bin,
         };
         eprintln!("Using binary: {}", bin.display());
-        let mut child = Command::new(&bin)
-            .arg("serve")
+        let mut cmd = Command::new(&bin);
+        cmd.arg("serve")
             .arg(db_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit()) // crash output lands in CI logs, not /dev/null
-            .spawn()
-            .expect("start MCP server");
+            .env_remove("AIKOQL_BACKEND");
+        if let Some(b) = backend {
+            cmd.env("AIKOQL_BACKEND", b);
+        }
+        let mut child = cmd.spawn().expect("start MCP server");
 
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
@@ -139,7 +150,12 @@ impl McpClient {
 
         let mut response = String::new();
         self.reader.read_line(&mut response).unwrap();
-        let v: J = serde_json::from_str(&response).unwrap();
+        let v: J = serde_json::from_str(&response).unwrap_or_else(|e| {
+            panic!(
+                "MCP parse failure for {tool}: {e:?} — response={response:?}, child_status={:?}",
+                self.child.try_wait()
+            )
+        });
         if let Some(err) = v.get("error") {
             panic!("MCP error for {}: {:?}", tool, err);
         }
@@ -1467,4 +1483,209 @@ fn mvp_rec_002_backup_destroy_restore_round_trip() {
     assert_eq!(restored_asserted["extensions"]["valid_from"], 1000);
 
     let _ = std::fs::remove_file(&db);
+}
+
+/// Removes the backend env var on drop — even when the test panics, so a
+/// global AIKOQL_BACKEND can never poison the other parallel tests.
+struct BackendEnvGuard;
+
+impl Drop for BackendEnvGuard {
+    fn drop(&mut self) {
+        std::env::remove_var("AIKOQL_BACKEND");
+    }
+}
+
+#[test]
+fn mcp_client_children_ignore_process_backend_env() {
+    // CI flake (2026-09-18, Windows job): p3m3_bkp005's redb leg set
+    // AIKOQL_BACKEND on the WHOLE test process, and every parallel test's
+    // child inherited it — a sibling's v2 directory opened as redb and
+    // died with "Access is denied". The harness must spawn children with
+    // a clean backend env, not leak the process-global one.
+    let db = tmp_db("envleak");
+    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
+    let _guard = BackendEnvGuard;
+    std::env::set_var("AIKOQL_BACKEND", "redb");
+    let mut c = McpClient::start(&db);
+    drop(_guard); // the child inherited at spawn; clean the process now
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note",
+            "properties": {"body": "backend env must not leak"}
+        }),
+    );
+    assert!(note["koid"].as_str().is_some());
+    let backup = c.call("backup", &json!({"subject": "admin"}));
+    assert_eq!(
+        backup["engine"], "aikoql-v2",
+        "McpClient::start leaked the process-global AIKOQL_BACKEND into the child: {backup}"
+    );
+    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// P3-M3 bkp005 — MCP backup/restore route v2 backends through the
+// engine-native snapshot (§58–60): the backup dir holds the manifest +
+// segments + logs + torn-safe WAL and exactly one SNAPSHOT-{gen} marker
+// (the commit point), and restore verifies then swaps rows through the
+// live kernel. redb servers keep the trait-default scan (REC-002
+// untouched): the backup dir holds a redb data file and no marker.
+#[test]
+fn p3m3_bkp005_backup_restore_route_by_backend() {
+    // ── v2 leg (the production default): engine-native snapshot ──────────
+    let db = tmp_db("bkp005v2");
+    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
+
+    let mut c = McpClient::start(&db);
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note",
+            "properties": {"body": "bkp005 native snapshot", "memo": "bkp005"}
+        }),
+    );
+    let koid = note["koid"].as_str().unwrap().to_string();
+
+    let backup = c.call("backup", &json!({"subject": "admin"}));
+    assert_eq!(backup["verified"], true, "v2 backup must verify: {backup}");
+    assert_eq!(
+        backup["engine"], "aikoql-v2",
+        "v2 backup routes engine-native: {backup}"
+    );
+    assert!(
+        backup["generation"].as_u64().unwrap() > 0,
+        "v2 backup records its generation"
+    );
+    let backup_dir = std::path::PathBuf::from(backup["backup"].as_str().unwrap());
+    let entries: Vec<String> = std::fs::read_dir(&backup_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        entries.iter().any(|n| n.starts_with("SNAPSHOT-")),
+        "v2 backup must hold a snapshot marker, got {entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|n| n.ends_with(".redb")),
+        "v2 backup must not hold a redb file, got {entries:?}"
+    );
+
+    // verify_backup on a v2 backup verifies the marker instead of redb.
+    let v = c.call(
+        "verify_backup",
+        &json!({"subject": "admin", "backup": backup_dir.to_str().unwrap()}),
+    );
+    assert_eq!(
+        v["verified"], true,
+        "verify_backup must accept the marker: {v}"
+    );
+
+    // destroy → fresh v2 server → restore → restart → knowledge is back.
+    drop(c);
+    let mut removed = false;
+    for _ in 0..20 {
+        if std::fs::remove_dir_all(&db).is_ok() {
+            removed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    assert!(removed, "destroy: v2 database dir must be removable");
+
+    let mut c = McpClient::start(&db);
+    let restored = c.call(
+        "restore",
+        &json!({"subject": "admin", "backup": backup_dir.to_str().unwrap()}),
+    );
+    assert_eq!(restored["restored"], true, "v2 native restore: {restored}");
+    assert_eq!(
+        restored["engine"], "aikoql-v2",
+        "restore routed engine-native: {restored}"
+    );
+    assert!(
+        restored["rows_restored"].as_u64().unwrap() >= 1,
+        "restore must report rows: {restored}"
+    );
+    drop(c);
+    let mut c = McpClient::start(&db);
+    let fetched = c.call("get", &json!({"koid": &koid, "subject": "admin"}));
+    assert_eq!(
+        fetched["properties"]["body"], "bkp005 native snapshot",
+        "restored knowledge must read back: {fetched}"
+    );
+    drop(c);
+
+    // ── redb leg: trait-default scan unchanged (REC-002 untouched) ───────
+    // The backend rides the CHILD's env, never the test process's — a
+    // process-global set_var races every parallel test's children.
+    let db2 = tmp_db("bkp005rb");
+    let _ = std::fs::remove_file(&db2);
+
+    let mut c = McpClient::start_with(&db2, Some("redb"));
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note",
+            "properties": {"body": "bkp005 redb path", "memo": "bkp005"}
+        }),
+    );
+    let koid2 = note["koid"].as_str().unwrap().to_string();
+
+    let backup = c.call("backup", &json!({"subject": "admin"}));
+    assert_eq!(
+        backup["verified"], true,
+        "redb backup must verify: {backup}"
+    );
+    assert!(
+        backup["engine"].as_str().is_none(),
+        "redb backup keeps the old response shape: {backup}"
+    );
+    let backup_dir = std::path::PathBuf::from(backup["backup"].as_str().unwrap());
+    let entries: Vec<String> = std::fs::read_dir(&backup_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        entries.iter().any(|n| n.ends_with(".redb")),
+        "redb backup must hold a redb data file, got {entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|n| n.starts_with("SNAPSHOT-")),
+        "redb backup must hold no snapshot marker, got {entries:?}"
+    );
+
+    // Full REC-002 loop on redb stays green.
+    drop(c);
+    let mut removed = false;
+    for _ in 0..20 {
+        if std::fs::remove_file(&db2).is_ok() {
+            removed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    assert!(removed, "destroy: redb file must be removable");
+
+    let mut c = McpClient::start_with(&db2, Some("redb"));
+    let restored = c.call(
+        "restore",
+        &json!({"subject": "admin", "backup": backup_dir.to_str().unwrap()}),
+    );
+    assert_eq!(
+        restored["restored"], true,
+        "redb restore unchanged: {restored}"
+    );
+    drop(c);
+    let mut c = McpClient::start_with(&db2, Some("redb"));
+    let fetched = c.call("get", &json!({"koid": &koid2, "subject": "admin"}));
+    assert_eq!(
+        fetched["properties"]["body"], "bkp005 redb path",
+        "redb restored knowledge must read back: {fetched}"
+    );
+    drop(c);
 }

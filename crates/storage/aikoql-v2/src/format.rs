@@ -51,6 +51,9 @@ pub enum FormatError {
     /// The database directory is held by another process (design §19:
     /// one process owns one database directory).
     Locked(String),
+    /// P4-M2 — a physical handle whose placement generation has moved, or
+    /// one the registry never issued. Fail-closed: the caller re-resolves.
+    Stale(String),
 }
 
 impl fmt::Display for FormatError {
@@ -61,6 +64,7 @@ impl fmt::Display for FormatError {
             FormatError::Io(m) => write!(f, "io: {m}"),
             FormatError::Invalid(m) => write!(f, "invalid: {m}"),
             FormatError::Locked(m) => write!(f, "locked: {m}"),
+            FormatError::Stale(m) => write!(f, "stale: {m}"),
         }
     }
 }
@@ -163,6 +167,13 @@ pub struct Manifest {
     pub generation: u64,
     pub segments: Vec<SegmentRecord>,
     pub wal_ids: Vec<u64>,
+    /// PR6-002 — per-family applied floors: the newest published delta-log
+    /// generation per family at this manifest's publication time (0 = none).
+    /// The coverage validator derives every REQUIRED post-checkpoint delta
+    /// generation from the floor raises across the manifest chain.
+    pub identity_floor: u64,
+    pub replica_floor: u64,
+    pub placement_floor: u64,
 }
 
 impl Manifest {
@@ -189,6 +200,13 @@ impl Manifest {
         for id in &self.wal_ids {
             bytes.extend_from_slice(&id.to_le_bytes());
         }
+        // PR6-002 — the floors ride INSIDE the checksum (the PR6-001
+        // precedent): an old binary reading this file fails the checksum, a
+        // new binary reading an old file hits EOF — both directions fail
+        // closed without a FORMAT_VERSION bump.
+        bytes.extend_from_slice(&self.identity_floor.to_le_bytes());
+        bytes.extend_from_slice(&self.replica_floor.to_le_bytes());
+        bytes.extend_from_slice(&self.placement_floor.to_le_bytes());
         bytes.extend_from_slice(&checksum8(&bytes));
         bytes
     }
@@ -249,6 +267,9 @@ impl Manifest {
         for _ in 0..wal_count {
             wal_ids.push(cur.u64()?);
         }
+        let identity_floor = cur.u64()?;
+        let replica_floor = cur.u64()?;
+        let placement_floor = cur.u64()?;
         let checksum = cur.take(8)?.to_vec();
         if !cur.is_empty() {
             return Err(FormatError::Corrupt("manifest trailing bytes".into()));
@@ -261,6 +282,9 @@ impl Manifest {
             generation,
             segments,
             wal_ids,
+            identity_floor,
+            replica_floor,
+            placement_floor,
         })
     }
 
@@ -293,6 +317,72 @@ pub fn verify_pair(current: &Current, manifest: &Manifest) -> Result<(), FormatE
             "CURRENT points at generation {} but manifest is generation {}",
             current.manifest_generation, manifest.generation
         )));
+    }
+    Ok(())
+}
+
+/// P4-M3 — manifest invariants (TDD-STOR-005): structural checks plus the
+/// filesystem cross-check (every named segment file present at the recorded
+/// size). Runs at open — impossible metadata fails closed as Corrupt before
+/// any reader opens — and in debug builds before each publication. The
+/// manifest-record ↔ segment-header agreement (key range, sequence bounds,
+/// entry count) lives in the Db's open loop where the readers are in hand.
+pub fn validate_manifest(manifest: &Manifest, dir: &Path) -> Result<(), FormatError> {
+    if manifest.generation == 0 {
+        return Err(FormatError::Corrupt(
+            "manifest generation must be > 0".into(),
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for rec in &manifest.segments {
+        if !seen.insert(rec.segment_id) {
+            return Err(FormatError::Corrupt(format!(
+                "manifest names segment {} twice",
+                rec.segment_id
+            )));
+        }
+        if rec.level > 1 {
+            return Err(FormatError::Corrupt(format!(
+                "segment {} has unsupported level {}",
+                rec.segment_id, rec.level
+            )));
+        }
+        if rec.key_min > rec.key_max {
+            return Err(FormatError::Corrupt(format!(
+                "segment {} key range flipped",
+                rec.segment_id
+            )));
+        }
+        if rec.seq_lo > rec.seq_hi {
+            return Err(FormatError::Corrupt(format!(
+                "segment {} sequence range flipped",
+                rec.segment_id
+            )));
+        }
+        if rec.record_count == 0 {
+            return Err(FormatError::Corrupt(format!(
+                "segment {} claims zero records",
+                rec.segment_id
+            )));
+        }
+        // A missing file is a filesystem condition (Io — the SE2-M1
+        // `missing_segment_fails_closed` pin), not metadata damage; the
+        // recorded size differing from the file IS disagreement (Corrupt).
+        let actual =
+            std::fs::metadata(crate::segment::segment_path(dir, rec.segment_id)).map_err(|e| {
+                FormatError::Io(format!(
+                    "segment {} file missing or unreadable: {e}",
+                    rec.segment_id
+                ))
+            })?;
+        if actual.len() != rec.file_size {
+            return Err(FormatError::Corrupt(format!(
+                "segment {} size mismatch: manifest {}, on disk {}",
+                rec.segment_id,
+                rec.file_size,
+                actual.len()
+            )));
+        }
     }
     Ok(())
 }
@@ -387,9 +477,13 @@ pub(crate) fn crash_park(var: &str, dir: &Path, stage: &str) {
     if std::env::var(var).ok().as_deref() != Some(stage) {
         return;
     }
-    std::fs::write(dir.join(stage), b"1").ok();
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(60));
+    let marker = dir.join(stage);
+    std::fs::write(&marker, b"1").ok();
+    // Kill-based crash rows park forever (the test kills the process);
+    // interleave rows release by deleting the marker file — the marker is
+    // the handshake in both directions.
+    while marker.exists() {
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
 

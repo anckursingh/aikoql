@@ -4,6 +4,7 @@
 //! All KO reads route through here. The commit pipeline (write path)
 //! stays in the Kernel orchestrator; this manager handles the read side.
 
+use crate::knowledge::codec::ScoringRecord;
 use crate::knowledge::kom::*;
 use crate::storage::repository::KnowledgeRepository;
 use std::sync::Arc;
@@ -52,6 +53,16 @@ impl ObjectManager {
     /// Load a KO at a specific snapshot timestamp.
     pub fn get_at(&self, koid: &KOID, snap_ts: u64) -> KResult<Option<KnowledgeObject>> {
         self.repo.get_object_at(koid, snap_ts)
+    }
+
+    /// P5-M16 — the slim scoring read (see `codec::ScoringRecord`).
+    pub(crate) fn get_scoring(
+        &self,
+        koid: &KOID,
+        snap_ts: u64,
+        required: &[String],
+    ) -> KResult<Option<ScoringRecord>> {
+        self.repo.get_object_scoring(koid, snap_ts, required)
     }
 
     /// Load a KO at a specific commit timestamp (bypasses head pointer).

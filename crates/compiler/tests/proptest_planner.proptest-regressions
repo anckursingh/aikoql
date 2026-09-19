@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1b09b3637286573a77b8035df631fedbbbc76cf79958029156892384180c5b29 # shrinks to a = ("event", "query-user", ["writer"], None), b = ("event", "query-user", ["writer"], Some("aa"))
+cc 0713e4048c10654ad07b76095ea7c22aaf5e91fb105e1dbb3246b61d83e17389 # shrinks to tuples = [("event", "bob", [], None), ("event", "bob", [], Some("aa"))]

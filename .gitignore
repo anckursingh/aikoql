@@ -56,6 +56,11 @@ test-*.db
 --version
 .aikoql/
 
+# P1-21: the mcp default path is ./aikoql-v2 in the CWD — dev runs from the
+# repo root leave store shells behind.
+/aikoql-v2/
+/kb/
+
 # npm launcher / serve runtime artifacts
 *.log
 /serve
