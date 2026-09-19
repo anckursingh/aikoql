@@ -134,6 +134,63 @@ fn marker_generation(name: &str) -> Option<u64> {
     name.strip_prefix("SNAPSHOT-")?.parse().ok()
 }
 
+/// PR6-R2-001 — the marker's structural contract: exactly the files that
+/// make one generation self-consistent, no more (uniqueness) and no less.
+/// Runs before the target is materialized; the checksum is NOT part of
+/// this trust decision (checksum8 is not tamper resistance — the marker
+/// must stand on its structure).
+fn validate_snapshot_manifest(marker: &SnapshotMarker, src: &Path) -> Result<(), FormatError> {
+    let mut seen = HashSet::with_capacity(marker.files.len());
+    for f in &marker.files {
+        if !seen.insert(f.name.as_str()) {
+            return Err(FormatError::Corrupt(format!(
+                "snapshot marker names {} twice",
+                f.name
+            )));
+        }
+    }
+    let has = |name: &str| seen.contains(name);
+    if !has("CURRENT") {
+        return Err(FormatError::Corrupt(
+            "snapshot marker carries no CURRENT".into(),
+        ));
+    }
+    let manifest_name = format!("MANIFEST-{:06}", marker.generation);
+    if !has(&manifest_name) {
+        return Err(FormatError::Corrupt(format!(
+            "snapshot marker carries no {manifest_name}"
+        )));
+    }
+    if !has(WAL_FILE) {
+        return Err(FormatError::Corrupt(format!(
+            "snapshot marker carries no {WAL_FILE}"
+        )));
+    }
+    let manifest = crate::format::Manifest::read(&src.join(&manifest_name))?;
+    for rec in &manifest.segments {
+        let seg = format!("SEGMENT-{:06}.seg", rec.segment_id);
+        if !has(&seg) {
+            return Err(FormatError::Corrupt(format!(
+                "snapshot marker omits {seg} referenced by {manifest_name}"
+            )));
+        }
+    }
+    // The manifest publishes per-family floors: each non-zero floor's log
+    // must ride along (the delta relationship the manifest claims).
+    for (floor, prefix) in [
+        (manifest.identity_floor, "IDENTITY-"),
+        (manifest.replica_floor, "REPLICA-"),
+        (manifest.placement_floor, "PLACEMENT-"),
+    ] {
+        if floor > 0 && !has(&format!("{prefix}{floor:06}.log")) {
+            return Err(FormatError::Corrupt(format!(
+                "snapshot marker omits {prefix}{floor:06}.log — manifest floor {floor}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SnapshotInfo {
     pub generation: u64,
@@ -421,6 +478,10 @@ pub fn restore_from(src: &Path, target: PathBuf) -> Result<Db, FormatError> {
             marker.generation
         )));
     }
+    // PR6-R2-001 — the structural contract comes before any file IO on the
+    // target: a marker naming valid-but-incomplete files is rejected here,
+    // never half-materialized then failed by Db::open.
+    validate_snapshot_manifest(&marker, src)?;
     // Trust boundary: a marker could name arbitrary paths. Only plain file
     // names, and each must verify byte-exact before anything is copied.
     for f in &marker.files {

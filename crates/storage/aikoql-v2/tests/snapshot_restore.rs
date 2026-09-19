@@ -407,6 +407,155 @@ fn bkp004_damaged_snapshot_fails_closed() {
     assert_fails_closed(&snap, &dir("bkp004-target-current"), "flipped CURRENT");
 }
 
+// PR6-R2-001 — restore must validate the marker's STRUCTURAL contract
+// ("the snapshot carries a complete, self-consistent generation") before
+// materializing the target. The marker checksum is valid by construction in
+// every case below — checksum8 is not tamper resistance (see
+// docs/checksum-threat-model.md), so structural validation must not lean on
+// it. A structurally incomplete file list must be rejected with no partial
+// target state.
+fn r2_001_seed(name: &str) -> (Db, PathBuf) {
+    let d = dir(name);
+    let db = Db::open(Config::new(d.clone())).unwrap();
+    for i in 0..30u64 {
+        db.put(format!("k{i:03}").as_bytes(), b"v").unwrap();
+    }
+    db.flush().unwrap();
+    (db, d)
+}
+
+/// Read the real marker, mutate its file list, re-encode (a fresh valid
+/// checksum), and write it back.
+fn r2_001_retamper(snap: &Path, mutate: impl FnOnce(&mut SnapshotMarker)) {
+    let name = std::fs::read_dir(snap)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.starts_with("SNAPSHOT-"))
+        .expect("the snapshot carries a marker");
+    let path = snap.join(name);
+    let mut marker = SnapshotMarker::read(&path).unwrap();
+    mutate(&mut marker);
+    std::fs::write(&path, marker.encode()).unwrap();
+}
+
+fn r2_001_assert_rejected(snap: &Path, target: &Path, what: &str) {
+    assert!(
+        restore_from(snap, target.to_path_buf()).is_err(),
+        "{what}: restore of a structurally incomplete snapshot must fail"
+    );
+    let names: Vec<String> = std::fs::read_dir(target)
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        !names.iter().any(|n| n == "CURRENT"),
+        "{what}: restore must not materialize CURRENT"
+    );
+    assert!(
+        !names.iter().any(|n| n.starts_with("MANIFEST-")),
+        "{what}: restore must not materialize a manifest"
+    );
+}
+
+#[test]
+fn restore_rejects_marker_missing_current() {
+    let (db, _d) = r2_001_seed("r2-001-a-live");
+    let snap = dir("r2-001-a-snap");
+    db.snapshot_to(&snap).unwrap();
+    r2_001_retamper(&snap, |m| m.files.retain(|f| f.name != "CURRENT"));
+    r2_001_assert_rejected(&snap, &dir("r2-001-a-target"), "marker missing CURRENT");
+}
+
+#[test]
+fn restore_rejects_marker_missing_manifest() {
+    let (db, _d) = r2_001_seed("r2-001-b-live");
+    let snap = dir("r2-001-b-snap");
+    db.snapshot_to(&snap).unwrap();
+    r2_001_retamper(&snap, |m| {
+        m.files.retain(|f| !f.name.starts_with("MANIFEST-"))
+    });
+    r2_001_assert_rejected(&snap, &dir("r2-001-b-target"), "marker missing manifest");
+}
+
+#[test]
+fn restore_rejects_marker_missing_wal() {
+    let (db, _d) = r2_001_seed("r2-001-c-live");
+    let snap = dir("r2-001-c-snap");
+    db.snapshot_to(&snap).unwrap();
+    r2_001_retamper(&snap, |m| m.files.retain(|f| f.name != "WAL-000001.log"));
+    r2_001_assert_rejected(&snap, &dir("r2-001-c-target"), "marker missing WAL");
+}
+
+#[test]
+fn restore_rejects_duplicate_marker_file_names() {
+    let (db, _d) = r2_001_seed("r2-001-d-live");
+    let snap = dir("r2-001-d-snap");
+    db.snapshot_to(&snap).unwrap();
+    r2_001_retamper(&snap, |m| {
+        let cur = m
+            .files
+            .iter()
+            .find(|f| f.name == "CURRENT")
+            .expect("CURRENT in the marker")
+            .clone();
+        m.files.push(cur);
+    });
+    r2_001_assert_rejected(
+        &snap,
+        &dir("r2-001-d-target"),
+        "duplicate marker file names",
+    );
+}
+
+#[test]
+fn restore_rejects_marker_generation_without_matching_manifest() {
+    let (db, _d) = r2_001_seed("r2-001-e-live");
+    let snap = dir("r2-001-e-snap");
+    db.snapshot_to(&snap).unwrap();
+    // Claim generation G+1 while carrying generation-G files: rename the
+    // marker FILE too, so only the file-list content (MANIFEST-G vs the
+    // claimed G+1) can expose the lie.
+    let name = std::fs::read_dir(&snap)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.starts_with("SNAPSHOT-"))
+        .expect("the snapshot carries a marker");
+    let gen: u64 = name.strip_prefix("SNAPSHOT-").unwrap().parse().unwrap();
+    std::fs::rename(
+        snap.join(&name),
+        snap.join(format!("SNAPSHOT-{:06}", gen + 1)),
+    )
+    .unwrap();
+    r2_001_retamper(&snap, |m| m.generation += 1);
+    r2_001_assert_rejected(
+        &snap,
+        &dir("r2-001-e-target"),
+        "marker generation without its manifest",
+    );
+}
+
+#[test]
+fn restore_rejects_marker_missing_referenced_segment() {
+    let (db, _d) = r2_001_seed("r2-001-f-live");
+    let snap = dir("r2-001-f-snap");
+    db.snapshot_to(&snap).unwrap();
+    r2_001_retamper(&snap, |m| {
+        let before = m.files.len();
+        m.files.retain(|f| !f.name.starts_with("SEGMENT-"));
+        assert!(m.files.len() < before, "the snapshot carries a segment");
+    });
+    r2_001_assert_rejected(
+        &snap,
+        &dir("r2-001-f-target"),
+        "marker missing referenced segment",
+    );
+}
+
 /// bkp006 — the marker golden bytes. Computed in python BEFORE the Rust
 /// writer existed (testing-plan rule 4), over a fixed synthetic manifest:
 /// six files, deterministic zero-padded contents, sorted names. A change in
