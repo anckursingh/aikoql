@@ -7,13 +7,19 @@
 //! swap or join and trips the timeout — then reopens and verifies EVERY
 //! acknowledged write is present. The ack half is the mandatory one:
 //! no-deadlock alone says nothing about what the survivors wrote.
+//!
+//! PR6-R2-005: the close/reopen swap no longer trusts a fixed drain sleep.
+//! A per-actor acknowledgement barrier (Slot::episode / Slot::drained)
+//! proves every actor has stopped entering new work before the write guard
+//! is taken; the write guard itself then waits for the ops already inside
+//! (RwLock semantics), and Db's Drop joins the engine's own threads.
 
 mod common;
 
 use aikoql_storage_v2::db::{Config, Db};
 use aikoql_storage_v2::identity::ObjectId;
 use common::dir;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,6 +29,9 @@ use std::time::{Duration, Instant};
 /// close/reopen actor.
 const WRITERS: usize = 8;
 const FLUSHERS: usize = 2;
+/// The actors that must acknowledge each park round: writers + flushers +
+/// the checkpoint worker. (The supervisor parks; it is not an actor.)
+const ACTORS: usize = WRITERS + FLUSHERS + 1;
 const PHASES: usize = 3;
 const PHASE_MS: u64 = 600;
 /// The review's "hard timeout": the supervisor must finish the whole
@@ -38,6 +47,13 @@ const HARD_TIMEOUT: Duration = Duration::from_secs(180);
 struct Slot {
     db: RwLock<Option<Db>>,
     park: AtomicBool,
+    /// PR6-R2-005 — the deterministic drain barrier. `episode` is the
+    /// current park round; `drained` counts the actors that acknowledged
+    /// "stopped entering new work" for it. The supervisor bumps `episode`
+    /// when parking and waits for drained == ACTORS * episode before
+    /// taking the write guard — no sleep-as-synchronization.
+    episode: AtomicUsize,
+    drained: AtomicUsize,
 }
 
 fn open_cfg(path: &std::path::Path) -> Config {
@@ -54,12 +70,54 @@ fn oid(writer: u8) -> ObjectId {
 /// (oid, key, value) for every acknowledged write — the oracle.
 type Ack = (ObjectId, Vec<u8>, Vec<u8>);
 
+/// The actor side of the drain barrier: when parked, acknowledge the
+/// current round exactly once ("I have stopped entering new work"), then
+/// wait for the release. The once-per-round guard is per-actor state, so
+/// a slow actor can never double-ack and fake the barrier.
+fn ack_if_parked(slot: &Slot, my_episode: &mut usize) -> bool {
+    if !slot.park.load(Ordering::SeqCst) {
+        return false;
+    }
+    let ep = slot.episode.load(Ordering::SeqCst);
+    if *my_episode != ep {
+        *my_episode = ep;
+        slot.drained.fetch_add(1, Ordering::SeqCst);
+    }
+    thread::sleep(Duration::from_millis(2));
+    true
+}
+
+/// The supervisor side: start the next park round and wait for every
+/// actor to acknowledge it. The bound is a panic, not a hope — a
+/// deadlocked actor (stuck inside the Db) trips it instead of a fixed
+/// sleep letting the swap race it.
+fn park_and_drain(slot: &Slot) {
+    slot.episode.fetch_add(1, Ordering::SeqCst);
+    slot.park.store(true, Ordering::SeqCst);
+    let ep = slot.episode.load(Ordering::SeqCst);
+    let t0 = Instant::now();
+    loop {
+        if slot.drained.load(Ordering::SeqCst) >= ACTORS * ep {
+            return;
+        }
+        assert!(
+            t0.elapsed() < Duration::from_secs(10),
+            "drain barrier stuck at {}/{} acks for episode {ep} — an actor is deadlocked",
+            slot.drained.load(Ordering::SeqCst),
+            ACTORS * ep
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
 #[test]
 fn concurrent_write_flush_compact_checkpoint_close_has_no_deadlock() {
     let d = dir("pr6-004-matrix");
     let slot = Arc::new(Slot {
         db: RwLock::new(Some(Db::open(open_cfg(&d)).unwrap())),
         park: AtomicBool::new(false),
+        episode: AtomicUsize::new(0),
+        drained: AtomicUsize::new(0),
     });
     let stop = Arc::new(AtomicBool::new(false));
     // (oid, key, value) for every acknowledged write — the oracle.
@@ -73,9 +131,9 @@ fn concurrent_write_flush_compact_checkpoint_close_has_no_deadlock() {
         let acks = Arc::clone(&acks);
         handles.push(thread::spawn(move || {
             let mut iter = 0u64;
+            let mut my_episode = 0usize;
             while !stop.load(Ordering::SeqCst) {
-                if slot.park.load(Ordering::SeqCst) {
-                    thread::sleep(Duration::from_millis(2));
+                if ack_if_parked(&slot, &mut my_episode) {
                     continue;
                 }
                 let guard = slot.db.read().unwrap();
@@ -97,9 +155,9 @@ fn concurrent_write_flush_compact_checkpoint_close_has_no_deadlock() {
         let slot = Arc::clone(&slot);
         let stop = Arc::clone(&stop);
         handles.push(thread::spawn(move || {
+            let mut my_episode = 0usize;
             while !stop.load(Ordering::SeqCst) {
-                if slot.park.load(Ordering::SeqCst) {
-                    thread::sleep(Duration::from_millis(2));
+                if ack_if_parked(&slot, &mut my_episode) {
                     continue;
                 }
                 let guard = slot.db.read().unwrap();
@@ -114,9 +172,9 @@ fn concurrent_write_flush_compact_checkpoint_close_has_no_deadlock() {
         let slot = Arc::clone(&slot);
         let stop = Arc::clone(&stop);
         handles.push(thread::spawn(move || {
+            let mut my_episode = 0usize;
             while !stop.load(Ordering::SeqCst) {
-                if slot.park.load(Ordering::SeqCst) {
-                    thread::sleep(Duration::from_millis(2));
+                if ack_if_parked(&slot, &mut my_episode) {
                     continue;
                 }
                 let guard = slot.db.read().unwrap();
@@ -137,8 +195,7 @@ fn concurrent_write_flush_compact_checkpoint_close_has_no_deadlock() {
         let t0 = Instant::now();
         for phase in 0..PHASES {
             thread::sleep(Duration::from_millis(PHASE_MS));
-            sup_slot.park.store(true, Ordering::SeqCst);
-            thread::sleep(Duration::from_millis(50)); // in-flight ops drain
+            park_and_drain(&sup_slot);
             {
                 let mut guard = sup_slot.db.write().unwrap();
                 *guard = None; // close: joins compactor/committer mid-flight
@@ -148,8 +205,7 @@ fn concurrent_write_flush_compact_checkpoint_close_has_no_deadlock() {
             eprintln!("pr6-004 phase {phase} at {}s", t0.elapsed().as_secs());
         }
         // Final park + close; actors exit; one last reopen verifies acks.
-        sup_slot.park.store(true, Ordering::SeqCst);
-        thread::sleep(Duration::from_millis(50));
+        park_and_drain(&sup_slot);
         *sup_slot.db.write().unwrap() = None;
         *sup_slot.db.write().unwrap() = Some(Db::open(open_cfg(&d_sup)).unwrap());
         sup_stop.store(true, Ordering::SeqCst);
