@@ -3,8 +3,8 @@
 //! buffer for large datasets), byte-identical to the materialized form.
 //! REDs: cps001 streamed == materialized byte-for-byte; cps002 crash during
 //! the streamed publish leaves the old checkpoint authoritative; cps003
-//! (env-gated, CPS_NIGHTLY=1) the 1M peak-RSS cell — the streamed path
-//! never allocates the encoded buffer.
+//! (env-gated, CPS_NIGHTLY=1) the 1M peak-RSS cell; cps004 the
+//! deterministic allocation proof behind that cell (PR6-R2-006).
 
 mod common;
 
@@ -262,4 +262,64 @@ fn cps003_peak_rss_streamed_not_above_materialized() {
             encode_len / 2
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// cps004 — PR6-R2-006: the deterministic allocation proof behind the cps003
+// RSS cell. Every write_all slice write_streamed() issues is measured; the
+// largest must stay at record scale (≤ 33 B, the placement record), never
+// one buffer proportional to the checkpoint image — the thing the RSS cell
+// can only observe empirically.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cps004_streamed_writes_are_record_sized_not_image_sized() {
+    struct MaxCallWriter {
+        bytes: usize,
+        max_call: usize,
+    }
+    impl std::io::Write for MaxCallWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.bytes += buf.len();
+            self.max_call = self.max_call.max(buf.len());
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    // 100k of each record: the encoded image is ~8.1 MB — an image-sized
+    // write would dwarf the record bound by five orders of magnitude.
+    let n: u64 = 100_000;
+    let mut identity = HashMap::new();
+    let mut replicas = HashMap::new();
+    let mut placements = HashMap::new();
+    for i in 0..n {
+        let o = ObjectId(i.to_le_bytes().repeat(2).try_into().unwrap());
+        let lid = LogicalId(i + 1);
+        let rid = ReplicaId(i + 1);
+        identity.insert(o, lid);
+        replicas.insert(lid, rid);
+        placements.insert(rid, Placement::Memtable { generation: 1 });
+    }
+    let cp = DirectoryCheckpoint::from_state(1, &identity, &replicas, &placements, n + 1, n + 1, 2);
+
+    let mut w = MaxCallWriter {
+        bytes: 0,
+        max_call: 0,
+    };
+    cp.write_streamed(&mut w).unwrap();
+
+    // magic 4 + version 2 + generation 8 + 3×count 4 + identity 24n +
+    // replica 24n + memtable placement 33n + floors 24 + checksum 8.
+    let expect: usize =
+        4 + 2 + 8 + 12 + 24 * n as usize + 24 * n as usize + 33 * n as usize + 24 + 8;
+    assert_eq!(w.bytes, expect, "the streamed byte count is exact");
+    assert!(
+        w.max_call <= 33,
+        "the largest single write is {} B — record scale, not the {} B image",
+        w.max_call,
+        w.bytes
+    );
 }
