@@ -226,10 +226,20 @@ fn concurrent_write_flush_compact_checkpoint_close_has_no_deadlock() {
 
     // The mandatory second assertion: EVERY acknowledged write survives.
     let acks = acks.lock().unwrap().clone();
-    assert!(
-        acks.len() > WRITERS * 10,
-        "writers barely wrote ({} acks) — the matrix did not exercise the write path",
-        acks.len()
+    // The structural floor is per-writer progress, not throughput: CI
+    // evidence (Windows runs at bf79d41: 80 acks on a loaded runner, 54 on
+    // the rerun — ~22-33ms per group-commit fsync on GitHub's Windows
+    // hosts, vs ~2ms on Linux) shows a `> WRITERS*10` floor measures the
+    // runner's disk, not the matrix. Every writer must still have made
+    // visible progress through the drain barrier, and the loop below proves
+    // every acknowledged write survives close/reopen.
+    let distinct_writers: std::collections::BTreeSet<ObjectId> =
+        acks.iter().map(|(o, _, _)| *o).collect();
+    assert_eq!(
+        distinct_writers.len(),
+        WRITERS,
+        "not every writer acknowledged a write ({distinct_writers:?}) — \
+         the matrix did not exercise the full write path"
     );
     let db = slot.db.read().unwrap();
     let db = db.as_ref().unwrap();
