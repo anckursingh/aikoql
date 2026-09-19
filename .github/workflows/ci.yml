@@ -397,5 +397,11 @@ jobs:
             echo "DAG VIOLATION: $GUARD must run the 1M regime (V2ADOPT_NIGHTLY=1m)"
             exit 1
           fi
+          # PR6-R2-012: vendored node_modules must not be tracked source —
+          # enormous diffs, review noise, lockfile drift. This PR deletes
+          # the 278 paths origin/main still tracks; the gate keeps them
+          # deleted (RED proven against origin/main through the same script).
+          echo "Checking tracked node_modules..."
+          bash scripts/check-no-tracked-node-modules.sh
           echo "P5-M0 baseline-guard wiring OK"
           echo "Dependency DAG OK"
