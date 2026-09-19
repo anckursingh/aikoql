@@ -134,10 +134,30 @@ fn bkp002_concurrent_writer_snapshots_pin_consistent_generations() {
             }
         })
     };
+    // The writer must demonstrably overlap the snapshots, else the dense-
+    // prefix check degenerates into bkp001. The old timing-only guard
+    // ("total > 8" at the end) starved on loaded CI runners — CI run
+    // 35446653580 failed it on BOTH oses with the writer blocked behind
+    // eight back-to-back snapshots. Force the interleave instead: wait for
+    // one batch to land before the first snapshot, and after each snapshot
+    // wait for the next — no lock is held while waiting, so a healthy
+    // writer always progresses and a dead one fails loudly.
+    fn wait_progress(done: &AtomicU64, floor: u64) {
+        let start = Instant::now();
+        while done.load(Ordering::Relaxed) <= floor {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "writer stopped making progress at batch {floor}"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+    wait_progress(&done, 0);
     let snaps: Vec<PathBuf> = (0..8)
         .map(|i| {
             let s = dir(&format!("bkp002-snap-{i}"));
             db.snapshot_to(&s).unwrap();
+            wait_progress(&done, done.load(Ordering::Relaxed));
             s
         })
         .collect();
