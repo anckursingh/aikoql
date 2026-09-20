@@ -376,12 +376,15 @@ jobs:
           # (docs/sdk-proxy-decision.md). No workspace code or doc may
           # reference them again. (examples/hello-agent.ts lives again —
           # rewritten on @modelcontextprotocol/sdk; wave31_oss pins its
-          # existence and content.)
+          # existence and content.) docs/red-archive/ excluded: the PR6-F1
+          # (P0-1) archives capture the estate gate's own RED output, which
+          # names these paths by design.
           echo "Checking deleted SDK/proxy references..."
           if grep -rni 'crates/cluster/proxy\|crates/sdk/go\|crates/sdk/typescript\|crates/sdk/java\|aikoql-sdk\|AikoqlClient' \
               --exclude='sdk-proxy-decision.md' --exclude='PR6-TDD-DISPOSITIONS.md' \
               --exclude='check-estate-hygiene.sh' \
               --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.github \
+              --exclude-dir=red-archive \
               . 2>/dev/null; then
             echo "DAG VIOLATION: reference to a deleted P3-M9 SDK or cluster proxy"
             exit 1
@@ -399,6 +402,11 @@ jobs:
           # head through the same script).
           echo "Checking dispositions doc stamped at head..."
           bash scripts/check-disposition-head.sh
+          # PR6-F1 (P0-1): every red-archive artifact must be a complete
+          # RED — manifest fields + a non-zero exit marker in the log
+          # (docs/ARCHITECT-REVIEW-2026-09.md).
+          echo "Checking red-archive artifacts..."
+          bash scripts/check-red-archives.sh
           # P5-M0 (gd001): the baseline-certification guard
           # (.github/workflows/baseline-guard.yml) must stay wired — it runs
           # the 1M v2 workload + gate-5 ratio on every change touching a

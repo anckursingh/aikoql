@@ -82,7 +82,7 @@ commit; each DONE row names its commit.
 
 | id | item | priority | status | evidence |
 |---|---|---|---|---|
-| P0-1 | RED archives as artifacts | P0 | IN PROGRESS | `scripts/red-archive.sh` + `docs/red-archive/` + CI well-formedness step |
+| P0-1 | RED archives as artifacts | P0 | DONE | `scripts/red-archive.sh` + `scripts/check-red-archives.sh` + 4 captured archives + CI step |
 | P0-2 | Env-gate registry + drift sweep | P0 | PLANNED | centralize the ci.yml `--skip` lists (sfm009, kse19) |
 | P0-3 | Deterministic damage corpus | P0 | PLANNED | shared corpus for the FormatError classifiers |
 | P1-4 | Seed-determinism gate | P1 | PLANNED | CI grep: no unseeded RNG / bare set_var in new tests |
@@ -93,18 +93,35 @@ commit; each DONE row names its commit.
 | P2-9 | Wire-contract golden tests (SDK) | P2 | PLANNED | on demand |
 | P2-10 | Gate-script mutation harness | P2 | PLANNED | on demand (half-covered by P0-1) |
 
-### P0-1 — RED archives as artifacts (IN PROGRESS)
+### P0-1 — RED archives as artifacts (DONE)
 
 Every disposition currently cites a RED as prose ("sfm009 RED 192700 KiB")
 that nobody can re-run. `scripts/red-archive.sh` captures a RED as a
 reproducible artifact: run the command against the pinned pre-fix state,
 assert non-zero exit (that is the RED), and write
 `docs/red-archive/<id>.red.log` + a `<id>.json` manifest (id, pre-fix
-commit, command, captured-at, exit code). `scripts/check-red-archives.sh`
-validates the archive directory in CI — every manifest well-formed, every
-log carrying its non-zero exit marker — and the SDK/proxy reference grep
-excludes the archive directory (the logs name the deleted estate by design,
-same treatment as the dispositions doc).
+commit, command, captured-at, captured-head, exit code).
+`scripts/check-red-archives.sh` validates the archive directory in CI —
+every manifest well-formed, every log carrying its non-zero exit marker —
+and the SDK/proxy reference grep excludes the archive directory (the logs
+name the deleted estate by design, same treatment as the dispositions doc).
+
+Captured archives:
+
+| id | pre-fix state | exit |
+|---|---|---|
+| estate-hygiene-vs-origin-main | origin/main (the pre-deletion tree) | 1 — 11 deleted-estate paths tracked |
+| disposition-head-vs-origin-main | origin/main (no dispositions doc) | 1 |
+| disposition-head-vs-f291130 | f291130 (stamp f7696be vs tip f291130) | 1 |
+| sfm009 | worktree at a70773f with snapshot.rs+wal.rs reverted to 8e5dd8e | 101 — RSS 192692 KiB, re-measured vs the round's cited 192700 KiB |
+
+Reproducibility note, recorded honestly: the first capture attempt reverted
+to 9a9833d — a *descendant* of the fix commit, which already carries the
+fix — and the test passed (GREEN), correctly exposing the wrong base. The
+retry with the true parent (8e5dd8e) reproduced the cited RED on the first
+attempt. RSS-cell REDs are timing-dependent by nature (the sampler can miss
+the transient peak); the capture script's non-zero-exit assertion makes a
+silent false capture impossible.
 
 ### P0-2 — Env-gate registry + drift sweep (PLANNED)
 
