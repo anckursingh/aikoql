@@ -151,10 +151,29 @@ fn ctx() -> KnowledgeContext {
     KnowledgeContext::new(Subject::new("alice"))
 }
 
+thread_local! {
+    static INJECT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with the cert002 regression injection armed — scoped to the
+/// CALLING THREAD. The previous process-global flag (CERT_INJECT env var)
+/// leaked into sibling tests running in parallel threads: cert003's
+/// determinism assertion flaked mid-window (coverage 0.333) vs after the
+/// window closed (0.0). A thread-local cannot leak process-wide or
+/// cross-thread.
+pub fn with_inject<T>(f: impl FnOnce() -> T) -> T {
+    INJECT.with(|c| {
+        let prev = c.replace(true);
+        let out = f();
+        c.set(prev);
+        out
+    })
+}
+
 /// cert002 hook: the injected regression corrupts cats' topic after seeding,
 /// so the first oracle that reads cats (db-oltp point_read) fails parity.
 fn maybe_inject(k: &Kernel, cats: KOID) {
-    if std::env::var("CERT_INJECT").as_deref() == Ok("1") {
+    if INJECT.with(|c| c.get()) {
         let mut req = RememberRequest::update(ctx(), cats, meta("note"));
         req.properties
             .insert("topic".into(), Value::Text("CORRUPTED-INJECTED".into()));

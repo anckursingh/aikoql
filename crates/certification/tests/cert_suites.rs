@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use aikoql_certification::{agent_provenance_check, run_suite, SUITES};
+use aikoql_certification::{agent_provenance_check, run_suite, with_inject, SUITES};
 
 /// cert002's CERT_INJECT is a process-wide env var — parallel tests would
 /// observe the injection mid-run. Serialize the tests that run db-oltp /
@@ -190,11 +190,44 @@ fn cert002_injected_regression_fails_the_run() {
     let _guard = lock();
     let out = out_dir("cert002");
     // Detection power: the certification data path must not write a green
-    // artifact over an injected regression.
-    std::env::set_var("CERT_INJECT", "1");
-    let result = run_suite("db-oltp", &out);
-    std::env::remove_var("CERT_INJECT");
+    // artifact over an injected regression. with_inject scopes the hook to
+    // this thread — a process-global flag leaked into sibling tests running
+    // in parallel threads (cert003's determinism assertion flaked exactly
+    // that way).
+    let result = with_inject(|| run_suite("db-oltp", &out));
     assert!(result.is_err(), "injected regression must fail the suite");
+}
+
+#[test]
+fn cert002b_injection_is_thread_scoped() {
+    // cert002's hook must be scoped to the arming thread. A process-global
+    // flag (env var) leaks into sibling tests running in parallel threads —
+    // cert003's determinism assertion flaked exactly this way (coverage
+    // 0.333 mid-window vs 0.0 after the window closed). The baseline below
+    // is the clean check; the armed thread holds the flag open while this
+    // thread runs the same check — it must see the same clean value.
+    let clean = agent_provenance_check()
+        .expect("clean check must run")
+        .evidence_coverage;
+    let (tx_open, rx_open) = std::sync::mpsc::channel::<()>();
+    let (tx_done, rx_done) = std::sync::mpsc::channel::<()>();
+    let t = std::thread::spawn(move || {
+        with_inject(|| {
+            let _ = tx_open.send(());
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        });
+        drop(tx_done); // the receiver's Err is the window-closed signal
+    });
+    rx_open.recv().unwrap(); // the window is open
+    let during = agent_provenance_check()
+        .expect("check during the window must run")
+        .evidence_coverage;
+    let _ = rx_done.recv(); // Err = thread finished; join below reaps it
+    t.join().unwrap();
+    assert_eq!(
+        during, clean,
+        "a sibling thread's injection must not leak into this check"
+    );
 }
 
 #[test]

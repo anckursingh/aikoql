@@ -1,0 +1,8 @@
+{
+  "id": "cert002b-env-leak",
+  "pre_fix_commit": "4ee7bb1",
+  "command": "cargo test -p aikoql-certification --test cert_suites cert002b",
+  "captured_at": "2026-09-20T10:57:33Z",
+  "captured_head": "4ee7bb11e50d6f1259a6cbadaa03bc7cbea144ef",
+  "exit_code": 101
+}

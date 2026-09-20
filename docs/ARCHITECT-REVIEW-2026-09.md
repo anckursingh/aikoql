@@ -182,12 +182,11 @@ Two legs:
 - **Env hygiene.** A bare `set_var` in one test mutates the process-global
   environment for every parallel sibling in the same binary and every
   spawned child — the AIKOQL_BACKEND redb leak from the 2026-09-18 Windows
-  flake. The 10 existing sites are pinned as (file, raw-var) pairs, each
-  with its honest one-line reason in the script (lock-guarded
-  `CERT_INJECT`, `BackendEnvGuard`-scoped `AIKOQL_BACKEND`, the
-  park-poll idiom's arm vars). A NEW var in a pinned file, or any use in a
-  new file, fails — the allowlist is the review point, updated deliberately,
-  never silently.
+  flake. The 8 remaining sites are pinned as (file, raw-var) pairs, each
+  with its honest one-line reason in the script (`BackendEnvGuard`-scoped
+  `AIKOQL_BACKEND`, the park-poll idiom's arm vars). A NEW var in a pinned
+  file, or any use in a new file, fails — the allowlist is the review
+  point, updated deliberately, never silently.
 - **Seed determinism.** `thread_rng()` / `rand::random(` / `from_entropy(`
   carry no allowlist at all: the tree is clean today, and any unseeded RNG
   in new test code fails.
@@ -202,6 +201,14 @@ Honest first-run note: the gate's own GREEN run caught two `*_AT`
 companion vars the survey had missed — the park-poll idiom sets an
 armed-at timestamp next to the park var itself (now pinned with the same
 reason). The gate earned its keep before it ever ran in CI.
+
+And the class it names proved live immediately: cert002's `CERT_INJECT`
+hook was a process-global env var held open for the whole db-oltp suite —
+cert003's determinism assertion (a parallel thread, same process) flaked
+mid-window vs after (coverage 0.333 vs 0.0). The follow-up commit
+thread-scopes the hook (`with_inject`, thread-local), deterministically
+RED-pinned by `cert002b_injection_is_thread_scoped`, and the allowlist
+pin is deleted — 10 pins became 8, the review point working as designed.
 
 ### P1-5 — Shuffle runs (PLANNED)
 

@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s
+     Running tests\cert_suites.rs (target\debug\deps\cert_suites-a43d8742b67b2e28.exe)
+
+running 1 test
+test cert002b_injection_is_thread_scoped ... FAILED
+
+failures:
+
+---- cert002b_injection_is_thread_scoped stdout ----
+
+thread 'cert002b_injection_is_thread_scoped' (44548) panicked at crates\certification\tests\cert_suites.rs:226:5:
+assertion `left == right` failed: a sibling thread's injection must not leak into this check
+  left: 0.0
+ right: 0.3333333333333333
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cert002b_injection_is_thread_scoped
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 2.01s
+
+error: test failed, to rerun pass `-p aikoql-certification --test cert_suites`
+EXIT=101

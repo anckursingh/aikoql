@@ -20,7 +20,6 @@ cd "$root"
 
 allowed() { # file|token -> 0 if pinned (patterns fully quoted: the | is literal)
   case "$1|$2" in
-    'crates/certification/tests/cert_suites.rs|"CERT_INJECT"') return 0 ;; # guarded by lock(); set+remove around the run_suite call
     'crates/kernel/tests/index_subsystem.rs|"INDEX_REBUILD_PARK"') return 0 ;; # crash park armed in-process for the sibling binary under test
     'crates/kernel/tests/index_subsystem.rs|"INDEX_REBUILD_PARK_AT"') return 0 ;; # the park's armed-at timestamp, polled by the same sibling
     'crates/runtime/tests/cbo.rs|"INDEX_DROP_PARK"') return 0 ;; # crash park armed in-process; dropped thread consumes it before cleanup
