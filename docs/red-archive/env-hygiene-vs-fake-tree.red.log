@@ -1,0 +1,3 @@
+ENV HYGIENE: unpinned env mutation: crates/demo/tests/bad.rs ("AIKOQL_NEW_LEAK")
+SEED DETERMINISM: unseeded RNG: crates/demo/tests/bad.rs (7:    let mut rng = rand::thread_rng();)
+EXIT=1

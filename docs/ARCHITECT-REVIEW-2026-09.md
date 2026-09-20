@@ -85,7 +85,7 @@ commit; each DONE row names its commit.
 | P0-1 | RED archives as artifacts | P0 | DONE | `scripts/red-archive.sh` + `scripts/check-red-archives.sh` + 4 captured archives + CI step |
 | P0-2 | Env-gate registry + drift sweep | P0 | DONE | `tests/gated.toml` + `scripts/skip-list.sh` + `scripts/check-skip-drift.sh` + ungated nightly job |
 | P0-3 | Deterministic damage corpus | P0 | DONE | `tests/common/damage.rs` + `tests/damage_corpus.rs` (11 cells, per-byte sweeps) + RED archive |
-| P1-4 | Seed-determinism gate | P1 | PLANNED | CI grep: no unseeded RNG / bare set_var in new tests |
+| P1-4 | Seed-determinism gate | P1 | DONE | `scripts/check-test-env-hygiene.sh` — no unseeded RNG / bare set_var in new tests, 10 pinned sites + fake-tree RED archive, CI-wired |
 | P1-5 | Shuffle runs | P1 | PLANNED | nightly randomized-order run + residue sweepers |
 | P1-6 | Per-commit perf smoke budget | P1 | PLANNED | tiny fixed cell set, generous 3× budget, storage paths only |
 | P1-7 | Coverage floor on codec/replay | P1 | PLANNED | grcov delta pinned on checkpoint/snapshot/replay |
@@ -173,12 +173,35 @@ before the helper), and the fixture work surfaced that `Db::put` publishes
 no WAL frame (memtable until flush) — the Db-level legs seed via `write()`
 batches, one frame each.
 
-### P1-4 — Seed-determinism gate (PLANNED)
+### P1-4 — Seed-determinism gate (DONE)
 
-The two known flake classes (env leakage into parallel children, exact-draw
-reproduction) both trace to uncontrolled test-environment state. A CI grep
-fails new tests using unseeded RNG or bare `set_var`, requiring the seeded /
-`start_with` helpers.
+`scripts/check-test-env-hygiene.sh` fails any test-code `set_var`/
+`remove_var` or unseeded RNG use — the two flake classes named in the plan.
+Two legs:
+
+- **Env hygiene.** A bare `set_var` in one test mutates the process-global
+  environment for every parallel sibling in the same binary and every
+  spawned child — the AIKOQL_BACKEND redb leak from the 2026-09-18 Windows
+  flake. The 10 existing sites are pinned as (file, raw-var) pairs, each
+  with its honest one-line reason in the script (lock-guarded
+  `CERT_INJECT`, `BackendEnvGuard`-scoped `AIKOQL_BACKEND`, the
+  park-poll idiom's arm vars). A NEW var in a pinned file, or any use in a
+  new file, fails — the allowlist is the review point, updated deliberately,
+  never silently.
+- **Seed determinism.** `thread_rng()` / `rand::random(` / `from_entropy(`
+  carry no allowlist at all: the tree is clean today, and any unseeded RNG
+  in new test code fails.
+
+RED captured via the P0-1 mechanism without touching the repo:
+`TESTS_ROOT` pointed at a one-file fake tree (`set_var` of a new var +
+`thread_rng()`), exit 1 naming both —
+`docs/red-archive/env-hygiene-vs-fake-tree.red.log`. Wired into ci.yml's dag
+job after the registry checks.
+
+Honest first-run note: the gate's own GREEN run caught two `*_AT`
+companion vars the survey had missed — the park-poll idiom sets an
+armed-at timestamp next to the park var itself (now pinned with the same
+reason). The gate earned its keep before it ever ran in CI.
 
 ### P1-5 — Shuffle runs (PLANNED)
 

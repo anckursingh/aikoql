@@ -399,6 +399,13 @@ jobs:
           # source and every registered name must exist in the tree.
           echo "Checking gated-cell registry..."
           bash scripts/check-skip-drift.sh
+          # PR6-F4 (P1-4): test env hygiene + seed determinism — new test
+          # code may not mutate the process-global environment (the
+          # 2026-09-18 AIKOQL_BACKEND parallel-child leak class) nor use
+          # an unseeded RNG; the 10 existing sites are pinned in the
+          # script's allowlist (file|token) with honest per-entry reasons.
+          echo "Checking test env hygiene + seed determinism..."
+          bash scripts/check-test-env-hygiene.sh
           # P5-M0 (gd001): the baseline-certification guard
           # (.github/workflows/baseline-guard.yml) must stay wired — it runs
           # the 1M v2 workload + gate-5 ratio on every change touching a
