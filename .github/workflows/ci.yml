@@ -450,6 +450,22 @@ jobs:
             echo "DAG VIOLATION: $SMOKE must run scripts/perf-smoke.sh"
             exit 1
           fi
+          # PR6-F7 (P1-7): the codec/replay coverage floor workflow must
+          # stay wired — a deleted gate lets coverage silently regress.
+          echo "Checking coverage-floor wiring..."
+          COV=.github/workflows/coverage-floor.yml
+          if [ ! -f "$COV" ]; then
+            echo "DAG VIOLATION: $COV missing — the coverage floor job must exist"
+            exit 1
+          fi
+          if ! grep -q 'crates/storage' "$COV"; then
+            echo "DAG VIOLATION: $COV must trigger on crates/storage"
+            exit 1
+          fi
+          if ! grep -q 'check-coverage-floor.sh' "$COV"; then
+            echo "DAG VIOLATION: $COV must run scripts/check-coverage-floor.sh"
+            exit 1
+          fi
           # PR6-R2-012: vendored node_modules must not be tracked source —
           # enormous diffs, review noise, lockfile drift. This PR deletes
           # the 278 paths origin/main still tracks; the gate keeps them

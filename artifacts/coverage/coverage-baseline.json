@@ -1,0 +1,15 @@
+{
+  "captured_at": "2026-09-20",
+  "captured_head": "80de6f8",
+  "machine": "windows/x86_64; 8 logical cores; AMD64 Family 23 Model 24 Stepping 1, AuthenticAMD (laptop, first genuine measurement)",
+  "rustc": "1.97.1",
+  "cargo_llvm_cov": "0.9.1",
+  "suite": "cargo llvm-cov test -p aikoql-storage-v2 --all-features --no-report",
+  "tolerance_pct": 0.05,
+  "note": "Per-file line coverage of the PR6-003 codec/replay trio (checkpoint/snapshot/wal) under the storage-v2 suite. Tolerance 0.05% points absorbs report rounding only; a real decrease fails. Re-baseline deliberately when the toolchain changes.",
+  "cells": {
+    "checkpoint.rs": 96.34,
+    "snapshot.rs": 81.11,
+    "wal.rs": 89.73
+  }
+}

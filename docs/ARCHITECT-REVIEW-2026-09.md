@@ -88,7 +88,7 @@ commit; each DONE row names its commit.
 | P1-4 | Seed-determinism gate | P1 | DONE | `scripts/check-test-env-hygiene.sh` — no unseeded RNG / bare set_var in new tests, 10 pinned sites + fake-tree RED archive, CI-wired |
 | P1-5 | Shuffle runs | P1 | DONE | `scripts/run-shuffle.sh` + `scripts/check-residue.sh` + `scripts/check-shuffle-wiring.sh` + nightly shuffle job + RED archive |
 | P1-6 | Per-commit perf smoke budget | P1 | DONE | 3 fixed cells + 3× budget vs committed baseline + path-gated workflow + dag pin |
-| P1-7 | Coverage floor on codec/replay | P1 | PLANNED | grcov delta pinned on checkpoint/snapshot/replay |
+| P1-7 | Coverage floor on codec/replay | P1 | DONE | cargo-llvm-cov gate on checkpoint/snapshot/wal vs committed baseline + path-gated workflow + dag pin |
 | P1-8 | Dogfood MRFC-0070 on the review loop | P1 | PLANNED | findings as KOs, fixes reconciled via A8 |
 | P2-9 | Wire-contract golden tests (SDK) | P2 | PLANNED | on demand |
 | P2-10 | Gate-script mutation harness | P2 | PLANNED | on demand (half-covered by P0-1) |
@@ -277,11 +277,35 @@ absorbs the laptop-vs-runner variance until enough CI runs pin it.
 baseline, and ci.yml's dag job pins the wiring inline (a bad merge can't
 silently un-arm it).
 
-### P1-7 — Coverage floor on codec/replay (PLANNED)
+### P1-7 — Coverage floor on codec/replay (DONE)
 
-A grcov delta on checkpoint/snapshot/replay, failing on decrease vs the
-pinned baseline, makes the next "it round-trips but nobody asserts it" show
-up red instead of in a review.
+The three PR6-003 files must hold their committed line-coverage baseline on
+every storage-touching change: `scripts/check-coverage-floor.sh` runs the
+storage-v2 suite under cargo-llvm-cov and fails any of the trio below its
+committed floor. The floor is a floor, not a delta: coverage *can* only move
+when the suite or the code changes, so a decrease below baseline is always a
+real signal — the 0.05%-point tolerance absorbs report rounding only.
+
+Baseline (laptop, first genuine measurement — `artifacts/coverage/
+coverage-baseline.json`, recorded with rustc 1.97.1 + cargo-llvm-cov 0.9.1
+and the machine string, so a toolchain change explains drift and re-baselines
+deliberately):
+
+| file | line coverage |
+|---|---|
+| checkpoint.rs | 96.34% |
+| snapshot.rs | 81.11% |
+| wal.rs | 89.73% |
+
+RED via the P0-1 mechanism (`coverage-floor-no-baseline`, exit 1): at the
+pre-fix tree the storage-v2 suite runs green and there is no baseline to
+enforce, so the gate has nothing to read — the structural RED. `coverage-
+floor.yml` path-gates on storage + the script + the baseline + itself, and
+ci.yml's dag job pins the wiring inline (a bad merge can't silently un-arm
+it). The first live run's honest trap, recorded: cargo-llvm-cov 0.9.1's
+`report --json` is the raw LLVM export format (per-file segments), not
+per-file summaries — the gate parses the `--summary-only` text table
+instead, whose last `Cover` column is the line coverage.
 
 ### P1-8 — Dogfood MRFC-0070 on the review loop (PLANNED)
 
