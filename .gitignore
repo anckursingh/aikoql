@@ -60,6 +60,9 @@ test-*.db
 # repo root leave store shells behind.
 /aikoql-v2/
 /kb/
+# P1-8: dogfood machine state (KOIDs are kb-specific, not portable) — the
+# committable artifact is the compiled section inside the doc itself.
+docs/PR6-TDD-DISPOSITIONS.state.json
 
 # npm launcher / serve runtime artifacts
 *.log

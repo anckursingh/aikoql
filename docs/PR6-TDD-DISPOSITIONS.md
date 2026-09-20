@@ -216,4 +216,38 @@ follow-up milestones, one commit each, re-stamping this table as they land.
 | P1-5 shuffle runs | DONE (this commit) — `scripts/run-shuffle.sh` (nextest `--shuffle`), `scripts/check-residue.sh` (ports/temp-dirs/tree sweeper before+after), `scripts/check-shuffle-wiring.sh` (fails if the nightly job loses its wiring), nightly shuffle job in benchmark-nightly + wiring gate in ci.yml's dag job, `skip-list.sh --nextest` feeds the gated registry as a nextest filter; RED `shuffle-wiring-vs-unwired` (5 pieces missing, exit 1) |
 | P1-6 per-commit perf smoke budget | DONE (this commit) — three fixed cells (W1/W2 point reads via the new `V2ADOPT_PERF_SMOKE=1` smoke artifact arm, hot-head, ann004 recall@10) with a 3× budget vs a committed baseline; `scripts/perf-smoke.sh` + `scripts/perf-smoke-check.py` + `perf-smoke.yml` (path-gated on storage/kernel/vector) + dag wiring pin; RED `perf-smoke-no-arm` (the pre-fix smoke runs green and produces no machine-readable artifact, exit 1) |
 | P1-7 coverage floor on codec/replay | DONE (this commit) — `scripts/check-coverage-floor.sh` runs the storage-v2 suite under cargo-llvm-cov and fails any of checkpoint/snapshot/wal below its committed baseline (0.05%-point tolerance = report rounding only); committed baseline records the toolchain; `coverage-floor.yml` path-gated on storage + dag wiring pin; RED `coverage-floor-no-baseline` (suite green, no baseline to enforce, exit 1) |
-| P1-8 dogfood MRFC-0070 on the review loop | next |
+| P1-8 dogfood MRFC-0070 on the review loop | DONE (this commit) — `scripts/dogfood-review-loop.py` (full/verify/trace) runs the repo's own plugin over MCP stdio: the 6 findings are Requirement KOs in `./kb`, the doc is the compiled knowledge document, the 13 re-stamp commits are reconciled via A8, and `trace_requirement` pins the requirement leg (`finding: R3-003` / `re-stamping`) with the tests leg documented as MRFC-0070 follow-up (markdown fact entities are mock tokens; `tested_by` objects are `crate`); the doc carries the compiled section emitted from kernel state (findings→KOID table, trace answers, `compiled-head`), `verify` fails on any drift, and the dag job pins the freshness (a doc change without a re-emit fails CI); RED `dogfood-loop-unwired` (no review-loop script, so no gate could fail, exit 1) |
+
+<!-- DOGFOOD-COMPILED-BEGIN -->
+## Compiled from kernel state (P1-8 dogfood)
+
+`scripts/dogfood-review-loop.py full` emits this section from the
+project knowledge base (`./kb`, served by the repo's own aikoql-mcp
+plugin; machine state lives in the `.state.json` sidecar). The
+findings are Requirement KOs; the dispositions doc is the compiled
+knowledge document; each re-stamp commit below is reconciled via
+the A8 `reconcile` tool against that document.
+
+- knowledge document KOID: `01a0bfd04c3f0000000000000000a9c9`
+- reconciled re-stamp commits: 13 (first 75846d1, last 7577e94)
+- trace answers: `R3-003->finding: R3-003 | R3-005->re-stamping`
+
+The trace pins the requirement leg (the finding is found by query).
+The tests leg is empty by construction today — two extractor gaps the
+dogfood itself surfaced: the markdown compiler attaches mock tokens,
+not component names, as fact entities, and the code extractor's
+`tested_by` objects are `crate`, which the tests-leg walk
+(components/functions) cannot match. Closing those is MRFC-0070
+follow-up, not this milestone.
+
+| finding | KOID | disposition | status |
+|---|---|---|---|
+| R3-001 | 01a0bfccb7e50000000000000000a9c9 | NOT A FINDING | closed |
+| R3-002 | 01a0bfccb8280000000000000000a9c9 | FIXED | closed |
+| R3-003 | 01a0bfccb83f0000000000000000a9c9 | FIXED | closed |
+| R3-004 | 01a0bfccb8710000000000000000a9c9 | COVERED | closed |
+| R3-005 | 01a0bfccb8a40000000000000000a9c9 | FIXED | closed |
+| R2-008 | 01a0bfccb8b70000000000000000a9c9 | CLOSED | closed |
+
+compiled-head: 75846d137178f74ea1fd2dc182e468a23b2677d3
+<!-- DOGFOOD-COMPILED-END -->

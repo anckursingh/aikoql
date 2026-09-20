@@ -466,6 +466,26 @@ jobs:
             echo "DAG VIOLATION: $COV must run scripts/check-coverage-floor.sh"
             exit 1
           fi
+          # PR6-F8 (P1-8): the dogfood review loop must stay wired — the
+          # script must exist, and the doc's compiled section must have
+          # been emitted at the base of the commit that last modified the
+          # doc: a doc change without a re-emit leaves compiled-head
+          # behind and fails here (the R3-005 staleness rule extended
+          # from the stamp to the compiled section). Clean doc-touching
+          # merges simplify through to the branch head, so their base is
+          # the emit commit.
+          echo "Checking dogfood review-loop wiring..."
+          DOGFOOD=scripts/dogfood-review-loop.py
+          if [ ! -f "$DOGFOOD" ]; then
+            echo "DAG VIOLATION: $DOGFOOD missing — the P1-8 review loop must exist"
+            exit 1
+          fi
+          DOC_COMMIT=$(git log -1 --format=%H -- docs/PR6-TDD-DISPOSITIONS.md)
+          DOC_BASE=$(git rev-parse "$DOC_COMMIT^")
+          if ! grep -q "^compiled-head: $DOC_BASE$" docs/PR6-TDD-DISPOSITIONS.md; then
+            echo "DAG VIOLATION: the dogfood compiled section is stale — re-run scripts/dogfood-review-loop.py full"
+            exit 1
+          fi
           # PR6-R2-012: vendored node_modules must not be tracked source —
           # enormous diffs, review noise, lockfile drift. This PR deletes
           # the 278 paths origin/main still tracks; the gate keeps them

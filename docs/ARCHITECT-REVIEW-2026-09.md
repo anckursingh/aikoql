@@ -89,7 +89,7 @@ commit; each DONE row names its commit.
 | P1-5 | Shuffle runs | P1 | DONE | `scripts/run-shuffle.sh` + `scripts/check-residue.sh` + `scripts/check-shuffle-wiring.sh` + nightly shuffle job + RED archive |
 | P1-6 | Per-commit perf smoke budget | P1 | DONE | 3 fixed cells + 3× budget vs committed baseline + path-gated workflow + dag pin |
 | P1-7 | Coverage floor on codec/replay | P1 | DONE | cargo-llvm-cov gate on checkpoint/snapshot/wal vs committed baseline + path-gated workflow + dag pin |
-| P1-8 | Dogfood MRFC-0070 on the review loop | P1 | PLANNED | findings as KOs, fixes reconciled via A8 |
+| P1-8 | Dogfood MRFC-0070 on the review loop | P1 | DONE | `scripts/dogfood-review-loop.py` — 6 findings as Requirement KOs, 13 re-stamps reconciled via A8, requirement-leg trace pins, dag freshness pin + 4 extractor/kernel findings |
 | P2-9 | Wire-contract golden tests (SDK) | P2 | PLANNED | on demand |
 | P2-10 | Gate-script mutation harness | P2 | PLANNED | on demand (half-covered by P0-1) |
 
@@ -307,15 +307,54 @@ it). The first live run's honest trap, recorded: cargo-llvm-cov 0.9.1's
 per-file summaries — the gate parses the `--summary-only` text table
 instead, whose last `Cover` column is the line coverage.
 
-### P1-8 — Dogfood MRFC-0070 on the review loop (PLANNED)
+### P1-8 — Dogfood MRFC-0070 on the review loop (DONE)
 
-Each review finding becomes a Claim/Requirement KO through the repo's own
-plugin; each fix commit is reconciled via the A8 `reconcile` tool; the
+Each review finding becomes a Requirement KO through the repo's own
+plugin; each re-stamp commit is reconciled via the A8 `reconcile` tool; the
 dispositions doc becomes the *compiled output* of that state, and
 `trace_requirement` answers "which tests pin R3-003" by query instead of
-prose. The project's own thesis applied to its own TDD workflow — and it
-makes the head-check gate (R3-005) check machine state instead of a doc
-stamp.
+prose. The project's own thesis applied to its own TDD workflow.
+
+Wiring: `scripts/dogfood-review-loop.py full` (bootstrap → compile →
+reconcile → trace → emit) runs the repo's own plugin (`npx aikoql-mcp
+serve ./kb`) over MCP stdio. The 6 findings (R3-001..005 + R2-008) are
+Requirement KOs; the dispositions doc is ingested + compiled to a
+knowledge document; the 13 commits that re-stamped the doc are reconciled
+via A8; `trace_requirement` pins the requirement leg — the finding is
+found by query (`finding: R3-003`, `re-stamping` for R3-005), not by
+prose. `full` re-emits the doc's compiled section (findings → KOID table,
+trace answers, `compiled-head`); `verify` fails on drift (missing state
+sidecar, KOID/stale-kb mismatch, `compiled-head != HEAD`, unpinned
+traces). The negative check (`verify --trace-check R3-003:sfm999`, exit 1)
+proves the trace leg would catch a regression. ci.yml's dag job pins the
+wiring: the script must exist and `compiled-head` must name the base of
+the commit that last modified the doc — a doc change without a re-emit
+fails CI, the R3-005 staleness rule extended from the stamp to the
+compiled section. RED: `dogfood-loop-unwired` (pre-fix tree has no
+review-loop script, so no gate could fail; exit 1, P0-1 capture).
+
+The dogfood's honest yield — four findings recorded for MRFC-0070, not
+fixed here:
+- **Markdown fact entities are mock tokens.** The compiler attaches
+  tokens like "P1" / "MiB WAL" as fact entities, not component names, so
+  trace facts cannot join onto components (the requirements leg works
+  only because the finder matches the statement text).
+- **The tests leg is empty by construction.** The code extractor's
+  `tested_by` objects are `crate` / module names, which the tests-leg
+  walk (components/functions) cannot match — the extracted relations
+  don't join onto the function KOs they should name.
+- **The kernel loses writes on abrupt termination.** A `SystemExit`
+  raised inside the MCP session aborted the stdio close and the store
+  lost the run's writes (next spawn: 0 objects). The script closes the
+  session cleanly and re-raises after — the kernel should flush
+  durably-by-default instead of relying on the client's good manners.
+- **Self-reference poisons the evidence.** Machine state echoed into the
+  compiled doc becomes a trace fact that fakes the pins (the loop's own
+  trace matched its own emitted blob). The state lives in a gitignored
+  sidecar, the previous section is stripped before each compile, and
+  the trace check rejects matches that name the section or the state.
+- **The trace finder's first-match order is arbitrary** (intro fact vs
+  table fact) — each pin token was chosen to occur in exactly one fact.
 
 ### P2-9 / P2-10 — on demand only
 
