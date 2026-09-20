@@ -1,9 +1,113 @@
-# PR6 TDD review — dispositions (008 / 010 / 012)
+# PR6 TDD review — dispositions (Round 3)
 
-Response to `AIKOQL_PR6_SENIOR_RUST_TDD_REVIEW.md`. Findings 001–007, 009,
-and 011 were fixed or pinned in code (see commit history; each carries its
-PR6 number). This file disposes of the three structural/documentation
-findings.
+Response to `AIKOQL_PR6_R3_SENIOR_RUST_TDD_REVIEW.md` (5 findings, P0-P1,
+"Request changes before merge"). Current head: the commit that last modified
+this file (`git log -1 -- docs/PR6-TDD-DISPOSITIONS.md`) — the CI gate
+`scripts/check-disposition-head.sh` fails any change that moves the reviewed
+tip without re-stamping this document (R3-005).
+
+| finding | disposition | evidence |
+|---|---|---|
+| R3-001 (P0) tracked node_modules | NOT A FINDING | diff vs origin/main: 0 added / 278 deleted; 0 tracked at head — `scripts/check-no-tracked-node-modules.sh` proves it on every CI run |
+| R3-002 (P1) deleted-estate tree assertions | FIXED | `scripts/check-estate-hygiene.sh` — RED vs origin/main (11 paths), GREEN vs HEAD (8e5dd8e) |
+| R3-003 (P1) snapshot WAL read-to-end | FIXED | sfm009 RED 192700 KiB (~2× the 96 MiB WAL) → streamed validation GREEN (a70773f) |
+| R3-004 (P1) equivalence floors + chains | COVERED | codec already round-trips all six; equivalence extended + allocation-after-restart cell — GREEN pin, structural RED = PR6-001's ckp009 (f291130) |
+| R3-005 (P1) evidence doc staleness | FIXED | this doc re-stamped at the final head + automated head check in CI (this commit) |
+
+Round work beyond the findings: the Windows CI runs during the round exposed
+that the PR6-004 concurrency matrix's ack floor measured GitHub's Windows
+fsync throughput (~22-33ms per group commit vs ~2ms Linux), not the matrix —
+floor hardened to per-writer progress (9a9833d).
+
+## R3-001 — tracked node_modules: NOT A FINDING (evidence)
+
+The review's P0 claims the PR adds 278 tracked node_modules paths. The diff
+against the PR base (origin/main) shows the opposite:
+
+- added: 0
+- deleted: 278
+- tracked at head: 0
+
+The 278 deletions are the R2-012 fix (bf79d41): vendored node_modules
+removed from the tree. The PR's own additions tracked zero node_modules
+paths. The deletion gate `scripts/check-no-tracked-node-modules.sh` (also
+from R2-012) fails CI the moment any path under a node_modules directory is
+tracked again, so the disposition is a mechanism, not a promise.
+
+## R3-002 — deleted-estate tree assertions: FIXED (8e5dd8e)
+
+The review's P1: the R2-012 estate deletions had only a textual-reference
+grep (P3-M9/P3-M0, ci.yml) — nothing asserted the paths are ABSENT from the
+tracked tree, so a re-added file nothing references yet would pass CI.
+
+Fix: `scripts/check-estate-hygiene.sh` — a ref-parameterized gate listing
+the deleted-estate paths (`crates/cluster/proxy/`, `crates/sdk/go/`,
+`crates/sdk/java/`, `tests/universal_test_harness.py`,
+`benchmarks/tests/load_test.rs`, `tests/e2e/`) and exiting 1 on any tracked
+match. RED proven against origin/main (11 paths tracked there); GREEN
+against HEAD. Wired into ci.yml after the reference greps; the SDK/proxy
+grep excludes the script itself (it names the paths by design).
+
+## R3-003 — bounded-memory snapshot WAL copy: FIXED (a70773f)
+
+The review's P1: `snapshot_to` read the whole WAL into memory
+(read_to_end), so snapshot RSS scaled with the WAL size. RED:
+`sfm009_large_wal_snapshot_has_bounded_rss` grew RSS 192700 KiB (≈ 2× the
+96 MiB WAL — the full materialization, twice: validate + copy) against the
+48 MiB limit.
+
+Fix: `valid_prefix_len` walks the WAL one frame at a time
+(`validate_frame_at`: one frame's bytes in memory, per-offset probe with
+exactly `replay_frames`' torn-tail / damage / strict-sequence semantics —
+the decode tail extracted into `decode_payload` so the two paths stay
+byte-identical), and `copy_wal_prefix` copies the prefix in 64 KiB chunks
+under the still-held wal mutex while hashing for the marker. Memory is
+O(largest frame), not O(WAL). sfm009 (bounded RSS) and sfm007 (torn-tail
+semantics preserved) green; sfm009 is env-gated on CI like kse19
+(whole-process RSS cell — sibling tests in the same binary perturb the peak
+on shared runners).
+
+## R3-004 — checkpoint equivalence floors + chains: COVERED (f291130)
+
+The review's P1: the PR6-003 equivalence helper compared the three maps
+only. It now also asserts the PR6-001 allocator floors (next_logical_id,
+next_replica_id, next_placement_generation) and the PR6-R2-002 publish
+chains (identity/replica/placement chain) on every round-trip cell.
+
+This is a GREEN pin, not a fake RED: the codec already writes and reads all
+six inside the checksum (checkpoint.rs, from PR6-001 / PR6-R2-002), and
+reopen consumes them — the floors max into the allocators over any map
+recompute (db.rs open path), and the coverage validator compares the
+chains. The structural RED is PR6-001's own ckp009 (burned generations
+re-handed after checkpoint + prune + reopen): dropping either codec half
+fails every round-trip cell here; dropping the open-path max re-opens
+ckp009.
+
+Plus `allocators_resume_from_checkpoint_floors_after_prune`: checkpoint +
+prune (delta_log_count == 0) + reopen, then the first create must hand out
+the checkpointed next lid/rid exactly and a placement generation ≥ the
+checkpointed floor (writes re-publish placements with a fresh generation,
+so the record moves past the floor — the resume is a lower bound, INV-05).
+
+## R3-005 — evidence doc staleness: FIXED (this commit)
+
+The review's P1: this document claimed a head the branch had moved past.
+Fix: the document is re-stamped at the final head (the commit that last
+modified it), and `scripts/check-disposition-head.sh` — wired into ci.yml
+after the estate gate — fails any change that moves the reviewed tip
+without re-stamping. On a two-parent head (PR merge ref, or a pushed merge
+commit — this repo merges with merge commits) the reviewed tip is the
+second parent; on a plain push it is HEAD. RED proven against origin/main
+(no stamp for the doc there at all) and against the pre-stamp branch head
+(stamp f7696be vs reviewed tip f291130).
+
+---
+
+## Carried-over dispositions (Rounds 1–2)
+
+Each section below states the head it was verified at; the Round-1 items
+are structural dispositions that did not change, and the R2-008 closure
+rides on the next push re-running the scan (see that section).
 
 ## PR6-008 — CI separation: SATISFIED (structure)
 

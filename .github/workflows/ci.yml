@@ -379,7 +379,8 @@ jobs:
           # existence and content.)
           echo "Checking deleted SDK/proxy references..."
           if grep -rni 'crates/cluster/proxy\|crates/sdk/go\|crates/sdk/typescript\|crates/sdk/java\|aikoql-sdk\|AikoqlClient' \
-              --exclude='sdk-proxy-decision.md' --exclude='check-estate-hygiene.sh' \
+              --exclude='sdk-proxy-decision.md' --exclude='PR6-TDD-DISPOSITIONS.md' \
+              --exclude='check-estate-hygiene.sh' \
               --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.github \
               . 2>/dev/null; then
             echo "DAG VIOLATION: reference to a deleted P3-M9 SDK or cluster proxy"
@@ -391,6 +392,13 @@ jobs:
           # yet — RED proven against origin/main through the same script).
           echo "Checking deleted-estate paths absent from the tree..."
           bash scripts/check-estate-hygiene.sh
+          # PR6-R3-005: the dispositions doc must be stamped at the reviewed
+          # tip — its evidence is verified at a specific head, and any
+          # change that moves the tip must re-stamp it in the same change
+          # (RED proven against origin/main and against the pre-stamp branch
+          # head through the same script).
+          echo "Checking dispositions doc stamped at head..."
+          bash scripts/check-disposition-head.sh
           # P5-M0 (gd001): the baseline-certification guard
           # (.github/workflows/baseline-guard.yml) must stay wired — it runs
           # the 1M v2 workload + gate-5 ratio on every change touching a
