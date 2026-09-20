@@ -37,7 +37,7 @@ use crate::segment::{
     SegmentAnchor, SegmentAttach, SegmentEntry, SegmentIter, SegmentReader, SegmentWriter,
     FLAG_DELETE,
 };
-use std::cmp::Reverse;
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -92,6 +92,36 @@ impl RetentionPolicy for KeepAll {
     }
 }
 
+/// PERF-3 — one heap node owns its front entry, so a push moves the key
+/// in instead of cloning it (and the `fronts` staging vector disappears —
+/// the heap IS the staging). Ordering: min key first, then max seq (a
+/// key's versions drain seq-descending), then idx as the tie-break.
+struct HeapEntry {
+    entry: SegmentEntry,
+    idx: usize,
+}
+
+impl PartialEq for HeapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+impl Eq for HeapEntry {}
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (Reverse(&self.entry.key), self.entry.seq, self.idx).cmp(&(
+            Reverse(&other.entry.key),
+            other.entry.seq,
+            other.idx,
+        ))
+    }
+}
+
 /// Merge `inputs` (key-sorted segments, any levels) into a sequence of
 /// bounded L1 segments under `dir` (SE2-M20): live chunks publish as
 /// `SEGMENT-{id:06}.seg` with ids pulled from `next_id` in chunk order,
@@ -123,19 +153,14 @@ pub(crate) fn merge(
         ..CompactStats::default()
     };
     let mut iters: Vec<SegmentIter> = inputs.iter().map(|r| r.iter()).collect();
-    // One front entry per segment, already pulled from its iterator.
-    let mut fronts: Vec<Option<SegmentEntry>> = iters
-        .iter_mut()
-        .map(|it| it.next().transpose())
-        .collect::<Result<_, _>>()?;
-    // Heap: min key first, then max seq — every version of one key drains
-    // contiguously in seq-descending order. The key is Reversed (max-heap
-    // pops min key); the seq is NOT — max seq pops first within a key,
-    // and advance() only ever pulls further versions of that same key.
-    let mut heap: BinaryHeap<(Reverse<Vec<u8>>, u64, usize)> = BinaryHeap::new();
-    for (i, f) in fronts.iter().enumerate() {
-        if let Some(e) = f {
-            heap.push((Reverse(e.key.clone()), e.seq, i));
+    // PERF-3 — the heap owns each segment's front entry (HeapEntry): min
+    // key first, then max seq, so every version of one key drains
+    // contiguously in seq-descending order, and advance() only ever pulls
+    // further versions of that same key.
+    let mut heap: BinaryHeap<HeapEntry> = BinaryHeap::new();
+    for (i, it) in iters.iter_mut().enumerate() {
+        if let Some(e) = it.next().transpose()? {
+            heap.push(HeapEntry { entry: e, idx: i });
         }
     }
 
@@ -149,7 +174,11 @@ pub(crate) fn merge(
     // nothing of it survived the live output.
     let mut seen: HashSet<ReplicaId> = HashSet::new();
     let mut archive: Option<ArchiveSink> = None;
-    while let Some((key, _, i)) = heap.pop() {
+    // PERF-3 — the per-key run and the rid-dedup set are hoisted and
+    // drained/cleared per key instead of constructed per key.
+    let mut run: Vec<SegmentEntry> = Vec::new();
+    let mut grouped: Vec<ReplicaId> = Vec::new();
+    while let Some(HeapEntry { entry, idx: i }) = heap.pop() {
         // SE2-M38 — a key is a shared byte namespace: any number of
         // replicas may write it, so the winner is per (key, rid) — each
         // rid's newest entry survives, its older same-rid versions are
@@ -159,46 +188,53 @@ pub(crate) fn merge(
         // still matters — one segment can hold several versions of the
         // key, and a version not yet in the heap would otherwise pop
         // later as a fresh winner.
-        let mut run: Vec<SegmentEntry> = Vec::new();
-        run.push(fronts[i].take().expect("front present"));
+        run.push(entry);
         stats.entries_in += 1;
-        advance(&mut iters, &mut fronts, &mut heap, i)?;
+        advance(&mut iters, &mut heap, i)?;
         while heap
             .peek()
-            .is_some_and(|(k, _, _)| k.0.as_slice() == key.0.as_slice())
+            .is_some_and(|e| e.entry.key.as_slice() == run[0].key.as_slice())
         {
-            let (_, _, j) = heap.pop().expect("peeked");
-            run.push(fronts[j].take().expect("front present"));
+            let HeapEntry { entry, idx: j } = heap.pop().expect("peeked");
+            run.push(entry);
             stats.entries_in += 1;
-            advance(&mut iters, &mut fronts, &mut heap, j)?;
+            advance(&mut iters, &mut heap, j)?;
         }
         for entry in &run {
             if entry.replica_id != ReplicaId(0) {
                 seen.insert(entry.replica_id);
             }
         }
-        let mut grouped: HashSet<ReplicaId> = HashSet::new();
-        match policy.classify(&key.0) {
+        match policy.classify(&run[0].key) {
             Retention::Keep => {
-                for entry in run {
-                    if !grouped.insert(entry.replica_id) {
-                        continue; // an older version of an already-won rid
-                    }
-                    if entry.flags & FLAG_DELETE == 0 {
-                        push_live(&mut live, dir, next_id, chunk_bytes, entry, attach)?;
-                        stats.entries_out += 1;
+                for entry in run.drain(..) {
+                    // ponytail: linear-scan rid dedup — O(k²) with k =
+                    // versions per key. A fresh HashSet per key run is the
+                    // per-key allocation this PERF avoids; upgrade only if
+                    // version-heavy keys ever appear.
+                    if !grouped.contains(&entry.replica_id) {
+                        // The rid groups even on a tombstone: its delete
+                        // wins over older same-rid versions.
+                        grouped.push(entry.replica_id);
+                        if entry.flags & FLAG_DELETE == 0 {
+                            push_live(&mut live, dir, next_id, chunk_bytes, entry, attach)?;
+                            stats.entries_out += 1;
+                        }
                     }
                 }
             }
-            Retention::Drop => {}
+            Retention::Drop => {
+                run.clear();
+            }
             Retention::Archive => {
                 let aw = archive.get_or_insert_with(|| ArchiveSink::new(block_target));
-                for entry in run {
+                for entry in run.drain(..) {
                     push_archive(aw, dir, next_id, chunk_bytes, entry)?;
                     stats.entries_archived += 1;
                 }
             }
         }
+        grouped.clear();
     }
 
     if live.len > 0 {
@@ -389,20 +425,15 @@ fn publish_archive_chunk(
     Ok(())
 }
 
-/// Pull the next entry of iterator `i` into the heap.
+/// Pull the next entry of iterator `i` into the heap — PERF-3: the entry
+/// moves in, no key clone.
 fn advance(
     iters: &mut [SegmentIter],
-    fronts: &mut [Option<SegmentEntry>],
-    heap: &mut BinaryHeap<(Reverse<Vec<u8>>, u64, usize)>,
+    heap: &mut BinaryHeap<HeapEntry>,
     i: usize,
 ) -> Result<(), FormatError> {
-    match iters[i].next() {
-        Some(Ok(e)) => {
-            heap.push((Reverse(e.key.clone()), e.seq, i));
-            fronts[i] = Some(e);
-        }
-        Some(Err(e)) => return Err(e),
-        None => {}
+    if let Some(e) = iters[i].next().transpose()? {
+        heap.push(HeapEntry { entry: e, idx: i });
     }
     Ok(())
 }

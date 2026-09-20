@@ -266,8 +266,11 @@ impl SegmentWriter {
         let mut bounds: Vec<(usize, usize)> = Vec::new();
         {
             let mut len = 0usize;
-            let mut prev: Option<Vec<u8>> = None;
-            let mut last_restart_key: Option<Vec<u8>> = None;
+            // PERF-3 — references into `entries` (immutable for the whole
+            // pass), not per-entry key clones: the dry pass only compares
+            // prefixes.
+            let mut prev: Option<&[u8]> = None;
+            let mut last_restart_key: Option<&[u8]> = None;
             // SE2-M38 — the shared prefix the current key run's head entry
             // encoded with: a cadence restart that lands mid-run is
             // repositioned to the run head (see the encode pass), growing
@@ -275,9 +278,7 @@ impl SegmentWriter {
             let mut run_head_shared: Option<usize> = None;
             let mut start = 0usize;
             for (i, e) in entries.iter().enumerate() {
-                let key_changed = prev
-                    .as_ref()
-                    .is_none_or(|p| e.key.as_slice() > p.as_slice());
+                let key_changed = prev.is_none_or(|p| e.key.as_slice() > p);
                 let shared_c = shared_of(&prev, e);
                 let est = 2
                     + 2
@@ -303,9 +304,7 @@ impl SegmentWriter {
                 // split resets, without the counter.
                 let is_restart = v2
                     && (i - start).is_multiple_of(RESTART_INTERVAL as usize)
-                    && last_restart_key
-                        .as_ref()
-                        .is_none_or(|k| e.key.as_slice() > k.as_slice());
+                    && last_restart_key.is_none_or(|k| e.key.as_slice() > k);
                 // SE2-M39 — v4 encodes a full key at EVERY cadence point
                 // (the dense table's decode bases): the cadence entry must
                 // stand alone, so shared = 0 there even mid-run.
@@ -331,9 +330,9 @@ impl SegmentWriter {
                     + if v3 { 8 } else { 0 };
                 if is_restart {
                     len += run_head_shared.take().unwrap_or(0);
-                    last_restart_key = Some(e.key.clone());
+                    last_restart_key = Some(&e.key);
                 }
-                prev = Some(e.key.clone());
+                prev = Some(&e.key);
             }
             bounds.push((start, entries.len()));
         }
@@ -382,8 +381,8 @@ impl SegmentWriter {
                 payload.clear();
                 restarts.clear();
                 dense.clear();
-                let mut prev: Option<Vec<u8>> = None;
-                let mut last_restart_key: Option<Vec<u8>> = None;
+                let mut prev: Option<&[u8]> = None;
+                let mut last_restart_key: Option<&[u8]> = None;
                 // SE2-M38 — (payload position, shared prefix) of the current
                 // key run's head entry. A run can start mid-cadence (one
                 // row per replica — a hot key's run is long): its first
@@ -397,14 +396,10 @@ impl SegmentWriter {
                 // full key (a restart position must decode standalone).
                 let mut run_head: Option<(u32, usize)> = None;
                 for (count, e) in entries[start..end].iter().enumerate() {
-                    let key_changed = prev
-                        .as_ref()
-                        .is_none_or(|p| e.key.as_slice() > p.as_slice());
+                    let key_changed = prev.is_none_or(|p| e.key.as_slice() > p);
                     let is_restart = v2
                         && count.is_multiple_of(RESTART_INTERVAL as usize)
-                        && last_restart_key
-                            .as_ref()
-                            .is_none_or(|k| e.key.as_slice() > k.as_slice());
+                        && last_restart_key.is_none_or(|k| e.key.as_slice() > k);
                     // SE2-M39 — v4: every cadence point is a dense decode
                     // base (full key, position recorded) — even mid-run.
                     // The key table (`restarts`) keeps M38's run-head-only
@@ -431,7 +426,7 @@ impl SegmentWriter {
                             payload.splice(hpos as usize..hpos as usize + old_len, full);
                         }
                         restarts.push(hpos);
-                        last_restart_key = Some(e.key.clone());
+                        last_restart_key = Some(&e.key);
                     }
                     if is_dense {
                         // After the splice: payload.len() is this entry's
@@ -470,7 +465,7 @@ impl SegmentWriter {
                             }
                         }
                     }
-                    prev = Some(e.key.clone());
+                    prev = Some(&e.key);
                     let d = sha256(&e.key);
                     let h1 = u64::from_le_bytes(d[..8].try_into().expect("sha256 len"));
                     let h2 = u64::from_le_bytes(d[8..16].try_into().expect("sha256 len"));
@@ -581,7 +576,9 @@ impl SegmentWriter {
 
 /// Common prefix of the previous key and this one — the entry stores only
 /// the suffix (0 when there is no previous key, e.g. the first of a block).
-fn shared_of(prev: &Option<Vec<u8>>, e: &SegmentEntry) -> usize {
+/// PERF-3 — the prefix base is a reference into the entry list (both
+/// publish passes iterate it immutably), not a per-entry key clone.
+fn shared_of(prev: &Option<&[u8]>, e: &SegmentEntry) -> usize {
     match prev {
         Some(p) => common_prefix(p, &e.key),
         None => 0,
@@ -1528,20 +1525,24 @@ impl SegmentReader {
             0
         };
         let mut cur = Cursor::new(&payload[start..]);
-        let mut out = Vec::with_capacity(b.entries as usize);
-        let mut prev: Vec<u8> = Vec::new();
-        for _ in 0..b.entries {
+        let mut out: Vec<SegmentEntry> = Vec::with_capacity(b.entries as usize);
+        // PERF-3 — the prefix base is the previous DECODED entry (`out`),
+        // not a cloned `prev` Vec, and the suffix copies straight into the
+        // key: 2 allocations per entry (key + value) instead of 4.
+        for idx in 0..b.entries as usize {
             let shared = cur.u16()? as usize;
-            if shared > prev.len() {
+            let base: &[u8] = if idx == 0 { &[] } else { &out[idx - 1].key };
+            if shared > base.len() {
                 return Err(FormatError::Corrupt(format!(
                     "entry shared prefix {shared} exceeds previous key {}",
-                    prev.len()
+                    base.len()
                 )));
             }
             let suffix_len = cur.u16()? as usize;
-            let suffix = cur.take(suffix_len)?.to_vec();
-            let mut key = prev[..shared].to_vec();
-            key.extend_from_slice(&suffix);
+            let suffix = cur.take(suffix_len)?;
+            let mut key = Vec::with_capacity(shared + suffix.len());
+            key.extend_from_slice(&base[..shared]);
+            key.extend_from_slice(suffix);
             let value = cur.vec()?;
             let seq = cur.u64()?;
             let flags = cur.u8()?;
@@ -1550,7 +1551,6 @@ impl SegmentReader {
             } else {
                 ReplicaId(0)
             };
-            prev = key.clone();
             out.push(SegmentEntry {
                 key,
                 value,
