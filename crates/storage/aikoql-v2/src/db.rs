@@ -58,7 +58,7 @@ use crate::segment::{
 use crate::stats::{
     record_latency_us, DbStats, ReadPathStats, ReadTraceRecord, SegmentStats, Stats, WriteStats,
 };
-use crate::wal::{encode_frame, replay_frames, Op};
+use crate::wal::{encode_frame, replay_frames_streaming, Op};
 use aikoql_kernel::knowledge::kom::sha256;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -661,15 +661,6 @@ impl Db {
             .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
         wal.read_to_end(&mut wal_bytes)
             .map_err(|e| FormatError::Io(format!("WAL read: {e}")))?;
-        let (frames, consumed) = replay_frames(&wal_bytes)?;
-        if consumed != wal_bytes.len() {
-            // torn tail: drop the partial final frame (it was never acked)
-            wal.set_len(consumed as u64)
-                .map_err(|e| FormatError::Io(format!("WAL truncate: {e}")))?;
-            wal.sync_all()
-                .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
-        }
-
         // Replay bypasses the durability boundary — the frames are already
         // fsynced — but preserves every sequence number.
         let mut active = Memtable::new();
@@ -690,30 +681,35 @@ impl Db {
             .unwrap_or(0)
             .max(orphan_pgen_max)
             + 1;
-        for frame in &frames {
-            for op in &frame.ops {
+        // PERF-1 — the replay streams: each frame is applied as it is
+        // decoded, so the frames are never materialized beside the read
+        // buffer (peak was ~3x the WAL with the collecting replay). The
+        // ops are owned here, so keys and values move into the memtable
+        // instead of being cloned out of a materialized frame.
+        let consumed = replay_frames_streaming(&wal_bytes, |frame| {
+            for op in frame.ops {
                 match op {
-                    Op::Put(k, v) => active.apply(k.clone(), frame.seq, Some(v.clone())),
-                    Op::Delete(k) => active.apply(k.clone(), frame.seq, None),
+                    Op::Put(k, v) => active.apply(k, frame.seq, Some(v)),
+                    Op::Delete(k) => active.apply(k, frame.seq, None),
                     // SE2-M33 — the rid rides the op (spec §17/§18), so
                     // replay restores the entry's identity without
                     // consulting the directories.
                     Op::PutObject(rid, k, v) => {
-                        active.apply_object(k.clone(), frame.seq, Some(v.clone()), *rid);
+                        active.apply_object(k, frame.seq, Some(v), rid);
                         Self::replay_object_placement(
                             &mut placements,
                             &mut pending_placements,
                             &mut replay_pgen,
-                            *rid,
+                            rid,
                         )?;
                     }
                     Op::DeleteObject(rid, k) => {
-                        active.apply_object(k.clone(), frame.seq, None, *rid);
+                        active.apply_object(k, frame.seq, None, rid);
                         Self::replay_object_placement(
                             &mut placements,
                             &mut pending_placements,
                             &mut replay_pgen,
-                            *rid,
+                            rid,
                         )?;
                     }
                     // SE2-M30 — a replayed create re-pends its records:
@@ -730,27 +726,29 @@ impl Db {
                         rid,
                         pgen,
                     } => {
-                        merge_identity(&mut identity, *oid, *lid)?;
-                        pending_identity.push(IdentityRecord {
-                            oid: *oid,
-                            lid: *lid,
-                        });
-                        merge_replica(&mut replicas, *lid, LOCAL_NODE_ID, *rid)?;
+                        merge_identity(&mut identity, oid, lid)?;
+                        pending_identity.push(IdentityRecord { oid, lid });
+                        merge_replica(&mut replicas, lid, LOCAL_NODE_ID, rid)?;
                         pending_replicas.push(ReplicaRecord {
-                            lid: *lid,
+                            lid,
                             node: LOCAL_NODE_ID,
-                            rid: *rid,
+                            rid,
                         });
-                        let placement = Placement::Memtable { generation: *pgen };
-                        merge_placement(&mut placements, *rid, placement)?;
-                        pending_placements.push(PlacementRecord {
-                            rid: *rid,
-                            placement,
-                        });
+                        let placement = Placement::Memtable { generation: pgen };
+                        merge_placement(&mut placements, rid, placement)?;
+                        pending_placements.push(PlacementRecord { rid, placement });
                     }
                 }
             }
             replay_max = replay_max.max(frame.seq);
+            Ok(())
+        })?;
+        if consumed != wal_bytes.len() {
+            // torn tail: drop the partial final frame (it was never acked)
+            wal.set_len(consumed as u64)
+                .map_err(|e| FormatError::Io(format!("WAL truncate: {e}")))?;
+            wal.sync_all()
+                .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
         }
         let segment_max = manifest
             .segments

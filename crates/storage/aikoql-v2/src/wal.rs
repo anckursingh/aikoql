@@ -232,13 +232,17 @@ fn decode_payload(payload: &[u8]) -> Result<Vec<Op>, FormatError> {
     Ok(ops)
 }
 
-/// Walk frames from the start. Returns the valid prefix and the byte count
-/// it covers. A decode failure with nothing valid after it is a torn tail
-/// (the caller truncates the WAL there); damage followed by a valid frame
-/// is Corrupt — the WAL must not be trusted. Sequences must strictly
-/// increase.
-pub fn replay_frames(bytes: &[u8]) -> Result<(Vec<WalFrame>, usize), FormatError> {
-    let mut frames = Vec::new();
+/// Walk frames from the start, applying each to `f` as it is decoded —
+/// PERF-1: recovery consumes this so the frames are never materialized
+/// (peak memory is one frame, not a second copy of the WAL). Returns the
+/// byte count of the valid prefix. A decode failure with nothing valid
+/// after it is a torn tail (the caller truncates the WAL there); damage
+/// followed by a valid frame is Corrupt — the WAL must not be trusted.
+/// Sequences must strictly increase.
+pub fn replay_frames_streaming<F>(bytes: &[u8], mut f: F) -> Result<usize, FormatError>
+where
+    F: FnMut(WalFrame) -> Result<(), FormatError>,
+{
     let mut pos = 0;
     let mut last_seq: Option<u64> = None;
     while pos < bytes.len() {
@@ -252,7 +256,7 @@ pub fn replay_frames(bytes: &[u8]) -> Result<(Vec<WalFrame>, usize), FormatError
                     }
                 }
                 last_seq = Some(frame.seq);
-                frames.push(frame);
+                f(frame)?;
                 pos += len;
             }
             Err(_) => {
@@ -265,11 +269,23 @@ pub fn replay_frames(bytes: &[u8]) -> Result<(Vec<WalFrame>, usize), FormatError
                         )));
                     }
                 }
-                return Ok((frames, pos));
+                return Ok(pos);
             }
         }
     }
-    Ok((frames, pos))
+    Ok(pos)
+}
+
+/// Walk frames from the start into a Vec — the collecting wrapper over
+/// `replay_frames_streaming` (one definition of the stream semantics; the
+/// recovery path streams, tests and the damage corpus collect).
+pub fn replay_frames(bytes: &[u8]) -> Result<(Vec<WalFrame>, usize), FormatError> {
+    let mut frames = Vec::new();
+    let consumed = replay_frames_streaming(bytes, |frame| {
+        frames.push(frame);
+        Ok(())
+    })?;
+    Ok((frames, consumed))
 }
 
 /// Validate ONE complete frame at `pos`: header, then payload + stored
