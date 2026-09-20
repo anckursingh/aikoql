@@ -82,25 +82,49 @@ pub struct WalFrame {
     pub ops: Vec<Op>,
 }
 
+/// PERF-4 — the encoded byte length of one op (the `encoded_len` idiom the
+/// directory records use). One definition of the layout lengths, so an
+/// under-counted arm shows up as a realloc in the pin instead of a
+/// truncated frame.
+fn op_encoded_len(op: &Op) -> usize {
+    match op {
+        Op::Put(k, v) => 1 + 4 + k.len() + 4 + v.len(),
+        Op::Delete(k) => 1 + 4 + k.len(),
+        Op::CreateObject { .. } => 1 + 16 + 8 + 8 + 8,
+        Op::PutObject(_, k, v) => 1 + 8 + 4 + k.len() + 4 + v.len(),
+        Op::DeleteObject(_, k) => 1 + 8 + 4 + k.len(),
+    }
+}
+
 pub fn encode_frame(seq: u64, ops: &[Op]) -> Result<Vec<u8>, FormatError> {
     if ops.is_empty() {
         return Err(FormatError::Invalid("WAL frame with no ops".into()));
     }
-    let mut payload = Vec::new();
-    payload.extend_from_slice(&(ops.len() as u32).to_le_bytes());
+    // PERF-4 — one allocation, sized exactly: payload = entry_count u32 +
+    // the ops, then the frame is the header + payload + checksum written
+    // straight into the final buffer (no intermediate payload Vec to copy).
+    // Byte-identical to the old two-buffer build (wal_golden pins it).
+    let payload_len = 4 + ops.iter().map(op_encoded_len).sum::<usize>();
+    let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + payload_len + 8);
+    frame.extend_from_slice(WAL_MAGIC);
+    frame.extend_from_slice(&WAL_FORMAT_VERSION.to_le_bytes());
+    frame.push(FRAME_BATCH);
+    frame.extend_from_slice(&seq.to_le_bytes());
+    frame.extend_from_slice(&(payload_len as u32).to_le_bytes());
+    frame.extend_from_slice(&(ops.len() as u32).to_le_bytes());
     for op in ops {
         match op {
             Op::Put(k, v) => {
-                payload.push(OP_PUT);
-                payload.extend_from_slice(&(k.len() as u32).to_le_bytes());
-                payload.extend_from_slice(k);
-                payload.extend_from_slice(&(v.len() as u32).to_le_bytes());
-                payload.extend_from_slice(v);
+                frame.push(OP_PUT);
+                frame.extend_from_slice(&(k.len() as u32).to_le_bytes());
+                frame.extend_from_slice(k);
+                frame.extend_from_slice(&(v.len() as u32).to_le_bytes());
+                frame.extend_from_slice(v);
             }
             Op::Delete(k) => {
-                payload.push(OP_DELETE);
-                payload.extend_from_slice(&(k.len() as u32).to_le_bytes());
-                payload.extend_from_slice(k);
+                frame.push(OP_DELETE);
+                frame.extend_from_slice(&(k.len() as u32).to_le_bytes());
+                frame.extend_from_slice(k);
             }
             Op::CreateObject {
                 oid,
@@ -108,35 +132,28 @@ pub fn encode_frame(seq: u64, ops: &[Op]) -> Result<Vec<u8>, FormatError> {
                 rid,
                 pgen,
             } => {
-                payload.push(OP_CREATE_OBJECT);
-                payload.extend_from_slice(oid.as_bytes());
-                payload.extend_from_slice(&lid.to_bytes());
-                payload.extend_from_slice(&rid.to_bytes());
-                payload.extend_from_slice(&pgen.to_le_bytes());
+                frame.push(OP_CREATE_OBJECT);
+                frame.extend_from_slice(oid.as_bytes());
+                frame.extend_from_slice(&lid.to_bytes());
+                frame.extend_from_slice(&rid.to_bytes());
+                frame.extend_from_slice(&pgen.to_le_bytes());
             }
             Op::PutObject(rid, k, v) => {
-                payload.push(OP_PUT_OBJECT);
-                payload.extend_from_slice(&rid.to_bytes());
-                payload.extend_from_slice(&(k.len() as u32).to_le_bytes());
-                payload.extend_from_slice(k);
-                payload.extend_from_slice(&(v.len() as u32).to_le_bytes());
-                payload.extend_from_slice(v);
+                frame.push(OP_PUT_OBJECT);
+                frame.extend_from_slice(&rid.to_bytes());
+                frame.extend_from_slice(&(k.len() as u32).to_le_bytes());
+                frame.extend_from_slice(k);
+                frame.extend_from_slice(&(v.len() as u32).to_le_bytes());
+                frame.extend_from_slice(v);
             }
             Op::DeleteObject(rid, k) => {
-                payload.push(OP_DELETE_OBJECT);
-                payload.extend_from_slice(&rid.to_bytes());
-                payload.extend_from_slice(&(k.len() as u32).to_le_bytes());
-                payload.extend_from_slice(k);
+                frame.push(OP_DELETE_OBJECT);
+                frame.extend_from_slice(&rid.to_bytes());
+                frame.extend_from_slice(&(k.len() as u32).to_le_bytes());
+                frame.extend_from_slice(k);
             }
         }
     }
-    let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + payload.len() + 8);
-    frame.extend_from_slice(WAL_MAGIC);
-    frame.extend_from_slice(&WAL_FORMAT_VERSION.to_le_bytes());
-    frame.push(FRAME_BATCH);
-    frame.extend_from_slice(&seq.to_le_bytes());
-    frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    frame.extend_from_slice(&payload);
     frame.extend_from_slice(&checksum8(&frame));
     Ok(frame)
 }

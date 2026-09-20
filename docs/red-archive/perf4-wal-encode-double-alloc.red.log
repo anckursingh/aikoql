@@ -1,0 +1,25 @@
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 24s
+     Running tests\wal_encode_alloc.rs (target\debug\deps\wal_encode_alloc-43c8696b102810b6.exe)
+
+running 1 test
+test encode_frame_allocates_exactly_once ... FAILED
+
+failures:
+
+---- encode_frame_allocates_exactly_once stdout ----
+
+thread 'encode_frame_allocates_exactly_once' (20340) panicked at crates\storage\aikoql-v2\tests\wal_encode_alloc.rs:64:5:
+assertion `left == right` failed: encode_frame allocated 7 blocks — the payload Vec is built separately (and re-grows) before being copied into the frame Vec; one with_capacity of the final size must suffice
+  left: 7
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    encode_frame_allocates_exactly_once
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p aikoql-storage-v2 --test wal_encode_alloc`
+EXIT=101
