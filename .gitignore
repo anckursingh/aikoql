@@ -63,6 +63,12 @@ test-*.db
 
 # npm launcher / serve runtime artifacts
 *.log
+# P0-1: the RED-archive capture logs are reproducible evidence artifacts,
+# not runtime noise — tracked so check-red-archives.sh can validate them.
+!docs/red-archive/*.red.log
 /serve
 serve.artifacts/
 npm-publish/memory/
+
+# local commit-message scratch file
+.commit-msg.txt

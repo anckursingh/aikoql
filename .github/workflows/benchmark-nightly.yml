@@ -64,6 +64,14 @@ jobs:
         run: KSE19_NIGHTLY=1 cargo test --release -p aikoql-storage --test kse19_resource
         timeout-minutes: 90
 
+      # PR6-F2 (P0-2): the gated cells with no other ungated home (the
+      # registry's ungated_by = "none" entries) — run ungated so their
+      # limits can't silently regress. Default regime; where a cell's
+      # sampler is platform-gated the path still executes end to end.
+      - name: Gated cells ungated (registry)
+        run: cargo test --release --workspace -- $(bash scripts/skip-list.sh --ungated)
+        timeout-minutes: 45
+
       # P3-M2 met007: write-path instrumentation overhead cell (design §21
       # atomics) — reported to write-stats-overhead.md, lenient sanity
       # assert only. Strict opt-in.

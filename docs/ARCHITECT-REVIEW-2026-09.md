@@ -83,7 +83,7 @@ commit; each DONE row names its commit.
 | id | item | priority | status | evidence |
 |---|---|---|---|---|
 | P0-1 | RED archives as artifacts | P0 | DONE | `scripts/red-archive.sh` + `scripts/check-red-archives.sh` + 4 captured archives + CI step |
-| P0-2 | Env-gate registry + drift sweep | P0 | PLANNED | centralize the ci.yml `--skip` lists (sfm009, kse19) |
+| P0-2 | Env-gate registry + drift sweep | P0 | DONE | `tests/gated.toml` + `scripts/skip-list.sh` + `scripts/check-skip-drift.sh` + ungated nightly job |
 | P0-3 | Deterministic damage corpus | P0 | PLANNED | shared corpus for the FormatError classifiers |
 | P1-4 | Seed-determinism gate | P1 | PLANNED | CI grep: no unseeded RNG / bare set_var in new tests |
 | P1-5 | Shuffle runs | P1 | PLANNED | nightly randomized-order run + residue sweepers |
@@ -123,14 +123,25 @@ attempt. RSS-cell REDs are timing-dependent by nature (the sampler can miss
 the transient peak); the capture script's non-zero-exit assertion makes a
 silent false capture impossible.
 
-### P0-2 — Env-gate registry + drift sweep (PLANNED)
+### P0-2 — Env-gate registry + drift sweep (DONE)
 
-The env gates live in the ci.yml `--skip` lists (sfm009, kse19, dominance
-cells). Centralize them in one `tests/gated.toml` (test, gate, why,
-verified-at-head) that the workflow reads; CI asserts **both directions** —
-every registered test is skipped, every skipped test is registered — plus a
-nightly run with all gates armed. Kills the silent-regression hole that
-gating creates.
+The env gates lived in the ci.yml `--skip` lists (sfm009, kse19, dominance
+cells). They are now centralized in `tests/gated.toml` — 14 entries, each
+with its reason and its `ungated_by` home — and both test jobs derive their
+skip list from it via `scripts/skip-list.sh`. `scripts/check-skip-drift.sh`
+asserts the wiring (no inline `--skip` may exist in ci.yml), the registry's
+shape (one test/reason/ungated_by/verified_at per entry), and — the
+dangerous direction — that every registered name still exists in the tree:
+a renamed or deleted test silently un-skips itself on CI. RED archived via
+the P0-1 mechanism (mutation with one dead entry, exit 1 —
+`docs/red-archive/skip-drift-vs-dead-entry.red.log`).
+
+The drift check earned its keep immediately: the ci.yml classification
+table claimed the amplification trio runs "weekly benchmark-nightly", but
+the nightly workflow has no such step — five cells (amplification trio +
+report, sfm009) ran ungated nowhere. The new benchmark-nightly "Gated cells
+ungated" job re-runs every `ungated_by = "none"` entry weekly so their
+limits can't silently regress.
 
 ### P0-3 — Deterministic damage corpus (PLANNED)
 

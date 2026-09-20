@@ -1,0 +1,3 @@
+SKIP DRIFT: gated test(s) no longer exist in the tree:
+renamed_or_deleted_cell
+EXIT=1

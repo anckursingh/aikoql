@@ -1,0 +1,13 @@
+DAG VIOLATION: deleted-estate paths present in the tree (P3-M0/P3-M9 deletions — docs/sdk-proxy-decision.md):
+benchmarks/tests/load_test.rs
+crates/cluster/proxy/Cargo.toml
+crates/cluster/proxy/src/main.rs
+crates/sdk/go/aikoql.go
+crates/sdk/go/go.mod
+crates/sdk/java/src/main/java/com/aikoql/sdk/AikoqlClient.java
+tests/e2e/package-lock.json
+tests/e2e/package.json
+tests/e2e/playwright.config.ts
+tests/e2e/studio-document.spec.ts
+tests/universal_test_harness.py
+EXIT=1

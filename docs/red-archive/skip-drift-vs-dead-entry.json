@@ -1,0 +1,9 @@
+{
+  "id": "skip-drift-vs-dead-entry",
+  "pre_fix_commit": "d9cfcfb",
+  "command": "env GATED_TOML=/tmp/dead-registry.toml bash scripts/check-skip-drift.sh",
+  "captured_at": "2026-09-20T05:09:08Z",
+  "captured_head": "d9cfcfb1037e0a7c70ef53add62e15db76fc00b4",
+  "exit_code": 1,
+  "note": "mutation RED: GATED_TOML pointed at a registry copy carrying one dead test name (renamed_or_deleted_cell) — the drift gate exits 1 naming it; with the real registry the gate is green"
+}

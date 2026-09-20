@@ -1,0 +1,96 @@
+# PR6-F2 (P0-2): gated-cell registry — the cells the per-push CI test
+# commands skip, centralized (docs/ARCHITECT-REVIEW-2026-09.md).
+#
+# scripts/skip-list.sh derives the ci.yml --skip args from this file (the
+# ONLY skip source in the workflow); scripts/check-skip-drift.sh asserts
+# that wiring and that every registered name still exists in the tree (a
+# renamed test silently un-skips itself on CI). The ungated home column
+# says where each cell re-runs with its gate armed — the benchmark-nightly
+# "Gated cells ungated" job runs every `none` entry weekly so the limits
+# can't silently regress.
+#
+# verified_at = the head each entry's gate condition was last re-verified at.
+
+[[gated]]
+test = "load_encryption_overhead"
+reason = "pure measurement cell; #[ignore] in debug — weekly --ignored release step covers it"
+ungated_by = "weekly --ignored step"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "kse120c_report"
+reason = "report generator over the kse120c cells — the weekly release smoke runs the whole kse120c file"
+ungated_by = "weekly release smoke"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "kse16_storage_amplification"
+reason = "amplification measurement cell (dominance cells — shared-runner noise, SE2-M21)"
+ungated_by = "none"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "kse17_write_amplification"
+reason = "amplification measurement cell (dominance cells — shared-runner noise, SE2-M21)"
+ungated_by = "none"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "kse18_read_amplification"
+reason = "amplification measurement cell (dominance cells — shared-runner noise, SE2-M21)"
+ungated_by = "none"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "kse161718_report"
+reason = "report aggregator over the amplification cells — runs ungated with its trio"
+ungated_by = "none"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "kse19_resource_usage"
+reason = "whole-process RSS/disk cell — sibling tests perturb the peak on shared runners; KSE19_NIGHTLY=1 escalates to 100k/1M in the weekly KSE-19 step"
+ungated_by = "weekly KSE-19 step"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "kse19_report"
+reason = "report aggregator over the kse19 cells — weekly KSE-19 step"
+ungated_by = "weekly KSE-19 step"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "m7_workloads"
+reason = "minute-scale workload suite — the weekly release smoke runs the whole kse_m7_workloads file"
+ungated_by = "weekly release smoke"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "v2_m7_workloads"
+reason = "minute-scale workload suite — the weekly release smoke runs the whole kse_m7_v2_workloads file"
+ungated_by = "weekly release smoke"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "multimodal_golden_suite"
+reason = "golden PDF suite — skipped in the main run, re-run with --nocapture in the dedicated PR step (zero coverage loss)"
+ungated_by = "PR dedicated step"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "rule_baseline_retrieval_quality"
+reason = "retrieval-quality baseline matrix — skipped in the main run, re-run with --nocapture in the dedicated PR step (zero coverage loss)"
+ungated_by = "PR dedicated step"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "semantic_extraction_quality"
+reason = "semantic-extraction quality suite — skipped in the main run, re-run with --nocapture in the dedicated PR step (zero coverage loss)"
+ungated_by = "PR dedicated step"
+verified_at = "8c60d74"
+
+[[gated]]
+test = "sfm009_large_wal_snapshot_has_bounded_rss"
+reason = "whole-process RSS cell — sibling tests in the same binary perturb the peak on CI runners; stays in the local suite (RED archived: docs/red-archive/sfm009.red.log, exit 101)"
+ungated_by = "none"
+verified_at = "8c60d74"

@@ -207,6 +207,6 @@ follow-up milestones, one commit each, re-stamping this table as they land.
 | milestone | status |
 |---|---|
 | Architect review doc + TDD plan | FILED (8f9416a) |
-| P0-1 RED archives as artifacts | DONE (this commit) — `scripts/red-archive.sh` + `scripts/check-red-archives.sh` + captured archives + CI step |
-| P0-2 env-gate registry + drift sweep | next |
-| P0-3 deterministic damage corpus | planned |
+| P0-1 RED archives as artifacts | DONE (d9cfcfb) — `scripts/red-archive.sh` + `scripts/check-red-archives.sh` + 5 captured archives + CI step |
+| P0-2 env-gate registry + drift sweep | DONE (this commit) — `tests/gated.toml` + `scripts/skip-list.sh` + `scripts/check-skip-drift.sh` + ungated nightly job |
+| P0-3 deterministic damage corpus | next |

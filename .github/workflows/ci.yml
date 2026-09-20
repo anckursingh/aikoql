@@ -42,7 +42,7 @@ jobs:
       # | merged_iterator_correctness      | byte-exact vs oracle | — | — | SE2M12_NIGHTLY=1 (50k steps) |
       # | w31_scale_001                    | probe success 12/12 per scale | cells | 10K synthesis | W31_SCALE_NIGHTLY=1 (100k) |
       # | w31_scale_002                    | probe pins (n=1000 fixed) | cells | — | runs fully on PR |
-      # | kse16/17/18 amp trio + report (SKIPPED) | consistency pins covered by kse20_backend_conformance | — | amplification cells | weekly benchmark-nightly |
+      # | kse16/17/18 amp trio + report (SKIPPED) | consistency pins covered by kse20_backend_conformance | — | amplification cells | benchmark-nightly ungated job (P0-2 registry) |
       # | kse19_resource_usage + report (SKIPPED) | — | — | RSS/disk cells (10k smoke) | KSE19_NIGHTLY=1 (100k + 1M) |
       # | v2_m7_workloads (SKIPPED)        | verdict is V2ADOPT_NIGHTLY-gated; its 4 correctness siblings in the binary stay; v2 nets = the 40+ reduced SE2 suites | cells | RSS/disk cells | V2ADOPT_NIGHTLY=1 (100k) at milestones |
       # | multimodal_golden/retrieval_quality/semantic_extraction_quality (SKIPPED here) | re-run with --nocapture in dedicated steps below — zero coverage loss | quality metrics | — | the dedicated steps |
@@ -60,15 +60,10 @@ jobs:
       # like kse19: a whole-process RSS cell, sibling tests in the same
       # binary perturb the peak on CI runners — it stays in the local suite
       # (RED 192700 KiB growth → GREEN bounded, both proven locally).
-      - run: >-
-          cargo test --workspace -- --skip load_encryption_overhead --skip kse120c_report
-          --skip kse16_storage_amplification --skip kse17_write_amplification
-          --skip kse18_read_amplification --skip kse161718_report
-          --skip kse19_resource_usage --skip kse19_report
-          --skip m7_workloads --skip v2_m7_workloads
-          --skip multimodal_golden_suite --skip rule_baseline_retrieval_quality
-          --skip semantic_extraction_quality
-          --skip sfm009_large_wal_snapshot_has_bounded_rss
+      # The skip list is derived from tests/gated.toml via
+      # scripts/skip-list.sh — the registry is the single source of truth
+      # (PR6-F2 / P0-2); scripts/check-skip-drift.sh guards the wiring.
+      - run: cargo test --workspace -- $(bash scripts/skip-list.sh)
         timeout-minutes: 60
       # DoD 19 (HLD §52/§53): golden PDF suite with visible per-stage
       # metrics — extraction/fragmentation/semantic/provenance/retrieval.
@@ -91,15 +86,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # sfm009_large_wal_snapshot_has_bounded_rss (PR6-R3-003): same RSS-cell
       # gating as the Windows job — local-suite test, skipped on CI runners.
-      - run: >-
-          cargo test --workspace -- --skip load_encryption_overhead --skip kse120c_report
-          --skip kse16_storage_amplification --skip kse17_write_amplification
-          --skip kse18_read_amplification --skip kse161718_report
-          --skip kse19_resource_usage --skip kse19_report
-          --skip m7_workloads --skip v2_m7_workloads
-          --skip multimodal_golden_suite --skip rule_baseline_retrieval_quality
-          --skip semantic_extraction_quality
-          --skip sfm009_large_wal_snapshot_has_bounded_rss
+      # Skip list derived from tests/gated.toml (PR6-F2 / P0-2).
+      - run: cargo test --workspace -- $(bash scripts/skip-list.sh)
         # Fast regression net. Only pure measurement is skipped (SE-06
         # classification — the same skip list as the Windows check job's
         # table, so the regression net is identical on both OSes); every
@@ -407,6 +395,10 @@ jobs:
           # (docs/ARCHITECT-REVIEW-2026-09.md).
           echo "Checking red-archive artifacts..."
           bash scripts/check-red-archives.sh
+          # PR6-F2 (P0-2): the gated-cell registry must be the only skip
+          # source and every registered name must exist in the tree.
+          echo "Checking gated-cell registry..."
+          bash scripts/check-skip-drift.sh
           # P5-M0 (gd001): the baseline-certification guard
           # (.github/workflows/baseline-guard.yml) must stay wired — it runs
           # the 1M v2 workload + gate-5 ratio on every change touching a
