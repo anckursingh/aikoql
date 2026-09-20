@@ -194,3 +194,19 @@ Out of scope, recorded for the record: 9 open `rust/cleartext-logging` and
 2026-08-31, pre-dating this round) on mcp/ingestion/kernel paths. They are
 not "findings in runtime tests"; they get their own disposition, not a
 bundled fix.
+
+---
+
+## Follow-up milestones (post-R3)
+
+The Round-3 review closed at this head. The architect review
+(`docs/ARCHITECT-REVIEW-2026-09.md`) files the project-level assessment vs
+the agentic-DB field and the TDD enhancement plan; its P0 items land as
+follow-up milestones, one commit each, re-stamping this table as they land.
+
+| milestone | status |
+|---|---|
+| Architect review doc + TDD plan | FILED (this commit) |
+| P0-1 RED archives as artifacts | next |
+| P0-2 env-gate registry + drift sweep | planned |
+| P0-3 deterministic damage corpus | planned |
