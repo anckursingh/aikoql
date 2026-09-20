@@ -1,0 +1,10 @@
+{
+  "generated_at": "2026-09-20T14:40:00Z",
+  "machine": "windows/x86_64; 8 logical cores; AMD64 Family 23 Model 24 Stepping 1, AuthenticAMD (laptop, first genuine measurement)",
+  "note": "The harness result rows label the field p50_us but carry nanoseconds (58900 = 58.9 us at 1M — the gate-5 magnitude); the budget is ratio-wise, so units cancel. Budget 3x until CI runs pin the runner variance.",
+  "cells": {
+    "w1_ko_get_p50_ns": 6600.0,
+    "w2_head_get_p50_ns": 6300.0,
+    "hot_head_p50_ns": 1300.0
+  }
+}

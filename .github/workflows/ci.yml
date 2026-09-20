@@ -431,6 +431,25 @@ jobs:
             echo "DAG VIOLATION: $GUARD must run the 1M regime (V2ADOPT_NIGHTLY=1m)"
             exit 1
           fi
+          # PR6-F6 (P1-6): the per-commit perf smoke workflow must stay
+          # wired — the cheap gate-5 catches O(n^2)-class storage
+          # regressions at commit time instead of in the nightly 1M guard.
+          echo "Checking perf-smoke wiring..."
+          SMOKE=.github/workflows/perf-smoke.yml
+          if [ ! -f "$SMOKE" ]; then
+            echo "DAG VIOLATION: $SMOKE missing — the per-commit perf smoke job must exist"
+            exit 1
+          fi
+          for path in crates/storage crates/kernel crates/engines/vector; do
+            if ! grep -q "$path" "$SMOKE"; then
+              echo "DAG VIOLATION: $SMOKE must trigger on $path"
+              exit 1
+            fi
+          done
+          if ! grep -q 'perf-smoke.sh' "$SMOKE"; then
+            echo "DAG VIOLATION: $SMOKE must run scripts/perf-smoke.sh"
+            exit 1
+          fi
           # PR6-R2-012: vendored node_modules must not be tracked source —
           # enormous diffs, review noise, lockfile drift. This PR deletes
           # the 278 paths origin/main still tracks; the gate keeps them

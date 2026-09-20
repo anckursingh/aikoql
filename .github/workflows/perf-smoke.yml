@@ -1,0 +1,50 @@
+# PR6-F6 (P1-6) — per-commit perf smoke budget.
+#
+# The cheap version of gate-5: three tiny fixed cells (W1/W2 point reads,
+# hot-head P50, ann004 recall@10) with a generous 3x budget vs the
+# committed baseline, on every change touching the cells' code. The full
+# 1M gate-5 ratio stays in baseline-guard.yml (nightly/manual class).
+#
+# Wired by the dependency-dag job's inline pin (ci.yml): deleting this
+# file, dropping a trigger path, or losing the perf-smoke.sh step fails CI.
+
+name: Per-commit perf smoke
+
+# CodeQL actions/missing-workflow-permissions: the smoke only reads the
+# repo and runs benchmarks — no contents: write anywhere.
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - 'crates/storage/**'
+      - 'crates/kernel/**'
+      - 'crates/engines/vector/**'
+      - 'scripts/perf-smoke.sh'
+      - 'scripts/perf-smoke-check.py'
+      - 'artifacts/storage-engine-v2/perf-smoke-baseline.json'
+      - '.github/workflows/perf-smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/storage/**'
+      - 'crates/kernel/**'
+      - 'crates/engines/vector/**'
+      - 'scripts/perf-smoke.sh'
+      - 'scripts/perf-smoke-check.py'
+      - 'artifacts/storage-engine-v2/perf-smoke-baseline.json'
+      - '.github/workflows/perf-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Perf smoke (3 cells, 3x budget)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Perf smoke cells + budget check
+        shell: bash
+        run: bash scripts/perf-smoke.sh

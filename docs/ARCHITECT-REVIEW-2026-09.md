@@ -87,7 +87,7 @@ commit; each DONE row names its commit.
 | P0-3 | Deterministic damage corpus | P0 | DONE | `tests/common/damage.rs` + `tests/damage_corpus.rs` (11 cells, per-byte sweeps) + RED archive |
 | P1-4 | Seed-determinism gate | P1 | DONE | `scripts/check-test-env-hygiene.sh` — no unseeded RNG / bare set_var in new tests, 10 pinned sites + fake-tree RED archive, CI-wired |
 | P1-5 | Shuffle runs | P1 | DONE | `scripts/run-shuffle.sh` + `scripts/check-residue.sh` + `scripts/check-shuffle-wiring.sh` + nightly shuffle job + RED archive |
-| P1-6 | Per-commit perf smoke budget | P1 | PLANNED | tiny fixed cell set, generous 3× budget, storage paths only |
+| P1-6 | Per-commit perf smoke budget | P1 | DONE | 3 fixed cells + 3× budget vs committed baseline + path-gated workflow + dag pin |
 | P1-7 | Coverage floor on codec/replay | P1 | PLANNED | grcov delta pinned on checkpoint/snapshot/replay |
 | P1-8 | Dogfood MRFC-0070 on the review loop | P1 | PLANNED | findings as KOs, fixes reconciled via A8 |
 | P2-9 | Wire-contract golden tests (SDK) | P2 | PLANNED | on demand |
@@ -250,12 +250,32 @@ tree — all five pieces missing, exit 1
 runs in ci.yml's dag job on every PR, since a workflow step can rot
 silently in a bad merge.
 
-### P1-6 — Per-commit perf smoke budget (PLANNED)
+### P1-6 — Per-commit perf smoke budget (DONE)
 
-The 1M Baseline Guard is nightly/manual. A tiny fixed cell set (point_read,
-hot-head, one recall cell) with a generous 3× budget on storage-crate
-changes only catches O(n²) regressions at commit time — the cheap version of
-gate-5.
+The 1M Baseline Guard is nightly/manual. The cheap version of gate-5: three
+fixed cells on every change touching their code, with a generous 3× budget
+vs a committed baseline — sized to catch O(n²)-class regressions at commit
+time, not machine noise. No new measurement code: all three cells are
+pre-existing env-armed tests.
+
+- **W1/W2 point reads** — the 2K smoke matrix. `V2ADOPT_PERF_SMOKE=1`
+  (strict opt-in) writes `result-smoke.json` / `workloads-smoke.md` with a
+  `-smoke` suffix, so the canonical artifacts are still never clobbered
+  (SE2-M19 holds); the budget diffs the v2 W1/W2 P50s against the
+  baseline's.
+- **hot-head** — `SE2M11_NIGHTLY=1` writes `hot-head.md` (100K cached
+  lookups, answers pinned per lookup); the check parses its P50 line.
+- **recall** — ann004 self-asserts recall@10 ≥ 9 vs the brute-force
+  oracle at N=10001, so it needs no budget row.
+
+RED via the P0-1 mechanism (`perf-smoke-no-arm`, exit 1): at the pre-fix
+tree the smoke matrix runs green and produces no machine-readable artifact,
+so the budget gate has nothing to read. The baseline is the first genuine
+measurement (laptop, recorded with its machine string); the 3× budget
+absorbs the laptop-vs-runner variance until enough CI runs pin it.
+`perf-smoke.yml` path-gates on storage/kernel/vector + the scripts + the
+baseline, and ci.yml's dag job pins the wiring inline (a bad merge can't
+silently un-arm it).
 
 ### P1-7 — Coverage floor on codec/replay (PLANNED)
 

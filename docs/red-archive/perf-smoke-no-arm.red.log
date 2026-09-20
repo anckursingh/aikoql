@@ -1,0 +1,20 @@
+   Compiling aikoql-kernel v0.1.19 (E:\dreams\Mnemosyne\crates\kernel)
+   Compiling aikoql-storage v0.1.19 (E:\dreams\Mnemosyne\crates\storage\aikoql)
+   Compiling aikoql-storage-v2 v0.1.19 (E:\dreams\Mnemosyne\crates\storage\aikoql-v2)
+    Finished `release` profile [optimized] target(s) in 2m 42s
+     Running tests\kse_m7_v2_workloads.rs (target\release\deps\kse_m7_v2_workloads-0cec0c9f213c663f.exe)
+
+running 8 tests
+test v2_m25_relationship_batch ... ok
+test v2_attribution_probe ... ok
+test v2_m26_scan_profile ... ok
+test v2_m7_loader ... ok
+test v2_m27_context_profile ... ok
+test v2_p3m2_write_stats_overhead ... ok
+test v2_gate2_3_dataset_larger_than_ram ... ok
+test v2_m7_workloads has been running for over 60 seconds
+test v2_m7_workloads ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 74.22s
+
+EXIT=1

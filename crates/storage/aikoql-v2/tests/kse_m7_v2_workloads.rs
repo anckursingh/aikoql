@@ -38,7 +38,9 @@
 //! (PR#2 review SE-11: the same evidence plus run metadata as
 //! machine-readable JSON for automated comparison) — both only at
 //! `V2ADOPT_NIGHTLY=1`, so a smoke run never clobbers the canonical
-//! artifacts (SE2-M19).
+//! artifacts (SE2-M19). `V2ADOPT_PERF_SMOKE=1` (P1-6, strict opt-in,
+//! smoke size) writes the `-smoke`-suffixed twins instead, so the
+//! per-commit perf budget has machine-readable rows to diff.
 
 mod common;
 
@@ -1076,13 +1078,28 @@ fn v2_m7_workloads() {
     }
     // The artifact is canonical at adoption scale only — a smoke run (the
     // plain suite) must not clobber it (SE2-M19: it used to).
-    if std::env::var_os(NIGHTLY_ENV).is_some() {
+    //
+    // PR6-F6 (P1-6): V2ADOPT_PERF_SMOKE=1 (strict opt-in, smoke size)
+    // writes the -smoke-suffixed twins so the per-commit perf budget has
+    // machine-readable rows to diff against its committed baseline.
+    let perf_smoke = match std::env::var("V2ADOPT_PERF_SMOKE") {
+        Err(std::env::VarError::NotPresent) => false,
+        Ok(v) if v == "1" => true,
+        other => panic!("V2ADOPT_PERF_SMOKE strict opt-in: unset or \"1\", got {other:?}"),
+    };
+    if std::env::var_os(NIGHTLY_ENV).is_some() || perf_smoke {
         let dir =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine-v2");
         std::fs::create_dir_all(&dir).unwrap();
         // Scale/filter suffixes (SE2-M28): a 1m or single-backend run never
-        // clobbers the canonical 100K workloads.md/result.json.
-        let suffix = artifact_suffix(filter.as_deref());
+        // clobbers the canonical 100K workloads.md/result.json; the perf
+        // smoke gets its own -smoke suffix (V2ADOPT_NIGHTLY stays unset, so
+        // the run is at smoke size).
+        let suffix = if std::env::var_os(NIGHTLY_ENV).is_some() {
+            artifact_suffix(filter.as_deref())
+        } else {
+            "-smoke".to_string()
+        };
         common::report_write(
             &dir.join(format!("workloads{suffix}.md")),
             benchmark_report(&results, sz, filter.as_deref()),

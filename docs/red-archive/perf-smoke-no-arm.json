@@ -1,0 +1,8 @@
+{
+  "id": "perf-smoke-no-arm",
+  "pre_fix_commit": "b145cbf",
+  "command": "bash -c AIKOQL_REPORT_WRITE=1 cargo test -p aikoql-storage-v2 --release --test kse_m7_v2_workloads && test -f artifacts/storage-engine-v2/result-smoke.json",
+  "captured_at": "2026-09-20T14:21:34Z",
+  "captured_head": "b145cbf69ba4318cc186e493243423ea6d01f642",
+  "exit_code": 1
+}
