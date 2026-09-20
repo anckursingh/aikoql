@@ -1,0 +1,6 @@
+SHUFFLE: missing scripts/run-shuffle.sh
+SHUFFLE: missing scripts/check-residue.sh
+SHUFFLE: benchmark-nightly.yml lacks the nextest install step
+SHUFFLE: benchmark-nightly.yml lacks the shuffle run step
+SHUFFLE: the residue sweepers must arm before AND after the run
+EXIT=1

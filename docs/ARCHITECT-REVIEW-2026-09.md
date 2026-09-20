@@ -86,7 +86,7 @@ commit; each DONE row names its commit.
 | P0-2 | Env-gate registry + drift sweep | P0 | DONE | `tests/gated.toml` + `scripts/skip-list.sh` + `scripts/check-skip-drift.sh` + ungated nightly job |
 | P0-3 | Deterministic damage corpus | P0 | DONE | `tests/common/damage.rs` + `tests/damage_corpus.rs` (11 cells, per-byte sweeps) + RED archive |
 | P1-4 | Seed-determinism gate | P1 | DONE | `scripts/check-test-env-hygiene.sh` — no unseeded RNG / bare set_var in new tests, 10 pinned sites + fake-tree RED archive, CI-wired |
-| P1-5 | Shuffle runs | P1 | PLANNED | nightly randomized-order run + residue sweepers |
+| P1-5 | Shuffle runs | P1 | DONE | `scripts/run-shuffle.sh` + `scripts/check-residue.sh` + `scripts/check-shuffle-wiring.sh` + nightly shuffle job + RED archive |
 | P1-6 | Per-commit perf smoke budget | P1 | PLANNED | tiny fixed cell set, generous 3× budget, storage paths only |
 | P1-7 | Coverage floor on codec/replay | P1 | PLANNED | grcov delta pinned on checkpoint/snapshot/replay |
 | P1-8 | Dogfood MRFC-0070 on the review loop | P1 | PLANNED | findings as KOs, fixes reconciled via A8 |
@@ -226,11 +226,29 @@ mystery. RED archived from the live suite (`auth-surface-5s-flake`,
 exit 101 — a timing RED, which the P0-1 re-capture assertion cannot
 reproduce deterministically; the archive says so).
 
-### P1-5 — Shuffle runs (PLANNED)
+### P1-5 — Shuffle runs (DONE)
 
-Nightly randomized-order run (nextest — not currently in the tree) with the
-residue-sweeper asserts armed, to catch cross-test interference at night
-instead of in the PR that adopted the dependency.
+Nightly randomized-order run with the residue-sweeper asserts armed, so
+cross-test interference shows up at night instead of in the PR that adopted
+the dependency. nextest (new to the tree) runs the workspace with
+`--no-fail-fast --shuffle` — process-per-test, the right shape for the
+P1-4 interference classes (leaked listeners, temp dirs, tree mutation are
+process-level, not thread-level) — and the gated registry feeds it:
+`skip-list.sh --nextest` emits the 14 gated cells as a nextest
+`-E 'not test(a) and not test(b)'` filter (nextest has no --skip), so the
+env-gated cells stay gated in the shuffled world too.
+
+`scripts/check-residue.sh` snapshots listening ports, temp dirs and the
+git tree before the run and fails on anything new after it — both flake
+classes observed live this campaign (the 2026-09-18 AIKOQL_BACKEND env
+leak, the 2026-09-20 port-9091 corpse) would have tripped it. And the
+wiring itself is pinned: `check-shuffle-wiring.sh` fails if the scripts
+are missing or benchmark-nightly.yml loses its nextest step or either
+sweeper arm. RED captured via the P0-1 mechanism against the unwired
+tree — all five pieces missing, exit 1
+(`docs/red-archive/shuffle-wiring-vs-unwired.red.log`) — and the check
+runs in ci.yml's dag job on every PR, since a workflow step can rot
+silently in a bad merge.
 
 ### P1-6 — Per-commit perf smoke budget (PLANNED)
 

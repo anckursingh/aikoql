@@ -406,6 +406,11 @@ jobs:
           # script's allowlist (file|token) with honest per-entry reasons.
           echo "Checking test env hygiene + seed determinism..."
           bash scripts/check-test-env-hygiene.sh
+          # PR6-F5 (P1-5): the nightly shuffle run + its residue sweepers
+          # must stay wired in benchmark-nightly.yml (a workflow step can
+          # rot silently in a bad merge).
+          echo "Checking shuffle-run wiring..."
+          bash scripts/check-shuffle-wiring.sh
           # P5-M0 (gd001): the baseline-certification guard
           # (.github/workflows/baseline-guard.yml) must stay wired — it runs
           # the 1M v2 workload + gate-5 ratio on every change touching a

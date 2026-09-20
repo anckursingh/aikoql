@@ -18,6 +18,34 @@ permissions:
   contents: read
 
 jobs:
+  # PR6-F5 (P1-5): randomized-order run of the PR test set + residue
+  # sweepers. nextest shuffles every test (the printed seed + the retained
+  # run log reproduce a night's failure locally); the sweepers bracket the
+  # run and fail on any listener / temp dir / tree mutation it leaves
+  # behind — the cross-test interference classes caught out-of-band of the
+  # PR loop. Gate: scripts/check-shuffle-wiring.sh (dag job in ci.yml).
+  shuffle:
+    name: Randomized-order run + residue sweepers
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Residue sweep — arm
+        run: bash scripts/check-residue.sh before
+      - name: Randomized-order run
+        run: bash scripts/run-shuffle.sh
+        timeout-minutes: 90
+      # Always run: a failed shuffle's residue is exactly what may explain
+      # the failure (e.g. a test leaked a listener a later test hit).
+      - name: Residue sweep — assert
+        if: always()
+        run: bash scripts/check-residue.sh after
+
   benchmark:
     name: Run Benchmarks + Regression Check
     runs-on: ubuntu-latest
