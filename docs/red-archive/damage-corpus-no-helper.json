@@ -1,0 +1,9 @@
+{
+  "id": "damage-corpus-no-helper",
+  "pre_fix_commit": "b2da44e",
+  "command": "cargo test -p aikoql-storage-v2 --test damage_corpus --no-run",
+  "captured_at": "2026-09-20T05:20:59Z",
+  "captured_head": "b2da44e806b50b18cc4b10615ff887ffc8eb47e1",
+  "exit_code": 101,
+  "note": "structural RED: the matrix test was written first — E0432 unresolved import `common::damage` (the corpus helper did not exist yet). 11/11 green after tests/common/damage.rs landed."
+}

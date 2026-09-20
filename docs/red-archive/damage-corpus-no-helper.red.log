@@ -1,0 +1,11 @@
+    Blocking waiting for file lock on build directory
+   Compiling aikoql-storage-v2 v0.1.19 (E:\dreams\Mnemosyne\crates\storage\aikoql-v2)
+error[E0432]: unresolved import `common::damage`
+  --> crates\storage\aikoql-v2\tests\damage_corpus.rs:31:13
+   |
+31 | use common::damage::Damage;
+   |             ^^^^^^ could not find `damage` in `common`
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `aikoql-storage-v2` (test "damage_corpus") due to 1 previous error
+EXIT=101

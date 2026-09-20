@@ -84,7 +84,7 @@ commit; each DONE row names its commit.
 |---|---|---|---|---|
 | P0-1 | RED archives as artifacts | P0 | DONE | `scripts/red-archive.sh` + `scripts/check-red-archives.sh` + 4 captured archives + CI step |
 | P0-2 | Env-gate registry + drift sweep | P0 | DONE | `tests/gated.toml` + `scripts/skip-list.sh` + `scripts/check-skip-drift.sh` + ungated nightly job |
-| P0-3 | Deterministic damage corpus | P0 | PLANNED | shared corpus for the FormatError classifiers |
+| P0-3 | Deterministic damage corpus | P0 | DONE | `tests/common/damage.rs` + `tests/damage_corpus.rs` (11 cells, per-byte sweeps) + RED archive |
 | P1-4 | Seed-determinism gate | P1 | PLANNED | CI grep: no unseeded RNG / bare set_var in new tests |
 | P1-5 | Shuffle runs | P1 | PLANNED | nightly randomized-order run + residue sweepers |
 | P1-6 | Per-commit perf smoke budget | P1 | PLANNED | tiny fixed cell set, generous 3× budget, storage paths only |
@@ -143,14 +143,35 @@ report, sfm009) ran ungated nowhere. The new benchmark-nightly "Gated cells
 ungated" job re-runs every `ungated_by = "none"` entry weekly so their
 limits can't silently regress.
 
-### P0-3 — Deterministic damage corpus (PLANNED)
+### P0-3 — Deterministic damage corpus (DONE)
 
-Recovery tests hand-roll corruption (truncate, bit-flip, zero checksum
-region). One helper applies a shared corpus of deterministic mutations to
-golden checkpoint/WAL fixtures, and a matrix test runs the full corpus
-through the FormatError classifiers (Io vs Corrupt vs Stale). Every new
-codec path inherits the classifier coverage — the R3-004 discovery (codec
-round-tripped all six fields, nothing asserted it) is exactly this class.
+Recovery tests hand-rolled corruption inline. One shared corpus —
+`tests/common/damage.rs`, four mutation classes (bit-flip, truncation,
+trailing bytes, zeroed region) — and a matrix test (`damage_corpus.rs`,
+11 cells) that runs the full corpus through the FormatError classifiers on
+synthetic WAL frames, a checkpoint golden, CURRENT, and a real Db. Every
+new codec path inherits the classifier coverage by adding its fixture
+there — the R3-004 discovery (codec round-tripped all six fields, nothing
+asserted it) is exactly this class.
+
+What the sweeps pin, per byte:
+
+- **WAL**: damage with a valid frame after it is Corrupt (KSE-082B);
+  damage in the final frame with nothing valid after it is a torn tail —
+  replayed as the exact prefix, never as silent data. Truncation at every
+  cut replays exactly the complete frames; trailing garbage drops nothing.
+- **Checkpoint / CURRENT**: every flip, truncation and trailing byte fails
+  closed. Version bytes (and checkpoint placement-variant bytes, whose
+  position moves with the record layout — pinned by count, not offset)
+  classify Unsupported; everything else Corrupt; a missing file is Io.
+- **Stale** is a lifecycle class (generation moved), not byte damage — the
+  corpus cannot produce it; phy001–005 pin it.
+
+Two honest first-run findings, both encoded into the matrix: the corpus
+RED is archived (`damage-corpus-no-helper`, exit 101 — the test written
+before the helper), and the fixture work surfaced that `Db::put` publishes
+no WAL frame (memtable until flush) — the Db-level legs seed via `write()`
+batches, one frame each.
 
 ### P1-4 — Seed-determinism gate (PLANNED)
 

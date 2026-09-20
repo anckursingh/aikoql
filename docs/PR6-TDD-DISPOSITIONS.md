@@ -209,4 +209,5 @@ follow-up milestones, one commit each, re-stamping this table as they land.
 | Architect review doc + TDD plan | FILED (8f9416a) |
 | P0-1 RED archives as artifacts | DONE (d9cfcfb) — `scripts/red-archive.sh` + `scripts/check-red-archives.sh` + 5 captured archives + CI step |
 | P0-2 env-gate registry + drift sweep | DONE (this commit) — `tests/gated.toml` + `scripts/skip-list.sh` + `scripts/check-skip-drift.sh` + ungated nightly job |
-| P0-3 deterministic damage corpus | next |
+| P0-3 deterministic damage corpus | DONE (this commit) — `tests/common/damage.rs` + `tests/damage_corpus.rs` (11 cells, per-byte sweeps vs synthetic WAL / checkpoint / CURRENT / real Db) + RED archive `damage-corpus-no-helper` |
+| P1-4 seed-determinism gate | next |
