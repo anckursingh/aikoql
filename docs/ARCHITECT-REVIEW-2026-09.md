@@ -210,6 +210,22 @@ thread-scopes the hook (`with_inject`, thread-local), deterministically
 RED-pinned by `cert002b_injection_is_thread_scoped`, and the allowlist
 pin is deleted — 10 pins became 8, the review point working as designed.
 
+A second live catch, this time from the suite itself: the cert fix's
+full-suite gate flaked 2/2 in `auth_surface` — "server still serving".
+Not the guard: the fail-closed child exits 2 with the exact refusal text
+(verified in isolation and under a simulated 127.0.0.1:9091 listener).
+The RED is the test's own 5s wall-clock deadline, which a debug-build
+child on a busy Windows laptop can miss (16.54s binary = both deadlines +
+teardown), and its choice of the DEFAULT metrics port — a real local
+server held 127.0.0.1:9091 during two of the three flaked windows
+(the 2026-09-20 corpse). The follow-up commit raises the deadline to 30s
+(the assert is about the guard, not machine speed), moves the probe to a
+non-default port (the guard checks the address, not the port), and carries
+the child's stderr into the panic so a recurrence is evidence, not a
+mystery. RED archived from the live suite (`auth-surface-5s-flake`,
+exit 101 — a timing RED, which the P0-1 re-capture assertion cannot
+reproduce deterministically; the archive says so).
+
 ### P1-5 — Shuffle runs (PLANNED)
 
 Nightly randomized-order run (nextest — not currently in the tree) with the

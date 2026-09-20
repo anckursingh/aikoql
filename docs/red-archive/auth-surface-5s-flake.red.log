@@ -1,0 +1,19 @@
+---- metrics_nonloopback_refused_by_default stdout ----
+
+thread 'metrics_nonloopback_refused_by_default' (28844) panicked at crates\services\api\mcp\tests\auth_surface.rs:53:17:
+metrics-nonloopback: server still serving — fail-closed startup missing
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- remote_http_without_credentials_refuses_to_serve stdout ----
+
+thread 'remote_http_without_credentials_refuses_to_serve' (40848) panicked at crates\services\api\mcp\tests\auth_surface.rs:53:17:
+remote-no-auth: server still serving — fail-closed startup missing
+
+
+failures:
+    metrics_nonloopback_refused_by_default
+    remote_http_without_credentials_refuses_to_serve
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.54s
+error: test failed, to rerun pass `-p aikoql-mcp --test auth_surface`
+EXIT=101

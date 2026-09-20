@@ -17,9 +17,14 @@ fn tmp_db(tag: &str) -> String {
         .into_owned()
 }
 
-/// Spawn `serve`, expect exit code 2 within 5s; kill + panic if the server
+/// Spawn `serve`, expect exit code 2 within 30s; kill + panic if the server
 /// stays up (fail-closed is the point — an armed-but-unauth remote HTTP
-/// surface would just keep serving).
+/// surface would just keep serving). 30s, not 5: the assert is about the
+/// GUARD, not machine speed — the suite gate flaked exactly here when a
+/// debug-build child on a busy Windows laptop missed a 5s wall-clock budget
+/// (2026-09-20 suite, 2/2 panics; guard verified correct in isolation).
+/// The panic carries the child's stderr so the next occurrence is evidence,
+/// not a mystery.
 fn expect_exit2(args: &[&str], tag: &str, envs: &[(&str, &str)]) -> String {
     let mut cmd = Command::new(bin());
     cmd.args(["serve"])
@@ -32,7 +37,7 @@ fn expect_exit2(args: &[&str], tag: &str, envs: &[(&str, &str)]) -> String {
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     let mut child: Child = cmd.spawn().expect("spawn aikoql-mcp");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         match child.try_wait().expect("try_wait") {
             Some(code) => {
@@ -50,7 +55,21 @@ fn expect_exit2(args: &[&str], tag: &str, envs: &[(&str, &str)]) -> String {
             None if Instant::now() > deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!("{tag}: server still serving — fail-closed startup missing");
+                let mut err = String::new();
+                if let Some(mut s) = child.stderr.take() {
+                    use std::io::Read;
+                    let _ = s.read_to_string(&mut err);
+                }
+                // Truncate at a char boundary — err[..500] would panic on
+                // multibyte UTF-8.
+                let tail: &str = match err.char_indices().nth(500) {
+                    Some((i, _)) => &err[..i],
+                    None => &err,
+                };
+                panic!(
+                    "{tag}: server still serving after 30s — fail-closed startup missing; \
+                     child stderr: {tail}"
+                );
             }
             None => std::thread::sleep(Duration::from_millis(50)),
         }
@@ -60,9 +79,12 @@ fn expect_exit2(args: &[&str], tag: &str, envs: &[(&str, &str)]) -> String {
 #[test]
 fn remote_http_without_credentials_refuses_to_serve() {
     // Armed for remote HTTP, no [auth] and no bootstrap password — the
-    // credentials gate must refuse before anything listens.
+    // credentials gate must refuse before anything listens. Port 19123, not
+    // the default 9091: the guard checks the ADDRESS, and the default port
+    // collides with any real local server (2026-09-20: a leaked server on
+    // 127.0.0.1:9091 coincided with this test's suite failures).
     let err = expect_exit2(
-        &["--metrics-addr", "0.0.0.0:9091"],
+        &["--metrics-addr", "0.0.0.0:19123"],
         "remote-no-auth",
         &[("AIKOQL_ALLOW_REMOTE_HTTP", "1")],
     );
@@ -75,7 +97,7 @@ fn remote_http_without_credentials_refuses_to_serve() {
 #[test]
 fn metrics_nonloopback_refused_by_default() {
     let err = expect_exit2(
-        &["--metrics-addr", "0.0.0.0:9091"],
+        &["--metrics-addr", "0.0.0.0:19123"],
         "metrics-nonloopback",
         &[],
     );
