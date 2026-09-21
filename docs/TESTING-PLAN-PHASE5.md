@@ -60,7 +60,7 @@ Mirror discipline of `docs/TESTING-PLAN-PHASE3.md`: one row per milestone; statu
 | P5-M34 | Snapshot double-read measurement (P1-05) | PR6 perf review | ✅ 416400a RED → feat | snp004 GREEN: capture 3 ms / copy 2743 / verify 2464 / marker 3, 67.1 MiB copied, read 134.2 MiB (= 2×, the double-read as data), RSS < 48 MiB bound, restore byte-exact — the ~64 MiB generation |
 | P5-M35 | Control-plane lock + L0-scan profile (P1-06+07) | PR6 perf review | ✅ RED → feat | prof001 GREEN: DbStats.control counts stats()/resolve guard waits (pooled per family, wait-only ns); prof002 GREEN (gated): scan 345 ns/write = 0.7% of the ~49 µs write path — immaterial, the per-write scan stays, publication-time counters NOT shipped (the evidence said no) |
 | P5-M36 | Compaction scale profile (P1-08+09) | PR6 perf review | ✅ | cp001 RED 60add89 → feat: CompactStats.rids_seen first-class (the seen-set denominator); laptop cells (debug, 1M × r{1k,100k}): wall 28.3/26.3 s, RSS +164.6/+169.2 MiB, allocs 2.03N (the 4N PERF-3 budget holds at scale), rids_seen == r; rid-side ≈ 45 B/rid → 2.7% of the bulk peak at r=100k → HashSet KEPT (rule 11: no custom structure without a gain cell); 10M points env-gated (AIKOQL_V2_CP_CELLS_FULL=1) for CI |
-| P5-M37 | Comparative latency gate + units (P1-10+11+12) | PR6 perf review | ⬜ | bench001 contract-schema harness; bench002 unit-mismatch regression; bench003 allocator-pin companion benches; v1/v2 runs on the CI workflow |
+| P5-M37 | Comparative latency gate + units (P1-10+11+12) | PR6 perf review | ✅ bench001/002 (0c41091 RED → ff2678a feat); bench003 + 1M republish pending | contract module (common::contract): rows emit p50_ns/p95_ns/p99_ns (the old *_us carried ns — bench002 pins the mismatch rejection), required sections/env/dataset keys named on rejection (bench001), verdict as a string never null; both kse_m7 harnesses renamed, gate5-check.py + perf-smoke-check.py readers follow; bench003 companion benches + the 1M republish ride the next session (full runs on the CI workflow) |
 
 ## Milestone gates (what flips a row to ✅)
 
@@ -94,7 +94,7 @@ Mirror discipline of `docs/TESTING-PLAN-PHASE3.md`: one row per milestone; statu
 - **P5-M34 (gate 12):** snp004 GREEN — the cells are recorded and reported (laptop cells: capture 3 ms, copy 2743 ms, verify 2464 ms, read = 2× copied, RSS under bound); protocol UNCHANGED — the verify re-read is the mutation-detection proof, no single-pass replacement can prove it (the RED states this).
 - **P5-M35 (gate 12):** prof001/prof002 green; the decision cell recorded — scan 345 ns/write, 0.7% of the write path, immaterial; the lock-wait instrumentation is live (DbStats.control) and the publication-time l0/l1 redesign is NOT shipped — the evidence said no (the gate's own rule).
 - **P5-M36 (gate 12):** 1M profile cells recorded on the laptop, 10M points env-gated for CI; no custom structure shipped — the gain cell said 2.7% (rule 11).
-- **P5-M37 (gate 12):** contract-schema harness green; comparative report published with baseline/candidate commits + ratios; cert suites untouched-green.
+- **P5-M37 (gate 12):** contract-schema harness green (bench001/002, 0c41091 → ff2678a); comparative republish with baseline/candidate commits + ratios pending the 1M CI runs; cert suites untouched-green.
 
 ## Honest-ledger template (pre-declared rows)
 

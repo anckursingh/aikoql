@@ -496,7 +496,9 @@ TDD REDs: bench001 — the comparative harness writes the contract schema (fails
 
 Acceptance: report artifacts published with baseline/candidate commits + ratios; existing cert suites untouched-green.
 
-Status: ⬜ open
+Status: ✅ Shipped (RED 0c41091 → feat ff2678a) — bench001 + bench002 closed; bench003 (companion benches — the workspace has no bench harness yet) and the 1M artifact republish pending.
+
+Evidence: common::contract is the comparative-harness contract schema (single source of truth) — ROW_KEYS with the unit named in the field (p50_ns/p95_ns/p99_ns), required sections + environment/dataset keys, and the gate verdict as a string (PASS/FAIL/NOT_EVIDENCED — a bare null is rejected). bench001 pins missing-field rejection naming the field/section; bench002 pins the unit-mismatch rejection (the old rows carried as_nanos() in fields named `*_us`); the null-verdict rule is pinned too. The harnesses now emit the contract shape: `p50_us` → `p50_ns` in both kse_m7 suites (the timed() pass always pushed as_nanos()), the readers follow (gate5-check.py, perf-smoke-check.py), and the v2 writer's null verdict became the gate_cell string (v1 already emitted one). Remaining: bench003 RED (needs a bench-harness decision), the 1M republish with the renamed fields + verdict strings (full runs on the CI workflow per the laptop directive).
 
 ## Gates (carried + new)
 

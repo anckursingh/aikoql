@@ -4,8 +4,8 @@
 
 #![allow(dead_code)]
 
-pub mod damage;
 pub mod contract;
+pub mod damage;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

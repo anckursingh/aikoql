@@ -97,9 +97,7 @@ pub fn validate_artifact(s: &str) -> Result<(), Vec<String>> {
     if !has_key(s, "verdict") {
         errs.push("gates missing required key `verdict`".into());
     } else if s.contains("\"verdict\": null") {
-        errs.push(
-            "null gate verdict — emit the verdict string (PASS/FAIL/NOT_EVIDENCED)".into(),
-        );
+        errs.push("null gate verdict — emit the verdict string (PASS/FAIL/NOT_EVIDENCED)".into());
     }
     if errs.is_empty() {
         Ok(())
