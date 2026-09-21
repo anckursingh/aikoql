@@ -412,7 +412,7 @@ TDD REDs: mtr001 — counting-allocator pin: N point reads allocate 0 (fails tod
 
 Acceptance: zero allocs per point read; memtable + db + storage-v2 suites green untouched; flush output byte-identical (M29's goldens re-run).
 
-Status: ⬜ open
+Status: ✅ Shipped (RED bdbe16b → feat 0e74083) — mtr001 green: armed peak 0 over 50k get/get_by_rid/prefix_heads reads (RED: 7 bytes — one key copy per read, the flat map's owned range start); mtr002 cell: warm point reads p50 1800→900ns, p99 3600→1500ns (100k reads, wall 201.9→100.9ms — measured unarmed, reported not gated); mtr003 prefix parity + mtr004 out-of-order/replace/version-heavy guards green. insert keeps the flat map's any-order + same-seq-replaces semantics via partition_point; into_entries moves the map key for the last version, clones for earlier (single-version chains clone none). No auxiliary map. Storage-v2 + kernel + mcp green (128 bins).
 
 ### P5-M32 — Group-commit allocation cleanup (P1-02 + P1-03)
 
