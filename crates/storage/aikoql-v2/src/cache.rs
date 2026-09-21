@@ -182,4 +182,50 @@ mod tests {
         assert!(cache.get(1, 2).is_some());
         assert!(cache.get(1, 3).is_some());
     }
+
+    /// P5-M30 (P0-04) RED — victim selection must not scan the map: the
+    /// min-gen victim comes from the heap, so one forced eviction moves
+    /// scan_steps by 0. Today the miss path runs a full min_by_key sweep
+    /// per victim (n steps). Touches make the LRU order non-trivial first.
+    #[test]
+    fn eviction_does_not_scan_the_map() {
+        let cache = BlockCache::new(64 * BLOCK);
+        for i in 0..64u32 {
+            cache.insert(1, i, block());
+        }
+        for i in 0..8u32 {
+            cache.get(1, i).unwrap(); // these are NOT the victims
+        }
+        let before = cache.state.lock().unwrap().scan_steps;
+        cache.insert(1, 64, block()); // over cap: exactly one eviction
+        let after = cache.state.lock().unwrap().scan_steps;
+        assert_eq!(
+            after - before,
+            0,
+            "one eviction walked {} map entries — victim selection must not scan",
+            after - before
+        );
+    }
+
+    /// P5-M30 (P0-04) RED — eviction work must not grow with the cache:
+    /// 16, 512 and 4096 entries each pay 0 map-scan steps per forced
+    /// eviction. Today each victim costs n, so the first size fails.
+    #[test]
+    fn eviction_scan_work_is_flat_across_cache_sizes() {
+        for n in [16usize, 512, 4096] {
+            let cache = BlockCache::new(n * BLOCK);
+            for i in 0..n as u32 {
+                cache.insert(1, i, block());
+            }
+            let before = cache.state.lock().unwrap().scan_steps;
+            cache.insert(1, n as u32, block()); // one eviction
+            let after = cache.state.lock().unwrap().scan_steps;
+            assert_eq!(
+                after - before,
+                0,
+                "at {n} entries one eviction walked {} map entries",
+                after - before
+            );
+        }
+    }
 }
