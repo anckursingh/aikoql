@@ -56,7 +56,8 @@ use crate::segment::{
     SegmentAttach, SegmentEntry, SegmentReader, SegmentWriter, FLAG_DELETE, FLAG_PUT,
 };
 use crate::stats::{
-    record_latency_us, DbStats, ReadPathStats, ReadTraceRecord, SegmentStats, Stats, WriteStats,
+    record_latency_us, ControlStats, DbStats, ReadPathStats, ReadTraceRecord, SegmentStats, Stats,
+    WriteStats,
 };
 use crate::wal::{encode_frame, replay_reader, Op};
 use aikoql_kernel::knowledge::kom::sha256;
@@ -404,6 +405,9 @@ pub struct Db {
     compactor_signal: Arc<CompactorSignal>,
     /// P4-M5 — the sampled per-request read trace (empty while disabled).
     trace: TraceState,
+    /// P5-M35 — control-plane lock-wait counters (prof001): the
+    /// stats()/resolve_* surface's guard waits, pooled per family.
+    control: ControlStats,
     /// PR6-R2-003 test hook — one-shot Sync-path WAL append failure,
     /// armed from `Config::wal_fail_next` (consumed on the next frame;
     /// production configs never arm it).
@@ -880,24 +884,31 @@ impl Db {
             compactor,
             compactor_signal,
             trace: TraceState::new(),
+            control: ControlStats::default(),
             wal_fail_next: AtomicBool::new(wal_fail_next_armed),
         })
     }
 
     /// P3-M2 (design §21) — the whole observable surface in one snapshot:
     /// read path (SE2-M8), write path, segment inventory, cache.
+    /// P5-M35 — the control-plane counters record this call's own guard
+    /// wait (prof001: wait only, not the hold).
     pub fn stats(&self) -> DbStats {
-        let (count, bytes) = {
-            let state = self.state.read().unwrap();
-            let count = state.segments.len() as u64;
-            let bytes = state.segment_records.iter().map(|r| r.file_size).sum();
-            (count, bytes)
-        };
+        let t = Instant::now();
+        let state = self.state.read().unwrap();
+        self.control
+            .stats_wait_ns
+            .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        self.control.stats_waits.fetch_add(1, Ordering::Relaxed);
+        let count = state.segments.len() as u64;
+        let bytes = state.segment_records.iter().map(|r| r.file_size).sum();
+        drop(state);
         DbStats {
             read: self.stats.snapshot(),
             write: self.wstats.snapshot(self.fsyncs.load(Ordering::SeqCst)),
             segments: SegmentStats { count, bytes },
             cache: self.cache.as_ref().map(|c| c.stats()).unwrap_or_default(),
+            control: self.control.snapshot(),
         }
     }
 
@@ -1082,7 +1093,15 @@ impl Db {
             let state = self.state.read().unwrap();
             // P3-M2 — the scan is the backlog gauge's free ride: every
             // write path refreshes what the compactor faces (met003).
+            // P5-M35 — and the prof002 decision cell's direct cost (the
+            // counters exist to answer whether publication-time counters
+            // should replace this per-write scan — the review's gate).
+            let t = Instant::now();
             let scan = scan_l0(&state);
+            self.wstats
+                .scan_l0_ns
+                .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            self.wstats.scan_l0_calls.fetch_add(1, Ordering::Relaxed);
             self.wstats
                 .compaction_pending_segments
                 .store(scan.0 as u64, Ordering::Relaxed);
@@ -1376,21 +1395,37 @@ impl Db {
     /// maps are rebuilt at open from the delta logs + the active WAL, and
     /// every create applies before its ack.
     pub fn resolve_object(&self, oid: ObjectId) -> Option<LogicalId> {
-        self.state.read().unwrap().identity.get(&oid).copied()
+        let state = self.ctrl_resolve_read();
+        state.identity.get(&oid).copied()
     }
 
     /// SE2-M31 — the local replica of a logical id (spec §9.2): every
     /// create reserves lid → rid 1:1, so a resolved logical always has one
     /// local replica. The topology views delegate here.
     pub(crate) fn resolve_local(&self, lid: LogicalId) -> Option<ReplicaId> {
-        self.state.read().unwrap().replicas.get(&lid).copied()
+        let state = self.ctrl_resolve_read();
+        state.replicas.get(&lid).copied()
     }
 
     /// SE2-M32 — the placement of a local replica (spec §9.3): created
     /// replicas carry Memtable placement from birth (§14); flush and
     /// compaction move it. The resolver view delegates here.
     pub(crate) fn resolve_placement(&self, rid: ReplicaId) -> Option<Placement> {
-        self.state.read().unwrap().placements.get(&rid).copied()
+        let state = self.ctrl_resolve_read();
+        state.placements.get(&rid).copied()
+    }
+
+    /// P5-M35 — one control-plane resolve read: the guard wait is counted
+    /// (wait only — the elapsed ns at acquisition, the M21 lock_wait_ns
+    /// pattern), pooled across the three resolve paths.
+    fn ctrl_resolve_read(&self) -> std::sync::RwLockReadGuard<'_, State> {
+        let t = Instant::now();
+        let state = self.state.read().unwrap();
+        self.control
+            .resolve_wait_ns
+            .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        self.control.resolve_waits.fetch_add(1, Ordering::Relaxed);
+        state
     }
 
     /// PR6-003 — the full directory snapshot at the current generation

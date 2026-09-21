@@ -220,6 +220,11 @@ pub struct WritePathStats {
     /// This open's recovery: wall ms of open() and WAL bytes replayed.
     pub recovery_ms: u64,
     pub wal_replay_bytes: u64,
+    /// P5-M35 — the write path's L0-metadata scan (maybe_compact's
+    /// backlog-gauge refresh): how often it ran and what it cost. The
+    /// prof002 decision cell's direct measurement.
+    pub scan_l0_calls: u64,
+    pub scan_l0_ns: u64,
 }
 
 /// The live write-path counters.
@@ -240,6 +245,8 @@ pub(crate) struct WriteStats {
     pub(crate) last_compaction_ms: AtomicU64,
     pub(crate) recovery_ms: AtomicU64,
     pub(crate) wal_replay_bytes: AtomicU64,
+    pub(crate) scan_l0_calls: AtomicU64,
+    pub(crate) scan_l0_ns: AtomicU64,
     /// P3-M8 — the failed background merge's error text (None = none yet).
     /// Not in the Copy snapshot — the admin reads it via `Db::last_compaction_error`.
     pub(crate) compaction_error: std::sync::Mutex<Option<String>>,
@@ -268,6 +275,8 @@ impl WriteStats {
             recovery_ms: self.recovery_ms.load(Ordering::Relaxed),
             wal_replay_bytes: self.wal_replay_bytes.load(Ordering::Relaxed),
             compaction_error_count: self.compaction_error_count.load(Ordering::Relaxed),
+            scan_l0_calls: self.scan_l0_calls.load(Ordering::Relaxed),
+            scan_l0_ns: self.scan_l0_ns.load(Ordering::Relaxed),
         }
     }
 }
@@ -280,6 +289,42 @@ pub struct SegmentStats {
     pub bytes: u64,
 }
 
+/// P5-M35 — control-plane lock-wait counters (prof001). The control
+/// surface (stats() + the resolve paths) takes the global state READ
+/// lock on every call, frequently under MCP/admin traffic — a writer's
+/// hold blocks them all. Each family counts its acquisitions and the
+/// wait for the guard (the M21 lock_wait_ns pattern: the elapsed ns at
+/// acquisition — wait only, not the hold). Pooled per family, not per
+/// path: the three resolves are one-line bodies with one traffic shape.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ControlPlaneStats {
+    pub stats_waits: u64,
+    pub stats_wait_ns: u64,
+    pub resolve_waits: u64,
+    pub resolve_wait_ns: u64,
+}
+
+/// The live control-plane counters (relaxed atomics, the read-path
+/// discipline).
+#[derive(Debug, Default)]
+pub(crate) struct ControlStats {
+    pub(crate) stats_waits: AtomicU64,
+    pub(crate) stats_wait_ns: AtomicU64,
+    pub(crate) resolve_waits: AtomicU64,
+    pub(crate) resolve_wait_ns: AtomicU64,
+}
+
+impl ControlStats {
+    pub(crate) fn snapshot(&self) -> ControlPlaneStats {
+        ControlPlaneStats {
+            stats_waits: self.stats_waits.load(Ordering::Relaxed),
+            stats_wait_ns: self.stats_wait_ns.load(Ordering::Relaxed),
+            resolve_waits: self.resolve_waits.load(Ordering::Relaxed),
+            resolve_wait_ns: self.resolve_wait_ns.load(Ordering::Relaxed),
+        }
+    }
+}
+
 /// `Db::stats()` — the whole observable surface in one snapshot (design
 /// §21's list, plus the read path and cache from SE2-M7/M8).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -288,4 +333,5 @@ pub struct DbStats {
     pub write: WritePathStats,
     pub segments: SegmentStats,
     pub cache: crate::cache::CacheStats,
+    pub control: ControlPlaneStats,
 }
