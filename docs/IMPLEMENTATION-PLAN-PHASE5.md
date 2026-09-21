@@ -463,7 +463,9 @@ TDD REDs: prof001 — the instrumentation counters exist and are readable (compi
 
 Acceptance: profile recorded; counters shipped only on evidence, never speculatively.
 
-Status: ⬜ open
+Status: ✅ Shipped (RED → feat) — instrumentation live, the evidence said no to the redesign
+
+Evidence (prof002 cells — 100k Async writes, 64 KiB memtable, ~64 segments): per-write scan cost 345 ns against a ~49 µs write path — 0.7%, immaterial. Decision: the per-write scan STAYS (it refreshes the met003 backlog gauges at a price too small to matter); publication-time l0/l1 counters NOT shipped — the review's own gate (counters only on evidence), and the evidence says no. prof001: DbStats.control counts the stats()/resolve guard waits (pooled per family, wait-only ns at acquisition, the M21 pattern). Honest-cell note: a wall-ordering assert (B ≥ A) failed on the first gated run — sequential regimes differ in page-cache state; the test pins the inline counters (a_scans == 0, scans == writes, scan_ns > 0) and rides the walls as context.
 
 ### P5-M36 — Compaction scale profile (P1-08 + P1-09)
 
