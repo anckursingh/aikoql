@@ -33,6 +33,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 const MARKER_MAGIC: &[u8; 4] = b"AKSN";
 const FORMAT_VERSION: u16 = 1;
@@ -403,6 +404,59 @@ impl Drop for SnapshotPinGuard<'_> {
     }
 }
 
+/// P5-M34 — env-gated measurement cells (`AIKOQL_V2_SNAP_CELLS=path`):
+/// phase walls + byte counts for the double-read report (snp004 pins the
+/// sidecar's shape). `new(None)` is inert — every method no-ops on the
+/// Option (the read-trace 0=off pattern). The sidecar is diagnostic: a
+/// write failure warns and never fails the snapshot.
+struct SnapCells {
+    path: Option<PathBuf>,
+    started: Instant,
+    spans: Vec<(String, u64)>,
+}
+
+impl SnapCells {
+    fn new(path: Option<std::ffi::OsString>) -> Self {
+        SnapCells {
+            path: path.map(PathBuf::from),
+            started: Instant::now(),
+            spans: Vec::new(),
+        }
+    }
+
+    /// Close the previous phase (if any) and open `name`.
+    fn phase(&mut self, name: &str) {
+        if self.path.is_none() {
+            return;
+        }
+        self.spans
+            .push((name.to_string(), self.started.elapsed().as_millis() as u64));
+        self.started = Instant::now();
+    }
+
+    /// Close the last phase and write the sidecar. `read_bytes` = 2 ×
+    /// copied — the copy read and the verify re-read (the double-read
+    /// claim, stated as derived).
+    fn finish(&mut self, bytes_copied: u64, file_count: u32) {
+        let Some(path) = &self.path else { return };
+        self.spans.push((
+            "marker_ms".into(),
+            self.started.elapsed().as_millis() as u64,
+        ));
+        let mut body = String::from("{");
+        for (k, v) in &self.spans {
+            body.push_str(&format!("\"{k}\":{v},"));
+        }
+        body.push_str(&format!(
+            "\"bytes_copied\":{bytes_copied},\"read_bytes\":{},\"file_count\":{file_count}}}",
+            bytes_copied * 2
+        ));
+        if let Err(e) = std::fs::write(path, &body) {
+            eprintln!("aikoql-v2: snapshot cells not written: {e}");
+        }
+    }
+}
+
 impl Db {
     /// P5-M33 (§58) — the protocol in docs/snapshot-crash-protocol.md.
     /// Capture + arm in one state WRITE hold: generation read, file-set
@@ -420,6 +474,7 @@ impl Db {
         }
         std::fs::create_dir_all(dir)
             .map_err(|e| FormatError::Io(format!("create snapshot dir {}: {e}", dir.display())))?;
+        let mut cells = SnapCells::new(std::env::var_os("AIKOQL_V2_SNAP_CELLS"));
 
         // Capture + arm — the one locked window. The pin inserts come
         // last, so no error path can leak a pin. The WAL copy rides the
@@ -450,6 +505,7 @@ impl Db {
             db: self,
             names: files.iter().map(|f| f.name.clone()).collect(),
         };
+        cells.phase("capture_ms");
 
         // Bulk copy, hashing on the way — no locks held. CURRENT is
         // synthesized from the pinned generation; everything else is
@@ -481,6 +537,7 @@ impl Db {
             bytes_copied += size;
         }
         crash_park("AIKOQL_V2_SNAP_PARK", dir, "after_copy");
+        cells.phase("copy_ms");
 
         // Verify: re-read every copied byte — the marker is only published
         // over files that were just proven intact. PR6-R2-011 — streamed,
@@ -500,6 +557,7 @@ impl Db {
             }
         }
         crash_park("AIKOQL_V2_SNAP_PARK", dir, "after_verify");
+        cells.phase("verify_ms");
 
         let marker = SnapshotMarker {
             format_version: FORMAT_VERSION,
@@ -513,6 +571,7 @@ impl Db {
         // PR6-007 — the marker is fully committed; a kill here must leave a
         // restorable snapshot (row 6).
         crash_park("AIKOQL_V2_SNAP_PARK", dir, "after_marker");
+        cells.finish(bytes_copied, marker.files.len() as u32);
 
         Ok(SnapshotInfo {
             generation,
