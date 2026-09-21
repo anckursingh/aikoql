@@ -264,4 +264,95 @@ mod tests {
             "rid 0 names no object row"
         );
     }
+
+    /// M31 (P0-03) mtr003 — prefix_heads parity across the refactor: key
+    /// asc, the newest BYTE row per key (a newer object row must not
+    /// shadow it), object-only keys skipped. Green on the flat map today;
+    /// it guards the chain shape's scan.
+    #[test]
+    fn prefix_heads_parity_under_the_chain_shape() {
+        let mut m = Memtable::new();
+        m.apply(b"aa".to_vec(), 1, Some(b"a1".to_vec()));
+        m.apply(b"aa".to_vec(), 2, Some(b"a2".to_vec()));
+        m.apply_object(b"aa".to_vec(), 3, Some(b"obj".to_vec()), rid(7));
+        m.apply(b"ab".to_vec(), 1, Some(b"b1".to_vec()));
+        m.apply_object(b"ac".to_vec(), 1, Some(b"c-obj".to_vec()), rid(7));
+        m.apply(b"ba".to_vec(), 1, Some(b"x".to_vec())); // outside the prefix
+        let got: Vec<(String, Option<String>)> = m
+            .prefix_heads(b"a")
+            .map(|(k, r)| {
+                (
+                    String::from_utf8_lossy(k).into_owned(),
+                    r.value.as_deref().map(|v| String::from_utf8_lossy(v).into_owned()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("aa".to_string(), Some("a2".to_string())),
+                ("ab".to_string(), Some("b1".to_string())),
+            ],
+            "key asc, newest byte row per key, object-only keys invisible"
+        );
+    }
+
+    /// M31 (P0-03) mtr004 — the flat map accepted ANY (key, seq) order and
+    /// a re-apply of the same seq REPLACED; the chain shape must keep both
+    /// (out-of-order arrivals binary-search their place). Guards the
+    /// semantics under high cardinality + version-heavy + object mixes.
+    #[test]
+    fn out_of_order_seqs_and_replace_match_the_flat_map_semantics() {
+        let mut m = Memtable::new();
+        m.apply(b"k".to_vec(), 5, Some(b"v5".to_vec()));
+        m.apply(b"k".to_vec(), 2, Some(b"v2".to_vec())); // arrives late
+        m.apply(b"k".to_vec(), 7, Some(b"v7".to_vec()));
+        m.apply(b"k".to_vec(), 7, Some(b"v7b".to_vec())); // same (key, seq): replaces
+        m.apply_object(b"k".to_vec(), 6, Some(b"o6".to_vec()), rid(7));
+        m.apply_object(b"k".to_vec(), 8, Some(b"o8".to_vec()), rid(7));
+        assert_eq!(
+            m.get(b"k").and_then(|e| e.value.as_deref()),
+            Some(b"v7b".as_slice()),
+            "the byte head is the highest-seq byte row, with replace"
+        );
+        assert_eq!(
+            m.get_by_rid(b"k", rid(7)).and_then(|e| e.value.as_deref()),
+            Some(b"o8".as_slice()),
+            "the object head is the highest-seq matching object row"
+        );
+        let order: Vec<(String, u64)> = m
+            .entries()
+            .map(|(k, s, _)| (String::from_utf8_lossy(k).into_owned(), s))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                ("k".to_string(), 2),
+                ("k".to_string(), 5),
+                ("k".to_string(), 6),
+                ("k".to_string(), 7),
+                ("k".to_string(), 8),
+            ],
+            "the flush stream is key asc, seq asc within key"
+        );
+        let owned: Vec<(String, u64)> = m
+            .into_entries()
+            .map(|((k, s), _)| (String::from_utf8_lossy(&k).into_owned(), s))
+            .collect();
+        assert_eq!(owned, order, "into_entries moves in the same order");
+
+        // High-cardinality interleave: 1k keys x 2 versions stays exact.
+        let mut big = Memtable::new();
+        for i in 0..1_000u32 {
+            let key = format!("k{i:04}").into_bytes();
+            big.apply(key.clone(), 1, Some(vec![i as u8]));
+            big.apply(key, 2, Some(vec![i as u8]));
+        }
+        assert_eq!(
+            big.get(b"k0999").and_then(|e| e.value.as_deref()),
+            Some([231u8].as_slice()),
+            "999 as u8 = 231; both versions present, head = seq 2"
+        );
+        assert_eq!(big.entries().count(), 2_000);
+    }
 }
