@@ -1023,7 +1023,7 @@ fn result_json(backends: &[BackendResult], gates: &Gates, sz: Size) -> String {
                 s.push_str(", ");
             }
             s.push_str(&format!(
-                "{{ \"label\": {}, \"ops\": {}, \"wall_ms\": {:.3}, \"p50_us\": {}, \"p95_us\": {}, \"p99_us\": {}, \"read_bytes\": {}, \"written_bytes\": {} }}",
+                "{{ \"label\": {}, \"ops\": {}, \"wall_ms\": {:.3}, \"p50_ns\": {}, \"p95_ns\": {}, \"p99_ns\": {}, \"read_bytes\": {}, \"written_bytes\": {} }}",
                 json_str(&r.label),
                 r.ops,
                 r.wall_ms,

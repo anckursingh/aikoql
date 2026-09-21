@@ -38,7 +38,7 @@ def p50_rows(path):
     out = {}
     for backend in data.get("backends", []):
         for row in backend.get("rows", []):
-            out[(backend.get("name"), row.get("label"))] = float(row["p50_us"])
+            out[(backend.get("name"), row.get("label"))] = float(row["p50_ns"])
     return out
 
 

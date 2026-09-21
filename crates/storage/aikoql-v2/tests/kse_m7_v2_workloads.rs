@@ -1005,7 +1005,7 @@ fn result_json(backends: &[BackendResult], sz: Size, filter: Option<&str>) -> St
                 s.push_str(", ");
             }
             s.push_str(&format!(
-                "{{ \"label\": {}, \"ops\": {}, \"wall_ms\": {:.3}, \"p50_us\": {}, \"p95_us\": {}, \"p99_us\": {}, \"read_bytes\": {}, \"written_bytes\": {} }}",
+                "{{ \"label\": {}, \"ops\": {}, \"wall_ms\": {:.3}, \"p50_ns\": {}, \"p95_ns\": {}, \"p99_ns\": {}, \"read_bytes\": {}, \"written_bytes\": {} }}",
                 json_str(&r.label),
                 r.ops,
                 r.wall_ms,
@@ -1024,7 +1024,7 @@ fn result_json(backends: &[BackendResult], sz: Size, filter: Option<&str>) -> St
     s.push_str(" ],\n");
     s.push_str(&format!(
         " \"gates\": {{ \"gate5_ko_lookup_competitive\": {{ \"verdict\": {}, \"w1_p50_ratio_vs_v1\": {}, \"w2_p50_ratio_vs_v1\": {}, \"bound\": {} }} }}\n",
-        opt(gate5),
+        json_str(gate_cell(gate5)),
         match r1 {
             Some(v) => format!("{v:.3}"),
             None => "null".into(),

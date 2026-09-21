@@ -27,7 +27,7 @@ def p50(path, label):
     for backend in data.get("backends", []):
         for row in backend.get("rows", []):
             if row.get("label") == label:
-                return float(row["p50_us"])
+                return float(row["p50_ns"])
     raise SystemExit(f"{label!r} not found in {path}")
 
 

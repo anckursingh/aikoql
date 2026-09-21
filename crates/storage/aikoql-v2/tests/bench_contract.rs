@@ -36,6 +36,17 @@ fn bench001_contract_rejects_missing_fields() {
         err.iter().any(|e| e.contains("environment")),
         "missing section must be named: {err:?}"
     );
+
+    // A null verdict fails the contract — the state must be stated
+    // (PASS/FAIL/NOT_EVIDENCED, the harness's gate_cell strings).
+    let null_verdict = format!(
+        r#"{{ "suite": "x", "generated": "2026-09-21", "environment": {{ "git_sha": "x", "rustc": "x", "os": "windows", "arch": "x86_64", "build": "debug" }}, "dataset": {{ "seed": 1, "n": 1000 }}, "backends": [ {{ "name": "aikoql-v2", "rows": [ {GOOD_ROW} ] }} ], "gates": {{ "verdict": null }} }}"#
+    );
+    let err = validate_artifact(&null_verdict).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("verdict")),
+        "null verdict must be rejected: {err:?}"
+    );
 }
 
 #[test]
