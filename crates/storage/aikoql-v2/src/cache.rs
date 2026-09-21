@@ -10,9 +10,13 @@
 //! validated bytes enter the cache. Answers never depend on the cache —
 //! a hit hands the caller the same bytes the file would produce.
 //!
-//! # ponytail: LRU via generation stamps — hits are O(1) (hash + stamp);
-//! eviction is a min-gen scan on the miss path (O(n), amortized behind
-//! block I/O). Ties pick any — exact-LRU ordering per distinct touch.
+//! # ponytail: LRU via generation stamps + a lazy-deletion min-heap on
+//! gen — hits stay O(1) (hash + stamp only); eviction pops the min-gen
+//! heap node (O(log n)) and discards stale nodes (a key touched since
+//! its push, or already gone). The heap rebuilds when it doubles past
+//! the map, so garbage stays bounded; an intrusive list (O(1) evict,
+//! unsafe) is the upgrade path only if a churn profile demands it.
+//! Ties pick any — exact-LRU ordering per distinct touch.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -44,6 +48,17 @@ struct Entry {
     bytes: Arc<Vec<u8>>,
 }
 
+/// P5-M30 — one lazy-deletion heap node: the gen its key had when
+/// pushed. A pop compares against the live entry's gen — equal means
+/// the node is current (evict); lower means the key was touched since
+/// (refresh the node in place); a missing entry means the key is gone
+/// (drop the garbage).
+#[derive(Debug, Clone, Copy)]
+struct HeapNode {
+    gen: u64,
+    key: (u64, u32),
+}
+
 #[derive(Debug, Default)]
 struct State {
     entries: HashMap<(u64, u32), Entry>,
@@ -52,8 +67,92 @@ struct State {
     clock: u64,
     bytes: usize,
     /// Total entries visited by eviction min-scans (miss path only) — the
-    /// RED pin asserts a hit never moves it.
+    /// RED pins assert a hit never moves it and an eviction never moves
+    /// it; only a heap rebuild scans (counted, amortized behind the 2x
+    /// trigger).
     scan_steps: u64,
+    /// Min-heap on gen; len <= 2x entries.len() (rebuild trigger).
+    heap: Vec<HeapNode>,
+}
+
+impl State {
+    fn heap_push(&mut self, gen: u64, key: (u64, u32)) {
+        self.heap.push(HeapNode { gen, key });
+        let mut i = self.heap.len() - 1;
+        while i > 0 {
+            let parent = (i - 1) / 2;
+            if self.heap[parent].gen <= self.heap[i].gen {
+                break;
+            }
+            self.heap.swap(parent, i);
+            i = parent;
+        }
+    }
+
+    fn sift_down(&mut self, mut i: usize) {
+        loop {
+            let l = 2 * i + 1;
+            let r = l + 1;
+            let mut smallest = i;
+            if l < self.heap.len() && self.heap[l].gen < self.heap[smallest].gen {
+                smallest = l;
+            }
+            if r < self.heap.len() && self.heap[r].gen < self.heap[smallest].gen {
+                smallest = r;
+            }
+            if smallest == i {
+                break;
+            }
+            self.heap.swap(i, smallest);
+            i = smallest;
+        }
+    }
+
+    fn heap_pop(&mut self) -> Option<HeapNode> {
+        let mut last = self.heap.pop()?;
+        if self.heap.is_empty() {
+            return Some(last);
+        }
+        std::mem::swap(&mut self.heap[0], &mut last);
+        self.sift_down(0);
+        Some(last)
+    }
+
+    /// Pops min-gen nodes until `needed` bytes fit (or the heap is
+    /// exhausted — unreachable: every live key keeps at least one node).
+    /// A stale node is re-pushed with the live gen, so it can be popped
+    /// again; each pop either frees bytes or moves a node's gen forward,
+    /// so the loop terminates without a scan. Returns victims evicted.
+    fn evict_for(&mut self, cap: usize, needed: usize) -> u64 {
+        let mut evicted = 0;
+        while self.bytes + needed > cap {
+            let Some(node) = self.heap_pop() else { break };
+            match self.entries.get(&node.key) {
+                None => {} // key already gone: strand from an overwrite
+                Some(e) if e.gen == node.gen => {
+                    if let Some(v) = self.entries.remove(&node.key) {
+                        self.bytes -= v.bytes.len();
+                        evicted += 1;
+                    }
+                }
+                Some(e) => self.heap_push(e.gen, node.key), // touched since push
+            }
+        }
+        evicted
+    }
+
+    /// Rebuilds the heap from the live entries (O(n) heapify) — the
+    /// rebuild itself is the one map scan on the evict path.
+    fn rebuild_heap(&mut self) {
+        self.heap.clear();
+        for (&key, e) in &self.entries {
+            self.heap.push(HeapNode { gen: e.gen, key });
+        }
+        for i in (0..self.heap.len() / 2).rev() {
+            self.sift_down(i);
+        }
+        self.scan_steps += self.entries.len() as u64;
+    }
 }
 
 impl BlockCache {
@@ -99,29 +198,21 @@ impl BlockCache {
             return; // one block bigger than the cache: never cached
         }
         let key = (id, block);
-        let State {
-            entries,
-            clock,
-            bytes: held,
-            scan_steps,
-        } = &mut *st;
-        if let Some(old) = entries.remove(&key) {
-            *held -= old.bytes.len();
+        if let Some(old) = st.entries.remove(&key) {
+            st.bytes -= old.bytes.len(); // its heap node pops as garbage
         }
-        while *held + bytes > self.cap {
-            let Some(victim) = entries.iter().min_by_key(|(_, e)| e.gen).map(|(k, _)| *k) else {
-                break;
-            };
-            *scan_steps += entries.len() as u64;
-            if let Some(v) = entries.remove(&victim) {
-                *held -= v.bytes.len();
-                self.evictions.fetch_add(1, Ordering::Relaxed);
-            }
+        let n = st.evict_for(self.cap, bytes);
+        if n > 0 {
+            self.evictions.fetch_add(n, Ordering::Relaxed);
         }
-        let gen = clock.wrapping_add(1);
-        *clock = gen;
-        *held += bytes;
-        entries.insert(key, Entry { gen, bytes: raw });
+        let gen = st.clock.wrapping_add(1);
+        st.clock = gen;
+        st.bytes += bytes;
+        st.entries.insert(key, Entry { gen, bytes: raw });
+        st.heap_push(gen, key);
+        if st.heap.len() > 2 * st.entries.len() {
+            st.rebuild_heap();
+        }
     }
 
     pub fn stats(&self) -> CacheStats {
@@ -227,5 +318,30 @@ mod tests {
                 after - before
             );
         }
+    }
+
+    /// P5-M30 (P0-04) — the lazy-deletion heap's garbage stays bounded:
+    /// overwrites strand one stale node each, and the 2x rebuild trigger
+    /// keeps heap nodes within 2x the live entries.
+    #[test]
+    fn heap_garbage_stays_bounded_under_churn() {
+        let cache = BlockCache::new(64 * BLOCK);
+        for i in 0..64u32 {
+            cache.insert(1, i, block());
+        }
+        for i in 0..32u32 {
+            cache.insert(1, i, block()); // overwrite: strands a stale node
+        }
+        for i in 64..96u32 {
+            cache.insert(1, i, block()); // evictions through the garbage
+        }
+        let st = cache.state.lock().unwrap();
+        assert!(
+            st.heap.len() <= 2 * st.entries.len(),
+            "heap {} vs map {} — garbage outgrew the rebuild trigger",
+            st.heap.len(),
+            st.entries.len()
+        );
+        assert_eq!(st.entries.len(), 64, "the cap still holds");
     }
 }
