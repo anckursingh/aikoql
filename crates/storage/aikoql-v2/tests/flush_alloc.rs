@@ -1,11 +1,12 @@
 //! M29 (P0-02) — the flush's publish must not sort already-sorted input.
 //! The memtable iterates key asc, seq asc within key (BTreeMap order) —
 //! exactly the publish's key asc + seq desc requirement with each key's
-//! version run reversed. Today the flush funnels that through
-//! `publish_with_anchors`, whose whole-buffer sort allocates driftsort's
-//! len/2 scratch buffer on input that is sorted by construction. The
-//! sorted-input publish (`publish_with_anchors_sorted`) reverses each key
-//! run in place: no scratch buffer, O(n) total.
+//! version run reversed. The sorted-input publish
+//! (`publish_with_anchors_sorted`) reverses each key run in place: no
+//! scratch buffer, O(n) total. This pin holds the flush's entry point to
+//! that: publish over memtable-ordered input must not allocate a
+//! whole-buffer sort scratch (RED: 7.2 MB driftsort buffer over 100k
+//! entries).
 //!
 //! One test in its own binary: the global-allocator live-byte tracker is
 //! process-wide, and a lone test means no sibling test thread skews the
@@ -13,8 +14,8 @@
 
 mod common;
 
-use aikoql_storage_v2::segment::{SegmentEntry, SegmentWriter, FLAG_PUT};
 use aikoql_storage_v2::identity::ReplicaId;
+use aikoql_storage_v2::segment::{SegmentEntry, SegmentWriter, FLAG_PUT};
 use common::dir;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
@@ -91,12 +92,12 @@ fn publish_allocation_excludes_a_whole_input_sort() {
     }
     // The entries themselves were allocated before the pin — the pin is
     // the PUBLISH's temporary memory: bloom + one block's payload +
-    // index on the sorted path; plus driftsort's len/2 scratch buffer
-    // (≈3.6 MB here) on the sorting path.
+    // index on the sorted path; plus the sort's scratch buffer (one
+    // SegmentEntry per entry — 7.2 MB here) on a sorting path.
     ARMED.store(1, Ordering::Relaxed);
     LIVE.store(0, Ordering::Relaxed);
     PEAK_DELTA.store(0, Ordering::Relaxed);
-    writer.publish_with_anchors(&path).unwrap();
+    writer.publish_with_anchors_sorted(&path).unwrap();
     ARMED.store(0, Ordering::Relaxed);
     let peak = PEAK_DELTA.load(Ordering::Relaxed);
 

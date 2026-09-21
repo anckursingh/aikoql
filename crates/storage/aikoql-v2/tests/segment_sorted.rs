@@ -62,8 +62,13 @@ fn sorted_publish_is_byte_identical_to_the_sorting_publish() {
     for e in corpus {
         wb.push(e);
     }
-    let (size_b, ck_b, anchors_b) = wb.publish_with_anchors_sorted(&pb).unwrap();
+    let (size_b, ck_b, mut anchors_b) = wb.publish_with_anchors_sorted(&pb).unwrap();
 
+    // The anchor Vec's order is HashMap iteration order (the flush sorts
+    // it by rid itself) — compare as equal SETS.
+    let mut anchors_a = anchors_a;
+    anchors_a.sort_by_key(|a| a.replica_id);
+    anchors_b.sort_by_key(|a| a.replica_id);
     assert_eq!((size_a, ck_a, anchors_a), (size_b, ck_b, anchors_b));
     assert_eq!(
         std::fs::read(&pa).unwrap(),
@@ -91,7 +96,8 @@ fn sorted_publish_rejects_duplicate_key_seq_pairs() {
 fn sorted_publish_decodes_to_key_asc_seq_desc_within_key() {
     let d = dir("sorted-order");
     let path = d.join("SEGMENT-001.log");
-    let mut w = SegmentWriter::new_v2(16 << 10);
+    // v4: rids persist in v3+ blocks only (v2 decodes them as 0).
+    let mut w = SegmentWriter::new_v4(16 << 10);
     for e in version_corpus() {
         w.push(e);
     }
@@ -102,13 +108,7 @@ fn sorted_publish_decodes_to_key_asc_seq_desc_within_key() {
         .scan(b"", b"~")
         .unwrap()
         .into_iter()
-        .map(|e| {
-            (
-                String::from_utf8(e.key).unwrap(),
-                e.seq,
-                e.replica_id.0,
-            )
-        })
+        .map(|e| (String::from_utf8(e.key).unwrap(), e.seq, e.replica_id.0))
         .collect();
     let want = vec![
         ("alpha".to_string(), 9, 7), // the run reversed: seq desc

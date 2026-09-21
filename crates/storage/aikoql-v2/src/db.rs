@@ -857,7 +857,7 @@ impl Db {
             .store(open_t.elapsed().as_millis() as u64, Ordering::Relaxed);
         wstats
             .wal_replay_bytes
-            .store(consumed as u64, Ordering::Relaxed);
+            .store(consumed, Ordering::Relaxed);
         let wal_fail_next_armed = config.wal_fail_next;
         Ok(Db {
             config,
@@ -1835,7 +1835,10 @@ impl Db {
             // into_entries: the flushed table is consumed — keys/values
             // move into the writer, no second copy (SE2-M15). TDD-STOR-006:
             // `into_parts` splits the row on the enum — byte rows report
-            // replica 0, object rows their owning replica.
+            // replica 0, object rows their owning replica. The iteration
+            // order is the memtable's own (key asc, seq asc), so the
+            // sorted-input publish consumes it directly (M29): each key's
+            // version run is reversed in place, no whole-buffer sort.
             for ((key, seq), e) in mem.into_entries() {
                 let (value, replica_id) = e.into_parts();
                 let flags = if value.is_some() {
@@ -1851,7 +1854,7 @@ impl Db {
                     replica_id,
                 });
             }
-            let (file_size, checksum, seg_anchors) = writer.publish_with_anchors(&path)?;
+            let (file_size, checksum, seg_anchors) = writer.publish_with_anchors_sorted(&path)?;
             // One flushed replica may span several immutables (rotates
             // between writes): the max-seq anchor across ALL segments this
             // flush writes wins.

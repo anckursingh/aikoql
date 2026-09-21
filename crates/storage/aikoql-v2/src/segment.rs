@@ -232,16 +232,57 @@ impl SegmentWriter {
         path: &Path,
         stage: Option<&str>,
     ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
+        let mut entries = std::mem::take(&mut self.entries);
+        entries.sort_by(|a, b| a.key.cmp(&b.key).then(b.seq.cmp(&a.seq)));
+        self.publish_sorted_entries(path, stage, entries)
+    }
+
+    /// M29 (P0-02) — the sorted-input publish: the caller pushes entries in
+    /// memtable order (key asc, seq ASC within key — the BTreeMap's
+    /// iteration order); each key's version run is reversed in place to the
+    /// publish's key asc + seq desc contract. No whole-buffer sort — the
+    /// flush feeds the already-ordered memtable straight through, so
+    /// temporary memory is the payload buffers only, not an O(n) scratch.
+    pub fn publish_with_anchors_sorted(
+        &mut self,
+        path: &Path,
+    ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
+        let mut entries = std::mem::take(&mut self.entries);
+        debug_assert!(
+            entries
+                .windows(2)
+                .all(|w| (&w[0].key, w[0].seq) <= (&w[1].key, w[1].seq)),
+            "sorted publish requires memtable order (key asc, seq asc within key)"
+        );
+        let mut run_start = 0;
+        while run_start < entries.len() {
+            let mut run_end = run_start + 1;
+            while run_end < entries.len() && entries[run_end].key == entries[run_start].key {
+                run_end += 1;
+            }
+            entries[run_start..run_end].reverse();
+            run_start = run_end;
+        }
+        self.publish_sorted_entries(path, None, entries)
+    }
+
+    /// The shared publish body — `entries` arrive sorted (key asc, seq
+    /// desc within key) from either entry point; the precondition and
+    /// duplicate guards stay here, one definition for both.
+    fn publish_sorted_entries(
+        &self,
+        path: &Path,
+        stage: Option<&str>,
+        entries: Vec<SegmentEntry>,
+    ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
         if self.target_block_bytes == 0 {
             return Err(FormatError::Invalid("target block size must be > 0".into()));
         }
-        if self.entries.is_empty() {
+        if entries.is_empty() {
             return Err(FormatError::Invalid(
                 "cannot publish an empty segment".into(),
             ));
         }
-        let mut entries = std::mem::take(&mut self.entries);
-        entries.sort_by(|a, b| a.key.cmp(&b.key).then(b.seq.cmp(&a.seq)));
         if entries
             .windows(2)
             .any(|w| w[0].key == w[1].key && w[0].seq == w[1].seq)
