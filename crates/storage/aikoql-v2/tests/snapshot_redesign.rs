@@ -112,8 +112,8 @@ fn snp000_snapshot_module_cites_the_crash_protocol() {
             "snapshot-crash-protocol.md must document {needle:?}"
         );
     }
-    let module = std::fs::read_to_string(format!("{manifest}/src/snapshot.rs"))
-        .expect("snapshot.rs");
+    let module =
+        std::fs::read_to_string(format!("{manifest}/src/snapshot.rs")).expect("snapshot.rs");
     assert!(
         module.contains("snapshot-crash-protocol.md"),
         "snapshot.rs must cite docs/snapshot-crash-protocol.md — the protocol \
@@ -156,7 +156,7 @@ fn interleave_completed_while_parked(
     }
     let completed_while_parked = done.load(Ordering::SeqCst);
     drop(_arm); // disarm future parks — the snapshot thread is parked on the
-    // marker FILE itself; deleting it releases the park (the matrix pattern).
+                // marker FILE itself; deleting it releases the park (the matrix pattern).
     std::fs::remove_file(snap.join("during_copy")).expect("release the park");
     let info = snap_t.join().expect("snapshot thread").expect("snapshot");
     op_t.join().expect("op thread");
@@ -188,10 +188,21 @@ fn snp001_put_completes_while_the_snapshot_is_parked() {
     // The pin contract still holds regardless of the write's timing: the
     // snapshot is the pre-write generation, the write is invisible to it
     // and visible to the live db.
-    assert_eq!(info.generation, g0, "the snapshot pins the pre-write generation");
+    assert_eq!(
+        info.generation, g0,
+        "the snapshot pins the pre-write generation"
+    );
     let restored = restore_from(&snap, dir("snp001-target")).unwrap();
-    assert_eq!(walk(&restored), before, "the write is invisible to the snapshot");
-    assert_eq!(db.get(b"late").unwrap(), Some(b"x".to_vec()), "the write is visible live");
+    assert_eq!(
+        walk(&restored),
+        before,
+        "the write is invisible to the snapshot"
+    );
+    assert_eq!(
+        db.get(b"late").unwrap(),
+        Some(b"x".to_vec()),
+        "the write is visible live"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +254,8 @@ fn snp002_checkpoint_during_copy_kill_window() {
                 while !park.exists() {
                     std::thread::sleep(Duration::from_millis(5));
                 }
-                db.checkpoint_now().expect("checkpoint during the parked copy");
+                db.checkpoint_now()
+                    .expect("checkpoint during the parked copy");
             })
         };
         db.snapshot_to(&child_snap_dir()).unwrap();
@@ -353,7 +365,10 @@ fn snp003_concurrent_checkpoint_prune_skips_pinned_files() {
         }
     });
 
-    assert_eq!(info.generation, g0, "the snapshot pins the pre-checkpoint generation");
+    assert_eq!(
+        info.generation, g0,
+        "the snapshot pins the pre-checkpoint generation"
+    );
     let g1 = Current::read(&d.join("CURRENT"))
         .unwrap()
         .manifest_generation;
@@ -376,6 +391,16 @@ fn snp003_concurrent_checkpoint_prune_skips_pinned_files() {
         "the checkpoint published at g1"
     );
     let restored = restore_from(&snap, dir("snp003-target")).unwrap();
-    assert_eq!(walk(&restored), before, "the pinned generation restores byte-exact");
-    assert_eq!(walk(&db), before, "the checkpoint changed no rows");
+    assert_eq!(
+        walk(&restored),
+        before,
+        "the pinned generation restores byte-exact"
+    );
+    let mut expected_live = before.clone();
+    expected_live.insert(b"k2".to_vec(), b"v2".to_vec());
+    assert_eq!(
+        walk(&db),
+        expected_live,
+        "the checkpoint changed no rows beyond the put"
+    );
 }

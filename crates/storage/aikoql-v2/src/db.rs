@@ -282,6 +282,14 @@ pub(crate) struct State {
     identity_chain: u64,
     replica_chain: u64,
     placement_chain: u64,
+    /// P5-M33 — snapshot pins: file names (relative to the db dir) a
+    /// running snapshot has captured. Both deletion surfaces — the
+    /// checkpoint prune and the compaction segment deletion — skip pinned
+    /// names, so the snapshot's lock-free bulk copy can never race a
+    /// prune. Armed and disarmed under the state write lock; in-memory
+    /// only — a kill mid-snapshot leaves the files as harmless leftovers
+    /// (the tolerated deletion-failure class).
+    pub(crate) snapshot_pins: HashSet<String>,
 }
 
 /// One queued batch waiting on its group: the ops plus the ack channel
@@ -814,6 +822,7 @@ impl Db {
             identity_chain: manifest.identity_chain,
             replica_chain: manifest.replica_chain,
             placement_chain: manifest.placement_chain,
+            snapshot_pins: HashSet::new(),
         }));
         let fsyncs = Arc::new(AtomicU64::new(0));
         let (queue_tx, committer) = if config.durability == DurabilityMode::GroupCommit {
@@ -2081,7 +2090,7 @@ impl Db {
             ));
         }
         crash_park("AIKOQL_V2_CKP_PARK", &config.dir, "after_checkpoint");
-        prune_deltas_before(&config.dir, state.generation)?;
+        prune_deltas_before(&config.dir, state.generation, &state.snapshot_pins)?;
         crash_park("AIKOQL_V2_CKP_PARK", &config.dir, "after_prune");
         state.bytes_since_checkpoint = 0;
         // P3-M2 — a published+verified checkpoint counts; a failed one (the
@@ -2262,6 +2271,14 @@ fn compact_impl(
         merge_placement(&mut state.placements, rec.rid, rec.placement)?;
     }
     for p in &old_paths {
+        // P5-M33 — a running snapshot's pinned segments survive: the
+        // deletion skips pinned names (the snapshot's lock-free copies
+        // still need them; the leftover files are the tolerated class).
+        if p.file_name()
+            .is_some_and(|n| state.snapshot_pins.contains(n.to_string_lossy().as_ref()))
+        {
+            continue;
+        }
         if let Err(e) = std::fs::remove_file(p) {
             // Not fatal: the segment is unreferenced — a leftover is
             // reported and ignored at the next open.

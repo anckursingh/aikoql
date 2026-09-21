@@ -1,9 +1,10 @@
 //! PR6-007 — the snapshot composed failure-injection matrix (review §9).
 //! Eight rows: four interleaves (write/flush/checkpoint/compaction issued
-//! while the snapshot is mid-copy — deterministic: each blocks on the state
-//! lock the snapshot holds and can only land after it completes) and four
-//! crash/corruption windows (crash mid-copy, crash after the marker commit,
-//! torn WAL tail, corrupt copied file).
+//! while the snapshot is mid-copy — the M33 redesign: the bulk copy holds
+//! no locks, so the ops land CONCURRENTLY with it, and the snapshot's pin
+//! keeps the captured set intact) and four crash/corruption windows (crash
+//! mid-copy, crash after the marker commit, torn WAL tail, corrupt copied
+//! file).
 //!
 //! One mechanism serves both kinds of row: AIKOQL_V2_SNAP_PARK "during_copy"
 //! parks the copy loop after the first file, "after_marker" parks after the
@@ -96,10 +97,10 @@ impl Drop for ParkArm {
     }
 }
 
-/// Park the snapshot mid-copy in one thread, run `op` in another (it blocks
-/// on the state lock the snapshot holds), release the park, join both. The
-/// op lands only after the snapshot has fully completed — deterministic, no
-/// timing window.
+/// Park the snapshot mid-copy in one thread, run `op` in another (M33: it
+/// runs CONCURRENTLY with the lock-free bulk copy — the pin protects the
+/// captured set), release the park, join both. Deterministic, no timing
+/// window.
 fn interleave(db: &Arc<Db>, snap: &Path, op: impl FnOnce() + Send + 'static) -> SnapshotInfo {
     let _serial = PARK_LOCK.lock().unwrap();
     let _arm = ParkArm::new("during_copy");
@@ -116,7 +117,9 @@ fn interleave(db: &Arc<Db>, snap: &Path, op: impl FnOnce() + Send + 'static) -> 
 }
 
 /// row 1 — write during snapshot → the snapshot stays at the pinned
-/// generation: the write is invisible to it and lands only after it.
+/// generation: the write lands concurrently with the lock-free copy, and
+/// is invisible to the snapshot (its WAL frame is beyond the captured
+/// prefix).
 #[test]
 fn sfm001_write_during_snapshot_stays_at_pinned_generation() {
     let d = dir("sfm001-live");
@@ -151,13 +154,15 @@ fn sfm001_write_during_snapshot_stays_at_pinned_generation() {
     assert_eq!(
         db.get(b"late").unwrap(),
         Some(b"x".to_vec()),
-        "the write landed after the snapshot"
+        "the write is visible live"
     );
 }
 
 /// row 2 — flush during snapshot → the pinned generation remains complete:
-/// the concurrent put+flush lands only after the snapshot, which restores
-/// byte-exact at the pre-flush state.
+/// the concurrent put+flush lands while the copy is in flight (its
+/// segment publication and WAL truncate can't touch the pinned set or the
+/// already-captured WAL prefix), which restores byte-exact at the
+/// pre-flush state.
 #[test]
 fn sfm002_flush_during_snapshot_pins_complete_generation() {
     let d = dir("sfm002-live");
@@ -197,7 +202,7 @@ fn sfm002_flush_during_snapshot_pins_complete_generation() {
             .unwrap()
             .manifest_generation
             > g0,
-        "the flush landed after the snapshot"
+        "the flush landed and bumped the generation"
     );
 }
 
@@ -214,9 +219,11 @@ fn snap_gen(name: &str) -> Option<u64> {
 }
 
 /// row 3 — write+flush during snapshot → no mixed generations: the snapshot
-/// carries only files of its pinned generation. (The name says "checkpoint";
-/// the actual checkpoint-during-snapshot interleave is the row-3b test right
-/// below — kept separate per the Round-2 review.)
+/// carries only files of its pinned generation (the write+flush land
+/// concurrently with the lock-free copy, but the snapshot's set was fixed
+/// at capture). (The name says "checkpoint"; the actual
+/// checkpoint-during-snapshot interleave is the row-3b test right below —
+/// kept separate per the Round-2 review.)
 #[test]
 fn sfm003_checkpoint_during_snapshot_no_mixed_generations() {
     let d = dir("sfm003-live");
@@ -261,11 +268,11 @@ fn sfm003_checkpoint_during_snapshot_no_mixed_generations() {
 }
 
 /// row 3b — CHECKPOINT during snapshot (PR6-R2-004): a real
-/// `checkpoint_now()` — publish CHECKPOINT-{g}, prune older deltas — waits
-/// on the state lock the snapshot copy loop holds, so it can only land
-/// after the snapshot completed. The dangerous interaction the original
-/// review named (checkpoint prunes while the snapshot still needs ≤g
-/// files) is structurally impossible: pinned here, not assumed.
+/// `checkpoint_now()` — publish CHECKPOINT-{g}, prune older deltas — lands
+/// while the lock-free copy is in flight, and its prune must skip the
+/// pinned set. The dangerous interaction the original review named
+/// (checkpoint prunes while the snapshot still needs ≤g files) is
+/// structurally impossible: pinned here, not assumed.
 #[test]
 fn sfm003_checkpoint_during_snapshot_preserves_pinned_generation() {
     let d = dir("sfm003b-live");
@@ -317,14 +324,16 @@ fn sfm003_checkpoint_during_snapshot_preserves_pinned_generation() {
     );
     assert!(
         ckps_in(&d) > 0,
-        "the checkpoint landed (published) after the snapshot"
+        "the checkpoint landed (published) during the copy"
     );
     assert_eq!(walk(&db), before, "the checkpoint changed no state");
 }
 
 /// row 4 — compaction during snapshot → the referenced segments remain
-/// available: the interleaved compact merges and deletes the LIVE segments
-/// only after the snapshot completed; its copies still restore byte-exact.
+/// available: the interleaved compact merges and swaps the live segments
+/// while the snapshot's copy is in flight, but the deletion skips the
+/// pinned names — they survive on disk as leftovers (the tolerated class)
+/// and the copies restore byte-exact.
 #[test]
 fn sfm004_compaction_during_snapshot_referenced_segments_remain_available() {
     let d = dir("sfm004-live");
@@ -345,8 +354,9 @@ fn sfm004_compaction_during_snapshot_referenced_segments_remain_available() {
     });
 
     assert!(
-        segs_in(&d).len() < live_segs_before,
-        "the interleaved compaction pruned the live segments"
+        segs_in(&d).len() >= live_segs_before,
+        "the interleaved compaction skipped the pinned segments — none of \
+         the captured set was deleted"
     );
     let restored = restore_from(&snap, dir("sfm004-target")).unwrap();
     assert_eq!(

@@ -1,14 +1,22 @@
-//! P3-M3 — engine-native snapshot/restore (docs/IMPLEMENTATION-PLAN-PHASE3.md
-//! §58–60, design §18). Manifest-based, no full decode: a snapshot pins the
-//! CURRENT generation under the state READ lock (the §23 publication order —
-//! segments → logs → manifest → CURRENT — makes one generation a complete,
-//! self-consistent cut; the read lock keeps a concurrent checkpoint's prune
-//! from deleting logs the pinned generation still needs), copies CURRENT +
-//! MANIFEST-{gen} + the segments it references + the identity/replica/
-//! placement logs and checkpoints ≤ gen + the torn-safe WAL prefix, verifies
-//! every copied byte, then publishes the marker LAST — the marker is the
-//! commit point, so a killed snapshot is never visible (restore refuses a
-//! dir without one).
+//! P3-M3 / P5-M33 — engine-native snapshot/restore
+//! (docs/IMPLEMENTATION-PLAN-PHASE3.md §58–60, design §18). The crash
+//! protocol is the contract: docs/snapshot-crash-protocol.md (grep-pinned
+//! by snapshot_redesign.rs snp000).
+//!
+//! Manifest-based, no full decode: one brief state WRITE-lock window reads
+//! CURRENT → G, enumerates the pinned file set (CURRENT, MANIFEST-G, the
+//! segments it references, every identity/replica/placement/checkpoint log
+//! ≤ G, the WAL), arms the pin (both deletion surfaces skip pinned names
+//! from here on), and validates + copies the WAL's torn-safe prefix under
+//! the wal mutex — the same hold as the generation read, so no flush can
+//! land between them and strand rows in neither the ≤ G set nor the
+//! prefix. The bulk copy then runs with NO locks: files ≤ G are immutable
+//! under the publication protocol (every publish is a staged rename),
+//! CURRENT is SYNTHESIZED from G (a concurrent checkpoint's rewrite can
+//! never tear it away from its MANIFEST). Every copied byte is verified,
+//! then the marker publishes LAST — the commit point, so a killed
+//! snapshot is never visible (restore refuses a dir without one). The pin
+//! disarms on every exit path (guard).
 //!
 //! Marker (bkp006 pins its bytes — python-computed before this writer
 //! existed):
@@ -246,6 +254,28 @@ fn copy_hashed(src: &Path, dst: &Path) -> Result<(u64, [u8; 8]), FormatError> {
     Ok((size, full[..8].try_into().expect("sha256-8 slice")))
 }
 
+/// The snapshot's CURRENT is synthesized from the pinned generation, never
+/// re-read from the live file — a concurrent checkpoint rewrites CURRENT,
+/// and the synthesized 22 bytes can never tear away from MANIFEST-G (the
+/// protocol doc's "mix impossible by construction"). Hashed like any other
+/// copied file, so the marker and the verify pass treat it uniformly.
+fn write_current(dst: &Path, generation: u64) -> Result<(u64, [u8; 8]), FormatError> {
+    let bytes = crate::format::Current::new(FORMAT_VERSION, generation).encode();
+    let mut out = File::create(dst)
+        .map_err(|e| FormatError::Io(format!("create {} in snapshot: {e}", dst.display())))?;
+    out.write_all(&bytes)
+        .map_err(|e| FormatError::Io(format!("write snapshot CURRENT: {e}")))?;
+    out.sync_all()
+        .map_err(|e| FormatError::Io(format!("sync snapshot CURRENT: {e}")))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let full = hasher.finalize();
+    Ok((
+        bytes.len() as u64,
+        full[..8].try_into().expect("sha256-8 slice"),
+    ))
+}
+
 /// Stream a file while hashing it — restore verification must never hold
 /// the largest snapshot file in memory (PR6-R2-011). Same primitive as
 /// `copy_hashed`, without the destination.
@@ -355,12 +385,32 @@ fn pinned_files(db_dir: &Path, generation: u64) -> Result<Vec<SnapshotFile>, For
     Ok(files)
 }
 
+/// P5-M33 — the pin disarm: both deletion surfaces consult
+/// `State::snapshot_pins`; the guard removes the captured names on every
+/// exit path (success or error) so a pin can never leak into a slow disk
+/// leak. Poison-recovering — a panic elsewhere must not leave pins armed.
+struct SnapshotPinGuard<'a> {
+    db: &'a Db,
+    names: Vec<String>,
+}
+
+impl Drop for SnapshotPinGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = self.db.state.write().unwrap_or_else(|e| e.into_inner());
+        for name in &self.names {
+            state.snapshot_pins.remove(name);
+        }
+    }
+}
+
 impl Db {
-    /// §58 — pin the CURRENT generation and copy it out. Takes the state
-    /// READ lock for the whole copy: puts block for the copy's duration
-    /// (design §18 keeps writers lock-free elsewhere; a snapshot is a rare
-    /// operator operation), and a concurrent checkpoint cannot prune logs
-    /// the pinned generation needs.
+    /// P5-M33 (§58) — the protocol in docs/snapshot-crash-protocol.md.
+    /// Capture + arm in one state WRITE hold: generation read, file-set
+    /// enumeration, pin inserts, and the WAL validate + copy (wal mutex,
+    /// state → wal order — commit_group's). The hold is the snapshot's
+    /// whole writer-blocking span. The bulk copy + verify + marker then
+    /// run with no locks held; the pin disarms via the guard on every
+    /// exit path.
     pub fn snapshot_to(&self, dir: &Path) -> Result<SnapshotInfo, FormatError> {
         if dir.exists() && std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_some()) {
             return Err(FormatError::Invalid(format!(
@@ -371,35 +421,58 @@ impl Db {
         std::fs::create_dir_all(dir)
             .map_err(|e| FormatError::Io(format!("create snapshot dir {}: {e}", dir.display())))?;
 
-        let state = self.state.read().expect("state read lock");
-        let current = crate::format::Current::read(&self.config.dir.join("CURRENT"))?;
-        let generation = current.manifest_generation;
+        // Capture + arm — the one locked window. The pin inserts come
+        // last, so no error path can leak a pin. The WAL copy rides the
+        // SAME hold as the generation read: a flush between the two would
+        // strand its rows in neither the ≤ G file set nor the captured
+        // prefix.
+        let (generation, mut files, wal_size, wal_checksum) = {
+            let mut state = self.state.write().expect("state write lock");
+            let current = crate::format::Current::read(&self.config.dir.join("CURRENT"))?;
+            let generation = current.manifest_generation;
+            let files = pinned_files(&self.config.dir, generation)?;
+            // The WAL is the one mutable file in the set (GroupCommit's
+            // committer appends, every flush truncates): validate + copy
+            // inside one wal-mutex hold, torn-safe prefix only, streamed
+            // — bounded memory, PR6-R3-003. The marker records that
+            // prefix size, not the file's.
+            let mut wal = self.wal.lock().expect("wal mutex");
+            let (wal_size, wal_checksum) = copy_wal_prefix(&mut wal, &dir.join(WAL_FILE))?;
+            for f in &files {
+                state.snapshot_pins.insert(f.name.clone());
+            }
+            (generation, files, wal_size, wal_checksum)
+        };
+        // Disarm on every exit path from here on — success or error (the
+        // protocol doc: a leaked pin is a slow disk leak). Poison-
+        // recovering: a panic elsewhere must not leave the pins armed.
+        let _pin = SnapshotPinGuard {
+            db: self,
+            names: files.iter().map(|f| f.name.clone()).collect(),
+        };
 
-        let mut files = pinned_files(&self.config.dir, generation)?;
-
-        // The WAL is the one mutable file in the set (GroupCommit's committer
-        // appends without the state lock): the wal mutex is taken here and
-        // HELD for the whole files loop, so the committer cannot append
-        // between validation and copy. Only the torn-safe prefix rides along
-        // (a partial final frame never does), streamed — bounded memory,
-        // PR6-R3-003. The marker records that prefix size, not the file's.
-        let mut wal = self.wal.lock().expect("wal mutex");
-
-        // Copy everything, hashing on the way. The WAL is special: it is
-        // validated and copied under the still-held wal mutex, and the
-        // marker records the prefix size.
-        let mut bytes_copied = 0u64;
+        // Bulk copy, hashing on the way — no locks held. CURRENT is
+        // synthesized from the pinned generation; everything else is
+        // immutable under the publication protocol and protected from the
+        // prune surfaces by the pin.
+        let mut bytes_copied = wal_size;
         for (i, f) in files.iter_mut().enumerate() {
-            // PR6-007 — one file (CURRENT) is already copied: a kill here
-            // leaves an unmarked dir (row 5); deleting the marker file
-            // releases the park for the interleave rows — write/flush/
-            // checkpoint/compaction issued while the state read lock below
-            // blocks them until this snapshot completes (rows 1–4).
+            if f.name == WAL_FILE {
+                f.size = wal_size;
+                f.checksum = wal_checksum;
+                continue; // copied above, under the wal mutex
+            }
+            // PR6-007 — CURRENT is already copied: a kill here leaves an
+            // unmarked dir (row 5); deleting the marker file releases the
+            // park for the interleave rows — write/flush/checkpoint/
+            // compaction issued while parked land CONCURRENTLY with this
+            // lock-free copy, and the pin keeps the captured set intact
+            // (rows 1–4, the M33 redesign).
             if i == 1 {
                 crash_park("AIKOQL_V2_SNAP_PARK", dir, "during_copy");
             }
-            let (size, checksum) = if f.name == WAL_FILE {
-                copy_wal_prefix(&mut wal, &dir.join(&f.name))?
+            let (size, checksum) = if f.name == "CURRENT" {
+                write_current(&dir.join(&f.name), generation)?
             } else {
                 copy_hashed(&self.config.dir.join(&f.name), &dir.join(&f.name))?
             };
@@ -440,7 +513,6 @@ impl Db {
         // PR6-007 — the marker is fully committed; a kill here must leave a
         // restorable snapshot (row 6).
         crash_park("AIKOQL_V2_SNAP_PARK", dir, "after_marker");
-        drop(state);
 
         Ok(SnapshotInfo {
             generation,

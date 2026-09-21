@@ -20,36 +20,35 @@ snapshot's entire duration. The matrix pinned:
 
 ## New protocol (M33 — the pin)
 
-**Capture** (state READ lock, held for a fast metadata-only window):
-read CURRENT → generation G, enumerate the pinned file set (CURRENT,
-MANIFEST-G, the segments it references, every identity/replica/
-placement/checkpoint log ≤ G, the WAL), and measure the WAL's
-torn-safe prefix length under the wal mutex (scan only — no copying).
+**Capture + arm** (one state WRITE lock): read CURRENT → generation G,
+enumerate the pinned file set (CURRENT, MANIFEST-G, the segments it
+references, every identity/replica/placement/checkpoint log ≤ G, the
+WAL), and — under the wal mutex, state → wal order like commit_group —
+validate + copy the WAL's torn-safe prefix (streamed, bounded memory).
+The WAL copy must ride the SAME hold as the generation read: the WAL is
+the one mutable file (the committer appends without the state lock,
+every flush truncates it), and a flush landing between the two would
+strand its rows in neither the ≤ G file set nor the captured prefix.
+The pin inserts come last in the hold, so no error path can leak a
+pin. This hold — a small WAL copy, bounded because every flush
+truncates — is the snapshot's whole writer-blocking span.
 
-**Arm the pin** (state WRITE lock): insert the file set into
-`snapshot_pins`. From here until disarm, both deletion surfaces —
-`prune_deltas_before` and the segment deletion in the flush/compact
-path — skip pinned names. Everything else remains prunable.
-
-**Copy + verify + marker — no locks held.** The files ≤ G are
+**Bulk copy + verify + marker — no locks held.** The files ≤ G are
 immutable under the publication protocol (every publish is a staged
-rename, never an in-place edit). Two exceptions are handled without
-locks:
-
-- CURRENT is mutable (rewritten by every checkpoint): the snapshot
-  SYNTHESIZES its bytes from G instead of re-reading the live file, so
-  a concurrent checkpoint can never tear the snapshot's CURRENT away
-  from its MANIFEST (the "mix" is impossible by construction).
-- The WAL is append-only: the captured prefix length fixes the cut;
-  the copy reads exactly that many bytes through its own handle.
-  Frames acked after the capture are beyond the cut and stay
-  invisible to the snapshot.
+rename, never an in-place edit), and both deletion surfaces —
+`prune_deltas_before` and the segment deletion in the flush/compact
+path — skip pinned names from the arm until the disarm. CURRENT is
+mutable (rewritten by every checkpoint): the snapshot SYNTHESIZES its
+bytes from G instead of re-reading the live file, so a concurrent
+checkpoint can never tear the snapshot's CURRENT away from its
+MANIFEST (the "mix" is impossible by construction). The WAL was
+already copied in the capture hold.
 
 **Disarm the pin** (state WRITE lock), on success and on every error
 path (a guard's Drop). A leaked pin is a slow disk leak — files the
 pin protects would never be pruned.
 
-**Writers during the snapshot**: a put lands while the copy is in
+**Writers during the snapshot**: a put lands while the bulk copy is in
 flight; its WAL frame is beyond the captured prefix, so the snapshot
 keeps the P3-M3 semantics — the write is invisible to it and visible
 to the live db immediately.
@@ -68,8 +67,9 @@ to the live db immediately.
   Pinned files survive for the snapshot's copy; the snapshot dir holds
   only files ≤ G (never a mix).
 - **Compaction during the copy**: merges and deletes live segments
-  except the pinned ones; the snapshot's copies complete and restore
-  byte-exact.
+  except the pinned ones (the skipped deletions stay as harmless
+  leftovers — the tolerated class); the snapshot's copies complete and
+  restore byte-exact.
 - **Crash of the LIVE db during a snapshot**: the snapshot dir is a
   separate directory; the live db's own recovery is the
   checkpoint/compaction crash protocol, unchanged by the pin (the pin

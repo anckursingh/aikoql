@@ -52,7 +52,7 @@ use crate::identity::{NodeId, LOCAL_NODE_ID};
 use crate::placement::directory::{placement_log_path, PlacementLog, PlacementRecord};
 use crate::placement::{BlockId, Placement, SegmentId};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 
@@ -548,11 +548,18 @@ fn require_delta(dir: &Path, family: &str, g: u64) -> Result<(), FormatError> {
 
 /// Delete every directory delta log at or below `generation` (fully
 /// subsumed by the checkpoint now published at that generation) and every
-/// OLDER checkpoint. Deletion failures warn — a leftover is harmless (the
-/// checkpoint answers first; re-applying old logs is idempotent under the
-/// merge gates). Parks after the first deletion for the crash matrix
-/// (`AIKOQL_V2_CKP_PARK` = `after_first_prune`). Returns files removed.
-pub fn prune_deltas_before(dir: &Path, generation: u64) -> Result<u32, FormatError> {
+/// OLDER checkpoint. Pinned files (a running snapshot's captured set,
+/// `State::snapshot_pins` — P5-M33) are skipped: the snapshot copies them
+/// lock-free, so a prune can never delete what it still needs. Deletion
+/// failures warn — a leftover is harmless (the checkpoint answers first;
+/// re-applying old logs is idempotent under the merge gates). Parks after
+/// the first deletion for the crash matrix (`AIKOQL_V2_CKP_PARK` =
+/// `after_first_prune`). Returns files removed.
+pub fn prune_deltas_before(
+    dir: &Path,
+    generation: u64,
+    pins: &HashSet<String>,
+) -> Result<u32, FormatError> {
     let mut deleted: u32 = 0;
     let mut names: Vec<std::ffi::OsString> = Vec::new();
     for entry in std::fs::read_dir(dir)
@@ -563,6 +570,9 @@ pub fn prune_deltas_before(dir: &Path, generation: u64) -> Result<u32, FormatErr
     }
     for name in names {
         let name = name.to_string_lossy();
+        if pins.contains(name.as_ref()) {
+            continue;
+        }
         let log_gen = identity_log_generation(&name)
             .or_else(|| crate::identity::directory::replica_log_generation(&name))
             .or_else(|| crate::placement::directory::placement_log_generation(&name));
