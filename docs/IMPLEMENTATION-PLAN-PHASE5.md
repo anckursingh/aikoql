@@ -352,6 +352,140 @@ TDD REDs: cache_hit_does_not_scan (scan-steps pin — fails 64 > 0 pre-fix, f189
 
 Acceptance: storage-v2 suite green (RED→GREEN, one commit each).
 
+### P5-M26 — Per-connect rebuild no-op + property checkpoint (SHIPPED 2026-09-18)
+
+Freshness guard (`applied == head && Ready` skips the O(heads) property-index reseed on a fresh connect — the scale harness's per-connect rebuild cost); the maintainer checkpoint now carries the AKPI property-index files (water-first, restore-before-tail); the competitor-scale job is wired into benchmark-nightly.yml. Traps: `SchedulerJob::checkpoint` needs the kernel; mcp main.rs holds `Arc<Kernel>`.
+
+### P5-M27 — Crash matrix + PR6 plan closed (SHIPPED 2026-09-18)
+
+All seven PR6 remediation items closed (b2aa690 RED → f083dea → 439d8fc) — the M19–M25 review program closes with the crash matrix green. 2026-09-19 CI run 35381873058's two failures root-caused + fixed locally (user pushes): mvp_rec_002 flake = `AIKOQL_BACKEND` set_var leaking into parallel-test children (9f23b7a RED → 2abc9fa, per-child start_with); Python SDK tantivy panic = TopDocs limit-0 on empty checkpoint load (4f691ad RED → 3b59656). Traps: park-release-file must be consumed per checkpoint; HNSW search score is SIMILARITY, not distance.
+
+## PR #6 performance review remediation program (2026-09-21 — from the senior code review ACTION PLAN)
+
+`AIKOQL_PR6_SENIOR_CODE_REVIEW_ACTION_PLAN.md` (reviewed HEAD c8232f0) is a performance-focused review of the storage engine. Verified line-by-line against the code as Rust lead — all four P0s CONFIRMED verbatim (db.rs `read_to_end`; segment.rs publish `sort_by`; memtable.rs `range((key.to_vec(), 0)..)`; cache.rs `min_by_key` scan). The review correctly credits the just-landed PERF-1/4/3 (d049ac5, 7c95038, 1c7b3ff). Disposition decisions: **P0-04 ships as a SAFE lazy-deletion gen-heap** (touch stays O(1), evict amortized O(log n)) — the review's mandated unsafe intrusive list is the upgrade path only if a churn profile demands O(1) evict; **P0-03 is LAST of the P0s** (largest refactor, smallest measured win — reads are block-I/O dominated); **P1-01 folds into P0-01**; **P1-02/03 ship together**; the design-risk P1s (snapshot lock, snapshot double-read, L0 counters) ship only with their failure-window/integrity REDs — the review's own conditions.
+
+Full mapping: P0-01+P1-01 → M28 · P0-02 → M29 · P0-04 → M30 · P0-03 → M31 · P1-02+P1-03 → M32 · P1-04 → M33 · P1-05 → M34 · P1-06+P1-07 → M35 · P1-08+P1-09 → M36 · P1-10+P1-11+P1-12 → M37. Same rules: RED-first, one milestone = one commit, no push, honest ledger.
+
+### P5-M28 — Reader-based WAL replay (P0-01 + P1-01)
+
+Current state: `Db::open` reads the WHOLE WAL with `read_to_end` (db.rs) before replay. PERF-1 killed the decoded-frame accumulation Vec, not the byte buffer — recovery memory = full WAL + current frame + memtable. WAL is bounded in practice (truncated at flush ⇒ ≈ memtable_bytes + in-flight) but the O(total WAL) term is avoidable.
+
+Deliver: `replay_reader<R: Read + Seek>` — read one header, the exact payload/checksum, decode/apply one frame, discard, advance (`valid_prefix_len`'s reader pattern is the structural reference). Preserve EXACT current semantics: valid frames, torn final frame (truncate), damage-followed-by-valid fails closed, unsupported versions/types, strictly increasing seqs. P1-01 rides along: ops decode straight into the apply callback — no per-frame `Vec<Op>`.
+
+TDD REDs: rpl001 — recovery peak allocation independent of WAL size (counting allocator: 10 MB vs 100 MB WAL ⇒ same armed delta; fails today); rpl002 — byte-equivalence against the current decoder corpus (all existing WAL goldens + the PERF-1 replay suite stay green); rpl003 — torn-tail truncation identical (consumed == valid prefix, tail dropped, reopen clean); rpl004 — damage then valid frame fails closed (Corrupt, never truncate); rpl005 — seq monotonicity enforced in reader mode.
+
+Acceptance: open() never materializes the WAL; existing recovery/wal suites green untouched; peak memory O(max frame + memtable delta).
+
+Status: ⬜ open
+
+### P5-M29 — Sorted-input publish (P0-02)
+
+Current state: `publish_with_anchors_staged` globally sorts the buffered entries (segment.rs `entries.sort_by(key ASC, seq DESC)`) — the memtable is ALREADY ordered (BTreeMap: key ASC, seq ASC), so flush pays O(n log n) for what per-key-run reversal does in O(n).
+
+Deliver: `publish_sorted` / `publish_with_anchors_sorted` — key ASC, seq DESC within key by construction (memtable stream → key run → reverse only the run's versions → writer). Temporary memory ∝ largest version run, not N. The unsorted writer stays for arbitrary inputs and golden compatibility.
+
+TDD REDs: fls001 — flush allocation pin (~2N, decode only; fails today on the sort buffer + comparator temporaries); fls002 — byte-for-byte golden compatibility vs the sorted writer over the same corpus; fls003 — duplicate (key, seq) detection preserved (the `windows(2)` check's successor); fls004 — equal-key multi-version order (seq DESC within key, rids interleaved); fls005 — placement anchor correctness (v4 chunks' anchors identical to today).
+
+Acceptance: flush never calls `entries.sort_by`; golden corpus byte-exact; 100k/1M flush allocation + wall-clock cells recorded (env-gated, reported).
+
+Status: ⬜ open
+
+### P5-M30 — O(log n) cache eviction (P0-04)
+
+Current state: hits O(1) (gen stamp, P5-M25); eviction scans ALL entries per victim under the mutex (cache.rs `min_by_key`) — O(n) per evicted block on the miss path. ~128 entries at defaults (sub-µs, hidden behind cold I/O) — bites at large caps / small blocks / churn.
+
+Deliver: lazy-deletion min-heap keyed on gen — touch stays O(1) (stamp only); evict pops the min gen and discards stale heap nodes (map-gen mismatch); the heap rebuilds when it doubles past the map (amortized O(log n) evict, no unsafe). The review's intrusive doubly-linked list (O(1) evict, unsafe) is the documented upgrade only if a churn profile demands it.
+
+TDD REDs: cch001 — eviction scan-steps pin flips to ~0 (the P5-M25 RED pin re-armed on the evict path — fails today, scan_steps = n per victim); cch002 — eviction work flat as cache grows (16 vs 512 vs 4096 entries: evict-cost ratio bounded); cch003 — hit path unchanged: cache_hit_does_not_scan green untouched; cch004 — LRU semantics guard (eviction_targets_least_recently_hit) green across the refactor; cch005 — heap garbage bounded (rebuild trigger pinned: heap.len() ≤ 2×map.len()).
+
+Acceptance: touch O(1) preserved (pin), evict amortized O(log n), no unsafe; storage-v2 suite green.
+
+Status: ⬜ open
+
+### P5-M31 — Allocation-free memtable point reads (P0-03)
+
+Current state: get()/get_by_rid() allocate `key.to_vec()` per lookup (memtable.rs `range((key.to_vec(), 0)..)`) — one heap alloc on every warm memtable read. No borrowed-key shortcut exists for the tuple key (`Borrow` cannot bridge it) — the restructure is the fix.
+
+Deliver: `BTreeMap<Vec<u8>, VersionChain>` (chain = the key's versions, seq ASC; byte and object rows segregated as today). get/get_by_rid/prefix_scan walk the chain without key construction; into_entries streams key → chain (feeds M29's publish_sorted directly). No auxiliary HashMap (the review's condition) — the write path keeps its shape (insert at chain head).
+
+TDD REDs: mtr001 — counting-allocator pin: N point reads allocate 0 (fails today, N allocs); mtr002 — p50/p99 before/after on a warm memtable (env-gated cell, reported); mtr003 — prefix-scan correctness vs pre-restructure (existing memtable pins stay green); mtr004 — high-cardinality + version-heavy mix: read/write semantics identical (get-by-rid head = max seq per rid, delete wins).
+
+Acceptance: zero allocs per point read; memtable + db + storage-v2 suites green untouched; flush output byte-identical (M29's goldens re-run).
+
+Status: ⬜ open
+
+### P5-M32 — Group-commit allocation cleanup (P1-02 + P1-03)
+
+Current state: the group-building loop re-folds the whole group per iteration (db.rs `group.iter().fold` — O(g²) on the write path); commit_group allocates a fresh seqs Vec per group.
+
+Deliver: running group_ops/group_bytes counters updated only when a batch is accepted (exact-fit + carry-over behavior preserved); the seqs buffer hoisted/cleared instead of allocated per group.
+
+TDD REDs: grp001 — behavior pin: exact-fit/carry-over identical to today over a boundary-chasing workload (fails if counters drift from the fold); grp002 — allocator pin: per-group allocations drop (fails today on the fold temporaries + seqs Vec).
+
+Acceptance: group commit allocates once per group; commit-path suites green.
+
+Status: ⬜ open
+
+### P5-M33 — Snapshot lock redesign (P1-04)
+
+Current state: snapshot_to holds the state READ lock through capture + copy + verify (snapshot.rs — deliberate today, §58; writers block for the whole snapshot). The review's condition stands: the crash protocol must be documented BEFORE the change.
+
+Deliver: state lock → capture immutable generation/file set → PIN the files (orphan cleanup consults the pin) → release lock → bulk copy/verify → release pin. Crash protocol + failure-window tests first: a concurrent checkpoint during copy must not prune a pinned file; a crash mid-copy leaves the partial snapshot inert.
+
+TDD REDs: snp001 — writer-latency pin: a put during a long snapshot completes while the snapshot is in flight (fails today — blocked on the read lock); snp002 — checkpoint-during-copy child-kill window: the snapshot is the old or new generation, never a mix; snp003 — pinned-file prune guard: orphan cleanup skips pinned files.
+
+Acceptance: writer latency decoupled from snapshot duration; failure-window tests green; existing bkp suites green.
+
+Status: ⬜ open
+
+### P5-M34 — Snapshot double-read measurement (P1-05)
+
+Current state: copy hashes while writing, then verification re-reads every copied file — ~2× snapshot read traffic at large sizes.
+
+Deliver: MEASURE FIRST (copy wall / verify wall / read+write bytes / peak RSS at a large generation). Keep the double-read integrity protocol unless a single-pass protocol can PROVE it catches a file mutated between passes — do not weaken integrity for speed (the review's condition).
+
+TDD REDs: measurement-first — snp004 pins the measurement harness writes the cells (env-gated); any protocol change then ships with a RED proving mutation detection.
+
+Acceptance: cells recorded and reported; protocol unchanged unless the RED-gated replacement exists.
+
+Status: ⬜ open
+
+### P5-M35 — Control-plane lock + L0-scan profile (P1-06 + P1-07)
+
+Current state: stats()/resolve_* take the global state read lock (cheap each, frequent under MCP/admin traffic); maybe_compact rescans L0 metadata per write (deliberate — the met003 backlog-gauge free ride).
+
+Deliver: lock-wait instrumentation on the control-plane paths; a write-path scan_l0 cost profile at high throughput. THEN decide: publication-time l0_count/l0_bytes/l1_bytes counters with a full-scan invariant checker retained for debug — only if the profile shows the scan is material (the review's own gate).
+
+TDD REDs: prof001 — the instrumentation counters exist and are readable (compile-error RED); prof002 — the decision evidence cell (env-gated): scan cost per write at 100k ops throughput.
+
+Acceptance: profile recorded; counters shipped only on evidence, never speculatively.
+
+Status: ⬜ open
+
+### P5-M36 — Compaction scale profile (P1-08 + P1-09)
+
+Current state: compaction keeps `seen: HashSet<ReplicaId>` for the whole merge (needed for Retired relocation entries — cannot drop, only profile); PERF-3's heap/key ownership just landed — further structure work must be evidence-driven.
+
+Deliver: RSS + allocation profile of a full merge at 1M and 10M keys (replica count swept); CPU flamegraph of the merge loop. THEN decide: dense/bounded rids → generation-mark array or bitset for `seen`; heap redesign (loser tree / arena) only if the profile shows key comparison/copy as top cost.
+
+TDD REDs: measurement-first — cp001 env-gated cells: merge RSS ∝ (keys, replicas), allocation histogram (the PERF-3 pin harness re-used), merge wall time.
+
+Acceptance: profile cells recorded; no custom structure shipped without a cell showing the gain (rule 11).
+
+Status: ⬜ open
+
+### P5-M37 — Comparative latency gate + unit standardization (P1-10 + P1-11 + P1-12)
+
+Current state: the 1M artifact is single-backend with a null gate verdict and confusing units (p50_us fields are actually nanoseconds); the baseline guard is Windows-only and p50-centric; allocator tests are regression pins, not complexity proofs.
+
+Deliver: deterministic v1/v2 comparative runs (same dataset, access order, machine, filesystem, build, cache regime) reporting p50/p95/p99/p999/ops/s/bytes/op/blocks/op/allocs/op/RSS — the review's benchmark contract; artifact units standardized before any automated gate consumes them; platform-specific baselines where practical with tail latencies compared (not p50 alone); Criterion benches pairing the allocator pins where viable. Full comparative runs go to the CI workflow (laptop-small/workflow-big — the laptop runs --quick only).
+
+TDD REDs: bench001 — the comparative harness writes the contract schema (fails on missing fields); bench002 — a unit-mismatch regression fails the schema check; bench003 — allocator-pin companion benches exist and run (compile-error RED).
+
+Acceptance: report artifacts published with baseline/candidate commits + ratios; existing cert suites untouched-green.
+
+Status: ⬜ open
+
 ## Gates (carried + new)
 
 - **Gate 5** (≤8× W1/W2 at 1M) — carried. W1 is REDLINE at 7.96× (0.04× headroom): every milestone touching storage/kernel/runtime re-runs the 1M matrix before merge (M0's CI job automates this).
@@ -361,6 +495,7 @@ Acceptance: storage-v2 suite green (RED→GREEN, one commit each).
 - **Gate 9** (new): tenant/security invariance — no optimizer or executor change may cross tenant/security boundaries (M1 proptest pins this).
 - **Gate 10** (new, P5-M19): secondary-index convergence — a committed event is never silently abandoned; `applied_seq == head` certifies only actually-applied events; a persistent failure surfaces as Error, never CaughtUp. ✅ closed by P5-M19 (2026-09-17).
 - **Gate 11** (new, P5-M21): index-assist snapshot pinning — an index-assisted plan may not return a set incomplete relative to its declared snapshot; the exec path re-pins the head captured at optimize or falls back to the scan. ✅ closed by P5-M21 (2026-09-17).
+- **Gate 12** (new, PR6 perf review): perf-change evidence contract — every storage performance change reports the review's benchmark contract (commit, os, fs, cpu, ram, dataset, workload, cache/block/memtable config, p50/p95/p99/p999, ops/s, read/write bytes, RSS peak, allocs; comparisons add baseline/candidate commits + ratios). No performance claim from a single wall-clock number. First binding for M28+.
 
 ## Definition of 1.0
 
