@@ -400,7 +400,7 @@ TDD REDs: cch001 — eviction scan-steps pin flips to ~0 (the P5-M25 RED pin re-
 
 Acceptance: touch O(1) preserved (pin), evict amortized O(log n), no unsafe; storage-v2 suite green.
 
-Status: ⬜ open
+Status: ✅ Shipped (RED f3ccb8e → feat e45bbe0) — cch001 one forced eviction moves scan_steps by 0 (RED: 64); cch002 the same pin at 16/512/4096 (RED: n per victim — work no longer grows with the cache); cch003/cch004 green untouched; cch005 overwrite churn keeps heap ≤ 2× map (the 2× rebuild trigger). Rebuilds are the only remaining map scan (counted in scan_steps); no unsafe. Storage-v2 + kernel + mcp green.
 
 ### P5-M31 — Allocation-free memtable point reads (P0-03)
 
