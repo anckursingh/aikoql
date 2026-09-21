@@ -104,8 +104,10 @@ fn cp001_merge_scale_cells() {
         return; // env-gated — 2M puts for the base gate
     }
     let full = std::env::var_os("AIKOQL_V2_CP_CELLS_FULL").is_some();
-    let mut points: Vec<(&str, usize, usize)> =
-        vec![("n1m_r1k", 1_000_000, 1_000), ("n1m_r100k", 1_000_000, 100_000)];
+    let mut points: Vec<(&str, usize, usize)> = vec![
+        ("n1m_r1k", 1_000_000, 1_000),
+        ("n1m_r100k", 1_000_000, 100_000),
+    ];
     if full {
         points.push(("n10m_r1k", 10_000_000, 1_000));
         points.push(("n10m_r100k", 10_000_000, 100_000));

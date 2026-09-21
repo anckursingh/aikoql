@@ -49,6 +49,10 @@ pub struct CompactStats {
     pub entries_in: u64,
     pub entries_out: u64,
     pub entries_archived: u64,
+    /// Distinct replicas in the merged output — the seen-set denominator
+    /// (P5-M36 cp001: the RSS ∝ (keys, replicas) sweep's direct data,
+    /// deciding the generation-mark array/bitset vs this HashSet).
+    pub rids_seen: u64,
 }
 
 /// A just-published segment, open for validation: the reader plus the
@@ -258,6 +262,7 @@ pub(crate) fn merge(
         }
     }
     stats.segments_out = live.chunks.len() as u64;
+    stats.rids_seen = seen.len() as u64;
     // The relocation set: per-rid anchors aggregate across chunks (a
     // replica's keys may straddle a chunk boundary — the max-seq entry's
     // chunk wins), and every seen rid gets its entry (None = Retired).
