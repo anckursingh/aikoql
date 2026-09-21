@@ -1,10 +1,15 @@
-//! SE2-M2 — memtable: the in-memory recent-write layer (design §10). A
-//! BTreeMap on (key, seq) — deterministic, the doc's own order. The head
-//! for a key is its highest-seq entry; a None value is a delete tombstone.
-//! The byte accounting is approximate (reported, never asserted).
+//! SE2-M2 — memtable: the in-memory recent-write layer (design §10). P5-M31
+//! — a BTreeMap<key, VersionChain>: reads borrow the key (Borrow<[u8]>) and
+//! walk one key's versions — zero allocations per point read and per prefix
+//! scan (the flat (key, seq) map needed an owned range start per read). The
+//! chain is seq-ascending; its last matching row is the head (a None value
+//! is a delete tombstone). The byte accounting is approximate (reported,
+//! never asserted).
 
 use crate::identity::ReplicaId;
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
+use std::ops::Bound;
 
 /// Approximate in-memory cost of one entry: key + value + seq + map node.
 const ENTRY_OVERHEAD: usize = 24;
@@ -68,9 +73,18 @@ impl MemEntry {
     }
 }
 
+/// P5-M31 — one key's versions, seq ASC (the flat map's run, keyed once).
+/// The head for a read is the last matching row; the flush iterates the
+/// chain as-is (key asc from the map, seq asc within the chain — exactly
+/// the sorted publish's input contract, M29).
+#[derive(Debug, Default, Clone)]
+struct VersionChain {
+    versions: Vec<(u64, MemEntry)>,
+}
+
 #[derive(Debug, Default)]
 pub struct Memtable {
-    map: BTreeMap<(Vec<u8>, u64), MemEntry>,
+    map: BTreeMap<Vec<u8>, VersionChain>,
     bytes: usize,
 }
 
@@ -86,7 +100,10 @@ impl Memtable {
     /// SE2-M34 — any identity-carrying entry: the flush writes v4 blocks
     /// iff this is true (rid-0 rows alone stay v2, byte-identical to M9).
     pub fn has_identity(&self) -> bool {
-        self.map.values().any(MemEntry::is_identity)
+        self.map
+            .values()
+            .flat_map(|c| c.versions.iter())
+            .any(|(_, e)| e.is_identity())
     }
 
     pub fn bytes(&self) -> usize {
@@ -95,8 +112,7 @@ impl Memtable {
 
     pub fn apply(&mut self, key: Vec<u8>, seq: u64, value: Option<Vec<u8>>) {
         self.bytes += key.len() + value.as_ref().map_or(0, Vec::len) + ENTRY_OVERHEAD;
-        self.map
-            .insert((key, seq), MemEntry::Byte(ByteRow { value }));
+        self.insert(key, seq, MemEntry::Byte(ByteRow { value }));
     }
 
     /// SE2-M33 — an object write: the entry carries the owning replica id
@@ -110,56 +126,88 @@ impl Memtable {
         replica_id: ReplicaId,
     ) {
         self.bytes += key.len() + value.as_ref().map_or(0, Vec::len) + ENTRY_OVERHEAD;
-        self.map.insert(
-            (key, seq),
-            MemEntry::Object(ObjectRow { value, replica_id }),
-        );
+        self.insert(key, seq, MemEntry::Object(ObjectRow { value, replica_id }));
     }
 
-    /// Head for a key on the BYTE surface: the highest-seq byte row
-    /// (BTreeMap order is key asc, seq asc, so the last byte row of the
-    /// run is the head). Object rows are invisible here — the byte API
-    /// cannot answer object reads (TDD-STOR-006). SE2-M10 — ONE allocation
-    /// (the owned range start): `RangeFrom` + take-while covers the key's
-    /// run without building both bounds. (`last()`, not `next_back()`:
-    /// TakeWhile's DoubleEndedIterator impl needs an ExactSize inner, which
-    /// a BTreeMap range is not.)
+    /// P5-M31 — one insert path. Monotonic writes append (partition_point
+    /// lands at the end); out-of-order arrivals — legal on the flat map —
+    /// insert at their place; a repeated (key, seq) replaces in place (the
+    /// flat map's insert overwrote).
+    fn insert(&mut self, key: Vec<u8>, seq: u64, e: MemEntry) {
+        match self.map.entry(key) {
+            Entry::Vacant(v) => {
+                v.insert(VersionChain {
+                    versions: vec![(seq, e)],
+                });
+            }
+            Entry::Occupied(mut o) => {
+                let chain = o.get_mut();
+                let idx = chain.versions.partition_point(|&(s, _)| s < seq);
+                match chain.versions.get(idx) {
+                    Some(&(s, _)) if s == seq => chain.versions[idx] = (seq, e),
+                    _ => chain.versions.insert(idx, (seq, e)),
+                }
+            }
+        }
+    }
+
+    /// Head for a key on the BYTE surface: the highest-seq byte row (the
+    /// chain is seq-ascending, so the last byte row is the head). Object
+    /// rows are invisible here — the byte API cannot answer object reads
+    /// (TDD-STOR-006). P5-M31 — zero allocation: `get` borrows the key.
     pub fn get(&self, key: &[u8]) -> Option<&ByteRow> {
-        self.map
-            .range((key.to_vec(), 0)..)
-            .take_while(|((k, _), _)| k.as_slice() == key)
-            .filter_map(|(_, e)| match e {
+        self.map.get(key).and_then(|chain| {
+            chain.versions.iter().rev().find_map(|(_, e)| match e {
                 MemEntry::Byte(b) => Some(b),
                 MemEntry::Object(_) => None,
             })
-            .last()
+        })
     }
 
-    /// SE2-M33 — the object's head: the newest entry in the key's run whose
-    /// replica_id matches (the run is seq-ascending, so the last match is
-    /// the head). Byte rows carry no identity and never answer an object
-    /// read — structural (TDD-STOR-006), not a filter.
+    /// SE2-M33 — the object's head: the newest entry in the key's chain
+    /// whose replica_id matches (the chain is seq-ascending, so the last
+    /// match is the head). Byte rows carry no identity and never answer an
+    /// object read — structural (TDD-STOR-006), not a filter.
     pub fn get_by_rid(&self, key: &[u8], rid: ReplicaId) -> Option<&ObjectRow> {
-        self.map
-            .range((key.to_vec(), 0)..)
-            .take_while(|((k, _), _)| k.as_slice() == key)
-            .filter_map(|(_, e)| match e {
+        self.map.get(key).and_then(|chain| {
+            chain.versions.iter().rev().find_map(|(_, e)| match e {
                 MemEntry::Object(o) if o.replica_id == rid => Some(o),
                 _ => None,
             })
-            .last()
+        })
     }
 
     /// All entries in (key, seq) order — the flush order.
     pub fn entries(&self) -> impl Iterator<Item = (&[u8], u64, &MemEntry)> {
-        self.map.iter().map(|((k, s), e)| (k.as_slice(), *s, e))
+        self.map.iter().flat_map(|(k, chain)| {
+            chain
+                .versions
+                .iter()
+                .map(move |(s, e)| (k.as_slice(), *s, e))
+        })
     }
 
     /// All entries in (key, seq) order, moved out — the table is consumed,
     /// so the flush takes keys and values by move instead of cloning
-    /// (SE2-M15).
+    /// (SE2-M15). The last version of a chain moves the map's key; earlier
+    /// ones clone it — single-version chains (the common case) clone none.
     pub fn into_entries(self) -> impl Iterator<Item = ((Vec<u8>, u64), MemEntry)> {
-        self.map.into_iter()
+        self.map.into_iter().flat_map(|(key, chain)| {
+            let n = chain.versions.len();
+            let mut key = Some(key);
+            chain
+                .versions
+                .into_iter()
+                .enumerate()
+                .map(move |(i, (seq, e))| {
+                    let k = if i + 1 == n {
+                        key.take().expect("key moved once, last")
+                    } else {
+                        key.clone().expect("key present until the last version")
+                    };
+                    ((k, seq), e)
+                })
+        })
     }
 
     /// V2-Adopt — one entry per key with the prefix, key-ascending: the
@@ -167,39 +215,33 @@ impl Memtable {
     /// directly to the prefix range — the kernel's scan contract forbids
     /// walking the whole key space. Keys holding only object rows never
     /// appear (TDD-STOR-006: the byte scan cannot answer object data).
+    /// P5-M31 — zero allocation: the borrowed-key range (Borrow<[u8]>)
+    /// seeks without building an owned bound.
     pub fn prefix_heads<'a>(
         &'a self,
         prefix: &'a [u8],
     ) -> impl Iterator<Item = (&'a [u8], &'a ByteRow)> {
-        // SE2-M10 — one allocation: the owned range start moves into the
-        // iterator; the closure compares against the borrowed prefix.
         let mut it = self
             .map
-            .range((prefix.to_vec(), 0)..)
-            .map(|((k, _), e)| (k.as_slice(), e))
+            .range::<[u8], _>((Bound::Included(prefix), Bound::Unbounded))
+            .map(|(k, chain)| (k.as_slice(), chain))
             .peekable();
         std::iter::from_fn(move || loop {
-            let (first_key, first_e) = it.next()?;
+            let (first_key, first_chain) = it.next()?;
             if !first_key.starts_with(prefix) {
                 return None;
             }
-            // (key, seq) order is seq-ascending within a key — the last
-            // byte row of the run is the byte-API head.
-            let mut head: Option<&ByteRow> = None;
-            if let MemEntry::Byte(b) = first_e {
-                head = Some(b);
-            }
-            while let Some((next_key, next_e)) = it.peek() {
-                if next_key != &first_key {
-                    break;
-                }
-                if let MemEntry::Byte(b) = next_e {
-                    head = Some(b);
-                }
-                it.next();
-            }
-            if let Some(h) = head {
-                return Some((first_key, h));
+            // The chain is seq-ascending — its last byte row is the head.
+            if let Some(b) = first_chain
+                .versions
+                .iter()
+                .rev()
+                .find_map(|(_, e)| match e {
+                    MemEntry::Byte(b) => Some(b),
+                    MemEntry::Object(_) => None,
+                })
+            {
+                return Some((first_key, b));
             }
             // Key holds only object rows — skip it; next key.
         })
@@ -283,7 +325,9 @@ mod tests {
             .map(|(k, r)| {
                 (
                     String::from_utf8_lossy(k).into_owned(),
-                    r.value.as_deref().map(|v| String::from_utf8_lossy(v).into_owned()),
+                    r.value
+                        .as_deref()
+                        .map(|v| String::from_utf8_lossy(v).into_owned()),
                 )
             })
             .collect();
