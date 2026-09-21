@@ -287,7 +287,11 @@ fn reader_stream(bytes: &[u8]) -> Result<(Vec<(u64, Op)>, u64), FormatError> {
         stream.push((seq, op));
         Ok(())
     })?;
-    assert_eq!(end, bytes.len() as u64, "the reader must see the whole file");
+    assert_eq!(
+        end,
+        bytes.len() as u64,
+        "the reader must see the whole file"
+    );
     Ok((stream, consumed))
 }
 
@@ -323,11 +327,7 @@ fn wal_reader_matches_in_memory_replay_over_the_damage_corpus() {
         .apply(&bytes), // checksum
     );
     cases.push(
-        Damage::ZeroRegion {
-            from: 30,
-            len: 12,
-        }
-        .apply(&bytes), // payload
+        Damage::ZeroRegion { from: 30, len: 12 }.apply(&bytes), // payload
     );
     // One big-frame case: frame 0 sized so frame 1's magic starts exactly
     // on the reader probe's 64 KiB chunk boundary (the probe's overlap
@@ -348,8 +348,14 @@ fn wal_reader_matches_in_memory_replay_over_the_damage_corpus() {
                 assert_eq!(rs, ms, "case {i}: applied stream diverged");
             }
             (Err(re), Err(me)) => {
-                assert!(matches!(re, FormatError::Corrupt(_)), "case {i}: reader {re:?}");
-                assert!(matches!(me, FormatError::Corrupt(_)), "case {i}: replay {me:?}");
+                assert!(
+                    matches!(re, FormatError::Corrupt(_)),
+                    "case {i}: reader {re:?}"
+                );
+                assert!(
+                    matches!(me, FormatError::Corrupt(_)),
+                    "case {i}: replay {me:?}"
+                );
             }
             (r, m) => panic!("case {i}: verdict diverged — reader {r:?} vs replay {m:?}"),
         }
@@ -377,14 +383,22 @@ fn wal_reader_torn_tail_truncates_to_the_valid_prefix() {
     let expect = surviving_keys(&frames, &bounds, last_start);
     for k in [b"k1".to_vec(), b"k2".to_vec()] {
         let got = db.get(&k).unwrap();
-        assert_eq!(got.is_some(), expect.contains(&k), "key {k:?} after torn tail");
+        assert_eq!(
+            got.is_some(),
+            expect.contains(&k),
+            "key {k:?} after torn tail"
+        );
     }
     drop(db);
     // Reopen clean: the truncation left the store consistent.
     let db = Db::open(Config::new(d.clone())).unwrap();
     for k in [b"k1".to_vec(), b"k2".to_vec()] {
         let got = db.get(&k).unwrap();
-        assert_eq!(got.is_some(), expect.contains(&k), "key {k:?} after clean reopen");
+        assert_eq!(
+            got.is_some(),
+            expect.contains(&k),
+            "key {k:?} after clean reopen"
+        );
     }
 }
 
@@ -450,7 +464,8 @@ fn wal_reader_enforces_strictly_increasing_sequences() {
 }
 
 #[test]
-fn checkpoint_flip_corpus() {    let bytes = checkpoint_fixture();
+fn checkpoint_flip_corpus() {
+    let bytes = checkpoint_fixture();
     let mut unsupported = 0;
     for o in 0..bytes.len() {
         let damaged = Damage::BitFlip { offset: o }.apply(&bytes);

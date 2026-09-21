@@ -58,12 +58,12 @@ use crate::segment::{
 use crate::stats::{
     record_latency_us, DbStats, ReadPathStats, ReadTraceRecord, SegmentStats, Stats, WriteStats,
 };
-use crate::wal::{encode_frame, replay_frames_streaming, Op};
+use crate::wal::{encode_frame, replay_reader, Op};
 use aikoql_kernel::knowledge::kom::sha256;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
@@ -656,11 +656,6 @@ impl Db {
             .write(true)
             .open(&wal_path)
             .map_err(|e| FormatError::Io(format!("open WAL {}: {e}", wal_path.display())))?;
-        let mut wal_bytes = Vec::new();
-        wal.seek(SeekFrom::Start(0))
-            .map_err(|e| FormatError::Io(format!("WAL seek: {e}")))?;
-        wal.read_to_end(&mut wal_bytes)
-            .map_err(|e| FormatError::Io(format!("WAL read: {e}")))?;
         // Replay bypasses the durability boundary — the frames are already
         // fsynced — but preserves every sequence number.
         let mut active = Memtable::new();
@@ -681,71 +676,70 @@ impl Db {
             .unwrap_or(0)
             .max(orphan_pgen_max)
             + 1;
-        // PERF-1 — the replay streams: each frame is applied as it is
-        // decoded, so the frames are never materialized beside the read
-        // buffer (peak was ~3x the WAL with the collecting replay). The
-        // ops are owned here, so keys and values move into the memtable
+        // M28 (P0-01 + P1-01) — the replay streams straight from the
+        // reader: the WAL is never materialized beside the memtable (the
+        // read_to_end buffer was a second copy of the WAL), and each op
+        // decodes into this apply closure (no per-frame Vec<Op>). The ops
+        // are owned here, so keys and values move into the memtable
         // instead of being cloned out of a materialized frame.
-        let consumed = replay_frames_streaming(&wal_bytes, |frame| {
-            for op in frame.ops {
-                match op {
-                    Op::Put(k, v) => active.apply(k, frame.seq, Some(v)),
-                    Op::Delete(k) => active.apply(k, frame.seq, None),
-                    // SE2-M33 — the rid rides the op (spec §17/§18), so
-                    // replay restores the entry's identity without
-                    // consulting the directories.
-                    Op::PutObject(rid, k, v) => {
-                        active.apply_object(k, frame.seq, Some(v), rid);
-                        Self::replay_object_placement(
-                            &mut placements,
-                            &mut pending_placements,
-                            &mut replay_pgen,
-                            rid,
-                        )?;
-                    }
-                    Op::DeleteObject(rid, k) => {
-                        active.apply_object(k, frame.seq, None, rid);
-                        Self::replay_object_placement(
-                            &mut placements,
-                            &mut pending_placements,
-                            &mut replay_pgen,
-                            rid,
-                        )?;
-                    }
-                    // SE2-M30 — a replayed create re-pends its records:
-                    // the next flush re-exports them, so an identity that
-                    // only ever lived in a truncated WAL still lands in a
-                    // log (the merge rule makes the duplicate harmless).
-                    // SE2-M32 — the placement record is the exact one the
-                    // live apply produced (its generation rides the op):
-                    // the PL-005 gate treats the replay as a duplicate of
-                    // the logged record, or stale against a newer one.
-                    Op::CreateObject {
-                        oid,
-                        lid,
+        let (consumed, wal_end) = replay_reader(&mut wal, |seq, op| {
+            match op {
+                Op::Put(k, v) => active.apply(k, seq, Some(v)),
+                Op::Delete(k) => active.apply(k, seq, None),
+                // SE2-M33 — the rid rides the op (spec §17/§18), so
+                // replay restores the entry's identity without
+                // consulting the directories.
+                Op::PutObject(rid, k, v) => {
+                    active.apply_object(k, seq, Some(v), rid);
+                    Self::replay_object_placement(
+                        &mut placements,
+                        &mut pending_placements,
+                        &mut replay_pgen,
                         rid,
-                        pgen,
-                    } => {
-                        merge_identity(&mut identity, oid, lid)?;
-                        pending_identity.push(IdentityRecord { oid, lid });
-                        merge_replica(&mut replicas, lid, LOCAL_NODE_ID, rid)?;
-                        pending_replicas.push(ReplicaRecord {
-                            lid,
-                            node: LOCAL_NODE_ID,
-                            rid,
-                        });
-                        let placement = Placement::Memtable { generation: pgen };
-                        merge_placement(&mut placements, rid, placement)?;
-                        pending_placements.push(PlacementRecord { rid, placement });
-                    }
+                    )?;
+                }
+                Op::DeleteObject(rid, k) => {
+                    active.apply_object(k, seq, None, rid);
+                    Self::replay_object_placement(
+                        &mut placements,
+                        &mut pending_placements,
+                        &mut replay_pgen,
+                        rid,
+                    )?;
+                }
+                // SE2-M30 — a replayed create re-pends its records:
+                // the next flush re-exports them, so an identity that
+                // only ever lived in a truncated WAL still lands in a
+                // log (the merge rule makes the duplicate harmless).
+                // SE2-M32 — the placement record is the exact one the
+                // live apply produced (its generation rides the op):
+                // the PL-005 gate treats the replay as a duplicate of
+                // the logged record, or stale against a newer one.
+                Op::CreateObject {
+                    oid,
+                    lid,
+                    rid,
+                    pgen,
+                } => {
+                    merge_identity(&mut identity, oid, lid)?;
+                    pending_identity.push(IdentityRecord { oid, lid });
+                    merge_replica(&mut replicas, lid, LOCAL_NODE_ID, rid)?;
+                    pending_replicas.push(ReplicaRecord {
+                        lid,
+                        node: LOCAL_NODE_ID,
+                        rid,
+                    });
+                    let placement = Placement::Memtable { generation: pgen };
+                    merge_placement(&mut placements, rid, placement)?;
+                    pending_placements.push(PlacementRecord { rid, placement });
                 }
             }
-            replay_max = replay_max.max(frame.seq);
+            replay_max = replay_max.max(seq);
             Ok(())
         })?;
-        if consumed != wal_bytes.len() {
+        if consumed != wal_end {
             // torn tail: drop the partial final frame (it was never acked)
-            wal.set_len(consumed as u64)
+            wal.set_len(consumed)
                 .map_err(|e| FormatError::Io(format!("WAL truncate: {e}")))?;
             wal.sync_all()
                 .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;

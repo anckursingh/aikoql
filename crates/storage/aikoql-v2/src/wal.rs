@@ -193,50 +193,54 @@ pub fn decode_frame(bytes: &[u8]) -> Result<(WalFrame, usize), FormatError> {
     Ok((WalFrame { seq, ops }, total))
 }
 
-/// Decode the op entries from a frame payload — the shared tail of
-/// `decode_frame` (in-memory replay path) and `validate_frame_at` (the
-/// streamed snapshot path); one definition keeps the two byte-identical.
-fn decode_payload(payload: &[u8]) -> Result<Vec<Op>, FormatError> {
+/// M28 (P1-01) — walk the op entries of a frame payload, decoding each op
+/// straight into `sink` — the shared tail of `decode_frame` (collecting),
+/// `replay_reader` (straight into the apply callback, no per-frame
+/// Vec<Op>), and `validate_frame_at` (via the collecting wrapper). One
+/// definition keeps every path byte-identical.
+fn walk_payload(
+    payload: &[u8],
+    mut sink: impl FnMut(Op) -> Result<(), FormatError>,
+) -> Result<(), FormatError> {
     let mut pcur = Cursor::new(payload);
     let count = pcur.u32()? as usize;
     if count == 0 {
         return Err(FormatError::Corrupt("WAL frame with zero entries".into()));
     }
-    let mut ops = Vec::with_capacity(count);
     for _ in 0..count {
         let op = pcur.u8()?;
         match op {
             OP_PUT => {
                 let key = pcur.vec()?;
                 let value = pcur.vec()?;
-                ops.push(Op::Put(key, value));
+                sink(Op::Put(key, value))?;
             }
             OP_DELETE => {
                 let key = pcur.vec()?;
-                ops.push(Op::Delete(key));
+                sink(Op::Delete(key))?;
             }
             OP_CREATE_OBJECT => {
                 let oid = ObjectId::from_bytes(pcur.take(16)?.try_into().expect("16-byte slice"));
                 let lid = LogicalId::from_bytes(pcur.take(8)?.try_into().expect("8-byte slice"));
                 let rid = ReplicaId::from_bytes(pcur.take(8)?.try_into().expect("8-byte slice"));
                 let pgen = pcur.u64()?;
-                ops.push(Op::CreateObject {
+                sink(Op::CreateObject {
                     oid,
                     lid,
                     rid,
                     pgen,
-                });
+                })?;
             }
             OP_PUT_OBJECT => {
                 let rid = ReplicaId::from_bytes(pcur.take(8)?.try_into().expect("8-byte slice"));
                 let key = pcur.vec()?;
                 let value = pcur.vec()?;
-                ops.push(Op::PutObject(rid, key, value));
+                sink(Op::PutObject(rid, key, value))?;
             }
             OP_DELETE_OBJECT => {
                 let rid = ReplicaId::from_bytes(pcur.take(8)?.try_into().expect("8-byte slice"));
                 let key = pcur.vec()?;
-                ops.push(Op::DeleteObject(rid, key));
+                sink(Op::DeleteObject(rid, key))?;
             }
             other => {
                 return Err(FormatError::Unsupported(format!("WAL op byte {other}")));
@@ -246,6 +250,23 @@ fn decode_payload(payload: &[u8]) -> Result<Vec<Op>, FormatError> {
     if !pcur.is_empty() {
         return Err(FormatError::Corrupt("WAL payload trailing bytes".into()));
     }
+    Ok(())
+}
+
+/// Decode the op entries from a frame payload into a Vec — the collecting
+/// wrapper over `walk_payload`. The PERF-4 exact-capacity idiom is
+/// preserved: the count is peeked from the first 4 bytes for
+/// `with_capacity` (a short payload fails inside the walk itself).
+fn decode_payload(payload: &[u8]) -> Result<Vec<Op>, FormatError> {
+    let count = payload
+        .get(..4)
+        .map(|b| u32::from_le_bytes(b.try_into().expect("4-byte slice")) as usize)
+        .unwrap_or(0);
+    let mut ops = Vec::with_capacity(count);
+    walk_payload(payload, |op| {
+        ops.push(op);
+        Ok(())
+    })?;
     Ok(ops)
 }
 
@@ -305,17 +326,18 @@ pub fn replay_frames(bytes: &[u8]) -> Result<(Vec<WalFrame>, usize), FormatError
     Ok((frames, consumed))
 }
 
-/// Validate ONE complete frame at `pos`: header, then payload + stored
-/// checksum as one contiguous read (so the sha256-8 is byte-identical to
-/// `decode_frame`'s), then the op decode. Memory is bounded by this one
-/// frame. Ok(None): no valid frame starts at `pos` (bad magic/version/type,
-/// truncation, checksum or op failure — every case `replay_frames` would
-/// probe past). Err: a real read failure.
-fn validate_frame_at(
+/// M28 — read ONE frame's bytes at `pos` into memory: the header, then the
+/// payload + stored checksum contiguous in one Vec (so the sha256-8 is
+/// byte-identical to `decode_frame`'s). Ok(None): no frame starts at `pos`
+/// (bad magic/version/type, truncation — every case the in-memory replay
+/// probes past). Err: a real read failure. The checksum is NOT verified
+/// here — the callers own that (the probe needs only byte completeness,
+/// and the two full paths verify before use).
+fn read_frame_bytes(
     r: &mut (impl Read + Seek),
     pos: u64,
     end: u64,
-) -> Result<Option<(u64, usize)>, FormatError> {
+) -> Result<Option<(u64, Vec<u8>)>, FormatError> {
     if pos + FRAME_HEADER_LEN as u64 > end {
         return Ok(None); // torn header
     }
@@ -342,8 +364,9 @@ fn validate_frame_at(
     if pos + total as u64 > end {
         return Ok(None); // truncated payload/checksum
     }
-    let mut body = vec![0u8; total];
-    body[..FRAME_HEADER_LEN].copy_from_slice(&head);
+    let mut body = Vec::with_capacity(total);
+    body.extend_from_slice(&head);
+    body.resize(total, 0);
     if let Err(e) = r.read_exact(&mut body[FRAME_HEADER_LEN..]) {
         return if e.kind() == std::io::ErrorKind::UnexpectedEof {
             Ok(None)
@@ -351,6 +374,25 @@ fn validate_frame_at(
             Err(FormatError::Io(format!("WAL read at {pos}: {e}")))
         };
     }
+    Ok(Some((seq, body)))
+}
+
+/// Validate ONE complete frame at `pos` — `read_frame_bytes` plus the
+/// checksum and the op decode. Memory is bounded by this one frame.
+/// Ok(None): no valid frame starts at `pos` (bad magic/version/type,
+/// truncation or checksum — every case `replay_frames` would probe past).
+/// Err: a real read failure, or a checksum-valid frame whose ops fail to
+/// decode (an acked frame this build cannot understand — never silently
+/// skipped).
+fn validate_frame_at(
+    r: &mut (impl Read + Seek),
+    pos: u64,
+    end: u64,
+) -> Result<Option<(u64, usize)>, FormatError> {
+    let Some((seq, body)) = read_frame_bytes(r, pos, end)? else {
+        return Ok(None);
+    };
+    let total = body.len();
     if checksum8(&body[..total - 8]) != body[total - 8..] {
         return Ok(None);
     }
@@ -398,4 +440,124 @@ pub fn valid_prefix_len(r: &mut (impl Read + Seek)) -> Result<u64, FormatError> 
         }
     }
     Ok(pos)
+}
+
+/// M28 — the bounded-memory "is there a valid frame after `pos`" probe:
+/// the torn-tail vs damage classifier for the reader replay, where the
+/// tail can be arbitrarily long (a 100 MB torn tail would mean ~100M
+/// per-offset decodes). Scan 64 KiB chunks for the magic, overlapping 3
+/// bytes so a magic straddling a chunk boundary is found; only magic hits
+/// are fully validated (header + checksum + ops — the same predicate
+/// `decode_frame` accepts). Verdict-identical to validating every offset:
+/// any offset `decode_frame` could accept starts with a valid magic, and
+/// every offset with a valid magic is scanned.
+fn find_valid_frame_after(
+    r: &mut (impl Read + Seek),
+    pos: u64,
+    end: u64,
+) -> Result<Option<u64>, FormatError> {
+    const CHUNK: usize = 64 << 10;
+    let mut buf = vec![0u8; CHUNK];
+    let mut at = pos;
+    while at < end {
+        let want = ((end - at) as usize).min(CHUNK);
+        if want < 4 {
+            break; // not even a magic — nothing valid can start here
+        }
+        r.seek(SeekFrom::Start(at))
+            .map_err(|e| FormatError::Io(format!("WAL seek to {at}: {e}")))?;
+        let mut n = 0;
+        while n < want {
+            match r.read(&mut buf[n..want]) {
+                Ok(0) => break,
+                Ok(k) => n += k,
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                        break; // the WAL shrank — the rest is gone
+                    }
+                    return Err(FormatError::Io(format!("WAL read at {at}: {e}")));
+                }
+            }
+        }
+        if n < 4 {
+            break;
+        }
+        for i in 0..=n - 4 {
+            if &buf[i..i + 4] != WAL_MAGIC {
+                continue;
+            }
+            let cand = at + i as u64;
+            if let Some((_, bytes)) = read_frame_bytes(r, cand, end)? {
+                if checksum8(&bytes[..bytes.len() - 8]) == bytes[bytes.len() - 8..]
+                    && decode_payload(&bytes[FRAME_HEADER_LEN..bytes.len() - 8]).is_ok()
+                {
+                    return Ok(Some(cand));
+                }
+            }
+        }
+        if n < want {
+            break; // short read — nothing beyond
+        }
+        at += (want - 3) as u64;
+    }
+    Ok(None)
+}
+
+/// M28 (P0-01 + P1-01) — the reader-based replay: recovery consumes THIS,
+/// so the WAL is never materialized — one frame's bytes in memory at a
+/// time, and each op decodes straight into the apply callback (no
+/// per-frame Vec<Op>). EXACTLY `replay_frames`' semantics: a decode
+/// failure with nothing valid after it is a torn tail — Ok((prefix, end)),
+/// the caller truncates at `prefix`; damage followed by a valid frame is
+/// Corrupt; sequences must strictly increase. One deliberate divergence: a
+/// checksum-VALID frame whose ops fail to decode is a hard error (an acked
+/// frame this build cannot understand — never truncated), matching
+/// `validate_frame_at`; unreachable by raw byte damage, so the corpus
+/// verdicts stay identical. Returns (consumed prefix, file size at open).
+pub fn replay_reader<R, F>(r: &mut R, mut f: F) -> Result<(u64, u64), FormatError>
+where
+    R: Read + Seek,
+    F: FnMut(u64, Op) -> Result<(), FormatError>,
+{
+    let end = r
+        .seek(SeekFrom::End(0))
+        .map_err(|e| FormatError::Io(format!("WAL seek end: {e}")))?;
+    let mut pos = 0u64;
+    let mut last_seq: Option<u64> = None;
+    while pos < end {
+        let Some((seq, bytes)) = read_frame_bytes(r, pos, end)? else {
+            // Header-level failure (bad magic/version/type, truncation) —
+            // probe past it, exactly like the in-memory replay.
+            return match find_valid_frame_after(r, pos, end)? {
+                Some(after) => Err(FormatError::Corrupt(format!(
+                    "WAL damage at offset {pos} with valid frames after (next at {after})"
+                ))),
+                None => Ok((pos, end)),
+            };
+        };
+        if checksum8(&bytes[..bytes.len() - 8]) != bytes[bytes.len() - 8..] {
+            // Checksum mismatch — the torn-tail signal (a torn final
+            // frame), or mid-WAL damage if a valid frame follows.
+            return match find_valid_frame_after(r, pos, end)? {
+                Some(after) => Err(FormatError::Corrupt(format!(
+                    "WAL damage at offset {pos} with valid frames after (next at {after})"
+                ))),
+                None => Ok((pos, end)),
+            };
+        }
+        if let Some(prev) = last_seq {
+            if seq <= prev {
+                return Err(FormatError::Corrupt(format!(
+                    "WAL sequence must increase: {seq} after {prev}"
+                )));
+            }
+        }
+        last_seq = Some(seq);
+        // P1-01 — ops decode straight into the apply callback; a
+        // checksum-valid frame whose ops fail to decode hard-errors here
+        // (see the doc comment above).
+        walk_payload(&bytes[FRAME_HEADER_LEN..bytes.len() - 8], |op| f(seq, op))?;
+        pos += bytes.len() as u64;
+    }
+    Ok((pos, end))
 }
