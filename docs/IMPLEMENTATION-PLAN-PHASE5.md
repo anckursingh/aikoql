@@ -448,7 +448,10 @@ TDD REDs: measurement-first — snp004 pins the measurement harness writes the c
 
 Acceptance: cells recorded and reported; protocol unchanged unless the RED-gated replacement exists.
 
-Status: ⬜ open
+Status: ✅ Shipped (RED 416400a → feat — SnapCells sidecar, env-gated)
+
+Evidence (snp004 GREEN, laptop cells — a ~64 MiB generation, 5 files):
+capture_ms 3 (the writer-blocking hold is the WAL prefix copy — milliseconds, decoupled from the 5 s bulk), copy_ms 2743, verify_ms 2464, marker_ms 3, bytes_copied 67,114,767, read_bytes 134,229,534 (= 2× — the copy read + the verify re-read, the double-read claim as data), RSS growth under the 48 MiB bound. The verify wall ≈ the copy wall: the double-read's price is paid, exactly as measured — and KEPT, because no single-pass protocol can prove mutation detection (the review's condition). Protocol unchanged.
 
 ### P5-M35 — Control-plane lock + L0-scan profile (P1-06 + P1-07)
 
