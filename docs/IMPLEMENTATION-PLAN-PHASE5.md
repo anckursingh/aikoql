@@ -388,7 +388,7 @@ TDD REDs: fls001 — flush allocation pin (~2N, decode only; fails today on the 
 
 Acceptance: flush never calls `entries.sort_by`; golden corpus byte-exact; 100k/1M flush allocation + wall-clock cells recorded (env-gated, reported).
 
-Status: ⬜ open
+Status: ✅ Shipped (RED 10c9d7c → feat 756c938) — fls001 green: 100k memtable-ordered entries publish at a 933,401-byte armed peak vs the 1,800,000 budget (RED was 7,200,000 — driftsort's scratch); fls002 sorted-vs-sorting publish byte/checksum/anchor-identical over a version-heavy, rid-interleaved, block-spanning corpus; fls003 dup-(key,seq) → Invalid with no file; fls004 decode order = key asc + seq desc within key with rids preserved; fls005 per-rid max-seq anchors exact. The debug_assert pins the input ORDER (<=, non-strict) so duplicates reach the guard, not the assert. 100k/1M wall cells env-gated (ledger convention) — alloc cell above stands in; storage-v2 / kernel 260 / mcp 131 green.
 
 ### P5-M30 — O(log n) cache eviction (P0-04)
 
