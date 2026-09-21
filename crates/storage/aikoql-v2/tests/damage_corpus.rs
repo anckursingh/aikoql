@@ -28,10 +28,11 @@ use aikoql_storage_v2::format::{Current, FormatError};
 use aikoql_storage_v2::identity::{LogicalId, ObjectId, ReplicaId};
 use aikoql_storage_v2::placement::directory::{PhysicalLocation, Placement};
 use aikoql_storage_v2::placement::{BlockId, SegmentId};
-use aikoql_storage_v2::wal::{encode_frame, replay_frames, Op, WalFrame};
+use aikoql_storage_v2::wal::{encode_frame, replay_frames, replay_reader, Op, WalFrame};
 use common::damage::Damage;
 use common::dir;
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::path::PathBuf;
 
 const FRAME_HEADER_LEN: usize = 19; // magic 4 + version 2 + type 1 + seq 8 + payload_len 4
@@ -271,9 +272,185 @@ fn db_reopen_after_wal_damage_spot_checks() {
     assert!(db.get(b"k2").unwrap().is_none());
 }
 
+// ---------------------------------------------------------------------------
+// M28 — the reader-based replay (`replay_reader`, P0-01) must be verdict-
+// and byte-equivalent to the in-memory decoder this corpus pins, at the
+// function boundary and at the Db boundary.
+// ---------------------------------------------------------------------------
+
+/// The reader's applied stream, flattened to (seq, op) pairs — the same
+/// flattening as `replay_stream` so the two are comparable.
+fn reader_stream(bytes: &[u8]) -> Result<(Vec<(u64, Op)>, u64), FormatError> {
+    let mut cur = Cursor::new(bytes);
+    let mut stream = Vec::new();
+    let (consumed, end) = replay_reader(&mut cur, |seq, op| {
+        stream.push((seq, op));
+        Ok(())
+    })?;
+    assert_eq!(end, bytes.len() as u64, "the reader must see the whole file");
+    Ok((stream, consumed))
+}
+
+/// The in-memory reference — `replay_frames` flattened the same way.
+fn replay_stream(bytes: &[u8]) -> Result<(Vec<(u64, Op)>, u64), FormatError> {
+    let (frames, consumed) = replay_frames(bytes)?;
+    let stream = frames
+        .into_iter()
+        .flat_map(|f| f.ops.into_iter().map(move |op| (f.seq, op)))
+        .collect();
+    Ok((stream, consumed as u64))
+}
+
 #[test]
-fn checkpoint_flip_corpus() {
-    let bytes = checkpoint_fixture();
+fn wal_reader_matches_in_memory_replay_over_the_damage_corpus() {
+    let (bytes, _) = synthetic_wal();
+    let mut cases: Vec<Vec<u8>> = vec![bytes.clone()]; // the clean corpus
+    for o in 0..bytes.len() {
+        cases.push(Damage::BitFlip { offset: o }.apply(&bytes));
+    }
+    for cut in 0..bytes.len() {
+        cases.push(Damage::Truncate(cut).apply(&bytes));
+    }
+    for extra in [0x00u8, 0xFF] {
+        cases.push(Damage::TrailingByte(extra).apply(&bytes));
+    }
+    cases.push(Damage::ZeroRegion { from: 0, len: 4 }.apply(&bytes)); // magic
+    cases.push(
+        Damage::ZeroRegion {
+            from: bytes.len() - 8,
+            len: 8,
+        }
+        .apply(&bytes), // checksum
+    );
+    cases.push(
+        Damage::ZeroRegion {
+            from: 30,
+            len: 12,
+        }
+        .apply(&bytes), // payload
+    );
+    // One big-frame case: frame 0 sized so frame 1's magic starts exactly
+    // on the reader probe's 64 KiB chunk boundary (the probe's overlap
+    // scan must not miss a valid frame straddling a chunk — a missed
+    // straddle would misread damage-with-valid-after as a torn tail).
+    let f0 = encode_frame(1, &[Op::Put(b"k".to_vec(), vec![b'v'; 65_495])]).unwrap();
+    assert_eq!(f0.len(), 65_536, "frame 0 must end on the chunk boundary");
+    let mut big = f0;
+    big.extend_from_slice(&encode_frame(2, &[Op::Put(b"a".to_vec(), b"1".to_vec())]).unwrap());
+    cases.push(Damage::BitFlip { offset: 0 }.apply(&big));
+
+    for (i, case) in cases.iter().enumerate() {
+        let r = reader_stream(case);
+        let m = replay_stream(case);
+        match (r, m) {
+            (Ok((rs, rc)), Ok((ms, mc))) => {
+                assert_eq!(rc, mc, "case {i}: consumed diverged");
+                assert_eq!(rs, ms, "case {i}: applied stream diverged");
+            }
+            (Err(re), Err(me)) => {
+                assert!(matches!(re, FormatError::Corrupt(_)), "case {i}: reader {re:?}");
+                assert!(matches!(me, FormatError::Corrupt(_)), "case {i}: replay {me:?}");
+            }
+            (r, m) => panic!("case {i}: verdict diverged — reader {r:?} vs replay {m:?}"),
+        }
+    }
+}
+
+#[test]
+fn wal_reader_torn_tail_truncates_to_the_valid_prefix() {
+    let (d, bytes, frames) = seeded_wal_fixture("reader-tail");
+    let bounds = frame_bounds(&bytes);
+    let last_start = bounds[bounds.len() - 2];
+    // Tear the FINAL frame (partial payload — the crash window).
+    let cut = last_start + FRAME_HEADER_LEN;
+    std::fs::write(d.join(WAL_FILE), &bytes[..cut]).unwrap();
+    let db = Db::open(Config::new(d.clone())).unwrap();
+    // The torn tail is physically gone — the on-disk WAL IS the valid
+    // prefix, not just logically skipped.
+    let on_disk = std::fs::read(d.join(WAL_FILE)).unwrap();
+    assert_eq!(
+        on_disk,
+        &bytes[..last_start],
+        "the WAL must be truncated to the valid prefix"
+    );
+    // The prefix data survives, the torn frame's does not.
+    let expect = surviving_keys(&frames, &bounds, last_start);
+    for k in [b"k1".to_vec(), b"k2".to_vec()] {
+        let got = db.get(&k).unwrap();
+        assert_eq!(got.is_some(), expect.contains(&k), "key {k:?} after torn tail");
+    }
+    drop(db);
+    // Reopen clean: the truncation left the store consistent.
+    let db = Db::open(Config::new(d.clone())).unwrap();
+    for k in [b"k1".to_vec(), b"k2".to_vec()] {
+        let got = db.get(&k).unwrap();
+        assert_eq!(got.is_some(), expect.contains(&k), "key {k:?} after clean reopen");
+    }
+}
+
+#[test]
+fn wal_reader_damage_then_valid_fails_closed() {
+    // Reader level: damage in frame 0 with frames 1-2 valid after it —
+    // Corrupt, never a truncated Ok.
+    let (bytes, _) = synthetic_wal();
+    let damaged = Damage::BitFlip { offset: 25 }.apply(&bytes);
+    assert!(
+        matches!(reader_stream(&damaged), Err(FormatError::Corrupt(_))),
+        "damage followed by a valid frame must be Corrupt, never a torn-tail Ok"
+    );
+    // Db boundary: open fails closed and the WAL is untouched on disk —
+    // the failed open must not have truncated.
+    let (d, bytes, _) = seeded_wal_fixture("reader-mid");
+    let damaged = Damage::BitFlip { offset: 20 }.apply(&bytes);
+    std::fs::write(d.join(WAL_FILE), &damaged).unwrap();
+    assert!(matches!(
+        Db::open(Config::new(d.clone())),
+        Err(FormatError::Corrupt(_))
+    ));
+    assert_eq!(
+        std::fs::read(d.join(WAL_FILE)).unwrap(),
+        damaged,
+        "a failed open must never truncate the WAL"
+    );
+}
+
+#[test]
+fn wal_reader_enforces_strictly_increasing_sequences() {
+    // Equal seqs across frames: Corrupt.
+    let w = [
+        encode_frame(7, &[Op::Put(b"a".to_vec(), b"1".to_vec())]).unwrap(),
+        encode_frame(7, &[Op::Put(b"b".to_vec(), b"2".to_vec())]).unwrap(),
+    ]
+    .concat();
+    assert!(
+        matches!(reader_stream(&w), Err(FormatError::Corrupt(_))),
+        "equal seqs must be Corrupt"
+    );
+    // Decreasing: Corrupt.
+    let w = [
+        encode_frame(7, &[Op::Put(b"a".to_vec(), b"1".to_vec())]).unwrap(),
+        encode_frame(3, &[Op::Put(b"b".to_vec(), b"2".to_vec())]).unwrap(),
+    ]
+    .concat();
+    assert!(
+        matches!(reader_stream(&w), Err(FormatError::Corrupt(_))),
+        "decreasing seqs must be Corrupt"
+    );
+    // Strictly increasing: both frames decode and apply in order.
+    let w = [
+        encode_frame(7, &[Op::Put(b"a".to_vec(), b"1".to_vec())]).unwrap(),
+        encode_frame(8, &[Op::Put(b"b".to_vec(), b"2".to_vec())]).unwrap(),
+    ]
+    .concat();
+    let (stream, consumed) = reader_stream(&w).unwrap();
+    assert_eq!(consumed, w.len() as u64);
+    assert_eq!(stream.len(), 2);
+    assert_eq!(stream[0].0, 7);
+    assert_eq!(stream[1].0, 8);
+}
+
+#[test]
+fn checkpoint_flip_corpus() {    let bytes = checkpoint_fixture();
     let mut unsupported = 0;
     for o in 0..bytes.len() {
         let damaged = Damage::BitFlip { offset: o }.apply(&bytes);
