@@ -376,7 +376,7 @@ TDD REDs: rpl001 — recovery peak allocation independent of WAL size (counting 
 
 Acceptance: open() never materializes the WAL; existing recovery/wal suites green untouched; peak memory O(max frame + memtable delta).
 
-Status: ⬜ open
+Status: ✅ Shipped (RED b9f5d1a → feat a22a200) — rpl001 green: the 100 MB torn-tail arm's armed peak now agrees with the 10 MB arm within the 4 MB budget (RED was 115.4 MB vs 21.0 MB — ~94 MB of materialized WAL); rpl002 verdict/byte-equivalence over the full damage corpus incl. a 64 KiB chunk-straddle case; rpl003–005 green; storage-v2 350+ / kernel 260 / mcp 131 green. Documented divergence (matching validate_frame_at): a checksum-valid frame whose ops fail to decode hard-errors — unreachable by raw byte damage. The torn-tail probe is a 64 KiB chunked magic scan with 3-byte overlap: verdict-identical to per-offset, O(chunks) not O(bytes).
 
 ### P5-M29 — Sorted-input publish (P0-02)
 
