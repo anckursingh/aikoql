@@ -87,13 +87,15 @@ fn per_group_allocations_drop_with_the_hoisted_seqs_buffer() {
 
     // Structural floor per write: batch + ops + group vec + frame + the
     // apply-path clones (key + value + the key's first chain vec) + the
-    // mpsc send slot. The per-group seqs Vec adds one MORE per write —
-    // the pin budget sits between the two shapes.
-    let budget = N * 8;
+    // mpsc send slot — 3244 allocations over 200 groups with the seqs
+    // buffer hoisted (16.2 per write). A regression to the per-group seqs
+    // Vec adds one more per write: 3443. The budget sits between the two
+    // shapes, mid-way with margin on both sides.
+    let budget = 3350;
     assert!(
         allocs < budget,
-        "{allocs} allocations over {N} groups (budget {budget}) — a per-group \
-         seqs buffer is being allocated on every commit"
+        "{allocs} allocations over {N} groups (budget {budget}) — per-group \
+         allocations are back (hoisted seqs buffer regressed)"
     );
 
     drop(writer);

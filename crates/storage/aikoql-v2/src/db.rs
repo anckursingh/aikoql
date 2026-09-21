@@ -855,9 +855,7 @@ impl Db {
         wstats
             .recovery_ms
             .store(open_t.elapsed().as_millis() as u64, Ordering::Relaxed);
-        wstats
-            .wal_replay_bytes
-            .store(consumed, Ordering::Relaxed);
+        wstats.wal_replay_bytes.store(consumed, Ordering::Relaxed);
         let wal_fail_next_armed = config.wal_fail_next;
         Ok(Db {
             config,
@@ -2572,30 +2570,33 @@ fn committer_loop(
 ) {
     let wait = config.max_wait_duration;
     let mut carry: Option<Batch> = None;
+    // Hoisted across groups: the running counters replace the per-iteration
+    // O(g²) fold (P1-02), the seqs buffer is cleared and reused (P1-03).
+    let mut seqs: Vec<u64> = Vec::new();
     loop {
         let first = match carry.take().or_else(|| rx.recv().ok()) {
             Some(b) => b,
             None => return, // all senders dropped, nothing pending
         };
         let mut group = vec![first];
+        let mut ops_n = batch_ops_of(&group[0]);
+        let mut bytes_n = batch_bytes_of(&group[0]);
         let deadline = Instant::now() + wait;
         loop {
-            // Sum over the whole group — groups are small; exact-fit caps.
-            let (ops_n, bytes_n) = group.iter().fold((0usize, 0usize), |(o, b), batch| {
-                (o + batch_ops_of(batch), b + batch_bytes_of(batch))
-            });
             if ops_n >= config.max_batch_ops || bytes_n >= config.max_batch_bytes {
                 break;
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             match rx.recv_timeout(remaining) {
                 Ok(batch) => {
-                    if ops_n + batch_ops_of(&batch) > config.max_batch_ops
-                        || bytes_n + batch_bytes_of(&batch) > config.max_batch_bytes
-                    {
+                    let o = batch_ops_of(&batch);
+                    let b = batch_bytes_of(&batch);
+                    if ops_n + o > config.max_batch_ops || bytes_n + b > config.max_batch_bytes {
                         carry = Some(batch); // exact fit: leads the next group
                         break;
                     }
+                    ops_n += o;
+                    bytes_n += b;
                     group.push(batch);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
@@ -2603,7 +2604,7 @@ fn committer_loop(
             }
         }
         commit_group(
-            &group, &wal, &state, &config, &fsyncs, &cache, &stats, &wstats,
+            &group, &wal, &state, &config, &fsyncs, &cache, &stats, &wstats, &mut seqs,
         );
     }
 }
@@ -2623,6 +2624,7 @@ fn commit_group(
     cache: &Option<Arc<BlockCache>>,
     stats: &Arc<Stats>,
     wstats: &Arc<WriteStats>,
+    seqs: &mut Vec<u64>,
 ) {
     // P3-M2 — group shape (design §21): batches per group, ops per group,
     // the widest group so far.
@@ -2637,7 +2639,7 @@ fn commit_group(
         .group_commit_max_ops
         .fetch_max(group_ops, Ordering::Relaxed);
     let mut st = state.write().unwrap();
-    let mut seqs: Vec<u64> = Vec::with_capacity(group.len());
+    seqs.clear(); // capacity retained from the widest group so far
     let mut outcome: Result<(), FormatError> = Ok(());
     {
         let mut wal = wal.lock().unwrap();
@@ -2679,7 +2681,7 @@ fn commit_group(
     }
     crash_park("AIKOQL_V2_GROUP_PARK", &config.dir, "after_fsync");
     if outcome.is_ok() {
-        for ((ops, _), seq) in group.iter().zip(&seqs) {
+        for ((ops, _), seq) in group.iter().zip(seqs.iter()) {
             for op in ops {
                 match op {
                     Op::Put(k, v) => st.active.apply(k.clone(), *seq, Some(v.clone())),
@@ -2774,7 +2776,7 @@ fn commit_group(
     }
     crash_park("AIKOQL_V2_GROUP_PARK", &config.dir, "after_apply");
     drop(st);
-    for ((_, ack_tx), seq) in group.iter().zip(&seqs) {
+    for ((_, ack_tx), seq) in group.iter().zip(seqs.iter()) {
         let _ = ack_tx.send(outcome.clone().map(|()| *seq));
     }
     crash_park("AIKOQL_V2_GROUP_PARK", &config.dir, "after_ack");
