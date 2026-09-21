@@ -424,7 +424,7 @@ TDD REDs: grp001 — behavior pin: exact-fit/carry-over identical to today over 
 
 Acceptance: group commit allocates once per group; commit-path suites green.
 
-Status: ⬜ open
+Status: ✅ Shipped (RED d676f89 → feat f7d81cf) — grp001/grp001b exact-fit/carry-over pins: green on the old fold and reproduced exactly by the running counters (three concurrent 2-op batches vs cap 3 → exactly 3 fsyncs; three 200-byte batches vs cap 250 → 3 fsyncs; group-commit suite 7/7); grp002: 200 sequential groups = 3244 allocations (16.2/write) with the hoisted seqs buffer vs 3443 (17.2/write) with the per-group Vec (RED verified 3×) — budget 3350 sits between, both shapes zero-spread over repeated runs; the O(g²) per-iteration fold is O(g) running counters; seqs.clear() retains capacity from the widest group. Commit-path suites green; workspace 253/253 green (a first-run ingestion context-cache order flake did not reproduce — passes in isolation, crate untouched by M32); clippy clean.
 
 ### P5-M33 — Snapshot lock redesign (P1-04)
 
