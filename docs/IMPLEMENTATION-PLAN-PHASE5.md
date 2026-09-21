@@ -475,6 +475,13 @@ Deliver: RSS + allocation profile of a full merge at 1M and 10M keys (replica co
 
 TDD REDs: measurement-first — cp001 env-gated cells: merge RSS ∝ (keys, replicas), allocation histogram (the PERF-3 pin harness re-used), merge wall time.
 
+Status: ✅ Shipped (RED 60add89 → feat) — cp001 cells recorded at 1M, the 10M points ride the env-gated full arm for CI; CompactStats.rids_seen is now first-class (the seen-set denominator the decision needed).
+
+Evidence (cp001 laptop cells, debug profile — 2M puts + two 1M merges, 183.8 s):
+n1m_r1k wall 28,259 ms / RSS growth 164,648 KiB / allocs 2,025,421 (2.03N of the 4N PERF-3 budget) / rids_seen 1,000 (== r, the sweep premise);
+n1m_r100k wall 26,261 ms / RSS growth 169,204 KiB / allocs 2,025,459 / rids_seen 100,000.
+Decision: the per-entry merge cost is 2.03N allocations and ~160 MiB per 1M keys regardless of the rid sweep; the rid-side structures (seen HashSet + relocation HashMap) cost ~45 B/rid — the whole r=100k sweep is ~4.5 MiB on a ~165 MiB merge (2.7%). A generation-mark array would save ~2% of a bulk peak — no cell shows that gain, so the HashSet STAYS (rule 11: no custom structure without a cell). Heap redesign: no cell — the profile shows an allocation-bound steady state, not key-compare-bound (key ownership already landed in PERF-3). Flamegraph not shipped: no decision depends on it. 10M points (n10m_r1k/r100k) are written and env-gated (AIKOQL_V2_CP_CELLS_FULL=1) for the CI workflow per the laptop-small/workflow-big directive.
+
 Acceptance: profile cells recorded; no custom structure shipped without a cell showing the gain (rule 11).
 
 Status: ⬜ open
