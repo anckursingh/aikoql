@@ -436,7 +436,7 @@ TDD REDs: snp001 — writer-latency pin: a put during a long snapshot completes 
 
 Acceptance: writer latency decoupled from snapshot duration; failure-window tests green; existing bkp suites green.
 
-Status: ⬜ open
+Status: ✅ Shipped (RED 3c2cba9 → feat 604606b) — the protocol was documented first (docs/snapshot-crash-protocol.md; the RED commit carried it, the feat corrected it to the as-built shape). As-built: capture + arm in ONE state WRITE hold — generation read, file-set enumeration, WAL torn-safe-prefix validate + copy under the wal mutex (same hold as the generation read: the WAL is truncated at every flush, and a flush between the two would strand rows), pin inserts last so no error path leaks a pin; then bulk copy + verify + marker with NO locks — CURRENT synthesized from G, both deletion surfaces (prune_deltas_before + the compaction segment deletion) skip pinned names; the pin disarms via a poison-recovering Drop guard on every exit path. Evidence: snp000–snp003 4/4 green (REDs failed 4/4 for the stated reasons at 3c2cba9); PR6-007 matrix 10/10 — interleave rows re-documented to lands-concurrently, sfm004's assertion flipped to the pin contract (pinned segments survive the merge as leftovers); storage-v2 suite fully green (real cargo exit 0).
 
 ### P5-M34 — Snapshot double-read measurement (P1-05)
 
