@@ -500,6 +500,112 @@ Status: ✅ Shipped (RED 0c41091 → feat ff2678a) — bench001 + bench002 close
 
 Evidence: common::contract is the comparative-harness contract schema (single source of truth) — ROW_KEYS with the unit named in the field (p50_ns/p95_ns/p99_ns), required sections + environment/dataset keys, and the gate verdict as a string (PASS/FAIL/NOT_EVIDENCED — a bare null is rejected). bench001 pins missing-field rejection naming the field/section; bench002 pins the unit-mismatch rejection (the old rows carried as_nanos() in fields named `*_us`); the null-verdict rule is pinned too. The harnesses now emit the contract shape: `p50_us` → `p50_ns` in both kse_m7 suites (the timed() pass always pushed as_nanos()), the readers follow (gate5-check.py, perf-smoke-check.py), and the v2 writer's null verdict became the gate_cell string (v1 already emitted one). Remaining: bench003 RED (needs a bench-harness decision), the 1M republish with the renamed fields + verdict strings (full runs on the CI workflow per the laptop directive).
 
+---
+
+## PR6 Round-4 review — senior storage review (head c19cee5) — M38–M47
+
+The R4 review (`AIKOQL_PR6_Senior_Code_Review_Findings.md`, 17 findings, P0–P2) reviewed the current PR6 head. Dispositions: the positives are already-shipped milestones (M28–M32 family); 16 findings become milestones M38–M47 in the review's own implementation order (lock scope → hot-path complexity → immutable metadata + cache → secondary cleanup); P2-03 closes with an honest-ledger row (its own condition defers it). Every code claim was verified against source before disposition — verification notes in the rows.
+
+### P5-M38 — Flush lock-scope split (R4-P0-01)
+
+Current state (verified): `flush()` takes the global state write lock and holds it across segment construction, disk I/O, checksumming, reader reopen, and publication (flush_locked_impl). The automatic flush rides the write path — a single write can pay a full flush. The review's top finding.
+
+Deliver: the three-phase split — (A) short lock: rotate active→immutable, capture the publication generation, detach the work; (B) no lock: encode/write/validate/reopen, build the manifest candidate; (C) short lock: generation-checked publication (a stale flush never overwrites a concurrently completed operation). Lock-hold instrumentation: flush_total_ns / flush_state_lock_hold_ns / flush_io_ns / flush_publish_ns with the structural invariant hold << total — the state lock must not cover segment file construction.
+
+TDD REDs: the instrumentation counters exist (compile-error RED); the parked-flush isolation pin — a put completes while the flush's segment I/O is parked (the M33 snp001 pattern); the stale-publication pin — generation mismatch refuses to publish.
+
+Acceptance: the invariant holds structurally; M29 goldens byte-identical; the PR6-007 crash matrix re-run green.
+
+### P5-M39 — Compaction merge outside the lock (R4-P0-02)
+
+Current state (verified): compact_impl runs the full k-way merge + output encode + checksum + reopen + relocation under the state write lock. The background compactor is thread-async but not state-async — readers, writers, memtable lookups, and checkpoints all block during a large merge (pr6_004 proves liveness, not latency isolation — the review's exact words).
+
+Deliver: the same A/B/C shape over the immutable-segment property — capture inputs + generation + placement state under the lock, merge unlocked, generation-checked publication (discard/retry on staleness; never publish from a stale snapshot).
+
+TDD REDs: the compaction-I/O isolation pin — readers serve memtable/cached reads while a deliberately slow merge is parked (structural lock instrumentation, not a wall threshold); the stale-publication pin.
+
+Acceptance: compact() output byte/checksum/anchor-identical to the locked shape (the M36 cp001 harness re-run at 1M — cells comparable pre/post); PR6-007 matrix green.
+
+### P5-M40 — O(1) L0/L1 backlog accounting (R4-P1-01)
+
+Current state: maybe_compact rescans segment_records per write. M35 measured 345 ns (0.7% of the ~49 µs write path) at ~64 segments and KEPT the scan — the R4 review requires O(1) accounting because the cost is O(segments) and the segment count grows. Both statements are true: M35's cell was regime-correct; the review's asymptote argument wins.
+
+Deliver: authoritative l0_count/l0_bytes/l1_bytes updated at flush/compaction/open; the write trigger reads them (O(1)); scan_l0 kept as the debug validation helper.
+
+TDD REDs: the review's own sweep pin — write-trigger overhead must not scale linearly across 10/100/1,000/10,000 segments (env-gated cells); the met003 gauges byte-identical (the M35 free ride preserved); the parity pin — counters ≡ scan_l0 after every flush/compact.
+
+Acceptance: the sweep cells recorded; M35's honest row stands (its keep was regime-true) with the reversal recorded here.
+
+### P5-M41 — Sorted compaction publish (R4-P1-02)
+
+Current state (verified): compaction.rs:344 publishes via `publish_with_anchors_staged` → segment.rs:236 `entries.sort_by` — a full O(n log n) sort of entries the merge heap already emitted in key-asc/seq-desc order. Redundant CPU work, confirmed.
+
+Deliver: `publish_with_anchors_sorted_staged` (the M29 sorted path + the SE2-M36 park stage); compaction feeds the heap order straight through.
+
+TDD REDs: the sort-elimination pin (publish-from-compaction never sorts — fails on the staged path today); fls002-style byte/checksum/anchor equivalence over a block-spanning corpus; duplicate-(key,seq) validation unchanged; the SE2-M36 crash-window park still lands.
+
+Acceptance: compaction CPU decreases with peak memory unchanged (the review's own list); M29 goldens + PR6-007 matrix green.
+
+### P5-M42 — get_many O(1) resolution tracking (R4-P1-03 + R4-P2-02)
+
+Current state (verified): db.rs:1619 `remaining.retain(|&p| p != pos)` per resolved key = O(B²) worst-case; db.rs:1572 `HashMap<usize, (u64, u64)>` bloom hashes where the key is the input position.
+
+Deliver: Vec<bool> positional resolution; Vec<Option<(u64, u64)>> bloom hashes.
+
+TDD REDs: the review's batch sweep 128/512/1K/4K/16K × {one segment, spread} with the allocation pin (allocs must not scale worse than O(B)); correctness parity vs the current path. (SE2-M25's batch-vs-loop falsification was about the API gain, not this internal complexity — both stand.)
+
+Acceptance: batch sweep cells recorded; storage-v2 suite green.
+
+### P5-M43 — Allocation-free scan equal-key drain (R4-P1-04)
+
+Current state (verified): db.rs:1794-1807 drains every equal-key candidate into a Vec then clones through max_by_key — per-group allocation + clone traffic on the W5 range path (M26 already flagged the scan as candidate-bound).
+
+Deliver: resolve the newest-layer winner inline while draining — winner + consumed stream indices only, never a candidate clone.
+
+TDD REDs: the zero-alloc equal-key drain pin (counting allocator over a version-heavy scan); winner parity vs the current path; the review's scan cells 10K/100K/1M × p50/p95/p99/allocs/bytes/rows-per-sec (env-gated; 10K/100K laptop, 1M CI).
+
+Acceptance: cells recorded; W5 re-stamped; the dedicated scan milestone the review asked for.
+
+### P5-M44 — Restart-index preparse (R4-P1-05)
+
+Current state (verified): segment.rs:1439 `block_get_v2` rebuilds the restart-key Vec and revalidates offsets on every point lookup — immutable metadata reparsed per read.
+
+Deliver: parse once at open (or OnceLock) into a compact RestartIndex; measure metadata-bytes/segment, open time, point-read CPU + allocs; select the representation on the tradeoff (the review's own memory gate — no blind per-segment bloat).
+
+TDD REDs: the reparse pin (a lookup no longer rebuilds the restart vector — structural probe); the per-segment metadata budget pin; byte-identical lookup results (the kse golden corpus).
+
+Acceptance: the measurement cells recorded and the representation selected on evidence.
+
+### P5-M45 — Cache concurrency benchmark (R4-P1-06)
+
+Current state: the gen-stamp cache is O(1) per hit but every hit takes one global mutex; the hot-head evidence (P50 1.2 µs) is single-threaded — multi-reader scaling is unmeasured.
+
+Deliver: the review's matrix — 1/2/4/8/16/32 threads × {same hot block, random blocks, mixed segment readers} × {throughput, p50/p95/p99, cache mutex wait}. Shard into 8–16 locked shards ONLY if the cells show contention (the review's own gate — no sharding before measurement).
+
+TDD REDs: the concurrency harness + mutex-wait instrumentation (compile-error RED); the cells (env-gated).
+
+Acceptance: the matrix recorded; the sharding decision evidence-driven either way.
+
+### P5-M46 — Two-tier replica dedup (R4-P2-01)
+
+Current state (verified): compaction.rs:184/219 `grouped: Vec<ReplicaId>` + `contains` — O(k²) worst-case per key with many versions.
+
+Deliver: benchmark k = 2/8/32/128/512/4096 first; the two-tier (Vec below the crossover, HashSet above) only where the cells show a crossover worth the branch (rule 11).
+
+TDD REDs: the k-sweep cells (env-gated, allocation + wall); correctness parity (rids_seen unchanged — the M36 pin re-run).
+
+Acceptance: the crossover measured; the two-tier ships only on evidence.
+
+### P5-M47 — Benchmark evidence + CI integrity (R4-P2-04/05/06/07)
+
+Current state (verified): the committed 1M artifact is stale (git_sha 75391b82 vs head c19cee5); gate5-check.py / perf-smoke-check.py read fields without schema validation (raw KeyError on drift); M37's contract pins the Rust side — the script side and the freshness gate remain.
+
+Deliver: (1) the artifact-freshness CI check — artifact environment.git_sha == tested HEAD, fail on mismatch (stale evidence can never silently feed the gate); (2) schema validation in both checker scripts — deterministic actionable errors ("missing field: p50_ns") with fixture tests; (3) the fast-PR vs protected-1M split is already the PR6-008 structure (ci.yml fast / baseline-guard protected / nightly cron) — the remaining item is re-verifying the budget on the next CI round, not a new split; (4) the 1M republish with the M37-renamed fields + verdict strings (CI workflow) — this milestone's evidence is the regenerated artifact stamped at the pushed head. (M37's pending bench003 stays with M37.)
+
+TDD REDs: the git_sha-mismatch pin (the committed 75391b82 artifact is the live RED); the script-schema fixture pins (missing field → named error, not KeyError).
+
+Acceptance: fresh 1M artifacts stamped at the pushed head with the *_ns schema; the gate reads validated artifacts only.
+
 ## Gates (carried + new)
 
 - **Gate 5** (≤8× W1/W2 at 1M) — carried. W1 is REDLINE at 7.96× (0.04× headroom): every milestone touching storage/kernel/runtime re-runs the 1M matrix before merge (M0's CI job automates this).
