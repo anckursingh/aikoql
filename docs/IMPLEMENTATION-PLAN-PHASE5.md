@@ -506,15 +506,15 @@ Evidence: common::contract is the comparative-harness contract schema (single so
 
 The R4 review (`AIKOQL_PR6_Senior_Code_Review_Findings.md`, 17 findings, P0–P2) reviewed the current PR6 head. Dispositions: the positives are already-shipped milestones (M28–M32 family); 16 findings become milestones M38–M47 in the review's own implementation order (lock scope → hot-path complexity → immutable metadata + cache → secondary cleanup); P2-03 closes with an honest-ledger row (its own condition defers it). Every code claim was verified against source before disposition — verification notes in the rows.
 
-### P5-M38 — Flush lock-scope split (R4-P0-01)
+### P5-M38 — Flush lock-scope split (R4-P0-01) — SHIPPED 2026-09-22
 
-Current state (verified): `flush()` takes the global state write lock and holds it across segment construction, disk I/O, checksumming, reader reopen, and publication (flush_locked_impl). The automatic flush rides the write path — a single write can pay a full flush. The review's top finding.
+RED 69fe49c (fsc001–004) → feat e81bb1b. `flush_entry()` runs (A) short state lock — rotate active→immutable, detach, reserve segment ids, capture the WAL length; (B) NO lock — encode/write/validate/reopen (parked at `AIKOQL_V2_FLUSH_IO_PARK=in_io` for the isolation pins); (C) short generation-checked publish — placements, directory logs, manifest, CURRENT, WAL reset, readers attach, checkpoint, with ALL state read fresh under the C lock, so a compaction completing during B is included in the manifest, never overwritten (fsc003). A `flush_pipe` serializes the three flush call sites (Sync write() trigger, explicit flush(), GroupCommit committer) so one flush's C-phase WAL reset can never race another's unpublished segments (fsc004); the write path and commit_group capture their trigger decision under the lock, drop the guard, then enter the pipe — no path holds `state` while blocking on it.
 
-Deliver: the three-phase split — (A) short lock: rotate active→immutable, capture the publication generation, detach the work; (B) no lock: encode/write/validate/reopen, build the manifest candidate; (C) short lock: generation-checked publication (a stale flush never overwrites a concurrently completed operation). Lock-hold instrumentation: flush_total_ns / flush_state_lock_hold_ns / flush_io_ns / flush_publish_ns with the structural invariant hold << total — the state lock must not cover segment file construction.
+Two deviations from the disposition, both forced by the hazard analysis: (1) phase A captures the WAL LENGTH, not the publication generation — the generation is stamped fresh in C by design; the length capture is what makes the C-phase truncate safe. (2) The truncate keeps exactly the uncovered tail: writes can append+apply between A and C (their data lands in the new active memtable), so C saves the interleaved frames, resets the file, and re-appends them — pr6_004's acked-write-lost failure pinned the race before the fix (honest-ledger row).
 
-TDD REDs: the instrumentation counters exist (compile-error RED); the parked-flush isolation pin — a put completes while the flush's segment I/O is parked (the M33 snp001 pattern); the stale-publication pin — generation mismatch refuses to publish.
+Instrumentation: `flush_total_ns` / `flush_state_lock_hold_ns` (A+C) / `flush_io_ns` (B) / `flush_publish_ns` (C) on WritePathStats, with the structural invariant hold + io ≤ total — fsc002 pins it (the state lock never covers segment file construction). Legacy flush_count/flush_latency_us ride flush_entry unchanged.
 
-Acceptance: the invariant holds structurally; M29 goldens byte-identical; the PR6-007 crash matrix re-run green.
+Acceptance: fsc001–004 4/4; pr6_004 deadlock matrix green (10/10 re-runs); full storage-v2 suite green; fmt + clippy -D warnings green; workspace regression green.
 
 ### P5-M39 — Compaction merge outside the lock (R4-P0-02)
 
