@@ -234,6 +234,13 @@ pub(crate) struct State {
     /// compaction — snapshot semantics by construction.
     segments: Arc<Vec<Arc<SegmentReader>>>,
     segment_records: Vec<SegmentRecord>,
+    /// P5-M40 — the authoritative L0/L1 backlog (updated at open/flush/
+    /// compaction; the write trigger reads these in O(1) instead of
+    /// rescanning segment_records). Parity with the scan_l0 debug
+    /// validator is pinned by lba002 after every structural change.
+    l0_count: usize,
+    l0_bytes: u64,
+    l1_bytes: u64,
     next_seq: u64,
     next_segment_id: u64,
     generation: u64,
@@ -809,11 +816,17 @@ impl Db {
         let bytes_since_checkpoint = directory_log_bytes(&config.dir, checkpoint_generation)?;
 
         let wal = Arc::new(Mutex::new(wal));
+        // P5-M40 — the authoritative backlog at open: one scan_l0 pass
+        // over the manifest (O(segments) once per open, never per write).
+        let (l0_count, l0_bytes, l1_bytes) = scan_l0(&manifest.segments);
         let state = Arc::new(RwLock::new(State {
             active,
             immutables: vec![],
             segments: Arc::new(segments),
             segment_records: manifest.segments,
+            l0_count,
+            l0_bytes,
+            l1_bytes,
             next_seq,
             next_segment_id,
             generation: manifest.generation,
@@ -919,15 +932,42 @@ impl Db {
             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
         self.control.stats_waits.fetch_add(1, Ordering::Relaxed);
         let count = state.segments.len() as u64;
-        let bytes = state.segment_records.iter().map(|r| r.file_size).sum();
+        // P5-M40 — the authoritative backlog doubles as the inventory sum
+        // (l0_bytes + l1_bytes ≡ Σ file_size; the parity invariant lba002
+        // pins after every structural change).
+        let (l0_count, l0_bytes, l1_bytes) =
+            (state.l0_count as u64, state.l0_bytes, state.l1_bytes);
+        let bytes = l0_bytes + l1_bytes;
         drop(state);
         DbStats {
             read: self.stats.snapshot(),
             write: self.wstats.snapshot(self.fsyncs.load(Ordering::SeqCst)),
-            segments: SegmentStats { count, bytes },
+            segments: SegmentStats {
+                count,
+                bytes,
+                l0_count,
+                l0_bytes,
+                l1_bytes,
+            },
             cache: self.cache.as_ref().map(|c| c.stats()).unwrap_or_default(),
             control: self.control.snapshot(),
         }
+    }
+
+    /// P5-M40 — the debug validator: recompute the backlog from the
+    /// manifest records (scan_l0) and count the invocation. The
+    /// authoritative counters must match this after every structural
+    /// change (lba002); production paths never call it.
+    #[doc(hidden)]
+    pub fn debug_scan_l0(&self) -> (usize, u64, u64) {
+        let t = Instant::now();
+        let state = self.state.read().unwrap();
+        let scan = scan_l0(&state.segment_records);
+        self.wstats
+            .scan_l0_ns
+            .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        self.wstats.scan_l0_calls.fetch_add(1, Ordering::Relaxed);
+        scan
     }
 
     /// P3-M8 — block until the compactor drains: every kicked merge has
@@ -1107,24 +1147,19 @@ impl Db {
         }
         let (l0, l0_bytes, l1_bytes) = {
             let state = self.state.read().unwrap();
-            // P3-M2 — the scan is the backlog gauge's free ride: every
-            // write path refreshes what the compactor faces (met003).
-            // P5-M35 — and the prof002 decision cell's direct cost (the
-            // counters exist to answer whether publication-time counters
-            // should replace this per-write scan — the review's gate).
-            let t = Instant::now();
-            let scan = scan_l0(&state);
-            self.wstats
-                .scan_l0_ns
-                .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
-            self.wstats.scan_l0_calls.fetch_add(1, Ordering::Relaxed);
+            // P5-M40 — the authoritative backlog (State fields, updated
+            // at open/flush/compaction): an O(1) read replaces the M35
+            // per-write scan_l0 (the R4-P1-01 asymptote). The P3-M2
+            // gauges still refresh here (met003); the scan_l0_* counters
+            // now count only the debug validator (db.debug_scan_l0).
+            let v = (state.l0_count, state.l0_bytes, state.l1_bytes);
             self.wstats
                 .compaction_pending_segments
-                .store(scan.0 as u64, Ordering::Relaxed);
+                .store(v.0 as u64, Ordering::Relaxed);
             self.wstats
                 .compaction_backlog_bytes
-                .store(scan.1, Ordering::Relaxed);
-            scan
+                .store(v.1, Ordering::Relaxed);
+            v
         };
         let triggered = l0 >= self.config.l0_compact_trigger;
         let tier_ok = self.config.l0_tier_ratio == 0
@@ -1998,6 +2033,10 @@ impl Db {
             records,
             anchors,
         } = build;
+        // P5-M40 — flushes publish L0 only: fold the records into the
+        // authoritative backlog (O(flushed), never O(all segments)).
+        state.l0_count += records.len();
+        state.l0_bytes += records.iter().map(|r| r.file_size).sum::<u64>();
         state.segment_records.extend(records);
         // SE2-M34 — every flushed replica publishes its Segment placement
         // in the SAME window as its segment (the §23 order): the anchor is
@@ -2596,6 +2635,13 @@ fn compact_impl(
     // Arc<Segment> lifetime guarantee, via the OS).
     st.segments = Arc::new(new_segments);
     st.segment_records = new_records;
+    // P5-M40 — recompute the authoritative backlog (O(segments) once per
+    // merge, never per write). Same scan_l0 code the debug validator
+    // runs, so the lba002 parity holds by construction.
+    let (l0_count, l0_bytes, l1_bytes) = scan_l0(&st.segment_records);
+    st.l0_count = l0_count;
+    st.l0_bytes = l0_bytes;
+    st.l1_bytes = l1_bytes;
     for rec in &placement_records {
         // Infallible in practice — the records carry fresh generations —
         // but the gate stays the one path in.
@@ -2651,15 +2697,16 @@ fn compact_impl(
     Ok(stats)
 }
 
-/// The L0 pile one scan sees: (segment count, total bytes) plus the L1
-/// byte total the tier gate compares against. Shared by the write path
-/// (which refreshes the P3-M2 backlog gauges with it) and the compactor's
-/// re-evaluation (which doesn't — the write path owns the gauges, met003).
-fn scan_l0(state: &State) -> (usize, u64, u64) {
+/// P5-M40 — the backlog recomputation, now the DEBUG VALIDATOR (the
+/// write trigger reads the authoritative State counters in O(1) — this
+/// function exists for `Db::debug_scan_l0` and the parity pins). One
+/// loop over the records, level-split: the L0 pile (segment count,
+/// total bytes) plus the L1 byte total the tier gate compares against.
+fn scan_l0(records: &[SegmentRecord]) -> (usize, u64, u64) {
     let mut l0 = 0usize;
     let mut l0_bytes = 0u64;
     let mut l1_bytes = 0u64;
-    for r in &state.segment_records {
+    for r in records {
         if r.level == 0 {
             l0 += 1;
             l0_bytes += r.file_size;
@@ -2693,8 +2740,14 @@ fn compactor_loop(
             }
             let (l0, l0_bytes, l1_bytes, len) = {
                 let state = state.read().unwrap();
-                let (l0, l0_bytes, l1_bytes) = scan_l0(&state);
-                (l0, l0_bytes, l1_bytes, state.segments.len())
+                // P5-M40 — the authoritative backlog; no scan on the
+                // re-evaluation (the write path owns the gauges, met003).
+                (
+                    state.l0_count,
+                    state.l0_bytes,
+                    state.l1_bytes,
+                    state.segments.len(),
+                )
             };
             let triggered = l0 >= config.l0_compact_trigger;
             let tier_ok = config.l0_tier_ratio == 0

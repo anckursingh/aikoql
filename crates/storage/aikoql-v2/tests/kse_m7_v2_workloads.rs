@@ -2590,9 +2590,10 @@ fn v2_p3m2_write_stats_overhead() {
     // The marginal sequence — per §21 the Sync write path adds per op:
     // wal_bytes += frame.len, t0 = now, sync_all, elapsed, one bucket
     // fetch_add (record_latency_us — its 11-edge position scan is ~ns and
-    // folded in), and the two backlog gauges inside maybe_compact's
-    // pre-existing scan. The syscall itself is the op's own I/O, not the
-    // instrumentation.
+    // folded in), and the two backlog gauges inside maybe_compact's O(1)
+    // trigger read (P5-M40 — the M35 per-write scan_l0 and its timing
+    // pair are gone from the write path). The syscall itself is the op's
+    // own I/O, not the instrumentation.
     let wal_bytes = AtomicU64::new(0);
     let buckets = [const { AtomicU64::new(0) }; 12];
     let pending = AtomicU64::new(0);
@@ -2656,7 +2657,7 @@ fn v2_p3m2_write_stats_overhead() {
          - Build mode: {}\n\
          - Machine: {machine}\n\
          - Date: {}\n\
-         - Method: {} puts per leg through the instrumented Sync write path (one put per batch); the marginal cost loop runs the exact counter sequence the write path adds per op (1 × wal_bytes fetch_add + 2 × Instant::now + elapsed + 1 × latency-bucket fetch_add + 2 × backlog-gauge fetch_adds — §21 atomics, no allocs) with no engine underneath\n\n\
+         - Method: {} puts per leg through the instrumented Sync write path (one put per batch); the marginal cost loop runs the exact counter sequence the write path adds per op (1 × wal_bytes fetch_add + 1 × Instant pair (fsync) + 1 × latency-bucket fetch_add + 2 × backlog-gauge fetch_adds — §21 atomics, no allocs; the P5-M40 O(1) trigger dropped the M35 scan's Instant pair) with no engine underneath\n\n\
          ## Cells\n\n\
          - 16 B put: mean {:.0} ns/op, p50 {} ns (instrumentation share {:.2}%)\n\
          - 1400 B put: mean {:.0} ns/op (instrumentation share {:.2}%)\n\

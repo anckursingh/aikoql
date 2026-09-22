@@ -220,9 +220,12 @@ pub struct WritePathStats {
     /// This open's recovery: wall ms of open() and WAL bytes replayed.
     pub recovery_ms: u64,
     pub wal_replay_bytes: u64,
-    /// P5-M35 — the write path's L0-metadata scan (maybe_compact's
-    /// backlog-gauge refresh): how often it ran and what it cost. The
-    /// prof002 decision cell's direct measurement.
+    /// P5-M35 → P5-M40 — the debug validator's (`Db::debug_scan_l0`)
+    /// invocations and cost. M35 measured the per-write scan with these
+    /// (the prof002 cell: 345 ns/write, 0.7% at ~64 segments — regime-
+    /// true but O(segments)); M40 moved the write trigger to the O(1)
+    /// authoritative counters, so writes never increment these — only
+    /// validator runs do (lba001 pins the flatness).
     pub scan_l0_calls: u64,
     pub scan_l0_ns: u64,
     /// P5-M38 — flush lock-scope counters (the R4-P0-01 instrumentation):
@@ -322,11 +325,18 @@ impl WriteStats {
 }
 
 /// The segment inventory as of the snapshot: every manifest segment, all
-/// levels.
+/// levels. P5-M40 — `l0_count`/`l0_bytes`/`l1_bytes` are the
+/// authoritative backlog counters (State fields updated at
+/// open/flush/compaction — the write trigger reads them in O(1)); they
+/// must equal the scan_l0 debug validator after every structural change
+/// (lba002).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SegmentStats {
     pub count: u64,
     pub bytes: u64,
+    pub l0_count: u64,
+    pub l0_bytes: u64,
+    pub l1_bytes: u64,
 }
 
 /// P5-M35 — control-plane lock-wait counters (prof001). The control

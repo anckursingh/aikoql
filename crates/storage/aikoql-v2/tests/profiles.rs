@@ -2,11 +2,12 @@
 //! the write-path scan_l0 cost profile. prof001 pins the counters exist
 //! and are readable (the RED is a compile error: `DbStats` carries no
 //! `control` block yet). prof002 pins the scan-cost evidence cell
-//! (env-gated): the A/B walls (trigger 0 = the scan never runs vs
-//! a trigger out of reach = the scan runs on every write, compaction
-//! never fires) ride the cell as context; the direct `scan_l0_*`
-//! counters are the pin — the data the publication-time-counter
-//! decision (the review's own gate) needs.
+//! (env-gated). P5-M40 flips the prof002 expectation: the M35 cell
+//! measured the per-write scan (345 ns/write, 0.7% at ~64 segments —
+//! the data that justified keeping the scan THEN), the O(1) authoritative
+//! counters made the scan O(segments)-asymptote argument win — prof002
+//! now pins the zero (both regimes: no scan_l0 call per write, however
+//! far the trigger is out of reach).
 //!
 //! prof002 runs only with AIKOQL_V2_PROF_CELLS_PROFILE set — 200k
 //! writes total, CI never pays for it. Run:
@@ -75,24 +76,28 @@ fn prof002_scan_l0_cost_per_write_cell() {
     if std::env::var_os("AIKOQL_V2_PROF_CELLS_PROFILE").is_none() {
         return; // env-gated — 200k writes across the two regimes
     }
-    // A: trigger 0 — maybe_compact returns BEFORE the scan (baseline).
-    // B: trigger 1<<30 — the scan runs on every write, never fires
-    // (l1 empty ⇒ the tier gate passes, the count gate never does).
-    // The walls ride the cell as context only — sequential runs differ
-    // in page-cache state, so a wall ordering would pin noise, not the
-    // scan. The counters are the measurement: inline, no A/B variance.
+    // A: trigger 0 — maybe_compact returns before the state read
+    // (baseline). B: trigger 1<<30 — the O(1) counters are read, the
+    // gate never fires (l1 empty ⇒ the tier gate passes, the count gate
+    // never does). P5-M40: NEITHER regime scans — the M35 cell's own
+    // counter went from 100k scans per regime to 0. The walls ride the
+    // cell as context only — sequential runs differ in page-cache state,
+    // so a wall ordering would pin noise, not the accounting. The
+    // counters are the measurement: inline, no A/B variance.
     let (a_wall, a_scans, _) = run_regime("prof002-a", 0);
     let (b_wall, scans, scan_ns) = run_regime("prof002-b", 1 << 30);
     assert_eq!(a_scans, 0, "the A regime never scans (trigger 0)");
-    assert!(scans >= 100_000, "the B regime scanned on every write");
-    assert!(scan_ns > 0, "the scan's direct cost is recorded");
-    // The evidence cell — the decision input, not a gate: per-write scan
-    // cost at 100k ops throughput.
+    assert_eq!(
+        scans, 0,
+        "the M40 trigger never rescans — the O(1) counters replaced the M35 scan"
+    );
+    assert_eq!(scan_ns, 0, "no per-write scan cost is recorded");
+    // The evidence cell — the M40 decision input: the scan cost is gone
+    // from the write path at 100k ops.
     let cells = dir("prof002-cells").join("cells.json");
     let body = format!(
         "{{\"writes\":100000,\"a_wall_us\":{a_wall},\"b_wall_us\":{b_wall},\
-         \"scan_calls\":{scans},\"scan_ns\":{scan_ns},\"per_write_scan_ns\":{}}}",
-        scan_ns / scans.max(1)
+         \"scan_calls\":{scans},\"scan_ns\":{scan_ns},\"per_write_scan_ns\":0}}"
     );
     std::fs::write(&cells, &body).unwrap();
     eprintln!("[prof002 cells] {body}");
