@@ -526,15 +526,13 @@ Instrumentation: `compact_total_ns` / `compact_state_lock_hold_ns` (A+C) / `comp
 
 Acceptance: csc001–003 3/3; the three crash-suite re-pins green; full storage-v2 suite green; fmt + clippy -D warnings green; workspace regression green (one flake run: server_lifecycle sv004/sv005 failed under full-workspace parallelism, 13/13 green standalone and on the re-run — recorded, not silent). The cp001-at-1M comparability cells ride the CI workflow (M37's remainder — no bench harness in the workspace).
 
-### P5-M40 — O(1) L0/L1 backlog accounting (R4-P1-01)
+### P5-M40 — O(1) L0/L1 backlog accounting (R4-P1-01) — SHIPPED 2026-09-22
 
-Current state: maybe_compact rescans segment_records per write. M35 measured 345 ns (0.7% of the ~49 µs write path) at ~64 segments and KEPT the scan — the R4 review requires O(1) accounting because the cost is O(segments) and the segment count grows. Both statements are true: M35's cell was regime-correct; the review's asymptote argument wins.
+RED 95f4506 (lba001–002) → feat 067f413. Current state at the start: maybe_compact rescanned segment_records per write. M35 measured 345 ns (0.7% of the ~49 µs write path) at ~64 segments and KEPT the scan — the R4 review requires O(1) accounting because the cost is O(segments) and the segment count grows. Both statements are true: M35's cell was regime-correct; the review's asymptote argument wins.
 
-Deliver: authoritative l0_count/l0_bytes/l1_bytes updated at flush/compaction/open; the write trigger reads them (O(1)); scan_l0 kept as the debug validation helper.
+Delivered: three authoritative counters (l0_count / l0_bytes / l1_bytes) live in State, updated at the three structural points — open (one scan_l0 pass over the manifest), flush phase C (flushes publish L0 only, so the fold is O(flushed), never O(all segments)), compaction phase C (one scan_l0 recompute after the manifest replacement — O(segments) once per merge, never per write). The write trigger and the compactor's re-evaluation read the fields in O(1); the P3-M2 backlog gauges still refresh on the write path (met003 byte-identical — the M35 free ride preserved); `stats()` now derives the inventory sum from the same fields (l0_bytes + l1_bytes ≡ Σ file_size). scan_l0 kept as the debug validator — `Db::debug_scan_l0` (doc-hidden) recomputes and counts the invocation; the M35 scan_l0_calls/scan_l0_ns counters now count only validator runs. prof002 flipped to the M40 reality: both regimes record 0 scans / 0 ns per 100k writes (the M35 cell's own counter went 100k → 0).
 
-TDD REDs: the review's own sweep pin — write-trigger overhead must not scale linearly across 10/100/1,000/10,000 segments (env-gated cells); the met003 gauges byte-identical (the M35 free ride preserved); the parity pin — counters ≡ scan_l0 after every flush/compact.
-
-Acceptance: the sweep cells recorded; M35's honest row stands (its keep was regime-true) with the reversal recorded here.
+Acceptance: lba001 10/100 segments laptop + 1,000/10,000 env-gated (AIKOQL_V2_LBA_CELLS_FULL=1 — zero scan_l0 calls per write at every scale, the review's sweep pin structurally, not a wall cell); lba002 counters ≡ scan_l0 after every flush/compaction/reopen; met003 green; full storage-v2 suite + workspace regression green; fmt + clippy -D warnings green. M35's honest row stands (its keep was regime-true); the reversal is recorded here and on the ledger.
 
 ### P5-M41 — Sorted compaction publish (R4-P1-02)
 
