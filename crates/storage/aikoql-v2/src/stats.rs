@@ -234,6 +234,17 @@ pub struct WritePathStats {
     pub flush_state_lock_hold_ns: u64,
     pub flush_io_ns: u64,
     pub flush_publish_ns: u64,
+    /// P5-M39 — compaction lock-scope counters (the R4-P0-02
+    /// instrumentation): the whole merge wall, the state-lock hold across
+    /// phase A + C, the UNLOCKED merge-I/O window (phase B), and the
+    /// publication lock (phase C). The structural invariant:
+    /// hold + io ≤ total — the state lock never covers merge construction.
+    /// A stale discard (generation moved between A and C) counts A, B and
+    /// C's check — only the publication counter stays empty.
+    pub compact_total_ns: u64,
+    pub compact_state_lock_hold_ns: u64,
+    pub compact_io_ns: u64,
+    pub compact_publish_ns: u64,
 }
 
 /// The live write-path counters.
@@ -262,6 +273,12 @@ pub(crate) struct WriteStats {
     pub(crate) flush_state_lock_hold_ns: AtomicU64,
     pub(crate) flush_io_ns: AtomicU64,
     pub(crate) flush_publish_ns: AtomicU64,
+    /// P5-M39 — the compaction lock-scope windows (see WritePathStats).
+    /// A and C both accumulate the hold; B is the unlocked merge window.
+    pub(crate) compact_total_ns: AtomicU64,
+    pub(crate) compact_state_lock_hold_ns: AtomicU64,
+    pub(crate) compact_io_ns: AtomicU64,
+    pub(crate) compact_publish_ns: AtomicU64,
     /// P3-M8 — the failed background merge's error text (None = none yet).
     /// Not in the Copy snapshot — the admin reads it via `Db::last_compaction_error`.
     pub(crate) compaction_error: std::sync::Mutex<Option<String>>,
@@ -296,6 +313,10 @@ impl WriteStats {
             flush_state_lock_hold_ns: self.flush_state_lock_hold_ns.load(Ordering::Relaxed),
             flush_io_ns: self.flush_io_ns.load(Ordering::Relaxed),
             flush_publish_ns: self.flush_publish_ns.load(Ordering::Relaxed),
+            compact_total_ns: self.compact_total_ns.load(Ordering::Relaxed),
+            compact_state_lock_hold_ns: self.compact_state_lock_hold_ns.load(Ordering::Relaxed),
+            compact_io_ns: self.compact_io_ns.load(Ordering::Relaxed),
+            compact_publish_ns: self.compact_publish_ns.load(Ordering::Relaxed),
         }
     }
 }

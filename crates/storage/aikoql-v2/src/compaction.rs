@@ -53,6 +53,11 @@ pub struct CompactStats {
     /// (P5-M36 cp001: the RSS ∝ (keys, replicas) sweep's direct data,
     /// deciding the generation-mark array/bitset vs this HashSet).
     pub rids_seen: u64,
+    /// P5-M39 — the merge published nothing: a generation changed between
+    /// its capture (phase A) and publication (phase C) — a flush
+    /// interleaved — so the staged output was discarded. The counters
+    /// above still describe the merge that ran.
+    pub stale: bool,
 }
 
 /// A just-published segment, open for validation: the reader plus the

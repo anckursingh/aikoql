@@ -41,6 +41,26 @@ fn segment_files(d: &Path) -> Vec<PathBuf> {
     v
 }
 
+/// P5-M39 — the un-published merge's chunks live inside the staging
+/// directory (swept by the next open), never as root-namespace orphans.
+fn staging_segment_files(d: &Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::fs::read_dir(d)
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(".compact-staging-")
+        })
+        .flat_map(|e| std::fs::read_dir(e.path()).unwrap())
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("SEGMENT-"))
+        .map(|e| e.path())
+        .collect();
+    v.sort();
+    v
+}
+
 /// 100 keys × 100-byte values — ~12 KiB of rows, ~24 chunks at a
 /// 512-byte cap (~122 bytes estimated per entry).
 fn seed(db: &Db, n: usize) {
@@ -293,9 +313,11 @@ fn child_branch() -> bool {
 }
 
 /// Reopen after the kill: every key holds its expected value and the
-/// sequence resumes at 121; then a flush exercises segment-id reuse over
-/// the orphan chunks (reopen's next_segment_id = old max + 1 = the first
-/// orphan's id — the M3 reuse-by-rename behavior) and survives reopen.
+/// sequence resumes at 121; then a flush + reopen round proves the swept
+/// state publishes normally. (The M3 orphan reuse-by-rename path — a
+/// flush colliding with an un-published segment's id — is exercised by
+/// the flush crash windows; P5-M39's staging sweep removed this test's
+/// orphan collision.)
 fn verify(d: &Path) {
     let db = Db::open(Config::new(d.to_path_buf())).unwrap();
     for (k, want) in &expected() {
@@ -333,16 +355,27 @@ fn merge_chunks_crash_after_segment_recovers() {
     child.kill().expect("kill child");
     child.wait().expect("wait child");
 
-    // The old manifest still governs; the k chunks are orphans.
+    // The old manifest still governs; the k chunks sit in the merge's
+    // staging directory (P5-M39 — the merge never writes into the real
+    // namespace before publication), and the reopen sweeps them.
     let current = Current::read(&d.join("CURRENT")).unwrap();
     let manifest = Manifest::read(&manifest_path(&d, current.manifest_generation)).unwrap();
     assert!(
         manifest.segments.iter().all(|s| s.level == 0),
         "no L1 record published yet"
     );
-    let k = segment_files(&d).len() - manifest.segments.len();
-    assert!(k >= 2, "the merge must have split, got {k} orphans");
+    assert_eq!(
+        segment_files(&d).len(),
+        manifest.segments.len(),
+        "no orphan lands in the real namespace — the staged chunks live in .compact-staging-*"
+    );
+    let k = staging_segment_files(&d).len();
+    assert!(k >= 2, "the merge must have split, got {k} staged chunks");
     verify(&d);
+    assert!(
+        staging_segment_files(&d).is_empty(),
+        "the reopen swept the staged chunks"
+    );
 }
 
 #[test]

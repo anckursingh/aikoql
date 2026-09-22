@@ -283,6 +283,23 @@ fn csc003_a_flush_completing_during_the_merge_makes_the_compaction_stale() {
         "a stale merge must not publish or delete — the three flushed \
          segments must all survive on disk"
     );
+    // Residue discipline: the discard must remove its staging directory —
+    // the reopen sweep only exists for crash leftovers.
+    let staging_left: Vec<String> = std::fs::read_dir(&d)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".compact-staging-")
+        })
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        staging_left.is_empty(),
+        "the stale discard must remove its staging directory (left: {staging_left:?})"
+    );
     let reopened = open_quiet(&d);
     let want: BTreeMap<Vec<u8>, Vec<u8>> = (0..60)
         .map(|i| {

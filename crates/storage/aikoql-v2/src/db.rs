@@ -467,6 +467,10 @@ impl Db {
     pub fn open(config: Config) -> Result<Db, FormatError> {
         let open_t = Instant::now();
         let lock = lock_directory(&config.dir)?;
+        // P5-M39 — a crash between a merge and its publication can leave
+        // a staging directory behind; sweep it at open (the manifest
+        // never references staged files).
+        sweep_compact_staging(&config.dir);
         let current_path = config.dir.join("CURRENT");
         let current = match Current::read(&current_path) {
             Ok(c) => c,
@@ -2172,10 +2176,9 @@ impl Db {
     /// §23 window before the manifest, and the in-memory placements swap
     /// only after CURRENT.
     pub fn compact_with(&self, policy: &dyn RetentionPolicy) -> Result<CompactStats, FormatError> {
-        let mut state = self.state.write().unwrap();
         compact_impl(
             &self.config,
-            &mut state,
+            &self.state,
             &self.cache,
             &self.stats,
             &self.wstats,
@@ -2233,38 +2236,237 @@ impl Db {
     }
 }
 
+/// P5-M39 — the merge staging namespace: a child of the data dir (same
+/// volume, so the C-phase renames are O(1) directory moves). Per-process
+/// nonce so concurrent merges never share a namespace.
+static COMPACT_STAGING_NONCE: AtomicU64 = AtomicU64::new(0);
+
+fn staging_dir(dir: &Path) -> PathBuf {
+    dir.join(format!(
+        ".compact-staging-{}-{}",
+        std::process::id(),
+        COMPACT_STAGING_NONCE.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+/// P5-M39 — removes the merge staging directory on every exit (success
+/// leaves it empty after the renames; errors and stale discards leave
+/// the staged files for the sweep). Best-effort: a leftover is also
+/// swept at the next open.
+struct StagingCleanup(PathBuf);
+
+impl Drop for StagingCleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// P5-M39 — best-effort removal of merge staging directories a crash
+/// left behind. Nothing references them — the manifest never names
+/// staged files — so the sweep is cosmetic hygiene, not recovery.
+fn sweep_compact_staging(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".compact-staging-") && entry.path().is_dir() {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// The merge body shared by the synchronous `compact_with` and the
 /// background compactor (P3-M8) — free of `self` so both run the exact
 /// same publication protocol (segment → manifest → CURRENT → delete
 /// obsolete, the flush mirror; every crash park in between).
+///
+/// P5-M39 (R4-P0-02) — the A/B/C split (the flush split's mirror):
+/// A short lock captures the input set, the publication generation and
+/// the id base, and stages a merge namespace. B runs the merge UNLOCKED
+/// into the staging directory — the merge's output chunk count is
+/// unknowable before merging, so its ids cannot be reserved at A; a
+/// flush interleaved between A and C would otherwise collide on the
+/// same segment ids. C re-checks the generation: moved since A means a
+/// flush interleaved — discard the staged output, publish nothing
+/// (never publish a stale snapshot; the caller re-evaluates the gates
+/// and re-merges the CURRENT segments). Fresh: allocate real ids under
+/// the C lock, rename the staged files into the real namespace, remap
+/// the chunk and relocation SegmentIds, and run the publication tail.
 #[allow(clippy::too_many_arguments)] // same handle-set mirror as committer_loop
 fn compact_impl(
     config: &Config,
-    state: &mut State,
+    state: &Arc<RwLock<State>>,
     cache: &Option<Arc<BlockCache>>,
     stats: &Arc<Stats>,
     wstats: &Arc<WriteStats>,
     policy: &dyn RetentionPolicy,
 ) -> Result<CompactStats, FormatError> {
-    if state.segments.is_empty() {
-        return Ok(CompactStats::default());
-    }
     let compact_t = Instant::now();
-    let mut next_id = state.next_segment_id;
+
+    // ---- phase A — the short capture lock -------------------------------
+    let a_t = Instant::now();
+    let (inputs, generation, staging, next_id) = {
+        let st = state.read().unwrap();
+        if st.segments.is_empty() {
+            return Ok(CompactStats::default());
+        }
+        let staging = staging_dir(&config.dir);
+        std::fs::create_dir_all(&staging).map_err(|e| {
+            FormatError::Io(format!(
+                "create merge staging dir {}: {e}",
+                staging.display()
+            ))
+        })?;
+        (
+            Arc::clone(&st.segments),
+            st.generation,
+            staging,
+            st.next_segment_id,
+        )
+    };
+    let hold_a = a_t.elapsed().as_nanos() as u64;
+    // P5-M39 — every exit removes the staging directory (success leaves
+    // it empty after the renames; errors and the stale discard leave the
+    // staged files for the sweep).
+    let _cleanup = StagingCleanup(staging.clone());
+
+    // ---- phase B — the merge, UNLOCKED ----------------------------------
+    let b_t = Instant::now();
+    crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "in_io");
+    // The ids the merge draws here are staging placeholders — the chunk
+    // count is unknown at A, so real ids are only drawn under the C lock
+    // (below), where a flush cannot interleave.
+    let mut next_id = next_id;
     let attach = SegmentAttach {
         cache: cache.clone(),
         stats: Some(Arc::clone(stats)),
     };
     let (stats, chunks, relocations) = merge(
-        &state.segments,
+        &inputs,
         config.block_target,
         config.merge_chunk_bytes,
-        &config.dir,
+        &staging,
         &mut next_id,
         policy,
         &attach,
     )?;
     crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_segment");
+    let io = b_t.elapsed().as_nanos() as u64;
+
+    // ---- phase C — the generation-checked publish ------------------------
+    let c_t = Instant::now();
+    let mut st = state.write().unwrap();
+    if st.generation != generation {
+        // P5-M39 — a flush interleaved since A: the inputs this merge
+        // consumed no longer describe the current segment set. Publish
+        // nothing; the staged files die with the cleanup guard.
+        let hold_c = c_t.elapsed().as_nanos() as u64;
+        drop(st);
+        wstats
+            .compact_state_lock_hold_ns
+            .fetch_add(hold_a + hold_c, Ordering::Relaxed);
+        wstats
+            .compact_total_ns
+            .fetch_add(compact_t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        wstats.compact_io_ns.fetch_add(io, Ordering::Relaxed);
+        let mut stats = stats;
+        stats.stale = true;
+        return Ok(stats);
+    }
+    // Fresh: allocate real ids under the lock and rename the staged files
+    // into the real namespace (same volume — the staging dir is a child
+    // of the data dir, so the renames are O(1) directory moves; the open
+    // readers stay valid — their handles were opened with share-delete).
+    let mut remap: HashMap<u64, u64> = HashMap::new();
+    let mut chunks = chunks;
+    for chunk in &mut chunks {
+        let new_id = st.next_segment_id;
+        st.next_segment_id += 1;
+        let old_path = segment_path(&staging, chunk.0);
+        let new_path = segment_path(&config.dir, new_id);
+        std::fs::rename(&old_path, &new_path).map_err(|e| {
+            FormatError::Io(format!(
+                "rename staged segment {} -> {}: {e}",
+                old_path.display(),
+                new_path.display()
+            ))
+        })?;
+        remap.insert(chunk.0, new_id);
+        chunk.0 = new_id;
+    }
+    // The archived rows ride the same namespace: one fresh id per archive
+    // id (multi-chunk archives share theirs), every chunk file follows.
+    let archive_staging = staging.join("archive");
+    if archive_staging.is_dir() {
+        let archive_dir = config.dir.join("archive");
+        std::fs::create_dir_all(&archive_dir).map_err(|e| {
+            FormatError::Io(format!("create archive dir {}: {e}", archive_dir.display()))
+        })?;
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&archive_staging)
+            .map_err(|e| {
+                FormatError::Io(format!(
+                    "read merge staging archive {}: {e}",
+                    archive_staging.display()
+                ))
+            })?
+            .map(|e| e.map(|e| e.path()))
+            .collect::<Result<_, _>>()
+            .map_err(|e| FormatError::Io(format!("scan merge staging archive: {e}")))?;
+        paths.sort(); // deterministic id assignment across runs
+        for path in paths {
+            let name = path
+                .file_name()
+                .expect("read_dir entry has a file name")
+                .to_string_lossy();
+            let digits: String = name
+                .strip_prefix("ARCHIVE-")
+                .and_then(|rest| {
+                    let end = rest
+                        .find(|c: char| !c.is_ascii_digit())
+                        .unwrap_or(rest.len());
+                    (end > 0).then(|| rest[..end].to_string())
+                })
+                .ok_or_else(|| {
+                    FormatError::Corrupt(format!("staging archive name not ARCHIVE-{{id}}: {name}"))
+                })?;
+            let old_id: u64 = digits.parse().map_err(|_| {
+                FormatError::Corrupt(format!("staging archive id not numeric: {digits}"))
+            })?;
+            let new_id = *remap.entry(old_id).or_insert_with(|| {
+                let id = st.next_segment_id;
+                st.next_segment_id += 1;
+                id
+            });
+            let new_name = name.replacen(
+                &format!("ARCHIVE-{old_id:06}"),
+                &format!("ARCHIVE-{new_id:06}"),
+                1,
+            );
+            let target = archive_dir.join(new_name.as_str());
+            std::fs::rename(&path, &target).map_err(|e| {
+                FormatError::Io(format!(
+                    "rename staged archive {} -> {}: {e}",
+                    path.display(),
+                    target.display()
+                ))
+            })?;
+        }
+    }
+    // The relocation set names the staged chunk ids — remap them to the
+    // real ones before any placement record is drawn.
+    let mut relocations = relocations;
+    for loc in relocations.values_mut() {
+        let Some((sid, _, _)) = loc else { continue };
+        let new_id = *remap.get(&sid.0).ok_or_else(|| {
+            FormatError::Corrupt(format!(
+                "relocation names a staged segment id {} the remap lacks",
+                sid.0
+            ))
+        })?;
+        *sid = SegmentId(new_id);
+    }
 
     // SE2-M35 — every Segment-placed replica relocates: a fresh §25
     // generation per move, the relocation set's anchor as the new home,
@@ -2277,8 +2479,8 @@ fn compact_impl(
     // dangling Segment placement on reopen (M35: no surviving record
     // may reference a removed segment). The flip's generation predates
     // the relocation draws (one allocator), so the order never matters.
-    let mut placement_records: Vec<PlacementRecord> = std::mem::take(&mut state.pending_placements);
-    let mut segment_rids: Vec<ReplicaId> = state
+    let mut placement_records: Vec<PlacementRecord> = std::mem::take(&mut st.pending_placements);
+    let mut segment_rids: Vec<ReplicaId> = st
         .placements
         .iter()
         .filter_map(|(&rid, p)| matches!(p, Placement::Segment(_)).then_some(rid))
@@ -2286,8 +2488,8 @@ fn compact_impl(
     // SE2-M35 — sorted, so the fresh generations assign deterministically.
     segment_rids.sort_unstable();
     for rid in segment_rids {
-        let pgen = state.next_placement_generation;
-        state.next_placement_generation += 1;
+        let pgen = st.next_placement_generation;
+        st.next_placement_generation += 1;
         let relocated = match relocations.get(&rid) {
             Some(Some(loc)) => Placement::Segment(PhysicalLocation {
                 segment_id: loc.0,
@@ -2312,7 +2514,7 @@ fn compact_impl(
         });
     }
 
-    let old_paths: Vec<PathBuf> = state
+    let old_paths: Vec<PathBuf> = st
         .segment_records
         .iter()
         .map(|r| segment_path(&config.dir, r.segment_id))
@@ -2333,8 +2535,7 @@ fn compact_impl(
         });
         new_segments.push(Arc::new(reader));
     }
-    state.next_segment_id = next_id;
-    state.generation += 1;
+    st.generation += 1;
     // SE2-M35 — the relocation records publish at the NEW generation,
     // before the manifest names it (the §23 order, mirroring flush):
     // state-C — log durable, manifest not — keeps the old placements
@@ -2344,47 +2545,47 @@ fn compact_impl(
     if !placement_records.is_empty() {
         let log = PlacementLog {
             format_version: FORMAT_VERSION,
-            generation: state.generation,
+            generation: st.generation,
             records: placement_records.clone(),
         };
         // SE2-M40 — the checkpoint trigger's budget.
-        state.bytes_since_checkpoint += log.encoded_len() as u64;
+        st.bytes_since_checkpoint += log.encoded_len() as u64;
         // SE2-M36 — staged: the §38 LOCATION windows park inside.
         PlacementLog::publish_staged(
-            &placement_log_path(&config.dir, state.generation),
+            &placement_log_path(&config.dir, st.generation),
             &log,
             Some("LOCATION"),
         )?;
-        state.placement_floor = state.generation; // PR6-002
-        state.placement_chain = chain_extend(state.placement_chain, state.generation);
+        st.placement_floor = st.generation; // PR6-002
+        st.placement_chain = chain_extend(st.placement_chain, st.generation);
         // PR6-R2-002
     }
     crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_location");
     let manifest = Manifest {
         format_version: FORMAT_VERSION,
-        generation: state.generation,
+        generation: st.generation,
         segments: new_records.clone(),
         wal_ids: vec![],
-        identity_floor: state.identity_floor,
-        replica_floor: state.replica_floor,
-        placement_floor: state.placement_floor,
-        identity_chain: state.identity_chain, // PR6-R2-002
-        replica_chain: state.replica_chain,
-        placement_chain: state.placement_chain,
+        identity_floor: st.identity_floor,
+        replica_floor: st.replica_floor,
+        placement_floor: st.placement_floor,
+        identity_chain: st.identity_chain, // PR6-R2-002
+        replica_chain: st.replica_chain,
+        placement_chain: st.placement_chain,
     };
     // P4-M3 — debug builds refuse to publish impossible metadata.
     #[cfg(debug_assertions)]
     validate_manifest(&manifest, &config.dir)?;
     // SE2-M36 — staged: the §38 MANIFEST windows park inside.
     Manifest::publish_staged(
-        &manifest_path(&config.dir, state.generation),
+        &manifest_path(&config.dir, st.generation),
         &manifest,
         Some("MANIFEST"),
     )?;
     crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_manifest");
     Current::publish(
         &config.dir.join("CURRENT"),
-        &Current::new(FORMAT_VERSION, state.generation),
+        &Current::new(FORMAT_VERSION, st.generation),
     )?;
     crash_park("AIKOQL_V2_PLACE_PARK", &config.dir, "FAIL_AFTER_PUBLISH");
     crash_park("AIKOQL_V2_COMPACT_PARK", &config.dir, "after_current");
@@ -2393,19 +2594,19 @@ fn compact_impl(
     // Windows marks the files delete-pending and any reader that still
     // references an obsolete segment keeps its data alive (the
     // Arc<Segment> lifetime guarantee, via the OS).
-    state.segments = Arc::new(new_segments);
-    state.segment_records = new_records;
+    st.segments = Arc::new(new_segments);
+    st.segment_records = new_records;
     for rec in &placement_records {
         // Infallible in practice — the records carry fresh generations —
         // but the gate stays the one path in.
-        merge_placement(&mut state.placements, rec.rid, rec.placement)?;
+        merge_placement(&mut st.placements, rec.rid, rec.placement)?;
     }
     for p in &old_paths {
         // P5-M33 — a running snapshot's pinned segments survive: the
         // deletion skips pinned names (the snapshot's lock-free copies
         // still need them; the leftover files are the tolerated class).
         if p.file_name()
-            .is_some_and(|n| state.snapshot_pins.contains(n.to_string_lossy().as_ref()))
+            .is_some_and(|n| st.snapshot_pins.contains(n.to_string_lossy().as_ref()))
         {
             continue;
         }
@@ -2420,9 +2621,8 @@ fn compact_impl(
     }
     // SE2-M40 — the relocation log's bytes count toward the trigger;
     // a compaction-heavy workload checkpoints without any flush.
-    if config.checkpoint_bytes > 0 && state.bytes_since_checkpoint >= config.checkpoint_bytes as u64
-    {
-        Db::write_checkpoint(config, state, wstats)?;
+    if config.checkpoint_bytes > 0 && st.bytes_since_checkpoint >= config.checkpoint_bytes as u64 {
+        Db::write_checkpoint(config, &mut st, wstats)?;
     }
     // P3-M2 — the merge drained L0 into L1: the backlog gauges drop to
     // zero here (the maybe_compact scan would have refreshed them on
@@ -2434,6 +2634,20 @@ fn compact_impl(
     wstats
         .last_compaction_ms
         .store(compact_t.elapsed().as_millis() as u64, Ordering::Relaxed);
+    // P5-M39 — the lock-scope windows (the flush split's mirror): hold
+    // = A + C, io = B, publish = C — disjoint slices of the total wall,
+    // so hold + io ≤ total holds structurally.
+    let publish = c_t.elapsed().as_nanos() as u64;
+    wstats
+        .compact_total_ns
+        .fetch_add(compact_t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    wstats
+        .compact_state_lock_hold_ns
+        .fetch_add(hold_a + publish, Ordering::Relaxed);
+    wstats.compact_io_ns.fetch_add(io, Ordering::Relaxed);
+    wstats
+        .compact_publish_ns
+        .fetch_add(publish, Ordering::Relaxed);
     Ok(stats)
 }
 
@@ -2489,8 +2703,9 @@ fn compactor_loop(
             if !triggered || !tier_ok || len <= 1 {
                 break;
             }
-            let mut st = state.write().unwrap();
-            match compact_impl(&config, &mut st, &cache, &stats, &wstats, &KeepAll) {
+            // P5-M39 — compact_impl takes its own A/C locks; the merge
+            // (B) runs unlocked, so the loop must not hold a guard here.
+            match compact_impl(&config, &state, &cache, &stats, &wstats, &KeepAll) {
                 Ok(_) => {}
                 Err(e) => {
                     wstats
