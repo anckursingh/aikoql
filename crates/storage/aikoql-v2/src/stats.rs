@@ -225,6 +225,15 @@ pub struct WritePathStats {
     /// prof002 decision cell's direct measurement.
     pub scan_l0_calls: u64,
     pub scan_l0_ns: u64,
+    /// P5-M38 — flush lock-scope counters (the R4-P0-01 instrumentation):
+    /// the whole flush wall, the state-lock hold across phase A + C, the
+    /// UNLOCKED segment-I/O window (phase B), and the publication lock
+    /// (phase C). The structural invariant: hold + io ≤ total — the state
+    /// lock never covers segment file construction.
+    pub flush_total_ns: u64,
+    pub flush_state_lock_hold_ns: u64,
+    pub flush_io_ns: u64,
+    pub flush_publish_ns: u64,
 }
 
 /// The live write-path counters.
@@ -247,6 +256,12 @@ pub(crate) struct WriteStats {
     pub(crate) wal_replay_bytes: AtomicU64,
     pub(crate) scan_l0_calls: AtomicU64,
     pub(crate) scan_l0_ns: AtomicU64,
+    /// P5-M38 — the flush lock-scope windows (see WritePathStats). A and C
+    /// both accumulate the hold; B is the unlocked I/O window.
+    pub(crate) flush_total_ns: AtomicU64,
+    pub(crate) flush_state_lock_hold_ns: AtomicU64,
+    pub(crate) flush_io_ns: AtomicU64,
+    pub(crate) flush_publish_ns: AtomicU64,
     /// P3-M8 — the failed background merge's error text (None = none yet).
     /// Not in the Copy snapshot — the admin reads it via `Db::last_compaction_error`.
     pub(crate) compaction_error: std::sync::Mutex<Option<String>>,
@@ -277,6 +292,10 @@ impl WriteStats {
             compaction_error_count: self.compaction_error_count.load(Ordering::Relaxed),
             scan_l0_calls: self.scan_l0_calls.load(Ordering::Relaxed),
             scan_l0_ns: self.scan_l0_ns.load(Ordering::Relaxed),
+            flush_total_ns: self.flush_total_ns.load(Ordering::Relaxed),
+            flush_state_lock_hold_ns: self.flush_state_lock_hold_ns.load(Ordering::Relaxed),
+            flush_io_ns: self.flush_io_ns.load(Ordering::Relaxed),
+            flush_publish_ns: self.flush_publish_ns.load(Ordering::Relaxed),
         }
     }
 }

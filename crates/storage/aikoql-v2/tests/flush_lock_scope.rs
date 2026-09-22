@@ -152,7 +152,8 @@ fn fsc001_put_completes_while_the_flush_is_parked_in_segment_io() {
     let completed = complete_while_parked(&db, &d, {
         let db = Arc::clone(&db);
         move || {
-            db.put(b"park-probe", b"p").expect("put during the parked I/O");
+            db.put(b"park-probe", b"p")
+                .expect("put during the parked I/O");
         }
     });
     assert!(
@@ -289,8 +290,10 @@ fn fsc004_a_second_flush_cannot_publish_while_the_first_is_in_io() {
         })
     };
     std::thread::sleep(Duration::from_millis(300));
-    let advanced =
-        Current::read(&d.join("CURRENT")).unwrap().manifest_generation > gen_before;
+    let advanced = Current::read(&d.join("CURRENT"))
+        .unwrap()
+        .manifest_generation
+        > gen_before;
     let done_early = second_done.load(Ordering::SeqCst);
     drop(_arm);
     std::fs::remove_file(d.join(PARK_STAGE)).expect("release the park");

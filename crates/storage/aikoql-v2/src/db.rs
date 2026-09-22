@@ -64,7 +64,7 @@ use aikoql_kernel::knowledge::kom::sha256;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, RwLock};
@@ -396,6 +396,13 @@ pub struct Db {
     /// P3-M2 — write-path instrumentation (design §21), shared with the
     /// committer thread in GroupCommit mode.
     wstats: Arc<WriteStats>,
+    /// P5-M38 — the flush pipe: every flush serializes on it (Sync write()
+    /// trigger, explicit flush(), the GroupCommit committer), so one
+    /// flush's phase-C WAL truncate can never race another flush's
+    /// unpublished phase-B segments. Taken BEFORE `state`; a path that
+    /// might flush must drop its state guard first (no path holds `state`
+    /// while blocking on the pipe).
+    flush_pipe: Arc<Mutex<()>>,
     /// P3-M8 — the background compactor thread (None when
     /// `compact_background` is off or the trigger is 0) and its handshake.
     /// The signal lives even without the thread so the write path and
@@ -829,6 +836,9 @@ impl Db {
             snapshot_pins: HashSet::new(),
         }));
         let fsyncs = Arc::new(AtomicU64::new(0));
+        // P5-M38 — the flush pipe (see the Db field): one per store, shared
+        // with the committer so its group flushes serialize with the rest.
+        let flush_pipe = Arc::new(Mutex::new(()));
         let (queue_tx, committer) = if config.durability == DurabilityMode::GroupCommit {
             let (tx, rx) = mpsc::channel();
             let handle = {
@@ -839,8 +849,11 @@ impl Db {
                 let cache = cache.clone();
                 let stats = Arc::clone(&stats);
                 let wstats = Arc::clone(&wstats);
+                let flush_pipe = Arc::clone(&flush_pipe);
                 std::thread::spawn(move || {
-                    committer_loop(rx, wal, state, config, fsyncs, cache, stats, wstats)
+                    committer_loop(
+                        rx, wal, state, flush_pipe, config, fsyncs, cache, stats, wstats,
+                    )
                 })
             };
             (Some(tx), Some(handle))
@@ -881,6 +894,7 @@ impl Db {
             cache,
             stats,
             wstats,
+            flush_pipe,
             compactor,
             compactor_signal,
             trace: TraceState::new(),
@@ -1061,17 +1075,15 @@ impl Db {
                 }
             }
         }
-        if state.active.bytes() >= self.config.memtable_bytes {
-            Self::flush_locked_impl(
-                &self.config,
-                &self.wal,
-                &mut state,
-                &self.cache,
-                &self.stats,
-                &self.wstats,
-            )?;
-        }
+        // P5-M38 — the trigger check runs under the lock, the flush runs
+        // OUTSIDE it (through the flush pipe): the guard is dropped before
+        // the pipe is acquired, so this writer never blocks the pipe while
+        // holding the state lock.
+        let need_flush = state.active.bytes() >= self.config.memtable_bytes;
         drop(state);
+        if need_flush {
+            self.flush()?;
+        }
         self.maybe_compact()?;
         Ok(seq)
     }
@@ -1829,42 +1841,74 @@ impl Db {
     }
 
     pub fn flush(&self) -> Result<(), FormatError> {
-        let mut state = self.state.write().unwrap();
-        Self::flush_locked_impl(
+        flush_entry(
+            &self.flush_pipe,
             &self.config,
             &self.wal,
-            &mut state,
+            &self.state,
             &self.cache,
             &self.stats,
             &self.wstats,
         )
     }
 
-    /// Publication order (every crash window recoverable — see module doc):
-    /// segment files → manifest → CURRENT → WAL truncate. Shared with the
-    /// group-commit committer — it takes the pieces, not the Db.
-    fn flush_locked_impl(
+    /// P5-M38 — phase A: under a SHORT state lock, rotate the active
+    /// memtable to immutable, detach the immutables, and reserve their
+    /// segment ids (a concurrent compaction allocates ids under the same
+    /// lock, so reservation must live here). Also captures the WAL length:
+    /// writes append and apply under the same state lock, so every frame
+    /// present at this capture rides the detached memtables — phase C
+    /// truncates to it and no further. None = nothing to flush.
+    fn flush_phase_a(
         config: &Config,
         wal: &Arc<Mutex<File>>,
-        state: &mut State,
-        cache: &Option<Arc<BlockCache>>,
-        stats: &Arc<Stats>,
-        wstats: &Arc<WriteStats>,
-    ) -> Result<(), FormatError> {
+        state: &Arc<RwLock<State>>,
+    ) -> Result<Option<FlushPlan>, FormatError> {
+        let mut state = state.write().unwrap();
         if !state.active.is_empty() {
             let fresh = std::mem::take(&mut state.active);
             state.immutables.push(fresh);
         }
         if state.immutables.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
-        let flush_t = Instant::now();
-        let mut new_segments = Vec::with_capacity(state.immutables.len());
-        let mut anchors: HashMap<ReplicaId, (u64, SegmentId, BlockId, u32)> = HashMap::new();
-        for mem in state.immutables.drain(..) {
+        let immutables: Vec<Memtable> = state.immutables.drain(..).collect();
+        let mut segment_ids = Vec::with_capacity(immutables.len());
+        for _ in 0..immutables.len() {
             let id = state.next_segment_id;
             state.next_segment_id += 1;
-            let path = segment_path(&config.dir, id);
+            segment_ids.push(id);
+        }
+        let wal_truncate_len = wal
+            .lock()
+            .unwrap()
+            .metadata()
+            .map_err(|e| FormatError::Io(format!("WAL length: {e}")))?
+            .len();
+        Ok(Some(FlushPlan {
+            dir: config.dir.clone(),
+            immutables,
+            segment_ids,
+            wal_truncate_len,
+        }))
+    }
+
+    /// P5-M38 — phase B: NO state lock. Encode, write, validate and reopen
+    /// the detached immutables as segments; a concurrent writer, reader or
+    /// compaction proceeds while this runs. Nothing here reads or writes
+    /// `state` — the build carries everything the publication needs.
+    fn flush_phase_b(
+        config: &Config,
+        cache: &Option<Arc<BlockCache>>,
+        stats: &Arc<Stats>,
+        plan: FlushPlan,
+    ) -> Result<FlushBuild, FormatError> {
+        crash_park("AIKOQL_V2_FLUSH_IO_PARK", &plan.dir, "in_io");
+        let mut new_segments = Vec::with_capacity(plan.immutables.len());
+        let mut records = Vec::with_capacity(plan.immutables.len());
+        let mut anchors: HashMap<ReplicaId, (u64, SegmentId, BlockId, u32)> = HashMap::new();
+        for (mem, id) in plan.immutables.into_iter().zip(plan.segment_ids) {
+            let path = segment_path(&plan.dir, id);
             // SE2-M34/M39 — identity-carrying immutables become v4 blocks
             // (v3 rid per entry + the dense cadence table the placement
             // directory reads); pure byte-API ones stay v2, byte-identical
@@ -1910,7 +1954,7 @@ impl Db {
                 }
             }
             let reader = SegmentReader::open_with(&path, cache.clone(), Some(Arc::clone(stats)))?;
-            let record = SegmentRecord {
+            records.push(SegmentRecord {
                 segment_id: id,
                 level: 0,
                 key_min: reader.key_min().to_vec(),
@@ -1920,10 +1964,37 @@ impl Db {
                 record_count: reader.entry_count(),
                 file_size,
                 checksum,
-            };
-            state.segment_records.push(record);
+            });
             new_segments.push(Arc::new(reader));
         }
+        Ok(FlushBuild {
+            new_segments,
+            records,
+            anchors,
+        })
+    }
+    /// P5-M38 — phase C: a SHORT generation-checked publication lock.
+    /// Everything reads `state` fresh under this lock — a compaction that
+    /// completed while this flush was in phase B is already in the state
+    /// and rides this manifest, never overwritten. Publication order
+    /// (every crash window recoverable — see module doc): segment files
+    /// (phase B) → directory logs → manifest → CURRENT → WAL truncate →
+    /// readers attach → checkpoint.
+    fn flush_phase_c(
+        config: &Config,
+        wal: &Arc<Mutex<File>>,
+        state: &Arc<RwLock<State>>,
+        wstats: &Arc<WriteStats>,
+        build: FlushBuild,
+        wal_truncate_len: u64,
+    ) -> Result<(), FormatError> {
+        let mut state = state.write().unwrap();
+        let FlushBuild {
+            new_segments,
+            records,
+            anchors,
+        } = build;
+        state.segment_records.extend(records);
         // SE2-M34 — every flushed replica publishes its Segment placement
         // in the SAME window as its segment (the §23 order): the anchor is
         // the replica's max-seq entry location, the record's generation
@@ -2015,9 +2086,39 @@ impl Db {
             &Current::new(FORMAT_VERSION, state.generation),
         )?;
         {
-            let wal = wal.lock().unwrap();
+            let mut wal = wal.lock().unwrap();
+            // P5-M38 — the truncate keeps exactly the UNCOVERED frames: a
+            // write can append and apply between A and C (its data lands
+            // in the NEW active memtable), and dropping its frame would
+            // destroy an acked write on the next crash. Everything before
+            // the phase-A capture rides the published segments, so the
+            // tail is saved, the file reset, and the tail re-appended —
+            // replay sees exactly the frames no segment covers. ponytail:
+            // the tail copy is O(writes interleaved into B's I/O window);
+            // a WAL base-offset in the manifest replaces it if that
+            // volume ever dominates.
+            let now = wal
+                .metadata()
+                .map_err(|e| FormatError::Io(format!("WAL length: {e}")))?
+                .len();
+            let tail = if now > wal_truncate_len {
+                let mut buf = vec![0u8; (now - wal_truncate_len) as usize];
+                wal.seek(SeekFrom::Start(wal_truncate_len))
+                    .map_err(|e| FormatError::Io(format!("WAL tail seek: {e}")))?;
+                wal.read_exact(&mut buf)
+                    .map_err(|e| FormatError::Io(format!("WAL tail read: {e}")))?;
+                buf
+            } else {
+                Vec::new()
+            };
             wal.set_len(0)
                 .map_err(|e| FormatError::Io(format!("WAL truncate: {e}")))?;
+            if !tail.is_empty() {
+                wal.seek(SeekFrom::Start(0))
+                    .map_err(|e| FormatError::Io(format!("WAL reset seek: {e}")))?;
+                wal.write_all(&tail)
+                    .map_err(|e| FormatError::Io(format!("WAL tail re-append: {e}")))?;
+            }
             wal.sync_all()
                 .map_err(|e| FormatError::Io(format!("WAL sync: {e}")))?;
         }
@@ -2030,14 +2131,8 @@ impl Db {
         if config.checkpoint_bytes > 0
             && state.bytes_since_checkpoint >= config.checkpoint_bytes as u64
         {
-            Self::write_checkpoint(config, state, wstats)?;
+            Self::write_checkpoint(config, &mut state, wstats)?;
         }
-        // P3-M2 — a real flush (a no-op flush never gets counted: the
-        // is_empty guard above returns first).
-        wstats.flush_count.fetch_add(1, Ordering::Relaxed);
-        wstats
-            .flush_latency_us
-            .fetch_add(flush_t.elapsed().as_micros() as u64, Ordering::Relaxed);
         Ok(())
     }
 
@@ -2604,16 +2699,91 @@ fn merge_replica(
     }
 }
 
+/// P5-M38 — phase A's output: the detached work (immutables + their
+/// reserved segment ids), the store dir, and the WAL length captured
+/// under the A lock — phase C truncates TO it, never to zero (frames
+/// appended after the rotate belong to writes the detached memtables do
+/// not cover). Nothing here borrows `state`.
+struct FlushPlan {
+    dir: PathBuf,
+    immutables: Vec<Memtable>,
+    segment_ids: Vec<u64>,
+    wal_truncate_len: u64,
+}
+
+/// P5-M38 — phase B's output: the built segments and everything the
+/// publication needs (records in flush order — `zip` order).
+struct FlushBuild {
+    new_segments: Vec<Arc<SegmentReader>>,
+    records: Vec<SegmentRecord>,
+    anchors: HashMap<ReplicaId, (u64, SegmentId, BlockId, u32)>,
+}
+
+/// P5-M38 (R4-P0-01) — the flush entry point, shared by every caller
+/// (Sync write() trigger, explicit flush(), the GroupCommit committer):
+/// the pipe serializes flushes (one flush's phase-C WAL truncate must
+/// never race another flush's unpublished phase-B segments), then A short
+/// lock → B unlocked I/O → C short generation-checked publish. The
+/// lock-scope counters accumulate the disjoint windows — the structural
+/// invariant is hold (A+C) + io (B) ≤ total: the state lock never covers
+/// segment file construction. The pipe wait is contention, not flush
+/// work, so the total starts after the pipe.
+#[allow(clippy::too_many_arguments)] // the committer passes pieces, not the Db
+fn flush_entry(
+    flush_pipe: &Arc<Mutex<()>>,
+    config: &Config,
+    wal: &Arc<Mutex<File>>,
+    state: &Arc<RwLock<State>>,
+    cache: &Option<Arc<BlockCache>>,
+    stats: &Arc<Stats>,
+    wstats: &Arc<WriteStats>,
+) -> Result<(), FormatError> {
+    let _pipe = flush_pipe.lock().unwrap_or_else(|e| e.into_inner());
+    let flush_t = Instant::now();
+    let a_t = Instant::now();
+    let plan = Db::flush_phase_a(config, wal, state)?;
+    let hold = a_t.elapsed().as_nanos() as u64;
+    let Some(plan) = plan else {
+        // P3-M2 — a no-op flush never gets counted.
+        return Ok(());
+    };
+    let wal_truncate_len = plan.wal_truncate_len;
+    let b_t = Instant::now();
+    let build = Db::flush_phase_b(config, cache, stats, plan)?;
+    let io = b_t.elapsed().as_nanos() as u64;
+    let c_t = Instant::now();
+    Db::flush_phase_c(config, wal, state, wstats, build, wal_truncate_len)?;
+    let publish = c_t.elapsed().as_nanos() as u64;
+    wstats
+        .flush_total_ns
+        .fetch_add(flush_t.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    wstats
+        .flush_state_lock_hold_ns
+        .fetch_add(hold + publish, Ordering::Relaxed);
+    wstats.flush_io_ns.fetch_add(io, Ordering::Relaxed);
+    wstats
+        .flush_publish_ns
+        .fetch_add(publish, Ordering::Relaxed);
+    // P3-M2 — the legacy pair (count + cumulative µs) rides every real
+    // flush, same as before the split.
+    wstats.flush_count.fetch_add(1, Ordering::Relaxed);
+    wstats
+        .flush_latency_us
+        .fetch_add(flush_t.elapsed().as_micros() as u64, Ordering::Relaxed);
+    Ok(())
+}
+
 /// The committer: drain the queue into groups bounded by the caps and
 /// the wait window, commit each group with ONE fsync, apply, ack. Exits
 /// when every sender is gone and nothing is pending.
-// ponytail: 8 params mirror the Db handle set (wstats added in P3-M2);
-// group into a struct if a third caller appears.
+// ponytail: 9 params mirror the Db handle set (flush_pipe added in
+// P5-M38); group into a struct if a third caller appears.
 #[allow(clippy::too_many_arguments)]
 fn committer_loop(
     rx: mpsc::Receiver<Batch>,
     wal: Arc<Mutex<File>>,
     state: Arc<RwLock<State>>,
+    flush_pipe: Arc<Mutex<()>>,
     config: Config,
     fsyncs: Arc<AtomicU64>,
     cache: Option<Arc<BlockCache>>,
@@ -2656,21 +2826,34 @@ fn committer_loop(
             }
         }
         commit_group(
-            &group, &wal, &state, &config, &fsyncs, &cache, &stats, &wstats, &mut seqs,
+            &group,
+            &wal,
+            &state,
+            &flush_pipe,
+            &config,
+            &fsyncs,
+            &cache,
+            &stats,
+            &wstats,
+            &mut seqs,
         );
     }
 }
 
 /// Commit one group: assign seqs, append every frame, ONE fsync, apply,
-/// ack — all under one state write-lock, exactly like Sync's write()
-/// (SE-05), so a flush can never interleave the append-and-apply window.
-/// Lock order is always state → wal, and the wal lock is never held
-/// across a flush.
+/// ack. The append-and-apply window runs under one state write-lock,
+/// exactly like Sync's write() (SE-05), so a flush can never interleave
+/// it — the wal lock is never held across it either. The flush itself
+/// (P5-M38) runs OUTSIDE the state lock through the flush pipe: the group
+/// captures whether its apply crossed the memtable trigger, drops the
+/// lock, and flushes before the acks (acked == durable AND visible).
+/// Lock order is always state → wal.
 #[allow(clippy::too_many_arguments)] // same handle-set mirror as committer_loop
 fn commit_group(
     group: &[Batch],
     wal: &Arc<Mutex<File>>,
     state: &Arc<RwLock<State>>,
+    flush_pipe: &Arc<Mutex<()>>,
     config: &Config,
     fsyncs: &Arc<AtomicU64>,
     cache: &Option<Arc<BlockCache>>,
@@ -2693,6 +2876,9 @@ fn commit_group(
     let mut st = state.write().unwrap();
     seqs.clear(); // capacity retained from the widest group so far
     let mut outcome: Result<(), FormatError> = Ok(());
+    // P5-M38 — hoisted: the apply-if captures it under the lock, the
+    // flush (outside the lock) consumes it.
+    let mut need_flush = false;
     {
         let mut wal = wal.lock().unwrap();
         for (ops, _) in group {
@@ -2820,14 +3006,20 @@ fn commit_group(
                 }
             }
         }
-        if outcome.is_ok() && st.active.bytes() >= config.memtable_bytes {
-            if let Err(e) = Db::flush_locked_impl(config, wal, &mut st, cache, stats, wstats) {
-                outcome = Err(e);
-            }
+        // P5-M38 — the trigger check runs under the lock, the flush runs
+        // OUTSIDE it: capture the decision, drop the guard, flush through
+        // the pipe (acked == durable AND visible — the flush completes
+        // before the acks), then park + ack as before. No state guard is
+        // held while the pipe is acquired.
+        need_flush = outcome.is_ok() && st.active.bytes() >= config.memtable_bytes;
+    }
+    drop(st);
+    if need_flush {
+        if let Err(e) = flush_entry(flush_pipe, config, wal, state, cache, stats, wstats) {
+            outcome = Err(e);
         }
     }
     crash_park("AIKOQL_V2_GROUP_PARK", &config.dir, "after_apply");
-    drop(st);
     for ((_, ack_tx), seq) in group.iter().zip(seqs.iter()) {
         let _ = ack_tx.send(outcome.clone().map(|()| *seq));
     }
