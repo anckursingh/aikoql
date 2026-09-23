@@ -550,15 +550,13 @@ Delivered: positional resolution — one `Vec<bool>` (`resolved[pos]` set on res
 
 Acceptance: batch_sweep all ten points green (128/512/1K/4K/16K × {one segment, spread round-robin over 16}): retain scans exactly O(B) — one-layout scans = B+2 per point, spread = 8.5B+32 (the per-resolution retain would have recorded B(B+1)/2 = 8.39M at 4K against the 8,320 bound — the pin fails on it by ~1000×); allocs linear (533 at 128 → 65,866 at 16K, ~124× for the 128× input growth); answers by construction, duplicates share their first position's answer. Walls recorded as cells (2 → 510 ms across the sweep), never asserted. Full storage-v2 suite green; fmt + clippy -D warnings green.
 
-### P5-M43 — Allocation-free scan equal-key drain (R4-P1-04)
+### P5-M43 — Allocation-free scan equal-key drain (R4-P1-04) — SHIPPED 2026-09-23
 
-Current state (verified): db.rs:1794-1807 drains every equal-key candidate into a Vec then clones through max_by_key — per-group allocation + clone traffic on the W5 range path (M26 already flagged the scan as candidate-bound).
+RED 869e54b (scan_drain, the drain-delta pin fails on the old code: 23,068 vs the 16,000 bound) → feat 16128cb. Current state at the start: db.rs:1794-1807 drained every equal-key candidate into a Vec then cloned through max_by_key — per-group allocation + clone traffic on the W5 range path (M26 already flagged the scan as candidate-bound).
 
-Deliver: resolve the newest-layer winner inline while draining — winner + consumed stream indices only, never a candidate clone.
+Delivered: the winner resolves inline while draining — one hoisted `run: Vec<usize>` (cleared/refilled per group, zero per-group allocations) plus `best_i`/`win_v` tracked inline with `j >= best_i` (max_by_key's last-max-wins parity for the same-stream duplicate-key edge case); the winner's value moves straight into the out row — no candidate clone ever runs.
 
-TDD REDs: the zero-alloc equal-key drain pin (counting allocator over a version-heavy scan); winner parity vs the current path; the review's scan cells 10K/100K/1M × p50/p95/p99/allocs/bytes/rows-per-sec (env-gated; 10K/100K laptop, 1M CI).
-
-Acceptance: cells recorded; W5 re-stamped; the dedicated scan milestone the review asked for.
+Acceptance: the drain delta 23,068 → 14,068 allocs at N=1000 (8-stream vs 1-stream, counting allocator) — exactly the 14N decode floor (both arms collect each entry as (key.to_vec, value.clone) = 2 allocs), bound 16N with a 12N floor (the floor keeps the pin honest if the corpus drifts). W1 absolute 4,021 → 2,022: the per-group Vec + clone are gone from every scan, not just version-heavy ones. Winner parity green (four rounds of overwrites + tombstones, answers by construction — newest round wins, newest tombstone suppresses, a newer put resurrects). Laptop scan cells recorded (segment-backed, 4 streams: allocs ≈ 12N at both 10K and 100K, decodes = 4N exactly, bytes ≈ 123.7 B/key, ~73K rows/s; per-row p50/p95/p99 ≈ 7.9/10.4/11.0 µs at 100K, chunked-proxy). 1M rides CI (AIKOQL_V2_SCAN_CELLS_FULL=1). W5 re-stamped (release, 2026-09-23): engine prefix scan 1,144 µs of the 38,689 µs mean op (3.0%) — the decision is unchanged (W5 is candidate-bound, not scan-bound; the drain's win is allocation traffic, below the wall's noise floor — the scan share moved 1.6% → 3.0% on cross-day noise, still far under the 15% threshold; W5 mean 41,147 → 38,689 µs rides the get-bound leg, recorded-not-claimed).
 
 ### P5-M44 — Restart-index preparse (R4-P1-05)
 
