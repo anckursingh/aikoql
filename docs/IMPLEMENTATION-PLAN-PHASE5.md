@@ -542,15 +542,13 @@ Delivered: `publish_with_anchors_sorted_staged` (the M29 sorted path + the SE2-M
 
 Acceptance: sst001 byte/checksum/anchor-identical over a block-spanning corpus (the sorting writer fed a genuinely scrambled permutation — the sort still earns its keep there); sst002 duplicate-(key,seq) → Invalid, no file. The debug_assert caught a real fixture bug on its first GREEN run (the corpus wasn't key-ascending) — the assert earned its keep in its first hour. M29 goldens + the PR6-007 crash matrix green in the full suite. Compaction CPU with peak memory unchanged (the review's own list): cp001 re-run (same machine, same corpus, debug) — walls 20.5/21.5 s vs the M36 baseline 28.3/26.3 s, RSS essentially unchanged (+160.8/+165.3 MiB vs +164.6/+169.2 MiB, −2.3% both arms), allocs structurally identical (2.03N — the sort allocated nothing, exactly as expected). The wall drop's direction matches the sort removal; its magnitude carries the cross-day caveat (M36 recorded 2026-09-21). Three one-off incidents across consecutive suite runs (tier_depth_answers_match_oracle, sfm004, a flush_lock_scope hang) were all green standalone repeatedly and green on the arbiter full-suite re-run — the sv004/005 parallel-suite class, recorded on the honest ledger, not silent.
 
-### P5-M42 — get_many O(1) resolution tracking (R4-P1-03 + R4-P2-02)
+### P5-M42 — get_many O(1) resolution tracking (R4-P1-03 + R4-P2-02) — SHIPPED 2026-09-23
 
-Current state (verified): db.rs:1619 `remaining.retain(|&p| p != pos)` per resolved key = O(B²) worst-case; db.rs:1572 `HashMap<usize, (u64, u64)>` bloom hashes where the key is the input position.
+RED ecb5646 (batch_sweep, E0609 on the missing counter) → feat 5029144. Current state at the start: db.rs:1670 `remaining.retain(|&p| p != pos)` per resolved key = O(B²) worst case per segment pass — a TIME finding, not an allocation one (the retain shuffles in place, it allocates nothing); db.rs:1623 `HashMap<usize, (u64, u64)>` bloom hashes over dense input positions.
 
-Deliver: Vec<bool> positional resolution; Vec<Option<(u64, u64)>> bloom hashes.
+Delivered: positional resolution — one `Vec<bool>` (`resolved[pos]` set on resolution, O(1)), with the retain compacted to once per segment pass (`remaining.retain(|&p| !resolved[p])`); positional bloom-hash cache — `Vec<Option<(u64, u64)>>` indexed directly (one allocation, no per-probe hashing), the same shape as `resolved`. A new `batch_retain_scans` counter counts the retain's examined elements (ReadPathStats + the read trace) — the discriminating pin. The plan's allocs pin alone could not RED-fail: the old code's allocations were already O(B) amortized (the retain never allocated), so the sweep's allocs ratio is a regression guard both regimes satisfy, and the counter is what fails on the old retain.
 
-TDD REDs: the review's batch sweep 128/512/1K/4K/16K × {one segment, spread} with the allocation pin (allocs must not scale worse than O(B)); correctness parity vs the current path. (SE2-M25's batch-vs-loop falsification was about the API gain, not this internal complexity — both stand.)
-
-Acceptance: batch sweep cells recorded; storage-v2 suite green.
+Acceptance: batch_sweep all ten points green (128/512/1K/4K/16K × {one segment, spread round-robin over 16}): retain scans exactly O(B) — one-layout scans = B+2 per point, spread = 8.5B+32 (the per-resolution retain would have recorded B(B+1)/2 = 8.39M at 4K against the 8,320 bound — the pin fails on it by ~1000×); allocs linear (533 at 128 → 65,866 at 16K, ~124× for the 128× input growth); answers by construction, duplicates share their first position's answer. Walls recorded as cells (2 → 510 ms across the sweep), never asserted. Full storage-v2 suite green; fmt + clippy -D warnings green.
 
 ### P5-M43 — Allocation-free scan equal-key drain (R4-P1-04)
 
