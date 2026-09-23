@@ -345,8 +345,11 @@ fn publish_chunk(
     *next_id += 1;
     let path = crate::segment::segment_path(dir, id);
     // SE2-M36 — staged: publish_chunk only ever runs inside compaction.
+    // P5-M41 — sorted: the merge heap emitted publish order (key asc,
+    // seq desc within key), so the staged publish takes it straight
+    // through — no whole-buffer sort of heap-ordered entries.
     let (file_size, checksum, anchors) =
-        writer.publish_with_anchors_staged(&path, Some("SEGMENT"))?;
+        writer.publish_with_anchors_sorted_staged(&path, Some("SEGMENT"))?;
     let reader = SegmentReader::open_with(&path, attach.cache.clone(), attach.stats.clone())?;
     *len = 0;
     Ok((id, (reader, file_size, checksum), anchors))
@@ -430,7 +433,10 @@ fn publish_archive_chunk(
     std::fs::create_dir_all(&archive_dir).map_err(|e| {
         FormatError::Io(format!("create archive dir {}: {e}", archive_dir.display()))
     })?;
-    writer.publish(&archive_dir.join(name))?;
+    // P5-M41 — heap order straight through (no stage: archives ride no
+    // crash window). Anchors are dropped — an archive is never consulted
+    // for placement (the publish body computes them identically).
+    let _ = writer.publish_with_anchors_sorted_staged(&archive_dir.join(name), None)?;
     *len = 0;
     Ok(())
 }

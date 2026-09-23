@@ -266,6 +266,25 @@ impl SegmentWriter {
         self.publish_sorted_entries(path, None, entries)
     }
 
+    /// P5-M41 (R4-P1-02) — the compaction merge heap emits exactly the
+    /// publish's key asc + seq desc contract, so the staged publish takes
+    /// that order straight through: the M29 sorted path plus the SE2-M36
+    /// park stage. No sort — the heap did the ordering once, at merge time.
+    pub fn publish_with_anchors_sorted_staged(
+        &mut self,
+        path: &Path,
+        stage: Option<&str>,
+    ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
+        let entries = std::mem::take(&mut self.entries);
+        debug_assert!(
+            entries
+                .windows(2)
+                .all(|w| { w[0].key < w[1].key || (w[0].key == w[1].key && w[0].seq >= w[1].seq) }),
+            "sorted staged publish requires publish order (key asc, seq desc within key)"
+        );
+        self.publish_sorted_entries(path, stage, entries)
+    }
+
     /// The shared publish body — `entries` arrive sorted (key asc, seq
     /// desc within key) from either entry point; the precondition and
     /// duplicate guards stay here, one definition for both.

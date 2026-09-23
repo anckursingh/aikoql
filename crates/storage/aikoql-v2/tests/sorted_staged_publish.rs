@@ -14,9 +14,7 @@ mod common;
 
 use aikoql_storage_v2::format::FormatError;
 use aikoql_storage_v2::identity::ReplicaId;
-use aikoql_storage_v2::segment::{
-    SegmentEntry, SegmentWriter, FLAG_DELETE, FLAG_PUT,
-};
+use aikoql_storage_v2::segment::{SegmentEntry, SegmentWriter, FLAG_DELETE, FLAG_PUT};
 use common::dir;
 
 fn entry(key: &str, value_len: usize, seq: u64, flags: u8, rid: u64) -> SegmentEntry {
@@ -38,11 +36,11 @@ fn publish_order_corpus() -> Vec<SegmentEntry> {
         entry("alpha", 4096, 4, FLAG_PUT, 7),
         entry("alpha", 2048, 1, FLAG_PUT, 0),
         entry("beta", 4096, 2, FLAG_PUT, 9),
-        entry("gamma", 3072, 5, FLAG_PUT, 9),
-        entry("gamma", 4096, 3, FLAG_PUT, 0),
         entry("delta", 4096, 6, FLAG_PUT, 9),
         entry("epsilon", 4096, 8, FLAG_PUT, 9),
         entry("epsilon", 4096, 7, FLAG_PUT, 7),
+        entry("gamma", 3072, 5, FLAG_PUT, 9),
+        entry("gamma", 4096, 3, FLAG_PUT, 0),
     ]
 }
 
@@ -70,8 +68,9 @@ fn staged_sorted_publish_is_byte_identical_to_the_sorting_publish() {
     for e in corpus {
         wb.push(e);
     }
-    let (size_b, ck_b, mut anchors_b) =
-        wb.publish_with_anchors_sorted_staged(&pb, Some("SEGMENT")).unwrap();
+    let (size_b, ck_b, mut anchors_b) = wb
+        .publish_with_anchors_sorted_staged(&pb, Some("SEGMENT"))
+        .unwrap();
 
     // The anchor Vec's order is HashMap iteration order (the compaction
     // sorts it by rid itself) — compare as equal SETS.
