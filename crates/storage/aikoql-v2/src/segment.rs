@@ -29,8 +29,9 @@
 //! restart offsets u32[] (absolute payload positions) | entries` — entry
 //! encoding is unchanged, but an entry at a restart position encodes
 //! shared = 0 (full key), so every interval decodes standalone. A point
-//! lookup binary-searches the restart keys (borrowed, no alloc) and
-//! decodes only the one interval slice it lands in (≤ 16 entries — a
+//! lookup binary-searches the parsed restart keys (P5-M44: the table
+//! parses once per block into a compact blob, lookups allocate nothing)
+//! and decodes only the one interval slice it lands in (≤ 16 entries — a
 //! multi-version equal-key run extends its interval, see
 //! `last_restart_key` in `publish`).
 //!
@@ -72,6 +73,7 @@ use std::os::unix::fs::FileExt;
 use std::os::windows::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 pub const SEGMENT_VERSION: u16 = 1;
@@ -713,6 +715,71 @@ struct DataBlock {
     /// Atomic so concurrent readers on one segment are safe (SE2-M4) — a
     /// benign race re-validates a block's deterministic checksum twice.
     validated: AtomicBool,
+    /// P5-M44 (R4-P1-05) — the restart table parsed once per block (lazy:
+    /// zero cost for never-read blocks). Owned keys — a borrowed slice
+    /// would self-reference the block payload's Arc (eviction hazard).
+    restart: OnceLock<RestartIndex>,
+}
+
+/// P5-M44 (R4-P1-05) — the parsed restart table: entry offsets plus the
+/// restart keys in ONE contiguous blob (n+1 key offsets, last =
+/// keys.len()). Three allocations at first touch vs one Box per key — the
+/// per-key Box layout costs ~41 B/restart (vec slot + alloc header +
+/// data) where the blob costs ~17 B/restart, measured on a 50k-key L0
+/// segment (3126 restarts: ~66 KB blob vs ~128 KB boxed — the cells gate
+/// the representation). The compact keys also bound the parse cost: one
+/// keys-Vec growth, not one alloc per restart.
+#[derive(Debug)]
+struct RestartIndex {
+    /// restart → payload offset of its interval's first entry.
+    blk_offs: Box<[u32]>,
+    /// restart → byte offset of its key in `keys` (len n+1; last = end).
+    key_offs: Box<[u32]>,
+    keys: Box<[u8]>,
+}
+
+impl RestartIndex {
+    /// Validates the whole table (offsets inside the payload's entry
+    /// region, full keys at restart positions, keys strictly increasing)
+    /// and copies it into the compact layout. Runs exactly once per
+    /// block — the block checksum covers the load, so a damaged table
+    /// still fails closed, just at parse time instead of per lookup.
+    fn parse(offs: &[u8], payload: &[u8], table_len: usize) -> Result<Self, FormatError> {
+        let restarts = offs.len() / 4;
+        let mut blk_offs = Vec::with_capacity(restarts);
+        let mut key_offs = Vec::with_capacity(restarts + 1);
+        let mut keys: Vec<u8> = Vec::new();
+        let mut prev: Option<&[u8]> = None;
+        for j in 0..restarts {
+            let o =
+                u32::from_le_bytes(offs[j * 4..j * 4 + 4].try_into().expect("u32 slice")) as usize;
+            if o < table_len || o >= payload.len() {
+                return Err(FormatError::Corrupt(format!(
+                    "restart offset {o} outside payload"
+                )));
+            }
+            let k = restart_key(payload, o)?;
+            if prev.is_some_and(|p| k <= p) {
+                return Err(FormatError::Corrupt(
+                    "restart keys not strictly increasing".into(),
+                ));
+            }
+            blk_offs.push(o as u32);
+            key_offs.push(keys.len() as u32);
+            keys.extend_from_slice(k);
+            prev = Some(k);
+        }
+        key_offs.push(keys.len() as u32);
+        Ok(Self {
+            blk_offs: blk_offs.into_boxed_slice(),
+            key_offs: key_offs.into_boxed_slice(),
+            keys: keys.into_boxed_slice(),
+        })
+    }
+
+    fn key(&self, i: usize) -> &[u8] {
+        &self.keys[self.key_offs[i] as usize..self.key_offs[i + 1] as usize]
+    }
 }
 
 /// Bounded positional read: short reads are the same Corrupt truncation
@@ -926,6 +993,7 @@ impl SegmentReader {
                         first: 0..0,
                         last: 0..0,
                         validated: AtomicBool::new(false),
+                        restart: OnceLock::new(),
                     });
                 }
                 BLOCK_INDEX => {
@@ -1459,11 +1527,13 @@ impl SegmentReader {
         Ok((table, keys, restarts))
     }
 
-    /// Bounded v2/v3 point lookup. The restart table is validated up front
-    /// (offsets inside the payload, full keys at restart positions, keys
-    /// strictly increasing) so the binary search below cannot silently
-    /// misread damaged data — it fails closed instead. Stats count only
-    /// decoded interval entries; restart probes are key reads, not decodes.
+    /// Bounded v2/v3 point lookup. The restart table parses once per
+    /// block (P5-M44: a OnceLock on the DataBlock — offsets + compact
+    /// keys); lookups binary-search the parsed keys and decode from the
+    /// block as before. Validation moved to parse time — the block
+    /// checksum covers the load, so damaged tables still fail closed.
+    /// Stats count only decoded interval entries; restart probes are key
+    /// reads, not decodes.
     /// SE2-M34: `v3` payloads carry the rid after the flags; a `rid` filter
     /// keeps scanning the key's equal-key run past other replicas' rows
     /// (the run is seq-descending, so the first matching entry is the
@@ -1501,36 +1571,35 @@ impl SegmentReader {
             }
         }
         let offs = &payload[6..6 + 4 * restarts];
-        let mut keys: Vec<&[u8]> = Vec::with_capacity(restarts);
-        let mut prev: Option<&[u8]> = None;
-        for j in 0..restarts {
-            let o =
-                u32::from_le_bytes(offs[j * 4..j * 4 + 4].try_into().expect("u32 slice")) as usize;
-            if o < table_len || o >= payload.len() {
-                return Err(FormatError::Corrupt(format!(
-                    "restart offset {o} outside payload"
-                )));
+        let idx = match b.restart.get() {
+            Some(idx) => idx,
+            None => {
+                // Benign race (the SE2-M4 validated pattern): the loser's
+                // parsed copy drops; parse is pure, so either copy is fine.
+                let parsed = RestartIndex::parse(offs, payload, table_len)?;
+                b.restart.get_or_init(|| parsed)
             }
-            let k = restart_key(payload, o)?;
-            if prev.is_some_and(|p| k <= p) {
-                return Err(FormatError::Corrupt(
-                    "restart keys not strictly increasing".into(),
-                ));
-            }
-            keys.push(k);
-            prev = Some(k);
-        }
+        };
         // First restart whose key > target — decode starts at the one
         // before it (its key ≤ target, and entries before it are strictly
         // smaller, so the interval holds every possible match).
-        let r = keys.partition_point(|k| *k <= key);
+        let n = idx.blk_offs.len();
+        let (mut lo, mut hi) = (0usize, n);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if idx.key(mid) <= key {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let r = lo;
         if r == 0 {
             return Ok(None); // key < first restart key — locate() prevents this
         }
-        let start =
-            u32::from_le_bytes(offs[(r - 1) * 4..r * 4].try_into().expect("u32 slice")) as usize;
-        let end = if r < restarts {
-            u32::from_le_bytes(offs[r * 4..r * 4 + 4].try_into().expect("u32 slice")) as usize
+        let start = idx.blk_offs[r - 1] as usize;
+        let end = if r < n {
+            idx.blk_offs[r] as usize
         } else {
             payload.len()
         };
