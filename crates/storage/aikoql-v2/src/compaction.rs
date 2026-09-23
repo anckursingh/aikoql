@@ -53,6 +53,11 @@ pub struct CompactStats {
     /// (P5-M36 cp001: the RSS ∝ (keys, replicas) sweep's direct data,
     /// deciding the generation-mark array/bitset vs this HashSet).
     pub rids_seen: u64,
+    /// P5-M46 (R4-P2-01) — Σ rid-membership tests the per-key dedup pays:
+    /// the Vec tier (below the crossover) counts each equality test, the
+    /// set tier counts one insert probe. The k-sweep harness pins the
+    /// exact value per tier.
+    pub dedup_compares: u64,
     /// P5-M39 — the merge published nothing: a generation changed between
     /// its capture (phase A) and publication (phase C) — a flush
     /// interleaved — so the staged output was discarded. The counters
@@ -90,6 +95,19 @@ pub enum Retention {
 pub trait RetentionPolicy {
     fn classify(&self, key: &[u8]) -> Retention;
 }
+
+/// P5-M46 (R4-P2-01) — the two-tier rid-dedup crossover: a key's run
+/// with at most this many entries dedups on the linear-scan Vec (no
+/// hashing, no per-key allocation); longer runs use the hoisted
+/// HashSet, taking the per-key cost from O(k²) to O(k). The M46
+/// k-cells (debug): at k=4096 the wall fell 40.4 → 21.5 s with the set
+/// tier (compares 2.15G → 1.05M, allocs +1 total — the 21.5 s is the
+/// entry-linear merge base, M36-consistent); the marginal compare cost
+/// (≈ 9 ns) makes the per-probe hash+insert more expensive, so the Vec
+/// wins below the tie and 64 sits above it with margin for the set's
+/// occasional rehash. Any value in [16, 512] captures the k=4096 gain —
+/// 64 is an estimate, not a measured optimum.
+pub const DEDUP_CROSSOVER: usize = 64;
 
 /// The default: compaction is purely mechanical — newest-per-key wins,
 /// nothing leaves the live key space but tombstones at the bottom.
@@ -183,10 +201,11 @@ pub(crate) fn merge(
     // nothing of it survived the live output.
     let mut seen: HashSet<ReplicaId> = HashSet::new();
     let mut archive: Option<ArchiveSink> = None;
-    // PERF-3 — the per-key run and the rid-dedup set are hoisted and
+    // PERF-3 — the per-key run and the rid-dedup tiers are hoisted and
     // drained/cleared per key instead of constructed per key.
     let mut run: Vec<SegmentEntry> = Vec::new();
     let mut grouped: Vec<ReplicaId> = Vec::new();
+    let mut grouped_set: HashSet<ReplicaId> = HashSet::new();
     while let Some(HeapEntry { entry, idx: i }) = heap.pop() {
         // SE2-M38 — a key is a shared byte namespace: any number of
         // replicas may write it, so the winner is per (key, rid) — each
@@ -214,21 +233,40 @@ pub(crate) fn merge(
                 seen.insert(entry.replica_id);
             }
         }
+        // P5-M46 — two-tier rid dedup: below DEDUP_CROSSOVER the linear
+        // scan wins (no hashing, no per-key allocation); at or above it
+        // the per-key cost is O(k) instead of O(k²) — the k-cells put
+        // k=4096 at 40.4 → 21.5 s. Both tiers are hoisted; the set
+        // reuses its allocation across keys (clear keeps the capacity).
+        let use_set = run.len() > DEDUP_CROSSOVER;
         match policy.classify(&run[0].key) {
             Retention::Keep => {
                 for entry in run.drain(..) {
-                    // ponytail: linear-scan rid dedup — O(k²) with k =
-                    // versions per key. A fresh HashSet per key run is the
-                    // per-key allocation this PERF avoids; upgrade only if
-                    // version-heavy keys ever appear.
-                    if !grouped.contains(&entry.replica_id) {
-                        // The rid groups even on a tombstone: its delete
-                        // wins over older same-rid versions.
-                        grouped.push(entry.replica_id);
-                        if entry.flags & FLAG_DELETE == 0 {
-                            push_live(&mut live, dir, next_id, chunk_bytes, entry, attach)?;
-                            stats.entries_out += 1;
+                    // dedup_compares counts each membership test — the
+                    // Vec tier's equality tests, one insert probe on the
+                    // set tier (the O(k²) signature below the crossover).
+                    let fresh = if use_set {
+                        stats.dedup_compares += 1;
+                        grouped_set.insert(entry.replica_id)
+                    } else {
+                        let mut fresh = true;
+                        for &rid in &grouped {
+                            stats.dedup_compares += 1;
+                            if rid == entry.replica_id {
+                                fresh = false;
+                                break;
+                            }
                         }
+                        if fresh {
+                            // The rid groups even on a tombstone: its
+                            // delete wins over older same-rid versions.
+                            grouped.push(entry.replica_id);
+                        }
+                        fresh
+                    };
+                    if fresh && entry.flags & FLAG_DELETE == 0 {
+                        push_live(&mut live, dir, next_id, chunk_bytes, entry, attach)?;
+                        stats.entries_out += 1;
                     }
                 }
             }
@@ -244,6 +282,9 @@ pub(crate) fn merge(
             }
         }
         grouped.clear();
+        if use_set {
+            grouped_set.clear();
+        }
     }
 
     if live.len > 0 {

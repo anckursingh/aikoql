@@ -8,10 +8,14 @@
 //! worth the branch (rule 11).
 //!
 //! The RED: the harness drives CompactStats.dedup_compares — the Σ
-//! rid-equality tests the dedup path pays (the O(k²) signature) —
-//! which does not exist today, so this does not compile. The feat is
-//! the counter (the scan goes inline to count it); the two-tier ships
-//! only on evidence.
+//! rid-membership tests the per-key dedup pays — which did not exist
+//! then (the compile-error RED). The feat is the counter plus the
+//! two-tier it measured into existence: the cells crossed the review's
+//! gate (k=4096 wall 40.4 → 21.5 s, compares 2.15G → 1.05M, allocs +1
+//! total — the residual is the entry-linear merge base), so a run over
+//! DEDUP_CROSSOVER=64 dedups on the hoisted HashSet (O(k) per key);
+//! below it the linear Vec scan stays (no hashing, no per-key
+//! allocation).
 //!
 //! Cells (AIKOQL_V2_K_CELLS=1): k ∈ 2/8/32/128/512/4096 × N keys, each
 //! key written once per rid (k distinct rids — the worst case for the
@@ -27,6 +31,7 @@
 
 mod common;
 
+use aikoql_storage_v2::compaction::DEDUP_CROSSOVER;
 use aikoql_storage_v2::db::{Config, Db, DurabilityMode};
 use aikoql_storage_v2::identity::ReplicaId;
 use aikoql_storage_v2::wal::Op;
@@ -75,12 +80,8 @@ fn one_merge(n: usize, k: usize) -> (u64, u64, u64, u64, u64) {
         for i in half * n / 2..(half + 1) * n / 2 {
             let key = format!("k{i:08}").into_bytes();
             for rid in 1..=k as u64 {
-                db.write(&[Op::PutObject(
-                    ReplicaId(rid),
-                    key.clone(),
-                    val.clone(),
-                )])
-                .unwrap();
+                db.write(&[Op::PutObject(ReplicaId(rid), key.clone(), val.clone())])
+                    .unwrap();
             }
         }
         db.flush().unwrap();
@@ -120,9 +121,11 @@ fn dedup_compare_pin() {
 /// Tombstone grouping parity (ungated): rid 1 deletes each key after
 /// writing it — its tombstone is the (key, 1) winner, so its puts never
 /// survive, yet the rid still probes the dedup scan (the memtable
-/// appends both versions, so each key's run has k+1 entries: the delete
-/// probes 0, the put probes 1 and finds it, the k-1 other rids probe
-/// 1..k-1 — per key exactly 1 + k(k-1)/2 compares) and counts as seen.
+/// appends both versions, so each key's run has k+1 entries) and counts
+/// as seen. Drain order is seq-descending: the k-1 rids written after
+/// the pair drain first and probe 0..k-2 (all fresh), the delete probes
+/// k-1 (rid 1 is new), the put probes k and finds it — per key exactly
+/// k(k+1)/2 compares.
 #[test]
 fn tombstone_rid_groups_and_counts() {
     let n = 16;
@@ -133,26 +136,24 @@ fn tombstone_rid_groups_and_counts() {
     cfg.l0_compact_trigger = 0;
     let db = Db::open(cfg).unwrap();
     let val = vec![b'v'; 32];
-    for i in 0..n {
-        let key = format!("k{i:08}").into_bytes();
-        db.write(&[Op::PutObject(ReplicaId(1), key.clone(), val.clone())])
-            .unwrap();
-        db.write(&[Op::DeleteObject(ReplicaId(1), key.clone())])
-            .unwrap();
-        for rid in 2..=k as u64 {
-            db.write(&[Op::PutObject(
-                ReplicaId(rid),
-                key.clone(),
-                val.clone(),
-            )])
-            .unwrap();
+    for half in 0..2 {
+        for i in half * n / 2..(half + 1) * n / 2 {
+            let key = format!("k{i:08}").into_bytes();
+            db.write(&[Op::PutObject(ReplicaId(1), key.clone(), val.clone())])
+                .unwrap();
+            db.write(&[Op::DeleteObject(ReplicaId(1), key.clone())])
+                .unwrap();
+            for rid in 2..=k as u64 {
+                db.write(&[Op::PutObject(ReplicaId(rid), key.clone(), val.clone())])
+                    .unwrap();
+            }
         }
+        db.flush().unwrap(); // two L0 segments — compact() no-ops at one
     }
-    db.flush().unwrap();
     let stats = db.compact().unwrap();
     assert_eq!(
         stats.dedup_compares,
-        (n * (1 + k * (k - 1) / 2)) as u64,
+        (n * k * (k + 1) / 2) as u64,
         "the tombstone's rid still probes (and its own put re-probes it)"
     );
     assert_eq!(
@@ -160,7 +161,27 @@ fn tombstone_rid_groups_and_counts() {
         (n * (k - 1)) as u64,
         "the delete wins over its rid's put — only rids 2..=k survive"
     );
-    assert_eq!(stats.rids_seen, k as u64, "the tombstoned rid is still seen");
+    assert_eq!(
+        stats.rids_seen, k as u64,
+        "the tombstoned rid is still seen"
+    );
+}
+
+/// The set tier's pin (ungated — 512 puts): k=128 > DEDUP_CROSSOVER,
+/// so each key's run dedups on the hoisted set — one membership test
+/// per entry (k probes per key), same output parity as the Vec tier.
+#[test]
+fn set_tier_compare_pin() {
+    let (wall_ms, allocs, compares, entries_out, rids_seen) = one_merge(4, 128);
+    assert!(wall_ms > 0, "the merge wall is recorded");
+    assert!(allocs > 0, "the allocation count is recorded");
+    assert_eq!(
+        compares,
+        4 * 128,
+        "the set tier: one insert probe per entry — O(k), not O(k²)"
+    );
+    assert_eq!(entries_out, 4 * 128, "distinct rids all survive");
+    assert_eq!(rids_seen, 128, "the M36 pin on the set tier");
 }
 
 #[test]
@@ -173,10 +194,16 @@ fn ksweep_cells() {
     let mut lines: Vec<String> = Vec::new();
     for &k in &[2usize, 8, 32, 128, 512, 4096] {
         let (wall_ms, allocs, compares, entries_out, rids_seen) = one_merge(n, k);
+        // Below the crossover every probe misses (k(k-1)/2 per key); at
+        // or above it the set tier pays one insert probe per entry.
+        let expected = if k > DEDUP_CROSSOVER {
+            (n * k) as u64
+        } else {
+            (n * k * (k - 1) / 2) as u64
+        };
         assert_eq!(
-            compares,
-            (n * k * (k - 1) / 2) as u64,
-            "k={k}: the exact O(k²) probe count — every probe misses"
+            compares, expected,
+            "k={k}: the exact membership-test count per tier"
         );
         assert_eq!(rids_seen, k as u64, "k={k}: the M36 pin re-run");
         assert_eq!(
