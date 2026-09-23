@@ -568,13 +568,11 @@ Acceptance: the representation selected on the cells (the review's memory gate).
 
 ### P5-M45 — Cache concurrency benchmark (R4-P1-06)
 
-Current state: the gen-stamp cache is O(1) per hit but every hit takes one global mutex; the hot-head evidence (P50 1.2 µs) is single-threaded — multi-reader scaling is unmeasured.
+SHIPPED 2026-09-23 — NO sharding (evidence-driven decline). RED 5d87e5a (cache_concurrency, the compile-error RED: the harness drives set_wait_tracking/wait_ns, which BlockCache does not have) → feat 82e50fd. Current state at the start: the gen-stamp cache is O(1) per hit but every hit takes one global mutex; the hot-head evidence (P50 1.2 µs) is single-threaded — multi-reader scaling was unmeasured.
 
-Deliver: the review's matrix — 1/2/4/8/16/32 threads × {same hot block, random blocks, mixed segment readers} × {throughput, p50/p95/p99, cache mutex wait}. Shard into 8–16 locked shards ONLY if the cells show contention (the review's own gate — no sharding before measurement).
+Delivered: gated mutex-wait tracking (wait_ns accumulation behind wait_enabled — off by default, one relaxed flag load per lock, no clock reads; all three lock sites route through one lock()) plus the 24-cell matrix (AIKOQL_V2_CACHE_CELLS=1): 1/2/4/8/16/32 threads × {hot block, random blocks, mixed reader ids, segment}. The segment regime is the decisive cell — real point gets on one hot key through the Db (state lock + cache hit + v2 decode; cache_hits verifies every op hits) — because the cache-level regimes make the lock the whole op.
 
-TDD REDs: the concurrency harness + mutex-wait instrumentation (compile-error RED); the cells (env-gated).
-
-Acceptance: the matrix recorded; the sharding decision evidence-driven either way.
+Acceptance: the matrix recorded, the decision evidence-driven. Cache-level: wait fraction 0.09 → 0.95 (1 → 32 threads; the 1-thread floor is the tracking clock itself), throughput 1.5M → 750K ops/s — NEGATIVE scaling, the mutex saturates at the cache layer. Segment-level: 77K → 426K ops/s (1 → 8 threads, 5.5× positive) and flat to 32; p50 82 → 126 µs. The lock is ~0.1% of a real read — sharding would optimize a 0.1% component, so it is DECLINED per the review's own gate; the harness stays as the regression instrument if the read path ever shrinks toward the lock. (16/32-thread segment p99 3.2/8.2 ms recorded-not-root-caused — p50/p95 flat says the common path scales; the tail rides the scheduler or a convoy, not the hot path.) Full v2 suite 404/0.
 
 ### P5-M46 — Two-tier replica dedup (R4-P2-01)
 
