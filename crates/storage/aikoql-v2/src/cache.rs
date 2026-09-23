@@ -19,8 +19,9 @@
 //! Ties pick any — exact-LRU ordering per distinct touch.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CacheStats {
@@ -39,6 +40,11 @@ pub struct BlockCache {
     misses: AtomicU64,
     evictions: AtomicU64,
     next_id: AtomicU64,
+    /// P5-M45 (R4-P1-06) — mutex-wait accumulation for the concurrency
+    /// cells, gated: off (the default), one relaxed flag load per lock
+    /// and no clock reads. The M45 harness enables it around its matrix.
+    wait_enabled: AtomicBool,
+    wait_ns: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -164,7 +170,33 @@ impl BlockCache {
             misses: AtomicU64::new(0),
             evictions: AtomicU64::new(0),
             next_id: AtomicU64::new(0),
+            wait_enabled: AtomicBool::new(false),
+            wait_ns: AtomicU64::new(0),
         })
+    }
+
+    /// P5-M45 cells — enables mutex-wait accumulation. Off by default;
+    /// when off a lock pays one relaxed flag load and no clock read.
+    pub fn set_wait_tracking(&self, on: bool) {
+        self.wait_enabled.store(on, Ordering::Relaxed);
+    }
+
+    /// P5-M45 cells — total ns spent waiting on the state mutex since
+    /// tracking was enabled (0 when tracking is off).
+    pub fn wait_ns(&self) -> u64 {
+        self.wait_ns.load(Ordering::Relaxed)
+    }
+
+    fn lock(&self) -> MutexGuard<'_, State> {
+        if self.wait_enabled.load(Ordering::Relaxed) {
+            let t0 = Instant::now();
+            let guard = self.state.lock().unwrap();
+            self.wait_ns
+                .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            guard
+        } else {
+            self.state.lock().unwrap()
+        }
     }
 
     /// A fresh identity for one SegmentReader (never reused — see module
@@ -176,7 +208,7 @@ impl BlockCache {
     /// Lookup returns an Arc clone — the caller decodes from shared bytes.
     pub fn get(&self, id: u64, block: u32) -> Option<Arc<Vec<u8>>> {
         let key = (id, block);
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock();
         // Disjoint field borrows — through a MutexGuard, `entries.get_mut`
         // would hold the whole guard borrowed and block the clock stamp.
         let State { entries, clock, .. } = &mut *st;
@@ -193,7 +225,7 @@ impl BlockCache {
 
     pub fn insert(&self, id: u64, block: u32, raw: Arc<Vec<u8>>) {
         let bytes = raw.len();
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock();
         if bytes > self.cap {
             return; // one block bigger than the cache: never cached
         }
@@ -220,7 +252,7 @@ impl BlockCache {
             hits: self.hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
             evictions: self.evictions.load(Ordering::Relaxed),
-            bytes: self.state.lock().unwrap().bytes,
+            bytes: self.lock().bytes,
         }
     }
 }
