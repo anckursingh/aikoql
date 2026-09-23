@@ -1593,6 +1593,11 @@ impl Db {
             .fetch_add(unique.len() as u64, Ordering::Relaxed);
 
         let mut answers: Vec<Option<Vec<u8>>> = vec![None; keys.len()];
+        // R4-P1-03 — positional resolution: one bool per input position,
+        // set when the memtable or a segment resolves the key. The old
+        // per-resolution O(B) retain (O(B²) worst case per segment pass)
+        // becomes one O(B) compaction at the end of each pass.
+        let mut resolved: Vec<bool> = vec![false; keys.len()];
         let (mut remaining, segments) = {
             let t_lock = Instant::now();
             let state = self.state.read().unwrap();
@@ -1619,14 +1624,18 @@ impl Db {
             (remaining, Arc::clone(&state.segments))
         };
         // SE2-M22 parity — one key hash per unique key, shared by every
-        // segment's bloom probe.
-        let mut bloom_hashes: HashMap<usize, (u64, u64)> = HashMap::new();
+        // segment's bloom probe. R4-P2-02 — the cache is positional: a
+        // dense input position indexes a Vec directly (one allocation,
+        // no per-probe hashing), the same shape as `resolved`.
+        let mut bloom_hashes: Vec<Option<(u64, u64)>> = vec![None; keys.len()];
         for seg in segments.iter().rev() {
             self.stats
                 .segments_considered
                 .fetch_add(1, Ordering::Relaxed);
             let mut wanted: Vec<usize> = Vec::with_capacity(remaining.len());
             for &pos in &remaining {
+                // the per-pass compaction keeps remaining ⊆ unresolved
+                debug_assert!(!resolved[pos], "remaining holds only unresolved positions");
                 let key = keys[pos];
                 if key < seg.key_min() || key > seg.key_max() {
                     self.stats
@@ -1635,9 +1644,8 @@ impl Db {
                     continue;
                 }
                 let t_bloom = Instant::now();
-                let (h1, h2) = *bloom_hashes
-                    .entry(pos)
-                    .or_insert_with(|| SegmentReader::bloom_hashes(key));
+                let (h1, h2) =
+                    *bloom_hashes[pos].get_or_insert_with(|| SegmentReader::bloom_hashes(key));
                 let may = seg.bloom_may_contain_hashes(h1, h2);
                 self.stats
                     .bloom_probe_ns
@@ -1665,11 +1673,15 @@ impl Db {
                     } else {
                         Some(e.value)
                     };
-                    // ponytail: linear retain per resolution — fine at batch
-                    // sizes (W4 fan-outs ≤ 1000)
-                    remaining.retain(|&p| p != pos);
+                    resolved[pos] = true; // O(1) — no per-resolution retain
                 }
             }
+            // R4-P1-03 — one O(B) compaction per segment pass; the counter
+            // counts the examined elements (the batch_sweep pin).
+            self.stats
+                .batch_retain_scans
+                .fetch_add(remaining.len() as u64, Ordering::Relaxed);
+            remaining.retain(|&p| !resolved[p]);
         }
         // duplicates answered from their first position's lookup
         for (pos, key) in keys.iter().enumerate() {

@@ -58,6 +58,10 @@ pub struct ReadPathStats {
     pub lock_wait_ns: u64,
     pub bloom_probe_ns: u64,
     pub get_wall_ns: u64,
+    /// P5-M42 — Σ remaining.len() at each get_many retain (the elements
+    /// examined): the per-resolution retain made it O(B²) worst case;
+    /// the per-pass compaction makes it O(B).
+    pub batch_retain_scans: u64,
 }
 
 /// The live counters — one per field, relaxed atomics (~ns overhead).
@@ -82,6 +86,7 @@ pub(crate) struct Stats {
     pub(crate) lock_wait_ns: AtomicU64,
     pub(crate) bloom_probe_ns: AtomicU64,
     pub(crate) get_wall_ns: AtomicU64,
+    pub(crate) batch_retain_scans: AtomicU64,
 }
 
 impl Stats {
@@ -106,6 +111,7 @@ impl Stats {
             lock_wait_ns: self.lock_wait_ns.load(Ordering::Relaxed),
             bloom_probe_ns: self.bloom_probe_ns.load(Ordering::Relaxed),
             get_wall_ns: self.get_wall_ns.load(Ordering::Relaxed),
+            batch_retain_scans: self.batch_retain_scans.load(Ordering::Relaxed),
         }
     }
 }
@@ -140,6 +146,7 @@ pub struct ReadTraceRecord {
     pub bytes_read: u64,
     pub entries_decoded: u64,
     pub bloom_probe_ns: u64,
+    pub batch_retain_scans: u64,
     /// True when the request needed no new block reads (block cache or
     /// memtable served it).
     pub cache_hit: bool,
@@ -174,6 +181,7 @@ impl ReadPathStats {
             bytes_read: d!(bytes_read),
             entries_decoded: d!(entries_decoded),
             bloom_probe_ns: d!(bloom_probe_ns),
+            batch_retain_scans: d!(batch_retain_scans),
             cache_hit: self.blocks_read == before.blocks_read,
         }
     }

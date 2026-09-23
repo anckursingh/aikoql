@@ -67,7 +67,7 @@ fn build_db(tag: &str, n: usize, segments: usize) -> (Db, Vec<Vec<u8>>, Vec<Vec<
     let db = Db::open(cfg).unwrap();
     let mut keys = Vec::with_capacity(n);
     let mut vals = Vec::with_capacity(n);
-    let per = (n + segments - 1) / segments;
+    let per = n.div_ceil(segments);
     for i in 0..n {
         let key = format!("k{i:08}").into_bytes();
         let val = format!("v{i:08}").into_bytes();

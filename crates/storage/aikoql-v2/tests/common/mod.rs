@@ -114,6 +114,9 @@ pub fn stats_delta(after: ReadPathStats, before: ReadPathStats) -> ReadPathStats
         lock_wait_ns: after.lock_wait_ns.saturating_sub(before.lock_wait_ns),
         bloom_probe_ns: after.bloom_probe_ns.saturating_sub(before.bloom_probe_ns),
         get_wall_ns: after.get_wall_ns.saturating_sub(before.get_wall_ns),
+        batch_retain_scans: after
+            .batch_retain_scans
+            .saturating_sub(before.batch_retain_scans),
     }
 }
 
