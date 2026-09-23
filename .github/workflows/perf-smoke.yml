@@ -23,6 +23,8 @@ on:
       - 'crates/engines/vector/**'
       - 'scripts/perf-smoke.sh'
       - 'scripts/perf-smoke-check.py'
+      - 'scripts/artifact_schema.py'
+      - 'scripts/test_artifact_schema.py'
       - 'artifacts/storage-engine-v2/perf-smoke-baseline.json'
       - '.github/workflows/perf-smoke.yml'
   push:
@@ -33,6 +35,8 @@ on:
       - 'crates/engines/vector/**'
       - 'scripts/perf-smoke.sh'
       - 'scripts/perf-smoke-check.py'
+      - 'scripts/artifact_schema.py'
+      - 'scripts/test_artifact_schema.py'
       - 'artifacts/storage-engine-v2/perf-smoke-baseline.json'
       - '.github/workflows/perf-smoke.yml'
   workflow_dispatch:
@@ -45,6 +49,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # P5-M47: the checker scripts validate their evidence schema and the
+      # artifact freshness stamp — the pins must hold before the gate runs.
+      - name: Checker schema pins
+        shell: bash
+        run: python scripts/test_artifact_schema.py
       - name: Perf smoke cells + budget check
         shell: bash
         run: bash scripts/perf-smoke.sh

@@ -29,6 +29,8 @@ on:
       - 'crates/runtime/**'
       - '.github/workflows/baseline-guard.yml'
       - 'scripts/gate5-check.py'
+      - 'scripts/artifact_schema.py'
+      - 'scripts/test_artifact_schema.py'
   push:
     branches: [main]
     paths:
@@ -38,6 +40,8 @@ on:
       - 'crates/runtime/**'
       - '.github/workflows/baseline-guard.yml'
       - 'scripts/gate5-check.py'
+      - 'scripts/artifact_schema.py'
+      - 'scripts/test_artifact_schema.py'
   workflow_dispatch:
 
 jobs:
@@ -48,6 +52,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # P5-M47: the checker scripts validate their evidence schema and the
+      # artifact freshness stamp — the pins must hold before the gate runs.
+      - name: Checker schema pins
+        shell: bash
+        run: python scripts/test_artifact_schema.py
       - name: Run 1M v2 workload
         shell: bash
         run: |
@@ -58,3 +67,45 @@ jobs:
       - name: Gate-5 ratio check
         shell: bash
         run: python scripts/gate5-check.py
+      # P5-M47 (R4-P2-07): the fresh artifact IS the republish evidence —
+      # always uploaded (a red gate is exactly when the evidence is needed),
+      # freshness-stamped by the gate check above. Nothing is committed from
+      # CI (P3-M0 rule 6): the maintainer downloads and commits.
+      - name: Upload fresh 1M v2 artifact (republish evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-1m-v2
+          path: artifacts/storage-engine-v2/result-1m-aikoql-v2.json
+          if-no-files-found: error
+
+  # P5-M47 (R4-P2-07): the committed v1 baseline predates the M37 *_ns
+  # rename — its republish regenerates it through the SAME harness
+  # (V2ADOPT_BACKEND=aikoql) at the pushed head, freshness-stamps the
+  # upload, and hands it to the maintainer to commit. Push/manual only:
+  # a 1M v1 leg on every PR would double the guard's cost for no
+  # PR-time purpose.
+  republish:
+    name: 1M v1 baseline republish (M37 *_ns schema)
+    runs-on: windows-latest
+    timeout-minutes: 360
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run 1M v1 workload
+        shell: bash
+        run: |
+          export V2ADOPT_NIGHTLY=1m
+          export V2ADOPT_BACKEND=aikoql
+          export AIKOQL_REPORT_WRITE=1
+          cargo test -p aikoql-storage-v2 --release --test kse_m7_v2_workloads
+      - name: Freshness-stamp the upload
+        shell: bash
+        run: python scripts/artifact_schema.py artifacts/storage-engine-v2/result-1m-aikoql.json
+      - name: Upload fresh 1M v1 artifact (republish evidence)
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-1m-v1
+          path: artifacts/storage-engine-v2/result-1m-aikoql.json
+          if-no-files-found: error

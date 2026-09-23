@@ -431,6 +431,17 @@ jobs:
             echo "DAG VIOLATION: $GUARD must run the 1M regime (V2ADOPT_NIGHTLY=1m)"
             exit 1
           fi
+          # P5-M47: the gate's checker schema pins must run in the guard,
+          # and the fresh artifact must be uploaded (the republish evidence)
+          # — either step can rot silently in a bad merge.
+          if ! grep -q 'test_artifact_schema.py' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must run the checker schema pins"
+            exit 1
+          fi
+          if ! grep -q 'upload-artifact' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must upload the fresh 1M artifact (the republish evidence)"
+            exit 1
+          fi
           # PR6-F6 (P1-6): the per-commit perf smoke workflow must stay
           # wired — the cheap gate-5 catches O(n^2)-class storage
           # regressions at commit time instead of in the nightly 1M guard.
@@ -448,6 +459,11 @@ jobs:
           done
           if ! grep -q 'perf-smoke.sh' "$SMOKE"; then
             echo "DAG VIOLATION: $SMOKE must run scripts/perf-smoke.sh"
+            exit 1
+          fi
+          # P5-M47: the smoke checker's schema pins must run there too.
+          if ! grep -q 'test_artifact_schema.py' "$SMOKE"; then
+            echo "DAG VIOLATION: $SMOKE must run the checker schema pins"
             exit 1
           fi
           # PR6-F7 (P1-7): the codec/replay coverage floor workflow must

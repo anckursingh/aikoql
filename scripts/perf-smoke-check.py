@@ -20,6 +20,8 @@ import json
 import re
 import sys
 
+from artifact_schema import SchemaError, validate_1m, validate_smoke_cells
+
 BOUND = 3.0
 BASE = "artifacts/storage-engine-v2/perf-smoke-baseline.json"
 SMOKE = "artifacts/storage-engine-v2/result-smoke.json"
@@ -32,29 +34,16 @@ def die(msg):
     sys.exit(1)
 
 
-def p50_rows(path):
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    out = {}
-    for backend in data.get("backends", []):
-        for row in backend.get("rows", []):
-            out[(backend.get("name"), row.get("label"))] = float(row["p50_ns"])
-    return out
-
-
 def main():
     try:
-        with open(BASE, encoding="utf-8") as f:
-            base = json.load(f)
-    except OSError as e:
-        die(f"baseline unreadable: {e}")
-    cells = base.get("cells")
-    if not cells:
-        die("baseline has no cells block")
+        cells = validate_smoke_cells(BASE)
+    except SchemaError as e:
+        die(f"baseline: {e}")
     try:
-        fresh = p50_rows(SMOKE)
-    except OSError as e:
-        die(f"fresh smoke artifact unreadable: {e} (did the run set V2ADOPT_PERF_SMOKE=1?)")
+        fresh = validate_1m(SMOKE, fresh=True)
+    except SchemaError as e:
+        hint = " (did the run set V2ADOPT_PERF_SMOKE=1?)" if e.unreadable else ""
+        die(f"{e}{hint}")
 
     for key, label in (
         ("w1_ko_get_p50_ns", "KO get (W1)"),
@@ -63,7 +52,7 @@ def main():
         got = fresh.get((BACKEND, label))
         if got is None:
             die(f"{label!r} missing from fresh smoke ({BACKEND})")
-        want = float(cells[key])
+        want = cells[key]
         ratio = got / want
         print(f"{key}: {got:.0f} ns vs baseline {want:.0f} ns = {ratio:.2f}x (bound {BOUND}x)")
         if ratio > BOUND:
@@ -78,7 +67,7 @@ def main():
     if not m:
         die("hot-head P50 line missing from hot-head.md")
     got_ns = int(m.group(1))
-    want_ns = float(cells["hot_head_p50_ns"])
+    want_ns = cells["hot_head_p50_ns"]
     ratio = got_ns / want_ns
     print(f"hot_head_p50_ns: {got_ns} ns vs baseline {want_ns:.0f} ns = {ratio:.2f}x (bound {BOUND}x)")
     if ratio > BOUND:

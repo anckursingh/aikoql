@@ -14,21 +14,26 @@ Shared by the baseline-guard CI job and the manual 1M procedure:
     python scripts/gate5-check.py
 """
 import argparse
-import json
 import sys
+
+from artifact_schema import SchemaError, validate_1m
 
 BOUND = 8.0  # GATE5_SLOWDOWN_BOUND — design gate, SE2-M22 (user decision)
 REDLINE_FRAC = 0.99  # W1 shipped at 7.96x = 99.5% of the bound — no headroom
 
 
-def p50(path, label):
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    for backend in data.get("backends", []):
-        for row in backend.get("rows", []):
-            if row.get("label") == label:
-                return float(row["p50_ns"])
-    raise SystemExit(f"{label!r} not found in {path}")
+def p50s(path, fresh):
+    """Validated label → p50_ns from one artifact (first backend wins, as the
+    committed 4-backend matrices share labels). Fresh artifacts must be
+    stamped at the tested HEAD — stale evidence can never feed the gate."""
+    try:
+        rows = validate_1m(path, fresh=fresh)
+    except SchemaError as e:
+        raise SystemExit(str(e)) from e
+    by_label = {}
+    for (_, label), p50 in rows.items():
+        by_label.setdefault(label, p50)
+    return by_label
 
 
 def main():
@@ -40,8 +45,15 @@ def main():
 
     rows = []
     worst = 0.0
+    fresh_p50 = p50s(args.fresh, fresh=True)
+    base_p50 = p50s(args.baseline, fresh=False)
     for label in ("KO get (W1)", "head get (W2)"):
-        f, b = p50(args.fresh, label), p50(args.baseline, label)
+        f = fresh_p50.get(label)
+        if f is None:
+            raise SystemExit(f"{label!r} not found in {args.fresh}")
+        b = base_p50.get(label)
+        if b is None:
+            raise SystemExit(f"{label!r} not found in {args.baseline}")
         ratio = f / b
         rows.append((label, f, b, ratio))
         worst = max(worst, ratio)
