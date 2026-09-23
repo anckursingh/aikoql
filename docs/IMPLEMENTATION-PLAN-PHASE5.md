@@ -560,13 +560,11 @@ Acceptance: the drain delta 23,068 → 14,068 allocs at N=1000 (8-stream vs 1-st
 
 ### P5-M44 — Restart-index preparse (R4-P1-05)
 
-Current state (verified): segment.rs:1439 `block_get_v2` rebuilds the restart-key Vec and revalidates offsets on every point lookup — immutable metadata reparsed per read.
+SHIPPED 2026-09-23. RED 7e3d4e6 (restart_index, the reparse pin fails on the old code: 5 == 5 allocs — the keys Vec rebuilds on every lookup; parity + fail-closed green) → feat 0a9876f. Current state at the start: segment.rs:1439 `block_get_v2` rebuilt the restart-key Vec and revalidated offsets on every point lookup — immutable metadata reparsed per read.
 
-Deliver: parse once at open (or OnceLock) into a compact RestartIndex; measure metadata-bytes/segment, open time, point-read CPU + allocs; select the representation on the tradeoff (the review's own memory gate — no blind per-segment bloat).
+Delivered: the restart table parses once per block — a `OnceLock<RestartIndex>` on DataBlock (lazy: never-read blocks cost nothing) holding the offsets + restart keys in one contiguous blob (n+1 key offsets into a keys buffer; three allocations at first touch, none per lookup). Lookups binary-search the parsed keys and decode from the block as before; validation moved to parse time — the block checksum covers the load, so damaged tables still fail closed (the pin's fail-closed arm re-stamps BOTH checksums: the block checksum field lives in the data block header the footer skeleton covers).
 
-TDD REDs: the reparse pin (a lookup no longer rebuilds the restart vector — structural probe); the per-segment metadata budget pin; byte-identical lookup results (the kse golden corpus).
-
-Acceptance: the measurement cells recorded and the representation selected on evidence.
+Acceptance: the representation selected on the cells (the review's memory gate). 50k-key L0 segment (1,009,576 B file, 3,126 restarts, table 12,846 B + keys 28,134 B): the blob costs ~17 B/restart → ~66 KB resident vs ~41 B/restart → ~128 KB for the per-key Box<[u8]> layout — blob selected. Warm steady state 5 → 4 allocs (block re-read 2 + scratch extend 1 + key clone 1 — the pin's floor); the one-time parse rides the first touch. Debug walls (recorded-not-claimed, laptop one-offs): p50 33.7 → 12.0 µs, p95 57.3 → 21.9 µs, p99 ~0.6 ms flat; open unchanged (the parse is lazy, open cost = 0). Full v2 suite 403/0. Open time, point-read CPU: lazy parse adds nothing at open by construction.
 
 ### P5-M45 — Cache concurrency benchmark (R4-P1-06)
 
