@@ -1853,23 +1853,31 @@ impl Db {
             }
         }
         let mut out = Vec::new();
+        // R4-P1-04 — the equal-key drain resolves the winner inline:
+        // stream indices only, no per-group Vec and no candidate clones.
+        // Streams are pushed in age order (segments, immutables, active),
+        // so the max index is the newest layer. `>=` keeps max_by_key's
+        // last-max-wins parity for the same-stream duplicate-key edge case.
+        let mut run: Vec<usize> = Vec::with_capacity(streams.len());
         while let Some((Reverse(k), i, v)) = heap.pop() {
-            let mut drained = vec![(i, v)];
+            run.clear();
+            run.push(i);
+            let mut best_i = i;
+            let mut win_v = v;
             while let Some((Reverse(k2), _, _)) = heap.peek() {
                 if k2.as_slice() != k.as_slice() {
                     break;
                 }
-                let (_, i, v) = heap.pop().expect("peeked");
-                drained.push((i, v));
+                let (_, j, v) = heap.pop().expect("peeked");
+                run.push(j);
+                if j >= best_i {
+                    best_i = j;
+                    win_v = v;
+                }
             }
-            let (_, win_v) = drained
-                .iter()
-                .cloned()
-                .max_by_key(|(i, _)| *i)
-                .expect("drained non-empty");
-            for (i, _) in &drained {
-                if let Some((nk, nv)) = streams[*i].next()? {
-                    heap.push((Reverse(nk), *i, nv));
+            for &i in &run {
+                if let Some((nk, nv)) = streams[i].next()? {
+                    heap.push((Reverse(nk), i, nv));
                 }
             }
             if let Some(v) = win_v {
