@@ -534,15 +534,13 @@ Delivered: three authoritative counters (l0_count / l0_bytes / l1_bytes) live in
 
 Acceptance: lba001 10/100 segments laptop + 1,000/10,000 env-gated (AIKOQL_V2_LBA_CELLS_FULL=1 — zero scan_l0 calls per write at every scale, the review's sweep pin structurally, not a wall cell); lba002 counters ≡ scan_l0 after every flush/compaction/reopen; met003 green; full storage-v2 suite + workspace regression green; fmt + clippy -D warnings green. M35's honest row stands (its keep was regime-true); the reversal is recorded here and on the ledger.
 
-### P5-M41 — Sorted compaction publish (R4-P1-02)
+### P5-M41 — Sorted compaction publish (R4-P1-02) — SHIPPED 2026-09-23
 
-Current state (verified): compaction.rs:344 publishes via `publish_with_anchors_staged` → segment.rs:236 `entries.sort_by` — a full O(n log n) sort of entries the merge heap already emitted in key-asc/seq-desc order. Redundant CPU work, confirmed.
+RED f685711 (sst001–002, E0599 ×2 on the missing surface) → feat f5c3bf8. Current state at the start: compaction.rs:344 published via `publish_with_anchors_staged` → segment.rs:236 `entries.sort_by` — a full O(n log n) sort of entries the merge heap already emitted in key-asc/seq-desc order. Redundant CPU work, confirmed.
 
-Deliver: `publish_with_anchors_sorted_staged` (the M29 sorted path + the SE2-M36 park stage); compaction feeds the heap order straight through.
+Delivered: `publish_with_anchors_sorted_staged` (the M29 sorted path + the SE2-M36 park stage) — a `debug_assert!` pins the input contract (key asc, seq desc within key), then the shared publish body straight through. Both the live publish_chunk AND the archive publish feed the heap order — compaction never sorts. The sorting staged variant stays for the public publish-with-arbitrary-order entry point, which compaction no longer uses.
 
-TDD REDs: the sort-elimination pin (publish-from-compaction never sorts — fails on the staged path today); fls002-style byte/checksum/anchor equivalence over a block-spanning corpus; duplicate-(key,seq) validation unchanged; the SE2-M36 crash-window park still lands.
-
-Acceptance: compaction CPU decreases with peak memory unchanged (the review's own list); M29 goldens + PR6-007 matrix green.
+Acceptance: sst001 byte/checksum/anchor-identical over a block-spanning corpus (the sorting writer fed a genuinely scrambled permutation — the sort still earns its keep there); sst002 duplicate-(key,seq) → Invalid, no file. The debug_assert caught a real fixture bug on its first GREEN run (the corpus wasn't key-ascending) — the assert earned its keep in its first hour. M29 goldens + the PR6-007 crash matrix green in the full suite. Compaction CPU with peak memory unchanged (the review's own list): cp001 re-run (same machine, same corpus, debug) — walls 20.5/21.5 s vs the M36 baseline 28.3/26.3 s, RSS essentially unchanged (+160.8/+165.3 MiB vs +164.6/+169.2 MiB, −2.3% both arms), allocs structurally identical (2.03N — the sort allocated nothing, exactly as expected). The wall drop's direction matches the sort removal; its magnitude carries the cross-day caveat (M36 recorded 2026-09-21). Three one-off incidents across consecutive suite runs (tier_depth_answers_match_oracle, sfm004, a flush_lock_scope hang) were all green standalone repeatedly and green on the arbiter full-suite re-run — the sv004/005 parallel-suite class, recorded on the honest ledger, not silent.
 
 ### P5-M42 — get_many O(1) resolution tracking (R4-P1-03 + R4-P2-02)
 
