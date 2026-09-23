@@ -970,6 +970,22 @@ impl Db {
         scan
     }
 
+    /// P5-M44 — cell instrumentation: the restart-table footprint across
+    /// the open segments — (table bytes, restart key bytes, restart
+    /// count). Doc-hidden debug; never a production path.
+    #[doc(hidden)]
+    pub fn debug_restart_metadata(&self) -> Result<(u64, u64, u64), FormatError> {
+        let state = self.state.read().unwrap();
+        let (mut table, mut keys, mut restarts) = (0u64, 0u64, 0u64);
+        for seg in state.segments.iter() {
+            let (t, k, r) = seg.debug_restart_metadata()?;
+            table += t;
+            keys += k;
+            restarts += r;
+        }
+        Ok((table, keys, restarts))
+    }
+
     /// P3-M8 — block until the compactor drains: every kicked merge has
     /// finished (or failed) and the write path's backpressure wait would
     /// not block. No-op when the compactor is off (`compact_background`

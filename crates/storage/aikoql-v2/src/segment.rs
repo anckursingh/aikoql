@@ -1413,6 +1413,52 @@ impl SegmentReader {
         }
     }
 
+    /// P5-M44 — cell instrumentation: this segment's restart-table
+    /// footprint — (table bytes, restart key bytes, restart count) over
+    /// its v2+ data blocks. Doc-hidden debug (the review's
+    /// measurement-first gate); never a production path.
+    pub(crate) fn debug_restart_metadata(&self) -> Result<(u64, u64, u64), FormatError> {
+        let mut table = 0u64;
+        let mut keys = 0u64;
+        let mut restarts = 0u64;
+        for (i, b) in self.data.iter().enumerate() {
+            if !b.v2 {
+                continue; // v1 blocks have no restart table
+            }
+            let raw = self.block_raw(i)?;
+            let payload = &raw[BLOCK_HEADER_LEN..];
+            if payload.len() < 6 {
+                return Err(FormatError::Corrupt(
+                    "v2 table header exceeds payload".into(),
+                ));
+            }
+            let n = u32::from_le_bytes(payload[2..6].try_into().expect("u32 slice")) as u64;
+            table += 6 + 4 * n;
+            if b.v4 {
+                // SE2-M39 — the dense cadence table follows the offsets.
+                if payload.len() < 10 + 4 * n as usize {
+                    return Err(FormatError::Corrupt("v4 table exceeds payload".into()));
+                }
+                let dense = u32::from_le_bytes(
+                    payload[6 + 4 * n as usize..10 + 4 * n as usize]
+                        .try_into()
+                        .expect("u32 slice"),
+                ) as u64;
+                table += 4 + 4 * dense;
+            }
+            for j in 0..n as usize {
+                let o = u32::from_le_bytes(
+                    payload[6 + 4 * j..10 + 4 * j]
+                        .try_into()
+                        .expect("u32 slice"),
+                ) as usize;
+                keys += restart_key(payload, o).map_or(0, |k| k.len() as u64);
+            }
+            restarts += n;
+        }
+        Ok((table, keys, restarts))
+    }
+
     /// Bounded v2/v3 point lookup. The restart table is validated up front
     /// (offsets inside the payload, full keys at restart positions, keys
     /// strictly increasing) so the binary search below cannot silently
