@@ -576,13 +576,13 @@ Acceptance: the matrix recorded, the decision evidence-driven. Cache-level: wait
 
 ### P5-M46 — Two-tier replica dedup (R4-P2-01)
 
-Current state (verified): compaction.rs:184/219 `grouped: Vec<ReplicaId>` + `contains` — O(k²) worst-case per key with many versions.
+SHIPPED 2026-09-23 — the two-tier ships on the cells. RED a8c7064 (compaction_ksweep, the compile-error RED: the harness drives CompactStats.dedup_compares — absent — plus the exact O(k²) pins). Current state at the start: `grouped: Vec<ReplicaId>` + `contains` — O(k²) worst-case per key with many versions (verified at compaction.rs:184/219).
 
-Deliver: benchmark k = 2/8/32/128/512/4096 first; the two-tier (Vec below the crossover, HashSet above) only where the cells show a crossover worth the branch (rule 11).
+Delivered: `dedup_compares` counts each rid-membership test (the Vec tier's equality tests, one insert probe on the set tier); the k-sweep harness (AIKOQL_V2_K_CELLS=1, PERF-3 arm around compact(), k ∈ 2/8/32/128/512/4096 × N=256 keys each written once per rid — every probe misses, the worst case; _FULL=1 → N=2048 for CI) + three exact pins: the Vec tier's k(k-1)/2 per key, the tombstone arm's k(k+1)/2 (drain order seq-descending — the pin caught the harness's own first derivation on its first green run), the set tier's one probe per entry; rids_seen == k re-run in every arm (the M36 pin).
 
-TDD REDs: the k-sweep cells (env-gated, allocation + wall); correctness parity (rids_seen unchanged — the M36 pin re-run).
+Acceptance: the crossover measured, the branch justified. Before (Vec only, debug laptop): k=2/8/32/128/512/4096 → wall 24/53/171/634/2940/40365 ms, allocs 1251/4479/17078/66828/265892/2123562. The marginal compare cost ≈ 9 ns puts the dedup at ~49% of the k=4096 wall. After (two-tier, DEDUP_CROSSOVER = 64): wall 38/58/169/646/2576/21491 ms — k=4096 40.4 → 21.5 s with compares 2.15G → 1.05M and allocs +1 total (the hoisted set reuses its allocation); the 21.5 s residual is the entry-linear merge base (M36-consistent: cp001's 1M entries took 28.3 s). k ≤ 32 unchanged (the Vec still wins below the tie — no hashing, no per-key allocation). 64 is an estimate with margin, not a measured optimum — any value in [16, 512] captures the gain; the residual cost at k=4096 belongs to the v4/rid-heavy merge base (M36 sweep territory), not the dedup. Full v2 suite 408/0 (M45's 404 + the 4 ksweep pins).
 
-Acceptance: the crossover measured; the two-tier ships only on evidence.
+Honest ledger: the harness's tombstone pin initially expected 464 (put-first drain derivation) and failed with the exact 576 — the real drain order is seq-descending (rids written after the pair drain first); the pin now documents the true order. The k-cells sidecar is swept with the temp dir at process exit (the TLS sweep) — the cells ride the eprintln.
 
 ### P5-M47 — Benchmark evidence + CI integrity (R4-P2-04/05/06/07)
 
