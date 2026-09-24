@@ -343,7 +343,14 @@ jobs:
     name: Verify Dependency DAG
     runs-on: ubuntu-latest
     steps:
+      # Full history: the R3-005 stamp gate and the P1-8 compiled-head
+      # grep walk the doc's commit chain — on the shallow PR merge-ref
+      # checkout (the default depth 1) the merge commit masquerades as
+      # the doc's last modifier (R3-005 passes vacuously) and
+      # `rev-parse DOC_COMMIT^` errors outright (F8 dies with a fatal).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - name: Check banned dependencies
         run: |
