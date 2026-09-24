@@ -160,5 +160,10 @@ Everything from review 1's §36, plus review 2's §23:
 - PR6-012 db.rs decomposition; P2-9 wire-contract golden tests.
 - Roadmap amendments: Phase 2 time trigger (architect point 1), ingestion
   automation (point 2), Phase 1 perf parity on demand.
+- Goal 2 ecosystem plan (`docs/GOAL-2-ECOSYSTEM-PLAN.md`): ECO-1..15 —
+  Database API extraction, native wire protocol, SQL/PG/JDBC-ODBC/Cypher
+  adapters, migrations. Starts after launch per its own §32; conflicts
+  with the P3-M9 driver re-adopt triggers to resolve first; evidence-gated
+  like the roadmap phases.
 - CI runtime refinement toward the review's 5–10 min PR target as measured
   data arrives (cache hit ratios, Windows split decisions).
