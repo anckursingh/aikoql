@@ -1,4 +1,7 @@
-//! Versioned physical record envelope (KSE-3, MRFC-KSE-001 §9).
+//! Frozen copy of v1's physical record envelope parser (KSE-3,
+//! MRFC-KSE-001 §9) — vendored when the v1 crate was deleted (launch S-02)
+//! because the WAL migrator must keep decoding the frozen on-disk format.
+//! Never extend: the format is dead, only `parse_at` + its tests are kept.
 //!
 //! Layout (all big-endian):
 //!
@@ -6,21 +9,14 @@
 //! magic(4) version(1) flags(1) record_type(1) payload_len(4) payload checksum(8)
 //! ```
 //!
-//! checksum = first 8 bytes of sha256 over everything before it (the same
-//! hash primitive the kernel's audit chain uses). A torn tail (fewer bytes
-//! than one full record — crash mid-append) is distinguished from corruption:
-//! replay truncates the former, fails closed on the latter. KSE-11 reserves
-//! flags bit 0 for encrypted payloads.
-//!
-//! Threat model (PR#2 review SE-07): the 8-byte checksum is an INTEGRITY
-//! FINGERPRINT — accidental corruption detection YES (false-positive
-//! ~2^-64 per candidate), cryptographic authenticity NO (no keyed input),
-//! attacker modification resistance NO (an attacker who can rewrite bytes
-//! can recompute the fingerprint). Adversarial integrity belongs to the
-//! encrypted envelope (MRFC-0020, KSE-11), whose keyed cipher authenticates
-//! payloads; this checksum only catches bit rot, truncation and torn tails.
+//! checksum = the crate's sha256-8 (the same primitive as v1's — the first
+//! 8 bytes of sha256 over everything before it). A torn tail (fewer bytes
+//! than one full record — crash mid-append) is distinguished from
+//! corruption: replay truncates the former, fails closed on the latter.
+//! The 8-byte checksum is an INTEGRITY FINGERPRINT (PR#2 review SE-07),
+//! not authenticity — bit rot / truncation / torn tails only.
 
-use aikoql_kernel::knowledge::kom::{sha256, KError, KResult};
+use crate::format::{checksum8, FormatError};
 
 pub const MAGIC: &[u8; 4] = b"AKQL";
 pub const FORMAT_VERSION: u8 = 1;
@@ -28,22 +24,8 @@ pub const TYPE_BATCH: u8 = 1;
 const HEADER_LEN: usize = 11;
 const CHECKSUM_LEN: usize = 8;
 
-fn corrupt(what: &str) -> KError {
-    KError::Store(format!("aikoql-storage: corrupt log: {}", what))
-}
-
-/// Encode one record: header + payload + checksum.
-pub fn encode_record(record_type: u8, payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(HEADER_LEN + payload.len() + CHECKSUM_LEN);
-    out.extend_from_slice(MAGIC);
-    out.push(FORMAT_VERSION);
-    out.push(0); // flags — bit 0 reserved for encryption (KSE-11)
-    out.push(record_type);
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
-    let ck = sha256(&out);
-    out.extend_from_slice(&ck[..CHECKSUM_LEN]);
-    out
+fn corrupt(what: &str) -> FormatError {
+    FormatError::Corrupt(format!("legacy WAL: corrupt log: {}", what))
 }
 
 #[derive(Debug)]
@@ -56,9 +38,25 @@ pub enum ParseOutcome {
     TornTail,
 }
 
+/// Encode one record: header + payload + checksum. Frozen with the format —
+/// production never encodes (the migrator only decodes); test fixtures use
+/// this so the encode/decode pair is self-checking.
+pub fn encode_record(record_type: u8, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(HEADER_LEN + payload.len() + CHECKSUM_LEN);
+    out.extend_from_slice(MAGIC);
+    out.push(FORMAT_VERSION);
+    out.push(0); // flags — bit 0 reserved for encryption (KSE-11)
+    out.push(record_type);
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload);
+    let ck = checksum8(&out);
+    out.extend_from_slice(&ck[..CHECKSUM_LEN]);
+    out
+}
+
 /// Parse one record at `offset`. `Err` = corruption / incompatibility
 /// (deterministic, fail closed); `TornTail` = safely ignorable tail.
-pub fn parse_at(bytes: &[u8], offset: usize) -> KResult<ParseOutcome> {
+pub fn parse_at(bytes: &[u8], offset: usize) -> Result<ParseOutcome, FormatError> {
     if bytes.len() - offset < HEADER_LEN + CHECKSUM_LEN {
         return Ok(ParseOutcome::TornTail);
     }
@@ -67,8 +65,8 @@ pub fn parse_at(bytes: &[u8], offset: usize) -> KResult<ParseOutcome> {
     }
     let version = bytes[offset + 4];
     if version != FORMAT_VERSION {
-        return Err(KError::Store(format!(
-            "aikoql-storage: unsupported format version {} (this build supports {})",
+        return Err(FormatError::Unsupported(format!(
+            "legacy WAL: unsupported format version {} (this build supports {})",
             version, FORMAT_VERSION
         )));
     }
@@ -82,7 +80,7 @@ pub fn parse_at(bytes: &[u8], offset: usize) -> KResult<ParseOutcome> {
         return Ok(ParseOutcome::TornTail);
     }
     let stored = &bytes[end - CHECKSUM_LEN..end];
-    let computed = sha256(&bytes[offset..end - CHECKSUM_LEN]);
+    let computed = checksum8(&bytes[offset..end - CHECKSUM_LEN]);
     if stored != &computed[..CHECKSUM_LEN] {
         return Err(corrupt("checksum mismatch"));
     }

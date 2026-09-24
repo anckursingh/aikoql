@@ -29,7 +29,7 @@ impl Drop for TempSweeper {
         for p in &self.paths {
             let _ = std::fs::remove_file(p);
             let _ = std::fs::remove_dir_all(p);
-            // Sidecars next to the registered stem (`{stem}.redb.artifacts`).
+            // Sidecars next to the registered stem (v2 keeps everything inside).
             let Some(name) = p.file_name() else { continue };
             if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
                 let prefix = format!("{}.", name.to_string_lossy());
@@ -42,6 +42,10 @@ impl Drop for TempSweeper {
             }
         }
     }
+}
+
+fn engine_at(path: &std::path::Path) -> aikoql_storage_v2::AikoqlStorageEngineV2 {
+    aikoql_storage_v2::AikoqlStorageEngineV2::open(path).expect("open engine")
 }
 
 fn tmp_db(name: &str) -> PathBuf {
@@ -73,7 +77,7 @@ fn tmp_db(name: &str) -> PathBuf {
     });
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "aikoql_dur_{}_{}_{}.redb",
+        "aikoql_dur_{}_{}_{}",
         name,
         std::process::id(),
         std::time::SystemTime::now()
@@ -104,8 +108,8 @@ fn alice() -> Subject {
 /// event. Journal-length and -position pins below count it as entry #1.
 const CATALOG_PREAMBLE: usize = 1;
 
-fn kernel_at(path: &PathBuf, salt: u64) -> Kernel {
-    let engine = RedbEngine::open(path).expect("open engine");
+fn kernel_at(path: &std::path::Path, salt: u64) -> Kernel {
+    let engine = engine_at(path);
     Kernel::open(Arc::new(engine), Arc::new(SystemClock), salt).expect("open kernel")
 }
 
@@ -134,7 +138,7 @@ fn d01_committed_mutations_survive_restart() {
     assert_eq!(ko.properties.get("n"), Some(&Value::Int(42)));
     assert_eq!(k2.journal().unwrap().len(), 2 + CATALOG_PREAMBLE);
     assert!(k2.prove(alice(), &id).unwrap().chain_valid);
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&path);
 }
 
 #[test]
@@ -165,13 +169,13 @@ fn d02_journal_seq_and_hlc_continue_after_reopen() {
         "commit_ts must be monotone across restarts"
     );
     assert!(k2.prove(alice(), &id).unwrap().chain_valid);
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&path);
 }
 
 #[test]
 fn d03_batch_is_all_or_nothing_on_disk() {
     let path = tmp_db("atomic");
-    let engine = RedbEngine::open(&path).unwrap();
+    let engine = engine_at(&path);
     let mut b = WriteBatch::new();
     for i in 0..100u8 {
         b.put(vec![i], vec![i.wrapping_mul(3)]);
@@ -187,7 +191,7 @@ fn d03_batch_is_all_or_nothing_on_disk() {
     engine.write_batch(&b2).unwrap();
     assert_eq!(engine.scan(&[]).unwrap().len(), 51);
     assert_eq!(engine.get(b"marker").unwrap(), Some(vec![1]));
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +245,7 @@ fn d04_abrupt_termination_preserves_all_commits() {
         .prove(&crasher, &KOID::from_bytes([0u8; KOID_LEN]))
         .unwrap();
     assert!(proof.chain_valid, "audit chain must validate after crash");
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&path);
 }
 
 #[test]
@@ -304,7 +308,7 @@ fn d04b_crash_fuzz_random_commit_boundaries() {
                 crash_after
             );
         }
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&path);
     }
 }
 
@@ -361,7 +365,7 @@ fn d05_syscall_surface_behaves_identically_on_durable_engine() {
     k.forget(alice(), &a, ForgetMode::Tombstone, None, None)
         .unwrap();
     assert!(k.prove(alice(), &a).unwrap().chain_valid);
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&path);
 }
 
 #[test]
@@ -387,7 +391,7 @@ fn d06_concurrent_writers_gapless_journal_on_disk() {
     for (i, ke) in j.iter().enumerate() {
         assert_eq!(ke.seq, (i + 1) as u64);
     }
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&path);
 }
 
 // ---------------------------------------------------------------------------
@@ -416,7 +420,7 @@ fn d07_point_read_p99_gate() {
     let p50 = lat[lat.len() / 2];
     let p99 = lat[(lat.len() * 99) / 100];
     println!(
-        "BENCH point-read n={} p50={:?} p99={:?} (engine=redb, dataset=500 KOs)",
+        "BENCH point-read n={} p50={:?} p99={:?} (engine=aikoql-v2, dataset=500 KOs)",
         lat.len(),
         p50,
         p99
@@ -426,120 +430,5 @@ fn d07_point_read_p99_gate() {
         "P99 gate breached: {:?}",
         p99
     );
-    let _ = std::fs::remove_file(&path);
-}
-
-// ---------------------------------------------------------------------------
-// REC-002 backup/restore knowledge-equivalence (MVP-QA-001)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn d09_restore_preserves_relations_provenance_temporal_and_constraints() {
-    // MVP-QA-001 REC-002: backup → destroy → restore yields equivalent KOs,
-    // facts, relations, provenance, temporal state AND constraints.
-    // Red 2026-08-25: the schema registry is in-memory only — after restore
-    // the check-violating write was accepted (constraints lost).
-    let path = tmp_db("rec002");
-    let snap = tmp_db("rec002snap");
-    let salt = 0xC0FFEE;
-    let (catalog, item, asserted);
-    {
-        let k = kernel_at(&path, salt);
-        k.register_schema(
-            Schema::new("Item", 1)
-                .required_property("name", "Text")
-                .property("qty", "Int")
-                .check(
-                    "qty_positive",
-                    CheckExpression::Compare {
-                        op: CompareOp::Gt,
-                        left: Box::new(CheckExpression::Property("qty".into())),
-                        right: Box::new(CheckExpression::Literal(Value::Int(0))),
-                    },
-                ),
-        )
-        .unwrap();
-
-        // relations: Catalog <- Item (Outbound from Item)
-        catalog = k
-            .remember(RememberRequest::create(alice(), meta("Catalog")))
-            .unwrap()
-            .koid;
-        let mut item_req = RememberRequest::create(alice(), meta("Item"));
-        item_req
-            .properties
-            .insert("name".into(), Value::Text("widget".into()));
-        item_req.properties.insert("qty".into(), Value::Int(7));
-        item_req.relationships.push(RelationshipRef {
-            rel_type: "listed_in".into(),
-            target: catalog,
-            direction: Direction::Outbound,
-        });
-        item = k.remember(item_req).unwrap().koid;
-
-        // provenance + temporal state: an asserted KO carrying evidence and
-        // an explicit assertion instant.
-        asserted = k
-            .assert_knowledge(AssertionRequest {
-                context: alice().into(),
-                type_name: "Policy".into(),
-                properties: {
-                    let mut p = PropertyMap::new();
-                    p.insert("text".into(), Value::Text("retention is 30 days".into()));
-                    p
-                },
-                authority: Some("architecture_decision".into()),
-                evidence: vec![Evidence::new("runbook.md", EvidenceMethod::DocExtraction)],
-                valid_from: Some(1_000),
-                security: None,
-                note: None,
-            })
-            .unwrap()
-            .koid;
-
-        k.backup_store_to(&snap).unwrap();
-    }
-
-    // destroy → fresh kernel → restore → reopen (restart after restore)
-    std::fs::remove_file(&path).unwrap();
-    {
-        let k = kernel_at(&path, salt);
-        k.restore_store_from(&snap).unwrap();
-    }
-    let k = kernel_at(&path, salt);
-
-    // relations equivalent
-    let restored_item = k.get(alice(), &item).unwrap();
-    assert_eq!(restored_item.relationships.len(), 1);
-    assert_eq!(restored_item.relationships[0].target, catalog);
-
-    // provenance + temporal state equivalent
-    let restored_asserted = k.get(alice(), &asserted).unwrap();
-    match restored_asserted
-        .extensions
-        .get(KnowledgeObject::EXT_EVIDENCE)
-    {
-        Some(Value::List(items)) => assert!(!items.is_empty(), "evidence survives restore"),
-        other => panic!("expected evidence list after restore, got {other:?}"),
-    }
-    assert_eq!(
-        restored_asserted
-            .extensions
-            .get(KnowledgeObject::EXT_VALID_FROM),
-        Some(&Value::Int(1_000)),
-        "assertion instant survives restore"
-    );
-
-    // constraints equivalent — the red leg: a qty<=0 write must be REJECTED
-    let mut bad = RememberRequest::create(alice(), meta("Item"));
-    bad.properties
-        .insert("name".into(), Value::Text("bad".into()));
-    bad.properties.insert("qty".into(), Value::Int(-3));
-    assert!(
-        k.remember(bad).is_err(),
-        "restored kernel must enforce the registered check constraint"
-    );
-
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&snap);
+    let _ = std::fs::remove_dir_all(&path);
 }

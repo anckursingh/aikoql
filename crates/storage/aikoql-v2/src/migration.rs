@@ -19,15 +19,16 @@
 //! post-state), and a state fingerprint taken before close and after reopen
 //! pins the flush/reopen round-trip.
 //!
-//! The envelope parser is v1's own validated reader (`envelope::parse_at` —
-//! magic/version/type/checksum); only the frozen payload codec is
-//! re-implemented here (v1's `decode_batch` is private, and this crate
-//! stays decoupled from v1's internals).
+//! The envelope parser is the vendored v1 reader (`legacy_envelope` — frozen
+//! when the v1 crate was deleted, launch S-02: magic/version/type/checksum);
+//! only the frozen payload codec is re-implemented here (v1's `decode_batch`
+//! is private, and this crate stays decoupled from v1's internals).
 
 use crate::db::{Config, Db};
 use crate::format::FormatError;
+use crate::legacy_envelope as envelope;
+use crate::legacy_envelope::ParseOutcome;
 use crate::wal::Op;
-use aikoql_storage::envelope::{self, ParseOutcome};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -236,10 +237,10 @@ pub fn migrate_v1_wal(source: &Path, config: Config) -> Result<MigrationReport, 
                     buf.extend_from_slice(&chunk[..n]);
                 }
             }
-            // v1 reports corruption/incompatibility as KError::Store; every
-            // reachable case here is damage (the format version is frozen
-            // at 1, so an unknown version would need a forged checksum too).
-            Err(e) => return Err(FormatError::Corrupt(e.to_string())),
+            // The vendored parser reports classified errors directly; an
+            // unsupported version is passed through as Unsupported (the
+            // format is frozen at 1, so it needs a forged checksum too).
+            Err(e) => return Err(e),
         }
     }
     drop(file);

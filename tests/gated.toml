@@ -12,57 +12,9 @@
 # verified_at = the head each entry's gate condition was last re-verified at.
 
 [[gated]]
-test = "load_encryption_overhead"
+test = "load_encryption_overhead_v2"
 reason = "pure measurement cell; #[ignore] in debug — weekly --ignored release step covers it"
 ungated_by = "weekly --ignored step"
-verified_at = "8c60d74"
-
-[[gated]]
-test = "kse120c_report"
-reason = "report generator over the kse120c cells — the weekly release smoke runs the whole kse120c file"
-ungated_by = "weekly release smoke"
-verified_at = "8c60d74"
-
-[[gated]]
-test = "kse16_storage_amplification"
-reason = "amplification measurement cell (dominance cells — shared-runner noise, SE2-M21)"
-ungated_by = "none"
-verified_at = "8c60d74"
-
-[[gated]]
-test = "kse17_write_amplification"
-reason = "amplification measurement cell (dominance cells — shared-runner noise, SE2-M21)"
-ungated_by = "none"
-verified_at = "8c60d74"
-
-[[gated]]
-test = "kse18_read_amplification"
-reason = "amplification measurement cell (dominance cells — shared-runner noise, SE2-M21)"
-ungated_by = "none"
-verified_at = "8c60d74"
-
-[[gated]]
-test = "kse161718_report"
-reason = "report aggregator over the amplification cells — runs ungated with its trio"
-ungated_by = "none"
-verified_at = "8c60d74"
-
-[[gated]]
-test = "kse19_resource_usage"
-reason = "whole-process RSS/disk cell — sibling tests perturb the peak on shared runners; KSE19_NIGHTLY=1 escalates to 100k/1M in the weekly KSE-19 step"
-ungated_by = "weekly KSE-19 step"
-verified_at = "8c60d74"
-
-[[gated]]
-test = "kse19_report"
-reason = "report aggregator over the kse19 cells — weekly KSE-19 step"
-ungated_by = "weekly KSE-19 step"
-verified_at = "8c60d74"
-
-[[gated]]
-test = "m7_workloads"
-reason = "minute-scale workload suite — the weekly release smoke runs the whole kse_m7_workloads file"
-ungated_by = "weekly release smoke"
 verified_at = "8c60d74"
 
 [[gated]]

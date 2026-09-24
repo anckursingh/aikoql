@@ -24,8 +24,6 @@ allowed() { # file|token -> 0 if pinned (patterns fully quoted: the | is literal
     'crates/kernel/tests/index_subsystem.rs|"INDEX_REBUILD_PARK_AT"') return 0 ;; # the park's armed-at timestamp, polled by the same sibling
     'crates/runtime/tests/cbo.rs|"INDEX_DROP_PARK"') return 0 ;; # crash park armed in-process; dropped thread consumes it before cleanup
     'crates/runtime/tests/cbo.rs|"INDEX_DROP_PARK_AT"') return 0 ;; # the park's armed-at timestamp, polled by the same sibling
-    'crates/services/api/mcp/tests/mcp_real_world.rs|"AIKOQL_BACKEND"') return 0 ;; # BackendEnvGuard + immediate clean — the 2026-09-18 leak's fixed site; child spawns under it
-    'crates/storage/aikoql/tests/report_gating.rs|"AIKOQL_REPORT_WRITE"') return 0 ;; # gates the report writer itself; single-test binary
     'crates/storage/aikoql-v2/tests/checkpoint_streaming.rs|"AIKOQL_V2_PLACE_PARK"') return 0 ;; # crash park armed in-process for the library under test
     'crates/storage/aikoql-v2/tests/report_gating.rs|"AIKOQL_REPORT_WRITE"') return 0 ;; # gates the report writer itself; single-test binary
     'crates/storage/aikoql-v2/tests/compaction_lock_scope.rs|PARK_ENV') return 0 ;; # const AIKOQL_V2_COMPACT_PARK; park armed/cleared around the compactor stage under test

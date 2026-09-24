@@ -5,22 +5,45 @@
 
 mod common;
 
-use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
-use aikoql_storage::AikoqlStorageEngine;
+use aikoql_kernel::storage::store::WriteBatch;
 use aikoql_storage_v2::db::{Config, Db};
 use aikoql_storage_v2::format::FormatError;
+use aikoql_storage_v2::legacy_envelope::{encode_record, TYPE_BATCH};
 use aikoql_storage_v2::migration::migrate_v1_wal;
 use common::{dir, tmp};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// Write real v1 batches through the certified engine (the v1 WAL format
-/// as produced in production, not a hand-rolled fixture).
-fn write_v1(path: &Path, batches: &[WriteBatch]) {
-    let engine = AikoqlStorageEngine::open(path).unwrap();
-    for batch in batches {
-        engine.write_batch(batch).unwrap();
+/// Frozen v1 batch codec (KSE-3): [u16 n_puts] puts* [u16 n_dels] dels*,
+/// each entry [u32 klen] k [u32 vlen] v, envelope-wrapped. Hand-rolled
+/// from the frozen spec since the v1 crate was deleted (launch S-02) — the
+/// encode/decode pair in legacy_envelope is self-checking, so a fixture
+/// that parses is a valid v1 WAL by construction.
+fn encode_batch(batch: &WriteBatch) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&(batch.puts.len() as u16).to_le_bytes());
+    for (k, v) in &batch.puts {
+        payload.extend_from_slice(&(k.len() as u32).to_le_bytes());
+        payload.extend_from_slice(k);
+        payload.extend_from_slice(&(v.len() as u32).to_le_bytes());
+        payload.extend_from_slice(v);
     }
+    payload.extend_from_slice(&(batch.dels.len() as u16).to_le_bytes());
+    for k in &batch.dels {
+        payload.extend_from_slice(&(k.len() as u32).to_le_bytes());
+        payload.extend_from_slice(k);
+    }
+    encode_record(TYPE_BATCH, &payload)
+}
+
+/// Write a v1 WAL as production wrote it (append-only, one envelope record
+/// per batch, no fsync ceremony — the migrator never cares).
+fn write_v1(path: &Path, batches: &[WriteBatch]) {
+    let mut wal = Vec::new();
+    for batch in batches {
+        wal.extend_from_slice(&encode_batch(batch));
+    }
+    std::fs::write(path, wal).unwrap();
 }
 
 /// v1 apply semantics (puts before dels — the shared KSE-006 order).
@@ -53,13 +76,7 @@ fn migrate_v1_wal_moves_state_and_never_deletes_source() {
     write_v1(&src, &batches);
     let src_bytes = std::fs::read(&src).unwrap();
 
-    // the source's own engine agrees on the final state (fixture cross-check)
-    let v1 = AikoqlStorageEngine::open(&src).unwrap();
     let want = expected(&batches);
-    for (k, v) in &want {
-        assert_eq!(v1.get(k).unwrap(), v.clone(), "v1 fixture diverged");
-    }
-
     let dest = dir("migrate-dest");
     let report = migrate_v1_wal(&src, Config::new(dest.clone())).unwrap();
     assert_eq!(report.batches, 3);
@@ -157,10 +174,7 @@ fn migrate_streams_frames_across_chunk_boundaries() {
         payload.extend_from_slice(&(value.len() as u32).to_le_bytes());
         payload.extend_from_slice(&value);
         payload.extend_from_slice(&0u16.to_le_bytes());
-        wal.extend_from_slice(&aikoql_storage::envelope::encode_record(
-            aikoql_storage::envelope::TYPE_BATCH,
-            &payload,
-        ));
+        wal.extend_from_slice(&encode_record(TYPE_BATCH, &payload));
     }
     assert!(
         wal.len() > 8 * 1024 * 1024,
@@ -213,7 +227,7 @@ fn migrate_single_frame_larger_than_chunk() {
 #[test]
 fn migrate_empty_wal_creates_fresh_v2() {
     let src = tmp("migrate-empty");
-    AikoqlStorageEngine::open(&src).unwrap(); // v1 open creates the (empty) WAL file
+    std::fs::write(&src, b"").unwrap(); // an empty file IS a valid empty v1 WAL
 
     let dest = dir("migrate-empty-dest");
     let report = migrate_v1_wal(&src, Config::new(dest.clone())).unwrap();

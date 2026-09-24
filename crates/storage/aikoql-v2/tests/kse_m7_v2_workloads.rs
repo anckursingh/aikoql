@@ -45,10 +45,8 @@
 mod common;
 
 use aikoql_kernel::storage::store::{MemoryEngine, StorageEngine, WriteBatch};
-use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_kernel::transaction::kernel::ManualClock;
 use aikoql_kernel::{Direction, Kernel, Metadata, RelationshipRef, Subject, Value, KOID};
-use aikoql_storage::AikoqlStorageEngine;
 use aikoql_storage_v2::db::{Config, Db};
 use aikoql_storage_v2::engine::StorageAdminApi;
 use aikoql_storage_v2::stats::ReadPathStats;
@@ -203,11 +201,12 @@ impl Xs {
     }
 }
 
+// Launch S-02: the redb/v1 legs died with the decommission; memory stays
+// as the in-RAM reference and aikoql-v2 is the engine under test. Gate 5
+// reads NOT_EVIDENCED until S-03 redefines it as self-regression.
 #[derive(Clone, Copy)]
 enum BackendKind {
     Memory,
-    Redb,
-    Aikoql,
     AikoqlV2,
 }
 
@@ -215,15 +214,11 @@ impl BackendKind {
     fn name(self) -> &'static str {
         match self {
             BackendKind::Memory => "memory",
-            BackendKind::Redb => "redb",
-            BackendKind::Aikoql => "aikoql",
             BackendKind::AikoqlV2 => "aikoql-v2",
         }
     }
     fn from_name(s: &str) -> BackendKind {
         match s {
-            "redb" => BackendKind::Redb,
-            "aikoql" => BackendKind::Aikoql,
             "aikoql-v2" => BackendKind::AikoqlV2,
             _ => panic!("unknown loader backend {s}"),
         }
@@ -231,8 +226,6 @@ impl BackendKind {
     fn open(self, path: &Path) -> Arc<dyn StorageEngine> {
         match self {
             BackendKind::Memory => Arc::new(MemoryEngine::new()),
-            BackendKind::Redb => Arc::new(RedbEngine::open(path).unwrap()),
-            BackendKind::Aikoql => Arc::new(AikoqlStorageEngine::open(path).unwrap()),
             BackendKind::AikoqlV2 => Arc::new(AikoqlStorageEngineV2::open(path).unwrap()),
         }
     }
@@ -1046,15 +1039,10 @@ fn v2_m7_workloads() {
     let sz = size();
     let filter = backend_filter();
     let mut results = Vec::new();
-    let kinds: Vec<BackendKind> = vec![
-        BackendKind::Memory,
-        BackendKind::Redb,
-        BackendKind::Aikoql,
-        BackendKind::AikoqlV2,
-    ]
-    .into_iter()
-    .filter(|k| filter.as_deref().is_none_or(|f| f == k.name()))
-    .collect();
+    let kinds: Vec<BackendKind> = vec![BackendKind::Memory, BackendKind::AikoqlV2]
+        .into_iter()
+        .filter(|k| filter.as_deref().is_none_or(|f| f == k.name()))
+        .collect();
     let mut paths = Vec::new();
     for kind in kinds {
         let path = tmp(&format!("v2-m7-{}", kind.name()));

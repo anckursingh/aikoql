@@ -13,7 +13,8 @@ fn main() {
     let path = args.next().expect("db path");
     let progress = args.next().expect("progress file");
 
-    let engine = RedbEngine::open(&path).expect("open store");
+    let engine = aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&path))
+        .expect("open store");
     let k = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 7).expect("open kernel");
 
     // The worker parks 60s before running — the parent kills us inside it.

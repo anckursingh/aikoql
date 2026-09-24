@@ -10,7 +10,7 @@ use crate::{
 };
 // Test-only (the stdio client below) — unused in the bin target.
 #[cfg(test)]
-use crate::{json, RedbEngine, SystemClock};
+use crate::{json, SystemClock};
 
 use crate::dispatcher::*;
 use crate::protocol::*;
@@ -418,14 +418,14 @@ mod tcp_auth_tests {
     fn spawn_server_with_limit(token_specs: &[&str], max_per_minute: u64) -> std::net::SocketAddr {
         // ponytail: this db stays open in the detached listener thread for
         // the process lifetime, so no sweeper can remove it (Windows locks
-        // the file) — a ~1.5MB pid-unique file per spawn is the accepted leak.
+        // the dir) — a pid-unique dir per spawn is the accepted leak.
         let db = std::env::temp_dir().join(format!(
-            "mcp-tcp-auth-{}-{}.redb",
+            "mcp-tcp-auth-{}-{}",
             std::process::id(),
             DB_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
-        let _ = std::fs::remove_file(&db);
-        let engine = RedbEngine::open(db.to_str().unwrap()).expect("open engine");
+        let _ = std::fs::remove_dir_all(&db);
+        let engine = aikoql_storage_v2::AikoqlStorageEngineV2::open(&db).expect("open engine");
         let kernel =
             Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xA9C9).expect("open kernel");
         let specs: Vec<String> = token_specs.iter().map(|s| s.to_string()).collect();

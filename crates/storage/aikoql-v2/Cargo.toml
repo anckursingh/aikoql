@@ -8,9 +8,9 @@ repository.workspace = true
 
 [dependencies]
 aikoql-kernel = { path = "../../kernel" }
-# SE2-M3: legacy WAL migration rides v1's validated envelope parser; the
-# frozen batch-payload codec is re-implemented in migration.rs.
-aikoql-storage = { path = "../aikoql" }
+# SE2-M3: legacy WAL migration rides the vendored v1 envelope parser
+# (legacy_envelope.rs — frozen when the v1 crate was deleted, launch S-02);
+# the frozen batch-payload codec is re-implemented in migration.rs.
 # SE2-M15: the streamed publish hashes the file as it writes (the whole-file
 # checksum8 the manifest record stores) — same crate/version kernel uses.
 # SE2-M22 — the fast backends were surveyed and rejected: 0.10 `compress` is
