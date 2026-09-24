@@ -231,8 +231,8 @@ findings are Requirement KOs; the dispositions doc is the compiled
 knowledge document; each re-stamp commit below is reconciled via
 the A8 `reconcile` tool against that document.
 
-- knowledge document KOID: `01a0d1f3c9bb0000000000000000a9c9`
-- reconciled re-stamp commits: 23 (first 82bc5a5, last 7577e94)
+- knowledge document KOID: `01a0d1fddf0d0000000000000000a9c9`
+- reconciled re-stamp commits: 25 (first f3d73c4, last 7577e94)
 - trace answers: `R3-003->finding: R3-003 | R3-005->re-stamping`
 
 The trace pins the requirement leg (the finding is found by query).
@@ -252,5 +252,5 @@ follow-up, not this milestone.
 | R3-005 | 01a0bfccb8a40000000000000000a9c9 | FIXED | closed |
 | R2-008 | 01a0bfccb8b70000000000000000a9c9 | CLOSED | closed |
 
-compiled-head: 82bc5a5dbce4de73a1abdd7ddf6f88c033a33834
+compiled-head: f3d73c4bb7a70ae42267736f8313ccfd714b3425
 <!-- DOGFOOD-COMPILED-END -->
