@@ -111,6 +111,25 @@ crates deleted at the pre-fix head; pre-fix 4f4721a). All five hygiene
 assertions green; S-03 (test-estate sweep) and S-05 (harness re-scope)
 remain.
 
+S-03 shipped 2026-09-25 — the test estate is v2-only. `kse_m7_v2_workloads`
+is storage self-regression: the matrix is memory (in-RAM reference) +
+aikoql-v2; gate 5 = the fresh W1/W2 P50s vs the committed v2 baseline at
+the same scale (result.json at 100K, result-1m-aikoql-v2.json at 1M, smoke
+NOT_EVIDENCED), bound 1.5× (GATE5_SELF_REGRESSION_BOUND — same-runner P50s
+are stable; the per-commit smoke keeps its 3× budget). `AIKOQL_REPORT_FRESH=1`
+(strict opt-in; requires V2ADOPT_NIGHTLY + AIKOQL_REPORT_WRITE=1) writes the
+-fresh twin beside the committed baseline so a gate run can never clobber
+it; `V2ADOPT_BACKEND` accepts only memory/aikoql-v2 (the dead aikoql leg
+fails closed at the filter — RED `s03-v1-estate-sweep`, exit 101 at
+b1e90e2). baseline-guard: the v1 republish job is deleted (guard cost
+halves); the guard arms FRESH and uploads the fresh twin as the
+next-baseline evidence; the gd001 pin forbids a re-added aikoql leg. The
+committed baselines predate the M37 *_ns rename, so the guard is RED on
+the stale 1M baseline BY DESIGN until the maintainer commits the first
+uploaded fresh twin (scripts/gate5-check.py stays strict; the suite's hand
+parser accepts p50_us for the historical rows). S-04 (concept rename +
+docs) and S-05 (benchmark harness) remain.
+
 ### Phase CI — three workflows (review 2, §1/§19)
 
 | id | milestone | RED | GREEN |
