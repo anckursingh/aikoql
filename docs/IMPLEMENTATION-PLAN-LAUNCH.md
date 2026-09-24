@@ -97,6 +97,20 @@ backend-selection machinery, the scale.py pin). The assertions flip green
 through S-02 (decommission) and S-05 (harness); dag wiring rides CI-04 —
 a red gate must not enter CI.
 
+S-02 shipped 2026-09-24 — `crates/storage/aikoql` + `crates/storage/rocksdb`
+deleted (12.1k lines), kernel storage = aikoql-v2 directly: `store_redb.rs`,
+the `redb` dep, backend selection, `AIKOQL_BACKEND` and `BackendEnvGuard` are
+gone; the 6 consumer crates (kernel, runtime, mcp, python-sdk, ingestion,
+benchmarks) compile against v2 only. The v1 WAL migrator survives as the
+vendored `legacy_envelope.rs` in aikoql-v2 (frozen parser). Backup/restore =
+the v2 `StorageAdminApi` snapshot/restore path everywhere (the old trait
+defaults are deleted). The v1 legs of benchmark-nightly (smoke, KSE-12/13/19
+jobs) and the v1 `gated.toml` entries are dropped. RED archived as
+`s02-v1-decommission` (exit 101: the workspace fails to resolve with the
+crates deleted at the pre-fix head; pre-fix 4f4721a). All five hygiene
+assertions green; S-03 (test-estate sweep) and S-05 (harness re-scope)
+remain.
+
 ### Phase CI — three workflows (review 2, §1/§19)
 
 | id | milestone | RED | GREEN |
