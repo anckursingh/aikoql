@@ -90,6 +90,13 @@ of the consolidation; they stay in L for matrix sequencing.
 | S-04 | concept rename + docs | V2ADOPT/v1-vs-v2 language everywhere | storage-regression/storage-performance/storage-correctness naming; gate-5 redefined as current-vs-committed-baseline self-regression; historical docs marked historical, not deleted |
 | S-05 | benchmark harness v2-only | harness links v1 | `benchmarks/` + `scripts/competitor_bench/` run the v2 API; v1 historical numbers frozen as artifacts |
 
+S-01 shipped 2026-09-24 (6bdcb3b) — the gate exists with its five
+storage-leg assertions; RED archived as `arch-hygiene-storage-v1-estate`
+(exit 1 against the live tree: deprecated members, four v1 deps, redb +
+backend-selection machinery, the scale.py pin). The assertions flip green
+through S-02 (decommission) and S-05 (harness); dag wiring rides CI-04 —
+a red gate must not enter CI.
+
 ### Phase CI — three workflows (review 2, §1/§19)
 
 | id | milestone | RED | GREEN |
