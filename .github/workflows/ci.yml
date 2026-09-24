@@ -64,6 +64,14 @@ jobs:
       # scripts/skip-list.sh — the registry is the single source of truth
       # (PR6-F2 / P0-2); scripts/check-skip-drift.sh guards the wiring.
       - run: cargo test --workspace -- $(bash scripts/skip-list.sh)
+        # bash, not the pwsh default: the $(...) here is bash word-splitting.
+        # pwsh captures a native command's one-line output as ONE argument —
+        # the Windows check job died on "Unrecognized option: 'skip
+        # load_encryption_overhead --skip …'" (CI rounds 2-3; masked until
+        # round 1's clippy/hang classes cleared, and untested on Windows
+        # since the registry landed after the last green Windows run). The
+        # command was authored for bash; the Linux job runs it under bash.
+        shell: bash
         timeout-minutes: 60
       # DoD 19 (HLD §52/§53): golden PDF suite with visible per-stage
       # metrics — extraction/fragmentation/semantic/provenance/retrieval.
