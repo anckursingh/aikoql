@@ -25,9 +25,11 @@
 //!   blocks on the state lock the merge holds — the scenario cannot
 //!   run. RED: the marker never appears).
 //!
-//! One binary: the park env is process-wide; every park-arming test
-//! serializes on PARK_LOCK and the release always runs (the guard), so a
-//! blocked op today cannot hang the suite — the RED is the flag, not a
+//! One binary: the park env is process-wide, so EVERY test in the binary
+//! serializes on PARK_LOCK — not just the park-arming ones: a sibling's
+//! unguarded flush/merge would park too, and its marker (in ITS dir) is
+//! deleted by nobody — a permanent hang. The release always runs (the
+//! guard), so a blocked op cannot leak the env — the RED is the flag, not a
 //! hang. (The park helpers mirror tests/flush_lock_scope.rs — two copies
 //! is the tolerated class; three would tip into a shared harness module.)
 
@@ -185,6 +187,11 @@ fn csc001_put_completes_while_the_compaction_is_parked_in_segment_io() {
 
 #[test]
 fn csc002_compaction_lock_scope_counters_exist_and_bound_the_hold() {
+    // No park is armed here, but the park env is process-wide: while a
+    // sibling holds it, this test's own merge would park too and its
+    // marker (in ITS dir) is deleted by nobody — a permanent hang. The
+    // serial guard keeps the whole binary's windows disjoint.
+    let _serial = park_lock();
     let d = dir("csc002-counters");
     let db = open_quiet(&d);
     put_range(&db, 0, 1000);

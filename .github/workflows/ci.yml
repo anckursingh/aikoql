@@ -94,7 +94,11 @@ jobs:
         # correctness-capable suite runs its reduced deterministic PR
         # version here. The full suite used to run 14-16 min on the
         # 2-core runner; the correctness suites add ~3-5 min back in
-        # debug — the budget stays 30.
+        # debug — the budget stays 30. R4-P2-06: the M47 push's timeout
+        # was a csc002 park-leak hang (env armed by a parallel sibling,
+        # marker in the wrong dir, nobody deletes it — fixed by
+        # serializing the whole binary), NOT a budget overflow; the suite
+        # had streamed to its midpoint when the hang started.
         timeout-minutes: 30
 
   lint:

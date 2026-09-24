@@ -27,9 +27,11 @@
 //!   first is parked in I/O (CURRENT stays put until the release) — its
 //!   WAL truncate must never race the first's unpublished segments.
 //!
-//! One binary: the park env is process-wide; every park-arming test
-//! serializes on PARK_LOCK and the release always runs (the guard), so a
-//! blocked op today cannot hang the suite — the RED is the flag, not a
+//! One binary: the park env is process-wide, so EVERY test in the binary
+//! serializes on PARK_LOCK — not just the park-arming ones: a sibling's
+//! unguarded flush/merge would park too, and its marker (in ITS dir) is
+//! deleted by nobody — a permanent hang. The release always runs (the
+//! guard), so a blocked op cannot leak the env — the RED is the flag, not a
 //! hang.
 
 mod common;
@@ -170,6 +172,11 @@ fn fsc001_put_completes_while_the_flush_is_parked_in_segment_io() {
 
 #[test]
 fn fsc002_flush_lock_scope_counters_exist_and_bound_the_hold() {
+    // No park is armed here, but the park env is process-wide: while a
+    // sibling holds it, this test's own flush would park too and its
+    // marker (in ITS dir) is deleted by nobody — a permanent hang. The
+    // serial guard keeps the whole binary's windows disjoint.
+    let _serial = park_lock();
     let d = dir("fsc002-counters");
     let db = open_quiet(&d);
     put_range(&db, 0, 2000);

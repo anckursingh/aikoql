@@ -1947,7 +1947,7 @@ impl Db {
         if state.immutables.is_empty() {
             return Ok(None);
         }
-        let immutables: Vec<Memtable> = state.immutables.drain(..).collect();
+        let immutables: Vec<Memtable> = std::mem::take(&mut state.immutables);
         let mut segment_ids = Vec::with_capacity(immutables.len());
         for _ in 0..immutables.len() {
             let id = state.next_segment_id;

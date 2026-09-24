@@ -28,6 +28,10 @@ allowed() { # file|token -> 0 if pinned (patterns fully quoted: the | is literal
     'crates/storage/aikoql/tests/report_gating.rs|"AIKOQL_REPORT_WRITE"') return 0 ;; # gates the report writer itself; single-test binary
     'crates/storage/aikoql-v2/tests/checkpoint_streaming.rs|"AIKOQL_V2_PLACE_PARK"') return 0 ;; # crash park armed in-process for the library under test
     'crates/storage/aikoql-v2/tests/report_gating.rs|"AIKOQL_REPORT_WRITE"') return 0 ;; # gates the report writer itself; single-test binary
+    'crates/storage/aikoql-v2/tests/compaction_lock_scope.rs|PARK_ENV') return 0 ;; # const AIKOQL_V2_COMPACT_PARK; park armed/cleared around the compactor stage under test
+    'crates/storage/aikoql-v2/tests/flush_lock_scope.rs|PARK_ENV') return 0 ;; # const AIKOQL_V2_FLUSH_IO_PARK; park armed/cleared around the M38 flush phase under test
+    'crates/storage/aikoql-v2/tests/snapshot_cells.rs|"AIKOQL_V2_SNAP_CELLS"') return 0 ;; # M34 cell-recorder path — armed once for the binary's single test
+    'crates/storage/aikoql-v2/tests/snapshot_redesign.rs|PARK_ENV') return 0 ;; # const AIKOQL_V2_SNAP_PARK; park armed/cleared around each stage
     'crates/storage/aikoql-v2/tests/snapshot_matrix.rs|PARK_ENV') return 0 ;; # const AIKOQL_V2_SNAP_PARK; park armed/cleared around each stage
     *) return 1 ;;
   esac
