@@ -111,7 +111,9 @@ fn one_batch(db: &Db, keys: &[Vec<u8>], vals: &[Vec<u8>], layout: &str) -> (u64,
         batch[3], batch[n],
         "{layout} n={n}: the duplicate position shares position 3's answer"
     );
-    assert!(wall_ms > 0, "{layout} n={n}: the wall is recorded");
+    // No wall pin here: a sub-millisecond cell is a valid measurement
+    // (CI round 2: the 128-key batch on a fast runner), and the cell is
+    // written to cells.json unconditionally below.
     (
         wall_ms,
         ALLOCS.load(Ordering::Relaxed) as u64,
