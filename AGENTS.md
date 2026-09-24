@@ -58,6 +58,9 @@ the architect review.
 - **Benchmarks**: laptop runs only the quick cells; 1M-scale rides CI.
   No performance claim without a structural metric (allocs/bytes/decodes)
   or a reproducible benchmark; no absolute timing pins on shared runners.
+- **Rust guidance**: `.claude/skills/rust-coding/SKILL.md` (invoked as
+  `/rust-coding` in Claude Code) — error classification, optimization
+  discipline, scalability patterns, the verified trap ledger.
 - **Pushing**: commits are made locally; the user pushes.
 - **Residue**: commit-message files and smoke sidecars are deleted after
   the commit lands; `scripts/clean-residue.sh` exists for target/ sweeps.
