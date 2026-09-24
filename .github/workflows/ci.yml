@@ -36,18 +36,13 @@ jobs:
       #
       # | Test                             | Correctness | Performance | Resource | Certification (full version)       |
       # |----------------------------------|:-----------:|:-----------:|:--------:|------------------------------------|
-      # | kse120c_writer_contention        | recovered == acked, byte-exact | latency cells | — | KSE120C_NIGHTLY=1 (20k) |
-      # | m7_workloads (SKIPPED)           | measurement-first matrix — gate verdict is M7_NIGHTLY-gated, shape pins overlap the KSE-01..20 nets | cells | RSS/disk cells | M7_NIGHTLY=1 (100k) |
-      # | kse050_052_relationship_locality | result-size pins + KSE-052 bidirectional | cells | — | KSE6_NIGHTLY=1 (10k hub) |
       # | merged_iterator_correctness      | byte-exact vs oracle | — | — | SE2M12_NIGHTLY=1 (50k steps) |
       # | w31_scale_001                    | probe success 12/12 per scale | cells | 10K synthesis | W31_SCALE_NIGHTLY=1 (100k) |
       # | w31_scale_002                    | probe pins (n=1000 fixed) | cells | — | runs fully on PR |
-      # | kse16/17/18 amp trio + report (SKIPPED) | consistency pins covered by kse20_backend_conformance | — | amplification cells | benchmark-nightly ungated job (P0-2 registry) |
-      # | kse19_resource_usage + report (SKIPPED) | — | — | RSS/disk cells (10k smoke) | KSE19_NIGHTLY=1 (100k + 1M) |
-      # | v2_m7_workloads (SKIPPED)        | verdict is V2ADOPT_NIGHTLY-gated; its 4 correctness siblings in the binary stay; v2 nets = the 40+ reduced SE2 suites | cells | RSS/disk cells | V2ADOPT_NIGHTLY=1 (100k) at milestones |
+      # | v2_m7_workloads (SKIPPED)        | verdict is V2ADOPT_NIGHTLY-gated; v2 nets = the 40+ reduced SE2 suites | cells | RSS/disk cells | V2ADOPT_NIGHTLY=1 (100k) at milestones |
       # | multimodal_golden/retrieval_quality/semantic_extraction_quality (SKIPPED here) | re-run with --nocapture in dedicated steps below — zero coverage loss | quality metrics | — | the dedicated steps |
-      # | kse120c_report (SKIPPED)         | covered by the contention test — same scenarios | report generator | — | weekly release smoke |
-      # | load_encryption_overhead (SKIPPED) | — | pure measurement | — | weekly --ignored release (also #[ignore] in debug) |
+      # | load_encryption_overhead_v2 (SKIPPED) | — | pure measurement | — | weekly --ignored release (also #[ignore] in debug) |
+      # | sfm009_large_wal_snapshot_has_bounded_rss (SKIPPED here) | bounded-RSS correctness (proven locally; RED archived) | — | whole-process RSS cell | local suite |
       #
       # 2026-09-07 re-classification (evidence: run 34088188509): the step
       # timed out at 60 min — test-profile compile 13m26s inside the step,
@@ -450,15 +445,26 @@ jobs:
             echo "DAG VIOLATION: $GUARD must run the 1M regime (V2ADOPT_NIGHTLY=1m)"
             exit 1
           fi
+          # S-03: the guard compares the fresh run against the committed v2
+          # baseline — the FRESH arm must stay armed, and the dead v1
+          # republish leg (V2ADOPT_BACKEND=aikoql) must stay deleted.
+          if ! grep -q 'AIKOQL_REPORT_FRESH=1' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must arm AIKOQL_REPORT_FRESH=1 (the fresh twin)"
+            exit 1
+          fi
+          if grep -q 'V2ADOPT_BACKEND=aikoql$' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must not run a v1 backend leg (decommissioned in S-02)"
+            exit 1
+          fi
           # P5-M47: the gate's checker schema pins must run in the guard,
-          # and the fresh artifact must be uploaded (the republish evidence)
-          # — either step can rot silently in a bad merge.
+          # and the fresh artifact must be uploaded (the next-baseline
+          # evidence) — either step can rot silently in a bad merge.
           if ! grep -q 'test_artifact_schema.py' "$GUARD"; then
             echo "DAG VIOLATION: $GUARD must run the checker schema pins"
             exit 1
           fi
           if ! grep -q 'upload-artifact' "$GUARD"; then
-            echo "DAG VIOLATION: $GUARD must upload the fresh 1M artifact (the republish evidence)"
+            echo "DAG VIOLATION: $GUARD must upload the fresh 1M artifact (the next-baseline evidence)"
             exit 1
           fi
           # PR6-F6 (P1-6): the per-commit perf smoke workflow must stay

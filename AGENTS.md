@@ -93,7 +93,7 @@ check its status before trusting any v1-era doc.
 
 - `ci.yml` — fmt, clippy, tests (Linux+Windows), dependency-dag gates,
   SDK contract, docker/plugin/e2e/connector smokes
-- `baseline-guard.yml` — 1M gate-5 + artifact republish (M47)
+- `baseline-guard.yml` — 1M gate-5 self-regression vs the committed v2 baseline (fresh-twin upload, S-03)
 - `benchmark-nightly.yml` — weekly: shuffle, benchmark, competitor scale
 - `coverage-floor.yml`, `perf-smoke.yml` — path-gated on storage changes
 - `release.yml` — tag-driven version gate + builds + npm/ghcr/pypi

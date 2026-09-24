@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""P5-M0 (gd001) — gate-5 slow-down ratio check (v2 vs committed v1 baseline).
+"""P5-M0 (gd001) — gate-5 self-regression ratio check (fresh vs committed v2).
 
-Ratio basis (SE2-M28 / gate 5): the shipped 1M runs. The harness writes the
-fresh v2 rows to `result-1m-aikoql-v2.json` when AIKOQL_REPORT_WRITE=1; the
-v1 baseline is the committed `result-1m-aikoql.json`. Single-backend runs
-leave the harness's own gate verdict null BY DESIGN (it only judges the full
-4-backend matrix) — this script computes the ratio the harness cannot.
+Ratio basis (S-03): the shipped 1M runs. The harness writes the fresh v2
+rows to `result-1m-aikoql-v2-fresh.json` when AIKOQL_REPORT_WRITE=1 and
+AIKOQL_REPORT_FRESH=1 (the fresh twin, strict opt-in); the baseline is the
+committed `result-1m-aikoql-v2.json`. The v1 baseline died with the S-02
+decommission — gate 5 now asks: did the engine regress against itself?
 
 Shared by the baseline-guard CI job and the manual 1M procedure:
 
     V2ADOPT_NIGHTLY=1m V2ADOPT_BACKEND=aikoql-v2 AIKOQL_REPORT_WRITE=1 \
+        AIKOQL_REPORT_FRESH=1 \
         cargo test -p aikoql-storage-v2 --release --test kse_m7_v2_workloads
     python scripts/gate5-check.py
 """
@@ -18,14 +19,15 @@ import sys
 
 from artifact_schema import SchemaError, validate_1m
 
-BOUND = 8.0  # GATE5_SLOWDOWN_BOUND — design gate, SE2-M22 (user decision)
-REDLINE_FRAC = 0.99  # W1 shipped at 7.96x = 99.5% of the bound — no headroom
+BOUND = 1.5  # GATE5_SELF_REGRESSION_BOUND — same-runner P50s are stable;
+# 1.5x absorbs noise without letting a real regression slip (S-03)
+REDLINE_FRAC = 0.99  # within 1% of the bound = no headroom
 
 
 def p50s(path, fresh):
     """Validated label → p50_ns from one artifact (first backend wins, as the
-    committed 4-backend matrices share labels). Fresh artifacts must be
-    stamped at the tested HEAD — stale evidence can never feed the gate."""
+    committed matrices share labels). Fresh artifacts must be stamped at
+    the tested HEAD — stale evidence can never feed the gate."""
     try:
         rows = validate_1m(path, fresh=fresh)
     except SchemaError as e:
@@ -38,8 +40,8 @@ def p50s(path, fresh):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--fresh", default="artifacts/storage-engine-v2/result-1m-aikoql-v2.json")
-    ap.add_argument("--baseline", default="artifacts/storage-engine-v2/result-1m-aikoql.json")
+    ap.add_argument("--fresh", default="artifacts/storage-engine-v2/result-1m-aikoql-v2-fresh.json")
+    ap.add_argument("--baseline", default="artifacts/storage-engine-v2/result-1m-aikoql-v2.json")
     ap.add_argument("--bound", type=float, default=BOUND)
     args = ap.parse_args()
 
@@ -60,8 +62,8 @@ def main():
 
     for label, f, b, r in rows:
         flag = "REDLINE" if r >= args.bound * REDLINE_FRAC else ("FAIL" if r > args.bound else "pass")
-        print(f"{label:14} v2 {f:>9.1f} us / v1 {b:>8.1f} us = {r:5.2f}x  {flag}")
-    print(f"gate 5 bound: <= {args.bound}x (design gate, SE2-M22)")
+        print(f"{label:14} fresh {f:>9.1f} ns / committed {b:>8.1f} ns = {r:5.2f}x  {flag}")
+    print(f"gate 5 bound: <= {args.bound}x (self-regression, S-03)")
 
     if worst > args.bound:
         print(f"GATE 5 FAIL: worst ratio {worst:.2f}x exceeds bound {args.bound}x")
