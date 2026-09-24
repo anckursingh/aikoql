@@ -217,6 +217,7 @@ follow-up milestones, one commit each, re-stamping this table as they land.
 | P1-6 per-commit perf smoke budget | DONE (this commit) — three fixed cells (W1/W2 point reads via the new `V2ADOPT_PERF_SMOKE=1` smoke artifact arm, hot-head, ann004 recall@10) with a 3× budget vs a committed baseline; `scripts/perf-smoke.sh` + `scripts/perf-smoke-check.py` + `perf-smoke.yml` (path-gated on storage/kernel/vector) + dag wiring pin; RED `perf-smoke-no-arm` (the pre-fix smoke runs green and produces no machine-readable artifact, exit 1) |
 | P1-7 coverage floor on codec/replay | DONE (this commit) — `scripts/check-coverage-floor.sh` runs the storage-v2 suite under cargo-llvm-cov and fails any of checkpoint/snapshot/wal below its committed baseline (0.05%-point tolerance = report rounding only); committed baseline records the toolchain; `coverage-floor.yml` path-gated on storage + dag wiring pin; RED `coverage-floor-no-baseline` (suite green, no baseline to enforce, exit 1) |
 | P1-8 dogfood MRFC-0070 on the review loop | DONE (this commit) — `scripts/dogfood-review-loop.py` (full/verify/trace) runs the repo's own plugin over MCP stdio: the 6 findings are Requirement KOs in `./kb`, the doc is the compiled knowledge document, the 13 re-stamp commits are reconciled via A8, and `trace_requirement` pins the requirement leg (`finding: R3-003` / `re-stamping`) with the tests leg documented as MRFC-0070 follow-up (markdown fact entities are mock tokens; `tested_by` objects are `crate`); the doc carries the compiled section emitted from kernel state (findings→KOID table, trace answers, `compiled-head`), `verify` fails on any drift, and the dag job pins the freshness (a doc change without a re-emit fails CI); RED `dogfood-loop-unwired` (no review-loop script, so no gate could fail, exit 1) |
+| M47 CI fix round (R4-P2-06) | DONE (this commit) — the first pushed-head round's classes, root-caused: the Linux 30-min timeout was a csc002 park-leak hang (the park env is process-wide, a sibling's armed park parks an unguarded test's own merge, its marker is deleted by nobody — csc002/fsc002 now take the serial guard; this is also the M41 flush_lock_scope one-off); clippy 1.98 `drain_collect` → `std::mem::take` (whole-workspace 1.98.1 re-lint green); four env-hygiene pins (the gate had masked a second, older failure one check deeper: the shuffle-wiring gate's `[ -x ]` — the repo tracks every script 644, the exec bit is invisible on Windows and failed on every Linux run → `[ -f ]`); the coverage stall pin is enriched with the read-path stats, its verdict rides the re-run. The R4 dispositions themselves (M38–M47) are tracked in the plan docs (`docs/IMPLEMENTATION-PLAN-PHASE5.md` / `TESTING-PLAN-PHASE5.md`) — the 31-commit M47 push never re-stamped this doc, the drift the shallow PR merge-ref checkout masks on CI; this commit restores the stamp at the tip |
 
 <!-- DOGFOOD-COMPILED-BEGIN -->
 ## Compiled from kernel state (P1-8 dogfood)
@@ -228,8 +229,8 @@ findings are Requirement KOs; the dispositions doc is the compiled
 knowledge document; each re-stamp commit below is reconciled via
 the A8 `reconcile` tool against that document.
 
-- knowledge document KOID: `01a0bfd04c3f0000000000000000a9c9`
-- reconciled re-stamp commits: 13 (first 75846d1, last 7577e94)
+- knowledge document KOID: `01a0d0cde7390000000000000000a9c9`
+- reconciled re-stamp commits: 14 (first 043ac1b, last 7577e94)
 - trace answers: `R3-003->finding: R3-003 | R3-005->re-stamping`
 
 The trace pins the requirement leg (the finding is found by query).
@@ -249,5 +250,5 @@ follow-up, not this milestone.
 | R3-005 | 01a0bfccb8a40000000000000000a9c9 | FIXED | closed |
 | R2-008 | 01a0bfccb8b70000000000000000a9c9 | CLOSED | closed |
 
-compiled-head: 75846d137178f74ea1fd2dc182e468a23b2677d3
+compiled-head: bcdf9a835b2a6751ea4a9350abc716415c9e89c1
 <!-- DOGFOOD-COMPILED-END -->
