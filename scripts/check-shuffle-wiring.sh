@@ -12,8 +12,11 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 wf="$root/.github/workflows/benchmark-nightly.yml"
 fail=0
 
-[ -x "$root/scripts/run-shuffle.sh" ] || { echo "SHUFFLE: missing scripts/run-shuffle.sh" >&2; fail=1; }
-[ -x "$root/scripts/check-residue.sh" ] || { echo "SHUFFLE: missing scripts/check-residue.sh" >&2; fail=1; }
+# -f, not -x: the repo convention tracks every script 644 (Windows
+# authors — the exec bit is invisible in Git Bash locally and would
+# fail on every Linux run); the workflow invokes them via `bash`.
+[ -f "$root/scripts/run-shuffle.sh" ] || { echo "SHUFFLE: missing scripts/run-shuffle.sh" >&2; fail=1; }
+[ -f "$root/scripts/check-residue.sh" ] || { echo "SHUFFLE: missing scripts/check-residue.sh" >&2; fail=1; }
 grep -q 'tool: nextest' "$wf" || { echo "SHUFFLE: benchmark-nightly.yml lacks the nextest install step" >&2; fail=1; }
 grep -q 'run-shuffle.sh' "$wf" || { echo "SHUFFLE: benchmark-nightly.yml lacks the shuffle run step" >&2; fail=1; }
 [ "$(grep -c 'check-residue.sh' "$wf")" -ge 2 ] || { echo "SHUFFLE: the residue sweepers must arm before AND after the run" >&2; fail=1; }
