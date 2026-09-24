@@ -42,7 +42,7 @@ jobs:
       # | merged_iterator_correctness      | byte-exact vs oracle | — | — | SE2M12_NIGHTLY=1 (50k steps) |
       # | w31_scale_001                    | probe success 12/12 per scale | cells | 10K synthesis | W31_SCALE_NIGHTLY=1 (100k) |
       # | w31_scale_002                    | probe pins (n=1000 fixed) | cells | — | runs fully on PR |
-      # | kse16/17/18 amp trio + report (SKIPPED) | consistency pins covered by kse20_backend_conformance | — | amplification cells | weekly benchmark-nightly |
+      # | kse16/17/18 amp trio + report (SKIPPED) | consistency pins covered by kse20_backend_conformance | — | amplification cells | benchmark-nightly ungated job (P0-2 registry) |
       # | kse19_resource_usage + report (SKIPPED) | — | — | RSS/disk cells (10k smoke) | KSE19_NIGHTLY=1 (100k + 1M) |
       # | v2_m7_workloads (SKIPPED)        | verdict is V2ADOPT_NIGHTLY-gated; its 4 correctness siblings in the binary stay; v2 nets = the 40+ reduced SE2 suites | cells | RSS/disk cells | V2ADOPT_NIGHTLY=1 (100k) at milestones |
       # | multimodal_golden/retrieval_quality/semantic_extraction_quality (SKIPPED here) | re-run with --nocapture in dedicated steps below — zero coverage loss | quality metrics | — | the dedicated steps |
@@ -56,14 +56,22 @@ jobs:
       # the dev box on fsync-heavy tests). Per the rule above the
       # next-slowest tests moved to the skip list — the budget is NOT
       # raised. Remaining measured cost: ~30 min tests + ~14 min compile.
-      - run: >-
-          cargo test --workspace -- --skip load_encryption_overhead --skip kse120c_report
-          --skip kse16_storage_amplification --skip kse17_write_amplification
-          --skip kse18_read_amplification --skip kse161718_report
-          --skip kse19_resource_usage --skip kse19_report
-          --skip m7_workloads --skip v2_m7_workloads
-          --skip multimodal_golden_suite --skip rule_baseline_retrieval_quality
-          --skip semantic_extraction_quality
+      # sfm009_large_wal_snapshot_has_bounded_rss (PR6-R3-003) is skipped
+      # like kse19: a whole-process RSS cell, sibling tests in the same
+      # binary perturb the peak on CI runners — it stays in the local suite
+      # (RED 192700 KiB growth → GREEN bounded, both proven locally).
+      # The skip list is derived from tests/gated.toml via
+      # scripts/skip-list.sh — the registry is the single source of truth
+      # (PR6-F2 / P0-2); scripts/check-skip-drift.sh guards the wiring.
+      - run: cargo test --workspace -- $(bash scripts/skip-list.sh)
+        # bash, not the pwsh default: the $(...) here is bash word-splitting.
+        # pwsh captures a native command's one-line output as ONE argument —
+        # the Windows check job died on "Unrecognized option: 'skip
+        # load_encryption_overhead --skip …'" (CI rounds 2-3; masked until
+        # round 1's clippy/hang classes cleared, and untested on Windows
+        # since the registry landed after the last green Windows run). The
+        # command was authored for bash; the Linux job runs it under bash.
+        shell: bash
         timeout-minutes: 60
       # DoD 19 (HLD §52/§53): golden PDF suite with visible per-stage
       # metrics — extraction/fragmentation/semantic/provenance/retrieval.
@@ -84,21 +92,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: >-
-          cargo test --workspace -- --skip load_encryption_overhead --skip kse120c_report
-          --skip kse16_storage_amplification --skip kse17_write_amplification
-          --skip kse18_read_amplification --skip kse161718_report
-          --skip kse19_resource_usage --skip kse19_report
-          --skip m7_workloads --skip v2_m7_workloads
-          --skip multimodal_golden_suite --skip rule_baseline_retrieval_quality
-          --skip semantic_extraction_quality
+      # sfm009_large_wal_snapshot_has_bounded_rss (PR6-R3-003): same RSS-cell
+      # gating as the Windows job — local-suite test, skipped on CI runners.
+      # Skip list derived from tests/gated.toml (PR6-F2 / P0-2).
+      - run: cargo test --workspace -- $(bash scripts/skip-list.sh)
         # Fast regression net. Only pure measurement is skipped (SE-06
         # classification — the same skip list as the Windows check job's
         # table, so the regression net is identical on both OSes); every
         # correctness-capable suite runs its reduced deterministic PR
         # version here. The full suite used to run 14-16 min on the
         # 2-core runner; the correctness suites add ~3-5 min back in
-        # debug — the budget stays 30.
+        # debug — the budget stays 30. R4-P2-06: the M47 push's timeout
+        # was a csc002 park-leak hang (env armed by a parallel sibling,
+        # marker in the wrong dir, nobody deletes it — fixed by
+        # serializing the whole binary), NOT a budget overflow; the suite
+        # had streamed to its midpoint when the hang started.
         timeout-minutes: 30
 
   lint:
@@ -314,11 +322,43 @@ jobs:
       - run: node scripts/certify.js --self-test
       - run: node scripts/certify.js --check
 
+  # P3-M9: the Python SDK is the adopted first-party SDK — its contract
+  # suite (sdk001 version parity + 8 mcp_client tests against the real
+  # binary) runs in CI so the client can never drift from the server again
+  # (the P3-M1 token-auth drift that broke all 8 tests was caught here).
+  python-sdk:
+    name: Python SDK contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build server binary (the contract target)
+        run: cargo build -p aikoql-mcp
+      - name: Build native module + run SDK suite
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          .venv/bin/pip install -q maturin pytest
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          "$VIRTUAL_ENV/bin/python" -m pytest tests/ -q
+
   dependency-dag:
     name: Verify Dependency DAG
     runs-on: ubuntu-latest
     steps:
+      # Full history: the R3-005 stamp gate and the P1-8 compiled-head
+      # grep walk the doc's commit chain — on the shallow PR merge-ref
+      # checkout (the default depth 1) the merge commit masquerades as
+      # the doc's last modifier (R3-005 passes vacuously) and
+      # `rev-parse DOC_COMMIT^` errors outright (F8 dies with a fatal).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - name: Check banned dependencies
         run: |
@@ -327,4 +367,165 @@ jobs:
             echo "DAG VIOLATION: kernel must not depend on runtime/compiler"
             exit 1
           fi
+          # P3-M0 (clb002): the estate-hygiene deletions must stay deleted —
+          # no code or script may reference them again.
+          echo "Checking deleted harness references..."
+          if grep -rn 'tests/universal_test_harness\.py\|benchmarks/tests/load_test\.rs\|tests/e2e/' \
+              --include='*.rs' --include='*.py' --include='*.js' --include='*.yml' \
+              --include='*.yaml' --include='*.toml' --include='*.json' \
+              --exclude-dir=node_modules --exclude-dir=.github \
+              . 2>/dev/null; then
+            echo "DAG VIOLATION: reference to a deleted P3-M0 harness"
+            exit 1
+          fi
+          # P3-M9 (sdk002-deletions): the deleted Go/TS/Java SDKs and the
+          # cluster proxy must stay deleted — MCP is the blessed surface
+          # (docs/sdk-proxy-decision.md). No workspace code or doc may
+          # reference them again. (examples/hello-agent.ts lives again —
+          # rewritten on @modelcontextprotocol/sdk; wave31_oss pins its
+          # existence and content.) docs/red-archive/ excluded: the PR6-F1
+          # (P0-1) archives capture the estate gate's own RED output, which
+          # names these paths by design.
+          echo "Checking deleted SDK/proxy references..."
+          if grep -rni 'crates/cluster/proxy\|crates/sdk/go\|crates/sdk/typescript\|crates/sdk/java\|aikoql-sdk\|AikoqlClient' \
+              --exclude='sdk-proxy-decision.md' --exclude='PR6-TDD-DISPOSITIONS.md' \
+              --exclude='check-estate-hygiene.sh' \
+              --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.github \
+              --exclude-dir=red-archive \
+              . 2>/dev/null; then
+            echo "DAG VIOLATION: reference to a deleted P3-M9 SDK or cluster proxy"
+            exit 1
+          fi
+          # PR6-R3-002: the deleted estate must be ABSENT from the tracked
+          # tree, not merely unreferenced (the greps above catch textual
+          # regressions; this catches a re-added file nothing references
+          # yet — RED proven against origin/main through the same script).
+          echo "Checking deleted-estate paths absent from the tree..."
+          bash scripts/check-estate-hygiene.sh
+          # PR6-R3-005: the dispositions doc must be stamped at the reviewed
+          # tip — its evidence is verified at a specific head, and any
+          # change that moves the tip must re-stamp it in the same change
+          # (RED proven against origin/main and against the pre-stamp branch
+          # head through the same script).
+          echo "Checking dispositions doc stamped at head..."
+          bash scripts/check-disposition-head.sh
+          # PR6-F1 (P0-1): every red-archive artifact must be a complete
+          # RED — manifest fields + a non-zero exit marker in the log
+          # (docs/ARCHITECT-REVIEW-2026-09.md).
+          echo "Checking red-archive artifacts..."
+          bash scripts/check-red-archives.sh
+          # PR6-F2 (P0-2): the gated-cell registry must be the only skip
+          # source and every registered name must exist in the tree.
+          echo "Checking gated-cell registry..."
+          bash scripts/check-skip-drift.sh
+          # PR6-F4 (P1-4): test env hygiene + seed determinism — new test
+          # code may not mutate the process-global environment (the
+          # 2026-09-18 AIKOQL_BACKEND parallel-child leak class) nor use
+          # an unseeded RNG; the 10 existing sites are pinned in the
+          # script's allowlist (file|token) with honest per-entry reasons.
+          echo "Checking test env hygiene + seed determinism..."
+          bash scripts/check-test-env-hygiene.sh
+          # PR6-F5 (P1-5): the nightly shuffle run + its residue sweepers
+          # must stay wired in benchmark-nightly.yml (a workflow step can
+          # rot silently in a bad merge).
+          echo "Checking shuffle-run wiring..."
+          bash scripts/check-shuffle-wiring.sh
+          # P5-M0 (gd001): the baseline-certification guard
+          # (.github/workflows/baseline-guard.yml) must stay wired — it runs
+          # the 1M v2 workload + gate-5 ratio on every change touching a
+          # protected path (storage/kernel/compiler/runtime).
+          echo "Checking P5-M0 baseline-guard wiring..."
+          GUARD=.github/workflows/baseline-guard.yml
+          if [ ! -f "$GUARD" ]; then
+            echo "DAG VIOLATION: $GUARD missing — the gate-5 baseline guard job must exist"
+            exit 1
+          fi
+          for path in crates/storage crates/kernel crates/compiler crates/runtime; do
+            if ! grep -q "$path" "$GUARD"; then
+              echo "DAG VIOLATION: $GUARD must trigger on $path"
+              exit 1
+            fi
+          done
+          if ! grep -q 'V2ADOPT_NIGHTLY=1m' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must run the 1M regime (V2ADOPT_NIGHTLY=1m)"
+            exit 1
+          fi
+          # P5-M47: the gate's checker schema pins must run in the guard,
+          # and the fresh artifact must be uploaded (the republish evidence)
+          # — either step can rot silently in a bad merge.
+          if ! grep -q 'test_artifact_schema.py' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must run the checker schema pins"
+            exit 1
+          fi
+          if ! grep -q 'upload-artifact' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must upload the fresh 1M artifact (the republish evidence)"
+            exit 1
+          fi
+          # PR6-F6 (P1-6): the per-commit perf smoke workflow must stay
+          # wired — the cheap gate-5 catches O(n^2)-class storage
+          # regressions at commit time instead of in the nightly 1M guard.
+          echo "Checking perf-smoke wiring..."
+          SMOKE=.github/workflows/perf-smoke.yml
+          if [ ! -f "$SMOKE" ]; then
+            echo "DAG VIOLATION: $SMOKE missing — the per-commit perf smoke job must exist"
+            exit 1
+          fi
+          for path in crates/storage crates/kernel crates/engines/vector; do
+            if ! grep -q "$path" "$SMOKE"; then
+              echo "DAG VIOLATION: $SMOKE must trigger on $path"
+              exit 1
+            fi
+          done
+          if ! grep -q 'perf-smoke.sh' "$SMOKE"; then
+            echo "DAG VIOLATION: $SMOKE must run scripts/perf-smoke.sh"
+            exit 1
+          fi
+          # P5-M47: the smoke checker's schema pins must run there too.
+          if ! grep -q 'test_artifact_schema.py' "$SMOKE"; then
+            echo "DAG VIOLATION: $SMOKE must run the checker schema pins"
+            exit 1
+          fi
+          # PR6-F7 (P1-7): the codec/replay coverage floor workflow must
+          # stay wired — a deleted gate lets coverage silently regress.
+          echo "Checking coverage-floor wiring..."
+          COV=.github/workflows/coverage-floor.yml
+          if [ ! -f "$COV" ]; then
+            echo "DAG VIOLATION: $COV missing — the coverage floor job must exist"
+            exit 1
+          fi
+          if ! grep -q 'crates/storage' "$COV"; then
+            echo "DAG VIOLATION: $COV must trigger on crates/storage"
+            exit 1
+          fi
+          if ! grep -q 'check-coverage-floor.sh' "$COV"; then
+            echo "DAG VIOLATION: $COV must run scripts/check-coverage-floor.sh"
+            exit 1
+          fi
+          # PR6-F8 (P1-8): the dogfood review loop must stay wired — the
+          # script must exist, and the doc's compiled section must have
+          # been emitted at the base of the commit that last modified the
+          # doc: a doc change without a re-emit leaves compiled-head
+          # behind and fails here (the R3-005 staleness rule extended
+          # from the stamp to the compiled section). Clean doc-touching
+          # merges simplify through to the branch head, so their base is
+          # the emit commit.
+          echo "Checking dogfood review-loop wiring..."
+          DOGFOOD=scripts/dogfood-review-loop.py
+          if [ ! -f "$DOGFOOD" ]; then
+            echo "DAG VIOLATION: $DOGFOOD missing — the P1-8 review loop must exist"
+            exit 1
+          fi
+          DOC_COMMIT=$(git log -1 --format=%H -- docs/PR6-TDD-DISPOSITIONS.md)
+          DOC_BASE=$(git rev-parse "$DOC_COMMIT^")
+          if ! grep -q "^compiled-head: $DOC_BASE$" docs/PR6-TDD-DISPOSITIONS.md; then
+            echo "DAG VIOLATION: the dogfood compiled section is stale — re-run scripts/dogfood-review-loop.py full"
+            exit 1
+          fi
+          # PR6-R2-012: vendored node_modules must not be tracked source —
+          # enormous diffs, review noise, lockfile drift. This PR deletes
+          # the 278 paths origin/main still tracks; the gate keeps them
+          # deleted (RED proven against origin/main through the same script).
+          echo "Checking tracked node_modules..."
+          bash scripts/check-no-tracked-node-modules.sh
+          echo "P5-M0 baseline-guard wiring OK"
           echo "Dependency DAG OK"

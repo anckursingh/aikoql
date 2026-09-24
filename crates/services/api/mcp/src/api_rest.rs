@@ -12,6 +12,7 @@ pub fn route_v1(
     sessions: &Mutex<HashMap<String, crate::HttpSession>>,
     token: Option<String>,
     rate_limit: &Mutex<crate::rate_limiter::RateLimiter>,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
 ) -> (String, String, String) {
     let clean_path = path.split('?').next().unwrap_or(path);
 
@@ -36,6 +37,7 @@ pub fn route_v1(
         db_path,
         sessions,
         token.as_deref(),
+        admin,
     );
 
     match result {
@@ -63,6 +65,7 @@ fn route_inner(
     db_path: &str,
     sessions: &Mutex<HashMap<String, crate::HttpSession>>,
     token: Option<&str>,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
 ) -> Result<J, String> {
     let need_auth = || check_auth(token, sessions);
     let args = || {
@@ -74,18 +77,34 @@ fn route_inner(
     };
 
     match (method, path) {
+        // P3-M1 (auth005): the allowlist — spec, ABI, metrics-info. health,
+        // metrics, and login live in the root-level handler.
         ("GET", "/api/v1/openapi.json") => openapi_spec(),
         ("GET", "/api/v1/abi-version") => tool_abi_version(k),
         ("GET", "/api/v1/metrics-info") => tool_metrics(k),
-        ("GET", "/api/v1/audit") => tool_audit_report(k),
-        ("GET", "/api/v1/backups") => tool_list_backups(db_path),
-        ("POST", "/api/v1/discover-ontology") => tool_discover_ontology(k),
+        ("GET", "/api/v1/audit") => {
+            need_auth()?;
+            tool_audit_report(k)
+        }
+        ("GET", "/api/v1/backups") => {
+            need_auth()?;
+            tool_list_backups(db_path)
+        }
+        ("POST", "/api/v1/discover-ontology") => {
+            need_auth()?;
+            tool_discover_ontology(k)
+        }
 
         ("GET", p) if p.starts_with("/api/v1/schema") => {
+            need_auth()?;
             schema_endpoint(k).and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
         }
         ("GET", p) if p.starts_with("/api/v1/graph") => {
-            graph_api(k, path).and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
+            need_auth()?;
+            // P3-M1 (auth006): graph executes as the session principal.
+            let subj = crate::http::validate_token(token, sessions).ok_or("login required")?;
+            graph_api(k, path, &subj)
+                .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
         }
 
         ("GET", "/api/v1/compliance") => {
@@ -279,6 +298,14 @@ fn route_inner(
             need_auth()?;
             tool_predict(k, &args())
         }
+        ("POST", "/api/v1/job-status") => {
+            need_auth()?;
+            tool_job_status(k, &args())
+        }
+        ("POST", "/api/v1/approve-job") => {
+            need_auth()?;
+            tool_approve_job(k, &args())
+        }
         ("POST", "/api/v1/documents") => {
             need_auth()?;
             tool_document_ingest(k, &args(), db_path)
@@ -303,9 +330,18 @@ fn route_inner(
             need_auth()?;
             tool_document_compile(k, &args(), db_path)
         }
-        ("POST", "/api/v1/backup") => tool_backup(k, db_path),
-        ("POST", "/api/v1/restore") => tool_restore(k, &args()),
-        ("POST", "/api/v1/verify-backup") => tool_verify_backup(&args()),
+        ("POST", "/api/v1/backup") => {
+            need_auth()?;
+            tool_backup(k, db_path, admin)
+        }
+        ("POST", "/api/v1/restore") => {
+            need_auth()?;
+            tool_restore(k, &args(), admin)
+        }
+        ("POST", "/api/v1/verify-backup") => {
+            need_auth()?;
+            tool_verify_backup(&args(), admin)
+        }
         ("POST", "/api/v1/eval/recall") => {
             need_auth()?;
             tool_eval_recall(k, &args())
@@ -496,6 +532,7 @@ mod tests {
                 username: "admin".into(),
                 roles: vec!["admin".into()],
                 created: std::time::Instant::now(),
+                ttl_secs: 86_400,
             },
         );
         // Valid token → body-declared subject/roles are overwritten.

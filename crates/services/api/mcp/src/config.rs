@@ -12,6 +12,15 @@ pub(crate) struct RuntimeConfig {
     pub listen_addr: Option<String>,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
+    /// P3-M1 (§53): HTTP login users ([auth].users), plus the
+    /// AIKOQL_ADMIN_PASSWORD bootstrap (plaintext in config only — hashed
+    /// once into the AuthResolver at serve start).
+    pub auth_users: Vec<AuthUser>,
+    pub admin_password: Option<String>,
+    pub auth_session_ttl_secs: u64,
+    /// P3-M1 (auth004): non-loopback HTTP/metrics bind (loopback stays the
+    /// default); refused at serve without configured credentials.
+    pub allow_remote_http: bool,
     pub memory_dir: String,
     /// None = default (candle); Some("openai") = OpenAI-compatible HTTP endpoint.
     /// Canonical config names: "candle" | "http" | "ollama" (alias of http).
@@ -32,38 +41,28 @@ pub(crate) struct RuntimeConfig {
     /// [encryption] — encryption-at-rest (MRFC-0020), wired in serve + all
     /// store-opening subcommands via engine::open_kernel.
     pub encryption: RuntimeEncryption,
-    /// Backend selection (PR#2 review SE-02): `None` = auto-detect at open
-    /// (redb for a fresh/redb path, the native engines for their own
-    /// formats — see engine::detect_backend). Any of TOML / env / CLI
-    /// naming a backend resolves to `Some` here, so the detection never
-    /// overrides an explicit choice.
+    /// Backend selection (PR#2 review SE-02, PR6-005): `None` = auto-detect
+    /// at open through the one authoritative path
+    /// (`aikoql_runtime::backend::detect_backend` — a redb file stays redb,
+    /// a native WAL stays aikoql, a v2 directory stays v2, a missing path
+    /// creates v2). Any of TOML / env / CLI naming a backend resolves to
+    /// `Some` here, so the detection never overrides an explicit choice.
     pub backend: Option<StorageBackend>,
+    /// P5-M11 (ND-11): KOQL request timeout in seconds — a query running
+    /// longer is cancelled and answered -32002.
+    pub request_timeout_secs: u64,
+    /// P5-M11 (ND-11): concurrent TCP connection cap — the accept loop
+    /// rejects the overflow with -32000.
+    pub max_connections: u64,
     /// The TOML path that took effect (for diagnostics).
     pub config_path: Option<String>,
 }
 
 /// The storage backends the server can open (docs/STORAGE-BACKENDS.md).
-/// Redb is the default for new paths — the stable compatibility engine;
-/// aikoql and aikoql-v2 are explicit opt-ins.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StorageBackend {
-    Redb,
-    Aikoql,
-    AikoqlV2,
-}
-
-impl StorageBackend {
-    fn parse(v: &str) -> Result<StorageBackend, String> {
-        match v {
-            "redb" => Ok(StorageBackend::Redb),
-            "aikoql" => Ok(StorageBackend::Aikoql),
-            "aikoql-v2" => Ok(StorageBackend::AikoqlV2),
-            other => Err(format!(
-                "unknown storage backend {other:?}: use \"redb\", \"aikoql\" or \"aikoql-v2\""
-            )),
-        }
-    }
-}
+/// PR6-005 — owned by the runtime's one authoritative backend module
+/// (aikoql_runtime::backend): parsing, detection and opening all live
+/// there; this alias keeps the config pipeline typed against it.
+pub(crate) use aikoql_runtime::backend::Backend as StorageBackend;
 
 /// Merged encryption settings (MRFC-0020). Disabled by default.
 #[derive(Clone, Debug, Default)]
@@ -77,6 +76,14 @@ pub(crate) struct RuntimeEncryption {
     pub policies: std::collections::HashMap<String, Vec<String>>,
 }
 
+/// P3-M1 (§53): one [auth].users row — argon2id hash + roles.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct AuthUser {
+    pub username: String,
+    pub hash: String,
+    pub roles: Vec<String>,
+}
+
 // ---------------------------------------------------------------------------
 // TOML schema — every section mirrors aikoql.toml. All fields Option so we
 // can layer sections over defaults.
@@ -88,6 +95,7 @@ struct TomlConfig {
     storage: Option<TomlStorage>,
     database: Option<TomlDatabase>,
     server: Option<TomlServer>,
+    auth: Option<TomlAuth>,
     encryption: Option<TomlEncryption>,
     rate_limit: Option<TomlRateLimit>,
     embedding: Option<TomlEmbedding>,
@@ -113,6 +121,26 @@ struct TomlServer {
     listen: Option<String>,
     metrics_addr: Option<String>,
     tcp_tokens: Option<Vec<String>>,
+    // P3-M1 (auth004): the HTTP surface is loopback-only unless explicitly
+    // armed — and arming it requires [auth] credentials (fail-closed).
+    allow_remote_http: Option<bool>,
+}
+
+/// P3-M1 (§53): HTTP login credentials — argon2id hashes (see
+/// `aikoql hash-password`), never plaintext, never hardcoded.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct TomlAuth {
+    users: Option<Vec<TomlAuthUser>>,
+    session_ttl_seconds: Option<u64>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct TomlAuthUser {
+    username: String,
+    hash: String,
+    roles: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -211,6 +239,12 @@ fn apply_toml_encryption(enc: &mut RuntimeEncryption, e: TomlEncryption) {
     }
 }
 
+/// The one canonical default database path (P1-21): a fresh default is the
+/// v2 DIRECTORY, named honestly — every verb that used to fall back to a
+/// file named `./aikoql.redb` now falls back to this. A legacy redb file is
+/// opened by passing its path (or `--backend redb`) explicitly.
+pub(crate) const DEFAULT_DB_PATH: &str = "./aikoql-v2";
+
 /// Layering: defaults → TOML → env → CLI. `subcmd == Some("serve")` skips
 /// the `serve` token when scanning flags/positionals (mirrors the old main.rs
 /// loop); bare `aikoql-mcp [DB]` still works.
@@ -220,10 +254,14 @@ pub(crate) fn load(
     subcmd_idx: Option<usize>,
 ) -> Result<RuntimeConfig, String> {
     let mut cfg = RuntimeConfig {
-        db_path: "./aikoql.redb".into(),
+        db_path: DEFAULT_DB_PATH.into(),
         listen_addr: None,
         metrics_addr: None,
         tcp_tokens: Vec::new(),
+        auth_users: Vec::new(),
+        admin_password: None,
+        auth_session_ttl_secs: 86_400,
+        allow_remote_http: false,
         memory_dir: "./memory".into(),
         embedding_provider: None,
         embedding_base_url: "http://localhost:11434".into(),
@@ -239,6 +277,8 @@ pub(crate) fn load(
             ..Default::default()
         },
         backend: None,
+        request_timeout_secs: 30,
+        max_connections: 64,
         config_path: None,
     };
 
@@ -280,6 +320,24 @@ pub(crate) fn load(
             // layer stops it working.
             if let Some(v) = s.tcp_tokens {
                 cfg.tcp_tokens = v;
+            }
+            if let Some(v) = s.allow_remote_http {
+                cfg.allow_remote_http = v;
+            }
+        }
+        if let Some(a) = t.auth {
+            if let Some(users) = a.users {
+                cfg.auth_users = users
+                    .into_iter()
+                    .map(|u| AuthUser {
+                        username: u.username,
+                        hash: u.hash,
+                        roles: u.roles.unwrap_or_default(),
+                    })
+                    .collect();
+            }
+            if let Some(v) = a.session_ttl_seconds {
+                cfg.auth_session_ttl_secs = v;
             }
         }
         if let Some(e) = t.encryption {
@@ -378,6 +436,15 @@ pub(crate) fn load(
     if let Some(v) = env_opt("AIKOQL_PASSPHRASE") {
         cfg.encryption.passphrase = Some(v);
     }
+    // P3-M1: allow_remote_http arming + the admin bootstrap password (the
+    // password stays in the config struct only until serve hashes it into
+    // the AuthResolver — it is never logged and never persisted).
+    if let Some(v) = env_opt("AIKOQL_ALLOW_REMOTE_HTTP") {
+        cfg.allow_remote_http = v == "1" || v.eq_ignore_ascii_case("true");
+    }
+    if let Some(v) = env_opt("AIKOQL_ADMIN_PASSWORD") {
+        cfg.admin_password = Some(v);
+    }
 
     // Layer 4: CLI (highest precedence). Same semantics as the pre-PRR-4 loop.
     // R2 (review round 3): repeated --tcp-token flags accumulate WITHIN this
@@ -407,7 +474,7 @@ pub(crate) fn load(
                     i += 2;
                 }
                 None => {
-                    return Err("--tcp-token requires a value: TOKEN[:TENANT[:ROLE1,ROLE2]]".into())
+                    return Err("--tcp-token requires a value: TOKEN[:TENANT[:ROLE1,ROLE2]]".into());
                 }
             },
             "--metrics-addr" => {
@@ -469,6 +536,25 @@ pub(crate) fn load(
                 // Consumed by find_toml above; skip its value here.
                 i += 2;
             }
+            // P5-M11 (ND-11): request timeout + connection cap.
+            "--request-timeout-secs" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.request_timeout_secs = v.parse().map_err(|_| {
+                        format!("--request-timeout-secs requires a number of seconds, got {v:?}")
+                    })?;
+                    i += 2;
+                }
+                None => return Err("--request-timeout-secs requires a value".into()),
+            },
+            "--max-connections" => match args.get(i + 1) {
+                Some(v) => {
+                    cfg.max_connections = v
+                        .parse()
+                        .map_err(|_| format!("--max-connections requires a number, got {v:?}"))?;
+                    i += 2;
+                }
+                None => return Err("--max-connections requires a value".into()),
+            },
             _ if args[i].starts_with("--") => {
                 return Err(format!(
                     "Unknown option: {} (run `aikoql-mcp help`)",
@@ -489,6 +575,12 @@ pub(crate) fn load(
 
     Ok(cfg)
 }
+
+/// Serializes env-mutating tests (process-global state). Shared with
+/// engine.rs's startup-path test, which also reads process env through
+/// load().
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -617,7 +709,7 @@ mod tests {
     #[test]
     fn defaults_only() {
         let cfg = load_bare(&argv(&["aikoql-mcp"])).unwrap();
-        assert_eq!(cfg.db_path, "./aikoql.redb");
+        assert_eq!(cfg.db_path, DEFAULT_DB_PATH);
         assert!(cfg.listen_addr.is_none());
         assert!(cfg.embedding_provider.is_none());
         assert_eq!(cfg.log_level, "info");

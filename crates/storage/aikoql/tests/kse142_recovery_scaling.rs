@@ -384,5 +384,5 @@ fn kse142_report() {
         slo = slo.unwrap_or_else(|| "- (no measured rows)".into()),
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("kse142-recovery-scaling.md"), report).unwrap();
+    common::report_write(&dir.join("kse142-recovery-scaling.md"), report);
 }

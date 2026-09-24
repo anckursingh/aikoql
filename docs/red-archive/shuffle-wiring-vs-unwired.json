@@ -1,0 +1,8 @@
+{
+  "id": "shuffle-wiring-vs-unwired",
+  "pre_fix_commit": "4ee7bb1",
+  "command": "bash scripts/check-shuffle-wiring.sh",
+  "captured_at": "2026-09-20T12:49:29Z",
+  "captured_head": "4ee7bb11e50d6f1259a6cbadaa03bc7cbea144ef",
+  "exit_code": 1
+}

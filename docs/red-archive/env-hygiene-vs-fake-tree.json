@@ -1,0 +1,8 @@
+{
+  "id": "env-hygiene-vs-fake-tree",
+  "pre_fix_commit": "13600ae",
+  "command": "env TESTS_ROOT=C:\Users\ancku\AppData\Local\Temp/env-hygiene-fake bash scripts/check-test-env-hygiene.sh",
+  "captured_at": "2026-09-20T07:38:12Z",
+  "captured_head": "13600ae526458145ba8087ce97a81492d90ce248",
+  "exit_code": 1
+}

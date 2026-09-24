@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.21s
+     Running tests\compaction_alloc.rs (target\debug\deps\compaction_alloc-0fc7441908f9a913.exe)
+
+running 1 test
+test merge_single_version_keys_allocations_bounded ... FAILED
+
+failures:
+
+---- merge_single_version_keys_allocations_bounded stdout ----
+
+thread 'merge_single_version_keys_allocations_bounded' (36180) panicked at crates\storage\aikoql-v2\tests\compaction_alloc.rs:75:5:
+101058 allocations merging 10000 single-version keys (budget 40000) — the per-key costs (heap key clone + run Vec + grouped HashSet) must be gone; steady cost is the decode + one heap node per entry
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    merge_single_version_keys_allocations_bounded
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.90s
+
+error: test failed, to rerun pass `-p aikoql-storage-v2 --test compaction_alloc`
+EXIT=101

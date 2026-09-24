@@ -5,6 +5,9 @@ use crate::admin::*;
 use crate::imports::*;
 use crate::ingest::*;
 use crate::model::*;
+// P5-M12 (ND-12): the contract verbs reuse the tool implementations in-process.
+use crate::config::DEFAULT_DB_PATH;
+use crate::{json, Kernel, J};
 pub(crate) fn print_usage() {
     println!(concat!(
         "aikoql — Knowledge Database Suite\n",
@@ -18,10 +21,16 @@ pub(crate) fn print_usage() {
         "  restore BACKUP [DB]    Restore from a backup\n",
         "  audit [DB]             Print encryption compliance report\n",
         "  keygen [PATH]          Generate an encryption master key\n",
+        "  status [DB]            Health, metrics, and ABI version of a knowledge base\n",
+        "  query <AIKOQL> [DB]    Run one aikoql statement (CREATE/MATCH/...)\n",
+        "  explain <KOID> [DB]    Explain an object (provenance + evidence)\n",
+        "  index [DB]             Storage/index statistics\n",
+        "  schema [DB]            List types in the knowledge base\n",
         "  import <SOURCE> [ARGS]  Import from DB (postgres, pgvector, sqlite, mongodb, neo4j)\n",
         "  ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR] Ingest directory into knowledge base\n",
         "  report [PATH]          Print knowledge report for directory\n",
         "  model install [MODEL]  Install an embedding model into the local store (offline use)\n",
+        "  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)\n",
         "\n",
         "Server options (serve mode):\n",
         "  --listen ADDR          TCP listen address (e.g., 127.0.0.1:9090; empty host = loopback)\n",
@@ -37,6 +46,10 @@ pub(crate) fn print_usage() {
         "  --config PATH           TOML config file (auto: ./aikoql.toml, then /etc/aikoql/aikoql.toml)\n",
         "\n",
         "Precedence: defaults < aikoql.toml < env (AIKOQL_*) < CLI flags.\n",
+        "HTTP auth: [auth] users/session_ttl_seconds in aikoql.toml (argon2id hashes);\n",
+        "  AIKOQL_ADMIN_PASSWORD bootstraps an admin when no users are configured.\n",
+        "  The HTTP/metrics surface is loopback-only unless allow_remote_http = true\n",
+        "  (arming it requires configured credentials).\n",
         "\n",
         "Examples:\n",
         "  aikoql-mcp shell                           # Interactive shell\n",
@@ -73,7 +86,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 eprintln!("Usage: aikoql-mcp shell [--tenant NAME] [DB_PATH]");
                 std::process::exit(2);
             };
-            let mut db = "./aikoql.redb";
+            let mut db = DEFAULT_DB_PATH;
             let mut tenant: Option<&str> = None;
             let tail_args: Vec<&str> = args.iter().skip(idx + 2).map(String::as_str).collect();
             let mut ti = 0;
@@ -97,7 +110,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             true
         }
         Some("backup") => {
-            run_backup(arg_after.unwrap_or("./aikoql.redb"));
+            run_backup(arg_after.unwrap_or(DEFAULT_DB_PATH));
             true
         }
         Some("restore") => {
@@ -105,21 +118,23 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 eprintln!("Usage: aikoql-mcp restore <BACKUP_DIR> [DB_PATH]");
                 std::process::exit(1);
             });
-            let target = arg_after2.unwrap_or("./aikoql.redb");
+            let target = arg_after2.unwrap_or(DEFAULT_DB_PATH);
             run_restore(backup, target);
             true
         }
         Some("audit") => {
-            run_audit(arg_after.unwrap_or("./aikoql.redb"));
+            run_audit(arg_after.unwrap_or(DEFAULT_DB_PATH));
             true
         }
         Some("ingest-dir") => {
             let Some(idx) = subcmd_idx else {
-                eprintln!("Usage: aikoql-mcp ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR]");
+                eprintln!(
+                    "Usage: aikoql-mcp ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR]"
+                );
                 std::process::exit(2);
             };
             let path = arg_after.unwrap_or(".");
-            let db = arg_after2.unwrap_or("./aikoql.redb");
+            let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
             let mut parallel = false;
             let mut incremental = false;
             let mut model_dir: Option<String> = None;
@@ -196,6 +211,22 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             run_report(path);
             true
         }
+        Some("hash-password") => {
+            // P3-M1 (§53): argon2id hash for the [auth].users table.
+            let Some(pw) = arg_after else {
+                eprintln!("Usage: aikoql-mcp hash-password <PASSWORD>");
+                eprintln!("Prints an argon2id hash for the [auth].users table in aikoql.toml.");
+                std::process::exit(2);
+            };
+            match argon2_hash_password(pw) {
+                Ok(h) => println!("{h}"),
+                Err(e) => {
+                    eprintln!("hash-password: {e}");
+                    std::process::exit(1);
+                }
+            }
+            true
+        }
         Some("import") => {
             // import <source> <source-args...>
             //   import postgres <conn_str> [--tenant NAME] [--table TABLE] [DB_PATH]
@@ -208,13 +239,19 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             if ti_args.is_empty() {
                 eprintln!("Usage: aikoql-mcp import <SOURCE> [ARGS...]");
                 eprintln!("Sources: postgres, pgvector, sqlite, mongodb, neo4j");
-                eprintln!("  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [--timeout-ms MS] [DB_PATH]");
-                eprintln!("  import pgvector <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [--timeout-ms MS] [DB_PATH]");
+                eprintln!(
+                    "  import postgres <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [--timeout-ms MS] [DB_PATH]"
+                );
+                eprintln!(
+                    "  import pgvector <CONN_STR> [--tenant NAME] [--table TABLE] [--run-id ID] [--timeout-ms MS] [DB_PATH]"
+                );
                 eprintln!("  import sqlite <FILE.db> [--tenant NAME] [--table TABLE] [DB_PATH]");
                 eprintln!(
                     "  import mongodb <URI> --db <NAME> [--collection C] [--tenant T] [--run-id ID] [--timeout-ms MS] [DB_PATH]"
                 );
-                eprintln!("  import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [--run-id ID] [--timeout-ms MS] [DB_PATH]");
+                eprintln!(
+                    "  import neo4j <URI> [--user U] [--password P] [--label L] [--tenant T] [--run-id ID] [--timeout-ms MS] [DB_PATH]"
+                );
                 std::process::exit(1);
             }
             match ti_args[0] {
@@ -222,7 +259,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 // provider parses vector columns to Value::List via ::text.
                 "postgres" | "pgvector" => {
                     let mut conn_str: Option<&str> = None;
-                    let mut target_db = "./aikoql.redb";
+                    let mut target_db = DEFAULT_DB_PATH;
                     let mut tenant: Option<&str> = None;
                     let mut table_filter: Option<&str> = None;
                     let mut run_id = fresh_run_id();
@@ -286,7 +323,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                     let mut uri: Option<&str> = None;
                     let mut user = "neo4j";
                     let mut password = "password";
-                    let mut target_db = "./aikoql.redb";
+                    let mut target_db = DEFAULT_DB_PATH;
                     let mut tenant: Option<&str> = None;
                     let mut label_filter: Option<&str> = None;
                     let mut run_id = fresh_run_id();
@@ -374,7 +411,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 "mongodb" => {
                     let mut uri: Option<&str> = None;
                     let mut database: Option<&str> = None;
-                    let mut target_db = "./aikoql.redb";
+                    let mut target_db = DEFAULT_DB_PATH;
                     let mut tenant: Option<&str> = None;
                     let mut coll_filter: Option<&str> = None;
                     let mut run_id = fresh_run_id();
@@ -451,7 +488,7 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
                 }
                 "sqlite" => {
                     let mut source_file: Option<&str> = None;
-                    let mut target_db = "./aikoql.redb";
+                    let mut target_db = DEFAULT_DB_PATH;
                     let mut tenant: Option<&str> = None;
                     let mut table_filter: Option<&str> = None;
                     let mut si = 1;
@@ -507,10 +544,100 @@ pub(crate) fn dispatch(args: &[String], subcmd: Option<&str>, subcmd_idx: Option
             run_keygen(arg_after.unwrap_or("./aikoql.key"));
             true
         }
+        // P5-M12 (ND-12): the five contract verbs are thin wrappers over the
+        // tool implementations the MCP surface already runs (cl03 dogfoods
+        // them through the repo-built binary).
+        Some("status") => {
+            let db = arg_after.unwrap_or(DEFAULT_DB_PATH);
+            run_verb(db, |k, _admin| {
+                let health = crate::tools::admin::tool_health(k)?;
+                let metrics = crate::tools::admin::tool_metrics(k)?;
+                let abi = crate::tools::admin::tool_abi_version(k)?;
+                Ok(json!({"health": health, "metrics": metrics, "abi_version": abi}))
+            });
+            true
+        }
+        Some("query") => {
+            let Some(query) = arg_after else {
+                eprintln!("Usage: aikoql-mcp query <AIKOQL> [DB]");
+                std::process::exit(2);
+            };
+            let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
+            run_verb(db, |k, _admin| {
+                crate::tools::query::tool_aikoql(k, &json!({"query": query, "subject": "cli"}))
+            });
+            true
+        }
+        Some("explain") => {
+            let Some(koid) = arg_after else {
+                eprintln!("Usage: aikoql-mcp explain <KOID> [DB]");
+                std::process::exit(2);
+            };
+            let db = arg_after2.unwrap_or(DEFAULT_DB_PATH);
+            run_verb(db, |k, _admin| {
+                crate::tools::query::tool_explain(k, &json!({"koid": koid, "subject": "cli"}))
+            });
+            true
+        }
+        Some("index") => {
+            let db = arg_after.unwrap_or(DEFAULT_DB_PATH);
+            run_verb(db, |_k, admin| {
+                crate::tools::admin::tool_storage_stats(admin)
+            });
+            true
+        }
+        Some("schema") => {
+            let db = arg_after.unwrap_or(DEFAULT_DB_PATH);
+            run_verb(db, |k, _admin| {
+                crate::tools::agent_knowledge::tool_discover_schema(k)
+            });
+            true
+        }
         Some("help") => {
             print_usage();
             true
         }
         _ => false,
     }
+}
+
+/// P5-M12 (ND-12) verb runner: open the db like shell/backup do, run one
+/// tool implementation in-process, print pretty JSON. Runtime errors go to
+/// stderr with exit 1 (cl03f pins the kernel tag rides along).
+fn run_verb(
+    db: &str,
+    f: impl FnOnce(
+        &Kernel,
+        Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+    ) -> Result<J, String>,
+) {
+    let (kernel, admin) = crate::engine::open_kernel_auto(db).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+    match f(&kernel, admin.as_deref()) {
+        Ok(v) => println!(
+            "{}",
+            serde_json::to_string_pretty(&v).unwrap_or_else(|e| {
+                eprintln!("serialize: {e}");
+                std::process::exit(1);
+            })
+        ),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// P3-M1: argon2id hash for the [auth].users table (argon2 defaults —
+/// m=19 MiB, t=2, p=1 — the same parameters the kernel envelope KDF uses).
+fn argon2_hash_password(password: &str) -> Result<String, String> {
+    use argon2::password_hash::PasswordHasher;
+    let salt =
+        argon2::password_hash::SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+    argon2::Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| e.to_string())
 }

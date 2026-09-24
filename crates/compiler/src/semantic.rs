@@ -49,10 +49,50 @@ impl<'a> SemanticAnalyzer<'a> {
     // ---- per-statement analyzers ----
 
     fn analyze_match(&self, m: &MatchStatement) -> Result<(), Diagnostic> {
+        // kq009 (ND-02): security objects fail closed BEFORE entity
+        // resolution — aikoql: names otherwise always pass. Checked on both
+        // sides of a JOIN.
+        if is_security_type(&m.entity) {
+            return Err(diagnostics::security_violation(&m.entity, 0, 0));
+        }
+        if let Some(ref j) = m.join {
+            if is_security_type(&j.right_type) {
+                return Err(diagnostics::security_violation(&j.right_type, 0, 0));
+            }
+        }
         let schema = self.resolve_entity(&m.entity)?;
         if let Some(schema) = schema {
             for pred in &m.predicates {
                 self.check_predicate_properties(pred, schema)?;
+            }
+            // P5-M2 (ND-02): precise errors for the new clauses — ORDER BY
+            // and GROUP BY fields, and aggregate arguments, must exist on a
+            // closed schema.
+            if let Some(ref ob) = m.order_by {
+                for key in &ob.keys {
+                    self.check_property(&key.field, schema)?;
+                }
+            }
+            if let Some(ref gb) = m.group_by {
+                for key in &gb.keys {
+                    self.check_property(key, schema)?;
+                }
+                for agg in &gb.aggs {
+                    if let Some(ref field) = agg.field {
+                        self.check_property(field, schema)?;
+                    }
+                }
+            }
+        }
+        // P5-M2 (ND-02): JOIN — the right side must resolve to a type, and
+        // both ON fields must exist on their sides.
+        if let Some(ref j) = m.join {
+            let right_schema = self.resolve_entity(&j.right_type)?;
+            if let Some(right) = right_schema {
+                self.check_property(&j.on.right, right)?;
+                if let Some(left) = schema {
+                    self.check_property(&j.on.left, left)?;
+                }
             }
         }
         // Validate TRAVERSE relationship against ontology.
@@ -115,11 +155,9 @@ impl<'a> SemanticAnalyzer<'a> {
                 return Ok(None);
             }
             // Also accept any physical type that appears in an ontology mapping.
-            // ponytail: O(n) scan; build set if this becomes a hot path.
-            for me in ont.definition().mappings.iter() {
-                if me.physical_type == name {
-                    return Ok(None);
-                }
+            // TDD-COMP-001: O(1) via the registry's physical-type index.
+            if ont.mapping_for_physical(name).is_some() {
+                return Ok(None);
             }
         }
         // Fallback: must be registered in SchemaRegistry.
@@ -159,6 +197,14 @@ impl<'a> SemanticAnalyzer<'a> {
         // Open-world schemas allow any property — skip.
         Ok(())
     }
+}
+
+/// kq009 (ND-02): the kernel's security-object types (role/policy) are
+/// managed through their own APIs, never queryable. Kept as one helper so
+/// both sides of a JOIN and both compile paths share the same set.
+fn is_security_type(name: &str) -> bool {
+    name == aikoql_kernel::security::auth::ROLE_TYPE
+        || name == aikoql_kernel::security::auth::POLICY_TYPE
 }
 
 #[cfg(test)]
@@ -248,5 +294,57 @@ mod tests {
         let stmt = crate::parser::parse("DELETE Bogus \"abc\"").unwrap();
         let err = a.analyze(&stmt).unwrap_err();
         assert_eq!(err.code, diagnostics::Code::UnknownType);
+    }
+
+    #[test]
+    fn comp001_entity_resolution_uses_the_physical_type_index() {
+        // TDD-COMP-001 (P4-M7): resolving a physical type against the ontology
+        // is ONE indexed probe, not an O(n) mapping scan. The registry's probe
+        // counter pins it: 300 physical resolutions = 300 probes, regardless of
+        // ontology size.
+        use aikoql_kernel::knowledge::ontology::{
+            ClassDef, MappingEntry, OntologyDef, OntologyRegistry,
+        };
+        let mut classes = std::collections::BTreeMap::new();
+        classes.insert(
+            "C".into(),
+            ClassDef {
+                name: "C".into(),
+                parent: None,
+                description: None,
+            },
+        );
+        let mappings: Vec<MappingEntry> = (0..300)
+            .map(|i| MappingEntry {
+                source: "pg".into(),
+                physical_type: format!("emp_{i}"),
+                class: "C".into(),
+                property_map: std::collections::BTreeMap::new(),
+            })
+            .collect();
+        let ont = OntologyRegistry::new(OntologyDef {
+            namespace: "t".into(),
+            version: "1".into(),
+            classes,
+            relationships: std::collections::BTreeMap::new(),
+            property_defs: std::collections::BTreeMap::new(),
+            mappings,
+        })
+        .unwrap();
+
+        let regs = SchemaRegistry::new(); // no schemas — the ontology must carry every resolution
+        let a = SemanticAnalyzer::new(&regs).with_ontology(&ont);
+        for i in 0..300 {
+            let stmt = crate::parser::parse(&format!("MATCH emp_{} RETURN *", i)).unwrap();
+            assert!(
+                a.analyze(&stmt).is_ok(),
+                "physical type emp_{i} resolves via the ontology"
+            );
+        }
+        assert_eq!(
+            ont.resolution_probes(),
+            300,
+            "300 resolutions = 300 probes — indexed, not scanned"
+        );
     }
 }

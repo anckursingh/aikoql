@@ -1,0 +1,8 @@
+{
+  "id": "perf3-compaction-per-key-alloc",
+  "pre_fix_commit": "7c95038",
+  "command": "cargo test -p aikoql-storage-v2 --test compaction_alloc",
+  "captured_at": "2026-09-20T21:45:24Z",
+  "captured_head": "7c95038a34d423676e377617bd820d50337ce8f3",
+  "exit_code": 101
+}

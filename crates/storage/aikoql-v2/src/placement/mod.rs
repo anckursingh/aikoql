@@ -5,12 +5,14 @@
 //! spec §34) lives in [`directory`].
 
 pub mod directory;
+pub mod handles;
 
 pub use directory::{
     merge_placement, orphan_placement_logs, placement_log_path, validate_segment_location,
     ApplyOutcome, LocalPlacementResolver, PhysicalLocation, Placement, PlacementDirectory,
     PlacementLog, PlacementRecord, PlacementResolver,
 };
+pub use handles::{HandleRegistry, PhysicalHandle, PhysicalResolver, PlacementSource};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SegmentId(pub u64);

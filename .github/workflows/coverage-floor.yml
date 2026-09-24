@@ -1,0 +1,52 @@
+# PR6-F7 (P1-7) — coverage floor on the codec/replay trio.
+#
+# The next "it round-trips but nobody asserts it" shows up RED instead of
+# in a review: checkpoint.rs / snapshot.rs / wal.rs must hold their
+# committed line-coverage baseline (artifacts/coverage/
+# coverage-baseline.json) on every storage-touching change. The tolerance
+# (0.05% points) absorbs report rounding only; a real decrease fails, and
+# the baseline records the toolchain so drift re-baselines deliberately.
+#
+# Wired by the dependency-dag job's inline pin (ci.yml): deleting this
+# file, dropping the storage trigger, or losing the
+# check-coverage-floor.sh step fails CI.
+
+name: Coverage floor (codec/replay)
+
+# CodeQL actions/missing-workflow-permissions: the gate only reads the
+# repo and runs instrumented tests — no contents: write anywhere.
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - 'crates/storage/**'
+      - 'scripts/check-coverage-floor.sh'
+      - 'artifacts/coverage/coverage-baseline.json'
+      - '.github/workflows/coverage-floor.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/storage/**'
+      - 'scripts/check-coverage-floor.sh'
+      - 'artifacts/coverage/coverage-baseline.json'
+      - '.github/workflows/coverage-floor.yml'
+  workflow_dispatch:
+
+jobs:
+  floor:
+    name: Coverage floor (codec/replay)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Coverage floor check
+        shell: bash
+        run: bash scripts/check-coverage-floor.sh

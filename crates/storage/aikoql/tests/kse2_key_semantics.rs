@@ -19,6 +19,10 @@ use std::sync::Arc;
 mod common;
 use common::tmp;
 
+/// P5-M7: every kernel open bootstraps the catalog row as journal event #1 —
+/// the journal counts it, the logical user op does not.
+const CATALOG_PREAMBLE: usize = 1;
+
 fn alice() -> Subject {
     Subject::new("alice")
 }
@@ -98,11 +102,12 @@ fn kse011_current_head() {
     k.remember(RememberRequest::update(alice(), id, meta("fact")))
         .unwrap();
 
-    // Raw view: exactly one head row for this KOID.
+    // Raw view: a head row for this KOID; head/ as a whole also carries the
+    // catalog bootstrap head (P5-M7).
     let mut head = b"head/".to_vec();
     head.extend_from_slice(id.as_bytes());
     assert!(store.get(&head).unwrap().is_some());
-    assert_eq!(store.scan(b"head/").unwrap().len(), 1);
+    assert_eq!(store.scan(b"head/").unwrap().len(), 1 + CATALOG_PREAMBLE);
 
     // Kernel view: get returns the latest version.
     let ko = k.get(alice(), &id).unwrap();
@@ -208,7 +213,11 @@ fn kse014_idempotency() {
     let r1 = k.remember(req.clone()).unwrap();
     let r2 = k.remember(req).unwrap();
     assert_eq!(r1, r2, "retry must return the original commit");
-    assert_eq!(k.journal().unwrap().len(), 1, "one logical op, one event");
+    assert_eq!(
+        k.journal().unwrap().len(),
+        1 + CATALOG_PREAMBLE,
+        "one logical op, one event"
+    );
 
     // Raw view: the idempotency row exists.
     assert!(store.get(b"idem/req-kse2-1").unwrap().is_some());
@@ -286,6 +295,9 @@ fn kse017_type_index() {
 #[test]
 fn kse2_semantics_survive_reopen() {
     let (k, clock, store, p) = mk("reopen");
+    // The catalog bootstrap owns (10_000, HLC counter 0) — give the user's
+    // v1 the next millis so the as-of pin below addresses counter 0 again.
+    clock.set(10_001);
     let id = create(&k, "fact");
     clock.set(2_000);
     k.remember(RememberRequest::update(alice(), id, meta("fact")))
@@ -325,9 +337,9 @@ fn kse2_semantics_survive_reopen() {
     );
     // Live facts only: id is tombstoned, the idem-req fact survives.
     assert_eq!(k2.scan_by_type(&alice(), "fact").unwrap().len(), 1);
-    // v1 committed at exactly 10_000 (HLC counter 0); v2 landed at +1.
+    // v1 committed at exactly 10_001 (HLC counter 0); v2 landed at +1.
     assert_eq!(
-        k2.get_as_of(alice(), &id, 10_000).unwrap().unwrap().version,
+        k2.get_as_of(alice(), &id, 10_001).unwrap().unwrap().version,
         1
     );
     let _ = std::fs::remove_file(&p);

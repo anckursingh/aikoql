@@ -18,13 +18,16 @@
 //! outside, in the (future) scheduler domain.
 
 pub mod async_kernel;
+mod catalog;
 pub mod embedding;
 pub mod eval;
 pub mod event;
 pub mod index;
 pub mod ir;
+pub mod jobs;
 pub mod object;
 pub mod relationship;
+pub mod statistics;
 
 pub mod knowledge {
     pub mod authority;
@@ -63,6 +66,7 @@ pub mod kernel {
     pub use crate::transaction::kernel::*;
 }
 
+pub use crate::catalog::is_catalog_type;
 pub use async_kernel::AsyncKernel;
 pub use embedding::EmbeddingProvider;
 pub use eval::{
@@ -70,9 +74,14 @@ pub use eval::{
     EvalStalenessReport,
 };
 pub use index::{
-    BruteForceVectorIndex, IndexCoordinator, IndexMaintainerApi, TextIndex, TokenTextIndex,
-    VectorIndex,
+    property::PropertyIndex,
+    unified::{
+        ConsistencyLevel, Index, IndexState, TextIndexAdapter, VectorIndexAdapter, VerifyReport,
+    },
+    BruteForceVectorIndex, IndexCoordinator, IndexMaintainerApi, IndexStatus, IndexStatusKind,
+    NoopTextIndex, NoopVectorIndex, TextIndex, TokenTextIndex, VectorHealth, VectorIndex,
 };
+pub use jobs::{JobHandle, JobKind, JobRecord, JobScheduler, JobStatus, DEFAULT_MAX_RUNNING_JOBS};
 pub use knowledge::authority::{Authority, AuthorityRanking};
 pub use knowledge::evidence::{Evidence, EvidenceMethod};
 pub use knowledge::kom::{
@@ -80,6 +89,8 @@ pub use knowledge::kom::{
     AclEntry,
     Action,
     ArithOp,
+    CardinalityConstraint,
+    CheckConstraint,
     CheckExpression,
     CompareOp,
     ConfidenceContext,
@@ -87,11 +98,14 @@ pub use knowledge::kom::{
     ConflictDetector,
     ConflictResolution,
     ConstraintResult,
+    ConstraintTiming,
     ConstraintViolation,
     ContentTrust,
     Derivation,
     Direction,
+    DomainConstraint,
     Effect,
+    EnforcementMode,
     EpistemicStatus,
     EventKind,
     EventRef,
@@ -114,10 +128,14 @@ pub use knowledge::kom::{
     RelationshipRef,
     Schema,
     SchemaMigration,
+    SchemaProperty,
     SecurityDescriptor,
     SemanticBlock,
+    TemporalConstraint,
+    UniqueConstraint,
     UniquenessScope,
     Value,
+    ViolationEvent,
     ViolationSeverity,
     // MRFC-0070 relationship types
     CALLS,
@@ -135,8 +153,11 @@ pub use knowledge::kom::{
     SUPERSEDES,
     TESTED_BY,
 };
-pub use knowledge::ontology::{Cardinality, ClassDef, OntologyDef, OntologyRegistry, RelDef};
+pub use knowledge::ontology::{
+    Cardinality, ClassDef, MappingEntry, OntologyDef, OntologyRegistry, RelDef,
+};
 pub use knowledge::scope::{Scope, ScopeResolver};
+pub use statistics::Statistics;
 pub use storage::store::{ConstraintCapabilities, MemoryEngine, StorageEngine, WriteBatch};
 pub use storage::store_redb::RedbEngine;
 pub use transaction::kernel::{
@@ -147,6 +168,6 @@ pub use transaction::kernel::{
     Lineage, ManualClock, MergeRequest, MergeStrategy, ObservationRequest, OfflineProof, Proof,
     PropertyFilter, RememberRequest, Remembered, ScoredKO, SimilarityQuery, SplitRequest,
     SplitResult, Subject, SubscriptionRecord, SummarizeConversationRequest, SupersedeRequest,
-    SupersedeResult, SystemClock, TransactionOp, VerificationRequest, VerificationResult,
-    VersionRecord,
+    SupersedeResult, SystemClock, Transaction, TransactionOp, TxnMetrics, TxnMetricsSnapshot,
+    VerificationRequest, VerificationResult, VersionRecord,
 };

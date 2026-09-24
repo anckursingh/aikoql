@@ -153,7 +153,7 @@ impl SchedulerJob for ReasoningEngine {
         // Stateless — no background thread to stop.
     }
 
-    fn checkpoint(&self, _dir: &std::path::Path) -> KResult<()> {
+    fn checkpoint(&self, _kernel: &Kernel, _dir: &std::path::Path) -> KResult<()> {
         // Rules are persisted as KOs; no additional state to checkpoint.
         Ok(())
     }

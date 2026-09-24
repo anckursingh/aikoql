@@ -4,7 +4,7 @@
 use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
 use aikoql_kernel::{Direction, Kernel, KnowledgeContext, Subject, KOID};
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -170,7 +170,44 @@ impl Drop for TempSweeper {
     }
 }
 
+/// P3-M0 (clb001): committed `artifacts/` evidence is only rewritten when
+/// the report env is armed — a plain local suite run must never dirty
+/// committed artifacts (TESTING-PLAN-PHASE3 rule 6). Correctness asserts in
+/// the suites stay unconditional; only the report write is gated.
+pub fn report_write(path: &Path, contents: impl AsRef<[u8]>) {
+    if std::env::var("AIKOQL_REPORT_WRITE").as_deref() != Ok("1") {
+        return;
+    }
+    std::fs::write(path, contents).expect("report write");
+}
+
 pub fn tmp(tag: &str) -> PathBuf {
+    // Killed runs never reach the TLS sweep — purge their corpses at the
+    // next startup (only entries older than a day, so a concurrent live
+    // run's fresh files are untouched).
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("aikoql_kse_unit_") {
+                continue;
+            }
+            let stale = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .is_some_and(|t| t < cutoff);
+            if stale {
+                let _ = std::fs::remove_file(e.path());
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    });
     let mut p = std::env::temp_dir();
     p.push(format!("aikoql_kse_unit_{}_{}", tag, std::process::id()));
     let _ = std::fs::remove_file(&p);
@@ -541,6 +578,38 @@ pub fn structural_sweep(k: &Kernel, engine: &dyn StorageEngine, label: &str) {
     let mut image = BTreeSet::new();
     for key in &heads {
         let koid = KOID::from_hex(&hex(&key[5..])).unwrap();
+        // Lineage from the version rows themselves — decoded straight off the
+        // engine (O(lineage) prefix scan per head). NOT k.trace: trace's
+        // full scan_events per KO makes this loop O(N²) at scale; and NOT
+        // k.history: it skips supersede-transition rows, which kse14's
+        // lineages legitimately contain. Decoding here also fails closed on
+        // any version row the codec cannot read. Decoded BEFORE k.get so the
+        // P5-M7 catalog head can be identified and skipped: it is owned by
+        // aikoql:system (owner-only ACL — get as alice fails) and is
+        // canonical-only (never derived-indexed, so it belongs in no image).
+        let mut ver = Vec::new();
+        let mut cts = Vec::new();
+        let mut prefix = b"ko/".to_vec();
+        prefix.extend_from_slice(&key[5..]); // koid bytes — version rows are
+                                             // ko/<koid><ts8>, no separator
+        let mut catalog_head = false;
+        for (_, val) in engine.scan(&prefix).unwrap() {
+            // decode_ko_wire — what the repository itself uses for version
+            // rows (storage/repository.rs scan_object_versions).
+            let ko = aikoql_kernel::codec::decode_ko_wire(&val)
+                .unwrap_or_else(|e| panic!("{label}: version row decode failed: {e:?}"));
+            if ver.is_empty() && aikoql_kernel::is_catalog_type(&ko.metadata.type_name) {
+                catalog_head = true;
+                break;
+            }
+            ver.push(ko.version);
+            cts.push(ko.commit_ts);
+        }
+        if catalog_head {
+            // Still satisfies the head/version-row invariants above; only the
+            // ACL-gated get and the derived-set image don't apply.
+            continue;
+        }
         let head = k
             .get(ctx(), &koid)
             .unwrap_or_else(|e| panic!("{label}: get head {} failed: {e:?}", koid.to_hex()));
@@ -557,25 +626,6 @@ pub fn structural_sweep(k: &Kernel, engine: &dyn StorageEngine, label: &str) {
         );
         if let (Some(f), Some(t)) = (head.valid_from(), head.valid_to()) {
             assert!(f <= t, "{label}: inverted interval on {}", koid.to_hex());
-        }
-        // Lineage from the version rows themselves — decoded straight off the
-        // engine (O(lineage) prefix scan per head). NOT k.trace: trace's
-        // full scan_events per KO makes this loop O(N²) at scale; and NOT
-        // k.history: it skips supersede-transition rows, which kse14's
-        // lineages legitimately contain. Decoding here also fails closed on
-        // any version row the codec cannot read.
-        let mut ver = Vec::new();
-        let mut cts = Vec::new();
-        let mut prefix = b"ko/".to_vec();
-        prefix.extend_from_slice(&key[5..]); // koid bytes — version rows are
-                                             // ko/<koid><ts8>, no separator
-        for (_, val) in engine.scan(&prefix).unwrap() {
-            // decode_ko_wire — what the repository itself uses for version
-            // rows (storage/repository.rs scan_object_versions).
-            let ko = aikoql_kernel::codec::decode_ko_wire(&val)
-                .unwrap_or_else(|e| panic!("{label}: version row decode failed: {e:?}"));
-            ver.push(ko.version);
-            cts.push(ko.commit_ts);
         }
         assert_eq!(
             ver.len(),

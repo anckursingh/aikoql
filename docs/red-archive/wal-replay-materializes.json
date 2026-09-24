@@ -1,0 +1,8 @@
+{
+  "id": "wal-replay-materializes",
+  "pre_fix_commit": "0da652f",
+  "command": "cargo test -p aikoql-storage-v2 --test wal_replay_streaming",
+  "captured_at": "2026-09-20T19:20:28Z",
+  "captured_head": "0da652f39d396805b34fb87b6f741dc236796e14",
+  "exit_code": 101
+}

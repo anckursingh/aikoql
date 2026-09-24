@@ -315,5 +315,5 @@ fn kse120c_report() {
          gates\n",
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("kse120c-writer-contention.md"), report).unwrap();
+    common::report_write(&dir.join("kse120c-writer-contention.md"), report);
 }

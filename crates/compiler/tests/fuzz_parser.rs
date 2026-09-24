@@ -13,38 +13,16 @@ use proptest::prelude::*;
 // ---------------------------------------------------------------------------
 
 fn ident_str() -> impl Strategy<Value = String> {
-    let keywords = &[
-        "match",
-        "where",
-        "and",
-        "or",
-        "return",
-        "similar",
-        "to",
-        "traverse",
-        "create",
-        "update",
-        "delete",
-        "ingest",
-        "extract",
-        "tables",
-        "entities",
-        "build",
-        "relationships",
-        "commit",
-        "explain",
-        // v0.3 K2: temporal + epistemic keywords
-        "as_of",
-        "between",
-        "historical",
-        "epistemic",
-        "true",
-        "false",
-        "null",
-    ];
-    "[a-zA-Z_][a-zA-Z0-9_]{0,15}".prop_filter("not a keyword", move |s: &String| {
-        let lower = s.to_lowercase();
-        !keywords.contains(&lower.as_str())
+    // Reserved words are the LEXER's decision, not a hand-maintained list:
+    // a draw must tokenize as Ident, so any keyword the grammar adds later
+    // (ORDER/BY/GROUP/JOIN/ON — P5-M5/M6 — were missed by the old list,
+    // surfacing as draw-dependent fuzz_match_parses panics) is excluded
+    // automatically.
+    "[a-zA-Z_][a-zA-Z0-9_]{0,15}".prop_filter("not a keyword", |s: &String| {
+        matches!(
+            parser::lexer::Lexer::new(s).next_token(),
+            parser::lexer::Token::Ident(_)
+        )
     })
 }
 
@@ -110,6 +88,27 @@ proptest! {
             Statement::Match(m) => {
                 assert_eq!(m.entity, entity);
                 assert_eq!(m.predicates.len(), 2);
+            }
+            _ => panic!("expected Match"),
+        }
+    }
+
+    /// TRAVERSE with an optional DEPTH clause parses and round-trips.
+    #[test]
+    fn fuzz_traverse_depth_parses(
+        entity in ident_str(),
+        rel in ident_str(),
+        depth in 0usize..=4usize,
+    ) {
+        let source = format!("MATCH {} TRAVERSE {} DEPTH {} RETURN *", entity, rel, depth);
+        let result = parser::parse(&source);
+        assert!(result.is_ok(), "failed to parse: {:?}", result.err());
+        let stmt = result.unwrap();
+        match stmt {
+            Statement::Match(m) => {
+                let trav = m.traverse.expect("traverse clause");
+                assert_eq!(trav.relation, rel);
+                assert_eq!(trav.depth, Some(depth));
             }
             _ => panic!("expected Match"),
         }

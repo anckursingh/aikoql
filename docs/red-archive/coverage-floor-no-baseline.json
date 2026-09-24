@@ -1,0 +1,8 @@
+{
+  "id": "coverage-floor-no-baseline",
+  "pre_fix_commit": "80de6f8",
+  "command": "bash -c cargo test -p aikoql-storage-v2 --all-features 2>&1 | tail -3 && test -f artifacts/coverage/coverage-baseline.json",
+  "captured_at": "2026-09-20T15:18:46Z",
+  "captured_head": "80de6f829abf248600c54417ffcf02440a5c34bd",
+  "exit_code": 1
+}

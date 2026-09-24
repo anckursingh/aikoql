@@ -10,6 +10,7 @@ pub(crate) mod ingestion;
 pub(crate) mod knowledge;
 pub(crate) mod memory;
 pub(crate) mod query;
+pub(crate) mod txn;
 
 pub(crate) use admin::*;
 pub(crate) use agent_knowledge::*;
@@ -20,3 +21,4 @@ pub(crate) use ingestion::*;
 pub(crate) use knowledge::*;
 pub(crate) use memory::*;
 pub(crate) use query::*;
+pub(crate) use txn::*;

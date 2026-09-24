@@ -111,11 +111,21 @@ fn get_does_not_stall_writers_during_disk_read() {
         gets >= 10,
         "the getter made {gets} gets — the stall pin needs real reads"
     );
+    // R4-P2-06 budget note — the message carries the getter intensity and
+    // the read-side lock-wait so a budget miss is diagnosable from the log:
+    // a large lock_wait means the getter queues behind the committer; a
+    // small one with a high p50 means committer scheduling delay (2-core
+    // runner) — the stall pin itself is structural (Arc segments).
+    let r = db.read_path_stats();
     assert!(
         cont_p50 < ctrl_p50 + 3_000,
         "writer ack p50 inflates by the get duration: {cont_p50}µs under \
          contention vs {ctrl_p50}µs control — a get must not hold the state \
-         lock across the disk read"
+         lock across the disk read [gets={gets} lookups={} considered={} \
+         lock_wait_ns={}]",
+        r.lookups,
+        r.segments_considered,
+        r.lock_wait_ns
     );
 }
 
@@ -129,6 +139,7 @@ fn compaction_trigger_bounds_candidates() {
     for i in 0..4 {
         db.put(format!("k{i}").as_bytes(), b"v").unwrap();
     }
+    db.wait_compactor_idle(); // P3-M8 — the triggered merge runs off the write path
 
     // The 4th write's flush hit the trigger: four L0 → one L1 (KeepAll).
     let current = Current::read(&d.join("CURRENT")).unwrap();

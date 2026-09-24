@@ -650,5 +650,5 @@ fn kse14_report() {
          throughput load)\n",
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("kse14-snapshot-restore.md"), report).unwrap();
+    common::report_write(&dir.join("kse14-snapshot-restore.md"), report);
 }

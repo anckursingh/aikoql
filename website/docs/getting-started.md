@@ -72,7 +72,7 @@ curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-
 **Linux (static musl — any distro):**
 ```bash
 curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-linux-musl
-chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql
+chmod +x aikoql-mcp-linux-musl && mv aikoql-mcp-linux-musl /usr/local/bin/aikoql-mcp
 ```
 
 A glibc build (`aikoql-mcp-linux`) is also available for distros that prefer dynamic linking.
@@ -81,11 +81,11 @@ A glibc build (`aikoql-mcp-linux`) is also available for distros that prefer dyn
 ```bash
 # Apple Silicon
 curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-macos-arm64
-chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql
+chmod +x aikoql-mcp-macos-arm64 && mv aikoql-mcp-macos-arm64 /usr/local/bin/aikoql-mcp
 
 # Intel
 curl -LO https://github.com/anckursingh/aikoql/releases/download/v0.1.19/aikoql-mcp-macos
-chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql
+chmod +x aikoql-mcp-macos && mv aikoql-mcp-macos /usr/local/bin/aikoql-mcp
 ```
 
 ### Docker (multi-arch: amd64 + arm64)
@@ -122,7 +122,7 @@ from the host, use the npm binary instead. A compose file
 ### Verify
 
 ```bash
-aikoql --version
+aikoql-mcp --version
 # aikoql-mcp 0.1.19
 ```
 
@@ -131,7 +131,7 @@ aikoql --version
 ### Interactive Shell
 
 ```bash
-aikoql shell :memory:
+aikoql-mcp shell :memory:
 ```
 ```
 aikoql> CREATE Person name == "Alice", role == "Architect"
@@ -151,7 +151,7 @@ Bye.
 ### MCP Server (stdio mode)
 
 ```bash
-aikoql serve ./my-knowledge
+aikoql-mcp serve ./my-knowledge
 ```
 
 Connects via stdin/stdout — perfect for Claude Code, VS Code, and other MCP clients. Add to your MCP config:
@@ -160,7 +160,7 @@ Connects via stdin/stdout — perfect for Claude Code, VS Code, and other MCP cl
 {
   "mcpServers": {
     "aikoql": {
-      "command": "aikoql",
+      "command": "aikoql-mcp",
       "args": ["serve", "./my-knowledge"]
     }
   }
@@ -173,7 +173,7 @@ TCP mode requires at least one auth token (`TOKEN[:TENANT[:ROLE1,ROLE2]]`); clie
 pass it as `params.token` to MCP `initialize`.
 
 ```bash
-aikoql serve --listen 127.0.0.1:9090 --tcp-token mytoken:acme:admin \
+aikoql-mcp serve --listen 127.0.0.1:9090 --tcp-token mytoken:acme:admin \
   --metrics-addr 127.0.0.1:9091 ./my-knowledge
 ```
 
@@ -205,7 +205,7 @@ curl http://127.0.0.1:9091/api/v1/schema
 
 ```bash
 # Open a database (fresh path = aikoql-v2 directory)
-aikoql shell ./kb
+aikoql-mcp shell ./kb
 
 # Create objects
 aikoql> CREATE Employee name == "Alice", dept == "Engineering", salary == 125000
@@ -226,7 +226,7 @@ Semantic search (`MATCH ... USING EMBEDDING`) runs fully offline — the server
 never downloads models at runtime. Install the bundled model once:
 
 ```bash
-aikoql model install
+aikoql-mcp model install
 ```
 
 Without an installed model, `serve` still starts and `/health` reports
@@ -237,28 +237,28 @@ Ollama/OpenAI-compatible endpoint to use a remote model instead
 
 ## Connecting from Code
 
+MCP is the blessed integration surface (P3-M9): every language uses its
+standard MCP client, plus a first-party Python SDK.
+
 ### Python
 ```python
-import aikoql_py
-kernel = aikoql_py.Kernel.open("./kb")  # fresh path = aikoql-v2 database directory
-result = kernel.remember({"type_name": "Note", "properties": {"body": "Hello"}})
+from aikoql import Agent
+db = Agent.connect("./kb")  # embedded — fresh path = aikoql-v2 database directory
+# or server mode: Agent.connect("localhost:9090", token="your-tcp-token")
+result = db.remember("Note", {"body": "Hello"})
 ```
 
-### TypeScript
+### TypeScript / Go / any language
 ```typescript
-import { AikoqlClient } from 'aikoql-sdk';
-const client = new AikoqlClient({ command: './aikoql' });
-await client.connect();
-await client.remember({ type_name: 'Note', properties: { body: 'Hello' } });
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+const client = new Client({ name: 'my-agent', version: '1.0.0' });
+await client.connect(new StdioClientTransport({ command: 'aikoql-mcp', args: ['serve', './kb'] }));
+const result = await client.callTool({ name: 'remember', arguments: { type_name: 'Note', properties: { body: 'Hello' } } });
 ```
 
-### Go
-```go
-import "github.com/ancku/aikoql-sdk"
-client := aikoql.NewClient("127.0.0.1:9090")
-client.Connect()
-result, _ := client.Remember(map[string]interface{}{"type_name": "Note"})
-```
+First-party drivers for other languages return with the primary-DB roadmap
+(`docs/first-class-db-roadmap.md`).
 
 ## Encryption (Optional)
 

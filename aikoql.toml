@@ -9,13 +9,14 @@
 # auto-detect. Name one explicitly to force a backend; unknown values are
 # rejected at startup.
 # backend = "redb"
-# Path to the redb database file.
-path = "./aikoql.redb"
+# Path to the database (a fresh path auto-creates the aikoql-v2 directory;
+# name an existing redb file explicitly to keep using it).
+path = "./aikoql-v2"
 
 [database]
 # Deprecated: use [storage] above. Kept for backward compatibility; this
 # section wins over [storage].path when both are set.
-path = "./aikoql.redb"
+path = "./aikoql-v2"
 
 [server]
 # TCP listen address. Comment out for stdio mode (single client).

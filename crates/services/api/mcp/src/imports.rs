@@ -194,8 +194,8 @@ pub(crate) fn run_pg_import(
 
     // Kernel first: every failure path below marks the run incomplete
     // (CON-005), so the sink must exist before any source I/O.
-    let kernel = match engine::open_kernel_auto(target_db) {
-        Ok(k) => k,
+    let (kernel, _admin) = match engine::open_kernel_auto(target_db) {
+        Ok((k, admin)) => (k, admin),
         Err(e) => {
             eprintln!("open kernel: {}", e);
             std::process::exit(1);
@@ -361,8 +361,8 @@ pub(crate) fn run_sqlite_import(
     }
     println!();
 
-    let kernel = match engine::open_kernel_auto(target_db) {
-        Ok(k) => k,
+    let (kernel, _admin) = match engine::open_kernel_auto(target_db) {
+        Ok((k, admin)) => (k, admin),
         Err(e) => {
             eprintln!("open kernel: {}", e);
             std::process::exit(1);
@@ -429,8 +429,8 @@ pub(crate) fn run_mongo_import(
 
     // Kernel first: every failure path below marks the run incomplete
     // (CON-005), so the sink must exist before any source I/O.
-    let kernel = match engine::open_kernel_auto(target_db) {
-        Ok(k) => k,
+    let (kernel, _admin) = match engine::open_kernel_auto(target_db) {
+        Ok((k, admin)) => (k, admin),
         Err(e) => {
             eprintln!("open kernel: {}", e);
             std::process::exit(1);
@@ -546,8 +546,8 @@ pub(crate) fn run_neo4j_import(
 
     // Kernel first: every failure path below marks the run incomplete
     // (CON-005), so the sink must exist before any source I/O.
-    let kernel = match engine::open_kernel_auto(target_db) {
-        Ok(k) => k,
+    let (kernel, _admin) = match engine::open_kernel_auto(target_db) {
+        Ok((k, admin)) => (k, admin),
         Err(e) => {
             eprintln!("open kernel: {}", e);
             std::process::exit(1);

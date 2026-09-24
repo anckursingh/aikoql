@@ -368,7 +368,7 @@ fn kse040_ko_read_amplification() {
     println!("{report}");
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("kse5-locality.md"), report).unwrap();
+    common::report_write(&dir.join("kse5-locality.md"), report);
 
     for p in [&redb_p, &aikoql_p] {
         let _ = std::fs::remove_file(p);

@@ -51,6 +51,16 @@ fn cover_match_bare() {
 }
 
 #[test]
+fn cover_match_type_with_colon() {
+    // P3-M4 follow-up: namespaced types like aikoql:document must be MATCHable.
+    let m = match parser::parse("MATCH aikoql:document RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.entity, "aikoql:document");
+}
+
+#[test]
 fn cover_match_where() {
     let m = match parser::parse(r#"MATCH Person WHERE x == "y" RETURN *"#).unwrap() {
         Statement::Match(m) => m,
@@ -75,6 +85,23 @@ fn cover_match_traverse() {
         _ => panic!(),
     };
     assert!(m.traverse.is_some());
+}
+
+#[test]
+fn cover_match_traverse_depth() {
+    let m = match parser::parse(r#"MATCH Person TRAVERSE knows DEPTH 5 RETURN *"#).unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    let trav = m.traverse.expect("traverse clause");
+    assert_eq!(trav.relation, "knows");
+    assert_eq!(trav.depth, Some(5));
+}
+
+#[test]
+fn cover_error_traverse_depth_zero() {
+    let e = parser::compile("MATCH Person TRAVERSE knows DEPTH 0 RETURN *").unwrap_err();
+    assert!(e.contains("AIKOQL1034"), "got: {}", e);
 }
 
 #[test]
@@ -407,4 +434,74 @@ fn cover_error_unexpected_eof() {
     // "MATCH Person" with no RETURN clause hits the EOF branch in parse_match.
     let e = parser::parse("MATCH Person").unwrap_err();
     assert!(e.contains("AIKOQL1012"), "got: {}", e);
+}
+
+// ---------------------------------------------------------------------------
+// P5-M2 (ND-02): ORDER BY / GROUP BY + aggregates / JOIN ... ON
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cover_match_order_by() {
+    let m = match parser::parse("MATCH Fact ORDER BY severity DESC RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.order_by.as_ref().unwrap().keys[0].field, "severity");
+    assert!(m.order_by.as_ref().unwrap().keys[0].desc);
+}
+
+#[test]
+fn cover_match_order_by_asc_default() {
+    let m = match parser::parse("MATCH Fact ORDER BY ts RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert!(!m.order_by.as_ref().unwrap().keys[0].desc);
+}
+
+#[test]
+fn cover_match_group_by_keys() {
+    let m = match parser::parse("MATCH Fact GROUP BY kind, severity RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.group_by.as_ref().unwrap().keys.len(), 2);
+    assert!(m.group_by.as_ref().unwrap().aggs.is_empty());
+}
+
+#[test]
+fn cover_match_group_by_count_star() {
+    let m = match parser::parse("MATCH Fact GROUP BY COUNT(*) RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.group_by.as_ref().unwrap().aggs[0].field, None);
+}
+
+#[test]
+fn cover_match_group_by_aggregates() {
+    let m = match parser::parse(
+        "MATCH Fact GROUP BY SUM(temp), AVG(temp), MIN(temp), MAX(temp) RETURN *",
+    )
+    .unwrap()
+    {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.group_by.as_ref().unwrap().aggs.len(), 4);
+}
+
+#[test]
+fn cover_match_join_on() {
+    let m = match parser::parse("MATCH Employee JOIN Department ON id == dept RETURN *").unwrap() {
+        Statement::Match(m) => m,
+        _ => panic!(),
+    };
+    assert_eq!(m.join.as_ref().unwrap().right_type, "Department");
+}
+
+#[test]
+fn cover_error_security_violation() {
+    let e = parser::compile("MATCH aikoql:role RETURN *").unwrap_err();
+    assert!(e.contains("AIKOQL1035"));
 }

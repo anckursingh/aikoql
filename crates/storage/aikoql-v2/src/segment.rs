@@ -29,8 +29,9 @@
 //! restart offsets u32[] (absolute payload positions) | entries` — entry
 //! encoding is unchanged, but an entry at a restart position encodes
 //! shared = 0 (full key), so every interval decodes standalone. A point
-//! lookup binary-searches the restart keys (borrowed, no alloc) and
-//! decodes only the one interval slice it lands in (≤ 16 entries — a
+//! lookup binary-searches the parsed restart keys (P5-M44: the table
+//! parses once per block into a compact blob, lookups allocate nothing)
+//! and decodes only the one interval slice it lands in (≤ 16 entries — a
 //! multi-version equal-key run extends its interval, see
 //! `last_restart_key` in `publish`).
 //!
@@ -72,6 +73,7 @@ use std::os::unix::fs::FileExt;
 use std::os::windows::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 pub const SEGMENT_VERSION: u16 = 1;
@@ -232,16 +234,76 @@ impl SegmentWriter {
         path: &Path,
         stage: Option<&str>,
     ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
+        let mut entries = std::mem::take(&mut self.entries);
+        entries.sort_by(|a, b| a.key.cmp(&b.key).then(b.seq.cmp(&a.seq)));
+        self.publish_sorted_entries(path, stage, entries)
+    }
+
+    /// M29 (P0-02) — the sorted-input publish: the caller pushes entries in
+    /// memtable order (key asc, seq ASC within key — the BTreeMap's
+    /// iteration order); each key's version run is reversed in place to the
+    /// publish's key asc + seq desc contract. No whole-buffer sort — the
+    /// flush feeds the already-ordered memtable straight through, so
+    /// temporary memory is the payload buffers only, not an O(n) scratch.
+    pub fn publish_with_anchors_sorted(
+        &mut self,
+        path: &Path,
+    ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
+        let mut entries = std::mem::take(&mut self.entries);
+        debug_assert!(
+            entries
+                .windows(2)
+                .all(|w| (&w[0].key, w[0].seq) <= (&w[1].key, w[1].seq)),
+            "sorted publish requires memtable order (key asc, seq asc within key)"
+        );
+        let mut run_start = 0;
+        while run_start < entries.len() {
+            let mut run_end = run_start + 1;
+            while run_end < entries.len() && entries[run_end].key == entries[run_start].key {
+                run_end += 1;
+            }
+            entries[run_start..run_end].reverse();
+            run_start = run_end;
+        }
+        self.publish_sorted_entries(path, None, entries)
+    }
+
+    /// P5-M41 (R4-P1-02) — the compaction merge heap emits exactly the
+    /// publish's key asc + seq desc contract, so the staged publish takes
+    /// that order straight through: the M29 sorted path plus the SE2-M36
+    /// park stage. No sort — the heap did the ordering once, at merge time.
+    pub fn publish_with_anchors_sorted_staged(
+        &mut self,
+        path: &Path,
+        stage: Option<&str>,
+    ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
+        let entries = std::mem::take(&mut self.entries);
+        debug_assert!(
+            entries
+                .windows(2)
+                .all(|w| { w[0].key < w[1].key || (w[0].key == w[1].key && w[0].seq >= w[1].seq) }),
+            "sorted staged publish requires publish order (key asc, seq desc within key)"
+        );
+        self.publish_sorted_entries(path, stage, entries)
+    }
+
+    /// The shared publish body — `entries` arrive sorted (key asc, seq
+    /// desc within key) from either entry point; the precondition and
+    /// duplicate guards stay here, one definition for both.
+    fn publish_sorted_entries(
+        &self,
+        path: &Path,
+        stage: Option<&str>,
+        entries: Vec<SegmentEntry>,
+    ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
         if self.target_block_bytes == 0 {
             return Err(FormatError::Invalid("target block size must be > 0".into()));
         }
-        if self.entries.is_empty() {
+        if entries.is_empty() {
             return Err(FormatError::Invalid(
                 "cannot publish an empty segment".into(),
             ));
         }
-        let mut entries = std::mem::take(&mut self.entries);
-        entries.sort_by(|a, b| a.key.cmp(&b.key).then(b.seq.cmp(&a.seq)));
         if entries
             .windows(2)
             .any(|w| w[0].key == w[1].key && w[0].seq == w[1].seq)
@@ -266,8 +328,11 @@ impl SegmentWriter {
         let mut bounds: Vec<(usize, usize)> = Vec::new();
         {
             let mut len = 0usize;
-            let mut prev: Option<Vec<u8>> = None;
-            let mut last_restart_key: Option<Vec<u8>> = None;
+            // PERF-3 — references into `entries` (immutable for the whole
+            // pass), not per-entry key clones: the dry pass only compares
+            // prefixes.
+            let mut prev: Option<&[u8]> = None;
+            let mut last_restart_key: Option<&[u8]> = None;
             // SE2-M38 — the shared prefix the current key run's head entry
             // encoded with: a cadence restart that lands mid-run is
             // repositioned to the run head (see the encode pass), growing
@@ -275,9 +340,7 @@ impl SegmentWriter {
             let mut run_head_shared: Option<usize> = None;
             let mut start = 0usize;
             for (i, e) in entries.iter().enumerate() {
-                let key_changed = prev
-                    .as_ref()
-                    .is_none_or(|p| e.key.as_slice() > p.as_slice());
+                let key_changed = prev.is_none_or(|p| e.key.as_slice() > p);
                 let shared_c = shared_of(&prev, e);
                 let est = 2
                     + 2
@@ -303,9 +366,7 @@ impl SegmentWriter {
                 // split resets, without the counter.
                 let is_restart = v2
                     && (i - start).is_multiple_of(RESTART_INTERVAL as usize)
-                    && last_restart_key
-                        .as_ref()
-                        .is_none_or(|k| e.key.as_slice() > k.as_slice());
+                    && last_restart_key.is_none_or(|k| e.key.as_slice() > k);
                 // SE2-M39 — v4 encodes a full key at EVERY cadence point
                 // (the dense table's decode bases): the cadence entry must
                 // stand alone, so shared = 0 there even mid-run.
@@ -331,9 +392,9 @@ impl SegmentWriter {
                     + if v3 { 8 } else { 0 };
                 if is_restart {
                     len += run_head_shared.take().unwrap_or(0);
-                    last_restart_key = Some(e.key.clone());
+                    last_restart_key = Some(&e.key);
                 }
-                prev = Some(e.key.clone());
+                prev = Some(&e.key);
             }
             bounds.push((start, entries.len()));
         }
@@ -382,8 +443,8 @@ impl SegmentWriter {
                 payload.clear();
                 restarts.clear();
                 dense.clear();
-                let mut prev: Option<Vec<u8>> = None;
-                let mut last_restart_key: Option<Vec<u8>> = None;
+                let mut prev: Option<&[u8]> = None;
+                let mut last_restart_key: Option<&[u8]> = None;
                 // SE2-M38 — (payload position, shared prefix) of the current
                 // key run's head entry. A run can start mid-cadence (one
                 // row per replica — a hot key's run is long): its first
@@ -397,14 +458,10 @@ impl SegmentWriter {
                 // full key (a restart position must decode standalone).
                 let mut run_head: Option<(u32, usize)> = None;
                 for (count, e) in entries[start..end].iter().enumerate() {
-                    let key_changed = prev
-                        .as_ref()
-                        .is_none_or(|p| e.key.as_slice() > p.as_slice());
+                    let key_changed = prev.is_none_or(|p| e.key.as_slice() > p);
                     let is_restart = v2
                         && count.is_multiple_of(RESTART_INTERVAL as usize)
-                        && last_restart_key
-                            .as_ref()
-                            .is_none_or(|k| e.key.as_slice() > k.as_slice());
+                        && last_restart_key.is_none_or(|k| e.key.as_slice() > k);
                     // SE2-M39 — v4: every cadence point is a dense decode
                     // base (full key, position recorded) — even mid-run.
                     // The key table (`restarts`) keeps M38's run-head-only
@@ -431,7 +488,7 @@ impl SegmentWriter {
                             payload.splice(hpos as usize..hpos as usize + old_len, full);
                         }
                         restarts.push(hpos);
-                        last_restart_key = Some(e.key.clone());
+                        last_restart_key = Some(&e.key);
                     }
                     if is_dense {
                         // After the splice: payload.len() is this entry's
@@ -470,7 +527,7 @@ impl SegmentWriter {
                             }
                         }
                     }
-                    prev = Some(e.key.clone());
+                    prev = Some(&e.key);
                     let d = sha256(&e.key);
                     let h1 = u64::from_le_bytes(d[..8].try_into().expect("sha256 len"));
                     let h2 = u64::from_le_bytes(d[8..16].try_into().expect("sha256 len"));
@@ -581,7 +638,9 @@ impl SegmentWriter {
 
 /// Common prefix of the previous key and this one — the entry stores only
 /// the suffix (0 when there is no previous key, e.g. the first of a block).
-fn shared_of(prev: &Option<Vec<u8>>, e: &SegmentEntry) -> usize {
+/// PERF-3 — the prefix base is a reference into the entry list (both
+/// publish passes iterate it immutably), not a per-entry key clone.
+fn shared_of(prev: &Option<&[u8]>, e: &SegmentEntry) -> usize {
     match prev {
         Some(p) => common_prefix(p, &e.key),
         None => 0,
@@ -656,6 +715,71 @@ struct DataBlock {
     /// Atomic so concurrent readers on one segment are safe (SE2-M4) — a
     /// benign race re-validates a block's deterministic checksum twice.
     validated: AtomicBool,
+    /// P5-M44 (R4-P1-05) — the restart table parsed once per block (lazy:
+    /// zero cost for never-read blocks). Owned keys — a borrowed slice
+    /// would self-reference the block payload's Arc (eviction hazard).
+    restart: OnceLock<RestartIndex>,
+}
+
+/// P5-M44 (R4-P1-05) — the parsed restart table: entry offsets plus the
+/// restart keys in ONE contiguous blob (n+1 key offsets, last =
+/// keys.len()). Three allocations at first touch vs one Box per key — the
+/// per-key Box layout costs ~41 B/restart (vec slot + alloc header +
+/// data) where the blob costs ~17 B/restart, measured on a 50k-key L0
+/// segment (3126 restarts: ~66 KB blob vs ~128 KB boxed — the cells gate
+/// the representation). The compact keys also bound the parse cost: one
+/// keys-Vec growth, not one alloc per restart.
+#[derive(Debug)]
+struct RestartIndex {
+    /// restart → payload offset of its interval's first entry.
+    blk_offs: Box<[u32]>,
+    /// restart → byte offset of its key in `keys` (len n+1; last = end).
+    key_offs: Box<[u32]>,
+    keys: Box<[u8]>,
+}
+
+impl RestartIndex {
+    /// Validates the whole table (offsets inside the payload's entry
+    /// region, full keys at restart positions, keys strictly increasing)
+    /// and copies it into the compact layout. Runs exactly once per
+    /// block — the block checksum covers the load, so a damaged table
+    /// still fails closed, just at parse time instead of per lookup.
+    fn parse(offs: &[u8], payload: &[u8], table_len: usize) -> Result<Self, FormatError> {
+        let restarts = offs.len() / 4;
+        let mut blk_offs = Vec::with_capacity(restarts);
+        let mut key_offs = Vec::with_capacity(restarts + 1);
+        let mut keys: Vec<u8> = Vec::new();
+        let mut prev: Option<&[u8]> = None;
+        for j in 0..restarts {
+            let o =
+                u32::from_le_bytes(offs[j * 4..j * 4 + 4].try_into().expect("u32 slice")) as usize;
+            if o < table_len || o >= payload.len() {
+                return Err(FormatError::Corrupt(format!(
+                    "restart offset {o} outside payload"
+                )));
+            }
+            let k = restart_key(payload, o)?;
+            if prev.is_some_and(|p| k <= p) {
+                return Err(FormatError::Corrupt(
+                    "restart keys not strictly increasing".into(),
+                ));
+            }
+            blk_offs.push(o as u32);
+            key_offs.push(keys.len() as u32);
+            keys.extend_from_slice(k);
+            prev = Some(k);
+        }
+        key_offs.push(keys.len() as u32);
+        Ok(Self {
+            blk_offs: blk_offs.into_boxed_slice(),
+            key_offs: key_offs.into_boxed_slice(),
+            keys: keys.into_boxed_slice(),
+        })
+    }
+
+    fn key(&self, i: usize) -> &[u8] {
+        &self.keys[self.key_offs[i] as usize..self.key_offs[i + 1] as usize]
+    }
 }
 
 /// Bounded positional read: short reads are the same Corrupt truncation
@@ -869,6 +993,7 @@ impl SegmentReader {
                         first: 0..0,
                         last: 0..0,
                         validated: AtomicBool::new(false),
+                        restart: OnceLock::new(),
                     });
                 }
                 BLOCK_INDEX => {
@@ -1356,11 +1481,59 @@ impl SegmentReader {
         }
     }
 
-    /// Bounded v2/v3 point lookup. The restart table is validated up front
-    /// (offsets inside the payload, full keys at restart positions, keys
-    /// strictly increasing) so the binary search below cannot silently
-    /// misread damaged data — it fails closed instead. Stats count only
-    /// decoded interval entries; restart probes are key reads, not decodes.
+    /// P5-M44 — cell instrumentation: this segment's restart-table
+    /// footprint — (table bytes, restart key bytes, restart count) over
+    /// its v2+ data blocks. Doc-hidden debug (the review's
+    /// measurement-first gate); never a production path.
+    pub(crate) fn debug_restart_metadata(&self) -> Result<(u64, u64, u64), FormatError> {
+        let mut table = 0u64;
+        let mut keys = 0u64;
+        let mut restarts = 0u64;
+        for (i, b) in self.data.iter().enumerate() {
+            if !b.v2 {
+                continue; // v1 blocks have no restart table
+            }
+            let raw = self.block_raw(i)?;
+            let payload = &raw[BLOCK_HEADER_LEN..];
+            if payload.len() < 6 {
+                return Err(FormatError::Corrupt(
+                    "v2 table header exceeds payload".into(),
+                ));
+            }
+            let n = u32::from_le_bytes(payload[2..6].try_into().expect("u32 slice")) as u64;
+            table += 6 + 4 * n;
+            if b.v4 {
+                // SE2-M39 — the dense cadence table follows the offsets.
+                if payload.len() < 10 + 4 * n as usize {
+                    return Err(FormatError::Corrupt("v4 table exceeds payload".into()));
+                }
+                let dense = u32::from_le_bytes(
+                    payload[6 + 4 * n as usize..10 + 4 * n as usize]
+                        .try_into()
+                        .expect("u32 slice"),
+                ) as u64;
+                table += 4 + 4 * dense;
+            }
+            for j in 0..n as usize {
+                let o = u32::from_le_bytes(
+                    payload[6 + 4 * j..10 + 4 * j]
+                        .try_into()
+                        .expect("u32 slice"),
+                ) as usize;
+                keys += restart_key(payload, o).map_or(0, |k| k.len() as u64);
+            }
+            restarts += n;
+        }
+        Ok((table, keys, restarts))
+    }
+
+    /// Bounded v2/v3 point lookup. The restart table parses once per
+    /// block (P5-M44: a OnceLock on the DataBlock — offsets + compact
+    /// keys); lookups binary-search the parsed keys and decode from the
+    /// block as before. Validation moved to parse time — the block
+    /// checksum covers the load, so damaged tables still fail closed.
+    /// Stats count only decoded interval entries; restart probes are key
+    /// reads, not decodes.
     /// SE2-M34: `v3` payloads carry the rid after the flags; a `rid` filter
     /// keeps scanning the key's equal-key run past other replicas' rows
     /// (the run is seq-descending, so the first matching entry is the
@@ -1398,36 +1571,35 @@ impl SegmentReader {
             }
         }
         let offs = &payload[6..6 + 4 * restarts];
-        let mut keys: Vec<&[u8]> = Vec::with_capacity(restarts);
-        let mut prev: Option<&[u8]> = None;
-        for j in 0..restarts {
-            let o =
-                u32::from_le_bytes(offs[j * 4..j * 4 + 4].try_into().expect("u32 slice")) as usize;
-            if o < table_len || o >= payload.len() {
-                return Err(FormatError::Corrupt(format!(
-                    "restart offset {o} outside payload"
-                )));
+        let idx = match b.restart.get() {
+            Some(idx) => idx,
+            None => {
+                // Benign race (the SE2-M4 validated pattern): the loser's
+                // parsed copy drops; parse is pure, so either copy is fine.
+                let parsed = RestartIndex::parse(offs, payload, table_len)?;
+                b.restart.get_or_init(|| parsed)
             }
-            let k = restart_key(payload, o)?;
-            if prev.is_some_and(|p| k <= p) {
-                return Err(FormatError::Corrupt(
-                    "restart keys not strictly increasing".into(),
-                ));
-            }
-            keys.push(k);
-            prev = Some(k);
-        }
+        };
         // First restart whose key > target — decode starts at the one
         // before it (its key ≤ target, and entries before it are strictly
         // smaller, so the interval holds every possible match).
-        let r = keys.partition_point(|k| *k <= key);
+        let n = idx.blk_offs.len();
+        let (mut lo, mut hi) = (0usize, n);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if idx.key(mid) <= key {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let r = lo;
         if r == 0 {
             return Ok(None); // key < first restart key — locate() prevents this
         }
-        let start =
-            u32::from_le_bytes(offs[(r - 1) * 4..r * 4].try_into().expect("u32 slice")) as usize;
-        let end = if r < restarts {
-            u32::from_le_bytes(offs[r * 4..r * 4 + 4].try_into().expect("u32 slice")) as usize
+        let start = idx.blk_offs[r - 1] as usize;
+        let end = if r < n {
+            idx.blk_offs[r] as usize
         } else {
             payload.len()
         };
@@ -1528,20 +1700,24 @@ impl SegmentReader {
             0
         };
         let mut cur = Cursor::new(&payload[start..]);
-        let mut out = Vec::with_capacity(b.entries as usize);
-        let mut prev: Vec<u8> = Vec::new();
-        for _ in 0..b.entries {
+        let mut out: Vec<SegmentEntry> = Vec::with_capacity(b.entries as usize);
+        // PERF-3 — the prefix base is the previous DECODED entry (`out`),
+        // not a cloned `prev` Vec, and the suffix copies straight into the
+        // key: 2 allocations per entry (key + value) instead of 4.
+        for idx in 0..b.entries as usize {
             let shared = cur.u16()? as usize;
-            if shared > prev.len() {
+            let base: &[u8] = if idx == 0 { &[] } else { &out[idx - 1].key };
+            if shared > base.len() {
                 return Err(FormatError::Corrupt(format!(
                     "entry shared prefix {shared} exceeds previous key {}",
-                    prev.len()
+                    base.len()
                 )));
             }
             let suffix_len = cur.u16()? as usize;
-            let suffix = cur.take(suffix_len)?.to_vec();
-            let mut key = prev[..shared].to_vec();
-            key.extend_from_slice(&suffix);
+            let suffix = cur.take(suffix_len)?;
+            let mut key = Vec::with_capacity(shared + suffix.len());
+            key.extend_from_slice(&base[..shared]);
+            key.extend_from_slice(suffix);
             let value = cur.vec()?;
             let seq = cur.u64()?;
             let flags = cur.u8()?;
@@ -1550,7 +1726,6 @@ impl SegmentReader {
             } else {
                 ReplicaId(0)
             };
-            prev = key.clone();
             out.push(SegmentEntry {
                 key,
                 value,

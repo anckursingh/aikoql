@@ -1,0 +1,2 @@
+DOGFOOD RED: scripts/dogfood-review-loop.py absent — the review loop is not backed by kernel state (no Requirement KOs, no compiled section)
+EXIT=1

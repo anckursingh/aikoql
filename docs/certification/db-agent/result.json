@@ -1,0 +1,147 @@
+{
+  "commit": "b257844",
+  "correctness_parity": true,
+  "seed": "aikoql-cert-nd14-v1",
+  "started_at": "1789482522255",
+  "suite": "db-agent",
+  "workloads": [
+    {
+      "cold": {
+        "p50_ms": 1.0594999999999999,
+        "p95_ms": 1.3145,
+        "p99_ms": 1.3918,
+        "throughput_ops_s": 925.737349799115
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "context_retrieval",
+      "p50_ms": 1.0594999999999999,
+      "p95_ms": 1.3145,
+      "p99_ms": 1.3918,
+      "rss_kb": 9008,
+      "throughput_ops_s": 925.737349799115,
+      "warm": {
+        "p50_ms": 1.1775,
+        "p95_ms": 2.0924,
+        "p99_ms": 2.1989,
+        "throughput_ops_s": 754.7758441538837
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 1.1647999999999998,
+        "p95_ms": 2.5263999999999998,
+        "p99_ms": 7.1988,
+        "throughput_ops_s": 665.9991874809913
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "evidence_coverage",
+      "p50_ms": 1.1647999999999998,
+      "p95_ms": 2.5263999999999998,
+      "p99_ms": 7.1988,
+      "rss_kb": 9008,
+      "throughput_ops_s": 665.9991874809913,
+      "warm": {
+        "p50_ms": 1.089,
+        "p95_ms": 1.8211,
+        "p99_ms": 1.9694999999999998,
+        "throughput_ops_s": 822.2850204337828
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 3.0925000000000002,
+        "p95_ms": 6.989000000000001,
+        "p99_ms": 7.5114,
+        "throughput_ops_s": 289.2528117783745
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "provenance_completeness",
+      "p50_ms": 3.0925000000000002,
+      "p95_ms": 6.989000000000001,
+      "p99_ms": 7.5114,
+      "rss_kb": 9008,
+      "throughput_ops_s": 289.2528117783745,
+      "warm": {
+        "p50_ms": 2.6178,
+        "p95_ms": 4.7917000000000005,
+        "p99_ms": 5.6708,
+        "throughput_ops_s": 344.8224336877725
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 2.1564,
+        "p95_ms": 3.5436,
+        "p99_ms": 3.5459,
+        "throughput_ops_s": 440.11372538663994
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "historical_correctness",
+      "p50_ms": 2.1564,
+      "p95_ms": 3.5436,
+      "p99_ms": 3.5459,
+      "rss_kb": 9008,
+      "throughput_ops_s": 440.11372538663994,
+      "warm": {
+        "p50_ms": 2.0317,
+        "p95_ms": 3.2148,
+        "p99_ms": 4.4884,
+        "throughput_ops_s": 463.2596493124455
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 0.9974999999999999,
+        "p95_ms": 1.8764999999999998,
+        "p99_ms": 2.3295999999999997,
+        "throughput_ops_s": 906.2513216165107
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "semantic_relevance",
+      "p50_ms": 0.9974999999999999,
+      "p95_ms": 1.8764999999999998,
+      "p99_ms": 2.3295999999999997,
+      "rss_kb": 9008,
+      "throughput_ops_s": 906.2513216165107,
+      "warm": {
+        "p50_ms": 1.0567,
+        "p95_ms": 2.3494,
+        "p99_ms": 2.4343,
+        "throughput_ops_s": 835.2404657300835
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 1.0744,
+        "p95_ms": 2.2178,
+        "p99_ms": 2.5144,
+        "throughput_ops_s": 889.8486070903136
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "authorization_correctness",
+      "p50_ms": 1.0744,
+      "p95_ms": 2.2178,
+      "p99_ms": 2.5144,
+      "rss_kb": 9008,
+      "throughput_ops_s": 889.8486070903136,
+      "warm": {
+        "p50_ms": 0.8427,
+        "p95_ms": 1.5937,
+        "p99_ms": 1.9113,
+        "throughput_ops_s": 1023.3459318588054
+      }
+    }
+  ]
+}

@@ -263,11 +263,9 @@ crates/
 │   ├── mongodb/      MongoDB import
 │   └── neo4j/        Neo4j import
 ├── sdk/
-│   ├── python/       PyO3 native bindings
-│   ├── typescript/   MCP JSON-RPC client
-│   ├── go/           TCP JSON-RPC client
-│   └── java/         Zero-dependency JSON-RPC client
-└── cluster/proxy/    Multi-shard proxy with retry/backoff
+│   └── python/       PyO3 native bindings + MCP client (P3-M9: the one
+│                     first-party SDK; other languages use standard MCP
+│                     clients — drivers return with the primary-DB roadmap)
 ```
 
 ## Dependencies

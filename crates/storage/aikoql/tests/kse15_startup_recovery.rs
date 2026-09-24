@@ -39,6 +39,9 @@ use std::time::{Duration, Instant};
 
 const SEED: u64 = 0x15_0000;
 const TYPE: &str = "kse15_ko";
+/// P5-M7: every kernel open bootstraps the catalog row as journal event #1 —
+/// raw ke/ (and ko/) scans count it, the user-level model does not.
+const CATALOG_PREAMBLE: usize = 1;
 const CHILD_ENV: &str = "KSE141_CHILD";
 const PATH_ENV: &str = "KSE141_PATH";
 const MARKER_ENV: &str = "KSE141_MARKER";
@@ -170,7 +173,10 @@ fn measure_kse140(label: &str) -> Kse140 {
     let events = cold.scan(b"ke/").unwrap().len();
     assert_eq!(
         (version_rows, events),
-        ((KOS + KOS / 10) as usize, (KOS + KOS / 10) as usize),
+        (
+            (KOS + KOS / 10) as usize + CATALOG_PREAMBLE,
+            (KOS + KOS / 10) as usize + CATALOG_PREAMBLE
+        ),
         "kse140: unexpected dataset shape after cold open"
     );
     Kse140 {
@@ -307,7 +313,7 @@ fn measure_kse141(label: &str) -> Kse141 {
     let events = engine.scan(b"ke/").unwrap().len();
     assert_eq!(
         (version_rows, events),
-        (rows.len(), rows.len()),
+        (rows.len() + CATALOG_PREAMBLE, rows.len() + CATALOG_PREAMBLE),
         "kse141: version rows / events != recovered KOs"
     );
     Kse141 {
@@ -393,5 +399,5 @@ fn kse15_report() {
         b.first_query_ms * 1e3,
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
-    std::fs::write(dir.join("crash-recovery.md"), report).unwrap();
+    common::report_write(&dir.join("crash-recovery.md"), report);
 }

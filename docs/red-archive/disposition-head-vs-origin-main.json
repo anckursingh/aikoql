@@ -1,0 +1,8 @@
+{
+  "id": "disposition-head-vs-origin-main",
+  "pre_fix_commit": "origin/main",
+  "command": "bash scripts/check-disposition-head.sh origin/main",
+  "captured_at": "2026-09-20T04:53:41Z",
+  "captured_head": "8f9416ac6669195e27fe222e86275481f7559804",
+  "exit_code": 1
+}

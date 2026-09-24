@@ -192,7 +192,7 @@ impl SchedulerJob for SemanticEngine {
         }
     }
 
-    fn checkpoint(&self, dir: &std::path::Path) -> KResult<()> {
+    fn checkpoint(&self, _kernel: &Kernel, dir: &std::path::Path) -> KResult<()> {
         let tmp = dir.with_extension("tmp");
         if tmp.exists() {
             let _ = std::fs::remove_dir_all(&tmp);

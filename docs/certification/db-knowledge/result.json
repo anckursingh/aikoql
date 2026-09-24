@@ -1,0 +1,147 @@
+{
+  "commit": "b257844",
+  "correctness_parity": true,
+  "seed": "aikoql-cert-nd14-v1",
+  "started_at": "1789482521631",
+  "suite": "db-knowledge",
+  "workloads": [
+    {
+      "cold": {
+        "p50_ms": 0.9650000000000001,
+        "p95_ms": 1.893,
+        "p99_ms": 2.2548,
+        "throughput_ops_s": 900.6682958755395
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "structured_filter",
+      "p50_ms": 0.9650000000000001,
+      "p95_ms": 1.893,
+      "p99_ms": 2.2548,
+      "rss_kb": 9192,
+      "throughput_ops_s": 900.6682958755395,
+      "warm": {
+        "p50_ms": 0.7073999999999999,
+        "p95_ms": 1.077,
+        "p99_ms": 1.1198,
+        "throughput_ops_s": 1370.4136822102028
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 0.8926999999999999,
+        "p95_ms": 1.3362,
+        "p99_ms": 1.5460999999999998,
+        "throughput_ops_s": 1019.7734063491096
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "vector_hits",
+      "p50_ms": 0.8926999999999999,
+      "p95_ms": 1.3362,
+      "p99_ms": 1.5460999999999998,
+      "rss_kb": 9192,
+      "throughput_ops_s": 1019.7734063491096,
+      "warm": {
+        "p50_ms": 0.9539000000000001,
+        "p95_ms": 1.4725000000000001,
+        "p99_ms": 1.4838,
+        "throughput_ops_s": 992.2669330352121
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 0.9252,
+        "p95_ms": 1.4684,
+        "p99_ms": 1.6260000000000001,
+        "throughput_ops_s": 1017.5458828397668
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "relationship_walk",
+      "p50_ms": 0.9252,
+      "p95_ms": 1.4684,
+      "p99_ms": 1.6260000000000001,
+      "rss_kb": 9192,
+      "throughput_ops_s": 1017.5458828397668,
+      "warm": {
+        "p50_ms": 1.0586,
+        "p95_ms": 2.4761,
+        "p99_ms": 2.5949,
+        "throughput_ops_s": 818.6678091630761
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 1.8813,
+        "p95_ms": 3.6121,
+        "p99_ms": 13.329600000000001,
+        "throughput_ops_s": 427.1514550914317
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "temporal_snapshot",
+      "p50_ms": 1.8813,
+      "p95_ms": 3.6121,
+      "p99_ms": 13.329600000000001,
+      "rss_kb": 9192,
+      "throughput_ops_s": 427.1514550914317,
+      "warm": {
+        "p50_ms": 1.8103,
+        "p95_ms": 4.2464,
+        "p99_ms": 5.2181,
+        "throughput_ops_s": 459.2035879107002
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 0.0807,
+        "p95_ms": 0.1227,
+        "p99_ms": 0.1462,
+        "throughput_ops_s": 11741.223435481976
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "evidence_explain",
+      "p50_ms": 0.0807,
+      "p95_ms": 0.1227,
+      "p99_ms": 0.1462,
+      "rss_kb": 9192,
+      "throughput_ops_s": 11741.223435481976,
+      "warm": {
+        "p50_ms": 0.06849999999999999,
+        "p95_ms": 0.0855,
+        "p99_ms": 0.0902,
+        "throughput_ops_s": 14060.08342316164
+      }
+    },
+    {
+      "cold": {
+        "p50_ms": 0.7014,
+        "p95_ms": 1.7515,
+        "p99_ms": 2.4612000000000003,
+        "throughput_ops_s": 1138.671170743742
+      },
+      "correct": true,
+      "disk_bytes": 0,
+      "n": 30,
+      "name": "authorization",
+      "p50_ms": 0.7014,
+      "p95_ms": 1.7515,
+      "p99_ms": 2.4612000000000003,
+      "rss_kb": 9192,
+      "throughput_ops_s": 1138.671170743742,
+      "warm": {
+        "p50_ms": 0.7319,
+        "p95_ms": 1.6115000000000002,
+        "p99_ms": 2.6557,
+        "throughput_ops_s": 1188.5189073549511
+      }
+    }
+  ]
+}

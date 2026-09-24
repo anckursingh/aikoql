@@ -1,0 +1,3 @@
+DISPOSITIONS STALE: docs/PR6-TDD-DISPOSITIONS.md last modified by , but the reviewed tip is ce00b9fa8e1d002cf8ed84021ce894b1248903f2
+re-stamp the dispositions doc in the same change that moved the tip
+EXIT=1

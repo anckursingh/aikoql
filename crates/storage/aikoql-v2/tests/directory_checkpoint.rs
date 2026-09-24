@@ -10,7 +10,9 @@
 
 mod common;
 
-use aikoql_storage_v2::checkpoint::{checkpoint_generation, checkpoint_path, DirectoryCheckpoint};
+use aikoql_storage_v2::checkpoint::{
+    checkpoint_generation, checkpoint_path, test_support, DirectoryCheckpoint,
+};
 use aikoql_storage_v2::db::{Config, Db, DurabilityMode};
 use aikoql_storage_v2::format::{Current, FormatError, FORMAT_VERSION};
 use aikoql_storage_v2::identity::directory::{IdentityResolver, LocalIdentityDirectory};
@@ -112,8 +114,9 @@ fn ckp001_format_golden_and_damage() {
     );
     placements.insert(ReplicaId(20), Placement::Retired { generation: 11 });
     placements.insert(ReplicaId(30), Placement::Memtable { generation: 4 });
-    let checkpoint = DirectoryCheckpoint::from_state(7, &identity, &replicas, &placements);
-    let encoded = checkpoint.encode();
+    let checkpoint =
+        DirectoryCheckpoint::from_state(7, &identity, &replicas, &placements, 3, 30, 12, 0, 0, 0);
+    let encoded = test_support::encode_for_tests(&checkpoint);
     assert_eq!(DirectoryCheckpoint::decode(&encoded).unwrap(), checkpoint);
 
     // The frozen golden — the only format-drift surface left to eyeballs.
@@ -125,7 +128,9 @@ fn ckp001_format_golden_and_damage() {
          020000000000000001000000000000001400000000000000030000000a0000000000000002\
          050000000000000003000000070000000900000000000000140000000000000003\
          000000000000000000000000000000000b000000000000001e0000000000000001\
-         000000000000000000000000000000000400000000000000f948258a71a12d46"
+         0000000000000000000000000000000004000000000000000300000000000000\
+         1e000000000000000c0000000000000000000000000000000000000000000000\
+         0000000000000000e04946b22753d4e0"
     );
 
     let mut bad_magic = encoded.clone();
@@ -306,7 +311,11 @@ fn ckp003_orphan_checkpoint_ignored_and_recovered() {
     let ckp = DirectoryCheckpoint::read(&checkpoint_path(&d, gens[0])).unwrap();
     let mut orphan = ckp.clone();
     orphan.generation += 1;
-    std::fs::write(checkpoint_path(&d, gens[0] + 1), orphan.encode()).unwrap();
+    std::fs::write(
+        checkpoint_path(&d, gens[0] + 1),
+        test_support::encode_for_tests(&orphan),
+    )
+    .unwrap();
 
     let db = Db::open(cfg.clone()).unwrap();
     for b in 0x01u8..=0x0A {
@@ -343,7 +352,11 @@ fn ckp003_name_internal_generation_mismatch() {
     let ckp = DirectoryCheckpoint::read(&checkpoint_path(&d, gens[0])).unwrap();
     let mut lied = ckp.clone();
     lied.generation += 7;
-    std::fs::write(checkpoint_path(&d, gens[0]), lied.encode()).unwrap();
+    std::fs::write(
+        checkpoint_path(&d, gens[0]),
+        test_support::encode_for_tests(&lied),
+    )
+    .unwrap();
 
     let err = Db::open(Config::new(d.clone()))
         .err()
@@ -734,6 +747,119 @@ fn ckp006_orphan_pgen_allocator_never_reuses() {
 }
 
 // ---------------------------------------------------------------------------
+// PR6-001 — a checkpoint that prunes must represent the allocator floors
+// (review P0: "decode succeeded" does not prove completeness; pruning
+// removes the only historical source for old mutations). ckp006 proved the
+// orphan scan recovers burned generations while the orphan log SURVIVES;
+// this pins that the CHECKPOINT carries the floors once the prune deletes
+// the orphan log itself. The read-back equality in write_checkpoint then
+// makes publication fail closed unless the floors round-trip.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn checkpoint_cannot_prune_when_allocator_state_is_not_represented() {
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let mut cfg = Config::new(child_dir());
+        cfg.checkpoint_bytes = 0;
+        cfg.l0_compact_trigger = 0;
+        let db = Db::open(cfg).unwrap();
+        for b in 0x01u8..=0x0A {
+            let a = oid(b);
+            db.put_object(a, b"k1", &[b, 1]).unwrap();
+            db.put_object(a, b"k2", &[b, 2]).unwrap();
+            if b % 5 == 0 {
+                db.flush().unwrap();
+            }
+        }
+        db.compact().unwrap(); // parks after the relocation log's publish
+        unreachable!("the parent kills the parked child");
+    }
+    let d = dir("ckp009");
+    let mut child = spawn_ckp_child(
+        "checkpoint_cannot_prune_when_allocator_state_is_not_represented",
+        &d,
+        COMPACT_ENV,
+        "after_location",
+    );
+    wait_for(&d.join("after_location"), Duration::from_secs(60));
+    child.kill().expect("kill child");
+    child.wait().expect("wait child");
+
+    // The §24 state-C window: the relocation log is an orphan whose
+    // durably-published generations the recovered map never sees (and the
+    // WAL never carries — relocation records do not ride it).
+    let current = Current::read(&d.join("CURRENT")).unwrap();
+    let orphan_max = orphan_placement_max_generation(&d, current.manifest_generation);
+    assert!(orphan_max > 0, "the orphan carries generations");
+
+    // Reopen #1 (the ckp006 recovery): the orphan scan lifts the allocator
+    // past the burned generations. A delete allocates nothing (it rides the
+    // object's own rid, db.rs delete_object), so the next flush crosses the
+    // tiny checkpoint trigger WITHOUT moving any allocator, publishes at
+    // CURRENT past the orphan's gen, and PRUNES — deleting the orphan log,
+    // the last recompute source for those generations.
+    let mut cfg = Config::new(d.clone());
+    cfg.checkpoint_bytes = 256; // every flush crosses it
+    cfg.l0_compact_trigger = 0;
+    {
+        let db = Db::open(cfg.clone()).unwrap();
+        db.delete_object(oid(1), b"k1").unwrap(); // dirties the memtable, allocates nothing
+        db.flush().unwrap(); // checkpoint at CURRENT, prunes ≤ CURRENT
+    }
+    assert_eq!(
+        checkpoint_gens(&d).len(),
+        1,
+        "the flush published a checkpoint"
+    );
+    let current = Current::read(&d.join("CURRENT")).unwrap();
+    assert_eq!(
+        orphan_placement_logs(&d, current.manifest_generation).len(),
+        0,
+        "the prune deleted the orphan log"
+    );
+
+    // The checkpoint must carry the floors: with the orphan log gone, the
+    // open's recompute sources for the burned generations are gone too.
+    // This IS the representation pin — a checkpoint format that drops the
+    // floors decodes them as 0 and fails here (and write_checkpoint's
+    // read-back equality fails publication closed).
+    let cp = DirectoryCheckpoint::read(&checkpoint_path(&d, checkpoint_gens(&d)[0])).unwrap();
+    assert!(
+        cp.next_placement_generation > orphan_max,
+        "the checkpoint represents the burned generations"
+    );
+    assert!(cp.next_logical_id > 0, "logical-id floor is represented");
+    assert!(cp.next_replica_id > 0, "replica-id floor is represented");
+
+    // Reopen #2 — the crash after prune. The acceptance pin: the recovered
+    // store is complete and every fresh relocation generation sits ABOVE
+    // everything that was ever durably published (INV-05), with the orphan
+    // log itself gone. (Not the discriminating assertion — the reopen's own
+    // orphan scan and first mutation re-pin the map above the burned space
+    // through the public API; the representation pin above is.)
+    let mut cfg = Config::new(d.clone());
+    cfg.checkpoint_bytes = 0;
+    cfg.l0_compact_trigger = 0;
+    let db = Db::open(cfg).unwrap();
+    db.compact().unwrap();
+    drop(db);
+    let current = Current::read(&d.join("CURRENT")).unwrap();
+    let logs = load_placement_logs(&d, current.manifest_generation).unwrap();
+    let relocations = logs
+        .iter()
+        .find(|l| l.generation == current.manifest_generation)
+        .expect("the relocation log rides the new manifest generation");
+    assert!(!relocations.records.is_empty());
+    for rec in &relocations.records {
+        assert!(
+            rec.placement.generation() > orphan_max,
+            "new placement generation {} reuses generation space the orphan published",
+            rec.placement.generation()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ckp007 — the randomized restart oracle: puts/deletes/flushes/compactions/
 // restarts against a live oracle, with a checkpoint trigger small enough to
 // fire constantly
@@ -978,5 +1104,5 @@ fn ckp008_growth_probe() {
     let artifacts =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine-v2");
     std::fs::create_dir_all(&artifacts).unwrap();
-    std::fs::write(artifacts.join("directory-checkpoint.md"), out).unwrap();
+    common::report_write(&artifacts.join("directory-checkpoint.md"), out);
 }

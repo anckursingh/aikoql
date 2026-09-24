@@ -54,6 +54,10 @@ fn drive_to_depth(
     loop {
         r += 1;
         put(db, r);
+        // P3-M8 — the auto-triggered merge runs on the compactor thread.
+        // Wait per round: the l0_count probe and the get's depth pin then
+        // read the drained state (the synchronous trace).
+        db.wait_compactor_idle();
         if l0_count(d) >= depth {
             return r;
         }
@@ -141,6 +145,12 @@ fn tier_depth_answers_match_oracle() {
         );
     }
     assert_eq!(twin.scan(b"k").unwrap(), expect, "twin scan diverged");
+    // The pin reads the DRAINED state — drive_to_depth waits per round for
+    // exactly this (the synchronous trace). Without the wait, a starved
+    // runner probes mid-merge and the pin flakes on machine speed, not on
+    // the count-only trigger arithmetic it actually guards (CI round 3:
+    // the twin's final merge was still in flight at the probe).
+    twin.wait_compactor_idle();
     assert!(l0_count(&d2) < 10, "count-only must not pile L0");
 }
 

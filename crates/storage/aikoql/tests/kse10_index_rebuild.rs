@@ -211,10 +211,12 @@ fn kse090_092_index_rebuild() {
     // Contract pins (KSE-090..092 gates, not just parity).
     assert_eq!(memory.golden_len, 12, "4 edges × 2 + 4 type rows");
     assert!(memory.full_restored, "KSE-090: full rebuild not exact");
+    // P5-M7: heads_scanned counts the catalog bootstrap head too (canonical
+    // state — scanned, never derived: it contributes no relo/reli/type rows).
     assert_eq!(
         memory.full_report,
-        (4, 4, 4, 4),
-        "heads scanned + 4 edges × 2 + 4 type rows"
+        (5, 4, 4, 4),
+        "heads scanned (4 user + catalog) + 4 edges × 2 + 4 type rows"
     );
     assert!(
         memory.partial_restored,

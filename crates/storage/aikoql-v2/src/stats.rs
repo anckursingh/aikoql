@@ -12,6 +12,23 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// P3-M2 (design §21) — fsync-latency histogram edges in µs. Twelve
+/// buckets: everything above 16 ms lands in the last one.
+pub const FSYNC_LATENCY_BUCKETS: usize = 12;
+const FSYNC_LATENCY_EDGES: [u64; FSYNC_LATENCY_BUCKETS - 1] =
+    [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384];
+
+/// Record one latency sample into its bucket (first edge it fits under;
+/// past the last edge = the final bucket). Relaxed — the counters are
+/// advisory, never a correctness input.
+pub(crate) fn record_latency_us(buckets: &[AtomicU64; FSYNC_LATENCY_BUCKETS], us: u64) {
+    let idx = FSYNC_LATENCY_EDGES
+        .iter()
+        .position(|&e| us <= e)
+        .unwrap_or(FSYNC_LATENCY_BUCKETS - 1);
+    buckets[idx].fetch_add(1, Ordering::Relaxed);
+}
+
 /// A snapshot of the cumulative read-path counters (the QA doc's
 /// `ReadPathMetrics`; `value_decode_ns` is folded into `block_decode_ns` —
 /// values decode with their entries, a separate counter would be fiction).
@@ -41,6 +58,10 @@ pub struct ReadPathStats {
     pub lock_wait_ns: u64,
     pub bloom_probe_ns: u64,
     pub get_wall_ns: u64,
+    /// P5-M42 — Σ remaining.len() at each get_many retain (the elements
+    /// examined): the per-resolution retain made it O(B²) worst case;
+    /// the per-pass compaction makes it O(B).
+    pub batch_retain_scans: u64,
 }
 
 /// The live counters — one per field, relaxed atomics (~ns overhead).
@@ -65,6 +86,7 @@ pub(crate) struct Stats {
     pub(crate) lock_wait_ns: AtomicU64,
     pub(crate) bloom_probe_ns: AtomicU64,
     pub(crate) get_wall_ns: AtomicU64,
+    pub(crate) batch_retain_scans: AtomicU64,
 }
 
 impl Stats {
@@ -89,6 +111,285 @@ impl Stats {
             lock_wait_ns: self.lock_wait_ns.load(Ordering::Relaxed),
             bloom_probe_ns: self.bloom_probe_ns.load(Ordering::Relaxed),
             get_wall_ns: self.get_wall_ns.load(Ordering::Relaxed),
+            batch_retain_scans: self.batch_retain_scans.load(Ordering::Relaxed),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// P4-M5 — the per-request read trace. One record per read request when
+// sampling fires: the delta of the cumulative ReadPathStats across the
+// request. Value-opaque (no user bytes leave the engine) and zero-cost when
+// disabled (the wrapper never snapshots, never locks). Deltas are
+// best-effort under concurrent readers — counters interleave, so a record
+// attributes its request, it never gates an answer.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadTraceRecord {
+    pub seq: u64,
+    pub wall_ns: u64,
+    pub lock_wait_ns: u64,
+    pub memtable_lookup_ns: u64,
+    pub memtable_hits: u64,
+    pub segments_considered: u64,
+    pub segments_range_skipped: u64,
+    pub segments_bloom_skipped: u64,
+    pub segments_index_searched: u64,
+    pub index_lookup_ns: u64,
+    pub block_cache_lookup_ns: u64,
+    pub block_cache_hits: u64,
+    pub block_cache_misses: u64,
+    pub block_io_ns: u64,
+    pub block_decode_ns: u64,
+    pub blocks_read: u64,
+    pub bytes_read: u64,
+    pub entries_decoded: u64,
+    pub bloom_probe_ns: u64,
+    pub batch_retain_scans: u64,
+    /// True when the request needed no new block reads (block cache or
+    /// memtable served it).
+    pub cache_hit: bool,
+}
+
+impl ReadPathStats {
+    /// P4-M5 — per-request delta against a before-snapshot. `seq` is 0
+    /// here; the trace assigns the real request sequence on record.
+    pub fn delta_of(&self, before: &ReadPathStats) -> ReadTraceRecord {
+        macro_rules! d {
+            ($f:ident) => {
+                self.$f.saturating_sub(before.$f)
+            };
+        }
+        ReadTraceRecord {
+            seq: 0,
+            wall_ns: d!(get_wall_ns),
+            lock_wait_ns: d!(lock_wait_ns),
+            memtable_lookup_ns: d!(memtable_lookup_ns),
+            memtable_hits: d!(memtable_hits),
+            segments_considered: d!(segments_considered),
+            segments_range_skipped: d!(segments_range_skipped),
+            segments_bloom_skipped: d!(segments_bloom_skipped),
+            segments_index_searched: d!(segments_index_searched),
+            index_lookup_ns: d!(index_lookup_ns),
+            block_cache_lookup_ns: d!(block_cache_lookup_ns),
+            block_cache_hits: d!(block_cache_hits),
+            block_cache_misses: d!(block_cache_misses),
+            block_io_ns: d!(block_io_ns),
+            block_decode_ns: d!(block_decode_ns),
+            blocks_read: d!(blocks_read),
+            bytes_read: d!(bytes_read),
+            entries_decoded: d!(entries_decoded),
+            bloom_probe_ns: d!(bloom_probe_ns),
+            batch_retain_scans: d!(batch_retain_scans),
+            cache_hit: self.blocks_read == before.blocks_read,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P3-M2 (design §21) — write-path instrumentation. Same discipline as the
+// read path: cumulative relaxed atomics that move only with real
+// operations; a snapshot struct for callers. The gauges
+// (compaction_backlog_bytes / compaction_pending_segments) are L0-only —
+// the backlog a background compactor would have to drain — and are
+// refreshed by the maybe_compact scan on every write path plus after every
+// successful merge.
+// ---------------------------------------------------------------------------
+
+/// A snapshot of the write-path counters (design §21's `WritePathStats`).
+/// `fsync_count` rides the Db's existing commit-fsync counter (one per
+/// batch/group; flush truncation syncs are not counted).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WritePathStats {
+    /// WAL frame bytes appended since open — cumulative, flushes truncate
+    /// the file, not the ledger.
+    pub wal_bytes: u64,
+    pub flush_count: u64,
+    pub flush_latency_us: u64,
+    pub fsync_count: u64,
+    pub fsync_latency_us_buckets: [u64; FSYNC_LATENCY_BUCKETS],
+    /// Σ uncompacted L0 segment bytes / count while the trigger is
+    /// unsatisfied — the backlog a background compactor (P3-M8) would
+    /// drain.
+    pub compaction_backlog_bytes: u64,
+    pub compaction_pending_segments: u64,
+    pub checkpoint_count: u64,
+    pub checkpoint_latency_us: u64,
+    pub write_queue_depth: u64,
+    pub group_commit_batches: u64,
+    pub group_commit_ops: u64,
+    pub group_commit_max_ops: u64,
+    /// Wall ms of the last merge that actually ran (0 = none yet).
+    pub last_compaction_ms: u64,
+    /// P3-M8 — background merges that failed (the error text rides
+    /// `Db::last_compaction_error`; the snapshot stays Copy).
+    pub compaction_error_count: u64,
+    /// This open's recovery: wall ms of open() and WAL bytes replayed.
+    pub recovery_ms: u64,
+    pub wal_replay_bytes: u64,
+    /// P5-M35 → P5-M40 — the debug validator's (`Db::debug_scan_l0`)
+    /// invocations and cost. M35 measured the per-write scan with these
+    /// (the prof002 cell: 345 ns/write, 0.7% at ~64 segments — regime-
+    /// true but O(segments)); M40 moved the write trigger to the O(1)
+    /// authoritative counters, so writes never increment these — only
+    /// validator runs do (lba001 pins the flatness).
+    pub scan_l0_calls: u64,
+    pub scan_l0_ns: u64,
+    /// P5-M38 — flush lock-scope counters (the R4-P0-01 instrumentation):
+    /// the whole flush wall, the state-lock hold across phase A + C, the
+    /// UNLOCKED segment-I/O window (phase B), and the publication lock
+    /// (phase C). The structural invariant: hold + io ≤ total — the state
+    /// lock never covers segment file construction.
+    pub flush_total_ns: u64,
+    pub flush_state_lock_hold_ns: u64,
+    pub flush_io_ns: u64,
+    pub flush_publish_ns: u64,
+    /// P5-M39 — compaction lock-scope counters (the R4-P0-02
+    /// instrumentation): the whole merge wall, the state-lock hold across
+    /// phase A + C, the UNLOCKED merge-I/O window (phase B), and the
+    /// publication lock (phase C). The structural invariant:
+    /// hold + io ≤ total — the state lock never covers merge construction.
+    /// A stale discard (generation moved between A and C) counts A, B and
+    /// C's check — only the publication counter stays empty.
+    pub compact_total_ns: u64,
+    pub compact_state_lock_hold_ns: u64,
+    pub compact_io_ns: u64,
+    pub compact_publish_ns: u64,
+}
+
+/// The live write-path counters.
+#[derive(Debug, Default)]
+pub(crate) struct WriteStats {
+    pub(crate) wal_bytes: AtomicU64,
+    pub(crate) flush_count: AtomicU64,
+    pub(crate) flush_latency_us: AtomicU64,
+    pub(crate) fsync_latency_us_buckets: [AtomicU64; FSYNC_LATENCY_BUCKETS],
+    pub(crate) compaction_backlog_bytes: AtomicU64,
+    pub(crate) compaction_pending_segments: AtomicU64,
+    pub(crate) checkpoint_count: AtomicU64,
+    pub(crate) checkpoint_latency_us: AtomicU64,
+    pub(crate) write_queue_depth: AtomicU64,
+    pub(crate) group_commit_batches: AtomicU64,
+    pub(crate) group_commit_ops: AtomicU64,
+    pub(crate) group_commit_max_ops: AtomicU64,
+    pub(crate) last_compaction_ms: AtomicU64,
+    pub(crate) recovery_ms: AtomicU64,
+    pub(crate) wal_replay_bytes: AtomicU64,
+    pub(crate) scan_l0_calls: AtomicU64,
+    pub(crate) scan_l0_ns: AtomicU64,
+    /// P5-M38 — the flush lock-scope windows (see WritePathStats). A and C
+    /// both accumulate the hold; B is the unlocked I/O window.
+    pub(crate) flush_total_ns: AtomicU64,
+    pub(crate) flush_state_lock_hold_ns: AtomicU64,
+    pub(crate) flush_io_ns: AtomicU64,
+    pub(crate) flush_publish_ns: AtomicU64,
+    /// P5-M39 — the compaction lock-scope windows (see WritePathStats).
+    /// A and C both accumulate the hold; B is the unlocked merge window.
+    pub(crate) compact_total_ns: AtomicU64,
+    pub(crate) compact_state_lock_hold_ns: AtomicU64,
+    pub(crate) compact_io_ns: AtomicU64,
+    pub(crate) compact_publish_ns: AtomicU64,
+    /// P3-M8 — the failed background merge's error text (None = none yet).
+    /// Not in the Copy snapshot — the admin reads it via `Db::last_compaction_error`.
+    pub(crate) compaction_error: std::sync::Mutex<Option<String>>,
+    pub(crate) compaction_error_count: AtomicU64,
+}
+
+impl WriteStats {
+    pub(crate) fn snapshot(&self, fsync_count: u64) -> WritePathStats {
+        WritePathStats {
+            wal_bytes: self.wal_bytes.load(Ordering::Relaxed),
+            flush_count: self.flush_count.load(Ordering::Relaxed),
+            flush_latency_us: self.flush_latency_us.load(Ordering::Relaxed),
+            fsync_count,
+            fsync_latency_us_buckets: std::array::from_fn(|i| {
+                self.fsync_latency_us_buckets[i].load(Ordering::Relaxed)
+            }),
+            compaction_backlog_bytes: self.compaction_backlog_bytes.load(Ordering::Relaxed),
+            compaction_pending_segments: self.compaction_pending_segments.load(Ordering::Relaxed),
+            checkpoint_count: self.checkpoint_count.load(Ordering::Relaxed),
+            checkpoint_latency_us: self.checkpoint_latency_us.load(Ordering::Relaxed),
+            write_queue_depth: self.write_queue_depth.load(Ordering::Relaxed),
+            group_commit_batches: self.group_commit_batches.load(Ordering::Relaxed),
+            group_commit_ops: self.group_commit_ops.load(Ordering::Relaxed),
+            group_commit_max_ops: self.group_commit_max_ops.load(Ordering::Relaxed),
+            last_compaction_ms: self.last_compaction_ms.load(Ordering::Relaxed),
+            recovery_ms: self.recovery_ms.load(Ordering::Relaxed),
+            wal_replay_bytes: self.wal_replay_bytes.load(Ordering::Relaxed),
+            compaction_error_count: self.compaction_error_count.load(Ordering::Relaxed),
+            scan_l0_calls: self.scan_l0_calls.load(Ordering::Relaxed),
+            scan_l0_ns: self.scan_l0_ns.load(Ordering::Relaxed),
+            flush_total_ns: self.flush_total_ns.load(Ordering::Relaxed),
+            flush_state_lock_hold_ns: self.flush_state_lock_hold_ns.load(Ordering::Relaxed),
+            flush_io_ns: self.flush_io_ns.load(Ordering::Relaxed),
+            flush_publish_ns: self.flush_publish_ns.load(Ordering::Relaxed),
+            compact_total_ns: self.compact_total_ns.load(Ordering::Relaxed),
+            compact_state_lock_hold_ns: self.compact_state_lock_hold_ns.load(Ordering::Relaxed),
+            compact_io_ns: self.compact_io_ns.load(Ordering::Relaxed),
+            compact_publish_ns: self.compact_publish_ns.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// The segment inventory as of the snapshot: every manifest segment, all
+/// levels. P5-M40 — `l0_count`/`l0_bytes`/`l1_bytes` are the
+/// authoritative backlog counters (State fields updated at
+/// open/flush/compaction — the write trigger reads them in O(1)); they
+/// must equal the scan_l0 debug validator after every structural change
+/// (lba002).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SegmentStats {
+    pub count: u64,
+    pub bytes: u64,
+    pub l0_count: u64,
+    pub l0_bytes: u64,
+    pub l1_bytes: u64,
+}
+
+/// P5-M35 — control-plane lock-wait counters (prof001). The control
+/// surface (stats() + the resolve paths) takes the global state READ
+/// lock on every call, frequently under MCP/admin traffic — a writer's
+/// hold blocks them all. Each family counts its acquisitions and the
+/// wait for the guard (the M21 lock_wait_ns pattern: the elapsed ns at
+/// acquisition — wait only, not the hold). Pooled per family, not per
+/// path: the three resolves are one-line bodies with one traffic shape.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ControlPlaneStats {
+    pub stats_waits: u64,
+    pub stats_wait_ns: u64,
+    pub resolve_waits: u64,
+    pub resolve_wait_ns: u64,
+}
+
+/// The live control-plane counters (relaxed atomics, the read-path
+/// discipline).
+#[derive(Debug, Default)]
+pub(crate) struct ControlStats {
+    pub(crate) stats_waits: AtomicU64,
+    pub(crate) stats_wait_ns: AtomicU64,
+    pub(crate) resolve_waits: AtomicU64,
+    pub(crate) resolve_wait_ns: AtomicU64,
+}
+
+impl ControlStats {
+    pub(crate) fn snapshot(&self) -> ControlPlaneStats {
+        ControlPlaneStats {
+            stats_waits: self.stats_waits.load(Ordering::Relaxed),
+            stats_wait_ns: self.stats_wait_ns.load(Ordering::Relaxed),
+            resolve_waits: self.resolve_waits.load(Ordering::Relaxed),
+            resolve_wait_ns: self.resolve_wait_ns.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// `Db::stats()` — the whole observable surface in one snapshot (design
+/// §21's list, plus the read path and cache from SE2-M7/M8).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DbStats {
+    pub read: ReadPathStats,
+    pub write: WritePathStats,
+    pub segments: SegmentStats,
+    pub cache: crate::cache::CacheStats,
+    pub control: ControlPlaneStats,
 }

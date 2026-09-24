@@ -15,8 +15,8 @@ pub(crate) fn run_backup(db_path: &str) {
 
     // Gather metadata, then drop kernel to release file lock before copy.
     let (seq, object_count) = {
-        let kernel = match engine::open_kernel_auto(db_path) {
-            Ok(k) => k,
+        let (kernel, _admin) = match engine::open_kernel_auto(db_path) {
+            Ok((k, admin)) => (k, admin),
             Err(e) => {
                 eprintln!("open kernel: {}", e);
                 std::process::exit(1);
@@ -99,8 +99,8 @@ pub(crate) fn run_restore(backup_dir: &str, target_path: &str) {
     println!("Restored to: {}", target_path);
 }
 pub(crate) fn run_audit(db_path: &str) {
-    let kernel = match engine::open_kernel_auto(db_path) {
-        Ok(k) => k,
+    let (kernel, _admin) = match engine::open_kernel_auto(db_path) {
+        Ok((k, admin)) => (k, admin),
         Err(e) => {
             eprintln!("open kernel: {}", e);
             std::process::exit(1);

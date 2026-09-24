@@ -37,7 +37,7 @@ aikoql-mcp shell :memory:
 - **Schema Discovery** — Agents learn what types and properties exist before composing queries.
 - **Idempotent Mutations** — Safe to retry. Same `idempotency_key` = exact-once commit.
 - **REST API** — 40+ endpoints with JSON, Bearer auth, OpenAPI 3.0 spec.
-- **4 SDKs** — Python (PyO3), TypeScript, Go, Java.
+- **SDKs** — Python (PyO3 + MCP client); every other language via standard MCP clients (P3-M9).
 - **Knowledge Transactions (v0.3)** — observe, assert, verify, contradict, supersede, merge, invalidate, resolve — every operation evidence-backed and lineage-stamped.
 - **Agent Experience Reuse (v0.3)** — record execution outcomes as TTL-bounded experience KOs; match them to new tasks under reuse conditions; injected into `compile_context`.
 

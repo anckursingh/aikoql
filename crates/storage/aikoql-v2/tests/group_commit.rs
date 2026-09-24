@@ -291,3 +291,85 @@ fn sync_and_group_commit_wals_are_byte_identical() {
 // report cell ×25, hiding the coalescing. `group_commit_effectiveness`
 // regenerates artifacts/storage-engine-v2/group-commit.md with honest
 // `batches_submitted` cells.
+
+/// P5-M32 (P1-02) grp001 — the exact-fit/carry-over boundary, pinned
+/// order-independently: three concurrent 2-op batches against cap 3 can
+/// only pack one per group (2+2 > 3 for EVERY arrival order), so the
+/// carry-over must lead each next group — exactly 3 fsyncs. A drift in the
+/// running counters (e.g. the carry's size not counted when it leads the
+/// next group) would pack two of them and drop a group. Guards today's
+/// fold; the counters must reproduce it exactly.
+#[test]
+fn exact_fit_carry_over_holds_at_the_ops_boundary() {
+    let d = dir("gc-carry-ops");
+    let mut cfg = gc_config(d.clone());
+    cfg.max_wait_duration = Duration::from_millis(200);
+    cfg.max_batch_ops = 3;
+    let db = Db::open(cfg).unwrap();
+    let writer = db.writer().unwrap();
+    let threads: Vec<_> = (0..3u64)
+        .map(|i| {
+            let writer = writer.clone();
+            std::thread::spawn(move || {
+                writer
+                    .write(&[
+                        Op::Put(format!("a{i}").into_bytes(), vec![b'a'; 4]),
+                        Op::Put(format!("b{i}").into_bytes(), vec![b'b'; 4]),
+                    ])
+                    .unwrap()
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    assert_eq!(
+        db.fsync_count(),
+        3,
+        "three 2-op batches against cap 3: carry-over leads every group"
+    );
+    drop(writer);
+    drop(db);
+    let db = Db::open(gc_config(d)).unwrap();
+    for i in 0..3u64 {
+        for k in [format!("a{i}"), format!("b{i}")] {
+            assert!(
+                db.get(k.as_bytes()).unwrap().is_some(),
+                "all six keys durable across the carry groups"
+            );
+        }
+    }
+}
+
+/// P5-M32 (P1-02) grp001b — the same boundary on the byte cap: three
+/// concurrent 200-byte batches against cap 250 (200+200 > 250 for every
+/// arrival order) → exactly 3 groups.
+#[test]
+fn exact_fit_carry_over_holds_at_the_bytes_boundary() {
+    let d = dir("gc-carry-bytes");
+    let mut cfg = gc_config(d.clone());
+    cfg.max_wait_duration = Duration::from_millis(200);
+    cfg.max_batch_bytes = 250;
+    let db = Db::open(cfg).unwrap();
+    let writer = db.writer().unwrap();
+    let v = vec![b'x'; 190];
+    let threads: Vec<_> = (0..3u64)
+        .map(|i| {
+            let writer = writer.clone();
+            let v = v.clone();
+            std::thread::spawn(move || {
+                let ops = [Op::Put(format!("key-{i:06}").into_bytes(), v)];
+                assert_eq!(batch_bytes(&ops), 200, "the pin assumes 200-byte batches");
+                writer.write(&ops).unwrap()
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    assert_eq!(
+        db.fsync_count(),
+        3,
+        "three 200-byte batches against cap 250: carry-over leads every group"
+    );
+}

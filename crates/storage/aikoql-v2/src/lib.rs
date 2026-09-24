@@ -32,6 +32,7 @@ pub mod memtable;
 pub mod migration;
 pub mod placement;
 pub mod segment;
+pub mod snapshot;
 pub mod stats;
 pub mod wal;
 

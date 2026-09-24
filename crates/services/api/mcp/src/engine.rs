@@ -1,9 +1,10 @@
 //! Single open path for every subcommand (MRFC-0020): honors [encryption]
 //! settings so no plaintext writer can open an encrypted database — that
-//! would silently corrupt it. Backend selection (PR#2 review SE-01/SE-02)
-//! is owned by the RuntimeConfig pipeline (defaults → TOML → env → CLI);
-//! the public contract and per-backend profiles live in
-//! docs/STORAGE-BACKENDS.md.
+//! would silently corrupt it. Backend selection (PR#2 review SE-01/SE-02,
+//! PR6-005) is owned by the runtime's ONE authoritative module
+//! (aikoql_runtime::backend); the config pipeline (defaults → TOML → env
+//! → CLI) supplies the explicit choice or None for detection. The public
+//! contract and per-backend profiles live in docs/STORAGE-BACKENDS.md.
 
 use crate::config::{RuntimeEncryption, StorageBackend};
 use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto};
@@ -14,76 +15,21 @@ use aikoql_kernel::security::kms::LocalKms;
 use aikoql_kernel::security::KeyManager;
 use aikoql_kernel::storage::encrypted::EncryptedStore;
 use aikoql_kernel::storage::store::StorageEngine;
-use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_kernel::{KError, KResult, Kernel, SystemClock};
-use aikoql_storage::AikoqlStorageEngine;
-use aikoql_storage_v2::AikoqlStorageEngineV2;
-use std::io::Read;
+use aikoql_storage_v2::engine::StorageAdminApi;
 use std::sync::Arc;
-
-/// Backend resolution (PR#2 review SE-01/SE-02, docs/STORAGE-BACKENDS.md):
-/// the config pipeline owns the selection — no direct env reads here. An
-/// explicit backend opens exactly that engine (unknown values already
-/// failed closed at the config layer). `None` (the default) auto-detects
-/// the existing format at `db_path`: a v2 database directory (CURRENT
-/// present) opens as aikoql-v2, a file with the v1 WAL magic ("AKQL")
-/// opens as aikoql, any other existing FILE falls through to redb (redb
-/// validates its own format and fails closed on anything else — snapshots
-/// and pre-flip databases keep working), and a MISSING path is a fresh
-/// aikoql-v2 create — the ratified production default (2026-09-07 ADR,
-/// docs/STORAGE-ENGINE-ARCHITECTURE-DECISION.md). Detection makes upgrades
-/// safe in both directions: a redb database from before the backend switch
-/// and a native WAL written while aikoql was the production default both
-/// keep working at the same path. A directory that is not a v2 database is
-/// an explicit error — never a silent fresh create.
-fn open_engine(db_path: &str, backend: Option<StorageBackend>) -> KResult<Arc<dyn StorageEngine>> {
-    let backend = match backend {
-        Some(b) => b,
-        None => detect_backend(db_path)?,
-    };
-    match backend {
-        StorageBackend::Redb => Ok(Arc::new(RedbEngine::open(db_path)?)),
-        StorageBackend::Aikoql => Ok(Arc::new(AikoqlStorageEngine::open(db_path)?)),
-        StorageBackend::AikoqlV2 => Ok(Arc::new(AikoqlStorageEngineV2::open(db_path)?)),
-    }
-}
-
-/// Sniff the on-disk format. A <4-byte or non-AKQL file falls through to
-/// redb, whose own header validation fails closed — the native WAL parser
-/// never truncates or reinterprets a non-AKQL file. A missing path is a
-/// fresh aikoql-v2 create (the 2026-09-07 default flip).
-fn detect_backend(db_path: &str) -> KResult<StorageBackend> {
-    let p = std::path::Path::new(db_path);
-    if p.is_dir() {
-        if p.join("CURRENT").is_file() {
-            return Ok(StorageBackend::AikoqlV2);
-        }
-        return Err(KError::Store(format!(
-            "{db_path} is a directory but not an aikoql-v2 database (no CURRENT): \
-             name an explicit backend (--backend / AIKOQL_BACKEND / storage.backend)"
-        )));
-    }
-    match std::fs::File::open(p) {
-        Ok(mut f) => {
-            let mut magic = [0u8; 4];
-            if f.read(&mut magic).ok() == Some(4) && &magic == b"AKQL" {
-                return Ok(StorageBackend::Aikoql);
-            }
-            Ok(StorageBackend::Redb)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StorageBackend::AikoqlV2),
-        Err(e) => Err(KError::Store(format!("read {db_path}: {e}"))),
-    }
-}
 
 pub(crate) fn open_kernel(
     db_path: &str,
     enc: &RuntimeEncryption,
     backend: Option<StorageBackend>,
-) -> KResult<Kernel> {
-    let engine = open_engine(db_path, backend)?;
+) -> KResult<(Kernel, Option<Arc<dyn StorageAdminApi>>)> {
+    // PR6-005 — engine selection + detection live in the runtime's
+    // backend module; every subcommand funnels through this open_kernel.
+    let (engine, admin) =
+        aikoql_runtime::backend::open_engine(std::path::Path::new(db_path), backend)?;
     if !enc.enabled {
-        return Kernel::open(engine, Arc::new(SystemClock), 0xA9C9);
+        return Ok((Kernel::open(engine, Arc::new(SystemClock), 0xA9C9)?, admin));
     }
     let Some(pass) = enc.passphrase.as_deref() else {
         return Err(KError::Store(
@@ -105,25 +51,25 @@ pub(crate) fn open_kernel(
     for (type_name, fields) in &enc.policies {
         kernel.set_encryption_policy(type_name, EncryptionPolicy::new(fields.clone()));
     }
-    Ok(kernel)
+    Ok((kernel, admin))
 }
 
 /// Subcommand variant: one config pipeline (R10, PR#2 review SE-02) —
 /// encryption AND backend both come from `load()` (defaults → TOML → env;
 /// subcommand flags are not server config and are not parsed).
-pub(crate) fn open_kernel_auto(db_path: &str) -> KResult<Kernel> {
+pub(crate) fn open_kernel_auto(
+    db_path: &str,
+) -> KResult<(Kernel, Option<Arc<dyn StorageAdminApi>>)> {
     let cfg = crate::config::load(&[], None, None).map_err(KError::Store)?;
     open_kernel(db_path, &cfg.encryption, cfg.backend)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::open_engine;
-    use crate::config::StorageBackend;
+    use super::open_kernel_auto;
+    use crate::config::ENV_LOCK;
     use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
     use aikoql_kernel::storage::store_redb::RedbEngine;
-    use aikoql_storage::AikoqlStorageEngine;
-    use aikoql_storage_v2::AikoqlStorageEngineV2;
     use std::io::Read;
 
     // Temp db paths written by THIS test thread, swept when the thread exits
@@ -158,6 +104,32 @@ mod tests {
     }
 
     fn scratch(tag: &str) -> String {
+        // Killed runs never reach TLS drop — sweep their corpses at the
+        // next startup (only entries older than a day, so a concurrent
+        // live run's fresh files are untouched).
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+                return;
+            };
+            let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+            for e in rd.flatten() {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if !name.starts_with("aikoql_mcp_backend_") {
+                    continue;
+                }
+                let stale = e
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .is_some_and(|t| t < cutoff);
+                if stale {
+                    let _ = std::fs::remove_file(e.path());
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        });
         let mut p = std::env::temp_dir();
         p.push(format!("aikoql_mcp_backend_{}_{}", tag, std::process::id()));
         let _ = std::fs::remove_file(&p);
@@ -165,30 +137,19 @@ mod tests {
         p.to_string_lossy().into_owned()
     }
 
-    /// SE-02 — every explicit backend opens and serves a put/get through the
-    /// same selector (no env reads: the selector takes the config value).
+    /// PR6-005 — the ONE detection contract exercised through the MCP
+    /// server startup path (open_kernel_auto = load() + open_kernel, the
+    /// funnel every subcommand uses): an existing redb database opens
+    /// through auto-detection (a v2-defaulted open would fail on the redb
+    /// file — that divergence is exactly what the review forbids), and a
+    /// missing path still creates a fresh v2. The full five-case detection
+    /// matrix lives in aikoql_runtime::backend's tests.
     #[test]
-    fn backend_matrix_explicit_selection() {
-        for (backend, tag) in [
-            (Some(StorageBackend::Redb), "redb"),
-            (Some(StorageBackend::Aikoql), "aikoql"),
-            (Some(StorageBackend::AikoqlV2), "aikoql-v2"),
-        ] {
-            let engine = open_engine(&scratch(tag), backend).unwrap();
-            let mut b = WriteBatch::new();
-            b.put(b"k".to_vec(), b"v".to_vec());
-            engine.write_batch(&b).unwrap();
-            assert_eq!(engine.get(b"k").unwrap(), Some(b"v".to_vec()));
-        }
-    }
+    fn mcp_startup_path_autodetects_existing_and_fresh() {
+        let _guard = ENV_LOCK.lock().unwrap(); // serializes with config tests' env windows
+        std::env::remove_var("AIKOQL_BACKEND");
 
-    /// PR#2 review SE-01 regression: a redb database created under the old
-    /// behavior opens as redb through the new default path — it is never
-    /// reinterpreted (or truncated) by the native WAL parser, and its data
-    /// survives byte-exact.
-    #[test]
-    fn existing_redb_database_is_not_reinterpreted_as_native_wal() {
-        let path = scratch("redb-existing");
+        let path = scratch("startup-redb");
         {
             let e = RedbEngine::open(&path).unwrap();
             let mut b = WriteBatch::new();
@@ -196,8 +157,7 @@ mod tests {
             e.write_batch(&b).unwrap();
         }
         {
-            let engine = open_engine(&path, None).unwrap();
-            assert_eq!(engine.get(b"k").unwrap(), Some(b"v".to_vec()));
+            let (_kernel, _admin) = open_kernel_auto(&path).unwrap();
         } // redb holds a live file lock — read the head bytes after close
         let mut head = [0u8; 4];
         std::fs::File::open(&path)
@@ -206,68 +166,16 @@ mod tests {
             .unwrap();
         assert_ne!(
             &head, b"AKQL",
-            "the redb file must not be rewritten as a native WAL"
+            "the redb file must survive the startup path unrewritten"
         );
-    }
 
-    /// SE-01 both directions: a native WAL written while aikoql was the
-    /// production default keeps opening as aikoql through the auto path.
-    #[test]
-    fn existing_native_wal_auto_detects_v1() {
-        let path = scratch("v1-existing");
+        let fresh = scratch("startup-fresh");
         {
-            let e = AikoqlStorageEngine::open(&path).unwrap();
-            let mut b = WriteBatch::new();
-            b.put(b"k".to_vec(), b"v".to_vec());
-            e.write_batch(&b).unwrap();
+            let (_kernel, _admin) = open_kernel_auto(&fresh).unwrap();
         }
-        let engine = open_engine(&path, None).unwrap();
-        assert_eq!(engine.get(b"k").unwrap(), Some(b"v".to_vec()));
-    }
-
-    /// SE-01 — a v2 database directory auto-detects; a directory that is
-    /// NOT a v2 database fails closed instead of becoming a fresh store.
-    #[test]
-    fn v2_directory_auto_detects_and_non_v2_dir_fails_closed() {
-        let dir = scratch("v2-existing");
-        {
-            let e = AikoqlStorageEngineV2::open(&dir).unwrap();
-            let mut b = WriteBatch::new();
-            b.put(b"k".to_vec(), b"v".to_vec());
-            e.write_batch(&b).unwrap();
-        }
-        let engine = open_engine(&dir, None).unwrap();
-        assert_eq!(engine.get(b"k").unwrap(), Some(b"v".to_vec()));
-
-        let plain = scratch("plain-dir");
-        std::fs::create_dir_all(&plain).unwrap();
-        let err = match open_engine(&plain, None) {
-            Err(e) => e,
-            Ok(_) => panic!("a non-v2 directory must fail closed, not become a fresh store"),
-        };
         assert!(
-            format!("{err}").contains("not an aikoql-v2 database"),
-            "got: {err}"
-        );
-    }
-
-    /// 2026-09-07 default flip (ADR STORAGE-ENGINE-ARCHITECTURE-DECISION):
-    /// a FRESH path (missing) auto-creates aikoql-v2 — the ratified
-    /// production default. An existing non-AKQL FILE still falls through to
-    /// redb (snapshots and pre-flip databases keep working — the SE-01
-    /// regression above pins that direction byte-exact).
-    #[test]
-    fn fresh_path_auto_creates_aikoql_v2() {
-        let path = scratch("fresh-default");
-        let engine = open_engine(&path, None).unwrap();
-        let mut b = WriteBatch::new();
-        b.put(b"k".to_vec(), b"v".to_vec());
-        engine.write_batch(&b).unwrap();
-        assert_eq!(engine.get(b"k").unwrap(), Some(b"v".to_vec()));
-        drop(engine);
-        assert!(
-            std::path::Path::new(&path).join("CURRENT").is_file(),
-            "a fresh path must create a v2 database directory with CURRENT"
+            std::path::Path::new(&fresh).join("CURRENT").is_file(),
+            "a missing path must create a v2 database directory through the startup path"
         );
     }
 }

@@ -1023,7 +1023,7 @@ fn result_json(backends: &[BackendResult], gates: &Gates, sz: Size) -> String {
                 s.push_str(", ");
             }
             s.push_str(&format!(
-                "{{ \"label\": {}, \"ops\": {}, \"wall_ms\": {:.3}, \"p50_us\": {}, \"p95_us\": {}, \"p99_us\": {}, \"read_bytes\": {}, \"written_bytes\": {} }}",
+                "{{ \"label\": {}, \"ops\": {}, \"wall_ms\": {:.3}, \"p50_ns\": {}, \"p95_ns\": {}, \"p99_ns\": {}, \"read_bytes\": {}, \"written_bytes\": {} }}",
                 json_str(&r.label),
                 r.ops,
                 r.wall_ms,
@@ -1108,13 +1108,12 @@ fn m7_workloads() {
     let gates = evaluate_gates(&results);
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../artifacts/storage-engine");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("benchmark.md"), benchmark_report(&results, sz)).unwrap();
-    std::fs::write(
-        dir.join("adoption-decision.md"),
+    common::report_write(&dir.join("benchmark.md"), benchmark_report(&results, sz));
+    common::report_write(
+        &dir.join("adoption-decision.md"),
         adoption_report(&results, &gates, sz),
-    )
-    .unwrap();
+    );
     // SE-11 (PR#2 review): the same evidence as machine-readable JSON for
     // automated comparison (Markdown = human report, JSON = diffable).
-    std::fs::write(dir.join("result.json"), result_json(&results, &gates, sz)).unwrap();
+    common::report_write(&dir.join("result.json"), result_json(&results, &gates, sz));
 }

@@ -1,0 +1,9 @@
+{
+  "id": "sfm009",
+  "pre_fix_commit": "a70773f",
+  "command": "cargo test -p aikoql-storage-v2 --test snapshot_matrix sfm009_large_wal_snapshot_has_bounded_rss",
+  "captured_at": "2026-09-20T04:56:13Z",
+  "captured_head": "a70773f5c641347019b508533d6b6015cff0bef1",
+  "exit_code": 101,
+  "note": "run in a worktree at a70773f with src/snapshot.rs + src/wal.rs reverted to 8e5dd8e (the pre-fix sources) — the test exists only in the fix commit; the failure re-measured 192692 KiB vs the round's cited 192700 KiB"
+}

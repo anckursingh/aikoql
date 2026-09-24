@@ -7,19 +7,20 @@
 //! these primitives (`aikoql.checkpointer`).
 
 use aikoql_graph::{GraphEngineApi, RelateRequest, TraverseQuery};
-use aikoql_kernel::storage::store::StorageEngine;
 use aikoql_kernel::{
-    Fusion, Kernel, KnowledgeContext, Metadata, RedbEngine, RememberRequest, ScoredKO,
-    SemanticBlock, SimilarityQuery, Subject, SystemClock, Value, KOID,
+    Fusion, IndexMaintainerApi, IndexStatusKind, Kernel, KnowledgeContext, Metadata,
+    RememberRequest, ScoredKO, SemanticBlock, SimilarityQuery, Subject, SystemClock, TextIndex,
+    Value, VectorIndex, KOID,
 };
-use aikoql_storage::AikoqlStorageEngine;
-use aikoql_storage_v2::AikoqlStorageEngineV2;
+use aikoql_scheduler::IndexMaintainer;
+use aikoql_vector::{HnswVectorIndex, TantivyTextIndex};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3::IntoPyObjectExt;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 fn to_pyerr(e: aikoql_kernel::KError) -> PyErr {
     PyRuntimeError::new_err(format!("{}", e))
@@ -151,33 +152,97 @@ fn scored_ko_to_py(py: Python<'_>, s: &ScoredKO) -> Py<PyAny> {
 #[pyclass(name = "aikoql")]
 pub struct Aikoql {
     inner: Arc<Kernel>,
+    /// P5-M17b (ND-14): the embedded production property-index maintainer.
+    /// The maintainer's thread holds the inner state + a kernel handle, not
+    /// this Arc — dropping Aikoql stops it cleanly.
+    maintainer: Arc<IndexMaintainer>,
+    /// P5-M22 (P1-15): the checkpoint directory (`{path}.ckpt`) — the open
+    /// resumes from it, the Drop writes it.
+    checkpoint_dir: std::path::PathBuf,
+}
+
+/// P5-M22 (P1-15): resume from `ckpt_dir` when a COMPLETE checkpoint is
+/// there — restart cost ∝ the events after it — and start fresh with a full
+/// replay otherwise. ANY load failure (a torn pair, P1-14; a foreign water,
+/// P1-15) falls back to a fresh start, never to an unavailable index.
+fn start_maintainer(
+    kernel: &Kernel,
+    ckpt_dir: &std::path::Path,
+) -> aikoql_kernel::KResult<Arc<IndexMaintainer>> {
+    if let Some(water) = IndexMaintainer::checkpoint_water(ckpt_dir)? {
+        if let (Ok(v), Ok(t)) = (
+            HnswVectorIndex::load(&ckpt_dir.join("vectors")),
+            TantivyTextIndex::load(&ckpt_dir.join("text")),
+        ) {
+            let vectors: Arc<dyn VectorIndex> = Arc::new(v);
+            let text: Arc<dyn TextIndex> = Arc::new(t);
+            if let Ok(m) =
+                IndexMaintainer::start_at(kernel, vectors, text, Some(water), Some(ckpt_dir))
+            {
+                return Ok(m);
+            }
+        }
+    }
+    IndexMaintainer::start(
+        kernel,
+        Arc::new(HnswVectorIndex::new(0, 10_000)),
+        Arc::new(TantivyTextIndex::new()?),
+    )
+}
+
+impl Drop for Aikoql {
+    fn drop(&mut self) {
+        // P5-M22 (P1-15): checkpoint on close — the next open resumes
+        // instead of replaying the whole journal. Best-effort: a failed
+        // checkpoint only costs the next open a full replay.
+        let _ = self
+            .maintainer
+            .checkpoint(&self.inner, &self.checkpoint_dir);
+    }
 }
 
 #[pymethods]
 impl Aikoql {
     #[new]
-    #[pyo3(signature = (path, salt = 0, backend = "aikoql-v2"))]
-    fn new(path: &str, salt: u64, backend: &str) -> PyResult<Self> {
-        // Default: aikoql-v2, the ratified production default (2026-09-07
-        // ADR). "aikoql" and "redb" open existing databases; the migration
-        // path is the REC-002 backup/restore flow.
-        let engine: Arc<dyn StorageEngine> = match backend {
-            "aikoql-v2" => Arc::new(AikoqlStorageEngineV2::open(path).map_err(to_pyerr)?),
-            "aikoql" => Arc::new(AikoqlStorageEngine::open(path).map_err(to_pyerr)?),
-            "redb" => Arc::new(RedbEngine::open(path).map_err(to_pyerr)?),
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown backend {other:?}: use \"aikoql-v2\", \"aikoql\" or \"redb\""
-                )))
+    #[pyo3(signature = (path, salt = 0, backend = None))]
+    fn new(path: &str, salt: u64, backend: Option<&str>) -> PyResult<Self> {
+        // PR6-005 — the ONE authoritative backend decision path
+        // (aikoql_runtime::backend): with no explicit backend the existing
+        // on-disk format is detected (redb file, native WAL, v2 directory);
+        // only a missing path defaults to a fresh aikoql-v2 (2026-09-07
+        // ADR). An unknown explicit value fails closed.
+        let backend = match backend {
+            Some(b) => {
+                Some(aikoql_runtime::backend::Backend::parse(b).map_err(PyValueError::new_err)?)
             }
+            None => None,
         };
+        let (engine, _admin) =
+            aikoql_runtime::backend::open_engine(std::path::Path::new(path), backend)
+                .map_err(to_pyerr)?;
         let kernel = Kernel::open(engine, Arc::new(SystemClock), salt).map_err(to_pyerr)?;
+        // P5-M18: real ANN/BM25 indexes behind a FULL journal replay — a
+        // live-only maintainer (M17b) leaves the vector index permanently
+        // empty, and the candidate-driven coordinator ranks only what the
+        // index nominates (empty = no hits). The replay commits in batches
+        // (one Tantivy commit per 64 events), so open stays proportional;
+        // the harness's per-cell opens pay it outside the timed ops. The
+        // HNSW adopts the first vector's dim (SDK callers send arbitrary
+        // dims) and its capacity is an allocator hint only.
+        //
+        // P5-M22 (P1-15): the replay is paid once — a prior Drop left a
+        // checkpoint, and the open resumes from it instead.
+        let checkpoint_dir = std::path::PathBuf::from(format!("{path}.ckpt"));
+        let maintainer = start_maintainer(&kernel, &checkpoint_dir).map_err(to_pyerr)?;
+        kernel.attach_indexes(maintainer.clone());
         Ok(Aikoql {
             inner: Arc::new(kernel),
+            maintainer,
+            checkpoint_dir,
         })
     }
 
-    #[pyo3(signature = (subject, type_name, properties, semantic = None, roles = None))]
+    #[pyo3(signature = (subject, type_name, properties, semantic = None, roles = None, koid = None))]
     fn remember(
         &self,
         py: Python<'_>,
@@ -186,6 +251,7 @@ impl Aikoql {
         properties: &Bound<'_, PyDict>,
         semantic: Option<&Bound<'_, PyDict>>,
         roles: Option<Vec<String>>,
+        koid: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         // Extract all Python data while the GIL is held; the closure passed to
         // `allow_threads` must be `Send`, so it cannot borrow `Bound` handles.
@@ -197,21 +263,28 @@ impl Aikoql {
         }
         let semantic = semantic.map(semantic_from_py).transpose()?;
         let type_name = type_name.to_string();
+        // koid present = update (MCP parity); the kernel update REPLACES the
+        // property map, so callers must restate every field they keep.
+        let koid = koid
+            .map(KOID::from_hex)
+            .transpose()
+            .map_err(|e| PyValueError::new_err(format!("{}", e)))?;
 
         let res = py.detach(move || {
             let subject = Subject::with_roles(
                 subject,
                 &roles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
             );
-            let mut req = RememberRequest::create(
-                subject,
-                Metadata {
-                    type_name,
-                    tenant: None,
-                    schema_version: 1,
-                    tags: vec![],
-                },
-            );
+            let metadata = Metadata {
+                type_name,
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            };
+            let mut req = match koid {
+                Some(k) => RememberRequest::update(subject, k, metadata),
+                None => RememberRequest::create(subject, metadata),
+            };
             req.properties = prop_map;
             req.semantic = semantic;
             self.inner.remember(req).map_err(to_pyerr)
@@ -285,12 +358,74 @@ impl Aikoql {
             k,
             fusion,
         };
+        // P5-M18: the ANN is eventually consistent — a query right after a
+        // write must not answer empty. Bounded wait for the maintainer to
+        // drain (a broken index is skipped; answers still come, lag is
+        // surfaced per hit).
+        let healthy = self
+            .maintainer
+            .status(&self.inner)
+            .map(|s| s.status != IndexStatusKind::Error)
+            .unwrap_or(true);
+        if healthy {
+            let _ = self
+                .maintainer
+                .wait_caught_up(&self.inner, Duration::from_secs(2));
+        }
         let hits = py.detach(|| self.inner.find_similar(q).map_err(to_pyerr))?;
         let list = PyList::empty(py);
         for s in hits.iter() {
             list.append(scored_ko_to_py(py, s)).unwrap();
         }
         Ok(list.into_py_any(py).unwrap())
+    }
+
+    /// P5-M17b (ND-14): the production declaration surface. Declare a
+    /// property index (catalog + registry + synchronous rebuild), settle
+    /// the maintainer, then analyze so the CBO can price it. Idempotent —
+    /// re-declaring the same shape rebuilds + re-analyzes (the harness
+    /// re-declares per cell to refresh M9 stats); a different shape under
+    /// the same name fails closed. An index changes plans, never answers.
+    #[pyo3(signature = (name, type_name, properties))]
+    fn create_index(
+        &self,
+        py: Python<'_>,
+        name: String,
+        type_name: String,
+        properties: Vec<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let dict = PyDict::new(py);
+        dict.set_item("name", &name).unwrap();
+        dict.set_item("type_name", &type_name).unwrap();
+        dict.set_item("properties", &properties).unwrap();
+        let rows = py.detach(move || {
+            let props: Vec<&str> = properties.iter().map(|p| p.as_str()).collect();
+            let declared = self.inner.catalog_list_indexes().map_err(to_pyerr)?;
+            if let Some(d) = declared.iter().find(|d| d.name == name) {
+                if d.type_name != type_name || d.properties != props {
+                    return Err(PyValueError::new_err(format!(
+                        "index '{name}' already declared with a different shape"
+                    )));
+                }
+                self.inner.rebuild_index(&name).map_err(to_pyerr)?;
+            } else {
+                self.inner
+                    .catalog_create_index(&name, &type_name, &props)
+                    .map_err(to_pyerr)?;
+            }
+            // Settle the maintainer before analyze — a lagging re-apply can
+            // transiently overwrite the rebuild with an older version (the
+            // M17b wait_caught_up contract).
+            self.maintainer
+                .wait_caught_up(&self.inner, std::time::Duration::from_secs(300))
+                .map_err(to_pyerr)?;
+            self.inner
+                .analyze(&type_name)
+                .map_err(to_pyerr)
+                .map(|s| s.row_count)
+        })?;
+        dict.set_item("rows", rows).unwrap();
+        Ok(dict.into_py_any(py).unwrap())
     }
 
     fn close(&self, _py: Python<'_>) -> PyResult<()> {
@@ -398,5 +533,8 @@ impl Aikoql {
 #[pymodule]
 fn _aikoql(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Aikoql>()?;
+    // P3-M9 — version parity with the workspace (sdk001 pins it): the
+    // crate version IS the package version (maturin dynamic = ["version"]).
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

@@ -4,7 +4,10 @@
 
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+pub mod contract;
+pub mod damage;
+
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use aikoql_storage_v2::segment::SegmentEntry;
@@ -111,12 +114,53 @@ pub fn stats_delta(after: ReadPathStats, before: ReadPathStats) -> ReadPathStats
         lock_wait_ns: after.lock_wait_ns.saturating_sub(before.lock_wait_ns),
         bloom_probe_ns: after.bloom_probe_ns.saturating_sub(before.bloom_probe_ns),
         get_wall_ns: after.get_wall_ns.saturating_sub(before.get_wall_ns),
+        batch_retain_scans: after
+            .batch_retain_scans
+            .saturating_sub(before.batch_retain_scans),
     }
 }
 
 /// A fresh, empty scratch DIRECTORY under the OS temp dir (same tag+pid
 /// scheme); any stale directory is wiped first.
+/// P3-M0 (clb001), copied VERBATIM from `crates/storage/aikoql/tests/common/mod.rs`:
+/// committed `artifacts/` evidence is only rewritten when the report env is
+/// armed — a plain local suite run must never dirty committed artifacts
+/// (TESTING-PLAN-PHASE3 rule 6). Correctness asserts in the suites stay
+/// unconditional; only the report write is gated.
+pub fn report_write(path: &Path, contents: impl AsRef<[u8]>) {
+    if std::env::var("AIKOQL_REPORT_WRITE").as_deref() != Ok("1") {
+        return;
+    }
+    std::fs::write(path, contents).expect("report write");
+}
+
 pub fn dir(tag: &str) -> PathBuf {
+    // Killed runs (crash-injection children included) never reach the TLS
+    // sweep — purge their corpses at the next startup (only entries older
+    // than a day, so a concurrent live run's fresh dirs are untouched).
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(rd) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with("aikoql-v2-") {
+                continue;
+            }
+            let stale = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .is_some_and(|t| t < cutoff);
+            if stale {
+                let _ = std::fs::remove_file(e.path());
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    });
     let path = std::env::temp_dir().join(format!("aikoql-v2-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).unwrap();
@@ -128,6 +172,56 @@ pub fn dir(tag: &str) -> PathBuf {
 /// eyeballs.
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Current process RSS in KiB, copied VERBATIM from
+/// `crates/certification/src/lib.rs` — one definition of the sampler so the
+/// sfm009 bounded-memory cell measures the same quantity the certification
+/// harness does. 0 = no sampler on this platform.
+#[cfg(windows)]
+pub fn self_rss_kb() -> u64 {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Pmc {
+        cb: u32,
+        _page_faults: u32,
+        _peak_ws: usize,
+        ws: usize,
+        _rest: [usize; 6],
+    }
+    extern "system" {
+        fn GetCurrentProcess() -> *mut core::ffi::c_void;
+        // K32GetProcessMemoryInfo is a kernel32 export (default-linked);
+        // psapi's GetProcessMemoryInfo would need an explicit link attr.
+        fn K32GetProcessMemoryInfo(p: *mut core::ffi::c_void, c: *mut Pmc, cb: u32) -> i32;
+    }
+    unsafe {
+        let mut pmc = std::mem::zeroed::<Pmc>();
+        pmc.cb = std::mem::size_of::<Pmc>() as u32;
+        if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb) == 0 {
+            0
+        } else {
+            (pmc.ws / 1024) as u64
+        }
+    }
+}
+
+#[cfg(all(not(windows), unix))]
+pub fn self_rss_kb() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmRSS:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<u64>().ok())
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(all(not(windows), not(unix)))]
+pub fn self_rss_kb() -> u64 {
+    0
 }
 
 // ---------------------------------------------------------------------------

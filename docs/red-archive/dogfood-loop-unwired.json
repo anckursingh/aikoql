@@ -1,0 +1,8 @@
+{
+  "id": "dogfood-loop-unwired",
+  "pre_fix_commit": "75846d1",
+  "command": "bash -c if [ ! -f scripts/dogfood-review-loop.py ]; then echo "DOGFOOD RED: scripts/dogfood-review-loop.py absent — the review loop is not backed by kernel state (no Requirement KOs, no compiled section)"; exit 1; fi; python scripts/dogfood-review-loop.py --verify",
+  "captured_at": "2026-09-20T16:49:48Z",
+  "captured_head": "75846d137178f74ea1fd2dc182e468a23b2677d3",
+  "exit_code": 1
+}

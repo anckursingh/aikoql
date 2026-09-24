@@ -5,7 +5,9 @@
 //! locations. The windows are the §23 publication order's boundaries:
 //!
 //! FAIL_AFTER_SEGMENT_WRITE / _FSYNC — merge output written to the temp,
-//! never renamed: the pre-compact state governs, no merged segment visible.
+//! never renamed: the pre-compact state governs, no merged segment visible
+//! (P5-M39: these park inside the merge staging dir — the marker rides the
+//! published file's parent — and the reopen sweeps the residue).
 //! FAIL_AFTER_LOCATION_WRITE / _FSYNC — segments renamed (orphans), the
 //! relocation log never renamed: old placements stay authoritative.
 //! FAIL_AFTER_MANIFEST_WRITE / _FSYNC — the relocation log IS visible past
@@ -139,6 +141,31 @@ fn wait_for(path: &Path, timeout: Duration) {
     }
 }
 
+/// P5-M39 — the merge's SEGMENT windows park inside its staging
+/// directory (the park marker rides the published file's parent, and the
+/// merge publishes into `.compact-staging-*`); the LOCATION/MANIFEST/
+/// PUBLISH windows still park in the data dir itself.
+fn wait_for_staging_park(d: &Path, stage: &str, timeout: Duration) {
+    let start = Instant::now();
+    loop {
+        let found = std::fs::read_dir(d).unwrap().flatten().any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(".compact-staging-")
+                && e.path().join(stage).exists()
+        });
+        if found {
+            return;
+        }
+        assert!(
+            start.elapsed() < timeout,
+            "marker {stage} never appeared in a staging dir under {}",
+            d.display()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn child_cfg() -> Config {
     let mut cfg = Config::new(child_dir());
     cfg.l0_compact_trigger = 0; // SE2-M10 — the explicit compact's windows only
@@ -199,12 +226,13 @@ fn ci001_fail_after_segment_write() {
         &d,
         "FAIL_AFTER_SEGMENT_WRITE",
     );
-    wait_for(&d.join("FAIL_AFTER_SEGMENT_WRITE"), Duration::from_secs(60));
+    wait_for_staging_park(&d, "FAIL_AFTER_SEGMENT_WRITE", Duration::from_secs(60));
     child.kill().expect("kill child");
     child.wait().expect("wait child");
 
-    // The merged output never renamed: nothing new visible, the
-    // pre-compact state governs.
+    // The merged output never renamed out of staging: nothing new
+    // visible, the pre-compact state governs, and the reopen sweeps the
+    // staged residue.
     let current = Current::read(&d.join("CURRENT")).unwrap();
     let merged = segment_path(&d, current.manifest_generation + 1);
     assert!(!merged.exists(), "the merged segment was never published");
@@ -229,7 +257,7 @@ fn ci002_fail_after_segment_fsync() {
         &d,
         "FAIL_AFTER_SEGMENT_FSYNC",
     );
-    wait_for(&d.join("FAIL_AFTER_SEGMENT_FSYNC"), Duration::from_secs(60));
+    wait_for_staging_park(&d, "FAIL_AFTER_SEGMENT_FSYNC", Duration::from_secs(60));
     child.kill().expect("kill child");
     child.wait().expect("wait child");
 

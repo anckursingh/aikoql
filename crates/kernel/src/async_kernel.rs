@@ -16,26 +16,109 @@ use crate::transaction::kernel::{
     Evolved, Explanation, ForgetMode, Forgotten, Kernel, Lineage, Proof, RememberRequest,
     Remembered, ScoredKO, SimilarityQuery, Subject,
 };
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
+use tokio::sync::Semaphore;
+
+/// Default concurrency bound for `AsyncKernel::new`.
+const DEFAULT_PERMITS: usize = 64;
+/// Ring size for queue-wait samples — `wait_p99_ns` is the 99th percentile
+/// over the most recent `WAIT_SAMPLES` waits (a sample, not a full histogram).
+const WAIT_SAMPLES: usize = 256;
+
+/// Queue-wait metrics for the bounded async facade (TDD-RUNTIME-001).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AsyncQueueStats {
+    /// Tasks currently waiting for a permit.
+    pub waiting: usize,
+    /// Total number of waits that actually queued.
+    pub queued: u64,
+    /// Total queue-wait time in ns.
+    pub wait_ns_total: u64,
+    /// Largest single queue wait in ns.
+    pub max_wait_ns: u64,
+    /// 99th percentile of recent queue waits (ring sample) in ns.
+    pub wait_p99_ns: u64,
+}
+
+struct QueueStats {
+    waiting: AtomicUsize,
+    queued: AtomicU64,
+    wait_ns_total: AtomicU64,
+    max_wait_ns: AtomicU64,
+    samples: [AtomicU64; WAIT_SAMPLES],
+    next: AtomicUsize,
+}
+
+impl Default for QueueStats {
+    fn default() -> Self {
+        QueueStats {
+            waiting: AtomicUsize::new(0),
+            queued: AtomicU64::new(0),
+            wait_ns_total: AtomicU64::new(0),
+            max_wait_ns: AtomicU64::new(0),
+            samples: std::array::from_fn(|_| AtomicU64::new(0)),
+            next: AtomicUsize::new(0),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AsyncKernel {
     inner: Arc<Kernel>,
+    permits: Arc<Semaphore>,
+    stats: Arc<QueueStats>,
 }
 
 impl AsyncKernel {
     pub fn new(kernel: Kernel) -> Self {
-        AsyncKernel {
-            inner: Arc::new(kernel),
-        }
+        Self::bounded(kernel, DEFAULT_PERMITS)
     }
 
     pub fn from_shared(kernel: Arc<Kernel>) -> Self {
-        AsyncKernel { inner: kernel }
+        AsyncKernel {
+            inner: kernel,
+            permits: Arc::new(Semaphore::new(DEFAULT_PERMITS)),
+            stats: Arc::new(QueueStats::default()),
+        }
+    }
+
+    /// P4-M7 (TDD-RUNTIME-001): an explicit concurrency bound — at most
+    /// `permits` kernel tasks execute at once, the rest queue on the
+    /// semaphore. Permits are NOT re-entrant: a task holding one must not
+    /// await another kernel call (the sync Kernel cannot, so this holds).
+    pub fn bounded(kernel: Kernel, permits: usize) -> Self {
+        AsyncKernel {
+            inner: Arc::new(kernel),
+            permits: Arc::new(Semaphore::new(permits)),
+            stats: Arc::new(QueueStats::default()),
+        }
     }
 
     pub fn raw(&self) -> &Arc<Kernel> {
         &self.inner
+    }
+
+    pub fn queue_stats(&self) -> AsyncQueueStats {
+        let s = &self.stats;
+        let n = s.next.load(Ordering::Relaxed).min(WAIT_SAMPLES);
+        let mut samples: Vec<u64> = s.samples[..n]
+            .iter()
+            .map(|a| a.load(Ordering::Relaxed))
+            .collect();
+        samples.sort_unstable();
+        let p99 = if n == 0 {
+            0
+        } else {
+            samples[(n - 1) * 99 / 100]
+        };
+        AsyncQueueStats {
+            waiting: s.waiting.load(Ordering::Relaxed),
+            queued: s.queued.load(Ordering::Relaxed),
+            wait_ns_total: s.wait_ns_total.load(Ordering::Relaxed),
+            max_wait_ns: s.max_wait_ns.load(Ordering::Relaxed),
+            wait_p99_ns: p99,
+        }
     }
 
     async fn run<T, F>(&self, f: F) -> KResult<T>
@@ -43,10 +126,32 @@ impl AsyncKernel {
         T: Send + 'static,
         F: FnOnce(Arc<Kernel>) -> KResult<T> + Send + 'static,
     {
+        let permit = {
+            let start = std::time::Instant::now();
+            let s = &self.stats;
+            s.waiting.fetch_add(1, Ordering::Relaxed);
+            let p = self
+                .permits
+                .acquire()
+                .await
+                .map_err(|e| KError::Store(format!("async acquire: {}", e)))?;
+            let w = start.elapsed().as_nanos() as u64;
+            s.waiting.fetch_sub(1, Ordering::Relaxed);
+            if w > 0 {
+                s.queued.fetch_add(1, Ordering::Relaxed);
+                s.wait_ns_total.fetch_add(w, Ordering::Relaxed);
+                s.max_wait_ns.fetch_max(w, Ordering::Relaxed);
+                let i = s.next.fetch_add(1, Ordering::Relaxed) % WAIT_SAMPLES;
+                s.samples[i].store(w, Ordering::Relaxed);
+            }
+            p
+        };
         let k = self.inner.clone();
-        tokio::task::spawn_blocking(move || f(k))
+        let out = tokio::task::spawn_blocking(move || f(k))
             .await
-            .map_err(|e| KError::Store(format!("async join: {}", e)))?
+            .map_err(|e| KError::Store(format!("async join: {}", e)))?;
+        drop(permit); // released only after the kernel work completes
+        out
     }
 
     pub async fn remember(&self, req: RememberRequest) -> KResult<Remembered> {
@@ -149,6 +254,7 @@ mod tests {
     use crate::knowledge::kom::{Metadata, Value};
     use crate::storage::store::MemoryEngine;
     use crate::transaction::kernel::ManualClock;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn meta(t: &str) -> Metadata {
         Metadata {
@@ -182,5 +288,101 @@ mod tests {
 
         let proof = ak.prove(alice.clone(), r.koid).await.unwrap();
         assert!(proof.chain_valid);
+    }
+
+    // -----------------------------------------------------------------------
+    // P4-M7 (TDD-RUNTIME-001) — run001: overload is bounded + measurable.
+    // RED state: `bounded`/`queue_stats`/`wait_p99_ns` do not exist yet.
+    // -----------------------------------------------------------------------
+
+    /// `permits` tasks may execute kernel work at once; the rest queue on
+    /// the semaphore and drain — overload creates bounded concurrent work,
+    /// never unbounded spawn_blocking depth.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn run001_concurrency_is_bounded_by_permits() {
+        let clock = Arc::new(ManualClock::new(5_000));
+        let k = Kernel::open(Arc::new(MemoryEngine::new()), clock, 1).unwrap();
+        let ak = AsyncKernel::bounded(k, 2);
+        let current = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let ak = ak.clone();
+            let current = current.clone();
+            let peak = peak.clone();
+            tasks.push(tokio::spawn(async move {
+                ak.run(move |_| {
+                    let c = current.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(c, Ordering::SeqCst);
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    current.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            }));
+        }
+        for t in tasks {
+            t.await.unwrap();
+        }
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            2,
+            "only `permits` kernel tasks may run at once"
+        );
+        let s = ak.queue_stats();
+        assert_eq!(s.waiting, 0, "the queue drains — no leaked permits");
+    }
+
+    /// Overload: with both permits held by slow tasks, the queued tasks
+    /// record a measurable, bounded queue wait (p99 above zero, under 1 s
+    /// here) and complete once the blockers finish.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn run001_overload_queue_wait_is_measured_and_bounded() {
+        let clock = Arc::new(ManualClock::new(5_000));
+        let k = Kernel::open(Arc::new(MemoryEngine::new()), clock, 1).unwrap();
+        let ak = AsyncKernel::bounded(k, 2);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut blockers = Vec::new();
+        for _ in 0..2 {
+            let ak = ak.clone();
+            let tx = tx.clone();
+            blockers.push(tokio::spawn(async move {
+                ak.run(move |_| {
+                    let _ = tx.send(());
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            }));
+        }
+        rx.recv().unwrap();
+        rx.recv().unwrap(); // both permits are now held by sleeping tasks
+
+        let mut queued = Vec::new();
+        for _ in 0..4 {
+            let ak = ak.clone();
+            queued.push(tokio::spawn(async move {
+                ak.run(|_| Ok(())).await.unwrap();
+            }));
+        }
+        for t in queued {
+            t.await.unwrap();
+        }
+        for t in blockers {
+            t.await.unwrap();
+        }
+
+        let s = ak.queue_stats();
+        assert!(s.queued >= 4, "every overflow task counted a queue wait");
+        assert!(s.wait_ns_total > 0, "queue wait is measured");
+        let p99 = s.wait_p99_ns;
+        assert!(p99 > 0, "p99 queue wait is measurable under overload");
+        assert!(
+            p99 < 1_000_000_000 && s.max_wait_ns < 1_000_000_000,
+            "queue wait stays bounded ({p99} ns) — no unbounded blocked work"
+        );
+        assert_eq!(s.waiting, 0, "the overload fully drains");
     }
 }

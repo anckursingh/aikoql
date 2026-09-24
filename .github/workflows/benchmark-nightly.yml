@@ -7,6 +7,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # P3-M0: the report legs below regenerate committed artifacts/ files —
+  # arm the report writer (TESTING-PLAN-PHASE3 rule 6). Nothing is committed
+  # from CI; the regenerated files land in the uploaded artifacts only.
+  AIKOQL_REPORT_WRITE: 1
 
 # CodeQL actions/missing-workflow-permissions: benchmark only reads the repo
 # (artifact upload/download does not need contents: write).
@@ -14,6 +18,34 @@ permissions:
   contents: read
 
 jobs:
+  # PR6-F5 (P1-5): randomized-order run of the PR test set + residue
+  # sweepers. nextest shuffles every test (the printed seed + the retained
+  # run log reproduce a night's failure locally); the sweepers bracket the
+  # run and fail on any listener / temp dir / tree mutation it leaves
+  # behind — the cross-test interference classes caught out-of-band of the
+  # PR loop. Gate: scripts/check-shuffle-wiring.sh (dag job in ci.yml).
+  shuffle:
+    name: Randomized-order run + residue sweepers
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Residue sweep — arm
+        run: bash scripts/check-residue.sh before
+      - name: Randomized-order run
+        run: bash scripts/run-shuffle.sh
+        timeout-minutes: 90
+      # Always run: a failed shuffle's residue is exactly what may explain
+      # the failure (e.g. a test leaked a listener a later test hit).
+      - name: Residue sweep — assert
+        if: always()
+        run: bash scripts/check-residue.sh after
+
   benchmark:
     name: Run Benchmarks + Regression Check
     runs-on: ubuntu-latest
@@ -60,6 +92,21 @@ jobs:
         run: KSE19_NIGHTLY=1 cargo test --release -p aikoql-storage --test kse19_resource
         timeout-minutes: 90
 
+      # PR6-F2 (P0-2): the gated cells with no other ungated home (the
+      # registry's ungated_by = "none" entries) — run ungated so their
+      # limits can't silently regress. Default regime; where a cell's
+      # sampler is platform-gated the path still executes end to end.
+      - name: Gated cells ungated (registry)
+        run: cargo test --release --workspace -- $(bash scripts/skip-list.sh --ungated)
+        timeout-minutes: 45
+
+      # P3-M2 met007: write-path instrumentation overhead cell (design §21
+      # atomics) — reported to write-stats-overhead.md, lenient sanity
+      # assert only. Strict opt-in.
+      - name: P3-M2 write-stats overhead cell (met007)
+        run: P3M2_ATTRIB=1 cargo test --release -p aikoql-storage-v2 --test kse_m7_v2_workloads v2_p3m2_write_stats_overhead
+        timeout-minutes: 30
+
       # R14: run all criterion benches, save results under the `ci` baseline.
       # Bench targets are enumerated so the criterion flags don't reach
       # libtest bench targets ("Unrecognized option: 'save-baseline'").
@@ -97,4 +144,59 @@ jobs:
           name: bench-baseline
           path: target/criterion/**/ci/*.json
           overwrite: true
+          if-no-files-found: error
+
+  # P5-M26: the FULL competitor scale harness (100k + 1M + MCP column +
+  # multi-op txn) lives here — the laptop runs only --quick, the big run is
+  # a scheduled/manual job (user directive 2026-09-18). PG is a service
+  # container (bench/bench @ 5433, the harness's PG_DSN); the aikoql sides
+  # use the repo's OWN release SDK (maturin develop) and release aikoql-mcp,
+  # so the fix under test is what gets measured. The result lands in the
+  # uploaded artifact — nothing is committed (P3-M0 rule 6). 360 = the
+  # GitHub-hosted job cap; if the 1M section ever needs more, split the
+  # sections into separate jobs.
+  competitor-scale:
+    name: Competitor scale harness (100k + 1M)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    services:
+      pg:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bench
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: bench
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release aikoql-mcp + native SDK
+        run: |
+          set -euo pipefail
+          cargo build --release -p aikoql-mcp
+          python -m venv .venv
+          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          cd "$GITHUB_WORKSPACE"
+      - name: Run the full scale harness (100k + 1M + MCP + txn)
+        run: |
+          set -euo pipefail
+          .venv/bin/python scripts/competitor_bench/scale.py \
+            --out "$RUNNER_TEMP/scale-result.json"
+          cp "$RUNNER_TEMP/scale-result.json" scale-result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scale-result
+          path: scale-result.json
           if-no-files-found: error

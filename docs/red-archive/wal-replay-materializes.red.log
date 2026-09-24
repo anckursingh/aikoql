@@ -1,0 +1,23 @@
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.88s
+     Running tests\wal_replay_streaming.rs (target\debug\deps\wal_replay_streaming-4b55f0b201166b62.exe)
+
+running 1 test
+test recovery_replays_without_materializing_frames ... FAILED
+
+failures:
+
+---- recovery_replays_without_materializing_frames stdout ----
+
+thread 'recovery_replays_without_materializing_frames' (46940) panicked at crates\storage\aikoql-v2\tests\wal_replay_streaming.rs:93:5:
+recovery peaked at 1595041 live bytes over a 527360-byte WAL (budget 1318400) — the frames are being materialized on top of the read buffer and the memtable
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    recovery_replays_without_materializing_frames
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+error: test failed, to rerun pass `-p aikoql-storage-v2 --test wal_replay_streaming`
+EXIT=101

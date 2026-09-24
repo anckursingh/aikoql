@@ -45,14 +45,17 @@ def mcp_server():
     # CodeQL py/insecure-temporary-file: mkstemp → non-guessable name, 0600.
     fd, db = tempfile.mkstemp(suffix=".redb")
     os.close(fd)
+    # P3-M1: TCP mode requires --tcp-token TOKEN[:TENANT[:ROLES]]; the bare
+    # token rides initialize params, the spec's roles come from the server side.
+    token = "test-token"
     proc = subprocess.Popen(
-        [binary, "--listen", f"127.0.0.1:{port}", db],
+        [binary, "serve", db, "--listen", f"127.0.0.1:{port}", "--tcp-token", f"{token}::admin"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     time.sleep(0.5)  # Wait for server to start.
 
-    yield f"127.0.0.1:{port}", db
+    yield f"127.0.0.1:{port}", db, token
 
     proc.terminate()
     try:
@@ -69,9 +72,9 @@ class TestMcpClient:
     """Test the low-level MCP client."""
 
     def test_connect_and_initialize(self, mcp_server):
-        host_port, _ = mcp_server
+        host_port, _, token = mcp_server
         host, _, port = host_port.partition(":")
-        c = McpClient(host, int(port)).connect()
+        c = McpClient(host, int(port), token).connect()
         try:
             result = c.initialize()
             assert result["protocolVersion"] == "2024-11-05"
@@ -80,9 +83,9 @@ class TestMcpClient:
             c.close()
 
     def test_remember_and_get(self, mcp_server):
-        host_port, _ = mcp_server
+        host_port, _, token = mcp_server
         host, _, port = host_port.partition(":")
-        c = McpClient(host, int(port)).connect()
+        c = McpClient(host, int(port), token).connect()
         try:
             c.initialize()
             r = c.remember("Task", {"title": "Fix login bug", "priority": 1},
@@ -97,14 +100,18 @@ class TestMcpClient:
             c.close()
 
     def test_session_identity(self, mcp_server):
-        host_port, _ = mcp_server
+        host_port, _, token = mcp_server
         host, _, port = host_port.partition(":")
-        c = McpClient(host, int(port)).connect()
+        c = McpClient(host, int(port), token).connect()
         try:
             c.initialize()
-            # Establish session.
-            sess = c.session_init("pm-agent-7", run_id="run-42", roles=["admin"])
-            assert sess["session"]["agent_id"] == "pm-agent-7"
+            # P3-M1: TCP identity is server-assigned by --tcp-token
+            # (agent_id "tcp-agent", roles from the token); only run_id is
+            # per-session client input.
+            sess = c.session_init(run_id="run-42")
+            assert sess["session"]["agent_id"] == "tcp-agent"
+            assert sess["session"]["run_id"] == "run-42"
+            assert sess["session"]["roles"] == ["admin"]
             assert sess["established"] is True
 
             # Create without explicit subject — session identity used.
@@ -114,9 +121,9 @@ class TestMcpClient:
             c.close()
 
     def test_health(self, mcp_server):
-        host_port, _ = mcp_server
+        host_port, _, token = mcp_server
         host, _, port = host_port.partition(":")
-        c = McpClient(host, int(port)).connect()
+        c = McpClient(host, int(port), token).connect()
         try:
             c.initialize()
             h = c.health()
@@ -128,9 +135,9 @@ class TestMcpClient:
             c.close()
 
     def test_structured_error(self, mcp_server):
-        host_port, _ = mcp_server
+        host_port, _, token = mcp_server
         host, _, port = host_port.partition(":")
-        c = McpClient(host, int(port)).connect()
+        c = McpClient(host, int(port), token).connect()
         try:
             c.initialize()
             # Try to get a nonexistent KOID.
@@ -147,8 +154,8 @@ class TestAgentUnified:
     """Test the unified Agent.connect() interface with MCP mode."""
 
     def test_agent_connect_server_mode(self, mcp_server):
-        host_port, db_path = mcp_server
-        a = Agent.connect(host_port)
+        host_port, db_path, token = mcp_server
+        a = Agent.connect(host_port, token=token)
         try:
             assert a.mode == "mcp"
             r = a.remember("Task", {"title": "Unified test"}, subject="alice")
@@ -159,8 +166,8 @@ class TestAgentUnified:
             a.close()
 
     def test_agent_health(self, mcp_server):
-        host_port, _ = mcp_server
-        a = Agent.connect(host_port)
+        host_port, _, token = mcp_server
+        a = Agent.connect(host_port, token=token)
         try:
             h = a.health()
             assert h["status"] == "healthy"
@@ -172,9 +179,9 @@ class TestStreaming:
     """Test aikoql/stream incremental results (MRFC-0040 #5)."""
 
     def test_aikoql_stream(self, mcp_server):
-        host_port, _ = mcp_server
+        host_port, _, token = mcp_server
         host, _, port = host_port.partition(":")
-        c = McpClient(host, int(port)).connect()
+        c = McpClient(host, int(port), token).connect()
         try:
             c.initialize()
 

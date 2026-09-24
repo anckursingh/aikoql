@@ -1,0 +1,9 @@
+{
+  "id": "auth-surface-5s-flake",
+  "pre_fix_commit": "4ee7bb1",
+  "command": "cargo test --workspace --all-features (live suite run, suite-p14e — auth_surface binary)",
+  "captured_at": "2026-09-20T13:16:00Z",
+  "captured_head": "4ee7bb11e50d6f1259a6cbadaa03bc7cbea144ef",
+  "exit_code": 101,
+  "capture_note": "Timing RED, extracted from the live full-suite run — the class P0-1's non-zero-exit assertion cannot re-capture deterministically: the fail-closed guard itself is correct (verified: the child exits 2 with the exact refusal text in isolation and under a simulated 9091 listener). The RED is the test's own 5s wall-clock deadline, which a debug-build child on a busy Windows laptop can miss (16.54s binary = both 5s deadlines + teardown); the follow-up commit raises the deadline to 30s and moves the probe off the DEFAULT metrics port (a real local server held 127.0.0.1:9091 — the 2026-09-20 corpse — during two of the three flaked windows)."
+}

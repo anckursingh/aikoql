@@ -101,6 +101,20 @@ fn segment_file_count(d: &Path) -> usize {
         .count()
 }
 
+/// P5-M39 — the merge staging directories (`.compact-staging-*`): where
+/// an un-published merge's output lives, swept by the next open.
+fn staging_dirs(d: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(d)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(".compact-staging-"))
+        })
+        .collect()
+}
+
 /// Reopen after the kill: every key holds its expected value, nothing was
 /// acked that is lost, nothing phantom — and the sequence resumes at 121.
 fn verify(d: &Path) {
@@ -148,8 +162,10 @@ fn compact_crash_after_segment_before_manifest() {
     child.kill().expect("kill child");
     child.wait().expect("wait child");
 
-    // The old manifest still governs; the parked L1 output is the one
-    // orphan segment on disk.
+    // The old manifest still governs; the parked L1 output sits in its
+    // staging directory (P5-M39 — the merge never writes into the real
+    // namespace before publication), and the reopen must sweep it:
+    // nothing orphaned, the same logical state.
     let current = Current::read(&d.join("CURRENT")).unwrap();
     let manifest = Manifest::read(&manifest_path(&d, current.manifest_generation)).unwrap();
     assert!(
@@ -162,10 +178,18 @@ fn compact_crash_after_segment_before_manifest() {
     );
     assert_eq!(
         segment_file_count(&d),
-        manifest.segments.len() + 1,
-        "the parked L1 output is the one orphan"
+        manifest.segments.len(),
+        "no orphan lands in the real namespace — the staged output lives in .compact-staging-*"
+    );
+    assert!(
+        !staging_dirs(&d).is_empty(),
+        "the parked merge's staging directory is on disk"
     );
     verify(&d);
+    assert!(
+        staging_dirs(&d).is_empty(),
+        "the reopen swept the staged residue"
+    );
 }
 
 #[test]

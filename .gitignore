@@ -56,8 +56,24 @@ test-*.db
 --version
 .aikoql/
 
+# P1-21: the mcp default path is ./aikoql-v2 in the CWD — dev runs from the
+# repo root leave store shells behind.
+/aikoql-v2/
+/kb/
+# P1-8: the dogfood loop's per-run extract residue (regenerates each full).
+/kb.artifacts/
+# P1-8: dogfood machine state (KOIDs are kb-specific, not portable) — the
+# committable artifact is the compiled section inside the doc itself.
+docs/PR6-TDD-DISPOSITIONS.state.json
+
 # npm launcher / serve runtime artifacts
 *.log
+# P0-1: the RED-archive capture logs are reproducible evidence artifacts,
+# not runtime noise — tracked so check-red-archives.sh can validate them.
+!docs/red-archive/*.red.log
 /serve
 serve.artifacts/
 npm-publish/memory/
+
+# local commit-message scratch file
+.commit-msg.txt

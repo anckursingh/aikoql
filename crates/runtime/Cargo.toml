@@ -8,7 +8,25 @@ repository.workspace = true
 
 [dependencies]
 aikoql-kernel = { path = "../kernel" }
+aikoql-compiler = { path = "../compiler" }
+# PR6-005 — the ONE authoritative backend decision path (backend.rs):
+# the storage openers live here so every production opener routes through
+# the same detect/open_engine (storage crates depend on kernel only — no
+# cycle).
+aikoql-storage = { path = "../storage/aikoql" }
+aikoql-storage-v2 = { path = "../storage/aikoql-v2" }
+sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 
 [dev-dependencies]
 aikoql-semantic = { path = "../engines/semantic" }
+aikoql-graph = { path = "../engines/graph" }
+# P5-M17b: the cbo-default production-shape pin drives the REAL
+# IndexMaintainer (no manual catch-up helper).
+aikoql-scheduler = { path = "../engines/scheduler" }
+proptest = "1"
+# P5-M13 (ND-13): machine-readable hybrid benchmark report (h7).
+serde_json = "1"
+# P5-M23 (ann006 RED): the live-dim cost pin drives a real HnswVectorIndex
+# through the production maintainer.
+aikoql-vector = { path = "../engines/vector" }
