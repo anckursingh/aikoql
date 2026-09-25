@@ -186,6 +186,92 @@ jobs:
           overwrite: true
           if-no-files-found: error
 
+  # CI-07 — the hybrid knowledge workload rides the nightly tier
+  # (TESTING-PLAN §5): bench.py's full matrix incl. the knowledge_query
+  # cell — identity resolution -> metadata filter -> traversal -> semantic
+  # retrieval -> ranking end-to-end — measured against the composed
+  # stacks (PG+pgvector+app traversal, Mongo+vector via qdrant,
+  # Neo4j+vector). §11 fairness: qdrant alone carries no_analog for the
+  # cell (a vector store is not a knowledge stack). The result lands in
+  # the uploaded artifact — nothing is committed (P3-M0 rule 6); the
+  # laptop re-stamps the published report from the same harness.
+  competitor-matrix:
+    name: Competitor matrix (hybrid knowledge workload)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    services:
+      pg:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: bench
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: bench
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/benchmarkpass
+        ports:
+          - 7474:7474
+          - 7687:7687
+        options: >-
+          --health-cmd "wget --no-check-certificate -qO- http://localhost:7474 >/dev/null || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+        options: >-
+          --health-cmd "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ping:1}).ok ? 0 : 2)'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release SDK (maturin develop)
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client pymongo
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          cd "$GITHUB_WORKSPACE"
+      - name: Run the competitor matrix (hybrid knowledge cell)
+        run: .venv/bin/python scripts/competitor_bench/bench.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: competitor-matrix
+          path: docs/certification/competitors/result.json
+          if-no-files-found: error
+
   # P5-M0 (gd001) — the 1M gate-5 ratio (fresh vs committed v2). Fires on
   # every PR/push touching the protected paths AND on the weekly cron
   # (the nightly-tier 1M self-regression).

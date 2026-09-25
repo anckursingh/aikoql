@@ -27,7 +27,8 @@
 # benchmark owner) and the perf smoke carries 3 of the review's 5 cells
 # (CI-03 grows it to W1–W5). The tests flip green through CI-02/CI-03;
 # CI-05 adds test 6 (build jobs cached), CI-06 adds test 7 (required
-# checks never path-filter).
+# checks never path-filter), CI-07 adds test 8 (the hybrid knowledge
+# workload wired).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -236,7 +237,7 @@ fi
 # again. The dependency-dag job never compiles (grep-only) and the
 # docker job builds inside the image — neither is a build job.
 for spec in "ci check test-linux lint build-release connectors python-sdk perf-smoke coverage-floor" \
-            "benchmark shuffle benchmark guard self-regression-main competitor-scale" \
+            "benchmark shuffle benchmark guard self-regression-main competitor-scale competitor-matrix" \
             "release windows linux-gnu linux-musl macos-intel macos-arm pypi-publish"; do
   wf="${spec%% *}"
   for job in ${spec#* }; do
@@ -270,6 +271,30 @@ done
 for gone in crates/compiler crates/runtime; do
   if grep -q "'$gone" "$BENCH"; then
     echo "ARCH: $BENCH trigger paths still carry $gone — outside the CI-06 protected set" >&2
+    fail=1
+  fi
+done
+
+# workflow test 8 — test_hybrid_knowledge_workload_wired (CI-07): the
+# flagship hybrid knowledge-query cell (identity resolution -> metadata
+# filter -> traversal -> semantic retrieval -> ranking end-to-end) lives
+# in bench.py, and the nightly competitor-matrix job runs the harness
+# against the composed stacks (pgvector PG, Neo4j, qdrant, Mongo).
+if ! grep -q 'knowledge_query' scripts/competitor_bench/bench.py; then
+  echo "ARCH: bench.py lacks the knowledge_query cell (CI-07)" >&2
+  fail=1
+fi
+if ! grep -qE '^  competitor-matrix:' "$BENCH"; then
+  echo "ARCH: $BENCH lacks the competitor-matrix job (CI-07)" >&2
+  fail=1
+fi
+if ! sed -n '/^  competitor-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q 'competitor_bench/bench.py'; then
+  echo "ARCH: the competitor-matrix job must run bench.py (CI-07)" >&2
+  fail=1
+fi
+for img in pgvector/pgvector neo4j:5-community qdrant/qdrant mongo:7; do
+  if ! sed -n '/^  competitor-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q "$img"; then
+    echo "ARCH: the competitor-matrix job lacks the composed-stack image: $img (CI-07)" >&2
     fail=1
   fi
 done
