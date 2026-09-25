@@ -213,6 +213,24 @@ STORAGE_REGRESSION=1m`) — a pin reference is not a run. RED archived as
 `ci02-benchmark-owner-missing` (exit 1 at ef1a5b1: the 1M/competitor run
 legs lived in 2 files, the owner absent).
 
+CI-03 shipped 2026-09-25 — `coverage-floor` + `perf-smoke` folded into
+ci.yml and the smoke grows to the review's W1–W5. Both jobs are always-run
+with a fast exit on non-matching paths (the base-sha diff; the fetch
+failure falls through to the full leg) — a path-gated required workflow
+skips and a required skipped check pends forever (§16). The smoke cells:
+W1 point lookup + W2 write throughput + W3 scan (the 2K matrix rows under
+`STORAGE_PERF_SMOKE=1` — KO get, ingestion mean-commit-wall, type scan),
+W4 hot-cache (SE2M11 hot-head), W5 small compaction (NEW
+`compaction_smoke` — one merge of two 25K-key segments under a counting
+allocator: wall + allocs, stamped with the tested HEAD), plus the
+self-asserting recall cell; all seven budgeted at the existing 3× vs the
+committed baseline (4 new cells measured on first genuine run). The dag's
+SMOKE/COV pins and the arch gate's test 4 re-point to the ci.yml job keys
+and a gone-check keeps the old files merged away; test 2's sweep is now
+`ci release`. RED archived as `ci03-two-specialized-workflows` (exit 1 at
+5919fdd: both specialized workflows existed; the gate flips to exit 0 with
+the fold — jobs present, files gone).
+
 ### Phase L — correctness matrices (review 1), launch sequence
 
 (L-00 is done this session — the skip-drift gate is comment-aware, and a
