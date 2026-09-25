@@ -28,7 +28,7 @@
 # (CI-03 grows it to W1–W5). The tests flip green through CI-02/CI-03;
 # CI-05 adds test 6 (build jobs cached), CI-06 adds test 7 (required
 # checks never path-filter), CI-07 adds test 8 (the hybrid knowledge
-# workload wired).
+# workload wired), CI-08 adds test 9 (reproducible results + reports).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -298,6 +298,41 @@ for img in pgvector/pgvector neo4j:5-community qdrant/qdrant mongo:7; do
     fail=1
   fi
 done
+
+# workflow test 9 — test_reproducible_results_and_reports (CI-08): the §13
+# schema (cpu/mem/disk/environment + harness-SHA, enforced by
+# artifact_schema.validate_competitor), the §18 version pins (no :latest
+# anywhere the harness or the job names images), and the §14 report trio
+# (json/md/csv — the csv leg written by bench.py and uploaded by the job).
+if ! grep -q 'cpu_seconds' scripts/competitor_bench/bench.py; then
+  echo "ARCH: bench.py lacks the §13 cpu_seconds field (CI-08)" >&2
+  fail=1
+fi
+if ! grep -q 'result.csv' scripts/competitor_bench/bench.py; then
+  echo "ARCH: bench.py lacks the §14 csv report leg (CI-08)" >&2
+  fail=1
+fi
+if ! grep -q 'validate_competitor' scripts/artifact_schema.py; then
+  echo "ARCH: artifact_schema.py lacks the §13 competitor validator (CI-08)" >&2
+  fail=1
+fi
+if grep -q ':latest' scripts/competitor_bench/containers.sh; then
+  echo "ARCH: containers.sh carries an unpinned :latest image (§18, CI-08)" >&2
+  fail=1
+fi
+matrix=$(sed -n '/^  competitor-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH")
+if printf '%s\n' "$matrix" | grep -q ':latest'; then
+  echo "ARCH: the competitor-matrix job carries an unpinned :latest image (§18, CI-08)" >&2
+  fail=1
+fi
+if ! printf '%s\n' "$matrix" | grep -q 'artifact_schema.py docs/certification/competitors/result.json'; then
+  echo "ARCH: the competitor-matrix job must schema-validate its artifact (§13, CI-08)" >&2
+  fail=1
+fi
+if ! printf '%s\n' "$matrix" | grep -q 'result.csv'; then
+  echo "ARCH: the competitor-matrix job must upload the §14 csv leg (CI-08)" >&2
+  fail=1
+fi
 
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"

@@ -229,7 +229,9 @@ jobs:
           --health-timeout 5s
           --health-retries 20
       qdrant:
-        image: qdrant/qdrant:latest
+        # CI-08 (§18): pinned competitor version — explicit tags only, the
+        # digest the run measured lands in result.json's engine_versions.
+        image: qdrant/qdrant:v1.19.1
         ports:
           - 6333:6333
         options: >-
@@ -266,10 +268,17 @@ jobs:
           cd "$GITHUB_WORKSPACE"
       - name: Run the competitor matrix (hybrid knowledge cell)
         run: .venv/bin/python scripts/competitor_bench/bench.py
+      # CI-08 (§13/§18/§14): the nightly artifact must satisfy the same
+      # schema contract the laptop evidence does — fresh at the merge ref,
+      # §13 fields complete, §18 digests recorded where measurable.
+      - name: Schema-validate the competitor artifact
+        run: .venv/bin/python scripts/artifact_schema.py docs/certification/competitors/result.json
       - uses: actions/upload-artifact@v4
         with:
           name: competitor-matrix
-          path: docs/certification/competitors/result.json
+          path: |
+            docs/certification/competitors/result.json
+            docs/certification/competitors/result.csv
           if-no-files-found: error
 
   # P5-M0 (gd001) — the 1M gate-5 ratio (fresh vs committed v2). Fires on

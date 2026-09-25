@@ -1,6 +1,6 @@
 # AIKOQL vs competitors — benchmark report (P5-M14 supplement)
 
-**2026-09-16** · **re-stamped 2026-09-15** · **M17 scale re-stamp 2026-09-16 (`3152c5e`)** · **CI-07 hybrid-workload re-stamp 2026-09-25** · results: [`result.json`](result.json) · harness: `scripts/competitor_bench/bench.py` + [`scale.py`](../../../scripts/competitor_bench/scale.py) · measured at commit `c4931ed`, re-measured at `dc42b16` (release SDK build)
+**2026-09-16** · **re-stamped 2026-09-15** · **M17 scale re-stamp 2026-09-16 (`3152c5e`)** · **CI-07 hybrid-workload re-stamp 2026-09-25** · **CI-08 reproducible-results re-stamp 2026-09-25** · results: [`result.json`](result.json) + [`result.csv`](result.csv) · harness: `scripts/competitor_bench/bench.py` + [`scale.py`](../../../scripts/competitor_bench/scale.py) · measured at commit `c4931ed`, re-measured at `dc42b16` (release SDK build)
 
 This is a **published report, not a CI gate** (the ND-14 acceptance: competitor
 comparisons ship as reports). Same deterministic dataset in five engines (CI-07
@@ -198,6 +198,78 @@ workload run): aikoql 142 MB RSS / 2.6 MB disk / 2.5 s ingest · PG 67 MB /
   the Mongo mirror's point ids are the note indexes (qdrant accepts only
   unsigned-int/UUID ids), and the aikoql store path is handed to the SDK
   nonexistent (the v2 store adopts no existing directory).
+
+## CI-08 — reproducible results + reports (2026-09-25)
+
+The launch plan's §13/§14/§18 proposition: every artifact this report
+publishes is machine-checked against one schema contract, the competitor
+stacks are version-pinned, and the report ships as a trio.
+
+### §13 — the schema, enforced by `artifact_schema.py`
+
+`python scripts/artifact_schema.py docs/certification/competitors/result.json`
+validates the artifact with **named errors** (path + field + §, never a
+KeyError) and the freshness stamp (`environment.git_sha` must equal the
+checked-out HEAD — a stale artifact can never be re-published silently).
+The contract:
+
+- **per engine column** — `cpu_seconds`, `memory_mb`, `disk_bytes`,
+  `ingest_s`, and the 7 workload cells; every n>0 cell carries
+  p50/p95/p99 + throughput. aikoql's `cpu_seconds` must be measured
+  in-process; the container columns may be `null` on runners without
+  docker access (GitHub runners cannot probe their service containers —
+  the laptop is the canonical measuring host, and the arch gate pins the
+  workflow tags instead).
+- **environment** — os / cpu / ram_mb / cache_state / harness_sha (plus
+  the freshness `git_sha`).
+- **config + dataset + seed** — the harness knobs and dataset shape.
+- **§18 engine_versions** — aikoql's SDK version and, where the measuring
+  host could probe, `{image, digest}` per composed stack.
+
+The CI `competitor-matrix` job runs the same validator on its nightly
+artifact, so the nightly evidence satisfies the same contract the laptop
+evidence does. The schema pins live in `scripts/test_artifact_schema.py`
+(23 pins: 14 original + 9 competitor — happy paths, every §13 omission,
+the §18 digest rule, and the main() dispatch).
+
+### §18 — pinned competitor versions
+
+| stack | image | digest (measured) | engine |
+|---|---|---|---|
+| PostgreSQL (composed) | `pgvector/pgvector:pg16` | `ccc6e83d…` | PostgreSQL 16.15 + pgvector 0.8.6 |
+| Neo4j | `neo4j:5-community` | `22ec5cd0…` | Neo4j 5.26.30 |
+| Qdrant | `qdrant/qdrant:v1.19.1` | `12364fe8…` | Qdrant 1.19.1 |
+| MongoDB (composed) | `mongo:7` | `b6421fd6…` | MongoDB 7.0.40 |
+
+No `:latest` anywhere: the workflow's qdrant pin moved to `v1.19.1`
+(verified the same digest as what `:latest` pulled), `containers.sh`
+carries the same explicit tags, and the arch-gate workflow test 9 fails
+the gate on any unpinned image in either file. The digests above are what
+this laptop pulled — the exact builds every number in this report belongs
+to. (Version-tracked tags like `pg16` still move upstream; the recorded
+digest pins the measured build regardless.)
+
+### §13 at this stamp — the resource columns
+
+| engine | cpu_s | mem MB | disk MB | knowledge_query p50 ms |
+|---|---|---|---|---|
+| aikoql | 7.56 | 145 | 2.7 | 13.37 |
+| PostgreSQL | 0.90 | 68 | 66.0 | 10.16 |
+| Neo4j | 7.69 | 1 139 | 542.1 | 58.09 |
+| Qdrant | 0.38 | 195 | 1.1 | — (no_analog) |
+| MongoDB | 0.92 | 135 | 315.8 | 24.12 |
+
+CPU is the cgroup delta across the engine's bench call (v1 `cpuacct.usage`
+fallback — Docker Desktop's WSL2 VM mounts cgroup v1, not v2; the v1/v2
+probe is in `container_cpu_usec`). Environment at this stamp: Windows 11
+(`Windows-11-10.0.26200-SP0`, AMD64 Family 23), 30 657 MB RAM,
+cache_state `fresh-store, warmup-per-cell`.
+
+### §14 — the report trio
+
+`result.json` (the machine-checked artifact), `result.csv` (the flat
+engine × workload matrix — one row per cell, both legs uploaded by the
+nightly job), and this markdown report. One harness writes all three.
 
 ## Method
 

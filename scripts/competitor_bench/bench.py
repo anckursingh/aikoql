@@ -38,9 +38,11 @@ Known caveats (documented in REPORT.md, not hidden):
     fsync — the same single-op surface the db-oltp suite certifies.
 """
 
+import csv
 import json
 import math
 import os
+import platform
 import random
 import shutil
 import subprocess
@@ -182,6 +184,9 @@ def run_engine(connect, close, builders, n=N):
 # ---------------------------------------------------------------- aikoql
 
 def bench_aikoql(ds, kb, n=N):
+    # CI-08 (§13): in-process CPU is the engine's cpu_seconds — the SDK and
+    # kernel threads run inside this process.
+    cpu0 = time.process_time()
     agent = Agent.connect(str(kb))
     note_koids, event_koids = [], []
     t0 = time.perf_counter()
@@ -348,7 +353,9 @@ def bench_aikoql(ds, kb, n=N):
 
     rss_kb = psutil.Process(os.getpid()).memory_info().rss // 1024
     disk = sum(f.stat().st_size for f in kb.rglob("*") if f.is_file())
-    return {"workloads": workloads, "rss_kb": rss_kb, "disk_bytes": disk,
+    return {"workloads": workloads, "rss_kb": rss_kb,
+            "memory_mb": rss_kb // 1024, "disk_bytes": disk,
+            "cpu_seconds": round(time.process_time() - cpu0, 3),
             "ingest_s": round(ingest_s, 2)}
 
 
@@ -360,6 +367,7 @@ PG_DSN = "host=127.0.0.1 port=5433 dbname=bench user=bench password=bench"
 
 
 def bench_pg(ds):
+    cpu0 = container_cpu_usec("bench-pg")
     conn = psycopg.connect(PG_DSN)
     conn.autocommit = True
     conn.execute("DROP TABLE IF EXISTS notes")
@@ -508,8 +516,13 @@ def bench_pg(ds):
         [build_read, build_write, build_filter, build_txn, None, None,
          build_knowledge_query])
 
-    return {"workloads": workloads, "rss_kb": docker_rss("bench-pg"),
+    rss_kb = docker_rss("bench-pg")
+    cpu1 = container_cpu_usec("bench-pg")
+    return {"workloads": workloads, "rss_kb": rss_kb,
+            "memory_mb": None if rss_kb is None else rss_kb // 1024,
             "disk_bytes": docker_du("bench-pg", ["/var/lib/postgresql/data"]),
+            "cpu_seconds": None if cpu0 is None or cpu1 is None
+                          else round((cpu1 - cpu0) / 1e6, 3),
             "ingest_s": round(ingest_s, 2)}
 
 
@@ -522,6 +535,7 @@ NEO4J_AUTH = ("neo4j", "benchmarkpass")
 
 
 def bench_neo4j(ds):
+    cpu0 = container_cpu_usec("bench-neo4j")
     driver = GraphDatabase.driver(NEO4J_URL, auth=NEO4J_AUTH)
     t0 = time.perf_counter()
     note_koids = [f"neo-note-{n['i']}" for n in ds["notes"]]
@@ -639,10 +653,14 @@ def bench_neo4j(ds):
         connect, lambda d: d.close(),
         [None, None, None, None, build_graph, None, build_knowledge_query])
 
-    return {"workloads": workloads,
-            "rss_kb": docker_rss("bench-neo4j"),
+    rss_kb = docker_rss("bench-neo4j")
+    cpu1 = container_cpu_usec("bench-neo4j")
+    return {"workloads": workloads, "rss_kb": rss_kb,
+            "memory_mb": None if rss_kb is None else rss_kb // 1024,
             "disk_bytes": docker_du("bench-neo4j", ["/var/lib/neo4j/data",
                                                     "/data"]),
+            "cpu_seconds": None if cpu0 is None or cpu1 is None
+                          else round((cpu1 - cpu0) / 1e6, 3),
             "ingest_s": round(ingest_s, 2)}
 
 
@@ -653,6 +671,7 @@ from qdrant_client.models import (Distance, PointStruct, VectorParams,
                                    Filter, FieldCondition, MatchValue)
 
 def bench_qdrant(ds):
+    cpu0 = container_cpu_usec("bench-qdrant")
     q = QdrantClient(host="127.0.0.1", port=6333, timeout=60)
     if q.collection_exists("notes"):
         q.delete_collection("notes")
@@ -684,9 +703,13 @@ def bench_qdrant(ds):
         connect, lambda c: c.close(),
         [None, None, None, None, None, build_vector, None])
 
-    return {"workloads": workloads,
-            "rss_kb": docker_rss("bench-qdrant"),
+    rss_kb = docker_rss("bench-qdrant")
+    cpu1 = container_cpu_usec("bench-qdrant")
+    return {"workloads": workloads, "rss_kb": rss_kb,
+            "memory_mb": None if rss_kb is None else rss_kb // 1024,
             "disk_bytes": docker_du("bench-qdrant", ["/qdrant/storage"]),
+            "cpu_seconds": None if cpu0 is None or cpu1 is None
+                          else round((cpu1 - cpu0) / 1e6, 3),
             "ingest_s": round(ingest_s, 2)}
 
 
@@ -704,6 +727,7 @@ def bench_mongo(ds):
     # native vector search is Atlas-only, §11: no engine forced into a
     # workload it is not for) serves the semantic leg, and the application
     # fuses the ranking.
+    cpu0 = container_cpu_usec("bench-mongo")
     client = MongoClient(MONGO_URL)
     db = client.bench
     db.notes.drop()
@@ -800,13 +824,41 @@ def bench_mongo(ds):
         connect, lambda c: None,
         [None, None, None, None, None, None, build_knowledge_query])
 
-    return {"workloads": workloads,
-            "rss_kb": docker_rss("bench-mongo"),
+    rss_kb = docker_rss("bench-mongo")
+    cpu1 = container_cpu_usec("bench-mongo")
+    return {"workloads": workloads, "rss_kb": rss_kb,
+            "memory_mb": None if rss_kb is None else rss_kb // 1024,
             "disk_bytes": docker_du("bench-mongo", ["/data/db"]),
+            "cpu_seconds": None if cpu0 is None or cpu1 is None
+                          else round((cpu1 - cpu0) / 1e6, 3),
             "ingest_s": round(ingest_s, 2)}
 
 
 # ---------------------------------------------------------------- helpers
+
+def container_cpu_usec(name):
+    """Cumulative CPU of a container; the delta across a bench call is the
+    engine's cpu_seconds. Reads the cgroup v2 cpu.stat usage_usec, falling
+    back to the v1 cpuacct.usage (nanoseconds — Docker Desktop's WSL2 VM
+    mounts v1). None where the runner has no docker access (GitHub runners
+    cannot reach their service containers — the laptop is the canonical
+    measuring host)."""
+    for path in ("/sys/fs/cgroup/cpu.stat",
+                 "/sys/fs/cgroup/cpuacct/cpuacct.usage"):
+        try:
+            out = subprocess.run(
+                ["docker", "exec", name, "cat", path],
+                capture_output=True, text=True, check=True).stdout
+            if path.endswith("cpu.stat"):
+                for line in out.splitlines():
+                    if line.startswith("usage_usec"):
+                        return int(line.split()[1])
+            else:
+                return int(out.strip()) // 1000  # ns -> us
+        except Exception:
+            continue
+    return None
+
 
 def docker_rss(name):
     try:
@@ -837,24 +889,61 @@ def docker_du(name, paths):
     return None
 
 
+def image_digest(image):
+    """The pulled image's registry digest — the exact build a measurement
+    belongs to (CI-08 §18 evidence; None where docker is unavailable)."""
+    try:
+        out = subprocess.run(
+            ["docker", "image", "inspect", "--format",
+             "{{index .RepoDigests 0}}", image],
+            capture_output=True, text=True, check=True).stdout.strip()
+        return out if out and "<no value>" not in out else None
+    except Exception:
+        return None
+
+
 def engine_meta():
     import importlib.metadata
-    ver = {"aikoql": importlib.metadata.version("aikoql")}
+    # CI-08 (§18): the container columns record the pinned image tag AND the
+    # pulled digest. On runners without docker access the probe degrades to
+    # None — the arch gate pins the tags in benchmark.yml, the laptop is the
+    # canonical measuring host.
+    meta = {"aikoql": importlib.metadata.version("aikoql")}
     for name in ["bench-pg", "bench-neo4j", "bench-qdrant", "bench-mongo"]:
+        key = name.removeprefix("bench-")
         try:
             img = subprocess.run(
                 ["docker", "inspect", "--format", "{{.Config.Image}}", name],
                 capture_output=True, text=True, check=True).stdout.strip()
-            ver[name.removeprefix("bench-")] = img
+            meta[key] = {"image": img, "digest": image_digest(img)}
         except Exception:
-            ver[name.removeprefix("bench-")] = None
-    return ver
+            meta[key] = None
+    return meta
 
 
 def git_commit():
     return subprocess.run(
         ["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
         capture_output=True, text=True).stdout.strip()
+
+
+def git_sha():
+    """Full HEAD — the freshness stamp artifact_schema.py compares."""
+    return subprocess.run(
+        ["git", "-C", str(REPO), "rev-parse", "HEAD"],
+        capture_output=True, text=True).stdout.strip()
+
+
+def environment(sha):
+    """CI-08 (§13): the run context — machine, cache discipline, harness."""
+    return {
+        "os": platform.platform(),
+        "cpu": platform.processor() or platform.machine(),
+        "ram_mb": psutil.virtual_memory().total // (1024 * 1024),
+        "cache_state": "fresh-store, warmup-per-cell",
+        "git_sha": sha,      # freshness stamp consumed by artifact_schema
+        "harness_sha": sha,  # §13 naming
+    }
 
 
 def main():
@@ -881,15 +970,19 @@ def main():
     print("mongodb ingest + cells ...")
     engines["mongodb"] = bench_mongo(ds)
 
+    sha = git_sha()
     result = {
         "commit": git_commit(),
         "started_at": started,
         "seed": 42,
+        "config": {"n_notes": N_NOTES, "n_events": N_EVENTS,
+                   "n_per_cell": N, "warmup_ops": WARMUP, "seed": 42},
         "dataset": {"notes": N_NOTES, "events": N_EVENTS,
                     "mentions": len(ds["mentions"]),
                     "derived_from": len(ds["derived"]),
                     "embedding_dim": 2, "n_per_cell": N,
                     "warmup_ops": WARMUP},
+        "environment": environment(sha),
         "engine_versions": engine_meta(),
         "engines": engines,
     }
@@ -897,6 +990,19 @@ def main():
     out = OUT_DIR / "result.json"
     out.write_text(json.dumps(result, indent=2) + "\n")
     print(f"wrote {out}")
+    # CI-08 (§14): the csv leg of the report trio — the flat matrix.
+    with (OUT_DIR / "result.csv").open("w", newline="",
+                                       encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["engine", "workload", "n", "p50_ms", "p95_ms",
+                    "p99_ms", "throughput_ops_s", "correct"])
+        for name, e in engines.items():
+            for wl in e["workloads"]:
+                if wl.get("n"):
+                    w.writerow([name, wl["name"], wl["n"], wl["p50_ms"],
+                                wl["p95_ms"], wl["p99_ms"],
+                                wl["throughput_ops_s"], wl["correct"]])
+    print(f"wrote {OUT_DIR / 'result.csv'}")
     for name, e in engines.items():
         wl = ", ".join(f"{w['name']}:{'ok' if w['correct'] else 'FAIL'}"
                        for w in e["workloads"] if w.get("n"))
