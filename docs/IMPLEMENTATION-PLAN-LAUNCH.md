@@ -231,6 +231,23 @@ and a gone-check keeps the old files merged away; test 2's sweep is now
 5919fdd: both specialized workflows existed; the gate flips to exit 0 with
 the fold — jobs present, files gone).
 
+CI-04 shipped 2026-09-25 — the dag job goes historical → architectural.
+Deleted from it: the inline P3-M0 deleted-harness grep, the inline P3-M9
+deleted-SDK/proxy grep, the `check-estate-hygiene.sh` step, and the
+`check-no-tracked-node-modules.sh` step (both scripts deleted — the
+R2-012/R3-002 estate pins were history). The S-04 language leg folded
+into `check-architecture-hygiene.sh` as storage leg 7 (the bracket trick
+keeps the gate from self-matching) so the rename guarantee survives the
+estate script's retirement. Joined: `check-architecture-hygiene.sh` runs
+in the dag job (the S-01/CI-01 architecture assertions — a RED gate
+could not enter CI before, and CI-03's end made it fully green). The
+active gates stay: disposition head, red-archives, skip-drift, test-env
+hygiene, shuffle wiring, the benchmark/smoke/floor wiring pins, and the
+dogfood freshness pin. RED archived as `ci04-dag-pins-history` (exit 1
+at ea9aa77: the dag still pinned the historical estate and lacked the
+architecture gate; flips to exit 0 with the legs deleted and the gate
+wired).
+
 ### Phase L — correctness matrices (review 1), launch sequence
 
 (L-00 is done this session — the skip-drift gate is comment-aware, and a
