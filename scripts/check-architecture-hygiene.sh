@@ -20,13 +20,14 @@
 #      .github/tests/gated.toml/AGENTS.md; historical docs keep the old
 #      names by design).
 #
-# Workflow leg (CI-01, review 2 §22 TDD): six tests prescribing the
+# Workflow leg (CI-01, review 2 §22 TDD): seven tests prescribing the
 # POST-consolidation workflow estate, asserted by name (never via file
 # count). RED against the live tree at CI-01 — benchmark.yml does not
 # exist yet (CI-02 merges baseline-guard + benchmark-nightly into the one
 # benchmark owner) and the perf smoke carries 3 of the review's 5 cells
 # (CI-03 grows it to W1–W5). The tests flip green through CI-02/CI-03;
-# CI-05 adds test 6 (build jobs cached).
+# CI-05 adds test 6 (build jobs cached), CI-06 adds test 7 (required
+# checks never path-filter).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -244,6 +245,33 @@ for spec in "ci check test-linux lint build-release connectors python-sdk perf-s
       fail=1
     fi
   done
+done
+
+# workflow test 7 — test_required_checks_never_path_filter (CI-06): the
+# required-check invariant — ci.yml must carry NO workflow-level path
+# filter (a path-gated ci.yml skips, and a required skipped check pends
+# forever — the review's §16 trap); its gates run always and decide
+# inside (the fast exits). And the benchmark owner's trigger set is the
+# CI-06 protected paths: storage/kernel/engines/benchmarks/
+# competitor_bench/Cargo.lock (the paths that can move the gate-5 ratio)
+# + the wiring self-paths — crates/compiler + crates/runtime are gone
+# (they cannot move the 1M storage ratio, and a non-matching PR must not
+# pay a 1M guard run).
+if grep -qE '^  paths:|^    paths:' "$CIWF"; then
+  echo "ARCH: ci.yml carries a workflow-level path filter — a required check can pend (§16)" >&2
+  fail=1
+fi
+for path in crates/storage crates/kernel crates/engines benchmarks scripts/competitor_bench Cargo.lock; do
+  if ! grep -q "'$path" "$BENCH"; then
+    echo "ARCH: $BENCH trigger paths lack the CI-06 protected path: $path" >&2
+    fail=1
+  fi
+done
+for gone in crates/compiler crates/runtime; do
+  if grep -q "'$gone" "$BENCH"; then
+    echo "ARCH: $BENCH trigger paths still carry $gone — outside the CI-06 protected set" >&2
+    fail=1
+  fi
 done
 
 if [ $fail -ne 0 ]; then exit 1; fi

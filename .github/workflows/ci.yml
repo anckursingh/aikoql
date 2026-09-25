@@ -498,14 +498,16 @@ jobs:
           # (.github/workflows/benchmark.yml's guard job, CI-02) must stay
           # wired — it runs
           # the 1M v2 workload + gate-5 ratio on every change touching a
-          # protected path (storage/kernel/compiler/runtime).
+          # protected path. CI-06: the protected set is storage/kernel/
+          # engines/benchmarks/competitor_bench/Cargo.lock — the paths
+          # that can move the ratio (compiler/runtime left: they cannot).
           echo "Checking P5-M0 benchmark.yml guard wiring..."
           GUARD=.github/workflows/benchmark.yml
           if [ ! -f "$GUARD" ]; then
             echo "DAG VIOLATION: $GUARD missing — the gate-5 baseline guard job must exist"
             exit 1
           fi
-          for path in crates/storage crates/kernel crates/compiler crates/runtime; do
+          for path in crates/storage crates/kernel crates/engines benchmarks scripts/competitor_bench Cargo.lock; do
             if ! grep -q "$path" "$GUARD"; then
               echo "DAG VIOLATION: $GUARD must trigger on $path"
               exit 1

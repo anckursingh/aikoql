@@ -34,12 +34,20 @@ on:
   schedule:
     - cron: '37 3 * * 1' # weekly, Monday 03:37 UTC
   workflow_dispatch: # manual trigger
+  # CI-06 protected set: the paths whose changes can move the guard's
+  # gate-5 ratio — storage + kernel + engines + the benchmark harness +
+  # the competitor harness + the lockfile (dependency bumps change
+  # numbers), plus the wiring self-paths. crates/compiler + crates/runtime
+  # left at CI-06: they cannot move the 1M storage ratio, and every
+  # non-matching PR pays a 1M guard run otherwise.
   pull_request:
     paths:
       - 'crates/storage/**'
       - 'crates/kernel/**'
-      - 'crates/compiler/**'
-      - 'crates/runtime/**'
+      - 'crates/engines/**'
+      - 'benchmarks/**'
+      - 'scripts/competitor_bench/**'
+      - 'Cargo.lock'
       - '.github/workflows/benchmark.yml'
       - 'scripts/gate5-check.py'
       - 'scripts/artifact_schema.py'
@@ -49,8 +57,10 @@ on:
     paths:
       - 'crates/storage/**'
       - 'crates/kernel/**'
-      - 'crates/compiler/**'
-      - 'crates/runtime/**'
+      - 'crates/engines/**'
+      - 'benchmarks/**'
+      - 'scripts/competitor_bench/**'
+      - 'Cargo.lock'
       - '.github/workflows/benchmark.yml'
       - 'scripts/gate5-check.py'
       - 'scripts/artifact_schema.py'
