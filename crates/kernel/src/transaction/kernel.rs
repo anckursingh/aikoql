@@ -3619,20 +3619,6 @@ impl Kernel {
         }
     }
 
-    /// REC-002: write a durable snapshot of the store into a fresh database
-    /// file at `path` (live backup — works while the kernel holds the store).
-    pub fn backup_store_to(&self, path: &std::path::Path) -> KResult<()> {
-        self.store.snapshot_to(path)
-    }
-
-    /// REC-002: replace the store contents with the snapshot at `path`
-    /// (point-in-time restore). In-memory derived state (semantic status,
-    /// enrichment indexes) stays stale until the next kernel open — restart
-    /// after restore.
-    pub fn restore_store_from(&self, path: &std::path::Path) -> KResult<()> {
-        self.store.restore_from(path)
-    }
-
     /// KSE-10: rebuild the derived indexes (relo/reli/type) from canonical
     /// ko/ heads. Repair op — repairs stale, missing, or corrupt derived
     /// rows in one atomic batch; canonical knowledge is never touched.
@@ -4608,7 +4594,6 @@ pub(crate) use crate::knowledge::scoring::{cosine, jaccard, tokenize};
 mod tests {
     use super::*;
     use crate::storage::store::MemoryEngine;
-    use crate::storage::store_redb::RedbEngine;
     use std::collections::BTreeMap;
 
     fn kernel() -> (Kernel, Arc<ManualClock>) {
@@ -4807,53 +4792,6 @@ mod tests {
 
         k.unsubscribe("s1").unwrap();
         assert!(k.replay("s1").is_err());
-    }
-
-    #[test]
-    fn durable_subscription_survives_reopen() {
-        let dir = std::env::temp_dir();
-        // The path is pid-only: a killed run's corpse is never removed by
-        // a different pid's start-remove — sweep stale siblings (>1 day,
-        // so a concurrent live run is untouched) instead.
-        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
-        if let Ok(rd) = std::fs::read_dir(&dir) {
-            for e in rd.flatten() {
-                let name = e.file_name();
-                let name = name.to_string_lossy();
-                let stale = name.starts_with("aikoql_sub_reopen_")
-                    && e.metadata()
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .is_some_and(|t| t < cutoff);
-                if stale {
-                    let _ = std::fs::remove_file(e.path());
-                    let _ = std::fs::remove_dir_all(e.path());
-                }
-            }
-        }
-        let path = dir.join(format!("aikoql_sub_reopen_{}.redb", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-
-        let clock = Arc::new(ManualClock::new(1_000));
-        let engine = Arc::new(RedbEngine::open(path.to_str().unwrap()).unwrap());
-        let k = Kernel::open(engine.clone(), clock.clone(), 42).unwrap();
-        let alice = Subject::new("alice");
-
-        let _rx = k.subscribe("s1".into(), EventFilter::default()).unwrap();
-        let r = k
-            .remember(RememberRequest::create(alice.clone(), meta("fact")))
-            .unwrap();
-        // do not ack — subscription must replay after reopen
-        drop(k);
-
-        let k2 = Kernel::open(engine, clock, 42).unwrap();
-        let replay = k2.replay("s1").unwrap();
-        assert_eq!(replay.len(), 1);
-        assert_eq!(replay[0].koid, r.koid);
-
-        drop(k2); // redb holds a live file lock — release before cleanup
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir_all(format!("{}.artifacts", path.display()));
     }
 
     #[test]

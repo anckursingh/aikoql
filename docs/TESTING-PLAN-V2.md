@@ -1,5 +1,7 @@
 # AIKOQL Storage Engine v2 — Testing Plan
 
+> HISTORICAL (S-04, 2026-09-25): pre-launch plan record — kept for reference, not updated.
+
 Mirror of `docs/TESTING-PLAN.md` §13.2 for v2. One row per milestone; status flips to ✅ only with real evidence (test names + green counts + artifacts). TDD rules carry over: RED first, never weaken assertions, correctness and performance separated, strict opt-in envs (env-set-but-dead = FAIL), reports end at `artifacts/storage-engine-v2/`, child-kill harness = `current_exe --exact` + env gates (KSE-15 pattern).
 
 | # | Milestone | Status | Evidence |

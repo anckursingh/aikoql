@@ -19,10 +19,13 @@ use std::sync::Arc;
 
 pub fn run_shell(db_path: &str, tenant: Option<&str>) {
     let tenant_opt: Option<String> = tenant.map(String::from);
-    let kernel = Arc::new(if db_path == ":memory:" {
+    let (kernel, admin): (
+        Kernel,
+        Option<Arc<dyn aikoql_storage_v2::engine::StorageAdminApi>>,
+    ) = if db_path == ":memory:" {
         let engine: Arc<dyn aikoql_kernel::StorageEngine> = Arc::new(MemoryEngine::new());
         match Kernel::open(engine, Arc::new(SystemClock), 0xCAFE) {
-            Ok(e) => e,
+            Ok(e) => (e, None),
             Err(e) => {
                 eprintln!("open kernel: {}", e);
                 std::process::exit(1);
@@ -36,13 +39,14 @@ pub fn run_shell(db_path: &str, tenant: Option<&str>) {
             }
         }
         match engine::open_kernel_auto(db_path) {
-            Ok((e, _admin)) => e,
+            Ok((e, a)) => (e, a),
             Err(e) => {
                 eprintln!("open kernel: {}", e);
                 std::process::exit(1);
             }
         }
-    });
+    };
+    let kernel = Arc::new(kernel);
 
     println!(
         "aikoql {} — Aikoql Knowledge Shell",
@@ -81,7 +85,7 @@ pub fn run_shell(db_path: &str, tenant: Option<&str>) {
 
         // Dot-commands start with `.`
         if trimmed.starts_with('.') {
-            match handle_dot_command(&kernel, trimmed, db_path) {
+            match handle_dot_command(&kernel, trimmed, db_path, admin.as_deref()) {
                 DotResult::Exit => break,
                 DotResult::Ok => continue,
                 DotResult::Error(msg) => eprintln!("Error: {}", msg),
@@ -150,7 +154,12 @@ enum DotResult {
     Error(String),
 }
 
-fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
+fn handle_dot_command(
+    kernel: &Kernel,
+    cmd: &str,
+    db_path: &str,
+    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+) -> DotResult {
     let parts: Vec<&str> = cmd.splitn(2, ' ').collect();
     let verb = parts[0];
     let arg = parts.get(1).copied().unwrap_or("");
@@ -305,10 +314,17 @@ fn handle_dot_command(kernel: &Kernel, cmd: &str, db_path: &str) -> DotResult {
             } else {
                 arg.to_string()
             };
-            let _ = std::fs::create_dir_all(&dir_name);
-            let backup_data = format!("{}/data.redb", dir_name);
-            match std::fs::copy(db_path, &backup_data) {
-                Ok(n) => println!("Backup created: {} ({} bytes)", dir_name, n),
+            let admin = match admin {
+                Some(a) => a,
+                None => {
+                    return DotResult::Error("storage admin unavailable on this backend".into())
+                }
+            };
+            match admin.snapshot_to(std::path::Path::new(&dir_name)) {
+                Ok(info) => println!(
+                    "Backup created: {} ({} files, {} bytes)",
+                    dir_name, info.file_count, info.bytes_copied
+                ),
                 Err(e) => return DotResult::Error(format!("backup failed: {}", e)),
             }
             DotResult::Ok

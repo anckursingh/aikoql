@@ -1,0 +1,400 @@
+#!/usr/bin/env bash
+# Launch S-01: architecture hygiene gate — the storage leg (review 2 §8/§22,
+# docs/IMPLEMENTATION-PLAN-LAUNCH.md). Seven assertions, all RED against the
+# pre-S-02 tree, green when the phase ends:
+#   1. aikoql-storage-v2 is a workspace member and no other storage backend
+#      crate is (the deprecated members are crates/storage/aikoql + rocksdb).
+#   2. No production Cargo.toml depends on a deprecated backend
+#      (aikoql-storage / aikoql-rocksdb).
+#   3. No production code references the deprecated v1 API (aikoql_storage).
+#   4. No deprecated backend in production: no redb references, no
+#      AIKOQL_BACKEND/BackendEnvGuard backend-selection machinery, and the
+#      kernel carries no store_redb.rs.
+#   5. The benchmark harness (benchmarks/, scripts/competitor_bench/) uses
+#      the current storage API: no v1 backend-selection pins.
+#   6. The harness language itself is v2-only: no redb name, no backend=
+#      kwarg-style selection in the rust or python harness (4a/4b cover
+#      `crates benchmarks`; this adds scripts/competitor_bench and the kwarg).
+#   7. The adoption-era env language is gone (S-04, folded here at CI-04):
+#      no V2ADOPT-era names on the functional surfaces (crates/scripts/
+#      .github/tests/gated.toml/AGENTS.md; historical docs keep the old
+#      names by design).
+#
+# Workflow leg (CI-01, review 2 §22 TDD): seven tests prescribing the
+# POST-consolidation workflow estate, asserted by name (never via file
+# count). RED against the live tree at CI-01 — benchmark.yml does not
+# exist yet (CI-02 merges baseline-guard + benchmark-nightly into the one
+# benchmark owner) and the perf smoke carries 3 of the review's 5 cells
+# (CI-03 grows it to W1–W5). The tests flip green through CI-02/CI-03;
+# CI-05 adds test 6 (build jobs cached), CI-06 adds test 7 (required
+# checks never path-filter), CI-07 adds test 8 (the hybrid knowledge
+# workload wired), CI-08 adds test 9 (reproducible results + reports),
+# CI-09 adds test 10 (the Tier-3 release certification).
+# Wired into the dag job at CI-04 (a RED gate must not enter CI).
+set -euo pipefail
+root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+cd "$root"
+fail=0
+
+# 1. workspace members: v2 present, no deprecated storage crate
+if ! grep -q '"crates/storage/aikoql-v2"' Cargo.toml; then
+  echo "ARCH: aikoql-storage-v2 is not a workspace member" >&2
+  fail=1
+fi
+for bad in aikoql rocksdb; do
+  if grep -q "\"crates/storage/$bad\"" Cargo.toml; then
+    echo "ARCH: deprecated storage crate is a workspace member: crates/storage/$bad" >&2
+    fail=1
+  fi
+done
+
+# 2. no production dependency on a deprecated backend (the deprecated
+# crates' own manifests are excluded — they are deleted wholesale in S-02)
+deps="$(grep -rnE '^(aikoql-storage|aikoql-rocksdb)[[:space:]]*=' crates benchmarks \
+  --include='Cargo.toml' 2>/dev/null \
+  | grep -vE '^crates/storage/(aikoql|rocksdb)/Cargo.toml:' || true)"
+if [ -n "$deps" ]; then
+  echo "$deps" | sed 's/^/ARCH: production dep on a deprecated backend: /' >&2
+  fail=1
+fi
+
+# 3. no v1 API references in production code (identifier boundary, so
+# aikoql_storage_v2 never matches)
+api="$(grep -rnE 'aikoql_storage([^_a-z0-9]|$)' crates benchmarks \
+  --include='*.rs' --include='*.py' 2>/dev/null \
+  | grep -v '/tests/' || true)"
+if [ -n "$api" ]; then
+  echo "$api" | sed 's/^/ARCH: v1 API reference in production code: /' >&2
+  fail=1
+fi
+
+# 4a. no redb references in production code
+redb="$(grep -rn '\bredb\b' crates benchmarks \
+  --include='*.rs' --include='*.toml' --include='*.py' 2>/dev/null \
+  | grep -v '/tests/' || true)"
+if [ -n "$redb" ]; then
+  echo "$redb" | sed 's/^/ARCH: redb reference in production code: /' >&2
+  fail=1
+fi
+
+# 4b. no backend-selection machinery in production code
+sel="$(grep -rn 'AIKOQL_BACKEND\|BackendEnvGuard' crates benchmarks \
+  --include='*.rs' --include='*.py' 2>/dev/null \
+  | grep -v '/tests/' || true)"
+if [ -n "$sel" ]; then
+  echo "$sel" | sed 's/^/ARCH: v1 backend-selection machinery in production: /' >&2
+  fail=1
+fi
+
+# 4c. the kernel carries no redb backend module
+if [ -f crates/kernel/src/storage/store_redb.rs ]; then
+  echo "ARCH: kernel carries the deprecated redb backend (store_redb.rs)" >&2
+  fail=1
+fi
+
+# 5. the benchmark harness pins no v1 backend selection
+pins="$(grep -rnE 'AIKOQL_BACKEND|STORAGE_BACKEND' benchmarks scripts/competitor_bench \
+  --include='*.rs' --include='*.py' --include='*.sh' 2>/dev/null || true)"
+if [ -n "$pins" ]; then
+  echo "$pins" | sed 's/^/ARCH: harness pins the v1 backend selection: /' >&2
+  fail=1
+fi
+
+# 6. the harness language is v2-only (S-05): no redb name, no backend=
+# kwarg-style selection in the rust or python harness
+harness="$(grep -rnE '\bredb\b|AIKOQL_BACKEND|backend[[:space:]]*=' benchmarks scripts/competitor_bench \
+  --include='*.rs' --include='*.py' 2>/dev/null || true)"
+if [ -n "$harness" ]; then
+  echo "$harness" | sed 's/^/ARCH: v1 backend language in the harness: /' >&2
+  fail=1
+fi
+
+# 7. the adoption-era env language is gone (S-04): V2ADOPT-era names must
+# be ABSENT from the functional surfaces (crates/scripts/.github/
+# tests/gated.toml/AGENTS.md; historical docs keep the old names by
+# design). The bracket in the pattern keeps the gate from self-matching.
+langbad="$(git grep -nE 'V2ADOPT[_]' -- crates scripts .github tests/gated.toml AGENTS.md || true)"
+if [ -n "$langbad" ]; then
+  echo "$langbad" | sed 's/^/ARCH: V2ADOPT-era language present (S-04 rename to STORAGE_*): /' >&2
+  fail=1
+fi
+
+# ── Workflow leg (CI-01, review 2 §22) ──────────────────────────────
+CIWF=.github/workflows/ci.yml
+
+# workflow test 1 — test_required_ci_jobs_exist: the required CI jobs
+# (fmt/clippy/check/test + the gates) are named jobs in ci.yml
+for job in check test-linux lint dependency-dag; do
+  if ! grep -qE "^  $job:" "$CIWF"; then
+    echo "ARCH: ci.yml is missing the required job: $job" >&2
+    fail=1
+  fi
+done
+for step in 'cargo fmt --check' 'cargo clippy --workspace' 'cargo check --workspace' 'cargo test --workspace'; do
+  if ! grep -qF "$step" "$CIWF"; then
+    echo "ARCH: ci.yml is missing the required step: $step" >&2
+    fail=1
+  fi
+done
+
+# workflow test 2 — test_benchmark_workflow_exists: benchmark.yml is the
+# one benchmark owner — the 1M self-regression and the competitor matrix
+# live there, and the pre-consolidation homes are merged away (CI-02)
+BENCH=.github/workflows/benchmark.yml
+if [ ! -f "$BENCH" ]; then
+  echo "ARCH: $BENCH missing — CI-02 merges baseline-guard + benchmark-nightly into the one benchmark owner" >&2
+  fail=1
+else
+  if ! grep -q 'STORAGE_REGRESSION=1m' "$BENCH"; then
+    echo "ARCH: $BENCH must run the 1M self-regression (STORAGE_REGRESSION=1m)" >&2
+    fail=1
+  fi
+  if ! grep -q 'competitor_bench/scale.py' "$BENCH"; then
+    echo "ARCH: $BENCH must run the competitor scale harness" >&2
+    fail=1
+  fi
+  for other in ci release; do
+    # run-signature patterns: the dag job's own pins quote these strings
+    # (a pin reference is not a run — post-CI-02 the guard pins in ci.yml
+    # name the 1M regime as a grep pattern)
+    if grep -qE 'export STORAGE_REGRESSION=1m' ".github/workflows/$other.yml"; then
+      echo "ARCH: $other.yml carries the gate-5 1M regime — benchmark.yml owns it alone" >&2
+      fail=1
+    fi
+  done
+  # CI-09 amends the one-owner rule: release.yml may carry the benchmark
+  # legs as Tier-3 tag-gated certification — but ONLY inside the tier3
+  # jobs. ci.yml never runs a competitor leg, and the release legs must
+  # not drift out of their tier3 job.
+  if grep -q 'competitor_bench/scale.py' ".github/workflows/ci.yml"; then
+    echo "ARCH: ci.yml carries a competitor leg — benchmark.yml owns it (CI-02)" >&2
+    fail=1
+  fi
+  if grep -q 'competitor_bench/scale.py' ".github/workflows/release.yml" && \
+     ! sed -n '/^  tier3-scale:/,/^  [a-z][a-z0-9_-]*:$/p' ".github/workflows/release.yml" | grep -q 'competitor_bench/scale.py'; then
+    echo "ARCH: release.yml's scale leg must live in the tier3-scale job (CI-09)" >&2
+    fail=1
+  fi
+  if grep -q 'competitor_bench/bench.py' ".github/workflows/release.yml" && \
+     ! sed -n '/^  tier3-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' ".github/workflows/release.yml" | grep -q 'competitor_bench/bench.py'; then
+    echo "ARCH: release.yml's matrix leg must live in the tier3-matrix job (CI-09)" >&2
+    fail=1
+  fi
+fi
+for gone in baseline-guard benchmark-nightly; do
+  if [ -f ".github/workflows/$gone.yml" ]; then
+    echo "ARCH: .github/workflows/$gone.yml still exists — CI-02 merges it into benchmark.yml" >&2
+    fail=1
+  fi
+done
+
+# workflow test 3 — test_competitor_matrix_exists: the engine column set
+# is declared in bench.py and a workflow job runs the scale harness
+if ! grep -qE 'postgresql|neo4j|qdrant' scripts/competitor_bench/bench.py; then
+  echo "ARCH: competitor matrix declares no external engines (bench.py)" >&2
+  fail=1
+fi
+if ! grep -q 'scripts/competitor_bench/scale.py' .github/workflows/*.yml; then
+  echo "ARCH: no workflow job runs the competitor scale harness" >&2
+  fail=1
+fi
+
+# workflow test 4 — test_perf_smoke_remains_wired: the perf smoke is a
+# ci.yml job (CI-03 — folded from perf-smoke.yml, fast exit on
+# non-matching paths so the required check never pends) carrying the
+# review's five cells (point lookup, write throughput, scan, hot-cache,
+# small compaction) under the 3x budget
+SMOKE=.github/workflows/ci.yml
+if ! grep -qE '^  perf-smoke:' "$SMOKE"; then
+  echo "ARCH: ci.yml is missing the perf-smoke job — CI-03 folds perf-smoke.yml into ci.yml" >&2
+  fail=1
+elif ! grep -q 'perf-smoke.sh' "$SMOKE"; then
+  echo "ARCH: the perf-smoke job must run scripts/perf-smoke.sh" >&2
+  fail=1
+elif ! grep -q '3x' "$SMOKE"; then
+  echo "ARCH: the perf-smoke job must declare the 3x budget" >&2
+  fail=1
+fi
+for gone in perf-smoke coverage-floor; do
+  if [ -f ".github/workflows/$gone.yml" ]; then
+    echo "ARCH: .github/workflows/$gone.yml still exists — CI-03 folds it into ci.yml" >&2
+    fail=1
+  fi
+done
+for cell in kse_m7_v2_workloads hot_head_gate throughput scan compact; do
+  if ! grep -q "$cell" scripts/perf-smoke.sh; then
+    echo "ARCH: perf smoke is missing the review cell: $cell" >&2
+    fail=1
+  fi
+done
+
+# workflow test 5 — test_release_workflow_remains_wired: the release
+# workflow keeps the version gate (tag == Cargo/npm/plugin/python) and
+# the identity verification (published versions + the MCP binary smoke)
+REL=.github/workflows/release.yml
+if [ ! -f "$REL" ]; then
+  echo "ARCH: $REL missing — the release workflow must exist" >&2
+  fail=1
+fi
+if ! grep -q 'Validate versions vs tag' "$REL"; then
+  echo "ARCH: $REL must keep the version gate (validate-versions)" >&2
+  fail=1
+fi
+if ! grep -qE '^  verify-release-identity:' "$REL"; then
+  echo "ARCH: $REL must keep the identity verification job (PR6-009)" >&2
+  fail=1
+fi
+if ! grep -q 'smoke-mcp.js' "$REL"; then
+  echo "ARCH: $REL must keep the MCP binary smoke (version + initialize + tools)" >&2
+  fail=1
+fi
+
+# workflow test 6 — test_build_jobs_cached (CI-05): every cargo build
+# job in the three workflows carries Swatinem/rust-cache (the action's
+# default key covers OS + rust version + Cargo.lock) — a cache step can
+# drop silently in a bad merge and every job pays the full compile
+# again. The dependency-dag job never compiles (grep-only) and the
+# docker job builds inside the image — neither is a build job.
+for spec in "ci check test-linux lint build-release connectors python-sdk perf-smoke coverage-floor" \
+            "benchmark shuffle benchmark guard self-regression-main competitor-scale competitor-matrix" \
+            "release windows linux-gnu linux-musl macos-intel macos-arm pypi-publish tier3-correctness tier3-correctness-windows tier3-coverage tier3-scale tier3-matrix"; do
+  wf="${spec%% *}"
+  for job in ${spec#* }; do
+    if ! sed -n "/^  $job:/,/^  [a-z][a-z0-9_-]*:$/p" ".github/workflows/$wf.yml" | grep -q 'Swatinem/rust-cache'; then
+      echo "ARCH: $wf.yml job $job builds without Swatinem/rust-cache (CI-05)" >&2
+      fail=1
+    fi
+  done
+done
+
+# workflow test 7 — test_required_checks_never_path_filter (CI-06): the
+# required-check invariant — ci.yml must carry NO workflow-level path
+# filter (a path-gated ci.yml skips, and a required skipped check pends
+# forever — the review's §16 trap); its gates run always and decide
+# inside (the fast exits). And the benchmark owner's trigger set is the
+# CI-06 protected paths: storage/kernel/engines/benchmarks/
+# competitor_bench/Cargo.lock (the paths that can move the gate-5 ratio)
+# + the wiring self-paths — crates/compiler + crates/runtime are gone
+# (they cannot move the 1M storage ratio, and a non-matching PR must not
+# pay a 1M guard run).
+if grep -qE '^  paths:|^    paths:' "$CIWF"; then
+  echo "ARCH: ci.yml carries a workflow-level path filter — a required check can pend (§16)" >&2
+  fail=1
+fi
+for path in crates/storage crates/kernel crates/engines benchmarks scripts/competitor_bench Cargo.lock; do
+  if ! grep -q "'$path" "$BENCH"; then
+    echo "ARCH: $BENCH trigger paths lack the CI-06 protected path: $path" >&2
+    fail=1
+  fi
+done
+for gone in crates/compiler crates/runtime; do
+  if grep -q "'$gone" "$BENCH"; then
+    echo "ARCH: $BENCH trigger paths still carry $gone — outside the CI-06 protected set" >&2
+    fail=1
+  fi
+done
+
+# workflow test 8 — test_hybrid_knowledge_workload_wired (CI-07): the
+# flagship hybrid knowledge-query cell (identity resolution -> metadata
+# filter -> traversal -> semantic retrieval -> ranking end-to-end) lives
+# in bench.py, and the nightly competitor-matrix job runs the harness
+# against the composed stacks (pgvector PG, Neo4j, qdrant, Mongo).
+if ! grep -q 'knowledge_query' scripts/competitor_bench/bench.py; then
+  echo "ARCH: bench.py lacks the knowledge_query cell (CI-07)" >&2
+  fail=1
+fi
+if ! grep -qE '^  competitor-matrix:' "$BENCH"; then
+  echo "ARCH: $BENCH lacks the competitor-matrix job (CI-07)" >&2
+  fail=1
+fi
+if ! sed -n '/^  competitor-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q 'competitor_bench/bench.py'; then
+  echo "ARCH: the competitor-matrix job must run bench.py (CI-07)" >&2
+  fail=1
+fi
+for img in pgvector/pgvector neo4j:5-community qdrant/qdrant mongo:7; do
+  if ! sed -n '/^  competitor-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q "$img"; then
+    echo "ARCH: the competitor-matrix job lacks the composed-stack image: $img (CI-07)" >&2
+    fail=1
+  fi
+done
+
+# workflow test 9 — test_reproducible_results_and_reports (CI-08): the §13
+# schema (cpu/mem/disk/environment + harness-SHA, enforced by
+# artifact_schema.validate_competitor), the §18 version pins (no :latest
+# anywhere the harness or the job names images), and the §14 report trio
+# (json/md/csv — the csv leg written by bench.py and uploaded by the job).
+if ! grep -q 'cpu_seconds' scripts/competitor_bench/bench.py; then
+  echo "ARCH: bench.py lacks the §13 cpu_seconds field (CI-08)" >&2
+  fail=1
+fi
+if ! grep -q 'result.csv' scripts/competitor_bench/bench.py; then
+  echo "ARCH: bench.py lacks the §14 csv report leg (CI-08)" >&2
+  fail=1
+fi
+if ! grep -q 'validate_competitor' scripts/artifact_schema.py; then
+  echo "ARCH: artifact_schema.py lacks the §13 competitor validator (CI-08)" >&2
+  fail=1
+fi
+if grep -q ':latest' scripts/competitor_bench/containers.sh; then
+  echo "ARCH: containers.sh carries an unpinned :latest image (§18, CI-08)" >&2
+  fail=1
+fi
+matrix=$(sed -n '/^  competitor-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH")
+if printf '%s\n' "$matrix" | grep -q ':latest'; then
+  echo "ARCH: the competitor-matrix job carries an unpinned :latest image (§18, CI-08)" >&2
+  fail=1
+fi
+if ! printf '%s\n' "$matrix" | grep -q 'artifact_schema.py docs/certification/competitors/result.json'; then
+  echo "ARCH: the competitor-matrix job must schema-validate its artifact (§13, CI-08)" >&2
+  fail=1
+fi
+if ! printf '%s\n' "$matrix" | grep -q 'result.csv'; then
+  echo "ARCH: the competitor-matrix job must upload the §14 csv leg (CI-08)" >&2
+  fail=1
+fi
+
+# workflow test 10 — test_release_tier3_certification (CI-09): the release
+# workflow carries the TESTING-PLAN §6 evidence pack — full correctness on
+# both OSes (the CI invocation verbatim, gated cells included), the
+# coverage floor, the full-scale harness, and the competitor matrix with
+# its §13 schema check + §18 pinned images.
+for job in tier3-correctness tier3-correctness-windows tier3-coverage tier3-scale tier3-matrix; do
+  if ! grep -qE "^  $job:" "$REL"; then
+    echo "ARCH: $REL lacks the Tier-3 job: $job (CI-09)" >&2
+    fail=1
+  fi
+done
+if ! grep -q 'cargo test --workspace -- $(bash scripts/skip-list.sh)' "$REL"; then
+  echo "ARCH: the Tier-3 correctness jobs must reuse the CI suite invocation (CI-09)" >&2
+  fail=1
+fi
+if ! grep -q 'check-coverage-floor.sh' "$REL"; then
+  echo "ARCH: $REL lacks the Tier-3 coverage-floor leg (CI-09)" >&2
+  fail=1
+fi
+if ! grep -q 'competitor_bench/scale.py' "$REL"; then
+  echo "ARCH: $REL lacks the Tier-3 full-scale harness leg (CI-09)" >&2
+  fail=1
+fi
+if ! grep -q 'competitor_bench/bench.py' "$REL"; then
+  echo "ARCH: $REL lacks the Tier-3 competitor-matrix leg (CI-09)" >&2
+  fail=1
+fi
+t3m=$(sed -n '/^  tier3-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL")
+if ! printf '%s\n' "$t3m" | grep -q 'artifact_schema.py docs/certification/competitors/result.json'; then
+  echo "ARCH: the tier3-matrix job must schema-validate its artifact (§13, CI-09)" >&2
+  fail=1
+fi
+if printf '%s\n' "$t3m" | grep -q ':latest'; then
+  echo "ARCH: the tier3-matrix job carries an unpinned image (§18, CI-09)" >&2
+  fail=1
+fi
+for img in pgvector/pgvector neo4j:5-community qdrant/qdrant mongo:7; do
+  if ! printf '%s\n' "$t3m" | grep -q "$img"; then
+    echo "ARCH: the tier3-matrix job lacks the composed-stack image: $img (CI-09)" >&2
+    fail=1
+  fi
+done
+
+if [ $fail -ne 0 ]; then exit 1; fi
+echo "architecture hygiene (storage + workflow legs) — OK"

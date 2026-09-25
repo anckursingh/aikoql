@@ -260,7 +260,7 @@ fn main() {
         None => None,
     };
 
-    let (kernel, admin) = match engine::open_kernel(&db_path, &cfg.encryption, cfg.backend) {
+    let (kernel, admin) = match engine::open_kernel(&db_path, &cfg.encryption) {
         Ok((k, admin)) => (k, admin),
         Err(e) => {
             eprintln!("open kernel: {}", e);

@@ -200,11 +200,13 @@ fn cb004_child_kill_between_accept_and_complete_marks_failed_on_reopen() {
         "child should have been killed, not exited"
     );
 
-    // Windows may release the file handle a beat after taskkill returns.
+    // Windows may release the dir lock a beat after taskkill returns.
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut k = None;
     while k.is_none() && Instant::now() <= deadline {
-        if let Ok(engine) = RedbEngine::open(&path) {
+        if let Ok(engine) =
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&path))
+        {
             k = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 7).ok();
         }
         if k.is_none() {

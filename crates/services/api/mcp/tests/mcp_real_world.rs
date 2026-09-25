@@ -28,26 +28,15 @@ struct TempSweeper {
 impl Drop for TempSweeper {
     fn drop(&mut self) {
         for p in &self.paths {
-            let _ = std::fs::remove_file(p);
+            // v2 databases are directories (launch S-02).
             let _ = std::fs::remove_dir_all(p);
-            // redb sidecar next to the registered stem (`{stem}.redb.artifacts`).
-            let Some(name) = p.file_name() else { continue };
-            if let Ok(rd) = std::fs::read_dir(p.parent().unwrap_or(std::path::Path::new("."))) {
-                let prefix = format!("{}.", name.to_string_lossy());
-                for e in rd.flatten() {
-                    if e.file_name().to_string_lossy().starts_with(&prefix) {
-                        let _ = std::fs::remove_file(e.path());
-                        let _ = std::fs::remove_dir_all(e.path());
-                    }
-                }
-            }
         }
     }
 }
 
 fn tmp_db(suffix: &str) -> String {
-    let p = std::env::temp_dir().join(format!("mcp-{suffix}-{}.redb", std::process::id()));
-    let _ = std::fs::remove_file(&p);
+    let p = std::env::temp_dir().join(format!("mcp-{suffix}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&p);
     TEMP_PATHS.with(|t| t.borrow_mut().paths.push(p.clone()));
     p.to_string_lossy().into_owned()
 }
@@ -61,14 +50,6 @@ struct McpClient {
 
 impl McpClient {
     fn start(db_path: &str) -> Self {
-        Self::start_with(db_path, None)
-    }
-
-    /// Spawns with an explicit backend override for THIS child only.
-    /// The default strips AIKOQL_BACKEND entirely: the process env is
-    /// shared by every parallel test in this binary, so a global set_var
-    /// in one test would leak into every sibling's children.
-    fn start_with(db_path: &str, backend: Option<&str>) -> Self {
         // Find binary relative to workspace root.
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -113,11 +94,7 @@ impl McpClient {
             .arg(db_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()) // crash output lands in CI logs, not /dev/null
-            .env_remove("AIKOQL_BACKEND");
-        if let Some(b) = backend {
-            cmd.env("AIKOQL_BACKEND", b);
-        }
+            .stderr(Stdio::inherit()); // crash output lands in CI logs, not /dev/null
         let mut child = cmd.spawn().expect("start MCP server");
 
         let stdin = child.stdin.take().unwrap();
@@ -202,9 +179,9 @@ impl McpClient {
 impl Drop for McpClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
-        // Wait for the process to fully exit: the child holds the redb
-        // exclusive flock, and a respawn on the same db before the OS tears
-        // it down fails to open and dies before responding (EOF flake under
+        // Wait for the process to fully exit: the child holds the database
+        // dir lock, and a respawn on the same db before the OS tears it
+        // down fails to open and dies before responding (EOF flake under
         // parallel load).
         let _ = self.child.wait();
     }
@@ -213,7 +190,7 @@ impl Drop for McpClient {
 #[test]
 fn real_world_agent_workflow() {
     let db = tmp_db("rw");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
 
     // ── Phase 1: Knowledge CRUD ──────────────────────────────────────────
@@ -471,7 +448,7 @@ fn real_world_agent_workflow() {
         "MATCH leaked beta's note: {match_koids:?}"
     );
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 /// §51 Critical End-to-End Scenario (chatbot suite, certification G5):
@@ -486,7 +463,7 @@ fn real_world_agent_workflow() {
 #[test]
 fn critical_e2e_scenario_51_chatbot_memory() {
     let db = tmp_db("s51");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
     c.session_init("chatbot-user", "acme");
 
@@ -738,7 +715,7 @@ fn critical_e2e_scenario_51_chatbot_memory() {
         "policy BotMayDeploy allowed"
     );
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 /// G6 — Chatbot Memory Certification Scenarios (TP-3b): scripted replay of
@@ -751,7 +728,7 @@ fn critical_e2e_scenario_51_chatbot_memory() {
 #[test]
 fn chatbot_memory_certification_scenarios() {
     let db = tmp_db("cmem");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
     c.session_init("chatbot-user", "acme");
 
@@ -1071,7 +1048,7 @@ fn chatbot_memory_certification_scenarios() {
         "PERS-004: another user's point read must be denied: {foreign}"
     );
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 /// G7 — CTX differential scenarios (TP-3c): the same context-compilation
@@ -1082,7 +1059,7 @@ fn chatbot_memory_certification_scenarios() {
 #[test]
 fn ctx_differential_scenarios() {
     let db = tmp_db("ctx");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
     c.session_init("alice", "acme");
 
@@ -1273,13 +1250,13 @@ fn ctx_differential_scenarios() {
         "CTX-003: the new entity must enter the context: {after_names:?}"
     );
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 #[test]
 fn mcp_ping_and_tools_list() {
     let db = tmp_db("ping");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
 
     // Ping
@@ -1309,13 +1286,13 @@ fn mcp_ping_and_tools_list() {
         tools.len()
     );
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 #[test]
 fn mcp_idempotency_guarantee() {
     let db = tmp_db("idem");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let mut c = McpClient::start(&db);
 
     // Create with idempotency key.
@@ -1340,7 +1317,7 @@ fn mcp_idempotency_guarantee() {
     );
     assert_eq!(r2["koid"].as_str().unwrap(), koid1);
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 }
 
 #[test]
@@ -1349,7 +1326,7 @@ fn mvp_rec_002_backup_destroy_restore_round_trip() {
     // knowledge — same KOID resolvable with the same content, and the
     // backup is listable.
     let db = tmp_db("recv");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
 
     // Phase 1: build knowledge.
     let mut c = McpClient::start(&db);
@@ -1423,8 +1400,7 @@ fn mvp_rec_002_backup_destroy_restore_round_trip() {
         "backup must appear in list_backups, got {names:?}"
     );
 
-    // Phase 3: destroy — kill the server, delete the database (a redb file
-    // pre-flip, an aikoql-v2 directory now — the 2026-09-07 default; give
+    // Phase 3: destroy — kill the server, delete the v2 database dir (give
     // the killed process a moment to release the handle on Windows).
     drop(c);
     let mut removed = false;
@@ -1482,61 +1458,18 @@ fn mvp_rec_002_backup_destroy_restore_round_trip() {
     assert!(!evidence.is_empty(), "evidence must survive restore");
     assert_eq!(restored_asserted["extensions"]["valid_from"], 1000);
 
-    let _ = std::fs::remove_file(&db);
-}
-
-/// Removes the backend env var on drop — even when the test panics, so a
-/// global AIKOQL_BACKEND can never poison the other parallel tests.
-struct BackendEnvGuard;
-
-impl Drop for BackendEnvGuard {
-    fn drop(&mut self) {
-        std::env::remove_var("AIKOQL_BACKEND");
-    }
-}
-
-#[test]
-fn mcp_client_children_ignore_process_backend_env() {
-    // CI flake (2026-09-18, Windows job): p3m3_bkp005's redb leg set
-    // AIKOQL_BACKEND on the WHOLE test process, and every parallel test's
-    // child inherited it — a sibling's v2 directory opened as redb and
-    // died with "Access is denied". The harness must spawn children with
-    // a clean backend env, not leak the process-global one.
-    let db = tmp_db("envleak");
-    let _ = std::fs::remove_file(&db);
-    let _ = std::fs::remove_dir_all(&db);
-    let _guard = BackendEnvGuard;
-    std::env::set_var("AIKOQL_BACKEND", "redb");
-    let mut c = McpClient::start(&db);
-    drop(_guard); // the child inherited at spawn; clean the process now
-    let note = c.call(
-        "remember",
-        &json!({
-            "subject": "admin", "type_name": "note",
-            "properties": {"body": "backend env must not leak"}
-        }),
-    );
-    assert!(note["koid"].as_str().is_some());
-    let backup = c.call("backup", &json!({"subject": "admin"}));
-    assert_eq!(
-        backup["engine"], "aikoql-v2",
-        "McpClient::start leaked the process-global AIKOQL_BACKEND into the child: {backup}"
-    );
-    let _ = std::fs::remove_file(&db);
     let _ = std::fs::remove_dir_all(&db);
 }
 
-// P3-M3 bkp005 — MCP backup/restore route v2 backends through the
-// engine-native snapshot (§58–60): the backup dir holds the manifest +
-// segments + logs + torn-safe WAL and exactly one SNAPSHOT-{gen} marker
-// (the commit point), and restore verifies then swaps rows through the
-// live kernel. redb servers keep the trait-default scan (REC-002
-// untouched): the backup dir holds a redb data file and no marker.
+// P3-M3 bkp005 — MCP backup/restore take the engine-native snapshot
+// (§58–60): the backup dir holds the manifest + segments + logs +
+// torn-safe WAL and exactly one SNAPSHOT-{gen} marker (the commit point),
+// and restore verifies then swaps rows through the live kernel.
 #[test]
 fn p3m3_bkp005_backup_restore_route_by_backend() {
     // ── v2 leg (the production default): engine-native snapshot ──────────
     let db = tmp_db("bkp005v2");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let _ = std::fs::remove_dir_all(&db);
 
     let mut c = McpClient::start(&db);
@@ -1571,10 +1504,10 @@ fn p3m3_bkp005_backup_restore_route_by_backend() {
     );
     assert!(
         !entries.iter().any(|n| n.ends_with(".redb")),
-        "v2 backup must not hold a redb file, got {entries:?}"
+        "v2 backup must hold no redb file, got {entries:?}"
     );
 
-    // verify_backup on a v2 backup verifies the marker instead of redb.
+    // verify_backup verifies the snapshot marker.
     let v = c.call(
         "verify_backup",
         &json!({"subject": "admin", "backup": backup_dir.to_str().unwrap()}),
@@ -1616,76 +1549,6 @@ fn p3m3_bkp005_backup_restore_route_by_backend() {
     assert_eq!(
         fetched["properties"]["body"], "bkp005 native snapshot",
         "restored knowledge must read back: {fetched}"
-    );
-    drop(c);
-
-    // ── redb leg: trait-default scan unchanged (REC-002 untouched) ───────
-    // The backend rides the CHILD's env, never the test process's — a
-    // process-global set_var races every parallel test's children.
-    let db2 = tmp_db("bkp005rb");
-    let _ = std::fs::remove_file(&db2);
-
-    let mut c = McpClient::start_with(&db2, Some("redb"));
-    let note = c.call(
-        "remember",
-        &json!({
-            "subject": "admin", "type_name": "note",
-            "properties": {"body": "bkp005 redb path", "memo": "bkp005"}
-        }),
-    );
-    let koid2 = note["koid"].as_str().unwrap().to_string();
-
-    let backup = c.call("backup", &json!({"subject": "admin"}));
-    assert_eq!(
-        backup["verified"], true,
-        "redb backup must verify: {backup}"
-    );
-    assert!(
-        backup["engine"].as_str().is_none(),
-        "redb backup keeps the old response shape: {backup}"
-    );
-    let backup_dir = std::path::PathBuf::from(backup["backup"].as_str().unwrap());
-    let entries: Vec<String> = std::fs::read_dir(&backup_dir)
-        .unwrap()
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    assert!(
-        entries.iter().any(|n| n.ends_with(".redb")),
-        "redb backup must hold a redb data file, got {entries:?}"
-    );
-    assert!(
-        !entries.iter().any(|n| n.starts_with("SNAPSHOT-")),
-        "redb backup must hold no snapshot marker, got {entries:?}"
-    );
-
-    // Full REC-002 loop on redb stays green.
-    drop(c);
-    let mut removed = false;
-    for _ in 0..20 {
-        if std::fs::remove_file(&db2).is_ok() {
-            removed = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(150));
-    }
-    assert!(removed, "destroy: redb file must be removable");
-
-    let mut c = McpClient::start_with(&db2, Some("redb"));
-    let restored = c.call(
-        "restore",
-        &json!({"subject": "admin", "backup": backup_dir.to_str().unwrap()}),
-    );
-    assert_eq!(
-        restored["restored"], true,
-        "redb restore unchanged: {restored}"
-    );
-    drop(c);
-    let mut c = McpClient::start_with(&db2, Some("redb"));
-    let fetched = c.call("get", &json!({"koid": &koid2, "subject": "admin"}));
-    assert_eq!(
-        fetched["properties"]["body"], "bkp005 redb path",
-        "redb restored knowledge must read back: {fetched}"
     );
     drop(c);
 }

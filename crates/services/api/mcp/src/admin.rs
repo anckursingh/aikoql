@@ -8,48 +8,47 @@ pub(crate) fn run_backup(db_path: &str) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let dir_name = format!("{}.backup.{}", db_path, ts);
-    if let Err(e) = std::fs::create_dir_all(&dir_name) {
-        eprintln!("create backup dir: {}", e);
+    let (kernel, admin) = match engine::open_kernel_auto(db_path) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("open kernel: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let seq = kernel
+        .journal_head()
+        .unwrap_or_else(|e| {
+            eprintln!("Error reading journal: {}", e);
+            std::process::exit(1);
+        })
+        .0;
+    let object_count = kernel
+        .scan_heads()
+        .unwrap_or_else(|e| {
+            eprintln!("Error scanning heads: {}", e);
+            std::process::exit(1);
+        })
+        .len();
+    // Launch S-02: the engine-native snapshot — the only backup format.
+    let Some(admin) = admin else {
+        eprintln!("storage admin unavailable on this backend");
         std::process::exit(1);
-    }
-
-    // Gather metadata, then drop kernel to release file lock before copy.
-    let (seq, object_count) = {
-        let (kernel, _admin) = match engine::open_kernel_auto(db_path) {
-            Ok((k, admin)) => (k, admin),
-            Err(e) => {
-                eprintln!("open kernel: {}", e);
-                std::process::exit(1);
-            }
-        };
-        let s = kernel
-            .journal_head()
-            .unwrap_or_else(|e| {
-                eprintln!("Error reading journal: {}", e);
-                std::process::exit(1);
-            })
-            .0;
-        let n = kernel
-            .scan_heads()
-            .unwrap_or_else(|e| {
-                eprintln!("Error scanning heads: {}", e);
-                std::process::exit(1);
-            })
-            .len();
-        (s, n)
-    }; // kernel + engine dropped → file lock released.
-
-    let data_path = format!("{}/data.redb", dir_name);
-    if let Err(e) = std::fs::copy(db_path, &data_path) {
-        eprintln!("copy db file: {}", e);
-        std::process::exit(1);
-    }
+    };
+    let info = admin
+        .snapshot_to(std::path::Path::new(&dir_name))
+        .unwrap_or_else(|e| {
+            eprintln!("snapshot: {}", e);
+            std::process::exit(1);
+        });
 
     let meta = serde_json::json!({
         "journal_seq": seq,
         "object_count": object_count,
         "backup_ts": ts,
         "source": db_path,
+        "engine": "aikoql-v2",
+        "generation": info.generation,
+        "file_count": info.file_count,
     });
     let meta_json = serde_json::to_string_pretty(&meta).unwrap_or_else(|e| {
         eprintln!("write backup meta: {}", e);
@@ -65,11 +64,6 @@ pub(crate) fn run_backup(db_path: &str) {
     println!("  Journal seq: {}", seq);
 }
 pub(crate) fn run_restore(backup_dir: &str, target_path: &str) {
-    let data_path = format!("{}/data.redb", backup_dir);
-    if !std::path::Path::new(&data_path).exists() {
-        eprintln!("Error: not a valid backup — {} not found", data_path);
-        std::process::exit(1);
-    }
     let meta_path = format!("{}/meta.json", backup_dir);
     if let Ok(meta_str) = std::fs::read_to_string(&meta_path) {
         if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_str) {
@@ -92,11 +86,28 @@ pub(crate) fn run_restore(backup_dir: &str, target_path: &str) {
             );
         }
     }
-    if let Err(e) = std::fs::copy(&data_path, target_path) {
-        eprintln!("restore copy: {}", e);
+    // Launch S-02: engine-native restore — verify, materialize, swap rows.
+    let (_kernel, admin) = match engine::open_kernel_auto(target_path) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("open kernel: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let Some(admin) = admin else {
+        eprintln!("storage admin unavailable on this backend");
         std::process::exit(1);
-    }
-    println!("Restored to: {}", target_path);
+    };
+    let info = admin
+        .restore_from(std::path::Path::new(backup_dir))
+        .unwrap_or_else(|e| {
+            eprintln!("restore: {}", e);
+            std::process::exit(1);
+        });
+    println!(
+        "Restored to: {} ({} rows, generation {})",
+        target_path, info.rows_restored, info.generation
+    );
 }
 pub(crate) fn run_audit(db_path: &str) {
     let (kernel, _admin) = match engine::open_kernel_auto(db_path) {

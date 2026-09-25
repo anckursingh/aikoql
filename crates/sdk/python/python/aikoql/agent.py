@@ -50,8 +50,8 @@ class Agent:
         elif isinstance(target, str):
             # Server mode iff the string is a bare host:port — no path
             # separators and a numeric port. Anything path-like (fresh
-            # paths included) is embedded: the engine's own auto-detection
-            # decides aikoql-v2 / redb / v1 from what is on disk.
+            # paths included) is embedded: the engine opens aikoql-v2 at
+            # the path (launch S-02).
             is_host_port = (
                 "/" not in target and "\\" not in target
                 and target.count(":") == 1

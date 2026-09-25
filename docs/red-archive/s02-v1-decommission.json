@@ -1,0 +1,8 @@
+{
+  "id": "s02-v1-decommission",
+  "pre_fix_commit": "4f4721a870d7a5ade1f40e393d66ef7b6738c019",
+  "command": "bash -c out=$(mktemp); CARGO_TARGET_DIR=/tmp/s02-red-target cargo check --workspace 2>"$out"; rc=$?; tail -n 60 "$out"; rm -f "$out"; exit $rc",
+  "captured_at": "2026-09-24T18:39:17Z",
+  "captured_head": "4f4721a1019a452a5317b7d0f65269fae0d807cd",
+  "exit_code": 101
+}

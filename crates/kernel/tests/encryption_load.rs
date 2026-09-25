@@ -1,6 +1,6 @@
 //! Encryption load test — MRFC-0020 Phase 1 performance measurement.
 //!
-//! Measures write throughput overhead of EncryptedStore vs plain redb.
+//! Measures write throughput overhead of EncryptedStore vs the plain store.
 //! Report-only cell (the M8 rule — a perf number never gates a test): the
 //! <100% floor formerly asserted here flapped on a dev box (186.6% with no
 //! code change — AV/disk-cache noise on microsecond samples). Runs weekly
@@ -9,7 +9,6 @@
 use aikoql_kernel::security::crypto::{Aes256Gcm, Crypto};
 use aikoql_kernel::storage::encrypted::EncryptedStore;
 use aikoql_kernel::storage::store::{StorageEngine, WriteBatch};
-use aikoql_kernel::storage::store_redb::RedbEngine;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -18,22 +17,28 @@ const VALUE_SIZE: usize = 256;
 
 #[test]
 #[cfg_attr(debug_assertions, ignore)]
-fn load_encryption_overhead_with_redb() {
+fn load_encryption_overhead_v2() {
     let path_base = format!(
         "{}/aikoql-load-{}",
         std::env::temp_dir().display(),
         std::process::id()
     );
 
-    let plain_path = format!("{}-plain.redb", path_base);
-    let enc_path = format!("{}-enc.redb", path_base);
-    let _ = std::fs::remove_file(&plain_path);
-    let _ = std::fs::remove_file(&enc_path);
+    let plain_path = format!("{}-plain", path_base);
+    let enc_path = format!("{}-enc", path_base);
+    let _ = std::fs::remove_dir_all(&plain_path);
+    let _ = std::fs::remove_dir_all(&enc_path);
 
-    let plain = Arc::new(RedbEngine::open(&plain_path).expect("open plain"));
+    let plain = Arc::new(
+        aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&plain_path))
+            .expect("open plain"),
+    );
     let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
     let key = crypto.generate_key();
-    let enc_redb = Arc::new(RedbEngine::open(&enc_path).expect("open enc"));
+    let enc_redb = Arc::new(
+        aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&enc_path))
+            .expect("open enc"),
+    );
     let enc = EncryptedStore::new(enc_redb, crypto, key);
 
     let value = vec![0xABu8; VALUE_SIZE];
@@ -52,7 +57,7 @@ fn load_encryption_overhead_with_redb() {
         enc.write_batch(&b).unwrap();
     }
 
-    // Benchmark: plain redb.
+    // Benchmark: plain store.
     let mut plain_times = Vec::with_capacity(10);
     for _ in 0..10 {
         let mut b = WriteBatch::new();
@@ -65,7 +70,7 @@ fn load_encryption_overhead_with_redb() {
     }
     let plain_avg = plain_times.iter().sum::<u128>() as f64 / plain_times.len() as f64;
 
-    // Benchmark: encrypted redb.
+    // Benchmark: encrypted store.
     let mut enc_times = Vec::with_capacity(10);
     for _ in 0..10 {
         let mut b = WriteBatch::new();
@@ -80,10 +85,10 @@ fn load_encryption_overhead_with_redb() {
 
     let overhead_pct = ((enc_avg - plain_avg) / plain_avg) * 100.0;
     println!(
-        "redb plain: {:.0}µs, encrypted: {:.0}µs, overhead: {:.1}% ({} × {}-byte values)",
+        "v2 plain: {:.0}µs, encrypted: {:.0}µs, overhead: {:.1}% ({} × {}-byte values)",
         plain_avg, enc_avg, overhead_pct, BATCH_SIZE, VALUE_SIZE
     );
 
-    let _ = std::fs::remove_file(&plain_path);
-    let _ = std::fs::remove_file(&enc_path);
+    let _ = std::fs::remove_dir_all(&plain_path);
+    let _ = std::fs::remove_dir_all(&enc_path);
 }

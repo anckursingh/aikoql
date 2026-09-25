@@ -74,11 +74,10 @@ def start_server(db_dir):
     # Bench config: the default 120 calls/min limit is far below ingest rate.
     cfg = db_dir / "aikoql.toml"
     cfg.write_text("[rate_limit]\nmax_calls_per_minute = 10000000\n")
-    env = dict(os.environ, AIKOQL_BACKEND="aikoql-v2")
     proc = subprocess.Popen(
         [str(exe), "serve", "--listen", f"{MCP_ADDR[0]}:{MCP_ADDR[1]}",
          "--tcp-token", f"{TOKEN}::bench", "--config", str(cfg), str(db_dir)],
-        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(120):
         if proc.poll() is not None:
             raise RuntimeError("aikoql-mcp exited during startup")

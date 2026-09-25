@@ -57,7 +57,12 @@ artifact) was deleted in P3-M9 with zero demand evidence.
 - **Phase 4 — Driver program.** First-party Go/TS/Java drivers (rebuilt
   from git history, current contract, CI + contract tests + versioned
   releases) + binary wire protocol + ORM support. *Gate: three external
-  consumers or an explicit product commitment.*
+  consumers or an explicit product commitment.* Detailed plan:
+  `docs/GOAL-2-ECOSYSTEM-PLAN.md` (ECO-1..15) — adds what this roadmap
+  skims: the DatabaseInstance/server extraction as a named prerequisite,
+  SQL compatibility, PG wire, JDBC/ODBC. It proposes Rust/TS/Java/Go
+  clients, which re-opens the P3-M9 deletion — `docs/sdk-proxy-decision.md`
+  re-adopt triggers still govern; its evidence gates still apply.
 - **Phase 5 — Primary-DB positioning.** Migration tooling from
   Postgres/Neo4j, hosted offering, ecosystem marketing.
 

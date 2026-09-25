@@ -1,0 +1,8 @@
+{
+  "id": "ci07-no-hybrid-knowledge-workload",
+  "pre_fix_commit": "23359e2",
+  "command": "grep -q knowledge_query scripts/competitor_bench/bench.py",
+  "captured_at": "2026-09-25T08:23:21Z",
+  "captured_head": "23359e2830c0422a3bbd070baaf6f1e6aac1a242",
+  "exit_code": 1
+}

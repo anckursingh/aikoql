@@ -1,0 +1,8 @@
+{
+  "id": "s05-harness-v1-pin-missing",
+  "pre_fix_commit": "c6ee00a",
+  "command": "sh -c if grep -qE "backend\[\[:space:\]\]\*=" scripts/check-architecture-hygiene.sh; then exit 0; else exit 1; fi",
+  "captured_at": "2026-09-25T04:29:07Z",
+  "captured_head": "c6ee00a34d6316238d65b0e9937ef4581357c72a",
+  "exit_code": 1
+}

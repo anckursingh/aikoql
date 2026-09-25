@@ -1,19 +1,18 @@
-//! V2-Adopt — the W1..W8 workloads re-run on v2 against the same matrix
-//! v1's M7 adoption used (MRFC-KSE-001 §27-28 + design §26 gates).
+//! Storage self-regression — the W1..W8 workloads on aikoql-v2
+//! (MRFC-KSE-001 §27-28 + design §26 gates).
 //!
-//! Mirrors `crates/storage/aikoql/tests/kse_m7_workloads.rs` workload for
-//! workload — same seed, same ops, same metrics (throughput, P50/P95/P99,
-//! logical bytes read/written, CPU/RSS/disk) — on four backends: memory
-//! (reference), redb, aikoql (the adopted v1 baseline) and aikoql-v2 (the
-//! candidate). One seeded dataset per backend, everything through
-//! `&dyn StorageEngine` + the Kernel (§32).
+//! Launch S-02 deleted the v1/redb legs: the matrix is memory (the
+//! in-RAM reference) + aikoql-v2 (the engine under test). One seeded
+//! dataset per backend — same seed, same ops, same metrics (throughput,
+//! P50/P95/P99, logical bytes read/written, CPU/RSS/disk) — everything
+//! through `&dyn StorageEngine` + the Kernel (§32).
 //!
 //! Workload mapping: W1/W2 KO head lookup (the same storage leg — KSE-18,
 //! measured twice on fresh samples), W3 version lookup + history, W4
 //! traversal at F=10/100/1000, W5 type scan, W6 ingestion = the seed
 //! phase, W7 context compilation, W8 mixed 70/20/10.
 //!
-//! The §26 adoption gates ride along:
+//! The §26 gates ride along:
 //! - gate 1 (bounded recovery): evidenced by the SE2-M3 suite —
 //!   artifacts/storage-engine-v2/recovery-independence.md (replay only the
 //!   active WAL; real-kill recovery in M3/M4/M6) — cited, not re-measured.
@@ -24,31 +23,34 @@
 //! - gate 4 (group commit): throughput evidence is the SE2-M6 nightly
 //!   matrix (`SE2M6_NIGHTLY=1`, writes group-commit.md) — cited, not
 //!   re-measured here.
-//! - gate 5 (KO lookup competitive): the W1/W2 rows below vs the v1
-//!   baseline — perf verdict at `V2ADOPT_NIGHTLY=1` only (smoke reports
-//!   the ratios, never a verdict).
+//! - gate 5 (KO lookup self-regression): the fresh W1/W2 rows vs the
+//!   committed v2 baseline at the same scale (result.json at 100K,
+//!   result-1m-aikoql-v2.json at 1M) — perf verdict at
+//!   `STORAGE_REGRESSION=1` only (smoke has no committed 2K baseline and
+//!   reads NOT_EVIDENCED).
 //!
-//! Sizing is strict opt-in: `V2ADOPT_NIGHTLY=1` (100K KOs / 10K deep × 10
-//! versions / 20K ops per workload) or unset (2K / 2K / 2K smoke). Any
-//! other value = FAIL (no silent skips). `V2ADOPT_LOADER=1` gates the RSS
+//! Sizing is strict opt-in: `STORAGE_REGRESSION=1` (100K KOs / 10K deep ×
+//! 10 versions / 20K ops per workload) or unset (2K / 2K / 2K smoke). Any
+//! other value = FAIL (no silent skips). `STORAGE_LOADER=1` gates the RSS
 //! loader child.
 //!
 //! Writes `artifacts/storage-engine-v2/workloads.md` (the §28 matrix +
 //! the §26 gate table) and `artifacts/storage-engine-v2/result.json`
 //! (PR#2 review SE-11: the same evidence plus run metadata as
 //! machine-readable JSON for automated comparison) — both only at
-//! `V2ADOPT_NIGHTLY=1`, so a smoke run never clobbers the canonical
-//! artifacts (SE2-M19). `V2ADOPT_PERF_SMOKE=1` (P1-6, strict opt-in,
+//! `STORAGE_REGRESSION=1`, so a smoke run never clobbers the canonical
+//! artifacts (SE2-M19). `STORAGE_PERF_SMOKE=1` (P1-6, strict opt-in,
 //! smoke size) writes the `-smoke`-suffixed twins instead, so the
 //! per-commit perf budget has machine-readable rows to diff.
+//! `AIKOQL_REPORT_FRESH=1` (S-03, strict opt-in, nightly only) appends
+//! `-fresh` to the suffix: a gate run writes the fresh twin next to the
+//! committed baseline it is judged against, never over it.
 
 mod common;
 
 use aikoql_kernel::storage::store::{MemoryEngine, StorageEngine, WriteBatch};
-use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_kernel::transaction::kernel::ManualClock;
 use aikoql_kernel::{Direction, Kernel, Metadata, RelationshipRef, Subject, Value, KOID};
-use aikoql_storage::AikoqlStorageEngine;
 use aikoql_storage_v2::db::{Config, Db};
 use aikoql_storage_v2::engine::StorageAdminApi;
 use aikoql_storage_v2::stats::ReadPathStats;
@@ -66,23 +68,24 @@ use std::io::{BufRead, BufReader};
 #[cfg(windows)]
 use std::process::{Command, Stdio};
 
-const NIGHTLY_ENV: &str = "V2ADOPT_NIGHTLY";
-const LOADER_ENV: &str = "V2ADOPT_LOADER";
-const LOADER_BACKEND_ENV: &str = "V2ADOPT_LOADER_BACKEND";
-const BACKEND_ENV: &str = "V2ADOPT_BACKEND";
+const NIGHTLY_ENV: &str = "STORAGE_REGRESSION";
+const LOADER_ENV: &str = "STORAGE_LOADER";
+const LOADER_BACKEND_ENV: &str = "STORAGE_LOADER_BACKEND";
+const BACKEND_ENV: &str = "STORAGE_BACKEND";
+const FRESH_ENV: &str = "AIKOQL_REPORT_FRESH";
 const SEED: u64 = 0x27_0000;
 const N_TYPES: usize = 100;
 const DEEP_VERSIONS: usize = 10; // "10+ versions each" (§27 W3)
-/// Gate 5 bound: the KO-lookup rows may be at most this much slower than
-/// the adopted v1 baseline to count as competitive. The original 2×
-/// envelope (v1's own gate vs redb) was a RAM-vs-RAM bar: v1's mirror
-/// pays zero disk by design, while v2's bounded-RAM contract pays one
-/// warm block read + soft sha256 per miss (the M22 probe measured 18.7 µs
-/// block io inside a 33.5 µs get). SE2-M22 amendment (2026-09-05, user
-/// decision): re-bound to 8×, the bounded-RAM design envelope — ~1.2–1.5×
-/// headroom over the measured 5.6–6.7×; the 2× bar is unreachable without
-/// converging on v1's design (adoption-decision.md, remediation section).
-const GATE5_SLOWDOWN_BOUND: f64 = 8.0;
+/// Gate 5 self-regression bound: the fresh KO-lookup rows may be at most
+/// this much slower than the committed v2 baseline at the same scale to
+/// pass. Same-backend, same-runner 1M re-runs have stable P50s (the
+/// SE2-M28/SE2-M22 matrices re-measured within a few percent run to run);
+/// 1.5× absorbs runner noise with headroom while catching real storage
+/// regressions — the v1-relative 8× design envelope (SE2-M22) died with
+/// the v1 baseline in S-02. The per-commit smoke keeps its 3× budget
+/// (perf-smoke-check.py) as the cheap O(n²)-class net; this is the
+/// full-scale gate.
+const GATE5_SELF_REGRESSION_BOUND: f64 = 1.5;
 
 static TYPE_ROUND: AtomicU64 = AtomicU64::new(0);
 
@@ -127,33 +130,34 @@ fn nightly() -> bool {
 /// The report's scale label (benchmark_report + the gate-5 row).
 fn scale_label() -> &'static str {
     match std::env::var(NIGHTLY_ENV).as_deref() {
-        Ok("1") => "V2ADOPT_NIGHTLY",
-        Ok("1m") => "V2ADOPT_NIGHTLY=1m",
+        Ok("1") => "STORAGE_REGRESSION",
+        Ok("1m") => "STORAGE_REGRESSION=1m",
         _ => "smoke",
     }
 }
 
 /// Single-backend filter (SE2-M28 staged runs): unset = the full
-/// four-backend matrix; one of the four names = that backend only.
+/// two-backend matrix; one of the two names = that backend only.
+/// S-03: the v1/redb names died with the decommission — a stale
+/// STORAGE_BACKEND=aikoql leg (the old republish job) panics HERE, the
+/// RED archived as s03-v1-estate-sweep.
 fn backend_filter() -> Option<String> {
     let v = match std::env::var(BACKEND_ENV) {
         Err(std::env::VarError::NotPresent) => return None,
-        Err(e) => panic!(
-            "{BACKEND_ENV} strict opt-in: unset, memory, redb, aikoql, or aikoql-v2, got {e:?}"
-        ),
+        Err(e) => panic!("{BACKEND_ENV} strict opt-in: unset, memory, or aikoql-v2, got {e:?}"),
         Ok(v) => v,
     };
     match v.as_str() {
-        "memory" | "redb" | "aikoql" | "aikoql-v2" => Some(v),
-        other => panic!(
-            "{BACKEND_ENV} strict opt-in: unset, memory, redb, aikoql, or aikoql-v2, got {other}"
-        ),
+        "memory" | "aikoql-v2" => Some(v),
+        other => panic!("{BACKEND_ENV} strict opt-in: unset, memory, or aikoql-v2, got {other}"),
     }
 }
 
 /// Artifact filename suffix: "" at 100K (canonical), "-1m" at 1M, plus
 /// "-<backend>" when the run is filtered — a filtered run never clobbers
-/// the canonical artifacts or the unfiltered scale artifacts.
+/// the canonical artifacts or the unfiltered scale artifacts. S-03:
+/// `AIKOQL_REPORT_FRESH=1` appends "-fresh" so a gate run writes its
+/// twin next to the committed baseline, never over it.
 fn artifact_suffix(filter: Option<&str>) -> String {
     let mut s = String::new();
     if std::env::var(NIGHTLY_ENV).as_deref() == Ok("1m") {
@@ -163,7 +167,33 @@ fn artifact_suffix(filter: Option<&str>) -> String {
         s.push('-');
         s.push_str(b);
     }
+    if fresh_arm() {
+        s.push_str("-fresh");
+    }
     s
+}
+
+/// The FRESH arm (S-03, strict opt-in): unset or "1", and meaningful only
+/// on a nightly run whose artifact is actually written — the fresh twin
+/// exists so the gate can compare it against the committed baseline at the
+/// same scale; at smoke size there is no committed baseline and the flag
+/// would do nothing.
+fn fresh_arm() -> bool {
+    match std::env::var(FRESH_ENV) {
+        Err(std::env::VarError::NotPresent) => false,
+        Ok(v) if v == "1" => {
+            assert!(
+                nightly(),
+                "{FRESH_ENV}=1 requires {NIGHTLY_ENV} (the fresh twin is a scale-matched comparison)"
+            );
+            assert!(
+                std::env::var_os("AIKOQL_REPORT_WRITE").is_some_and(|v| v == "1"),
+                "{FRESH_ENV}=1 requires AIKOQL_REPORT_WRITE=1 (the fresh twin is written as the next-baseline evidence)"
+            );
+            true
+        }
+        other => panic!("{FRESH_ENV} strict opt-in: unset or \"1\", got {other:?}"),
+    }
 }
 
 fn alice() -> Subject {
@@ -203,11 +233,12 @@ impl Xs {
     }
 }
 
+// Launch S-02: the redb/v1 legs died with the decommission; memory stays
+// as the in-RAM reference and aikoql-v2 is the engine under test. Gate 5
+// is self-regression vs the committed v2 baseline (S-03).
 #[derive(Clone, Copy)]
 enum BackendKind {
     Memory,
-    Redb,
-    Aikoql,
     AikoqlV2,
 }
 
@@ -215,15 +246,11 @@ impl BackendKind {
     fn name(self) -> &'static str {
         match self {
             BackendKind::Memory => "memory",
-            BackendKind::Redb => "redb",
-            BackendKind::Aikoql => "aikoql",
             BackendKind::AikoqlV2 => "aikoql-v2",
         }
     }
     fn from_name(s: &str) -> BackendKind {
         match s {
-            "redb" => BackendKind::Redb,
-            "aikoql" => BackendKind::Aikoql,
             "aikoql-v2" => BackendKind::AikoqlV2,
             _ => panic!("unknown loader backend {s}"),
         }
@@ -231,8 +258,6 @@ impl BackendKind {
     fn open(self, path: &Path) -> Arc<dyn StorageEngine> {
         match self {
             BackendKind::Memory => Arc::new(MemoryEngine::new()),
-            BackendKind::Redb => Arc::new(RedbEngine::open(path).unwrap()),
-            BackendKind::Aikoql => Arc::new(AikoqlStorageEngine::open(path).unwrap()),
             BackendKind::AikoqlV2 => Arc::new(AikoqlStorageEngineV2::open(path).unwrap()),
         }
     }
@@ -686,16 +711,64 @@ fn rss_cell(b: &BackendResult) -> String {
     b.rss.map(fmt_bytes).unwrap_or_else(|| "NOT_SAMPLED".into())
 }
 
-/// P50 ratio of the v2 row vs the same row on `base` (None when either
-/// side has no samples) — the gate-5 lens against the v1 baseline.
-fn p50_ratio(v2: &BackendResult, base: &BackendResult, label: &str) -> Option<f64> {
+/// P50 ratio of the v2 row vs the same label's committed baseline P50
+/// (None when either side has no samples) — the gate-5 self-regression
+/// lens (S-03: the v1 baseline died with the decommission).
+fn p50_ratio(v2: &BackendResult, base: &BTreeMap<String, u64>, label: &str) -> Option<f64> {
     let a = v2.rows.iter().find(|r| r.label == label)?;
-    let b = base.rows.iter().find(|r| r.label == label)?;
-    if a.p50 > 0 && b.p50 > 0 {
-        Some(a.p50 as f64 / b.p50 as f64)
+    let b = *base.get(label)?;
+    if a.p50 > 0 && b > 0 {
+        Some(a.p50 as f64 / b as f64)
     } else {
         None
     }
+}
+
+/// The committed self-regression baseline: the aikoql-v2 W1/W2 P50 rows
+/// of the committed artifact at this run's scale (result.json at 100K,
+/// result-1m-aikoql-v2.json at 1M; smoke has no committed baseline).
+/// Hand-parsed — no serde in tests — from the suite's own result_json
+/// format: find the aikoql-v2 backend block, then each label's p50.
+/// Accepts p50_ns (M37 rename) and the pre-M37 p50_us the committed
+/// baselines still carry. Any structural mismatch → None (NOT_EVIDENCED,
+/// never a guessed ratio).
+fn committed_baseline(n: usize) -> Option<BTreeMap<String, u64>> {
+    let file = match n {
+        1_000_000 => "result-1m-aikoql-v2.json",
+        100_000 => "result.json",
+        _ => return None,
+    };
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../artifacts/storage-engine-v2")
+        .join(file);
+    let text = std::fs::read_to_string(&path).ok()?;
+    // The v2 backend block: from its "name" field to the next one (the
+    // committed 1m artifact is a filtered single-backend run; result.json
+    // carries memory first, aikoql-v2 second).
+    let from = text.find("\"name\": \"aikoql-v2\"")? + 8;
+    let to = text[from..]
+        .find("\"name\": ")
+        .map(|i| from + i)
+        .unwrap_or(text.len());
+    let block = &text[from..to];
+    let mut out = BTreeMap::new();
+    for label in ["KO get (W1)", "head get (W2)"] {
+        let at = block.find(&format!("\"label\": \"{label}\""))?;
+        let row = &block[at..];
+        let key = ["\"p50_ns\": ", "\"p50_us\": "]
+            .iter()
+            .find(|k| row.contains(**k))?;
+        let p50_at = row.find(key)?;
+        let digits = &row[p50_at + key.len()..];
+        let end = digits
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(digits.len());
+        if end == 0 {
+            return None;
+        }
+        out.insert(label.to_string(), digits[..end].parse().ok()?);
+    }
+    Some(out)
 }
 
 fn gate_cell(g: Option<bool>) -> &'static str {
@@ -706,27 +779,50 @@ fn gate_cell(g: Option<bool>) -> &'static str {
     }
 }
 
-/// Gate-5 evidence: the v2 KO-lookup P50 slowdown vs the v1 baseline.
-/// The verdict is nightly-gated; the ratios are reported on every run.
-/// Shared by the report and result.json (SE-11) so they cannot drift.
-fn gate5_evidence(backends: &[BackendResult]) -> (Option<bool>, Option<f64>, Option<f64>) {
-    // A filtered run (V2ADOPT_BACKEND) may lack either half of the pair —
-    // then there is no verdict, and the cell reads NOT_EVIDENCED.
-    let (Some(v2), Some(aik)) = (
-        backends.iter().find(|b| b.name == "aikoql-v2"),
-        backends.iter().find(|b| b.name == "aikoql"),
-    ) else {
+/// Gate-5 evidence: the fresh v2 KO-lookup P50 vs the committed v2
+/// baseline at the same scale (self-regression since S-03 — the v1
+/// baseline died with the decommission). The verdict is nightly-gated;
+/// the ratios are reported on every run. Shared by the report and
+/// result.json (SE-11) so they cannot drift.
+fn gate5_evidence(
+    backends: &[BackendResult],
+    sz: Size,
+) -> (Option<bool>, Option<f64>, Option<f64>) {
+    // A scale with no committed baseline (smoke) has no verdict, and
+    // the cell reads NOT_EVIDENCED — same for a v2-less filtered run.
+    let Some(v2) = backends.iter().find(|b| b.name == "aikoql-v2") else {
+        return (None, None, None);
+    };
+    let Some(base) = committed_baseline(sz.n) else {
         return (None, None, None);
     };
     let (r1, r2) = (
-        p50_ratio(v2, aik, "KO get (W1)"),
-        p50_ratio(v2, aik, "head get (W2)"),
+        p50_ratio(v2, &base, "KO get (W1)"),
+        p50_ratio(v2, &base, "head get (W2)"),
     );
     let verdict = nightly().then(|| {
-        r1.is_some_and(|r| r <= GATE5_SLOWDOWN_BOUND)
-            && r2.is_some_and(|r| r <= GATE5_SLOWDOWN_BOUND)
+        r1.is_some_and(|r| r <= GATE5_SELF_REGRESSION_BOUND)
+            && r2.is_some_and(|r| r <= GATE5_SELF_REGRESSION_BOUND)
     });
     (verdict, r1, r2)
+}
+
+#[test]
+fn committed_baseline_parses_v2_rows() {
+    // The committed artifacts must keep both gate-5 labels parseable at
+    // the two scales the matrix runs at (S-03 self-regression). If an
+    // artifact is replaced, this is the tripwire for the hand parser.
+    let base = committed_baseline(100_000)
+        .expect("result.json must carry the aikoql-v2 W1/W2 rows at 100K");
+    assert!(base.contains_key("KO get (W1)") && base.contains_key("head get (W2)"));
+    let base =
+        committed_baseline(1_000_000).expect("result-1m-aikoql-v2.json must carry the rows at 1M");
+    assert!(base.contains_key("KO get (W1)") && base.contains_key("head get (W2)"));
+    assert_eq!(
+        committed_baseline(2_000),
+        None,
+        "smoke has no committed baseline"
+    );
 }
 
 fn benchmark_report(backends: &[BackendResult], sz: Size, filter: Option<&str>) -> String {
@@ -736,26 +832,26 @@ fn benchmark_report(backends: &[BackendResult], sz: Size, filter: Option<&str>) 
         "release"
     };
     let scale = scale_label();
-    let (gate5, r1, r2) = gate5_evidence(backends);
+    let (gate5, r1, r2) = gate5_evidence(backends, sz);
     let filter_note = match filter {
         Some(b) => format!(
-            "Single-backend run ({BACKEND_ENV}={b} — SE2-M28 staged): the matrix holds one row; gate 5 is decided across the aikoql-v2 and aikoql runs' cells.\n"
+            "Single-backend run ({BACKEND_ENV}={b} — SE2-M28 staged): the matrix holds one row; gate 5 compares that row's W1/W2 cells against the committed v2 baseline.\n"
         ),
         None => String::new(),
     };
     let scale_ref = if sz.n == 1_000_000 {
-        "- 1M/10M ingestion scale: v1 1M creates = 1242 s / 645 B per KO heap (KSE-19, measured). v2 at 1M: measured by this run (workloads-1m.md, SE2-M28).\n"
+        "- 1M ingestion scale: v2 at 1M measured by this run (workloads-1m.md, SE2-M28).\n"
     } else {
-        "- 1M/10M ingestion scale: v1 1M creates = 1242 s / 645 B per KO heap (KSE-19, measured). v2 at 1M NOT_MEASURED.\n"
+        "- 1M ingestion scale: v2 at 1M NOT_MEASURED.\n"
     };
 
     let mut s = String::new();
     let date = run_date();
     s.push_str(&format!(
-        "# W1..W8 Workloads — v2 vs redb vs v1 (MRFC-KSE-001 §27-28 + design §26)\n\n\
+        "# W1..W8 Workloads — v2 self-regression (MRFC-KSE-001 §27-28 + design §26)\n\n\
          Date: {date} · profile: {profile} · seed {SEED:#x} · scale: {} KOs / {} deep × {} versions / {} ops ({scale} — strict opt-in)\n\n\
          {filter_note}\
-         The same workload shapes v1's M7 adoption ran, on the same seed. All workloads through the Kernel on `&dyn StorageEngine` (§32). One seeded dataset per backend.\n\n",
+         The same workload shapes the historical M7 matrix (frozen record). All workloads through the Kernel on `&dyn StorageEngine` (§32). One seeded dataset per backend.\n\n",
         sz.n, sz.deep, DEEP_VERSIONS, sz.ops,
     ));
     s.push_str("## §28 matrix — throughput + latency\n\n");
@@ -781,25 +877,24 @@ fn benchmark_report(backends: &[BackendResult], sz: Size, filter: Option<&str>) 
          | 2. dataset larger than RAM remains queryable | PASS | `v2_gate2_3_dataset_larger_than_ram` (this suite): ~820 KB dataset under a 64 KiB memtable + zero cache → served from on-disk segments, full scan byte-exact, survives reopen |\n\
          | 3. memory limits configurable | PASS | the same probe pins both knobs: `memtable_bytes=64 KiB` forced flushes (≥2 SEGMENT files); `cache_bytes=0` detaches the cache (silent stats), a 4 KiB cap is consulted (misses) yet holds nothing (oversize block never retained) |\n\
          | 4. group commit improves concurrent throughput without weakening Sync | — | SE2-M6 suite green (Sync baseline reproduced exactly); throughput evidence = the `SE2M6_NIGHTLY=1` matrix → artifacts/storage-engine-v2/group-commit.md |\n\
-         | 5. KO lookup competitive with the MVP baseline (v1) | {} | W1 {:.2}× v1, W2 {:.2}× v1 (P50; bound ≤ {GATE5_SLOWDOWN_BOUND}× — perf verdict only on a real (non-smoke) matrix run; this run is {scale}) |\n",
+         | 5. KO lookup regression-free vs the committed v2 baseline | {} | W1 {:.2}× baseline, W2 {:.2}× baseline (P50; bound ≤ {GATE5_SELF_REGRESSION_BOUND}× — perf verdict only on a real (non-smoke) matrix run; this run is {scale}) |\n",
         gate_cell(gate5),
         r1.unwrap_or(0.0),
         r2.unwrap_or(0.0),
     ));
     s.push_str("\n## Reference rows (not re-measured here)\n\n");
     s.push_str(&format!(
-        "- snapshot: v2 rides the trait defaults (redb snapshot — REC-002); v1 byte-exact restore pinned (KSE-14); redb single-file opens as redb.\n\
-         - recovery: v2 real-kill recovery pinned by the SE2-M3/M4/M6 suites (recovery-independence.md); v1 by KSE-15.\n\
-         - concurrent mixed load: v2 pinned behaviorally by the SE2-M6 group-commit suite (KSE-13 order); v1 by KSE-13. W8 above is the single-threaded mixed row.\n\
+        "- recovery: v2 real-kill recovery pinned by the SE2-M3/M4/M6 suites (recovery-independence.md).\n\
+         - concurrent mixed load: v2 pinned behaviorally by the SE2-M6 group-commit suite (KSE-13 order). W8 above is the single-threaded mixed row.\n\
          {scale_ref}",
     ));
     s.push_str("\n## Honest metric mapping\n\n");
     s.push_str(
-        "- throughput/latency: per-op wall on one thread; percentiles over the instrumented pass (P50/P95/P99 in µs)\n\
+        "- throughput/latency: per-op wall on one thread; percentiles over the instrumented pass (P50/P95/P99 in ns)\n\
          - bytes read: CountingEngine bytes returned over the workload (get + scan Σ k+v)\n\
          - bytes written: CountingEngine batch Σ put k+v (logical, pre-codec)\n\
          - W6 ingestion P50/P95/P99 = mean commit cost (the seed loop isn't per-op instrumented)\n\
-         - CPU: seed wall, single-threaded (wall ≈ CPU); disk: file (redb/aikoql) or dir (aikoql-v2) at seed end; memory = none\n\
+         - CPU: seed wall, single-threaded (wall ≈ CPU); disk: dir (aikoql-v2) at seed end; memory = none\n\
          - RSS: Windows-only WorkingSet64 poll on a loader child (peak is a lower bound — kse19); CI/ubuntu rows NOT_SAMPLED\n\
          - memory backend: RAM-only reference, not an adoption candidate\n\
          - W2 = the same storage leg as W1 (k.get is the kernel's only public head read — KSE-18 pins head+version rows); \
@@ -940,25 +1035,27 @@ fn filesystem(dir: &Path) -> String {
 /// would leak credentials (e.g. AIKOQL_TCP_TOKEN).
 fn result_json(backends: &[BackendResult], sz: Size, filter: Option<&str>) -> String {
     let args = std::env::args().collect::<Vec<_>>().join(" ");
-    let (gate5, r1, r2) = gate5_evidence(backends);
+    let (gate5, r1, r2) = gate5_evidence(backends, sz);
     // The suite opens the engine at the v2 defaults (engine.rs:
     // AikoqlStorageEngineV2::open → Config::new) — report the live
     // default values, not hardcoded ones.
     let cfg = Config::new(PathBuf::new());
     let env_vars = format!(
-        "{{ {}: {}, {}: {}, {}: {} }}",
+        "{{ {}: {}, {}: {}, {}: {}, {}: {} }}",
         json_str(NIGHTLY_ENV),
         json_str(&std::env::var(NIGHTLY_ENV).unwrap_or_else(|_| "unset".into())),
         json_str(BACKEND_ENV),
         json_str(filter.unwrap_or("unset")),
         json_str(LOADER_ENV),
         json_str(&std::env::var(LOADER_ENV).unwrap_or_else(|_| "unset".into())),
+        json_str(FRESH_ENV),
+        json_str(&std::env::var(FRESH_ENV).unwrap_or_else(|_| "unset".into())),
     );
     let mut s = String::new();
     s.push_str("{\n");
     s.push_str(&format!(
         " \"suite\": {},\n \"generated\": {},\n",
-        json_str("M7 W1..W8 workloads on v2 (MRFC-KSE-001 §27-28 + design §26)"),
+        json_str("M7 W1..W8 workloads on v2 — storage self-regression (MRFC-KSE-001 §27-28 + design §26)"),
         json_str(&run_date()),
     ));
     s.push_str(&format!(
@@ -1023,7 +1120,7 @@ fn result_json(backends: &[BackendResult], sz: Size, filter: Option<&str>) -> St
     }
     s.push_str(" ],\n");
     s.push_str(&format!(
-        " \"gates\": {{ \"gate5_ko_lookup_competitive\": {{ \"verdict\": {}, \"w1_p50_ratio_vs_v1\": {}, \"w2_p50_ratio_vs_v1\": {}, \"bound\": {} }} }}\n",
+        " \"gates\": {{ \"gate5_ko_lookup_self_regression\": {{ \"verdict\": {}, \"w1_p50_ratio_vs_baseline\": {}, \"w2_p50_ratio_vs_baseline\": {}, \"bound\": {} }} }}\n",
         json_str(gate_cell(gate5)),
         match r1 {
             Some(v) => format!("{v:.3}"),
@@ -1033,7 +1130,7 @@ fn result_json(backends: &[BackendResult], sz: Size, filter: Option<&str>) -> St
             Some(v) => format!("{v:.3}"),
             None => "null".into(),
         },
-        GATE5_SLOWDOWN_BOUND,
+        GATE5_SELF_REGRESSION_BOUND,
     ));
     s.push_str("}\n");
     s
@@ -1045,16 +1142,14 @@ fn result_json(backends: &[BackendResult], sz: Size, filter: Option<&str>) -> St
 fn v2_m7_workloads() {
     let sz = size();
     let filter = backend_filter();
+    // S-03: validate the FRESH arm up front — an invalid or contradictory
+    // value must fail the run even when the write block below is skipped.
+    fresh_arm();
     let mut results = Vec::new();
-    let kinds: Vec<BackendKind> = vec![
-        BackendKind::Memory,
-        BackendKind::Redb,
-        BackendKind::Aikoql,
-        BackendKind::AikoqlV2,
-    ]
-    .into_iter()
-    .filter(|k| filter.as_deref().is_none_or(|f| f == k.name()))
-    .collect();
+    let kinds: Vec<BackendKind> = vec![BackendKind::Memory, BackendKind::AikoqlV2]
+        .into_iter()
+        .filter(|k| filter.as_deref().is_none_or(|f| f == k.name()))
+        .collect();
     let mut paths = Vec::new();
     for kind in kinds {
         let path = tmp(&format!("v2-m7-{}", kind.name()));
@@ -1079,13 +1174,13 @@ fn v2_m7_workloads() {
     // The artifact is canonical at adoption scale only — a smoke run (the
     // plain suite) must not clobber it (SE2-M19: it used to).
     //
-    // PR6-F6 (P1-6): V2ADOPT_PERF_SMOKE=1 (strict opt-in, smoke size)
+    // PR6-F6 (P1-6): STORAGE_PERF_SMOKE=1 (strict opt-in, smoke size)
     // writes the -smoke-suffixed twins so the per-commit perf budget has
     // machine-readable rows to diff against its committed baseline.
-    let perf_smoke = match std::env::var("V2ADOPT_PERF_SMOKE") {
+    let perf_smoke = match std::env::var("STORAGE_PERF_SMOKE") {
         Err(std::env::VarError::NotPresent) => false,
         Ok(v) if v == "1" => true,
-        other => panic!("V2ADOPT_PERF_SMOKE strict opt-in: unset or \"1\", got {other:?}"),
+        other => panic!("STORAGE_PERF_SMOKE strict opt-in: unset or \"1\", got {other:?}"),
     };
     if std::env::var_os(NIGHTLY_ENV).is_some() || perf_smoke {
         let dir =
@@ -1093,8 +1188,8 @@ fn v2_m7_workloads() {
         std::fs::create_dir_all(&dir).unwrap();
         // Scale/filter suffixes (SE2-M28): a 1m or single-backend run never
         // clobbers the canonical 100K workloads.md/result.json; the perf
-        // smoke gets its own -smoke suffix (V2ADOPT_NIGHTLY stays unset, so
-        // the run is at smoke size).
+        // smoke gets its own -smoke suffix (STORAGE_REGRESSION stays unset,
+        // so the run is at smoke size).
         let suffix = if std::env::var_os(NIGHTLY_ENV).is_some() {
             artifact_suffix(filter.as_deref())
         } else {
@@ -1213,9 +1308,9 @@ fn v2_gate2_3_dataset_larger_than_ram() {
 /// Remove a seeded dataset once its run is complete — these directories used
 /// to accumulate in the OS temp dir (hundreds of MB per nightly).
 fn cleanup_dataset(path: &Path) {
-    // A backend leaves a file (redb, aikoql v1), a directory (aikoql-v2), or
-    // nothing (Memory — idempotent by contract). remove_dir_all is dir-only:
-    // on a file it fails with 267 on Windows, so dispatch on the path type.
+    // Every backend leaves a directory (aikoql-v2) or nothing (Memory —
+    // idempotent by contract). remove_dir_all is dir-only: on a file it
+    // fails with 267 on Windows, so dispatch on the path type.
     let res = std::fs::symlink_metadata(path).and_then(|m| {
         if m.is_dir() {
             std::fs::remove_dir_all(path)
@@ -1991,7 +2086,7 @@ fn v2_m26_scan_profile() {
          - Date: {}\n\
          - Dataset: one v2 database, {} KOs / {} deep × {DEEP_VERSIONS} versions (SEED {SEED:#x}); one W5 op = `k.scan_by_type` = 1 engine prefix scan over the type index (empty values) + 1 head_object per candidate (2 engine point gets — head + ~1.4 KiB version row — + wire decode + type/Deleted checks + authz read-lock)\n\
          - Index shape (capture-pinned): m7_0 → {} rows → {} returned (harness phase-2 `rmv(.., \"m7_0\")` restated every KO to m7_0); m7_1..99 → {} rows → 0 returned (stale phase-1 entries, rejected by the payload re-check after full decode — stale entries kept by design, kernel.rs:1282); mean candidates per matrix op = {}\n\
-         - Matrix reference (09-05 workloads.md, warm): W5 v2 27451 µs vs v1 5534 µs — the cell mixes both shapes via TYPE_ROUND: 10 rounds × 100 types = 1% m7_0 ops + 99% stale-type ops\n\
+         - Matrix reference (the frozen v1-era 09-05 workloads.md, warm): W5 v2 27451 µs vs v1 5534 µs — the cell mixes both shapes via TYPE_ROUND: 10 rounds × 100 types = 1% m7_0 ops + 99% stale-type ops\n\
          - Decision-tree thresholds (fixed before the run): scan share < 15% → no index (W5 is get-bound); 15–40% → block-summary investigation opens; > 40% → scan-shape work (posting lists); kernel residual > 30% → kernel-side profiling follow-up\n\n",
         if cfg!(debug_assertions) { "debug" } else { "release" },
         run_date(),
@@ -2082,7 +2177,7 @@ fn v2_m26_scan_profile() {
     ));
     // the decision tree, computed against the pre-fixed thresholds
     let scan_verdict = if scan_share < 0.15 {
-        "no type index / no posting lists / no block summaries — W5 is candidate-bound, not scan-bound (the index already resolves candidates; the cost is the per-candidate head_object); its warm gate-5 cell (27451/5534 = 4.96× v1, 09-05) sits inside the amended ≤8× bound"
+        "no type index / no posting lists / no block summaries — W5 is candidate-bound, not scan-bound (the index already resolves candidates; the cost is the per-candidate head_object); its warm gate-5 cell (27451/5534 = 4.96×, the frozen v1-era 09-05 matrix) sat inside the then-current ≤8× adoption bound"
     } else if scan_share < 0.40 {
         "block-summary investigation opens — the scan's own share is material"
     } else {
@@ -2388,7 +2483,7 @@ fn v2_m27_context_profile() {
          - Date: {}\n\
          - Dataset: one v2 database, {} KOs / {} deep × {DEEP_VERSIONS} versions (SEED {SEED:#x}); one W7 op = `k.get(id)` (2 engine point gets — head + ~1.4 KiB version row — + decode + authz) + `outbound_edges(id)` (one `relo/` prefix scan, no gets, no authz) + 10 × `k.get(target)` + `history(id)` (one `ko/` prefix scan + decode + authz per version, no gets)\n\
          - Sample (capture-pinned): the harness's exact W7 draw sequence — {OPS} draws of `Xs(SEED ^ 0x27).below(100000)`, uniform with replacement (a stride sample would ride the ring's block locality and understate the miss rate); hubs included when drawn (100/1000 edges, 11 versions); {} deep draws × 10 versions + {} shallow × 2 (create + ring update)\n\
-         - Matrix reference (09-05 workloads.md, warm): W7 v2 222 µs vs v1 57 µs (3.9× — inside the amended gate-5 bound ≤8×); L1/L6 below run the same op on this machine in two cache regimes (fresh vs post-W1-W5-thrash)\n\
+         - Matrix reference (the frozen v1-era 09-05 workloads.md, warm): W7 v2 222 µs vs v1 57 µs (3.9× — inside the then-current amended ≤8× adoption bound); L1/L6 below run the same op on this machine in two cache regimes (fresh vs post-W1-W5-thrash)\n\
          - Decision-tree thresholds (fixed before the run): scan share < 15% → no scan-shape work (the scans are already single prefix scans); kernel residual > 30% → kernel-side profiling follow-up; batch ratio ≥ 0.90 → parity (M25's falsification holds at W7's mix → no new batch primitives); < 0.80 → reopen the batch question; 0.80–0.90 → re-run before deciding (built in — two batch-vs-loop pairs per run); history share > 30% → the versions path gets its own follow-up\n\n",
         if cfg!(debug_assertions) { "debug" } else { "release" },
         run_date(),

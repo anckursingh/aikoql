@@ -204,22 +204,13 @@ impl Drop for Aikoql {
 #[pymethods]
 impl Aikoql {
     #[new]
-    #[pyo3(signature = (path, salt = 0, backend = None))]
-    fn new(path: &str, salt: u64, backend: Option<&str>) -> PyResult<Self> {
-        // PR6-005 — the ONE authoritative backend decision path
-        // (aikoql_runtime::backend): with no explicit backend the existing
-        // on-disk format is detected (redb file, native WAL, v2 directory);
-        // only a missing path defaults to a fresh aikoql-v2 (2026-09-07
-        // ADR). An unknown explicit value fails closed.
-        let backend = match backend {
-            Some(b) => {
-                Some(aikoql_runtime::backend::Backend::parse(b).map_err(PyValueError::new_err)?)
-            }
-            None => None,
-        };
+    #[pyo3(signature = (path, salt = 0))]
+    fn new(path: &str, salt: u64) -> PyResult<Self> {
+        // Launch S-02 — v2 is the only engine (aikoql_runtime::backend):
+        // a missing path defaults to a fresh aikoql-v2, anything else must
+        // already be a v2 database directory.
         let (engine, _admin) =
-            aikoql_runtime::backend::open_engine(std::path::Path::new(path), backend)
-                .map_err(to_pyerr)?;
+            aikoql_runtime::backend::open_engine(std::path::Path::new(path)).map_err(to_pyerr)?;
         let kernel = Kernel::open(engine, Arc::new(SystemClock), salt).map_err(to_pyerr)?;
         // P5-M18: real ANN/BM25 indexes behind a FULL journal replay — a
         // live-only maintainer (M17b) leaves the vector index permanently

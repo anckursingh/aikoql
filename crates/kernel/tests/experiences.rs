@@ -381,11 +381,11 @@ fn invalidated_experiences_are_not_matched() {
 
 #[test]
 fn experiences_survive_reopen() {
-    let path = std::env::temp_dir().join(format!("aikoql-exp-{}-reopen.redb", std::process::id()));
-    let _ = std::fs::remove_file(&path);
+    let path = std::env::temp_dir().join(format!("aikoql-exp-{}-reopen", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
     let kid = {
         let clock = Arc::new(ManualClock::new(10_000));
-        let store = Arc::new(RedbEngine::open(&path).expect("open"));
+        let store = Arc::new(aikoql_storage_v2::AikoqlStorageEngineV2::open(&path).expect("open"));
         let k = Kernel::open(store, clock, 0xE915).unwrap();
         let kid = record(
             &k,
@@ -405,7 +405,7 @@ fn experiences_survive_reopen() {
         kid
     }; // kernel dropped → file unlocked
     let clock = Arc::new(ManualClock::new(10_000));
-    let store = Arc::new(RedbEngine::open(&path).expect("reopen"));
+    let store = Arc::new(aikoql_storage_v2::AikoqlStorageEngineV2::open(&path).expect("reopen"));
     let k = Kernel::open(store, clock, 0xE915).unwrap();
     let m = k
         .match_experiences(Subject::new("alice"), "cache the hot path", 10)

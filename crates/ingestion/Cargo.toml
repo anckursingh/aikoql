@@ -36,6 +36,8 @@ criterion = { version = "0.5", features = ["html_reports"] }
 flate2 = "1"
 # QA2-CONT-001 restart/rebuild legs: IndexMaintainer journal replay.
 aikoql-scheduler = { path = "../engines/scheduler" }
+# Launch S-02: the continuity chain opens the v2 engine directly.
+aikoql-storage-v2 = { path = "../storage/aikoql-v2" }
 # W3 kernel-state experiments (relate edges in the debug drill).
 aikoql-graph = { path = "../engines/graph" }
 # Wave 5 Phase C: StarRocks adapter for the OLAP comparative harness

@@ -1,0 +1,416 @@
+# CI-02 — the ONE benchmark owner: baseline-guard + benchmark-nightly
+# merged (launch plan CI-02; TESTING-PLAN §5). The tiers:
+#
+#   PR      = cheap per-commit smoke (a ci.yml job since CI-03 — W1–W5
+#             under the 3x budget, fast exit on non-matching paths)
+#   main    = 100K gate-5 self-regression on push to main
+#   nightly = 1M self-regression + the competitor matrix (weekly cron +
+#             dispatch); the guard job also fires on PRs touching the
+#             protected paths (the per-change 1M guard class)
+#   release = weekly full certification (R5 --ignored, skipped-suite
+#             smoke, gated cells ungated, criterion baseline regression)
+#
+# Guard semantics (P5-M0 gd001): the 1M run re-asserts the gate-5
+# self-regression ratio against the committed v2 baseline whenever a
+# protected path changes. Ratio basis (S-03): the committed
+# `result-1m-aikoql-v2.json`; the run writes its fresh twin
+# (`-fresh` suffix, AIKOQL_REPORT_FRESH=1 strict opt-in) so the two
+# artifacts coexist; scripts/gate5-check.py computes the ratio. The v1
+# baseline died with the S-02 decommission.
+#
+# Wired by the dependency-dag job's pins (ci.yml): deleting this file,
+# dropping a protected path from its triggers, un-arming the 1M regime,
+# or re-adding a STORAGE_BACKEND=aikoql leg fails CI (gd001); the
+# shuffle legs are pinned by scripts/check-shuffle-wiring.sh (PR6-F5).
+
+name: Benchmark (the one benchmark owner)
+
+# CodeQL actions/missing-workflow-permissions: benchmark jobs only read
+# the repo and run benchmarks — no contents: write anywhere.
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: '37 3 * * 1' # weekly, Monday 03:37 UTC
+  workflow_dispatch: # manual trigger
+  # CI-06 protected set: the paths whose changes can move the guard's
+  # gate-5 ratio — storage + kernel + engines + the benchmark harness +
+  # the competitor harness + the lockfile (dependency bumps change
+  # numbers), plus the wiring self-paths. crates/compiler + crates/runtime
+  # left at CI-06: they cannot move the 1M storage ratio, and every
+  # non-matching PR pays a 1M guard run otherwise.
+  pull_request:
+    paths:
+      - 'crates/storage/**'
+      - 'crates/kernel/**'
+      - 'crates/engines/**'
+      - 'benchmarks/**'
+      - 'scripts/competitor_bench/**'
+      - 'Cargo.lock'
+      - '.github/workflows/benchmark.yml'
+      - 'scripts/gate5-check.py'
+      - 'scripts/artifact_schema.py'
+      - 'scripts/test_artifact_schema.py'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/storage/**'
+      - 'crates/kernel/**'
+      - 'crates/engines/**'
+      - 'benchmarks/**'
+      - 'scripts/competitor_bench/**'
+      - 'Cargo.lock'
+      - '.github/workflows/benchmark.yml'
+      - 'scripts/gate5-check.py'
+      - 'scripts/artifact_schema.py'
+      - 'scripts/test_artifact_schema.py'
+
+env:
+  CARGO_TERM_COLOR: always
+  # P3-M0: the report legs below regenerate committed artifacts/ files —
+  # arm the report writer (TESTING-PLAN-PHASE3 rule 6). Nothing is committed
+  # from CI; the regenerated files land in the uploaded artifacts only.
+  AIKOQL_REPORT_WRITE: 1
+
+jobs:
+  # PR6-F5 (P1-5): randomized-order run of the PR test set + residue
+  # sweepers. nextest shuffles every test (the printed seed + the retained
+  # run log reproduce a night's failure locally); the sweepers bracket the
+  # run and fail on any listener / temp dir / tree mutation it leaves
+  # behind — the cross-test interference classes caught out-of-band of the
+  # PR loop. Gate: scripts/check-shuffle-wiring.sh (dag job in ci.yml).
+  shuffle:
+    name: Randomized-order run + residue sweepers
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Residue sweep — arm
+        run: bash scripts/check-residue.sh before
+      - name: Randomized-order run
+        run: bash scripts/run-shuffle.sh
+        timeout-minutes: 90
+      # Always run: a failed shuffle's residue is exactly what may explain
+      # the failure (e.g. a test leaked a listener a later test hit).
+      - name: Residue sweep — assert
+        if: always()
+        run: bash scripts/check-residue.sh after
+
+  benchmark:
+    name: Run Benchmarks + Regression Check
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+
+      # R5 durability gate (ignored tests only).
+      - run: cargo test --workspace -- --ignored --test-threads=1
+        timeout-minutes: 30
+
+      # Smoke pass of the minute-scale suites per-push CI skips (ci.yml):
+      # the same regression net, weekly, release mode.
+      # S-02: the v1 crate is decommissioned — only v2 suites remain.
+      - name: Skipped-by-CI suites — smoke (release)
+        run: |
+          cargo test --release -p aikoql-storage-v2 \
+            --test kse_m7_v2_workloads \
+            --test merged_scan \
+            && cargo test --release -p aikoql-ingestion --test wave31_scale
+        timeout-minutes: 60
+
+      # PR6-F2 (P0-2): the gated cells with no other ungated home (the
+      # registry's ungated_by = "none" entries) — run ungated so their
+      # limits can't silently regress. Default regime; where a cell's
+      # sampler is platform-gated the path still executes end to end.
+      - name: Gated cells ungated (registry)
+        run: cargo test --release --workspace -- $(bash scripts/skip-list.sh --ungated)
+        timeout-minutes: 45
+
+      # P3-M2 met007: write-path instrumentation overhead cell (design §21
+      # atomics) — reported to write-stats-overhead.md, lenient sanity
+      # assert only. Strict opt-in.
+      - name: P3-M2 write-stats overhead cell (met007)
+        run: P3M2_ATTRIB=1 cargo test --release -p aikoql-storage-v2 --test kse_m7_v2_workloads v2_p3m2_write_stats_overhead
+        timeout-minutes: 30
+
+      # R14: run all criterion benches, save results under the `ci` baseline.
+      # Bench targets are enumerated so the criterion flags don't reach
+      # libtest bench targets ("Unrecognized option: 'save-baseline'").
+      - name: Run criterion benchmarks
+        run: |
+          cargo bench \
+            -p aikoql-benchmarks --bench hybrid_recall --bench knowledge_ops --bench scale \
+            -p aikoql-kernel --bench kom_benchmark \
+            -p aikoql-ingestion --bench ingest_benchmark \
+            -p aikoql-compiler --bench parse_bench \
+            -- --save-baseline ci
+        timeout-minutes: 90
+
+      # R14: compare against the previous week's baseline; >20% regression
+      # fails the job (scheduled-run failure notifications are the alert).
+      - name: Download previous baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: bench-baseline
+          path: prev-baseline
+        continue-on-error: true
+
+      - name: Compare against previous baseline
+        run: |
+          if [ -d prev-baseline ] && [ -n "$(find prev-baseline -name estimates.json -print -quit)" ]; then
+            python3 benchmarks/scripts/compare_benchmarks.py prev-baseline target/criterion --threshold 20
+          else
+            echo "no previous baseline artifact — first run, skipping comparison"
+          fi
+
+      # Always store this week's results as the new baseline.
+      - name: Upload new baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-baseline
+          path: target/criterion/**/ci/*.json
+          overwrite: true
+          if-no-files-found: error
+
+  # CI-07 — the hybrid knowledge workload rides the nightly tier
+  # (TESTING-PLAN §5): bench.py's full matrix incl. the knowledge_query
+  # cell — identity resolution -> metadata filter -> traversal -> semantic
+  # retrieval -> ranking end-to-end — measured against the composed
+  # stacks (PG+pgvector+app traversal, Mongo+vector via qdrant,
+  # Neo4j+vector). §11 fairness: qdrant alone carries no_analog for the
+  # cell (a vector store is not a knowledge stack). The result lands in
+  # the uploaded artifact — nothing is committed (P3-M0 rule 6); the
+  # laptop re-stamps the published report from the same harness.
+  competitor-matrix:
+    name: Competitor matrix (hybrid knowledge workload)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    services:
+      pg:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: bench
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: bench
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/benchmarkpass
+        ports:
+          - 7474:7474
+          - 7687:7687
+        options: >-
+          --health-cmd "wget --no-check-certificate -qO- http://localhost:7474 >/dev/null || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+      qdrant:
+        # CI-08 (§18): pinned competitor version — explicit tags only, the
+        # digest the run measured lands in result.json's engine_versions.
+        image: qdrant/qdrant:v1.19.1
+        ports:
+          - 6333:6333
+        options: >-
+          --health-cmd "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ping:1}).ok ? 0 : 2)'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release SDK (maturin develop)
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client pymongo
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          cd "$GITHUB_WORKSPACE"
+      - name: Run the competitor matrix (hybrid knowledge cell)
+        run: .venv/bin/python scripts/competitor_bench/bench.py
+      # CI-08 (§13/§18/§14): the nightly artifact must satisfy the same
+      # schema contract the laptop evidence does — fresh at the merge ref,
+      # §13 fields complete, §18 digests recorded where measurable.
+      - name: Schema-validate the competitor artifact
+        run: .venv/bin/python scripts/artifact_schema.py docs/certification/competitors/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: competitor-matrix
+          path: |
+            docs/certification/competitors/result.json
+            docs/certification/competitors/result.csv
+          if-no-files-found: error
+
+  # P5-M0 (gd001) — the 1M gate-5 ratio (fresh vs committed v2). Fires on
+  # every PR/push touching the protected paths AND on the weekly cron
+  # (the nightly-tier 1M self-regression).
+  guard:
+    name: 1M gate-5 ratio (fresh vs committed v2)
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+      # P5-M47: the checker scripts validate their evidence schema and the
+      # artifact freshness stamp — the pins must hold before the gate runs.
+      - name: Checker schema pins
+        shell: bash
+        run: python scripts/test_artifact_schema.py
+      - name: Run 1M v2 workload
+        shell: bash
+        run: |
+          export STORAGE_REGRESSION=1m
+          export STORAGE_BACKEND=aikoql-v2
+          export AIKOQL_REPORT_WRITE=1
+          export AIKOQL_REPORT_FRESH=1
+          cargo test -p aikoql-storage-v2 --release --test kse_m7_v2_workloads
+      - name: Gate-5 ratio check
+        shell: bash
+        run: python scripts/gate5-check.py
+      # P5-M47 (R4-P2-07): the fresh artifact IS the next-baseline evidence —
+      # always uploaded (a red gate is exactly when the evidence is needed),
+      # freshness-stamped by the gate check above. Nothing is committed from
+      # CI (P3-M0 rule 6): the maintainer downloads and commits.
+      - name: Upload fresh 1M v2 artifact (next-baseline evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-1m-v2
+          path: artifacts/storage-engine-v2/result-1m-aikoql-v2-fresh.json
+          if-no-files-found: error
+
+  # CI-02 main tier — the 100K gate-5 self-regression on push to main
+  # (and the weekly cron). The suite self-asserts the 1.5x bound against
+  # the committed result.json at the same scale; the fresh twin is the
+  # next-baseline evidence (uploaded like the guard's).
+  self-regression-main:
+    name: 100K gate-5 self-regression (main)
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+      - name: Checker schema pins
+        shell: bash
+        run: python scripts/test_artifact_schema.py
+      - name: Run 100K v2 workload
+        shell: bash
+        run: |
+          export STORAGE_REGRESSION=1
+          export STORAGE_BACKEND=aikoql-v2
+          export AIKOQL_REPORT_WRITE=1
+          export AIKOQL_REPORT_FRESH=1
+          cargo test -p aikoql-storage-v2 --release --test kse_m7_v2_workloads
+      - name: Upload fresh 100K v2 artifact (next-baseline evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-100k-v2
+          path: artifacts/storage-engine-v2/result-fresh.json
+          if-no-files-found: error
+
+  # P5-M26: the FULL competitor scale harness (100k + 1M + MCP column +
+  # multi-op txn) lives here — the laptop runs only --quick, the big run is
+  # a scheduled/manual job (user directive 2026-09-18). PG is a service
+  # container (bench/bench @ 5433, the harness's PG_DSN); the aikoql sides
+  # use the repo's OWN release SDK (maturin develop) and release aikoql-mcp,
+  # so the fix under test is what gets measured. The result lands in the
+  # uploaded artifact — nothing is committed (P3-M0 rule 6). 360 = the
+  # GitHub-hosted job cap; if the 1M section ever needs more, split the
+  # sections into separate jobs.
+  competitor-scale:
+    name: Competitor scale harness (100k + 1M)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    services:
+      pg:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bench
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: bench
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release aikoql-mcp + native SDK
+        run: |
+          set -euo pipefail
+          cargo build --release -p aikoql-mcp
+          python -m venv .venv
+          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          cd "$GITHUB_WORKSPACE"
+      - name: Run the full scale harness (100k + 1M + MCP + txn)
+        run: |
+          set -euo pipefail
+          .venv/bin/python scripts/competitor_bench/scale.py \
+            --out "$RUNNER_TEMP/scale-result.json"
+          cp "$RUNNER_TEMP/scale-result.json" scale-result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scale-result
+          path: scale-result.json
+          if-no-files-found: error

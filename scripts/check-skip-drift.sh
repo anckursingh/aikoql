@@ -21,7 +21,10 @@ if ! grep -q 'scripts/skip-list.sh' "$ci"; then
   echo "SKIP DRIFT: ci.yml does not use scripts/skip-list.sh — the registry is not wired" >&2
   fail=1
 fi
-if grep -n -- '--skip' "$ci" 2>/dev/null; then
+# Comment lines are prose, not args: a comment quoting the old error text
+# (ci.yml round 4) re-tripped this raw grep on main's dag job — the gate
+# matches live argument lines only.
+if grep -n -- '--skip' "$ci" 2>/dev/null | grep -vE '^[0-9]+:\s*#'; then
   echo "SKIP DRIFT: inline --skip args in ci.yml — the registry is the only skip source" >&2
   fail=1
 fi

@@ -23,6 +23,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --workspace -- -D warnings
       - run: cargo check --workspace
@@ -31,23 +34,18 @@ jobs:
       # every test capable of finding data loss, wrong reads, wrong
       # ordering, corruption or recovery failure runs a REDUCED
       # DETERMINISTIC PR version here; only pure measurement stays
-      # scheduled (weekly release smoke in benchmark-nightly.yml + the
+      # scheduled (weekly release smoke in benchmark.yml + the
       # nightly env at local milestones).
       #
       # | Test                             | Correctness | Performance | Resource | Certification (full version)       |
       # |----------------------------------|:-----------:|:-----------:|:--------:|------------------------------------|
-      # | kse120c_writer_contention        | recovered == acked, byte-exact | latency cells | — | KSE120C_NIGHTLY=1 (20k) |
-      # | m7_workloads (SKIPPED)           | measurement-first matrix — gate verdict is M7_NIGHTLY-gated, shape pins overlap the KSE-01..20 nets | cells | RSS/disk cells | M7_NIGHTLY=1 (100k) |
-      # | kse050_052_relationship_locality | result-size pins + KSE-052 bidirectional | cells | — | KSE6_NIGHTLY=1 (10k hub) |
       # | merged_iterator_correctness      | byte-exact vs oracle | — | — | SE2M12_NIGHTLY=1 (50k steps) |
       # | w31_scale_001                    | probe success 12/12 per scale | cells | 10K synthesis | W31_SCALE_NIGHTLY=1 (100k) |
       # | w31_scale_002                    | probe pins (n=1000 fixed) | cells | — | runs fully on PR |
-      # | kse16/17/18 amp trio + report (SKIPPED) | consistency pins covered by kse20_backend_conformance | — | amplification cells | benchmark-nightly ungated job (P0-2 registry) |
-      # | kse19_resource_usage + report (SKIPPED) | — | — | RSS/disk cells (10k smoke) | KSE19_NIGHTLY=1 (100k + 1M) |
-      # | v2_m7_workloads (SKIPPED)        | verdict is V2ADOPT_NIGHTLY-gated; its 4 correctness siblings in the binary stay; v2 nets = the 40+ reduced SE2 suites | cells | RSS/disk cells | V2ADOPT_NIGHTLY=1 (100k) at milestones |
+      # | v2_m7_workloads (SKIPPED)        | verdict is STORAGE_REGRESSION-gated; v2 nets = the 40+ reduced SE2 suites | cells | RSS/disk cells | STORAGE_REGRESSION=1 (100k) at milestones |
       # | multimodal_golden/retrieval_quality/semantic_extraction_quality (SKIPPED here) | re-run with --nocapture in dedicated steps below — zero coverage loss | quality metrics | — | the dedicated steps |
-      # | kse120c_report (SKIPPED)         | covered by the contention test — same scenarios | report generator | — | weekly release smoke |
-      # | load_encryption_overhead (SKIPPED) | — | pure measurement | — | weekly --ignored release (also #[ignore] in debug) |
+      # | load_encryption_overhead_v2 (SKIPPED) | — | pure measurement | — | weekly --ignored release (also #[ignore] in debug) |
+      # | sfm009_large_wal_snapshot_has_bounded_rss (SKIPPED here) | bounded-RSS correctness (proven locally; RED archived) | — | whole-process RSS cell | local suite |
       #
       # 2026-09-07 re-classification (evidence: run 34088188509): the step
       # timed out at 60 min — test-profile compile 13m26s inside the step,
@@ -92,6 +90,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       # sfm009_large_wal_snapshot_has_bounded_rss (PR6-R3-003): same RSS-cell
       # gating as the Windows job — local-suite test, skipped on CI runners.
       # Skip list derived from tests/gated.toml (PR6-F2 / P0-2).
@@ -117,6 +118,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --workspace -- -D warnings
 
@@ -177,6 +181,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p aikoql-mcp
       - uses: actions/upload-artifact@v4
         with:
@@ -295,6 +302,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test -p aikoql-mcp --test connector_certification -- --nocapture
         env:
           AIKOQL_TEST_PG_DSN: host=localhost port=5432 user=aikoql password=aikoql-ci dbname=knowledge
@@ -332,6 +342,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -346,6 +359,92 @@ jobs:
           cd crates/sdk/python
           "$VIRTUAL_ENV/bin/maturin" develop --release
           "$VIRTUAL_ENV/bin/python" -m pytest tests/ -q
+
+  # PR6-F6 (P1-6) → CI-03 (the review's §16 trap): the per-commit perf
+  # smoke folded into ci.yml. An always-run job with a fast exit on
+  # non-matching paths — a path-gated required workflow skips and a
+  # required skipped check pends forever, so the gate must run and decide.
+  # W1–W5 point lookup / write throughput / scan / hot-cache / small
+  # compaction vs the committed baseline at a 3x budget — 8x for the
+  # fsync-heavy write/compact wall cells (shared Windows runners run
+  # 4-7x the laptop on fsync; run 36099891181 measured 4.11x)
+  # (scripts/perf-smoke-check.py), plus the self-asserting recall cell.
+  perf-smoke:
+    name: Perf smoke (W1–W5, 3x budget)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fast exit — no smoke path changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [ -n "$base" ] && [ "$base" != "0000000000000000000000000000000000000000" ] && \
+             git fetch --depth=1 origin "$base" >/dev/null 2>&1; then
+            if ! git diff --name-only "$base...HEAD" | grep -qE '^crates/storage/|^crates/kernel/|^crates/engines/vector/|^scripts/perf-smoke|^scripts/artifact_schema\.py|^scripts/test_artifact_schema\.py|^artifacts/storage-engine-v2/perf-smoke-baseline\.json'; then
+              echo "no perf-smoke path changed — fast exit"
+              exit 0
+            fi
+          fi
+          echo "perf-smoke path changed — running the full smoke"
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+      # P5-M47: the checker scripts validate their evidence schema and the
+      # artifact freshness stamp — the pins must hold before the gate runs.
+      - name: Checker schema pins
+        shell: bash
+        run: python scripts/test_artifact_schema.py
+      - name: Perf smoke cells + budget check
+        shell: bash
+        run: bash scripts/perf-smoke.sh
+
+  # PR6-F7 (P1-7) → CI-03: the codec/replay coverage floor folded into
+  # ci.yml with the same fast-exit shape. The next "it round-trips but
+  # nobody asserts it" shows up RED: checkpoint.rs / snapshot.rs / wal.rs
+  # must hold their committed line-coverage baseline on every
+  # storage-touching change.
+  coverage-floor:
+    name: Coverage floor (codec/replay)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fast exit — no storage path changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [ -n "$base" ] && [ "$base" != "0000000000000000000000000000000000000000" ] && \
+             git fetch --depth=1 origin "$base" >/dev/null 2>&1; then
+            if ! git diff --name-only "$base...HEAD" | grep -qE '^crates/storage/|^scripts/check-coverage-floor\.sh|^artifacts/coverage/coverage-baseline\.json'; then
+              echo "no coverage-floor path changed — fast exit"
+              exit 0
+            fi
+          fi
+          echo "coverage-floor path changed — running the floor check"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Coverage floor check
+        shell: bash
+        run: bash scripts/check-coverage-floor.sh
 
   dependency-dag:
     name: Verify Dependency DAG
@@ -367,41 +466,6 @@ jobs:
             echo "DAG VIOLATION: kernel must not depend on runtime/compiler"
             exit 1
           fi
-          # P3-M0 (clb002): the estate-hygiene deletions must stay deleted —
-          # no code or script may reference them again.
-          echo "Checking deleted harness references..."
-          if grep -rn 'tests/universal_test_harness\.py\|benchmarks/tests/load_test\.rs\|tests/e2e/' \
-              --include='*.rs' --include='*.py' --include='*.js' --include='*.yml' \
-              --include='*.yaml' --include='*.toml' --include='*.json' \
-              --exclude-dir=node_modules --exclude-dir=.github \
-              . 2>/dev/null; then
-            echo "DAG VIOLATION: reference to a deleted P3-M0 harness"
-            exit 1
-          fi
-          # P3-M9 (sdk002-deletions): the deleted Go/TS/Java SDKs and the
-          # cluster proxy must stay deleted — MCP is the blessed surface
-          # (docs/sdk-proxy-decision.md). No workspace code or doc may
-          # reference them again. (examples/hello-agent.ts lives again —
-          # rewritten on @modelcontextprotocol/sdk; wave31_oss pins its
-          # existence and content.) docs/red-archive/ excluded: the PR6-F1
-          # (P0-1) archives capture the estate gate's own RED output, which
-          # names these paths by design.
-          echo "Checking deleted SDK/proxy references..."
-          if grep -rni 'crates/cluster/proxy\|crates/sdk/go\|crates/sdk/typescript\|crates/sdk/java\|aikoql-sdk\|AikoqlClient' \
-              --exclude='sdk-proxy-decision.md' --exclude='PR6-TDD-DISPOSITIONS.md' \
-              --exclude='check-estate-hygiene.sh' \
-              --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.github \
-              --exclude-dir=red-archive \
-              . 2>/dev/null; then
-            echo "DAG VIOLATION: reference to a deleted P3-M9 SDK or cluster proxy"
-            exit 1
-          fi
-          # PR6-R3-002: the deleted estate must be ABSENT from the tracked
-          # tree, not merely unreferenced (the greps above catch textual
-          # regressions; this catches a re-added file nothing references
-          # yet — RED proven against origin/main through the same script).
-          echo "Checking deleted-estate paths absent from the tree..."
-          bash scripts/check-estate-hygiene.sh
           # PR6-R3-005: the dispositions doc must be stamped at the reviewed
           # tip — its evidence is verified at a specific head, and any
           # change that moves the tip must re-stamp it in the same change
@@ -426,79 +490,90 @@ jobs:
           echo "Checking test env hygiene + seed determinism..."
           bash scripts/check-test-env-hygiene.sh
           # PR6-F5 (P1-5): the nightly shuffle run + its residue sweepers
-          # must stay wired in benchmark-nightly.yml (a workflow step can
+          # must stay wired in benchmark.yml (a workflow step can
           # rot silently in a bad merge).
           echo "Checking shuffle-run wiring..."
           bash scripts/check-shuffle-wiring.sh
           # P5-M0 (gd001): the baseline-certification guard
-          # (.github/workflows/baseline-guard.yml) must stay wired — it runs
+          # (.github/workflows/benchmark.yml's guard job, CI-02) must stay
+          # wired — it runs
           # the 1M v2 workload + gate-5 ratio on every change touching a
-          # protected path (storage/kernel/compiler/runtime).
-          echo "Checking P5-M0 baseline-guard wiring..."
-          GUARD=.github/workflows/baseline-guard.yml
+          # protected path. CI-06: the protected set is storage/kernel/
+          # engines/benchmarks/competitor_bench/Cargo.lock — the paths
+          # that can move the ratio (compiler/runtime left: they cannot).
+          echo "Checking P5-M0 benchmark.yml guard wiring..."
+          GUARD=.github/workflows/benchmark.yml
           if [ ! -f "$GUARD" ]; then
             echo "DAG VIOLATION: $GUARD missing — the gate-5 baseline guard job must exist"
             exit 1
           fi
-          for path in crates/storage crates/kernel crates/compiler crates/runtime; do
+          for path in crates/storage crates/kernel crates/engines benchmarks scripts/competitor_bench Cargo.lock; do
             if ! grep -q "$path" "$GUARD"; then
               echo "DAG VIOLATION: $GUARD must trigger on $path"
               exit 1
             fi
           done
-          if ! grep -q 'V2ADOPT_NIGHTLY=1m' "$GUARD"; then
-            echo "DAG VIOLATION: $GUARD must run the 1M regime (V2ADOPT_NIGHTLY=1m)"
+          if ! grep -q 'STORAGE_REGRESSION=1m' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must run the 1M regime (STORAGE_REGRESSION=1m)"
+            exit 1
+          fi
+          # S-03: the guard compares the fresh run against the committed v2
+          # baseline — the FRESH arm must stay armed, and the dead v1
+          # republish leg (STORAGE_BACKEND=aikoql) must stay deleted.
+          if ! grep -q 'AIKOQL_REPORT_FRESH=1' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must arm AIKOQL_REPORT_FRESH=1 (the fresh twin)"
+            exit 1
+          fi
+          if grep -q 'STORAGE_BACKEND=aikoql$' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must not run a v1 backend leg (decommissioned in S-02)"
             exit 1
           fi
           # P5-M47: the gate's checker schema pins must run in the guard,
-          # and the fresh artifact must be uploaded (the republish evidence)
-          # — either step can rot silently in a bad merge.
+          # and the fresh artifact must be uploaded (the next-baseline
+          # evidence) — either step can rot silently in a bad merge.
           if ! grep -q 'test_artifact_schema.py' "$GUARD"; then
             echo "DAG VIOLATION: $GUARD must run the checker schema pins"
             exit 1
           fi
           if ! grep -q 'upload-artifact' "$GUARD"; then
-            echo "DAG VIOLATION: $GUARD must upload the fresh 1M artifact (the republish evidence)"
+            echo "DAG VIOLATION: $GUARD must upload the fresh 1M artifact (the next-baseline evidence)"
             exit 1
           fi
-          # PR6-F6 (P1-6): the per-commit perf smoke workflow must stay
-          # wired — the cheap gate-5 catches O(n^2)-class storage
-          # regressions at commit time instead of in the nightly 1M guard.
+          # PR6-F6 (P1-6) → CI-03: the per-commit perf smoke is now a
+          # ci.yml job (fast exit on non-matching paths, the review's §16
+          # trap — a path-gated required workflow pends forever). The
+          # cheap gate-5 catches O(n^2)-class storage regressions at
+          # commit time instead of in the nightly 1M guard.
           echo "Checking perf-smoke wiring..."
-          SMOKE=.github/workflows/perf-smoke.yml
-          if [ ! -f "$SMOKE" ]; then
-            echo "DAG VIOLATION: $SMOKE missing — the per-commit perf smoke job must exist"
+          SMOKE=.github/workflows/ci.yml
+          if ! grep -qE '^  perf-smoke:' "$SMOKE"; then
+            echo "DAG VIOLATION: ci.yml must carry the perf-smoke job"
             exit 1
           fi
-          for path in crates/storage crates/kernel crates/engines/vector; do
-            if ! grep -q "$path" "$SMOKE"; then
-              echo "DAG VIOLATION: $SMOKE must trigger on $path"
-              exit 1
-            fi
-          done
+          # CI-03: the fast exit IS the trigger — the path set must stay.
+          if ! grep -q "crates/storage" "$SMOKE" || ! grep -q 'git diff --name-only' "$SMOKE"; then
+            echo "DAG VIOLATION: the perf-smoke fast exit must diff against the base and watch crates/storage"
+            exit 1
+          fi
           if ! grep -q 'perf-smoke.sh' "$SMOKE"; then
-            echo "DAG VIOLATION: $SMOKE must run scripts/perf-smoke.sh"
+            echo "DAG VIOLATION: the perf-smoke job must run scripts/perf-smoke.sh"
             exit 1
           fi
           # P5-M47: the smoke checker's schema pins must run there too.
           if ! grep -q 'test_artifact_schema.py' "$SMOKE"; then
-            echo "DAG VIOLATION: $SMOKE must run the checker schema pins"
+            echo "DAG VIOLATION: the perf-smoke job must run the checker schema pins"
             exit 1
           fi
-          # PR6-F7 (P1-7): the codec/replay coverage floor workflow must
-          # stay wired — a deleted gate lets coverage silently regress.
+          # PR6-F7 (P1-7) → CI-03: the codec/replay coverage floor is now
+          # a ci.yml job with the same fast-exit shape — a deleted gate
+          # lets coverage silently regress.
           echo "Checking coverage-floor wiring..."
-          COV=.github/workflows/coverage-floor.yml
-          if [ ! -f "$COV" ]; then
-            echo "DAG VIOLATION: $COV missing — the coverage floor job must exist"
+          if ! grep -qE '^  coverage-floor:' "$SMOKE"; then
+            echo "DAG VIOLATION: ci.yml must carry the coverage-floor job"
             exit 1
           fi
-          if ! grep -q 'crates/storage' "$COV"; then
-            echo "DAG VIOLATION: $COV must trigger on crates/storage"
-            exit 1
-          fi
-          if ! grep -q 'check-coverage-floor.sh' "$COV"; then
-            echo "DAG VIOLATION: $COV must run scripts/check-coverage-floor.sh"
+          if ! grep -q 'check-coverage-floor.sh' "$SMOKE"; then
+            echo "DAG VIOLATION: the coverage-floor job must run scripts/check-coverage-floor.sh"
             exit 1
           fi
           # PR6-F8 (P1-8): the dogfood review loop must stay wired — the
@@ -521,11 +596,10 @@ jobs:
             echo "DAG VIOLATION: the dogfood compiled section is stale — re-run scripts/dogfood-review-loop.py full"
             exit 1
           fi
-          # PR6-R2-012: vendored node_modules must not be tracked source —
-          # enormous diffs, review noise, lockfile drift. This PR deletes
-          # the 278 paths origin/main still tracks; the gate keeps them
-          # deleted (RED proven against origin/main through the same script).
-          echo "Checking tracked node_modules..."
-          bash scripts/check-no-tracked-node-modules.sh
-          echo "P5-M0 baseline-guard wiring OK"
+          # CI-04: the architecture hygiene gate (S-01 storage legs +
+          # CI-01 workflow legs + the S-04 language leg) joins the dag —
+          # the job asserts the ARCHITECTURE, not deleted-file history
+          # (the P3-M0/P3-M9/R2-012 historical pins were deleted here).
+          echo "Checking architecture hygiene (storage + workflow legs)..."
+          bash scripts/check-architecture-hygiene.sh
           echo "Dependency DAG OK"

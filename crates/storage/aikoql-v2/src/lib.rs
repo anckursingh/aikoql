@@ -28,6 +28,7 @@ pub mod db;
 pub mod engine;
 pub mod format;
 pub mod identity;
+pub mod legacy_envelope;
 pub mod memtable;
 pub mod migration;
 pub mod placement;

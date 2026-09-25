@@ -7,7 +7,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-redb = "2"
 tokio = { version = "1", features = ["rt", "sync", "macros"] }
 sha2 = "0.10"
 hmac = "0.12"
@@ -21,6 +20,9 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
+# Launch S-02: crash/durability suites open the v2 engine directly
+# (dev-dep cycles are legal in cargo).
+aikoql-storage-v2 = { path = "../storage/aikoql-v2" }
 aikoql-vector = { path = "../engines/vector" }
 aikoql-scheduler = { path = "../engines/scheduler" }
 aikoql-graph = { path = "../engines/graph" }

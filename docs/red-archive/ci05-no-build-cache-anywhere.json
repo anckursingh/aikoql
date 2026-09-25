@@ -1,0 +1,8 @@
+{
+  "id": "ci05-no-build-cache-anywhere",
+  "pre_fix_commit": "582eacc",
+  "command": "grep -q Swatinem/rust-cache .github/workflows/ci.yml .github/workflows/benchmark.yml .github/workflows/release.yml",
+  "captured_at": "2026-09-25T08:01:32Z",
+  "captured_head": "582eacc9b88b21eca41c910c316ae68f06fbf2f0",
+  "exit_code": 1
+}

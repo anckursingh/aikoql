@@ -1,0 +1,97 @@
+ARCH: deprecated storage crate is a workspace member: crates/storage/aikoql
+ARCH: deprecated storage crate is a workspace member: crates/storage/rocksdb
+ARCH: production dep on a deprecated backend: crates/runtime/Cargo.toml:16:aikoql-storage = { path = "../storage/aikoql" }
+ARCH: production dep on a deprecated backend: crates/sdk/python/Cargo.toml:15:aikoql-storage = { path = "../../storage/aikoql" }
+ARCH: production dep on a deprecated backend: crates/services/api/mcp/Cargo.toml:11:aikoql-storage = { path = "../../../storage/aikoql" }
+ARCH: production dep on a deprecated backend: crates/storage/aikoql-v2/Cargo.toml:13:aikoql-storage = { path = "../aikoql" }
+ARCH: v1 API reference in production code: crates/runtime/src/backend.rs:22:use aikoql_storage::AikoqlStorageEngine;
+ARCH: v1 API reference in production code: crates/storage/aikoql-v2/src/migration.rs:30:use aikoql_storage::envelope::{self, ParseOutcome};
+ARCH: redb reference in production code: crates/kernel/Cargo.toml:10:redb = "2"
+ARCH: redb reference in production code: crates/kernel/examples/crash_writer.rs:4://! Commits N knowledge objects with well-known explicit KOIDs to a redb file,
+ARCH: redb reference in production code: crates/kernel/src/storage/encrypted.rs:215:            std::env::temp_dir().join(format!("aikoql_enc_snap_{}.redb", std::process::id()));
+ARCH: redb reference in production code: crates/kernel/src/storage/store.rs:5://! Increment 2 adds durable backends (`redb` / RocksDB) implementing the same
+ARCH: redb reference in production code: crates/kernel/src/storage/store.rs:114:    /// region-locked (Windows redb), so a file-level copy cannot work.
+ARCH: redb reference in production code: crates/kernel/src/storage/store_redb.rs:1://! Durable `StorageEngine` backend over redb (pure-Rust ACID embedded KV).
+ARCH: redb reference in production code: crates/kernel/src/storage/store_redb.rs:4://! - `write_batch` -> one redb write transaction: atomic by ACID, fsync'd at
+ARCH: redb reference in production code: crates/kernel/src/storage/store_redb.rs:6://! - `scan` -> redb range iterator over an ordered B-tree: ascending key order.
+ARCH: redb reference in production code: crates/kernel/src/storage/store_redb.rs:7://! - redb `Database` is `Send + Sync`: readers use short-lived read txns.
+ARCH: redb reference in production code: crates/kernel/src/storage/store_redb.rs:14:use redb::{Database, TableDefinition};
+ARCH: redb reference in production code: crates/kernel/src/storage/store_redb.rs:20:    KError::Store(format!("redb: {}", e))
+ARCH: redb reference in production code: crates/kernel/src/storage/store_redb.rs:30:    /// Fail-closed on corrupt/truncated files (FAULT-009): redb asserts
+ARCH: redb reference in production code: crates/kernel/src/storage/store_redb.rs:48:                "redb: corrupt or truncated database file: {}",
+ARCH: redb reference in production code: crates/kernel/src/storage/store_redb.rs:140:            "aikoql_redb_unit_{}_{}.redb",
+ARCH: redb reference in production code: crates/kernel/src/transaction/kernel.rs:4834:        let path = dir.join(format!("aikoql_sub_reopen_{}.redb", std::process::id()));
+ARCH: redb reference in production code: crates/kernel/src/transaction/kernel.rs:4854:        drop(k2); // redb holds a live file lock — release before cleanup
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:15://! through to redb (redb validates its own header and fails closed on
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:34:/// `"redb"`, `"aikoql"`, `"aikoql-v2"` — anything else fails closed at the
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:46:            "redb" => Ok(Backend::Redb),
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:50:                "unknown storage backend {other:?}: use \"redb\", \"aikoql\" or \"aikoql-v2\""
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:80:/// redb, whose own header validation fails closed — the native WAL parser
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:128:                // Sidecars next to the registered stem (`{stem}.redb.artifacts`).
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:199:        let p = scratch("redb-existing");
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:208:        drop(engine); // redb holds a live file lock — read the head bytes after close
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:216:            "the redb file must not be rewritten as a native WAL"
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:249:        let p = scratch("explicit-redb");
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:255:            "explicit redb must create a redb file, not a v2 directory"
+ARCH: redb reference in production code: crates/runtime/src/backend.rs:294:        assert_eq!(Backend::parse("redb"), Ok(Backend::Redb));
+ARCH: redb reference in production code: crates/sdk/python/python/aikoql/agent.py:54:            # decides aikoql-v2 / redb / v1 from what is on disk.
+ARCH: redb reference in production code: crates/sdk/python/src/lib.rs:211:        // on-disk format is detected (redb file, native WAL, v2 directory);
+ARCH: redb reference in production code: crates/services/api/mcp/src/admin.rs:42:    let data_path = format!("{}/data.redb", dir_name);
+ARCH: redb reference in production code: crates/services/api/mcp/src/admin.rs:68:    let data_path = format!("{}/data.redb", backup_dir);
+ARCH: redb reference in production code: crates/services/api/mcp/src/cli.rs:58:        "  aikoql-mcp serve --listen :9090 --tcp-token s3cret:acme:admin ./kb.redb\n",
+ARCH: redb reference in production code: crates/services/api/mcp/src/cli.rs:59:        "  aikoql-mcp serve --listen :9090 --tcp-token s3cret:acme:admin --metrics-addr :9091 ./kb.redb\n",
+ARCH: redb reference in production code: crates/services/api/mcp/src/cli.rs:60:        "  aikoql-mcp backup ./kb.redb                # Create backup\n",
+ARCH: redb reference in production code: crates/services/api/mcp/src/cli.rs:61:        "  aikoql-mcp restore kb.redb.backup.12345    # Restore backup\n",
+ARCH: redb reference in production code: crates/services/api/mcp/src/config.rs:46:    /// (`aikoql_runtime::backend::detect_backend` — a redb file stays redb,
+ARCH: redb reference in production code: crates/services/api/mcp/src/config.rs:244:/// file named `./aikoql.redb` now falls back to this. A legacy redb file is
+ARCH: redb reference in production code: crates/services/api/mcp/src/config.rs:245:/// opened by passing its path (or `--backend redb`) explicitly.
+ARCH: redb reference in production code: crates/services/api/mcp/src/config.rs:295:                // through the one pipeline (was rejected unless "redb" —
+ARCH: redb reference in production code: crates/services/api/mcp/src/config.rs:533:                None => return Err("--backend requires a value: redb|aikoql|aikoql-v2".into()),
+ARCH: redb reference in production code: crates/services/api/mcp/src/config.rs:655:    /// → CLI. The review's chain: TOML aikoql, env aikoql-v2, CLI redb ⇒
+ARCH: redb reference in production code: crates/services/api/mcp/src/config.rs:656:    /// redb.
+ARCH: redb reference in production code: crates/services/api/mcp/src/config.rs:671:            let args = argv(&["aikoql-mcp", "--config", &toml_path, "--backend", "redb"]);
+ARCH: redb reference in production code: crates/services/api/mcp/src/config.rs:1076:        let cfg = load_bare(&argv(&["aikoql-mcp", "./my.redb"])).unwrap();
+ARCH: redb reference in production code: crates/services/api/mcp/src/config.rs:1077:        assert_eq!(cfg.db_path, "./my.redb");
+ARCH: redb reference in production code: crates/services/api/mcp/src/engine.rs:91:                // Sidecars next to the registered stem (`{stem}.redb.artifacts`).
+ARCH: redb reference in production code: crates/services/api/mcp/src/engine.rs:142:    /// funnel every subcommand uses): an existing redb database opens
+ARCH: redb reference in production code: crates/services/api/mcp/src/engine.rs:143:    /// through auto-detection (a v2-defaulted open would fail on the redb
+ARCH: redb reference in production code: crates/services/api/mcp/src/engine.rs:152:        let path = scratch("startup-redb");
+ARCH: redb reference in production code: crates/services/api/mcp/src/engine.rs:161:        } // redb holds a live file lock — read the head bytes after close
+ARCH: redb reference in production code: crates/services/api/mcp/src/engine.rs:169:            "the redb file must survive the startup path unrewritten"
+ARCH: redb reference in production code: crates/services/api/mcp/src/shell.rs:309:            let backup_data = format!("{}/data.redb", dir_name);
+ARCH: redb reference in production code: crates/services/api/mcp/src/tests.rs:19:            // redb sidecar next to the registered stem (`{stem}.redb.artifacts`).
+ARCH: redb reference in production code: crates/services/api/mcp/src/tests.rs:35:    let p = std::env::temp_dir().join(format!("mnemo-{tag}-{}.redb", std::process::id()));
+ARCH: redb reference in production code: crates/services/api/mcp/src/tools/admin.rs:9:// the serving backend (redb/v1) has no admin surface: the tool answers with
+ARCH: redb reference in production code: crates/services/api/mcp/src/tools/admin.rs:164:    // redb/v1 — verifies through the redb open below.
+ARCH: redb reference in production code: crates/services/api/mcp/src/tools/admin.rs:269:    // redb/v1 backends keep the REC-002 trait-default scan (untouched).
+ARCH: redb reference in production code: crates/services/api/mcp/src/tools/admin.rs:300:/// The snapshot format is redb regardless of the production backend
+ARCH: redb reference in production code: crates/services/api/mcp/src/tools/admin.rs:302:/// backup AS redb explicitly, never through the AIKOQL_BACKEND-selected
+ARCH: redb reference in production code: crates/services/api/mcp/src/tools/admin.rs:324:/// db's filename (meta.json "source") — never a hard-coded data.redb.
+ARCH: redb reference in production code: crates/services/api/mcp/src/tools/admin.rs:339:    // Fallback: any redb file in the backup dir.
+ARCH: redb reference in production code: crates/services/api/mcp/src/tools/admin.rs:344:        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("redb"))
+ARCH: redb reference in production code: crates/services/api/mcp/src/tools/admin.rs:363:    // A redb-format backup on a v2 server still restores through the
+ARCH: redb reference in production code: crates/services/api/mcp/src/transport.rs:423:            "mcp-tcp-auth-{}-{}.redb",
+ARCH: redb reference in production code: crates/storage/aikoql/Cargo.toml:17:# KSE-5 harness: redb stats for the locality comparison.
+ARCH: redb reference in production code: crates/storage/aikoql/Cargo.toml:18:redb = "2"
+ARCH: redb reference in production code: crates/storage/aikoql/src/lib.rs:12://! checkpointing with bounded replay plus a redb → aikoql migration story
+ARCH: redb reference in production code: crates/storage/aikoql-v2/src/engine.rs:17://! beside it; the trait defaults (full scan + redb snapshot) serve the
+ARCH: redb reference in production code: crates/storage/rocksdb/src/lib.rs:4://! LSM-tree engine with concurrent readers AND writers (unlike redb's
+ARCH: redb reference in production code: benchmarks/benches/scale.rs:22://! - dataset metrics: KO count, edge count, on-disk (redb) bytes/KO,
+ARCH: redb reference in production code: benchmarks/benches/scale.rs:147:/// One-shot dataset metrics: KO/edge counts, redb on-disk bytes at 1K KOs,
+ARCH: redb reference in production code: benchmarks/benches/scale.rs:152:    // On-disk size via a throwaway redb store (MemoryEngine has no disk).
+ARCH: redb reference in production code: benchmarks/benches/scale.rs:153:    let redb_path = std::env::temp_dir().join(format!("aikoql-bench-{}.redb", std::process::id()));
+ARCH: v1 backend-selection machinery in production: crates/runtime/src/backend.rs:90:             name an explicit backend (--backend / AIKOQL_BACKEND / storage.backend)",
+ARCH: v1 backend-selection machinery in production: crates/services/api/mcp/src/config.rs:389:    if let Some(v) = env_opt("AIKOQL_BACKEND") {
+ARCH: v1 backend-selection machinery in production: crates/services/api/mcp/src/config.rs:390:        cfg.backend = Some(StorageBackend::parse(&v).map_err(|m| format!("AIKOQL_BACKEND: {m}"))?);
+ARCH: v1 backend-selection machinery in production: crates/services/api/mcp/src/config.rs:663:            std::env::remove_var("AIKOQL_BACKEND");
+ARCH: v1 backend-selection machinery in production: crates/services/api/mcp/src/config.rs:667:            std::env::set_var("AIKOQL_BACKEND", "aikoql-v2");
+ARCH: v1 backend-selection machinery in production: crates/services/api/mcp/src/config.rs:673:            std::env::remove_var("AIKOQL_BACKEND");
+ARCH: v1 backend-selection machinery in production: crates/services/api/mcp/src/config.rs:685:            std::env::remove_var("AIKOQL_BACKEND");
+ARCH: v1 backend-selection machinery in production: crates/services/api/mcp/src/config.rs:689:            std::env::set_var("AIKOQL_BACKEND", "nope");
+ARCH: v1 backend-selection machinery in production: crates/services/api/mcp/src/config.rs:691:            std::env::remove_var("AIKOQL_BACKEND");
+ARCH: v1 backend-selection machinery in production: crates/services/api/mcp/src/engine.rs:150:        std::env::remove_var("AIKOQL_BACKEND");
+ARCH: v1 backend-selection machinery in production: crates/services/api/mcp/src/tools/admin.rs:302:/// backup AS redb explicitly, never through the AIKOQL_BACKEND-selected
+ARCH: v1 backend-selection machinery in production: crates/storage/aikoql/src/lib.rs:10://! `AIKOQL_BACKEND=aikoql` / `storage.backend = "aikoql"`
+ARCH: kernel carries the deprecated redb backend (store_redb.rs)
+ARCH: harness pins the v1 backend selection: scripts/competitor_bench/scale.py:77:    env = dict(os.environ, AIKOQL_BACKEND="aikoql-v2")
+EXIT=1

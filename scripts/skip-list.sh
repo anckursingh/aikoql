@@ -5,7 +5,7 @@
 #   skip-list.sh             -> "--skip load_encryption_overhead ..."
 #   skip-list.sh --ungated   -> the names with ungated_by = "none" (space-
 #                              separated test-name filters) — the cells the
-#                              benchmark-nightly "Gated cells ungated" job
+#                              benchmark.yml "Gated cells ungated" job
 #                              re-runs so their limits stay honest
 set -euo pipefail
 mode="${1:-skip}"
