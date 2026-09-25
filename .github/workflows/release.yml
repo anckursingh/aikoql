@@ -89,6 +89,202 @@ jobs:
           git push origin "$TAG"
           echo "::notice::pushed tag $TAG"
 
+  # ── CI-09: Tier-3 launch certification (TESTING-PLAN §6) ──────────
+  # The release evidence pack that ships with the tag: the full
+  # correctness suite (incl. the concurrency/recovery cells — the suite IS
+  # their carrier) on Linux + Windows, the coverage floor, the full-scale
+  # benchmark harness (100k + 1M + MCP column + multi-op txn), and the
+  # competitor matrix with its §13/§18 schema-checked report trio (the
+  # benchmark report artifact). Every leg reuses the ci.yml/benchmark.yml
+  # invocation verbatim — a release measures exactly what CI measures,
+  # gated cells and pinned images included.
+  tier3-correctness:
+    name: Tier-3 correctness (Linux)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job.
+      - uses: Swatinem/rust-cache@v2
+      # The CI invocation verbatim — the skip list gates measurement-only
+      # cells (SE-06), never correctness (same as ci.yml's test-linux).
+      - run: cargo test --workspace -- $(bash scripts/skip-list.sh)
+        shell: bash
+        timeout-minutes: 180
+
+  tier3-correctness-windows:
+    name: Tier-3 correctness (Windows)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate-versions
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job.
+      - uses: Swatinem/rust-cache@v2
+      # bash, not pwsh: the $(...) here is bash word-splitting (the
+      # CI-rounds-2-3 lesson, same as ci.yml's Windows test job).
+      - run: cargo test --workspace -- $(bash scripts/skip-list.sh)
+        shell: bash
+        timeout-minutes: 180
+
+  tier3-coverage:
+    name: Tier-3 coverage floor
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate-versions
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      # CI-05: cargo cache in every build job.
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Coverage floor check
+        shell: bash
+        run: bash scripts/check-coverage-floor.sh
+
+  tier3-scale:
+    name: Tier-3 scale certification (100k + 1M)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    services:
+      pg:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bench
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: bench
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job.
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release aikoql-mcp + native SDK
+        run: |
+          set -euo pipefail
+          cargo build --release -p aikoql-mcp
+          python -m venv .venv
+          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          cd "$GITHUB_WORKSPACE"
+      - name: Run the full scale harness (100k + 1M + MCP + txn)
+        run: |
+          set -euo pipefail
+          .venv/bin/python scripts/competitor_bench/scale.py \
+            --out "$RUNNER_TEMP/scale-result.json"
+          cp "$RUNNER_TEMP/scale-result.json" scale-result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tier3-scale-result
+          path: scale-result.json
+          if-no-files-found: error
+
+  tier3-matrix:
+    name: Tier-3 competitor matrix + report artifact
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    services:
+      pg:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: bench
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: bench
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/benchmarkpass
+        ports:
+          - 7474:7474
+          - 7687:7687
+        options: >-
+          --health-cmd "wget --no-check-certificate -qO- http://localhost:7474 >/dev/null || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+      qdrant:
+        # CI-08 (§18): pinned competitor version — explicit tags only, the
+        # digest the run measured lands in result.json's engine_versions.
+        image: qdrant/qdrant:v1.19.1
+        ports:
+          - 6333:6333
+        options: >-
+          --health-cmd "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ping:1}).ok ? 0 : 2)'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job.
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release SDK (maturin develop)
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client pymongo
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          cd "$GITHUB_WORKSPACE"
+      - name: Run the competitor matrix (hybrid knowledge cell)
+        run: .venv/bin/python scripts/competitor_bench/bench.py
+      # CI-08 (§13/§18/§14): the release artifact must satisfy the same
+      # schema contract the laptop evidence does.
+      - name: Schema-validate the competitor artifact
+        run: .venv/bin/python scripts/artifact_schema.py docs/certification/competitors/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tier3-competitor-matrix
+          path: |
+            docs/certification/competitors/result.json
+            docs/certification/competitors/result.csv
+          if-no-files-found: error
+
   # ── Windows binary ──────────────────────────────────────────────
   windows:
     name: Build Windows (x86_64)

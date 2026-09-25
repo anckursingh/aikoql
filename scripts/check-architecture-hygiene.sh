@@ -28,7 +28,8 @@
 # (CI-03 grows it to W1–W5). The tests flip green through CI-02/CI-03;
 # CI-05 adds test 6 (build jobs cached), CI-06 adds test 7 (required
 # checks never path-filter), CI-07 adds test 8 (the hybrid knowledge
-# workload wired), CI-08 adds test 9 (reproducible results + reports).
+# workload wired), CI-08 adds test 9 (reproducible results + reports),
+# CI-09 adds test 10 (the Tier-3 release certification).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -156,11 +157,29 @@ else
     # run-signature patterns: the dag job's own pins quote these strings
     # (a pin reference is not a run — post-CI-02 the guard pins in ci.yml
     # name the 1M regime as a grep pattern)
-    if grep -qE 'export STORAGE_REGRESSION=1m|competitor_bench/scale.py' ".github/workflows/$other.yml"; then
-      echo "ARCH: $other.yml carries a 1M/competitor leg — benchmark.yml owns it alone" >&2
+    if grep -qE 'export STORAGE_REGRESSION=1m' ".github/workflows/$other.yml"; then
+      echo "ARCH: $other.yml carries the gate-5 1M regime — benchmark.yml owns it alone" >&2
       fail=1
     fi
   done
+  # CI-09 amends the one-owner rule: release.yml may carry the benchmark
+  # legs as Tier-3 tag-gated certification — but ONLY inside the tier3
+  # jobs. ci.yml never runs a competitor leg, and the release legs must
+  # not drift out of their tier3 job.
+  if grep -q 'competitor_bench/scale.py' ".github/workflows/ci.yml"; then
+    echo "ARCH: ci.yml carries a competitor leg — benchmark.yml owns it (CI-02)" >&2
+    fail=1
+  fi
+  if grep -q 'competitor_bench/scale.py' ".github/workflows/release.yml" && \
+     ! sed -n '/^  tier3-scale:/,/^  [a-z][a-z0-9_-]*:$/p' ".github/workflows/release.yml" | grep -q 'competitor_bench/scale.py'; then
+    echo "ARCH: release.yml's scale leg must live in the tier3-scale job (CI-09)" >&2
+    fail=1
+  fi
+  if grep -q 'competitor_bench/bench.py' ".github/workflows/release.yml" && \
+     ! sed -n '/^  tier3-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' ".github/workflows/release.yml" | grep -q 'competitor_bench/bench.py'; then
+    echo "ARCH: release.yml's matrix leg must live in the tier3-matrix job (CI-09)" >&2
+    fail=1
+  fi
 fi
 for gone in baseline-guard benchmark-nightly; do
   if [ -f ".github/workflows/$gone.yml" ]; then
@@ -238,7 +257,7 @@ fi
 # docker job builds inside the image — neither is a build job.
 for spec in "ci check test-linux lint build-release connectors python-sdk perf-smoke coverage-floor" \
             "benchmark shuffle benchmark guard self-regression-main competitor-scale competitor-matrix" \
-            "release windows linux-gnu linux-musl macos-intel macos-arm pypi-publish"; do
+            "release windows linux-gnu linux-musl macos-intel macos-arm pypi-publish tier3-correctness tier3-correctness-windows tier3-coverage tier3-scale tier3-matrix"; do
   wf="${spec%% *}"
   for job in ${spec#* }; do
     if ! sed -n "/^  $job:/,/^  [a-z][a-z0-9_-]*:$/p" ".github/workflows/$wf.yml" | grep -q 'Swatinem/rust-cache'; then
@@ -333,6 +352,49 @@ if ! printf '%s\n' "$matrix" | grep -q 'result.csv'; then
   echo "ARCH: the competitor-matrix job must upload the §14 csv leg (CI-08)" >&2
   fail=1
 fi
+
+# workflow test 10 — test_release_tier3_certification (CI-09): the release
+# workflow carries the TESTING-PLAN §6 evidence pack — full correctness on
+# both OSes (the CI invocation verbatim, gated cells included), the
+# coverage floor, the full-scale harness, and the competitor matrix with
+# its §13 schema check + §18 pinned images.
+for job in tier3-correctness tier3-correctness-windows tier3-coverage tier3-scale tier3-matrix; do
+  if ! grep -qE "^  $job:" "$REL"; then
+    echo "ARCH: $REL lacks the Tier-3 job: $job (CI-09)" >&2
+    fail=1
+  fi
+done
+if ! grep -q 'cargo test --workspace -- $(bash scripts/skip-list.sh)' "$REL"; then
+  echo "ARCH: the Tier-3 correctness jobs must reuse the CI suite invocation (CI-09)" >&2
+  fail=1
+fi
+if ! grep -q 'check-coverage-floor.sh' "$REL"; then
+  echo "ARCH: $REL lacks the Tier-3 coverage-floor leg (CI-09)" >&2
+  fail=1
+fi
+if ! grep -q 'competitor_bench/scale.py' "$REL"; then
+  echo "ARCH: $REL lacks the Tier-3 full-scale harness leg (CI-09)" >&2
+  fail=1
+fi
+if ! grep -q 'competitor_bench/bench.py' "$REL"; then
+  echo "ARCH: $REL lacks the Tier-3 competitor-matrix leg (CI-09)" >&2
+  fail=1
+fi
+t3m=$(sed -n '/^  tier3-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL")
+if ! printf '%s\n' "$t3m" | grep -q 'artifact_schema.py docs/certification/competitors/result.json'; then
+  echo "ARCH: the tier3-matrix job must schema-validate its artifact (§13, CI-09)" >&2
+  fail=1
+fi
+if printf '%s\n' "$t3m" | grep -q ':latest'; then
+  echo "ARCH: the tier3-matrix job carries an unpinned image (§18, CI-09)" >&2
+  fail=1
+fi
+for img in pgvector/pgvector neo4j:5-community qdrant/qdrant mongo:7; do
+  if ! printf '%s\n' "$t3m" | grep -q "$img"; then
+    echo "ARCH: the tier3-matrix job lacks the composed-stack image: $img (CI-09)" >&2
+    fail=1
+  fi
+done
 
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
