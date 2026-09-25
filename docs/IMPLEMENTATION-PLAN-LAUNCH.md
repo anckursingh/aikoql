@@ -311,6 +311,26 @@ unchanged, scalar fields byte-identical), and the kernel's default
 traverse direction merges inbound + outbound (the cell filters to
 outbound via the per-hit direction tag).
 
+CI-08 shipped 2026-09-25 — reproducible results + reports. The competitor
+artifact is machine-checked against the §13 contract with named errors
+and a freshness stamp: `artifact_schema.py` gains `validate_competitor`
+(per-engine cpu_seconds/memory_mb/disk_bytes + environment os/cpu/ram/
+cache_state/harness_sha + config/dataset + §18 engine_versions) and
+dispatches from the artifact's own shape (engines → competitor, backends
+→ 1M); bench.py emits the fields (CPU = the cgroup delta across the bench
+call — v2 cpu.stat with a v1 cpuacct.usage fallback, since Docker
+Desktop's WSL2 VM mounts cgroup v1; aikoql's is in-process), records
+image+digest evidence per composed stack, and writes the §14 result.csv
+leg (the trio: json/md/csv — the nightly job uploads json+csv and runs
+the same validator, so nightly evidence satisfies the same contract).
+§18 pins: no `:latest` anywhere — qdrant moves to `qdrant/qdrant:v1.19.1`
+in benchmark.yml + containers.sh (same digest as what :latest pulled),
+digests recorded in the artifact; the arch gate's workflow test 9 pins
+the §13 fields, the validator, the csv upload, and fails on any unpinned
+image (mutation-verified). Schema pins: 9 new competitor tests (23
+total). RED archived as `ci08-no-section13-schema` (exit 1 at b7ffac1:
+bench.py carried no cpu_seconds; flips to exit 0 with the field).
+
 ### Phase L — correctness matrices (review 1), launch sequence
 
 (L-00 is done this session — the skip-drift gate is comment-aware, and a
@@ -355,7 +375,7 @@ Everything from review 1's §36, plus review 2's §23:
 - [ ] The three-workflow estate exists with one benchmark owner; PR CI materially faster (measured).
 - [ ] Architecture hygiene protects the CURRENT architecture (storage + workflows), not history.
 - [ ] Self-regression (current vs committed baseline) is separate from competitive benchmarking; competitors are nightly/manual and version-pinned.
-- [ ] The hybrid knowledge workload is benchmarked with the §13 schema + report trio; results reproducible.
+- [x] The hybrid knowledge workload is benchmarked with the §13 schema + report trio; results reproducible.
 - [ ] Cargo caching consistent; path filters never leave a required check pending.
 - [ ] Release/package/Docker/E2E gates remain covered.
 - [ ] All 16 review-1 DoD items (sorted-publish precondition, memtable accounting, flush equivalence, restart safety, cache churn/wrap, WAL checked arithmetic + semantics, per-replica winners, stale-publication race, shutdown preservation, checkpoint/WAL five-layer reconstruction, no identifier collisions, placement equivalence, structural perf counters, CI mutation REDs, correctness before perf claims) — green.
