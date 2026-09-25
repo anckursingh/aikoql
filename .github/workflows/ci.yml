@@ -342,6 +342,84 @@ jobs:
           "$VIRTUAL_ENV/bin/maturin" develop --release
           "$VIRTUAL_ENV/bin/python" -m pytest tests/ -q
 
+  # PR6-F6 (P1-6) → CI-03 (the review's §16 trap): the per-commit perf
+  # smoke folded into ci.yml. An always-run job with a fast exit on
+  # non-matching paths — a path-gated required workflow skips and a
+  # required skipped check pends forever, so the gate must run and decide.
+  # W1–W5 point lookup / write throughput / scan / hot-cache / small
+  # compaction vs the committed baseline at a 3x budget
+  # (scripts/perf-smoke-check.py), plus the self-asserting recall cell.
+  perf-smoke:
+    name: Perf smoke (W1–W5, 3x budget)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fast exit — no smoke path changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [ -n "$base" ] && [ "$base" != "0000000000000000000000000000000000000000" ] && \
+             git fetch --depth=1 origin "$base" >/dev/null 2>&1; then
+            if ! git diff --name-only "$base...HEAD" | grep -qE '^crates/storage/|^crates/kernel/|^crates/engines/vector/|^scripts/perf-smoke|^scripts/artifact_schema\.py|^scripts/test_artifact_schema\.py|^artifacts/storage-engine-v2/perf-smoke-baseline\.json'; then
+              echo "no perf-smoke path changed — fast exit"
+              exit 0
+            fi
+          fi
+          echo "perf-smoke path changed — running the full smoke"
+      - uses: dtolnay/rust-toolchain@stable
+      # P5-M47: the checker scripts validate their evidence schema and the
+      # artifact freshness stamp — the pins must hold before the gate runs.
+      - name: Checker schema pins
+        shell: bash
+        run: python scripts/test_artifact_schema.py
+      - name: Perf smoke cells + budget check
+        shell: bash
+        run: bash scripts/perf-smoke.sh
+
+  # PR6-F7 (P1-7) → CI-03: the codec/replay coverage floor folded into
+  # ci.yml with the same fast-exit shape. The next "it round-trips but
+  # nobody asserts it" shows up RED: checkpoint.rs / snapshot.rs / wal.rs
+  # must hold their committed line-coverage baseline on every
+  # storage-touching change.
+  coverage-floor:
+    name: Coverage floor (codec/replay)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fast exit — no storage path changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [ -n "$base" ] && [ "$base" != "0000000000000000000000000000000000000000" ] && \
+             git fetch --depth=1 origin "$base" >/dev/null 2>&1; then
+            if ! git diff --name-only "$base...HEAD" | grep -qE '^crates/storage/|^scripts/check-coverage-floor\.sh|^artifacts/coverage/coverage-baseline\.json'; then
+              echo "no coverage-floor path changed — fast exit"
+              exit 0
+            fi
+          fi
+          echo "coverage-floor path changed — running the floor check"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Coverage floor check
+        shell: bash
+        run: bash scripts/check-coverage-floor.sh
+
   dependency-dag:
     name: Verify Dependency DAG
     runs-on: ubuntu-latest
@@ -468,44 +546,41 @@ jobs:
             echo "DAG VIOLATION: $GUARD must upload the fresh 1M artifact (the next-baseline evidence)"
             exit 1
           fi
-          # PR6-F6 (P1-6): the per-commit perf smoke workflow must stay
-          # wired — the cheap gate-5 catches O(n^2)-class storage
-          # regressions at commit time instead of in the nightly 1M guard.
+          # PR6-F6 (P1-6) → CI-03: the per-commit perf smoke is now a
+          # ci.yml job (fast exit on non-matching paths, the review's §16
+          # trap — a path-gated required workflow pends forever). The
+          # cheap gate-5 catches O(n^2)-class storage regressions at
+          # commit time instead of in the nightly 1M guard.
           echo "Checking perf-smoke wiring..."
-          SMOKE=.github/workflows/perf-smoke.yml
-          if [ ! -f "$SMOKE" ]; then
-            echo "DAG VIOLATION: $SMOKE missing — the per-commit perf smoke job must exist"
+          SMOKE=.github/workflows/ci.yml
+          if ! grep -qE '^  perf-smoke:' "$SMOKE"; then
+            echo "DAG VIOLATION: ci.yml must carry the perf-smoke job"
             exit 1
           fi
-          for path in crates/storage crates/kernel crates/engines/vector; do
-            if ! grep -q "$path" "$SMOKE"; then
-              echo "DAG VIOLATION: $SMOKE must trigger on $path"
-              exit 1
-            fi
-          done
+          # CI-03: the fast exit IS the trigger — the path set must stay.
+          if ! grep -q "crates/storage" "$SMOKE" || ! grep -q 'git diff --name-only' "$SMOKE"; then
+            echo "DAG VIOLATION: the perf-smoke fast exit must diff against the base and watch crates/storage"
+            exit 1
+          fi
           if ! grep -q 'perf-smoke.sh' "$SMOKE"; then
-            echo "DAG VIOLATION: $SMOKE must run scripts/perf-smoke.sh"
+            echo "DAG VIOLATION: the perf-smoke job must run scripts/perf-smoke.sh"
             exit 1
           fi
           # P5-M47: the smoke checker's schema pins must run there too.
           if ! grep -q 'test_artifact_schema.py' "$SMOKE"; then
-            echo "DAG VIOLATION: $SMOKE must run the checker schema pins"
+            echo "DAG VIOLATION: the perf-smoke job must run the checker schema pins"
             exit 1
           fi
-          # PR6-F7 (P1-7): the codec/replay coverage floor workflow must
-          # stay wired — a deleted gate lets coverage silently regress.
+          # PR6-F7 (P1-7) → CI-03: the codec/replay coverage floor is now
+          # a ci.yml job with the same fast-exit shape — a deleted gate
+          # lets coverage silently regress.
           echo "Checking coverage-floor wiring..."
-          COV=.github/workflows/coverage-floor.yml
-          if [ ! -f "$COV" ]; then
-            echo "DAG VIOLATION: $COV missing — the coverage floor job must exist"
+          if ! grep -qE '^  coverage-floor:' "$SMOKE"; then
+            echo "DAG VIOLATION: ci.yml must carry the coverage-floor job"
             exit 1
           fi
-          if ! grep -q 'crates/storage' "$COV"; then
-            echo "DAG VIOLATION: $COV must trigger on crates/storage"
-            exit 1
-          fi
-          if ! grep -q 'check-coverage-floor.sh' "$COV"; then
-            echo "DAG VIOLATION: $COV must run scripts/check-coverage-floor.sh"
+          if ! grep -q 'check-coverage-floor.sh' "$SMOKE"; then
+            echo "DAG VIOLATION: the coverage-floor job must run scripts/check-coverage-floor.sh"
             exit 1
           fi
           # PR6-F8 (P1-8): the dogfood review loop must stay wired — the

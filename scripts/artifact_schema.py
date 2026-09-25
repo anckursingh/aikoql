@@ -112,7 +112,15 @@ def validate_smoke_cells(path):
     if not isinstance(cells, dict):
         raise SchemaError(f"{path}: missing field: cells")
     out = {}
-    for key in ("w1_ko_get_p50_ns", "w2_head_get_p50_ns", "hot_head_p50_ns"):
+    for key in (
+        "w1_ko_get_p50_ns",
+        "w2_head_get_p50_ns",
+        "write_p50_ns",
+        "scan_p50_ns",
+        "hot_head_p50_ns",
+        "compact_wall_ms",
+        "compact_allocs",
+    ):
         if key not in cells:
             raise SchemaError(f"{path}: missing field: {key} in baseline cells")
         out[key] = _num(cells[key], path, key)

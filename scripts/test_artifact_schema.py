@@ -124,24 +124,32 @@ class SchemaPins(unittest.TestCase):
             "cells": {
                 "w1_ko_get_p50_ns": 6600.0,
                 "w2_head_get_p50_ns": 6300.0,
+                "write_p50_ns": 4100.0,
+                "scan_p50_ns": 900.0,
+                "hot_head_p50_ns": 1300.0,
+                "compact_wall_ms": 12.0,
             }
         }
         p = write_json("perf-smoke-baseline.json", o)
         with self.assertRaises(SchemaError) as cm:
             artifact_schema.validate_smoke_cells(str(p))
-        self.assertIn("missing field: hot_head_p50_ns", str(cm.exception))
+        self.assertIn("missing field: compact_allocs", str(cm.exception))
 
     def test_smoke_baseline_cells_valid(self):
         o = {
             "cells": {
                 "w1_ko_get_p50_ns": 6600.0,
                 "w2_head_get_p50_ns": 6300.0,
+                "write_p50_ns": 4100.0,
+                "scan_p50_ns": 900.0,
                 "hot_head_p50_ns": 1300.0,
+                "compact_wall_ms": 12.0,
+                "compact_allocs": 500.0,
             }
         }
         p = write_json("perf-smoke-baseline.json", o)
         cells = artifact_schema.validate_smoke_cells(str(p))
-        self.assertEqual(cells["hot_head_p50_ns"], 1300.0)
+        self.assertEqual(cells["compact_allocs"], 500.0)
 
     def test_unreadable_file_flags_for_the_hint(self):
         with self.assertRaises(SchemaError) as cm:

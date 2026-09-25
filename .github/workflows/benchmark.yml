@@ -1,8 +1,8 @@
 # CI-02 — the ONE benchmark owner: baseline-guard + benchmark-nightly
 # merged (launch plan CI-02; TESTING-PLAN §5). The tiers:
 #
-#   PR      = cheap per-commit smoke (perf-smoke.yml; folded into ci.yml
-#             by CI-03)
+#   PR      = cheap per-commit smoke (a ci.yml job since CI-03 — W1–W5
+#             under the 3x budget, fast exit on non-matching paths)
 #   main    = 100K gate-5 self-regression on push to main
 #   nightly = 1M self-regression + the competitor matrix (weekly cron +
 #             dispatch); the guard job also fires on PRs touching the

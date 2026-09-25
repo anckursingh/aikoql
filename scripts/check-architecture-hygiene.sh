@@ -135,7 +135,7 @@ else
     echo "ARCH: $BENCH must run the competitor scale harness" >&2
     fail=1
   fi
-  for other in ci perf-smoke coverage-floor release; do
+  for other in ci release; do
     # run-signature patterns: the dag job's own pins quote these strings
     # (a pin reference is not a run — post-CI-02 the guard pins in ci.yml
     # name the 1M regime as a grep pattern)
@@ -163,21 +163,28 @@ if ! grep -q 'scripts/competitor_bench/scale.py' .github/workflows/*.yml; then
   fail=1
 fi
 
-# workflow test 4 — test_perf_smoke_remains_wired: the perf smoke carries
-# the review's five cells (point lookup, write throughput, scan, hot-cache,
-# small compaction) under the 3x budget — CI-03 grows the 3 committed
-# cells to W1–W5
-SMOKE=.github/workflows/perf-smoke.yml
-if [ ! -f "$SMOKE" ]; then
-  echo "ARCH: $SMOKE missing — the per-commit perf smoke job must exist" >&2
+# workflow test 4 — test_perf_smoke_remains_wired: the perf smoke is a
+# ci.yml job (CI-03 — folded from perf-smoke.yml, fast exit on
+# non-matching paths so the required check never pends) carrying the
+# review's five cells (point lookup, write throughput, scan, hot-cache,
+# small compaction) under the 3x budget
+SMOKE=.github/workflows/ci.yml
+if ! grep -qE '^  perf-smoke:' "$SMOKE"; then
+  echo "ARCH: ci.yml is missing the perf-smoke job — CI-03 folds perf-smoke.yml into ci.yml" >&2
   fail=1
 elif ! grep -q 'perf-smoke.sh' "$SMOKE"; then
-  echo "ARCH: $SMOKE must run scripts/perf-smoke.sh" >&2
+  echo "ARCH: the perf-smoke job must run scripts/perf-smoke.sh" >&2
   fail=1
 elif ! grep -q '3x' "$SMOKE"; then
-  echo "ARCH: $SMOKE must declare the 3x budget" >&2
+  echo "ARCH: the perf-smoke job must declare the 3x budget" >&2
   fail=1
 fi
+for gone in perf-smoke coverage-floor; do
+  if [ -f ".github/workflows/$gone.yml" ]; then
+    echo "ARCH: .github/workflows/$gone.yml still exists — CI-03 folds it into ci.yml" >&2
+    fail=1
+  fi
+done
 for cell in kse_m7_v2_workloads hot_head_gate throughput scan compact; do
   if ! grep -q "$cell" scripts/perf-smoke.sh; then
     echo "ARCH: perf smoke is missing the review cell: $cell" >&2
