@@ -117,9 +117,9 @@ aikoql-v2; gate 5 = the fresh W1/W2 P50s vs the committed v2 baseline at
 the same scale (result.json at 100K, result-1m-aikoql-v2.json at 1M, smoke
 NOT_EVIDENCED), bound 1.5× (GATE5_SELF_REGRESSION_BOUND — same-runner P50s
 are stable; the per-commit smoke keeps its 3× budget). `AIKOQL_REPORT_FRESH=1`
-(strict opt-in; requires V2ADOPT_NIGHTLY + AIKOQL_REPORT_WRITE=1) writes the
+(strict opt-in; requires STORAGE_REGRESSION + AIKOQL_REPORT_WRITE=1) writes the
 -fresh twin beside the committed baseline so a gate run can never clobber
-it; `V2ADOPT_BACKEND` accepts only memory/aikoql-v2 (the dead aikoql leg
+it; `STORAGE_BACKEND` accepts only memory/aikoql-v2 (the dead aikoql leg
 fails closed at the filter — RED `s03-v1-estate-sweep`, exit 101 at
 b1e90e2). baseline-guard: the v1 republish job is deleted (guard cost
 halves); the guard arms FRESH and uploads the fresh twin as the
@@ -127,8 +127,27 @@ next-baseline evidence; the gd001 pin forbids a re-added aikoql leg. The
 committed baselines predate the M37 *_ns rename, so the guard is RED on
 the stale 1M baseline BY DESIGN until the maintainer commits the first
 uploaded fresh twin (scripts/gate5-check.py stays strict; the suite's hand
-parser accepts p50_us for the historical rows). S-04 (concept rename +
-docs) and S-05 (benchmark harness) remain.
+parser accepts p50_us for the historical rows). S-05 (benchmark harness)
+remains.
+
+S-04 shipped 2026-09-25 — the adoption-era language is gone from the
+functional surfaces. The env names are renamed: `V2ADOPT_NIGHTLY` →
+`STORAGE_REGRESSION`, `V2ADOPT_BACKEND` → `STORAGE_BACKEND`,
+`V2ADOPT_PERF_SMOKE` → `STORAGE_PERF_SMOKE`, `V2ADOPT_LOADER` →
+`STORAGE_LOADER`, `V2ADOPT_LOADER_BACKEND` → `STORAGE_LOADER_BACKEND`
+(Rust const names like `NIGHTLY_ENV` are internal and stay; the neutral
+`AIKOQL_REPORT_WRITE`/`AIKOQL_REPORT_FRESH` keep their names). Gate 5 is
+redefined in §26 as current-vs-committed-baseline self-regression (the
+1.5× bound on same-scale W1/W2 P50s — the v1 baseline died with S-02). The
+pre-launch plans/reviews (`ARCHITECT-REVIEW-2026-09.md`, the PHASE3/PHASE5
+implementation + testing plans, the V2 implementation + testing plans) are
+marked HISTORICAL at the top, not deleted; `PR6-TDD-DISPOSITIONS.md` and
+the benchmark artifacts stay untouched as frozen evidence. The language
+leg lives in `scripts/check-estate-hygiene.sh` (crates/scripts/.github/
+tests/gated.toml/AGENTS.md must carry no V2ADOPT-era env names — the
+bracket pattern keeps the gate from self-matching). RED archived as
+`s04-v2adopt-language` (exit 1 at 75a5d89). S-05 (benchmark harness)
+remains.
 
 ### Phase CI — three workflows (review 2, §1/§19)
 
