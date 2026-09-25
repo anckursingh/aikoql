@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launch S-01: architecture hygiene gate — the storage leg (review 2 §8/§22,
-# docs/IMPLEMENTATION-PLAN-LAUNCH.md). Six assertions, all RED against the
+# docs/IMPLEMENTATION-PLAN-LAUNCH.md). Seven assertions, all RED against the
 # pre-S-02 tree, green when the phase ends:
 #   1. aikoql-storage-v2 is a workspace member and no other storage backend
 #      crate is (the deprecated members are crates/storage/aikoql + rocksdb).
@@ -15,6 +15,10 @@
 #   6. The harness language itself is v2-only: no redb name, no backend=
 #      kwarg-style selection in the rust or python harness (4a/4b cover
 #      `crates benchmarks`; this adds scripts/competitor_bench and the kwarg).
+#   7. The adoption-era env language is gone (S-04, folded here at CI-04):
+#      no V2ADOPT-era names on the functional surfaces (crates/scripts/
+#      .github/tests/gated.toml/AGENTS.md; historical docs keep the old
+#      names by design).
 #
 # Workflow leg (CI-01, review 2 §22 TDD): five tests prescribing the
 # POST-consolidation workflow estate, asserted by name (never via file
@@ -22,7 +26,7 @@
 # exist yet (CI-02 merges baseline-guard + benchmark-nightly into the one
 # benchmark owner) and the perf smoke carries 3 of the review's 5 cells
 # (CI-03 grows it to W1–W5). The tests flip green through CI-02/CI-03.
-# The dag wiring rides CI-04 (a RED gate must not enter CI).
+# Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$root"
@@ -98,6 +102,16 @@ harness="$(grep -rnE '\bredb\b|AIKOQL_BACKEND|backend[[:space:]]*=' benchmarks s
   --include='*.rs' --include='*.py' 2>/dev/null || true)"
 if [ -n "$harness" ]; then
   echo "$harness" | sed 's/^/ARCH: v1 backend language in the harness: /' >&2
+  fail=1
+fi
+
+# 7. the adoption-era env language is gone (S-04): V2ADOPT-era names must
+# be ABSENT from the functional surfaces (crates/scripts/.github/
+# tests/gated.toml/AGENTS.md; historical docs keep the old names by
+# design). The bracket in the pattern keeps the gate from self-matching.
+langbad="$(git grep -nE 'V2ADOPT[_]' -- crates scripts .github tests/gated.toml AGENTS.md || true)"
+if [ -n "$langbad" ]; then
+  echo "$langbad" | sed 's/^/ARCH: V2ADOPT-era language present (S-04 rename to STORAGE_*): /' >&2
   fail=1
 fi
 

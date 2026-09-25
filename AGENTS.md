@@ -49,8 +49,8 @@ the architect review.
   `python scripts/dogfood-review-loop.py full`, then commit the re-emitted
   doc AS THE TIP. The tip commit is always the re-stamp.
 - **Gates** (run before declaring anything done): the `scripts/check-*.sh`
-  chain (node-modules, estate hygiene, red archives, skip drift, test-env
-  hygiene, shuffle wiring, disposition head) + `cargo fmt --check` +
+  chain (architecture hygiene, red archives, skip drift, test-env hygiene,
+  shuffle wiring, disposition head) + `cargo fmt --check` +
   `cargo clippy --workspace -- -D warnings`.
 - **Test hygiene**: no unseeded RNG or bare `set_var` in test code
   (`scripts/check-test-env-hygiene.sh`); env-gated cells register in

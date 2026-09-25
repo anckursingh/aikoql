@@ -440,41 +440,6 @@ jobs:
             echo "DAG VIOLATION: kernel must not depend on runtime/compiler"
             exit 1
           fi
-          # P3-M0 (clb002): the estate-hygiene deletions must stay deleted —
-          # no code or script may reference them again.
-          echo "Checking deleted harness references..."
-          if grep -rn 'tests/universal_test_harness\.py\|benchmarks/tests/load_test\.rs\|tests/e2e/' \
-              --include='*.rs' --include='*.py' --include='*.js' --include='*.yml' \
-              --include='*.yaml' --include='*.toml' --include='*.json' \
-              --exclude-dir=node_modules --exclude-dir=.github \
-              . 2>/dev/null; then
-            echo "DAG VIOLATION: reference to a deleted P3-M0 harness"
-            exit 1
-          fi
-          # P3-M9 (sdk002-deletions): the deleted Go/TS/Java SDKs and the
-          # cluster proxy must stay deleted — MCP is the blessed surface
-          # (docs/sdk-proxy-decision.md). No workspace code or doc may
-          # reference them again. (examples/hello-agent.ts lives again —
-          # rewritten on @modelcontextprotocol/sdk; wave31_oss pins its
-          # existence and content.) docs/red-archive/ excluded: the PR6-F1
-          # (P0-1) archives capture the estate gate's own RED output, which
-          # names these paths by design.
-          echo "Checking deleted SDK/proxy references..."
-          if grep -rni 'crates/cluster/proxy\|crates/sdk/go\|crates/sdk/typescript\|crates/sdk/java\|aikoql-sdk\|AikoqlClient' \
-              --exclude='sdk-proxy-decision.md' --exclude='PR6-TDD-DISPOSITIONS.md' \
-              --exclude='check-estate-hygiene.sh' \
-              --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.github \
-              --exclude-dir=red-archive \
-              . 2>/dev/null; then
-            echo "DAG VIOLATION: reference to a deleted P3-M9 SDK or cluster proxy"
-            exit 1
-          fi
-          # PR6-R3-002: the deleted estate must be ABSENT from the tracked
-          # tree, not merely unreferenced (the greps above catch textual
-          # regressions; this catches a re-added file nothing references
-          # yet — RED proven against origin/main through the same script).
-          echo "Checking deleted-estate paths absent from the tree..."
-          bash scripts/check-estate-hygiene.sh
           # PR6-R3-005: the dispositions doc must be stamped at the reviewed
           # tip — its evidence is verified at a specific head, and any
           # change that moves the tip must re-stamp it in the same change
@@ -603,11 +568,10 @@ jobs:
             echo "DAG VIOLATION: the dogfood compiled section is stale — re-run scripts/dogfood-review-loop.py full"
             exit 1
           fi
-          # PR6-R2-012: vendored node_modules must not be tracked source —
-          # enormous diffs, review noise, lockfile drift. This PR deletes
-          # the 278 paths origin/main still tracks; the gate keeps them
-          # deleted (RED proven against origin/main through the same script).
-          echo "Checking tracked node_modules..."
-          bash scripts/check-no-tracked-node-modules.sh
-          echo "P5-M0 benchmark.yml guard wiring OK"
+          # CI-04: the architecture hygiene gate (S-01 storage legs +
+          # CI-01 workflow legs + the S-04 language leg) joins the dag —
+          # the job asserts the ARCHITECTURE, not deleted-file history
+          # (the P3-M0/P3-M9/R2-012 historical pins were deleted here).
+          echo "Checking architecture hygiene (storage + workflow legs)..."
+          bash scripts/check-architecture-hygiene.sh
           echo "Dependency DAG OK"

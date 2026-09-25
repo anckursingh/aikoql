@@ -1,0 +1,8 @@
+{
+  "id": "ci04-dag-pins-history",
+  "pre_fix_commit": "ea9aa77",
+  "command": "sh -c f=0; grep -qE 'universal_test_harness|check-estate-hygiene|check-no-tracked-node-modules' .github/workflows/ci.yml && { echo the-dag-job-still-pins-the-historical-estate; f=1; }; grep -q check-architecture-hygiene.sh .github/workflows/ci.yml || { echo the-dag-job-lacks-the-architecture-gate; f=1; }; exit $f",
+  "captured_at": "2026-09-25T05:48:54Z",
+  "captured_head": "ea9aa77b4dd64723849bdcd4de0b1c83aafbe759",
+  "exit_code": 1
+}
