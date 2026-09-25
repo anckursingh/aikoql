@@ -12,8 +12,8 @@ nature; only the fresh side of a comparison must be stamped at the head
 under test.
 
 Also the CI republish gate: `python scripts/artifact_schema.py <path>`
-validates and freshness-stamps one artifact (baseline-guard's republish
-job runs it on the files it uploads).
+validates and freshness-stamps one artifact (benchmark.yml's guard job
+runs it on the files it uploads).
 """
 import json
 import subprocess

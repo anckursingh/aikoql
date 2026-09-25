@@ -1,9 +1,60 @@
-name: Benchmark (Weekly)
+# CI-02 — the ONE benchmark owner: baseline-guard + benchmark-nightly
+# merged (launch plan CI-02; TESTING-PLAN §5). The tiers:
+#
+#   PR      = cheap per-commit smoke (perf-smoke.yml; folded into ci.yml
+#             by CI-03)
+#   main    = 100K gate-5 self-regression on push to main
+#   nightly = 1M self-regression + the competitor matrix (weekly cron +
+#             dispatch); the guard job also fires on PRs touching the
+#             protected paths (the per-change 1M guard class)
+#   release = weekly full certification (R5 --ignored, skipped-suite
+#             smoke, gated cells ungated, criterion baseline regression)
+#
+# Guard semantics (P5-M0 gd001): the 1M run re-asserts the gate-5
+# self-regression ratio against the committed v2 baseline whenever a
+# protected path changes. Ratio basis (S-03): the committed
+# `result-1m-aikoql-v2.json`; the run writes its fresh twin
+# (`-fresh` suffix, AIKOQL_REPORT_FRESH=1 strict opt-in) so the two
+# artifacts coexist; scripts/gate5-check.py computes the ratio. The v1
+# baseline died with the S-02 decommission.
+#
+# Wired by the dependency-dag job's pins (ci.yml): deleting this file,
+# dropping a protected path from its triggers, un-arming the 1M regime,
+# or re-adding a STORAGE_BACKEND=aikoql leg fails CI (gd001); the
+# shuffle legs are pinned by scripts/check-shuffle-wiring.sh (PR6-F5).
+
+name: Benchmark (the one benchmark owner)
+
+# CodeQL actions/missing-workflow-permissions: benchmark jobs only read
+# the repo and run benchmarks — no contents: write anywhere.
+permissions:
+  contents: read
 
 on:
   schedule:
     - cron: '37 3 * * 1' # weekly, Monday 03:37 UTC
   workflow_dispatch: # manual trigger
+  pull_request:
+    paths:
+      - 'crates/storage/**'
+      - 'crates/kernel/**'
+      - 'crates/compiler/**'
+      - 'crates/runtime/**'
+      - '.github/workflows/benchmark.yml'
+      - 'scripts/gate5-check.py'
+      - 'scripts/artifact_schema.py'
+      - 'scripts/test_artifact_schema.py'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/storage/**'
+      - 'crates/kernel/**'
+      - 'crates/compiler/**'
+      - 'crates/runtime/**'
+      - '.github/workflows/benchmark.yml'
+      - 'scripts/gate5-check.py'
+      - 'scripts/artifact_schema.py'
+      - 'scripts/test_artifact_schema.py'
 
 env:
   CARGO_TERM_COLOR: always
@@ -11,11 +62,6 @@ env:
   # arm the report writer (TESTING-PLAN-PHASE3 rule 6). Nothing is committed
   # from CI; the regenerated files land in the uploaded artifacts only.
   AIKOQL_REPORT_WRITE: 1
-
-# CodeQL actions/missing-workflow-permissions: benchmark only reads the repo
-# (artifact upload/download does not need contents: write).
-permissions:
-  contents: read
 
 jobs:
   # PR6-F5 (P1-5): randomized-order run of the PR test set + residue
@@ -26,6 +72,7 @@ jobs:
   # PR loop. Gate: scripts/check-shuffle-wiring.sh (dag job in ci.yml).
   shuffle:
     name: Randomized-order run + residue sweepers
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -48,6 +95,7 @@ jobs:
 
   benchmark:
     name: Run Benchmarks + Regression Check
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -122,6 +170,75 @@ jobs:
           overwrite: true
           if-no-files-found: error
 
+  # P5-M0 (gd001) — the 1M gate-5 ratio (fresh vs committed v2). Fires on
+  # every PR/push touching the protected paths AND on the weekly cron
+  # (the nightly-tier 1M self-regression).
+  guard:
+    name: 1M gate-5 ratio (fresh vs committed v2)
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # P5-M47: the checker scripts validate their evidence schema and the
+      # artifact freshness stamp — the pins must hold before the gate runs.
+      - name: Checker schema pins
+        shell: bash
+        run: python scripts/test_artifact_schema.py
+      - name: Run 1M v2 workload
+        shell: bash
+        run: |
+          export STORAGE_REGRESSION=1m
+          export STORAGE_BACKEND=aikoql-v2
+          export AIKOQL_REPORT_WRITE=1
+          export AIKOQL_REPORT_FRESH=1
+          cargo test -p aikoql-storage-v2 --release --test kse_m7_v2_workloads
+      - name: Gate-5 ratio check
+        shell: bash
+        run: python scripts/gate5-check.py
+      # P5-M47 (R4-P2-07): the fresh artifact IS the next-baseline evidence —
+      # always uploaded (a red gate is exactly when the evidence is needed),
+      # freshness-stamped by the gate check above. Nothing is committed from
+      # CI (P3-M0 rule 6): the maintainer downloads and commits.
+      - name: Upload fresh 1M v2 artifact (next-baseline evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-1m-v2
+          path: artifacts/storage-engine-v2/result-1m-aikoql-v2-fresh.json
+          if-no-files-found: error
+
+  # CI-02 main tier — the 100K gate-5 self-regression on push to main
+  # (and the weekly cron). The suite self-asserts the 1.5x bound against
+  # the committed result.json at the same scale; the fresh twin is the
+  # next-baseline evidence (uploaded like the guard's).
+  self-regression-main:
+    name: 100K gate-5 self-regression (main)
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Checker schema pins
+        shell: bash
+        run: python scripts/test_artifact_schema.py
+      - name: Run 100K v2 workload
+        shell: bash
+        run: |
+          export STORAGE_REGRESSION=1
+          export STORAGE_BACKEND=aikoql-v2
+          export AIKOQL_REPORT_WRITE=1
+          export AIKOQL_REPORT_FRESH=1
+          cargo test -p aikoql-storage-v2 --release --test kse_m7_v2_workloads
+      - name: Upload fresh 100K v2 artifact (next-baseline evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fresh-100k-v2
+          path: artifacts/storage-engine-v2/result-fresh.json
+          if-no-files-found: error
+
   # P5-M26: the FULL competitor scale harness (100k + 1M + MCP column +
   # multi-op txn) lives here — the laptop runs only --quick, the big run is
   # a scheduled/manual job (user directive 2026-09-18). PG is a service
@@ -133,6 +250,7 @@ jobs:
   # sections into separate jobs.
   competitor-scale:
     name: Competitor scale harness (100k + 1M)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     services:

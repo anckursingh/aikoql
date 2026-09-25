@@ -136,7 +136,10 @@ else
     fail=1
   fi
   for other in ci perf-smoke coverage-floor release; do
-    if grep -qE 'STORAGE_REGRESSION=1m|competitor_bench/scale.py' ".github/workflows/$other.yml"; then
+    # run-signature patterns: the dag job's own pins quote these strings
+    # (a pin reference is not a run — post-CI-02 the guard pins in ci.yml
+    # name the 1M regime as a grep pattern)
+    if grep -qE 'export STORAGE_REGRESSION=1m|competitor_bench/scale.py' ".github/workflows/$other.yml"; then
       echo "ARCH: $other.yml carries a 1M/competitor leg — benchmark.yml owns it alone" >&2
       fail=1
     fi

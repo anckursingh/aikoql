@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PR6-F6 (P1-6): per-commit perf smoke — three fixed cells with a generous
 # 3x budget vs the committed baseline. The cheap version of gate-5: the
-# 1M ratio guard stays in baseline-guard.yml (nightly/manual class).
+# 1M ratio guard stays in benchmark.yml's guard job (nightly/manual class).
 #
 #   W1/W2 point reads : the 2K smoke matrix writes result-smoke.json
 #                       (STORAGE_PERF_SMOKE=1 — the arm that makes a smoke

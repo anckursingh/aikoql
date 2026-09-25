@@ -31,7 +31,7 @@ jobs:
       # every test capable of finding data loss, wrong reads, wrong
       # ordering, corruption or recovery failure runs a REDUCED
       # DETERMINISTIC PR version here; only pure measurement stays
-      # scheduled (weekly release smoke in benchmark-nightly.yml + the
+      # scheduled (weekly release smoke in benchmark.yml + the
       # nightly env at local milestones).
       #
       # | Test                             | Correctness | Performance | Resource | Certification (full version)       |
@@ -421,16 +421,17 @@ jobs:
           echo "Checking test env hygiene + seed determinism..."
           bash scripts/check-test-env-hygiene.sh
           # PR6-F5 (P1-5): the nightly shuffle run + its residue sweepers
-          # must stay wired in benchmark-nightly.yml (a workflow step can
+          # must stay wired in benchmark.yml (a workflow step can
           # rot silently in a bad merge).
           echo "Checking shuffle-run wiring..."
           bash scripts/check-shuffle-wiring.sh
           # P5-M0 (gd001): the baseline-certification guard
-          # (.github/workflows/baseline-guard.yml) must stay wired — it runs
+          # (.github/workflows/benchmark.yml's guard job, CI-02) must stay
+          # wired — it runs
           # the 1M v2 workload + gate-5 ratio on every change touching a
           # protected path (storage/kernel/compiler/runtime).
-          echo "Checking P5-M0 baseline-guard wiring..."
-          GUARD=.github/workflows/baseline-guard.yml
+          echo "Checking P5-M0 benchmark.yml guard wiring..."
+          GUARD=.github/workflows/benchmark.yml
           if [ ! -f "$GUARD" ]; then
             echo "DAG VIOLATION: $GUARD missing — the gate-5 baseline guard job must exist"
             exit 1
@@ -533,5 +534,5 @@ jobs:
           # deleted (RED proven against origin/main through the same script).
           echo "Checking tracked node_modules..."
           bash scripts/check-no-tracked-node-modules.sh
-          echo "P5-M0 baseline-guard wiring OK"
+          echo "P5-M0 benchmark.yml guard wiring OK"
           echo "Dependency DAG OK"

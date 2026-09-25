@@ -3,7 +3,7 @@
 # The cheap version of gate-5: three tiny fixed cells (W1/W2 point reads,
 # hot-head P50, ann004 recall@10) with a generous 3x budget vs the
 # committed baseline, on every change touching the cells' code. The full
-# 1M gate-5 ratio stays in baseline-guard.yml (nightly/manual class).
+# 1M gate-5 ratio stays in benchmark.yml's guard job (nightly/manual class).
 #
 # Wired by the dependency-dag job's inline pin (ci.yml): deleting this
 # file, dropping a trigger path, or losing the perf-smoke.sh step fails CI.

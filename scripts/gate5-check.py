@@ -7,7 +7,7 @@ AIKOQL_REPORT_FRESH=1 (the fresh twin, strict opt-in); the baseline is the
 committed `result-1m-aikoql-v2.json`. The v1 baseline died with the S-02
 decommission — gate 5 now asks: did the engine regress against itself?
 
-Shared by the baseline-guard CI job and the manual 1M procedure:
+Shared by the benchmark.yml guard job (CI-02) and the manual 1M procedure:
 
     STORAGE_REGRESSION=1m STORAGE_BACKEND=aikoql-v2 AIKOQL_REPORT_WRITE=1 \
         AIKOQL_REPORT_FRESH=1 \

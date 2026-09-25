@@ -79,7 +79,7 @@ the architect review.
 | `crates/certification/`, `benchmarks/` | certification suites; benchmark harness |
 | `scripts/` | every CI gate + the dogfood loop + benchmark tooling |
 | `kb/` | the dogfood knowledge base — the repo's own aikoql plugin serves it over MCP (P1-8); `kb.artifacts` is untracked local state |
-| `.github/workflows/` | ci.yml (correctness + gates), baseline-guard.yml, benchmark-nightly.yml, coverage-floor.yml, perf-smoke.yml, release.yml — being consolidated to ci/benchmark/release by the launch plan's phase CI |
+| `.github/workflows/` | ci.yml (correctness + gates), benchmark.yml (the one benchmark owner, CI-02), coverage-floor.yml, perf-smoke.yml, release.yml — consolidated from baseline-guard/benchmark-nightly by the launch plan's phase CI |
 
 ## Historical (cite, don't edit)
 
@@ -93,7 +93,6 @@ check its status before trusting any v1-era doc.
 
 - `ci.yml` — fmt, clippy, tests (Linux+Windows), dependency-dag gates,
   SDK contract, docker/plugin/e2e/connector smokes
-- `baseline-guard.yml` — 1M gate-5 self-regression vs the committed v2 baseline (fresh-twin upload, S-03)
-- `benchmark-nightly.yml` — weekly: shuffle, benchmark, competitor scale
+- `benchmark.yml` — the one benchmark owner (CI-02): weekly shuffle/benchmark/competitor-scale; guard job = 1M gate-5 self-regression vs the committed v2 baseline (fresh-twin upload, S-03); self-regression-main = 100K gate-5 on push to main
 - `coverage-floor.yml`, `perf-smoke.yml` — path-gated on storage changes
 - `release.yml` — tag-driven version gate + builds + npm/ghcr/pypi
