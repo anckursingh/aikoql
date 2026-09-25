@@ -15,8 +15,14 @@
 #   6. The harness language itself is v2-only: no redb name, no backend=
 #      kwarg-style selection in the rust or python harness (4a/4b cover
 #      `crates benchmarks`; this adds scripts/competitor_bench and the kwarg).
-# The CI-01 workflow leg joins this script later; CI-04 wires it into the
-# dag job (wiring rides the milestone whose GREEN makes the gate pass).
+#
+# Workflow leg (CI-01, review 2 §22 TDD): five tests prescribing the
+# POST-consolidation workflow estate, asserted by name (never via file
+# count). RED against the live tree at CI-01 — benchmark.yml does not
+# exist yet (CI-02 merges baseline-guard + benchmark-nightly into the one
+# benchmark owner) and the perf smoke carries 3 of the review's 5 cells
+# (CI-03 grows it to W1–W5). The tests flip green through CI-02/CI-03.
+# The dag wiring rides CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$root"
@@ -95,5 +101,107 @@ if [ -n "$harness" ]; then
   fail=1
 fi
 
+# ── Workflow leg (CI-01, review 2 §22) ──────────────────────────────
+CIWF=.github/workflows/ci.yml
+
+# workflow test 1 — test_required_ci_jobs_exist: the required CI jobs
+# (fmt/clippy/check/test + the gates) are named jobs in ci.yml
+for job in check test-linux lint dependency-dag; do
+  if ! grep -qE "^  $job:" "$CIWF"; then
+    echo "ARCH: ci.yml is missing the required job: $job" >&2
+    fail=1
+  fi
+done
+for step in 'cargo fmt --check' 'cargo clippy --workspace' 'cargo check --workspace' 'cargo test --workspace'; do
+  if ! grep -qF "$step" "$CIWF"; then
+    echo "ARCH: ci.yml is missing the required step: $step" >&2
+    fail=1
+  fi
+done
+
+# workflow test 2 — test_benchmark_workflow_exists: benchmark.yml is the
+# one benchmark owner — the 1M self-regression and the competitor matrix
+# live there, and the pre-consolidation homes are merged away (CI-02)
+BENCH=.github/workflows/benchmark.yml
+if [ ! -f "$BENCH" ]; then
+  echo "ARCH: $BENCH missing — CI-02 merges baseline-guard + benchmark-nightly into the one benchmark owner" >&2
+  fail=1
+else
+  if ! grep -q 'STORAGE_REGRESSION=1m' "$BENCH"; then
+    echo "ARCH: $BENCH must run the 1M self-regression (STORAGE_REGRESSION=1m)" >&2
+    fail=1
+  fi
+  if ! grep -q 'competitor_bench/scale.py' "$BENCH"; then
+    echo "ARCH: $BENCH must run the competitor scale harness" >&2
+    fail=1
+  fi
+  for other in ci perf-smoke coverage-floor release; do
+    if grep -qE 'STORAGE_REGRESSION=1m|competitor_bench/scale.py' ".github/workflows/$other.yml"; then
+      echo "ARCH: $other.yml carries a 1M/competitor leg — benchmark.yml owns it alone" >&2
+      fail=1
+    fi
+  done
+fi
+for gone in baseline-guard benchmark-nightly; do
+  if [ -f ".github/workflows/$gone.yml" ]; then
+    echo "ARCH: .github/workflows/$gone.yml still exists — CI-02 merges it into benchmark.yml" >&2
+    fail=1
+  fi
+done
+
+# workflow test 3 — test_competitor_matrix_exists: the engine column set
+# is declared in bench.py and a workflow job runs the scale harness
+if ! grep -qE 'postgresql|neo4j|qdrant' scripts/competitor_bench/bench.py; then
+  echo "ARCH: competitor matrix declares no external engines (bench.py)" >&2
+  fail=1
+fi
+if ! grep -q 'scripts/competitor_bench/scale.py' .github/workflows/*.yml; then
+  echo "ARCH: no workflow job runs the competitor scale harness" >&2
+  fail=1
+fi
+
+# workflow test 4 — test_perf_smoke_remains_wired: the perf smoke carries
+# the review's five cells (point lookup, write throughput, scan, hot-cache,
+# small compaction) under the 3x budget — CI-03 grows the 3 committed
+# cells to W1–W5
+SMOKE=.github/workflows/perf-smoke.yml
+if [ ! -f "$SMOKE" ]; then
+  echo "ARCH: $SMOKE missing — the per-commit perf smoke job must exist" >&2
+  fail=1
+elif ! grep -q 'perf-smoke.sh' "$SMOKE"; then
+  echo "ARCH: $SMOKE must run scripts/perf-smoke.sh" >&2
+  fail=1
+elif ! grep -q '3x' "$SMOKE"; then
+  echo "ARCH: $SMOKE must declare the 3x budget" >&2
+  fail=1
+fi
+for cell in kse_m7_v2_workloads hot_head_gate throughput scan compact; do
+  if ! grep -q "$cell" scripts/perf-smoke.sh; then
+    echo "ARCH: perf smoke is missing the review cell: $cell" >&2
+    fail=1
+  fi
+done
+
+# workflow test 5 — test_release_workflow_remains_wired: the release
+# workflow keeps the version gate (tag == Cargo/npm/plugin/python) and
+# the identity verification (published versions + the MCP binary smoke)
+REL=.github/workflows/release.yml
+if [ ! -f "$REL" ]; then
+  echo "ARCH: $REL missing — the release workflow must exist" >&2
+  fail=1
+fi
+if ! grep -q 'Validate versions vs tag' "$REL"; then
+  echo "ARCH: $REL must keep the version gate (validate-versions)" >&2
+  fail=1
+fi
+if ! grep -qE '^  verify-release-identity:' "$REL"; then
+  echo "ARCH: $REL must keep the identity verification job (PR6-009)" >&2
+  fail=1
+fi
+if ! grep -q 'smoke-mcp.js' "$REL"; then
+  echo "ARCH: $REL must keep the MCP binary smoke (version + initialize + tools)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
-echo "architecture hygiene (storage leg) — OK"
+echo "architecture hygiene (storage + workflow legs) — OK"

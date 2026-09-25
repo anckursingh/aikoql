@@ -1,0 +1,8 @@
+{
+  "id": "ci01-workflow-estate",
+  "pre_fix_commit": "4cc965f",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-09-25T04:57:49Z",
+  "captured_head": "4cc965fb5f4102c4caf556a8d62cdddee98e2afb",
+  "exit_code": 1
+}
