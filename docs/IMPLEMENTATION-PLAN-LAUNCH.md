@@ -273,6 +273,23 @@ regressions — still holds). The same run's Test (Linux) attribution-10%
 cell and python-sdk ConnectionRefused failures are pre-existing at the
 CI-03 tip (run 36098365429 shows both) — tracked, not caused by CI-04.
 
+CI-06 shipped 2026-09-25 — path filters + the required-check invariant.
+`benchmark.yml`'s trigger set re-pointed to the CI-06 protected paths:
+`crates/storage`, `crates/kernel`, `crates/engines`, `benchmarks`,
+`scripts/competitor_bench`, `Cargo.lock` (the paths that can move the
+gate-5 ratio) + the wiring self-paths; `crates/compiler` +
+`crates/runtime` leave the set — they cannot move the 1M storage ratio,
+and a non-matching PR must not pay a 1M guard run. The dag's gd001 pin
+loops the same set. The arch gate's workflow test 7
+(`test_required_checks_never_path_filter`) pins the invariant: ci.yml
+carries NO workflow-level path filter (a path-gated ci.yml skips and a
+required skipped check pends forever — §16; the gates run always and
+decide inside via the fast exits), and the benchmark trigger set is the
+protected set — compiler/runtime presence fails the gate. RED archived
+as `ci06-benchmark-paths-unfiltered` (exit 1 at e7a9366: the trigger
+paths lacked engines/benchmarks/competitor_bench/Cargo.lock; flips to
+exit 0 with the set).
+
 ### Phase L — correctness matrices (review 1), launch sequence
 
 (L-00 is done this session — the skip-drift gate is comment-aware, and a
