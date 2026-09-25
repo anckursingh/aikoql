@@ -194,6 +194,25 @@ smoke carries 3 of the 5 cells). Tests 1/3/5 hold already against the
 live estate; 2 flips at CI-02, 4 at CI-03. Dag wiring rides CI-04 (a RED
 gate must not enter CI).
 
+CI-02 shipped 2026-09-25 — `benchmark.yml` is the one benchmark owner:
+baseline-guard + benchmark-nightly merged into it (deleted), the dag's
+gd001 pins re-pointed to its guard job, the shuffle-wiring gate follows.
+Tiers: PR = the per-commit perf smoke (perf-smoke.yml; folded into ci.yml
+by CI-03); main = `self-regression-main` (NEW) — 100K gate-5 on push to
+main, the suite self-asserts the 1.5× bound at that scale so no
+gate5-check.py leg; nightly = the 1M guard (fresh twin vs the committed
+v2 baseline, fresh-1m-v2 upload) + shuffle/competitor-scale on the weekly
+cron (event-guarded schedule|dispatch); release = the weekly full
+certification (R5 `--ignored`, skipped-suite smoke, gated cells ungated,
+criterion baseline regression). The plan's "three homes" were already two
+at merge time: the republish job died at S-03 (L-24's `*_us` baseline
+stays stale by design; the guard RED on it is unchanged). The arch gate's
+test 2 flips green (only the 3 perf-smoke cell lines stay RED — CI-03);
+the other-workflows sweep now uses run signatures (`export
+STORAGE_REGRESSION=1m`) — a pin reference is not a run. RED archived as
+`ci02-benchmark-owner-missing` (exit 1 at ef1a5b1: the 1M/competitor run
+legs lived in 2 files, the owner absent).
+
 ### Phase L — correctness matrices (review 1), launch sequence
 
 (L-00 is done this session — the skip-drift gate is comment-aware, and a
