@@ -149,6 +149,21 @@ bracket pattern keeps the gate from self-matching). RED archived as
 `s04-v2adopt-language` (exit 1 at 75a5d89). S-05 (benchmark harness)
 remains.
 
+S-05 shipped 2026-09-25 — the benchmark harness is v2-only, pinned. The
+functional re-pointing was consumed by S-02 (`benchmarks/` = one of the 6
+consumer crates) and P5-M26 (the competitor_bench python columns call the
+embedded SDK); this milestone closes the pin: `check-architecture-hygiene.sh`
+gains a sixth leg — no redb name, no `backend=` kwarg-style selection in
+the rust or python harness (`benchmarks/`, `scripts/competitor_bench/`) —
+and the v1 historical numbers are formally frozen by
+`artifacts/storage-engine-v2/V1-HISTORICAL.md` (result-1m-{aikoql,redb,
+memory}.json + workloads-1m-{aikoql,redb,memory}.md; nothing regenerates
+them; the live baselines stay result.json + result-1m-aikoql-v2.json).
+All six hygiene assertions green; the 3 bench targets compile against v2
+(`cargo bench --no-run`). RED archived as `s05-harness-v1-pin-missing`
+(exit 1 at c6ee00a: the gate carried no harness backend-kwarg pin).
+Phase CI (CI-01..09) remains.
+
 ### Phase CI — three workflows (review 2, §1/§19)
 
 | id | milestone | RED | GREEN |
