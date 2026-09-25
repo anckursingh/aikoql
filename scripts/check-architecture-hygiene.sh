@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launch S-01: architecture hygiene gate — the storage leg (review 2 §8/§22,
-# docs/IMPLEMENTATION-PLAN-LAUNCH.md). Five assertions, all RED against the
+# docs/IMPLEMENTATION-PLAN-LAUNCH.md). Six assertions, all RED against the
 # pre-S-02 tree, green when the phase ends:
 #   1. aikoql-storage-v2 is a workspace member and no other storage backend
 #      crate is (the deprecated members are crates/storage/aikoql + rocksdb).
@@ -12,6 +12,9 @@
 #      kernel carries no store_redb.rs.
 #   5. The benchmark harness (benchmarks/, scripts/competitor_bench/) uses
 #      the current storage API: no v1 backend-selection pins.
+#   6. The harness language itself is v2-only: no redb name, no backend=
+#      kwarg-style selection in the rust or python harness (4a/4b cover
+#      `crates benchmarks`; this adds scripts/competitor_bench and the kwarg).
 # The CI-01 workflow leg joins this script later; CI-04 wires it into the
 # dag job (wiring rides the milestone whose GREEN makes the gate pass).
 set -euo pipefail
@@ -80,6 +83,15 @@ pins="$(grep -rnE 'AIKOQL_BACKEND|STORAGE_BACKEND' benchmarks scripts/competitor
   --include='*.rs' --include='*.py' --include='*.sh' 2>/dev/null || true)"
 if [ -n "$pins" ]; then
   echo "$pins" | sed 's/^/ARCH: harness pins the v1 backend selection: /' >&2
+  fail=1
+fi
+
+# 6. the harness language is v2-only (S-05): no redb name, no backend=
+# kwarg-style selection in the rust or python harness
+harness="$(grep -rnE '\bredb\b|AIKOQL_BACKEND|backend[[:space:]]*=' benchmarks scripts/competitor_bench \
+  --include='*.rs' --include='*.py' 2>/dev/null || true)"
+if [ -n "$harness" ]; then
+  echo "$harness" | sed 's/^/ARCH: v1 backend language in the harness: /' >&2
   fail=1
 fi
 
