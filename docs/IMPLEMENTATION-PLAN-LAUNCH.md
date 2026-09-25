@@ -248,6 +248,31 @@ at ea9aa77: the dag still pinned the historical estate and lacked the
 architecture gate; flips to exit 0 with the legs deleted and the gate
 wired).
 
+CI-05 shipped 2026-09-25 — cargo caching. `Swatinem/rust-cache@v2` added
+after the toolchain step in all 19 cargo build jobs: ci.yml (check,
+test-linux, lint, build-release, connectors, python-sdk, perf-smoke,
+coverage-floor), benchmark.yml (shuffle, benchmark, guard,
+self-regression-main, competitor-scale), release.yml (windows, linux-gnu,
+linux-musl, macos-intel, macos-arm, pypi-publish). The action's default
+key covers OS + rust version + Cargo.lock — the plan's keying, no
+explicit key block. The dependency-dag job never compiles (grep-only)
+and the docker job builds inside the image — neither gets one. The arch
+gate's workflow test 6 (`test_build_jobs_cached`) pins the cache per job
+by name so a bad merge can't silently drop it. RED archived as
+`ci05-no-build-cache-anywhere` (exit 1 at 582eacc: grep for the action
+in the three workflows found nothing; flips to exit 0 with the wiring).
+PR-loop runtime: pre-cache measured 23m51s (CI run 36099891181, the
+last pre-CI-05 run); the post-cache number rides the first CI run after
+this push and gets recorded when it lands. Also in this commit set: the
+CI-03 smoke's first CI-run RED fixed — run 36099891181 measured the
+write cell at 4.11x the laptop baseline (3.07 ms vs 0.75 ms), the
+documented shared-runner fsync class is 4-7x, so the fsync-heavy wall
+cells (write, compact wall) get an 8x budget in perf-smoke-check.py
+while the structural cells keep 3x (the smoke's charter — O(n^2)-class
+regressions — still holds). The same run's Test (Linux) attribution-10%
+cell and python-sdk ConnectionRefused failures are pre-existing at the
+CI-03 tip (run 36098365429 shows both) — tracked, not caused by CI-04.
+
 ### Phase L — correctness matrices (review 1), launch sequence
 
 (L-00 is done this session — the skip-drift gate is comment-aware, and a
