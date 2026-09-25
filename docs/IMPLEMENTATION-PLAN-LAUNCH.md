@@ -178,6 +178,22 @@ Phase CI (CI-01..09) remains.
 | CI-08 | reproducible results + reports | schema ad-hoc | the §13 output schema (commit/engine/engine_version/workload/dataset/config/throughput/p50/p95/p99/cpu/mem/disk + OS/CPU/RAM/seed/cache-state/harness-SHA) enforced by `artifact_schema.py`; pinned competitor versions (§18); report trio json/md/csv (§14) |
 | CI-09 | release tier | release runs no benchmark | release.yml gains the Tier-3 full-scale certification + benchmark report artifact |
 
+CI-01 shipped 2026-09-25 — the workflow architecture tests (review 2 §22)
+join `check-architecture-hygiene.sh` as the workflow leg, five tests
+prescribing the post-consolidation estate by name (never via file count):
+`test_required_ci_jobs_exist` (check/test-linux/lint/dependency-dag +
+fmt/clippy/check/test steps), `test_benchmark_workflow_exists`
+(benchmark.yml owns the 1M + competitor matrix alone; baseline-guard +
+benchmark-nightly merged away), `test_competitor_matrix_exists` (the
+engine column set + a workflow job runs scale.py), `test_perf_smoke_
+remains_wired` (the five review cells under the 3× budget),
+`test_release_workflow_remains_wired` (version gate + identity
+verification). RED archived as `ci01-workflow-estate` (exit 1 at 4cc965f:
+benchmark.yml absent, both pre-consolidation homes still exist, the
+smoke carries 3 of the 5 cells). Tests 1/3/5 hold already against the
+live estate; 2 flips at CI-02, 4 at CI-03. Dag wiring rides CI-04 (a RED
+gate must not enter CI).
+
 ### Phase L — correctness matrices (review 1), launch sequence
 
 (L-00 is done this session — the skip-drift gate is comment-aware, and a
