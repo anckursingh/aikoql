@@ -20,12 +20,13 @@
 #      .github/tests/gated.toml/AGENTS.md; historical docs keep the old
 #      names by design).
 #
-# Workflow leg (CI-01, review 2 §22 TDD): five tests prescribing the
+# Workflow leg (CI-01, review 2 §22 TDD): six tests prescribing the
 # POST-consolidation workflow estate, asserted by name (never via file
 # count). RED against the live tree at CI-01 — benchmark.yml does not
 # exist yet (CI-02 merges baseline-guard + benchmark-nightly into the one
 # benchmark owner) and the perf smoke carries 3 of the review's 5 cells
-# (CI-03 grows it to W1–W5). The tests flip green through CI-02/CI-03.
+# (CI-03 grows it to W1–W5). The tests flip green through CI-02/CI-03;
+# CI-05 adds test 6 (build jobs cached).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -226,6 +227,24 @@ if ! grep -q 'smoke-mcp.js' "$REL"; then
   echo "ARCH: $REL must keep the MCP binary smoke (version + initialize + tools)" >&2
   fail=1
 fi
+
+# workflow test 6 — test_build_jobs_cached (CI-05): every cargo build
+# job in the three workflows carries Swatinem/rust-cache (the action's
+# default key covers OS + rust version + Cargo.lock) — a cache step can
+# drop silently in a bad merge and every job pays the full compile
+# again. The dependency-dag job never compiles (grep-only) and the
+# docker job builds inside the image — neither is a build job.
+for spec in "ci check test-linux lint build-release connectors python-sdk perf-smoke coverage-floor" \
+            "benchmark shuffle benchmark guard self-regression-main competitor-scale" \
+            "release windows linux-gnu linux-musl macos-intel macos-arm pypi-publish"; do
+  wf="${spec%% *}"
+  for job in ${spec#* }; do
+    if ! sed -n "/^  $job:/,/^  [a-z][a-z0-9_-]*:$/p" ".github/workflows/$wf.yml" | grep -q 'Swatinem/rust-cache'; then
+      echo "ARCH: $wf.yml job $job builds without Swatinem/rust-cache (CI-05)" >&2
+      fail=1
+    fi
+  done
+done
 
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"

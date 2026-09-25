@@ -98,6 +98,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --release -p aikoql-mcp
       - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
@@ -124,6 +127,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --release -p aikoql-mcp
       - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
@@ -153,6 +159,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: cross
@@ -182,6 +191,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - name: Build release (x86_64)
         run: cargo build --release --target x86_64-apple-darwin -p aikoql-mcp
       - name: Generate SHA-256
@@ -204,6 +216,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --release -p aikoql-mcp
       - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
@@ -444,6 +459,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

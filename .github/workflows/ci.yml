@@ -23,6 +23,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --workspace -- -D warnings
       - run: cargo check --workspace
@@ -87,6 +90,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       # sfm009_large_wal_snapshot_has_bounded_rss (PR6-R3-003): same RSS-cell
       # gating as the Windows job — local-suite test, skipped on CI runners.
       # Skip list derived from tests/gated.toml (PR6-F2 / P0-2).
@@ -112,6 +118,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --workspace -- -D warnings
 
@@ -172,6 +181,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p aikoql-mcp
       - uses: actions/upload-artifact@v4
         with:
@@ -290,6 +302,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test -p aikoql-mcp --test connector_certification -- --nocapture
         env:
           AIKOQL_TEST_PG_DSN: host=localhost port=5432 user=aikoql password=aikoql-ci dbname=knowledge
@@ -327,6 +342,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -347,7 +365,9 @@ jobs:
   # non-matching paths — a path-gated required workflow skips and a
   # required skipped check pends forever, so the gate must run and decide.
   # W1–W5 point lookup / write throughput / scan / hot-cache / small
-  # compaction vs the committed baseline at a 3x budget
+  # compaction vs the committed baseline at a 3x budget — 8x for the
+  # fsync-heavy write/compact wall cells (shared Windows runners run
+  # 4-7x the laptop on fsync; run 36099891181 measured 4.11x)
   # (scripts/perf-smoke-check.py), plus the self-asserting recall cell.
   perf-smoke:
     name: Perf smoke (W1–W5, 3x budget)
@@ -373,6 +393,9 @@ jobs:
           fi
           echo "perf-smoke path changed — running the full smoke"
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       # P5-M47: the checker scripts validate their evidence schema and the
       # artifact freshness stamp — the pins must hold before the gate runs.
       - name: Checker schema pins
@@ -413,6 +436,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov

@@ -79,6 +79,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
@@ -100,6 +103,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
 
       # R5 durability gate (ignored tests only).
       - run: cargo test --workspace -- --ignored --test-threads=1
@@ -180,6 +186,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       # P5-M47: the checker scripts validate their evidence schema and the
       # artifact freshness stamp — the pins must hold before the gate runs.
       - name: Checker schema pins
@@ -220,6 +229,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - name: Checker schema pins
         shell: bash
         run: python scripts/test_artifact_schema.py
@@ -270,6 +282,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
