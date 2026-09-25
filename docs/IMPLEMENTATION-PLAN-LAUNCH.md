@@ -331,6 +331,26 @@ image (mutation-verified). Schema pins: 9 new competitor tests (23
 total). RED archived as `ci08-no-section13-schema` (exit 1 at b7ffac1:
 bench.py carried no cpu_seconds; flips to exit 0 with the field).
 
+CI-09 shipped 2026-09-25 — the release tier: release.yml gains the
+TESTING-PLAN §6 evidence pack. Five `tier3-*` jobs (needs
+validate-versions, tag push + dispatch): tier3-correctness +
+tier3-correctness-windows (the full workspace suite — the CI invocation
+verbatim incl. the gated-cell skip list, so correctness and the
+concurrency/recovery cells run on both OSes exactly as CI runs them),
+tier3-coverage (the codec/replay floor), tier3-scale (the full-scale
+harness: 100k + 1M + MCP column + multi-op txn, PG service, release
+aikoql-mcp + the repo's own release SDK — benchmark.yml's
+competitor-scale invocation verbatim, result uploaded), and tier3-matrix
+(the competitor matrix with the §13/§18 schema check, the report trio
+uploaded as the benchmark report artifact). A release measures exactly
+what CI measures. Arch-gate: test 2's one-owner rule is amended for CI-09
+— the benchmark legs may live in release.yml ONLY inside their tier3 jobs
+(ci.yml and the gate-5 1M regime stay benchmark-owned), and workflow test
+10 pins the five jobs, the CI suite invocation, the coverage/scale/matrix
+legs, the §13 schema check, and the §18 pinned images (mutation-verified).
+RED archived as `ci09-release-runs-no-benchmark` (exit 1 at e659d1c:
+release.yml carried no tier3-matrix; flips to exit 0 with the job set).
+
 ### Phase L — correctness matrices (review 1), launch sequence
 
 (L-00 is done this session — the skip-drift gate is comment-aware, and a
