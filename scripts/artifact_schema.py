@@ -26,7 +26,7 @@ class SchemaError(Exception):
     def __init__(self, msg, unreadable=False):
         super().__init__(msg)
         # unreadable marks a missing/unopenable file: the perf-smoke checker
-        # appends its "did the run set V2ADOPT_PERF_SMOKE=1?" hint only to
+        # appends its "did the run set STORAGE_PERF_SMOKE=1?" hint only to
         # this class (a schema drift needs the schema hint, not the env one).
         self.unreadable = unreadable
 

@@ -11,7 +11,7 @@
 #
 # Wired by the dependency-dag job's gd001 pin (ci.yml): deleting this file,
 # dropping a protected path from its triggers, un-arming the 1M regime, or
-# re-adding a V2ADOPT_BACKEND=aikoql leg fails CI.
+# re-adding a STORAGE_BACKEND=aikoql leg fails CI.
 
 name: Baseline Certification Guard
 
@@ -60,8 +60,8 @@ jobs:
       - name: Run 1M v2 workload
         shell: bash
         run: |
-          export V2ADOPT_NIGHTLY=1m
-          export V2ADOPT_BACKEND=aikoql-v2
+          export STORAGE_REGRESSION=1m
+          export STORAGE_BACKEND=aikoql-v2
           export AIKOQL_REPORT_WRITE=1
           export AIKOQL_REPORT_FRESH=1
           cargo test -p aikoql-storage-v2 --release --test kse_m7_v2_workloads

@@ -4,7 +4,7 @@
 # 1M ratio guard stays in baseline-guard.yml (nightly/manual class).
 #
 #   W1/W2 point reads : the 2K smoke matrix writes result-smoke.json
-#                       (V2ADOPT_PERF_SMOKE=1 — the arm that makes a smoke
+#                       (STORAGE_PERF_SMOKE=1 — the arm that makes a smoke
 #                       run machine-readable; the -smoke suffix never
 #                       clobbers the canonical artifacts)
 #   hot-head          : SE2M11_NIGHTLY=1 writes hot-head.md (100K cached
@@ -17,7 +17,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-V2ADOPT_PERF_SMOKE=1 AIKOQL_REPORT_WRITE=1 \
+STORAGE_PERF_SMOKE=1 AIKOQL_REPORT_WRITE=1 \
     cargo test -p aikoql-storage-v2 --release --test kse_m7_v2_workloads
 
 SE2M11_NIGHTLY=1 AIKOQL_REPORT_WRITE=1 \

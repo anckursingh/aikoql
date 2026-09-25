@@ -76,7 +76,7 @@ if [ -f crates/kernel/src/storage/store_redb.rs ]; then
 fi
 
 # 5. the benchmark harness pins no v1 backend selection
-pins="$(grep -rnE 'AIKOQL_BACKEND|V2ADOPT' benchmarks scripts/competitor_bench \
+pins="$(grep -rnE 'AIKOQL_BACKEND|STORAGE_BACKEND' benchmarks scripts/competitor_bench \
   --include='*.rs' --include='*.py' --include='*.sh' 2>/dev/null || true)"
 if [ -n "$pins" ]; then
   echo "$pins" | sed 's/^/ARCH: harness pins the v1 backend selection: /' >&2

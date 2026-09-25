@@ -21,3 +21,15 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 echo "deleted-estate paths absent — OK"
+
+# S-04: the adoption-era env language is gone — V2ADOPT-era names must be
+# ABSENT from the functional surfaces (crates/scripts/.github/gated.toml/
+# AGENTS.md; historical docs keep the old names by design — this covers the
+# active ones). The bracket in the pattern keeps the gate from self-matching.
+langbad="$(git grep -nE 'V2ADOPT[_]' "$ref" -- crates scripts .github tests/gated.toml AGENTS.md || true)"
+if [ -n "$langbad" ]; then
+  echo "DAG VIOLATION: V2ADOPT-era language present (S-04 rename to STORAGE_*):" >&2
+  printf '%s\n' "$langbad" >&2
+  exit 1
+fi
+echo "V2ADOPT-era language absent from functional surfaces — OK"

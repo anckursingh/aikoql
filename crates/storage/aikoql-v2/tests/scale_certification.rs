@@ -14,7 +14,7 @@
 //!    fanout F=10/100/1000 ≤ 1/10/50 ms, hot context ≤ 100 µs, group commit
 //!    cited from SE2-M13); RSS via a loader child; the
 //!    V2-Adopt matrix re-runs on the same harness as a child
-//!    (`V2ADOPT_NIGHTLY=1`, regenerating workloads.md).
+//!    (`STORAGE_REGRESSION=1`, regenerating workloads.md).
 //!
 //! Artifact: artifacts/storage-engine-v2/scale-certification.md. Perf
 //! numbers are report cells, never asserts — the pins are answer
@@ -877,7 +877,7 @@ fn rerun_adoption_matrix() {
     let status = Command::new(&exe)
         .arg("--exact")
         .arg("v2_m7_workloads")
-        .env("V2ADOPT_NIGHTLY", "1")
+        .env("STORAGE_REGRESSION", "1")
         .status()
         .unwrap();
     assert!(status.success(), "adoption matrix child failed");
@@ -1129,11 +1129,11 @@ fn write_report(sections: &[Section], m: Mode) {
     }
     s.push_str("\n## Adoption matrix re-run\n\n");
     s.push_str(
-        "`v2_m7_workloads` child with `V2ADOPT_NIGHTLY=1` — the same harness;\n\
+        "`v2_m7_workloads` child with `STORAGE_REGRESSION=1` — the same harness;\n\
          `workloads.md` regenerated this run, child exit 0 (asserted). The §26\n\
          verdict stays per `adoption-decision.md`; the ≤2×-of-v1 bound stays\n\
          out of scope (RAM-vs-disk physics, priced in by the 2026-09-01\n\
-         verdict) — the parity reference is gone post-S-02; S-03 lands the\n\
+         verdict) — the parity reference is gone post-S-02; S-03 landed the\n\
          self-regression baseline.\n",
     );
     s.push_str("\n## Honest metric mapping\n\n");

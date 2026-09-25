@@ -1,5 +1,7 @@
 # AIKOQL Phase 3 — Implementation Plan
 
+> HISTORICAL (S-04, 2026-09-25): pre-launch plan record — kept for reference, not updated.
+
 Source: architect review 2026-09-09 (storage / kernel / integration / testing surveys; see `docs/TESTING-PLAN-PHASE3.md` for the evidence ledger) + class-by-class main-branch review 2026-09-10 (`AIKOQL_Main_Branch_Class_by_Class_Next_Steps_TDD.md`, main@dbd8db4 — pre-Phase-3, does not reflect M0–M5). Branch `feature/phase3-enhancements` cut fresh from main (post-PR#5 dbd8db4). Commit per milestone, NO push (user pushes). TDD loop per milestone: PoV → RED (fail for the stated reason) → root-cause GREEN → regression → gates (`cargo fmt --all` + `cargo clippy --all-targets --all-features -- -D warnings`).
 
 **Next program:** Phase 5 — Database 1.0 (ND-00..ND-14, reviewed 2026-09-13): `docs/IMPLEMENTATION-PLAN-PHASE5.md` + `docs/TESTING-PLAN-PHASE5.md`. This document is the SHIPPED ledger and stays closed.

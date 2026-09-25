@@ -1,5 +1,7 @@
 # Architect review — AikoQL vs the agentic-DB field (2026-09-20)
 
+> HISTORICAL (S-04, 2026-09-25): pre-launch review record — kept for reference, not updated.
+
 Senior-architect review of the whole project as it stands against the
 databases used for agentic AI tasks today, plus enhancements to the TDD
 approach. Follow-up milestone plan to the PR6 Round-3 review (head 8c60d74).

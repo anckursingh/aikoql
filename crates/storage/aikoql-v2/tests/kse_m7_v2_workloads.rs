@@ -26,20 +26,20 @@
 //! - gate 5 (KO lookup self-regression): the fresh W1/W2 rows vs the
 //!   committed v2 baseline at the same scale (result.json at 100K,
 //!   result-1m-aikoql-v2.json at 1M) — perf verdict at
-//!   `V2ADOPT_NIGHTLY=1` only (smoke has no committed 2K baseline and
+//!   `STORAGE_REGRESSION=1` only (smoke has no committed 2K baseline and
 //!   reads NOT_EVIDENCED).
 //!
-//! Sizing is strict opt-in: `V2ADOPT_NIGHTLY=1` (100K KOs / 10K deep × 10
-//! versions / 20K ops per workload) or unset (2K / 2K / 2K smoke). Any
-//! other value = FAIL (no silent skips). `V2ADOPT_LOADER=1` gates the RSS
+//! Sizing is strict opt-in: `STORAGE_REGRESSION=1` (100K KOs / 10K deep ×
+//! 10 versions / 20K ops per workload) or unset (2K / 2K / 2K smoke). Any
+//! other value = FAIL (no silent skips). `STORAGE_LOADER=1` gates the RSS
 //! loader child.
 //!
 //! Writes `artifacts/storage-engine-v2/workloads.md` (the §28 matrix +
 //! the §26 gate table) and `artifacts/storage-engine-v2/result.json`
 //! (PR#2 review SE-11: the same evidence plus run metadata as
 //! machine-readable JSON for automated comparison) — both only at
-//! `V2ADOPT_NIGHTLY=1`, so a smoke run never clobbers the canonical
-//! artifacts (SE2-M19). `V2ADOPT_PERF_SMOKE=1` (P1-6, strict opt-in,
+//! `STORAGE_REGRESSION=1`, so a smoke run never clobbers the canonical
+//! artifacts (SE2-M19). `STORAGE_PERF_SMOKE=1` (P1-6, strict opt-in,
 //! smoke size) writes the `-smoke`-suffixed twins instead, so the
 //! per-commit perf budget has machine-readable rows to diff.
 //! `AIKOQL_REPORT_FRESH=1` (S-03, strict opt-in, nightly only) appends
@@ -68,10 +68,10 @@ use std::io::{BufRead, BufReader};
 #[cfg(windows)]
 use std::process::{Command, Stdio};
 
-const NIGHTLY_ENV: &str = "V2ADOPT_NIGHTLY";
-const LOADER_ENV: &str = "V2ADOPT_LOADER";
-const LOADER_BACKEND_ENV: &str = "V2ADOPT_LOADER_BACKEND";
-const BACKEND_ENV: &str = "V2ADOPT_BACKEND";
+const NIGHTLY_ENV: &str = "STORAGE_REGRESSION";
+const LOADER_ENV: &str = "STORAGE_LOADER";
+const LOADER_BACKEND_ENV: &str = "STORAGE_LOADER_BACKEND";
+const BACKEND_ENV: &str = "STORAGE_BACKEND";
 const FRESH_ENV: &str = "AIKOQL_REPORT_FRESH";
 const SEED: u64 = 0x27_0000;
 const N_TYPES: usize = 100;
@@ -130,8 +130,8 @@ fn nightly() -> bool {
 /// The report's scale label (benchmark_report + the gate-5 row).
 fn scale_label() -> &'static str {
     match std::env::var(NIGHTLY_ENV).as_deref() {
-        Ok("1") => "V2ADOPT_NIGHTLY",
-        Ok("1m") => "V2ADOPT_NIGHTLY=1m",
+        Ok("1") => "STORAGE_REGRESSION",
+        Ok("1m") => "STORAGE_REGRESSION=1m",
         _ => "smoke",
     }
 }
@@ -139,7 +139,7 @@ fn scale_label() -> &'static str {
 /// Single-backend filter (SE2-M28 staged runs): unset = the full
 /// two-backend matrix; one of the two names = that backend only.
 /// S-03: the v1/redb names died with the decommission — a stale
-/// V2ADOPT_BACKEND=aikoql leg (the old republish job) panics HERE, the
+/// STORAGE_BACKEND=aikoql leg (the old republish job) panics HERE, the
 /// RED archived as s03-v1-estate-sweep.
 fn backend_filter() -> Option<String> {
     let v = match std::env::var(BACKEND_ENV) {
@@ -851,7 +851,7 @@ fn benchmark_report(backends: &[BackendResult], sz: Size, filter: Option<&str>) 
         "# W1..W8 Workloads — v2 self-regression (MRFC-KSE-001 §27-28 + design §26)\n\n\
          Date: {date} · profile: {profile} · seed {SEED:#x} · scale: {} KOs / {} deep × {} versions / {} ops ({scale} — strict opt-in)\n\n\
          {filter_note}\
-         The same workload shapes v1's M7 adoption ran, on the same seed. All workloads through the Kernel on `&dyn StorageEngine` (§32). One seeded dataset per backend.\n\n",
+         The same workload shapes the historical M7 matrix (frozen record). All workloads through the Kernel on `&dyn StorageEngine` (§32). One seeded dataset per backend.\n\n",
         sz.n, sz.deep, DEEP_VERSIONS, sz.ops,
     ));
     s.push_str("## §28 matrix — throughput + latency\n\n");
@@ -1174,13 +1174,13 @@ fn v2_m7_workloads() {
     // The artifact is canonical at adoption scale only — a smoke run (the
     // plain suite) must not clobber it (SE2-M19: it used to).
     //
-    // PR6-F6 (P1-6): V2ADOPT_PERF_SMOKE=1 (strict opt-in, smoke size)
+    // PR6-F6 (P1-6): STORAGE_PERF_SMOKE=1 (strict opt-in, smoke size)
     // writes the -smoke-suffixed twins so the per-commit perf budget has
     // machine-readable rows to diff against its committed baseline.
-    let perf_smoke = match std::env::var("V2ADOPT_PERF_SMOKE") {
+    let perf_smoke = match std::env::var("STORAGE_PERF_SMOKE") {
         Err(std::env::VarError::NotPresent) => false,
         Ok(v) if v == "1" => true,
-        other => panic!("V2ADOPT_PERF_SMOKE strict opt-in: unset or \"1\", got {other:?}"),
+        other => panic!("STORAGE_PERF_SMOKE strict opt-in: unset or \"1\", got {other:?}"),
     };
     if std::env::var_os(NIGHTLY_ENV).is_some() || perf_smoke {
         let dir =
@@ -1188,8 +1188,8 @@ fn v2_m7_workloads() {
         std::fs::create_dir_all(&dir).unwrap();
         // Scale/filter suffixes (SE2-M28): a 1m or single-backend run never
         // clobbers the canonical 100K workloads.md/result.json; the perf
-        // smoke gets its own -smoke suffix (V2ADOPT_NIGHTLY stays unset, so
-        // the run is at smoke size).
+        // smoke gets its own -smoke suffix (STORAGE_REGRESSION stays unset,
+        // so the run is at smoke size).
         let suffix = if std::env::var_os(NIGHTLY_ENV).is_some() {
             artifact_suffix(filter.as_deref())
         } else {
@@ -2086,7 +2086,7 @@ fn v2_m26_scan_profile() {
          - Date: {}\n\
          - Dataset: one v2 database, {} KOs / {} deep × {DEEP_VERSIONS} versions (SEED {SEED:#x}); one W5 op = `k.scan_by_type` = 1 engine prefix scan over the type index (empty values) + 1 head_object per candidate (2 engine point gets — head + ~1.4 KiB version row — + wire decode + type/Deleted checks + authz read-lock)\n\
          - Index shape (capture-pinned): m7_0 → {} rows → {} returned (harness phase-2 `rmv(.., \"m7_0\")` restated every KO to m7_0); m7_1..99 → {} rows → 0 returned (stale phase-1 entries, rejected by the payload re-check after full decode — stale entries kept by design, kernel.rs:1282); mean candidates per matrix op = {}\n\
-         - Matrix reference (09-05 workloads.md, warm): W5 v2 27451 µs vs v1 5534 µs — the cell mixes both shapes via TYPE_ROUND: 10 rounds × 100 types = 1% m7_0 ops + 99% stale-type ops\n\
+         - Matrix reference (the frozen v1-era 09-05 workloads.md, warm): W5 v2 27451 µs vs v1 5534 µs — the cell mixes both shapes via TYPE_ROUND: 10 rounds × 100 types = 1% m7_0 ops + 99% stale-type ops\n\
          - Decision-tree thresholds (fixed before the run): scan share < 15% → no index (W5 is get-bound); 15–40% → block-summary investigation opens; > 40% → scan-shape work (posting lists); kernel residual > 30% → kernel-side profiling follow-up\n\n",
         if cfg!(debug_assertions) { "debug" } else { "release" },
         run_date(),
@@ -2177,7 +2177,7 @@ fn v2_m26_scan_profile() {
     ));
     // the decision tree, computed against the pre-fixed thresholds
     let scan_verdict = if scan_share < 0.15 {
-        "no type index / no posting lists / no block summaries — W5 is candidate-bound, not scan-bound (the index already resolves candidates; the cost is the per-candidate head_object); its warm gate-5 cell (27451/5534 = 4.96× v1, 09-05) sits inside the amended ≤8× bound"
+        "no type index / no posting lists / no block summaries — W5 is candidate-bound, not scan-bound (the index already resolves candidates; the cost is the per-candidate head_object); its warm gate-5 cell (27451/5534 = 4.96×, the frozen v1-era 09-05 matrix) sat inside the then-current ≤8× adoption bound"
     } else if scan_share < 0.40 {
         "block-summary investigation opens — the scan's own share is material"
     } else {
@@ -2483,7 +2483,7 @@ fn v2_m27_context_profile() {
          - Date: {}\n\
          - Dataset: one v2 database, {} KOs / {} deep × {DEEP_VERSIONS} versions (SEED {SEED:#x}); one W7 op = `k.get(id)` (2 engine point gets — head + ~1.4 KiB version row — + decode + authz) + `outbound_edges(id)` (one `relo/` prefix scan, no gets, no authz) + 10 × `k.get(target)` + `history(id)` (one `ko/` prefix scan + decode + authz per version, no gets)\n\
          - Sample (capture-pinned): the harness's exact W7 draw sequence — {OPS} draws of `Xs(SEED ^ 0x27).below(100000)`, uniform with replacement (a stride sample would ride the ring's block locality and understate the miss rate); hubs included when drawn (100/1000 edges, 11 versions); {} deep draws × 10 versions + {} shallow × 2 (create + ring update)\n\
-         - Matrix reference (09-05 workloads.md, warm): W7 v2 222 µs vs v1 57 µs (3.9× — inside the amended gate-5 bound ≤8×); L1/L6 below run the same op on this machine in two cache regimes (fresh vs post-W1-W5-thrash)\n\
+         - Matrix reference (the frozen v1-era 09-05 workloads.md, warm): W7 v2 222 µs vs v1 57 µs (3.9× — inside the then-current amended ≤8× adoption bound); L1/L6 below run the same op on this machine in two cache regimes (fresh vs post-W1-W5-thrash)\n\
          - Decision-tree thresholds (fixed before the run): scan share < 15% → no scan-shape work (the scans are already single prefix scans); kernel residual > 30% → kernel-side profiling follow-up; batch ratio ≥ 0.90 → parity (M25's falsification holds at W7's mix → no new batch primitives); < 0.80 → reopen the batch question; 0.80–0.90 → re-run before deciding (built in — two batch-vs-loop pairs per run); history share > 30% → the versions path gets its own follow-up\n\n",
         if cfg!(debug_assertions) { "debug" } else { "release" },
         run_date(),

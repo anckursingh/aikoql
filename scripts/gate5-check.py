@@ -9,7 +9,7 @@ decommission — gate 5 now asks: did the engine regress against itself?
 
 Shared by the baseline-guard CI job and the manual 1M procedure:
 
-    V2ADOPT_NIGHTLY=1m V2ADOPT_BACKEND=aikoql-v2 AIKOQL_REPORT_WRITE=1 \
+    STORAGE_REGRESSION=1m STORAGE_BACKEND=aikoql-v2 AIKOQL_REPORT_WRITE=1 \
         AIKOQL_REPORT_FRESH=1 \
         cargo test -p aikoql-storage-v2 --release --test kse_m7_v2_workloads
     python scripts/gate5-check.py

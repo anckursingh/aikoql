@@ -42,7 +42,7 @@ def main():
     try:
         fresh = validate_1m(SMOKE, fresh=True)
     except SchemaError as e:
-        hint = " (did the run set V2ADOPT_PERF_SMOKE=1?)" if e.unreadable else ""
+        hint = " (did the run set STORAGE_PERF_SMOKE=1?)" if e.unreadable else ""
         die(f"{e}{hint}")
 
     for key, label in (

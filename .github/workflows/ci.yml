@@ -39,7 +39,7 @@ jobs:
       # | merged_iterator_correctness      | byte-exact vs oracle | — | — | SE2M12_NIGHTLY=1 (50k steps) |
       # | w31_scale_001                    | probe success 12/12 per scale | cells | 10K synthesis | W31_SCALE_NIGHTLY=1 (100k) |
       # | w31_scale_002                    | probe pins (n=1000 fixed) | cells | — | runs fully on PR |
-      # | v2_m7_workloads (SKIPPED)        | verdict is V2ADOPT_NIGHTLY-gated; v2 nets = the 40+ reduced SE2 suites | cells | RSS/disk cells | V2ADOPT_NIGHTLY=1 (100k) at milestones |
+      # | v2_m7_workloads (SKIPPED)        | verdict is STORAGE_REGRESSION-gated; v2 nets = the 40+ reduced SE2 suites | cells | RSS/disk cells | STORAGE_REGRESSION=1 (100k) at milestones |
       # | multimodal_golden/retrieval_quality/semantic_extraction_quality (SKIPPED here) | re-run with --nocapture in dedicated steps below — zero coverage loss | quality metrics | — | the dedicated steps |
       # | load_encryption_overhead_v2 (SKIPPED) | — | pure measurement | — | weekly --ignored release (also #[ignore] in debug) |
       # | sfm009_large_wal_snapshot_has_bounded_rss (SKIPPED here) | bounded-RSS correctness (proven locally; RED archived) | — | whole-process RSS cell | local suite |
@@ -441,18 +441,18 @@ jobs:
               exit 1
             fi
           done
-          if ! grep -q 'V2ADOPT_NIGHTLY=1m' "$GUARD"; then
-            echo "DAG VIOLATION: $GUARD must run the 1M regime (V2ADOPT_NIGHTLY=1m)"
+          if ! grep -q 'STORAGE_REGRESSION=1m' "$GUARD"; then
+            echo "DAG VIOLATION: $GUARD must run the 1M regime (STORAGE_REGRESSION=1m)"
             exit 1
           fi
           # S-03: the guard compares the fresh run against the committed v2
           # baseline — the FRESH arm must stay armed, and the dead v1
-          # republish leg (V2ADOPT_BACKEND=aikoql) must stay deleted.
+          # republish leg (STORAGE_BACKEND=aikoql) must stay deleted.
           if ! grep -q 'AIKOQL_REPORT_FRESH=1' "$GUARD"; then
             echo "DAG VIOLATION: $GUARD must arm AIKOQL_REPORT_FRESH=1 (the fresh twin)"
             exit 1
           fi
-          if grep -q 'V2ADOPT_BACKEND=aikoql$' "$GUARD"; then
+          if grep -q 'STORAGE_BACKEND=aikoql$' "$GUARD"; then
             echo "DAG VIOLATION: $GUARD must not run a v1 backend leg (decommissioned in S-02)"
             exit 1
           fi
