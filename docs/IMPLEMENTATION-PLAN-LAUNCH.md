@@ -290,6 +290,27 @@ as `ci06-benchmark-paths-unfiltered` (exit 1 at e7a9366: the trigger
 paths lacked engines/benchmarks/competitor_bench/Cargo.lock; flips to
 exit 0 with the set).
 
+CI-07 shipped 2026-09-25 — the performance moat: the hybrid knowledge
+workload. One flagship `knowledge_query` cell walks the whole pipeline —
+identity resolution (seq → KOID through a unique index) → metadata
+filter (topic scope) → traversal (mentions + derived_from provenance,
+outbound) → semantic retrieval (text "cats" + vector) → ranking (RRF
+k0=60) — end-to-end on aikoql and the composed stacks (PG+pgvector+app
+traversal, Mongo+vector via the bolted-on qdrant mirror, Neo4j+vector);
+qdrant alone carries no_analog (a vector store is not a knowledge
+stack, §11). The cell rides the nightly Tier 2 `competitor-matrix` job
+(bench.py's full matrix + the four service containers; the result lands
+in the uploaded artifact — nothing committed, P3-M0 rule 6); the arch
+gate's workflow test 8 pins the cell, the job, and the composed-stack
+images. RED archived as `ci07-no-hybrid-knowledge-workload` (exit 1 at
+23359e2: bench.py carried no knowledge_query cell; flips to exit 0 with
+the cell). The stamp exposed two engine behaviors, documented in the
+REPORT.md CI-07 section: duplicate-coordinate clusters collapse the
+HNSW (the dataset now carries seeded per-note jitter — class geometry
+unchanged, scalar fields byte-identical), and the kernel's default
+traverse direction merges inbound + outbound (the cell filters to
+outbound via the per-hit direction tag).
+
 ### Phase L — correctness matrices (review 1), launch sequence
 
 (L-00 is done this session — the skip-drift gate is comment-aware, and a
