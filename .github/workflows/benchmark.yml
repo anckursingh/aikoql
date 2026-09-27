@@ -299,6 +299,15 @@ jobs:
       - name: Checker schema pins
         shell: bash
         run: python scripts/test_artifact_schema.py
+      # CI-10: RSS is weekly evidence, not a gate row (gate5-check ratios
+      # the workload p50 rows only), and its loader child re-seeds the
+      # whole 1M dataset — about half the guard's wall time. Arm it on the
+      # weekly/dispatch runs only so per-PR guards stay ~3h under the
+      # 360-min cap.
+      - name: Arm RSS measurement (weekly evidence)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: echo "AIKOQL_RSS=1" >> "$GITHUB_ENV"
       - name: Run 1M v2 workload
         shell: bash
         run: |
@@ -340,6 +349,11 @@ jobs:
       - name: Checker schema pins
         shell: bash
         run: python scripts/test_artifact_schema.py
+      # CI-10: the 100K re-seed is minutes, not hours — RSS stays armed
+      # here (its 240-min budget has room).
+      - name: Arm RSS measurement
+        shell: bash
+        run: echo "AIKOQL_RSS=1" >> "$GITHUB_ENV"
       - name: Run 100K v2 workload
         shell: bash
         run: |

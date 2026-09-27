@@ -73,6 +73,7 @@ const LOADER_ENV: &str = "STORAGE_LOADER";
 const LOADER_BACKEND_ENV: &str = "STORAGE_LOADER_BACKEND";
 const BACKEND_ENV: &str = "STORAGE_BACKEND";
 const FRESH_ENV: &str = "AIKOQL_REPORT_FRESH";
+const RSS_ENV: &str = "AIKOQL_RSS";
 const SEED: u64 = 0x27_0000;
 const N_TYPES: usize = 100;
 const DEEP_VERSIONS: usize = 10; // "10+ versions each" (§27 W3)
@@ -193,6 +194,26 @@ fn fresh_arm() -> bool {
             true
         }
         other => panic!("{FRESH_ENV} strict opt-in: unset or \"1\", got {other:?}"),
+    }
+}
+
+/// The RSS arm (CI-10, strict opt-in): the WorkingSet64 loader child
+/// re-seeds the whole dataset (about half the guard's wall time at 1M),
+/// and RSS is evidence, not a gate row — gate5-check ratios the workload
+/// p50 rows only. The per-PR guard leaves it unset; the weekly/dispatch
+/// runs arm it. Meaningful only where measure_rss already applies
+/// (nightly, load scale, Windows).
+fn rss_arm() -> bool {
+    match std::env::var(RSS_ENV) {
+        Err(std::env::VarError::NotPresent) => false,
+        Ok(v) if v == "1" => {
+            assert!(
+                nightly(),
+                "{RSS_ENV}=1 requires {NIGHTLY_ENV} (the loader child re-seeds at scale)"
+            );
+            true
+        }
+        other => panic!("{RSS_ENV} strict opt-in: unset or \"1\", got {other:?}"),
     }
 }
 
@@ -598,6 +619,9 @@ fn v2_m7_loader() {
 // Windows-only WorkingSet64 sampler around a loader child (kse19 pattern).
 // The child re-seeds the same dataset so peak RSS is the honest load RSS.
 fn measure_rss(backend: &str, sz: Size) -> Option<u64> {
+    if !rss_arm() {
+        return None; // CI-10: weekly evidence, not a gate row (see rss_arm)
+    }
     if !nightly() || sz.n < 100_000 {
         return None; // RSS needs load scale (kse19 lesson)
     }

@@ -29,7 +29,8 @@
 # CI-05 adds test 6 (build jobs cached), CI-06 adds test 7 (required
 # checks never path-filter), CI-07 adds test 8 (the hybrid knowledge
 # workload wired), CI-08 adds test 9 (reproducible results + reports),
-# CI-09 adds test 10 (the Tier-3 release certification).
+# CI-09 adds test 10 (the Tier-3 release certification), CI-10 adds test
+# 11 (guard RSS = weekly evidence; per-PR guards stay slim).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -395,6 +396,27 @@ for img in pgvector/pgvector neo4j:5-community qdrant/qdrant mongo:7; do
     fail=1
   fi
 done
+
+# workflow test 11 — test_guard_rss_weekly_only (CI-10): RSS is evidence,
+# not a gate row (gate5-check ratios the workload p50 rows only), and its
+# loader child re-seeds the whole 1M dataset (~half the guard's wall time).
+# The guard arms it on the weekly/dispatch runs only (the arm step carries
+# the schedule/dispatch gate inside the guard slice); the 100K main job
+# stays armed (its re-seed is minutes within a 240-min budget).
+guard=$(sed -n '/^  guard:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH")
+if ! printf '%s\n' "$guard" | grep -q 'AIKOQL_RSS=1'; then
+  echo "ARCH: the guard job lacks the RSS arm (CI-10)" >&2
+  fail=1
+fi
+if ! printf '%s\n' "$guard" | grep -q "if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"; then
+  echo "ARCH: the guard job must gate its RSS arm to the weekly/dispatch runs (CI-10)" >&2
+  fail=1
+fi
+main=$(sed -n '/^  self-regression-main:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH")
+if ! printf '%s\n' "$main" | grep -q 'AIKOQL_RSS=1'; then
+  echo "ARCH: the self-regression-main job lacks the RSS arm (CI-10)" >&2
+  fail=1
+fi
 
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
