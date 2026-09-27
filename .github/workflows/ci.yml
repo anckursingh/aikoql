@@ -173,6 +173,14 @@ jobs:
       # with the same content. Asserts the /data container contract.
       - name: DEP-003 — volume-backed restart preserves knowledge
         run: node scripts/e2e-volume-restart.js
+      # CI-13: the compose files are config-under-test, not docs — the
+      # PR #7 watch found they had never been executed (the dead host-port
+      # mappings shipped unnoticed; CI-11 removed them). Parse both with
+      # the token envs the `:?` gates require.
+      - name: Compose files parse (dev + release)
+        run: |
+          TCP_TOKEN=ci:ci:admin docker compose -f docker-compose.yml config --quiet
+          AIKOQL_TCP_TOKEN=ci:ci:admin docker compose -f docker-compose.release.yml config --quiet
 
   build-release:
     name: Build Release (Linux)

@@ -33,7 +33,8 @@
 # 11 (guard RSS = weekly evidence; per-PR guards stay slim), CI-11 adds
 # test 12 (the aikoql compose service publishes no host ports), CI-12 adds
 # test 13 (the coverage floor skips the alloc-budget pin under
-# instrumentation).
+# instrumentation), CI-13 adds tests 14-15 (the docker job parses the
+# compose files; the go-sdk binary path is pinned at the right depth).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -443,6 +444,30 @@ done
 # suites.
 if ! grep -q -- '--skip restart_index_reparse_pin' scripts/check-coverage-floor.sh; then
   echo "ARCH: check-coverage-floor.sh must skip the alloc-budget pin under instrumentation (CI-12)" >&2
+  fail=1
+fi
+
+# workflow test 14 — test_docker_job_parses_compose (CI-13): the compose
+# files are config-under-test, not docs — the PR #7 watch found the docker
+# job never executed them, so the dead host-port mappings shipped
+# unnoticed (CI-11). The job now parses both files with the token envs the
+# `:?` gates require.
+dock=$(sed -n '/^  docker:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF")
+for cf in docker-compose.yml docker-compose.release.yml; do
+  if ! printf '%s\n' "$dock" | grep -q "compose -f $cf config --quiet"; then
+    echo "ARCH: the docker job does not parse $cf (CI-13)" >&2
+    fail=1
+  fi
+done
+
+# workflow test 15 — test_gosdk_binary_path_depth (CI-13): the go-sdk
+# job's AIKOQL_MCP_BIN must name the workspace-root release binary — the
+# first CI run failed at spawn when ../../target resolved to crates/target
+# (one level short; the workflow expression had never been executed
+# anywhere before the push).
+gs=$(sed -n '/^  go-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF")
+if ! printf '%s\n' "$gs" | grep -q '"$PWD/../../../target/release/aikoql-mcp"'; then
+  echo "ARCH: the go-sdk job's AIKOQL_MCP_BIN is not pinned at the workspace-root depth (CI-13)" >&2
   fail=1
 fi
 
