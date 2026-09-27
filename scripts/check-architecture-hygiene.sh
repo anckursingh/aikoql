@@ -34,7 +34,9 @@
 # test 12 (the aikoql compose service publishes no host ports), CI-12 adds
 # test 13 (the coverage floor skips the alloc-budget pin under
 # instrumentation), CI-13 adds tests 14-15 (the docker job parses the
-# compose files; the go-sdk binary path is pinned at the right depth).
+# compose files; the go-sdk binary path is pinned at the right depth),
+# CI-14 adds test 16 (the committed 1M v2 baseline validates against the
+# §13/M47 schema).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -468,6 +470,17 @@ done
 gs=$(sed -n '/^  go-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF")
 if ! printf '%s\n' "$gs" | grep -q '"$PWD/../../../target/release/aikoql-mcp"'; then
   echo "ARCH: the go-sdk job's AIKOQL_MCP_BIN is not pinned at the workspace-root depth (CI-13)" >&2
+  fail=1
+fi
+
+# workflow test 16 — test_1m_baseline_schema (CI-14, lands L-24): the
+# committed 1M v2 baseline must satisfy the §13/M47 schema (fresh=False —
+# baselines are historical by design). PR #7's gate5-check died on the
+# pre-§13 *_us rows AFTER the 3h suite ran: the baseline had never been
+# validated by the named-error schema — only the fresh twin was, and the
+# stale baseline let the whole guard fail at the last step.
+if ! python3 -c "import sys; sys.path.insert(0, 'scripts'); from artifact_schema import validate_1m; validate_1m('artifacts/storage-engine-v2/result-1m-aikoql-v2.json', fresh=False)" >/dev/null 2>&1; then
+  echo "ARCH: the committed 1M v2 baseline fails the §13/M47 schema (CI-14)" >&2
   fail=1
 fi
 

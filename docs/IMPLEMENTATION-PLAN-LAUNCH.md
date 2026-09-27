@@ -29,7 +29,7 @@ L-01..L-23). Summary of what my verification confirmed real:
 | factor | disposition |
 |---|---|
 | dag job RED on main: drift gate's raw grep matched a comment quoting `--skip` | **L-00, fixed this session** — gate is comment-aware (mutation leg proven locally) |
-| M47 republish not landed — `*_us` baseline stale by design | L-24 (re-scoped in CI-02: the v1-baseline leg disappears with v1) |
+| M47 republish landed (CI-14/L-24, 2026-09-27) — the `*_us` baseline was stale by design | CLOSED — PR #7's uploaded fresh twin is the committed 1M baseline; guard green; arch test 16 pins the baseline schema |
 | 28 open code-scanning alerts — sites verified: zero-init nonce buffers (crypto.rs/kms.rs = false positive), test vectors (durability.rs), by-design admin passphrase print (admin.rs:165), KOID print (shell.rs:283) | L-25 |
 | R2-008's 7 CodeQL threads; P1-8 kernel loses writes on abrupt MCP close | L-25 |
 | PR6-012 db.rs decomposition (DEFERRED by the review's own condition); P2-9 wire-contract golden tests | stays deferred / post-launch |
@@ -127,7 +127,10 @@ next-baseline evidence; the gd001 pin forbids a re-added aikoql leg. The
 committed baselines predate the M37 *_ns rename, so the guard is RED on
 the stale 1M baseline BY DESIGN until the maintainer commits the first
 uploaded fresh twin (scripts/gate5-check.py stays strict; the suite's hand
-parser accepts p50_us for the historical rows). S-05 (benchmark harness)
+parser accepts p50_us for the historical rows). Landed CI-14 (2026-09-27):
+PR #7's uploaded fresh twin is the committed 1M baseline; gate5-check
+validates it, and arch test 16 pins the baseline schema on the gate chain.
+S-05 (benchmark harness)
 remains.
 
 S-04 shipped 2026-09-25 — the adoption-era language is gone from the
@@ -397,7 +400,7 @@ real inline `--skip` still trips it, proven locally.)
 | L-21 | gated registry integrity | TDD-032 | duplicate names unchecked | duplicates fail; shape/dead-entry/inline-skip legs stay green |
 | L-22 | shuffle behavioral proof | TDD-033 | wiring grep only | deliberate order dependency caught by shuffle; seed + order recorded |
 | L-23 | strong-claims evidence audit | TDD-034 | unpinned | script lists every O(/zero allocation/exactly once/never/always/bounded/must claim; each maps to executable evidence or loses the claim |
-| L-24 | republish landing | — | `*_us` baseline stale (by design) | committed v2 baseline refreshed (v1 leg gone per CI-02); guard green; M47 row flips ✅ |
+| L-24 | republish landing | — | `*_us` baseline stale (by design) | ✅ CI-14 2026-09-27: PR #7's fresh twin committed as the 1M baseline; guard green; arch test 16 pins the schema |
 | L-25 | security disposition | 28 alerts + R2-008 + P1-8 | alerts/threads open; kernel loses writes on abrupt MCP close | per-site disposition recorded (fix real, document false-positive/by-design); threads resolved; kernel flushes durably by default |
 | L-26 | release hygiene | — | no LICENSE/CHANGELOG; Dependabot red | LICENSE (Apache-2.0), CHANGELOG from v0.1.19, version decision, `lru` update investigated |
 | L-27 | launch cut | — | | tag → release pipeline (incl. Tier-3 benchmark report) → artifact smoke → VERIFY.md pass → launch |
