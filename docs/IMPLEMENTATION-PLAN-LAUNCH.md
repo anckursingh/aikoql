@@ -351,6 +351,21 @@ legs, the §13 schema check, and the §18 pinned images (mutation-verified).
 RED archived as `ci09-release-runs-no-benchmark` (exit 1 at e659d1c:
 release.yml carried no tier3-matrix; flips to exit 0 with the job set).
 
+CI-10 shipped 2026-09-27 — the guard gets room under the cap: the 1M
+gate-5 job measured 5h41m against the 360-minute GitHub job cap and hit it
+on 2 of 3 post-push runs (5h41m completed at 582eacc; cancelled at
+6h0m26s/6h0m45s at ea9aa77/fab6dcf). The log breakdown: seed 2h39m, the
+RSS loader child re-seeding the same 1M dataset 2h41m, the ten timed cells
+21m — RSS is evidence, not a gate row (gate5-check ratios the workload p50
+rows only). The loader child moves behind a strict-opt-in `AIKOQL_RSS` arm
+(fresh_arm idiom; unset = no child): the guard arms it on schedule/dispatch
+only (per-PR guards land ~3h under the cap), the 100K self-regression-main
+job stays armed (minutes within its 240 budget), and the weekly run keeps
+full RSS evidence. Arch-gate: workflow test 11 pins the guard slice's
+schedule/dispatch-gated arm and the main job's arm (mutation-verified both
+ways). RED archived as `ci10-guard-rss-weekly-only` (exit 1 at fab6dcf:
+benchmark.yml carried no AIKOQL_RSS arm).
+
 ### Phase L — correctness matrices (review 1), launch sequence
 
 (L-00 is done this session — the skip-drift gate is comment-aware, and a
