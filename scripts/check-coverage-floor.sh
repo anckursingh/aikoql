@@ -27,7 +27,11 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 echo "Coverage floor — instrumented storage-v2 suite run..."
-cargo llvm-cov test -p aikoql-storage-v2 --all-features --no-report
+# CI-12: the instrumented build perturbs the counting allocator — the
+# absolute-budget pin (restart_index_reparse_pin, warm a2<=4) is enforced
+# by BOTH plain CI suites and skipped here (PR #7's first llvm-cov run saw
+# 5 while the plain Linux/Windows suites passed it).
+cargo llvm-cov test -p aikoql-storage-v2 --all-features --no-report -- --skip restart_index_reparse_pin
 cargo llvm-cov report --summary-only > "$tmp/report.txt"
 
 python3 - "$BASE" "$tmp/report.txt" <<'EOF'

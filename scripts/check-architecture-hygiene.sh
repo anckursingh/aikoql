@@ -31,7 +31,9 @@
 # workload wired), CI-08 adds test 9 (reproducible results + reports),
 # CI-09 adds test 10 (the Tier-3 release certification), CI-10 adds test
 # 11 (guard RSS = weekly evidence; per-PR guards stay slim), CI-11 adds
-# test 12 (the aikoql compose service publishes no host ports).
+# test 12 (the aikoql compose service publishes no host ports), CI-12 adds
+# test 13 (the coverage floor skips the alloc-budget pin under
+# instrumentation).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -432,6 +434,17 @@ for cf in docker-compose.yml docker-compose.release.yml; do
     fail=1
   fi
 done
+
+# workflow test 13 — test_coverage_floor_skips_alloc_pins (CI-12): the
+# instrumented run perturbs the counting allocator (PR #7's first
+# llvm-cov run: restart_index_reparse_pin's a2<=4 budget saw 5 under
+# instrumentation while both plain suites passed it), so the absolute
+# alloc-budget pin is skipped there and stays enforced by the plain CI
+# suites.
+if ! grep -q -- '--skip restart_index_reparse_pin' scripts/check-coverage-floor.sh; then
+  echo "ARCH: check-coverage-floor.sh must skip the alloc-budget pin under instrumentation (CI-12)" >&2
+  fail=1
+fi
 
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
