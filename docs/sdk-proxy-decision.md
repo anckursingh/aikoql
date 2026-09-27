@@ -39,3 +39,27 @@ User decision: **delete, plus a future plan for primary-DB positioning** →
 `docs/first-class-db-roadmap.md`. All four deletions landed in this commit
 (workspace member removed, CI DAG pin added, QUICKSTART/website/docs updated
 to the MCP surface). Python stays adopted with sdk001 green.
+
+## Re-adoption: Go SDK (2026-09-27, GO-SDK-01)
+
+Trigger 1 fired: an external product — a Go web service — will use aikoql as
+its DB and needs a Go SDK. Rebuilt in `crates/sdk/go` from the deleted
+222-line client, against the then-current MCP contract (mirrored from the
+Python SDK): `MIN_SERVER_VERSION` 0.1.19 ND-12 contract, token in initialize
+params, MRFC-0040 error envelope, session/init, id-correlated streaming.
+Typed wrappers over the server's registry tools + `CallTool` escape hatch.
+Transport is MCP JSON-RPC over TCP and is private to `Client`, so Phase 4's
+native wire protocol can replace it without touching the tool surface.
+
+Adoption standard met — the evidence bar this doc set:
+
+- **Tests**: 7 unit tests (dial/version/error-envelope/round-trip/push-skip/
+  stream) + 2 real-server integration tests (round trip + wrong-token
+  rejection) that spawn the actual `aikoql-mcp` binary.
+- **CI**: `go-sdk` job in ci.yml (same shape as python-sdk: build the real
+  binary, then `go vet` + `go test` with `AIKOQL_MCP_BIN` armed).
+- **Consumer proof**: `examples/web-service` — an HTTP app over the SDK.
+- **Versioning**: go.mod module `github.com/ancku/aikoql-sdk`, go 1.22.
+
+TS/Java stay deleted — no trigger has fired for them; MCP + Python + Go
+remains the right-sized surface.

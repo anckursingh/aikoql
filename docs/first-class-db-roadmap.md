@@ -73,6 +73,8 @@ artifact) was deleted in P3-M9 with zero demand evidence.
 - **Re-adopt drivers (Phase 4)** when: the P3-M9 deletion triggers fire —
   see `docs/sdk-proxy-decision.md` §Re-adopt triggers. The deleted code is
   recoverable from git history and must be rebuilt against the then-current
-  MCP contract anyway.
+  MCP contract anyway. **Go re-adopted 2026-09-27 (GO-SDK-01)** — the
+  trigger fired (an external Go product); `crates/sdk/go` is rebuilt with
+  CI + contract tests + a web-service example. TS/Java triggers still open.
 - **Do nothing** while: aikoql's value is the agent knowledge layer — in
   that world, MCP + one well-maintained SDK is the right-sized investment.
