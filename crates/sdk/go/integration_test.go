@@ -161,3 +161,46 @@ func TestRealServerRejectsWrongToken(t *testing.T) {
 		t.Fatal("Initialize with a wrong token must fail")
 	}
 }
+
+// TestRealServerStdioRoundTrip is the docker-container contract: `docker
+// run -i` runs the same binary over the same stdin/stdout (the repo's
+// e2e-volume-restart.js proves the container side; this proves the SDK
+// side). No --listen, no token — stdio trusts the process boundary.
+func TestRealServerStdioRoundTrip(t *testing.T) {
+	bin := os.Getenv("AIKOQL_MCP_BIN")
+	if bin == "" {
+		t.Skip("AIKOQL_MCP_BIN not set — real-server integration test skipped")
+	}
+	dbDir := filepath.Join(t.TempDir(), "kb") // non-existent: auto-create (SE2-M41)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	c, err := DialStdio(ctx, bin, "serve", dbDir)
+	if err != nil {
+		t.Fatalf("DialStdio: %v", err)
+	}
+	if err := c.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize over stdio: %v", err)
+	}
+	got, err := c.Remember(ctx, RememberParams{
+		TypeName:   "person",
+		Properties: map[string]any{"name": "grace"},
+	})
+	if err != nil {
+		t.Fatalf("Remember over stdio: %v", err)
+	}
+	if got.KOID == "" {
+		t.Fatal("Remember returned an empty KOID")
+	}
+	ko, err := c.Get(ctx, got.KOID, "")
+	if err != nil {
+		t.Fatalf("Get over stdio: %v", err)
+	}
+	if ko.Properties["name"] != "grace" {
+		t.Fatalf("Get properties wrong: %+v", ko.Properties)
+	}
+	// Graceful close: stdin EOF makes the server checkpoint and exit 0
+	// (main.rs stdio mode) — Close must return nil.
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close over stdio: %v", err)
+	}
+}

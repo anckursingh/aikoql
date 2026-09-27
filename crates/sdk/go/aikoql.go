@@ -1,6 +1,6 @@
 // Package aikoql is the Go SDK for the AikoQL knowledge database. It
-// speaks MCP JSON-RPC over TCP to an aikoql-mcp server — the same first-
-// class surface the Python SDK and standard MCP clients use:
+// speaks MCP JSON-RPC over TCP or stdio to an aikoql-mcp server — the
+// same first-class surface the Python SDK and standard MCP clients use:
 //
 //	ctx := context.Background()
 //	db, err := aikoql.Dial(ctx, "127.0.0.1:9090", aikoql.WithToken("s3cret"))
@@ -11,6 +11,11 @@
 //	    TypeName: "person", Properties: map[string]any{"name": "ada"},
 //	})
 //	rows, err := db.Aikoql(ctx, "MATCH person RETURN *", "")
+//
+// DialStdio spawns the server instead and speaks MCP over its
+// stdin/stdout — the docker-container contract (`docker run -i --rm
+// image serve /data/aikoql.redb`), token-free because stdio trusts the
+// process boundary.
 //
 // A Client serializes its calls over one connection (the mutex is
 // internal) — pool Clients like you would pool any DB connection, or open
@@ -26,8 +31,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,9 +84,17 @@ func WithClientInfo(name, version string) Option {
 	return func(c *clientConfig) { c.name, c.version = name, version }
 }
 
+// transport abstracts the frame stream: a TCP conn or a spawned server's
+// stdio pipes. Two implementations — the SDK's one justified interface.
+type transport interface {
+	Write(p []byte) (int, error)
+	Close() error
+	SetDeadline(t time.Time) error
+}
+
 // Client is one MCP JSON-RPC connection to an aikoql-mcp server.
 type Client struct {
-	conn   net.Conn
+	tr     transport
 	r      *bufio.Reader
 	mu     sync.Mutex // serializes frames: one in-flight call per conn
 	nextID int64
@@ -97,12 +114,99 @@ func Dial(ctx context.Context, addr string, opts ...Option) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("aikoql: dial %s: %w", addr, err)
 	}
-	return &Client{conn: conn, r: bufio.NewReader(conn), cfg: cfg}, nil
+	return &Client{tr: conn, r: bufio.NewReader(conn), cfg: cfg}, nil
 }
 
-// Close closes the connection. Safe to call more than once.
+// DialStdio spawns bin with args and speaks MCP over its stdin/stdout.
+// This is the docker-container contract — `docker run -i --rm image serve
+// /data/aikoql.redb` runs the same binary over the same stdio (the repo's
+// e2e-volume-restart.js proves the container side). No token: stdio trusts
+// the process boundary and the server's stdio mode needs no --tcp-token.
+// The server's stderr is inherited so its logs stay visible. ctx bounds
+// the spawn only — the process lives until Close, and per-call ctxs carry
+// the call deadlines (a hung stdio server is killed at the deadline: a
+// pipe has no socket deadline to set).
+func DialStdio(ctx context.Context, bin string, args ...string) (*Client, error) {
+	cfg := clientConfig{name: "aikoql-go-sdk", version: "0.1.0", dialTimeout: 5 * time.Second}
+	cmd := exec.Command(bin, args...)
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("aikoql: stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("aikoql: stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("aikoql: start %s: %w", bin, err)
+	}
+	if err := ctx.Err(); err != nil {
+		killErr := cmd.Process.Kill()
+		waitErr := cmd.Wait()
+		return nil, errors.Join(err, killErr, waitErr)
+	}
+	return &Client{tr: &stdioTransport{cmd: cmd, stdin: stdin}, r: bufio.NewReader(stdout), cfg: cfg}, nil
+}
+
+// stdioTransport adapts a spawned server's stdin/stdout to the transport
+// contract. Deadlines become a kill timer: a hung stdio server cannot be
+// given a socket deadline, and a killed child unblocks the read with an
+// error.
+type stdioTransport struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	cancel func() // stops the armed kill timer
+}
+
+func (s *stdioTransport) Write(p []byte) (int, error) {
+	return s.stdin.Write(p)
+}
+
+func (s *stdioTransport) SetDeadline(t time.Time) error {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	if t.IsZero() {
+		return nil
+	}
+	d := time.Until(t)
+	if d <= 0 {
+		if err := s.cmd.Process.Kill(); err != nil {
+			return fmt.Errorf("aikoql: kill %s: %w", s.cmd.Path, err)
+		}
+		return context.DeadlineExceeded
+	}
+	timer := time.AfterFunc(d, func() {
+		if err := s.cmd.Process.Kill(); err != nil {
+			fmt.Fprintf(os.Stderr, "aikoql: deadline kill %s: %v\n", s.cmd.Path, err)
+		}
+	})
+	s.cancel = func() { timer.Stop() }
+	return nil
+}
+
+// Close shuts the stdio server down gracefully: stdin EOF is the server's
+// checkpoint-and-exit signal (main.rs stdio mode). A server that lingers
+// past the grace window is killed.
+func (s *stdioTransport) Close() error {
+	cerr := s.stdin.Close()
+	done := make(chan error, 1)
+	go func() { done <- s.cmd.Wait() }()
+	select {
+	case waitErr := <-done:
+		return errors.Join(cerr, waitErr)
+	case <-time.After(2 * time.Second):
+		killErr := s.cmd.Process.Kill()
+		waitErr := <-done
+		return errors.Join(cerr, killErr, waitErr)
+	}
+}
+
+// Close closes the transport. Safe to call more than once.
 func (c *Client) Close() error {
-	return c.conn.Close()
+	return c.tr.Close()
 }
 
 // rpcRequest is one JSON-RPC request frame.
@@ -140,36 +244,42 @@ func (e *rpcError) mcpError() *McpError {
 	return &McpError{Code: code, Message: e.Message}
 }
 
-// applyDeadline projects the context deadline onto the socket so a stalled
-// server cannot hang the caller past ctx.
-func (c *Client) applyDeadline(ctx context.Context) error {
-	if d, ok := ctx.Deadline(); ok {
-		if err := c.conn.SetDeadline(d); err != nil {
-			return fmt.Errorf("aikoql: set deadline: %w", err)
-		}
-		return nil
+// applyDeadline projects the context deadline onto the transport so a
+// stalled server cannot hang the caller past ctx. The returned clear func
+// disarms it when the call ends — on stdio the armed deadline is a kill
+// timer and must not outlive the call it bounds.
+func (c *Client) applyDeadline(ctx context.Context) (clear func() error, err error) {
+	var d time.Time
+	if dl, ok := ctx.Deadline(); ok {
+		d = dl
 	}
-	if err := c.conn.SetDeadline(time.Time{}); err != nil {
-		return fmt.Errorf("aikoql: clear deadline: %w", err)
+	if err := c.tr.SetDeadline(d); err != nil {
+		return nil, fmt.Errorf("aikoql: set deadline: %w", err)
 	}
-	return nil
+	return func() error { return c.tr.SetDeadline(time.Time{}) }, nil
 }
 
 // request sends one JSON-RPC request and returns its result frame,
 // skipping pushed notifications by id correlation.
-func (c *Client) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
+func (c *Client) request(ctx context.Context, method string, params any) (result json.RawMessage, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.applyDeadline(ctx); err != nil {
+	clear, err := c.applyDeadline(ctx)
+	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if cerr := clear(); cerr != nil {
+			err = errors.Join(err, cerr)
+		}
+	}()
 	c.nextID++
 	id := c.nextID
 	frame, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
 	if err != nil {
 		return nil, fmt.Errorf("aikoql: marshal %s: %w", method, err)
 	}
-	if _, err := c.conn.Write(append(frame, '\n')); err != nil {
+	if _, err := c.tr.Write(append(frame, '\n')); err != nil {
 		return nil, fmt.Errorf("aikoql: send %s: %w", method, err)
 	}
 	for {
@@ -196,19 +306,25 @@ func (c *Client) request(ctx context.Context, method string, params any) (json.R
 // notifications/notify frame carrying that id is handed to yieldFn until
 // its done flag. The mutex is held for the whole stream: do not share the
 // Client across goroutines while streaming.
-func (c *Client) stream(ctx context.Context, method string, params any, yieldFn func(chunk json.RawMessage) error) error {
+func (c *Client) stream(ctx context.Context, method string, params any, yieldFn func(chunk json.RawMessage) error) (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.applyDeadline(ctx); err != nil {
+	clear, err := c.applyDeadline(ctx)
+	if err != nil {
 		return err
 	}
+	defer func() {
+		if cerr := clear(); cerr != nil {
+			err = errors.Join(err, cerr)
+		}
+	}()
 	c.nextID++
 	id := c.nextID
 	frame, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
 	if err != nil {
 		return fmt.Errorf("aikoql: marshal %s: %w", method, err)
 	}
-	if _, err := c.conn.Write(append(frame, '\n')); err != nil {
+	if _, err := c.tr.Write(append(frame, '\n')); err != nil {
 		return fmt.Errorf("aikoql: send %s: %w", method, err)
 	}
 	var streamID string

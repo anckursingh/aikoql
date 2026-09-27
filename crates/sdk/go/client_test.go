@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -276,5 +277,93 @@ func TestAikoqlStreamChunks(t *testing.T) {
 	}
 	if !strings.Contains(chunks[1], `"done":true`) {
 		t.Fatalf("last chunk must be the done frame: %v", chunks[1])
+	}
+}
+
+// TestStdioHelper is a fake MCP server on stdin/stdout, re-exec'd by the
+// stdio tests below (the os/exec helper-process pattern). It answers
+// initialize and tools/call until stdin EOF, then os.Exit(0)s so the test
+// framework never prints to the frame stream.
+func TestStdioHelper(t *testing.T) {
+	if os.Getenv("AIKOQL_STDIO_HELPER") != "1" {
+		t.Skip("helper process")
+	}
+	r := bufio.NewReader(os.Stdin)
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			os.Exit(0) // stdin EOF = graceful server shutdown
+		}
+		var req rpcFrame
+		if err := json.Unmarshal([]byte(line), &req); err != nil {
+			continue
+		}
+		var out []byte
+		switch req.Method {
+		case "initialize":
+			out, _ = json.Marshal(rpcFrame{JSONRPC: "2.0", ID: req.ID,
+				Result: json.RawMessage(`{"serverInfo":{"name":"aikoql-mcp","version":"0.1.19"}}`)})
+		case "tools/call":
+			out, _ = json.Marshal(rpcFrame{JSONRPC: "2.0", ID: req.ID,
+				Result: toolResult(map[string]any{"koid": "helper1"})})
+		default:
+			continue
+		}
+		if _, err := os.Stdout.Write(append(out, '\n')); err != nil {
+			os.Exit(1)
+		}
+	}
+}
+
+// TestStdioHelperHang reads one frame then hangs — the target of the
+// deadline-kill test (a stdio pipe has no socket deadline; the client
+// must kill the child instead).
+func TestStdioHelperHang(t *testing.T) {
+	if os.Getenv("AIKOQL_STDIO_HANG") != "1" {
+		t.Skip("helper process")
+	}
+	bufio.NewReader(os.Stdin).ReadString('\n')
+	time.Sleep(time.Minute)
+	os.Exit(0)
+}
+
+func TestDialStdioRoundTrip(t *testing.T) {
+	t.Setenv("AIKOQL_STDIO_HELPER", "1")
+	ctx := context.Background()
+	c, err := DialStdio(ctx, os.Args[0], "-test.run=TestStdioHelper")
+	if err != nil {
+		t.Fatalf("DialStdio: %v", err)
+	}
+	if err := c.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize over stdio: %v", err)
+	}
+	ko, err := c.Remember(ctx, RememberParams{TypeName: "note"})
+	if err != nil {
+		t.Fatalf("Remember over stdio: %v", err)
+	}
+	if ko.KOID != "helper1" {
+		t.Fatalf("stdio round trip wrong: %+v", ko)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close (graceful stdin EOF): %v", err)
+	}
+}
+
+func TestDialStdioDeadlineKillsServer(t *testing.T) {
+	t.Setenv("AIKOQL_STDIO_HANG", "1")
+	ctx := context.Background()
+	c, err := DialStdio(ctx, os.Args[0], "-test.run=TestStdioHelperHang")
+	if err != nil {
+		t.Fatalf("DialStdio: %v", err)
+	}
+	callCtx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = c.Remember(callCtx, RememberParams{TypeName: "x"})
+	if err == nil {
+		t.Fatal("a hung stdio server must fail the deadline call")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("deadline not enforced (call took %v)", elapsed)
 	}
 }
