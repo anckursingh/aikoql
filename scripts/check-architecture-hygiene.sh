@@ -30,7 +30,8 @@
 # checks never path-filter), CI-07 adds test 8 (the hybrid knowledge
 # workload wired), CI-08 adds test 9 (reproducible results + reports),
 # CI-09 adds test 10 (the Tier-3 release certification), CI-10 adds test
-# 11 (guard RSS = weekly evidence; per-PR guards stay slim).
+# 11 (guard RSS = weekly evidence; per-PR guards stay slim), CI-11 adds
+# test 12 (the aikoql compose service publishes no host ports).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -417,6 +418,20 @@ if ! printf '%s\n' "$main" | grep -q 'AIKOQL_RSS=1'; then
   echo "ARCH: the self-regression-main job lacks the RSS arm (CI-10)" >&2
   fail=1
 fi
+
+# workflow test 12 — test_compose_aikoql_no_host_ports (CI-11): the aikoql
+# compose service publishes no host ports. The server fails closed on
+# non-loopback binds (R1/R3 validate_listen; CI pins `--listen 0.0.0.0`
+# must exit 2), so docker's -p proxy arrives on the container IP where
+# nothing listens — the mappings were dead as shipped. The host client
+# contract is MCP-over-stdio (docker run -i) or a sidecar that shares the
+# network namespace.
+for cf in docker-compose.yml docker-compose.release.yml; do
+  if sed -n '/^  aikoql:/,/^  [a-z][a-z0-9_-]*:$/p' "$cf" | grep -qE '^ *- "90(90|91):'; then
+    echo "ARCH: $cf publishes dead aikoql host ports (CI-11)" >&2
+    fail=1
+  fi
+done
 
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"

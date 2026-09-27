@@ -1,0 +1,8 @@
+{
+  "id": "ci11-compose-dead-ports",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-09-27T10:55:04Z",
+  "captured_head": "4b0dddbf4d7bc262bdb6daf8bd70da234a08df0f",
+  "exit_code": 1
+}

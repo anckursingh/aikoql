@@ -7,14 +7,15 @@
 # token, so AIKOQL_TCP_TOKEN (TOKEN[:TENANT[:ROLE1,ROLE2]]) is required here.
 # Supply it from a secret manager in production, not a committed .env.
 # Pin AIKOQL_VERSION to an immutable release tag; `latest` is for trying out.
+# The container's TCP/metrics listeners are loopback-only (R1/R3 — the server
+# rejects non-loopback binds), so this file publishes NO host ports (CI-11):
+# `up -d` runs a healthy container, and host clients reach it over stdio
+# (`docker run -i`) or via a sidecar sharing the network namespace.
 services:
   aikoql:
     image: ghcr.io/anckursingh/aikoql:${AIKOQL_VERSION:-latest}
     environment:
       AIKOQL_TCP_TOKEN: ${AIKOQL_TCP_TOKEN:?set a TCP token (TOKEN[:TENANT[:ROLES]])}
-    ports:
-      - "9090:9090" # MCP over TCP
-      - "9091:9091" # metrics + /health + Studio
     volumes:
       - aikoql_data:/data
     restart: unless-stopped
