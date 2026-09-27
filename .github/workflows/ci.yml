@@ -385,7 +385,9 @@ jobs:
           set -euo pipefail
           cd crates/sdk/go
           go vet ./...
-          AIKOQL_MCP_BIN="$PWD/../../target/release/aikoql-mcp" go test -v ./...
+          # crates/sdk/go → three levels up to the workspace-root target
+          # (CI's first run caught this one short: ../../target = crates/target).
+          AIKOQL_MCP_BIN="$PWD/../../../target/release/aikoql-mcp" go test -v ./...
 
   # PR6-F6 (P1-6) → CI-03 (the review's §16 trap): the per-commit perf
   # smoke folded into ci.yml. An always-run job with a fast exit on
