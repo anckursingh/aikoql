@@ -48,8 +48,10 @@ its DB and needs a Go SDK. Rebuilt in `crates/sdk/go` from the deleted
 Python SDK): `MIN_SERVER_VERSION` 0.1.19 ND-12 contract, token in initialize
 params, MRFC-0040 error envelope, session/init, id-correlated streaming.
 Typed wrappers over the server's registry tools + `CallTool` escape hatch.
-Transport is MCP JSON-RPC over TCP and is private to `Client`, so Phase 4's
-native wire protocol can replace it without touching the tool surface.
+Transport is MCP JSON-RPC over TCP or stdio (`DialStdio` — the
+`docker run -i` container contract, added when the container question
+surfaced) and is private to `Client`, so Phase 4's native wire protocol
+can replace it without touching the tool surface.
 
 Adoption standard met — the evidence bar this doc set:
 
