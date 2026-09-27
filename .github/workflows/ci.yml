@@ -360,6 +360,33 @@ jobs:
           "$VIRTUAL_ENV/bin/maturin" develop --release
           "$VIRTUAL_ENV/bin/python" -m pytest tests/ -q
 
+  # GO-SDK-01: the Go SDK (crates/sdk/go) is the P3-M9 re-adoption — the
+  # first-class-db-roadmap Phase-4 trigger fired (a Go product needs the
+  # DB). Same shape as python-sdk: build the real server binary, then run
+  # the SDK suite against it (the integration tests skip unless
+  # AIKOQL_MCP_BIN names the binary; the version contract Initialize
+  # enforces is exercised against the freshly built workspace version).
+  go-sdk:
+    name: Go SDK contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build server binary (the contract target)
+        run: cargo build --release -p aikoql-mcp
+      - name: Vet + unit + real-server integration suite
+        run: |
+          set -euo pipefail
+          cd crates/sdk/go
+          go vet ./...
+          AIKOQL_MCP_BIN="$PWD/../../target/release/aikoql-mcp" go test -v ./...
+
   # PR6-F6 (P1-6) → CI-03 (the review's §16 trap): the per-commit perf
   # smoke folded into ci.yml. An always-run job with a fast exit on
   # non-matching paths — a path-gated required workflow skips and a

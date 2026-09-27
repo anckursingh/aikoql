@@ -1,0 +1,2 @@
+grep: crates/sdk/go/go.mod: No such file or directory
+EXIT=2
