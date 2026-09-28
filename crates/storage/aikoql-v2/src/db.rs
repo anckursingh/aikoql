@@ -1023,6 +1023,26 @@ impl Db {
         if ops.is_empty() {
             return Err(FormatError::Invalid("empty write batch".into()));
         }
+        // L-12 (TDD-028) — the segment format's key fields are u16: a
+        // longer key would silently truncate at publish. Reject at the API
+        // trust boundary, before the WAL ack — never a truncated key on
+        // disk. publish carries the same guard for direct callers.
+        for op in ops {
+            let k = match op {
+                Op::Put(k, _) | Op::Delete(k) | Op::PutObject(_, k, _) | Op::DeleteObject(_, k) => {
+                    k
+                }
+                // a CreateObject carries no key (wal.rs Op doc)
+                Op::CreateObject { .. } => continue,
+            };
+            if k.len() > u16::MAX as usize {
+                return Err(FormatError::Invalid(format!(
+                    "key length {} exceeds the {} byte format limit",
+                    k.len(),
+                    u16::MAX
+                )));
+            }
+        }
         if self.config.durability == DurabilityMode::GroupCommit {
             let seq = self.writer()?.write(ops)?;
             // The committer applied and (if the threshold fired) flushed

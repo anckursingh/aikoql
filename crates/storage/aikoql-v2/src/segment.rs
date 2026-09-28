@@ -292,6 +292,17 @@ impl SegmentWriter {
                 "cannot publish an empty segment".into(),
             ));
         }
+        // L-12 (TDD-028) — the format's key fields are u16: reject an
+        // oversized key here too — publish is the choke point for callers
+        // that bypass Db::write (the API rejects first, this is the format
+        // boundary).
+        if let Some(e) = entries.iter().find(|e| e.key.len() > u16::MAX as usize) {
+            return Err(FormatError::Invalid(format!(
+                "key length {} exceeds the {} byte format limit",
+                e.key.len(),
+                u16::MAX
+            )));
+        }
         if entries
             .windows(2)
             .any(|w| w[0].key == w[1].key && w[0].seq == w[1].seq)
@@ -2066,7 +2077,11 @@ impl<'a> Iterator for SegmentScan<'a> {
                 self.pos += cur.pos();
                 continue;
             }
-            let value = match cur.vec() {
+            let value_len = match cur.u32() {
+                Ok(v) => v as usize,
+                Err(e) => return Some(Err(e)),
+            };
+            let value = match cur.take(value_len) {
                 Ok(v) => v,
                 Err(e) => return Some(Err(e)),
             };
@@ -2087,11 +2102,20 @@ impl<'a> Iterator for SegmentScan<'a> {
                 ReplicaId(0)
             };
             self.pos += cur.pos();
+            // L-12 (TDD-027) — the byte surface: an object row never
+            // answers a byte scan. Skip it WITHOUT recording `last`, so an
+            // older byte version of the same key still yields as the head
+            // (stor006's semantic — the memtable prefix_heads filter has
+            // it, the segment path didn't). Only yielded heads allocate;
+            // skipped rows ride the borrowed value slice.
+            if replica_id != ReplicaId(0) {
+                continue;
+            }
             let key = self.scratch.clone();
             self.last = Some(key.clone());
             return Some(Ok(SegmentEntry {
                 key,
-                value,
+                value: value.to_vec(),
                 seq,
                 flags,
                 replica_id,
