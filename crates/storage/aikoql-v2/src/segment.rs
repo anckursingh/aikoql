@@ -250,12 +250,6 @@ impl SegmentWriter {
         path: &Path,
     ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
         let mut entries = std::mem::take(&mut self.entries);
-        debug_assert!(
-            entries
-                .windows(2)
-                .all(|w| (&w[0].key, w[0].seq) <= (&w[1].key, w[1].seq)),
-            "sorted publish requires memtable order (key asc, seq asc within key)"
-        );
         let mut run_start = 0;
         while run_start < entries.len() {
             let mut run_end = run_start + 1;
@@ -278,12 +272,6 @@ impl SegmentWriter {
         stage: Option<&str>,
     ) -> Result<(u64, u64, Vec<SegmentAnchor>), FormatError> {
         let entries = std::mem::take(&mut self.entries);
-        debug_assert!(
-            entries
-                .windows(2)
-                .all(|w| { w[0].key < w[1].key || (w[0].key == w[1].key && w[0].seq >= w[1].seq) }),
-            "sorted staged publish requires publish order (key asc, seq desc within key)"
-        );
         self.publish_sorted_entries(path, stage, entries)
     }
 
@@ -309,6 +297,21 @@ impl SegmentWriter {
             .any(|w| w[0].key == w[1].key && w[0].seq == w[1].seq)
         {
             return Err(FormatError::Invalid("duplicate (key, seq) pair".into()));
+        }
+        // L-01 (TDD-001) — the sorted-input precondition is a REAL check in
+        // both profiles: release builds used to publish unsorted input
+        // silently (the entry-point debug_asserts vanish in release). Any
+        // memtable-order violation fed to the sorted entry is mangled by its
+        // run-reversal into one of these two detectable shapes (an equal
+        // pair lands on the duplicate guard above), so this one check covers
+        // every entry point.
+        if entries
+            .windows(2)
+            .any(|w| w[0].key > w[1].key || (w[0].key == w[1].key && w[0].seq < w[1].seq))
+        {
+            return Err(FormatError::Invalid(
+                "entries not in publish order (key asc, seq desc within key)".into(),
+            ));
         }
 
         let entry_count = entries.len() as u64;
