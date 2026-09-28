@@ -398,7 +398,10 @@ fn snp003_concurrent_checkpoint_prune_skips_pinned_files() {
     // The rows are OBJECT rows (the identity machinery is the fixture) —
     // the byte surface never answers them (stor006), so the row checks
     // go through the object surface.
-    assert!(walk(&db).is_empty(), "object rows never leak into a byte scan");
+    assert!(
+        walk(&db).is_empty(),
+        "object rows never leak into a byte scan"
+    );
     assert_eq!(
         db.get_object(oa, b"k").unwrap().as_deref(),
         Some(b"v".as_slice()),

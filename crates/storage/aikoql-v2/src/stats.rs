@@ -62,6 +62,11 @@ pub struct ReadPathStats {
     /// examined): the per-resolution retain made it O(B²) worst case;
     /// the per-pass compaction makes it O(B).
     pub batch_retain_scans: u64,
+    /// L-13 (TDD-008) — RestartIndex::parse invocations that found the
+    /// DataBlock's OnceLock empty. The parse-once property: sequential
+    /// cold == 1 then reuse == 0; a simultaneous cold storm lands inside
+    /// [1, N] — the documented benign race (segment.rs, block_get_v2).
+    pub restart_parses: u64,
 }
 
 /// The live counters — one per field, relaxed atomics (~ns overhead).
@@ -87,6 +92,7 @@ pub(crate) struct Stats {
     pub(crate) bloom_probe_ns: AtomicU64,
     pub(crate) get_wall_ns: AtomicU64,
     pub(crate) batch_retain_scans: AtomicU64,
+    pub(crate) restart_parses: AtomicU64,
 }
 
 impl Stats {
@@ -112,6 +118,7 @@ impl Stats {
             bloom_probe_ns: self.bloom_probe_ns.load(Ordering::Relaxed),
             get_wall_ns: self.get_wall_ns.load(Ordering::Relaxed),
             batch_retain_scans: self.batch_retain_scans.load(Ordering::Relaxed),
+            restart_parses: self.restart_parses.load(Ordering::Relaxed),
         }
     }
 }

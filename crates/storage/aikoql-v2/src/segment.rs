@@ -1592,6 +1592,14 @@ impl SegmentReader {
             None => {
                 // Benign race (the SE2-M4 validated pattern): the loser's
                 // parsed copy drops; parse is pure, so either copy is fine.
+                // L-13 (TDD-008) — the race is the price of the P5-M44
+                // representation (compact blob ~17 B/restart vs ~41 B
+                // boxed): a cold storm may parse up to N times, once the
+                // winner publishes the reuse is exact. `restart_parses`
+                // pins the bound.
+                if let Some(st) = &self.stats {
+                    st.restart_parses.fetch_add(1, Ordering::Relaxed);
+                }
                 let parsed = RestartIndex::parse(offs, payload, table_len)?;
                 b.restart.get_or_init(|| parsed)
             }
