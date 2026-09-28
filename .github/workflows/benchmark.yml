@@ -75,11 +75,14 @@ env:
 
 jobs:
   # PR6-F5 (P1-5): randomized-order run of the PR test set + residue
-  # sweepers. nextest shuffles every test (the printed seed + the retained
-  # run log reproduce a night's failure locally); the sweepers bracket the
-  # run and fail on any listener / temp dir / tree mutation it leaves
-  # behind — the cross-test interference classes caught out-of-band of the
-  # PR loop. Gate: scripts/check-shuffle-wiring.sh (dag job in ci.yml).
+  # sweepers. The shuffle is libtest's --shuffle on the nightly
+  # toolchain (nextest has no shuffle flag; stable libtest gates it
+  # behind -Z unstable-options); libtest prints the shuffle seed, and
+  # the retained run log reproduces a night's failure locally. The
+  # sweepers bracket the run and fail on any listener / temp dir / tree
+  # mutation it leaves behind — the cross-test interference classes
+  # caught out-of-band of the PR loop. Gate:
+  # scripts/check-shuffle-wiring.sh (dag job in ci.yml).
   shuffle:
     name: Randomized-order run + residue sweepers
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -88,13 +91,22 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned nightly: the ONLY toolchain whose libtest shuffles.
+      # Pin the DATE so rust-cache's toolchain key stays stable (an
+      # unpinned nightly bumps its version every day and the cache never
+      # hits); bump alongside the stable toolchain floor each release.
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly-2026-09-27
       # CI-05: cargo cache in every build job (default key = OS + rust
       # version + Cargo.lock).
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
+      # TDD-033: prove the shuffle CATCHES before spending the night on
+      # the full run — a deliberate order dependency between two
+      # env-armed probe tests, pinned seeds, seed + observed order
+      # asserted (scripts/shuffle-proof.sh).
+      - name: Shuffle proof — the harness catches an order dependency
+        run: bash scripts/shuffle-proof.sh
       - name: Residue sweep — arm
         run: bash scripts/check-residue.sh before
       - name: Randomized-order run

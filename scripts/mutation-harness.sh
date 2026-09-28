@@ -11,7 +11,7 @@
 #   zero     = UNCAUGHT — the gate stayed green on a damaged tree
 #
 #   mutation-harness.sh <id>   apply one mutation, run its gate
-#   mutation-harness.sh all    run all seven; exit 0 iff all are caught
+#   mutation-harness.sh all    run all nine; exit 0 iff all are caught
 #
 # Every mutation targets the estate as it stands NOW (the post-CI-01..16
 # consolidation tree) — the worktree is HEAD, so the teeth stay honest as
@@ -23,8 +23,9 @@ cd "$root"
 
 mutations() {
   echo "m1-remove-gated-test m2-rename-gated-test m3-remove-skip-wiring \
-m4-remove-nextest-install m5-remove-pre-residue-sweep \
-m6-remove-post-residue-sweep m7-remove-protected-path"
+m4-remove-shuffle-flag m5-remove-pre-residue-sweep \
+m6-remove-post-residue-sweep m7-remove-protected-path \
+m8-remove-nightly-install m9-remove-shuffle-proof"
 }
 
 mutate() {
@@ -55,10 +56,12 @@ mutate() {
       sed -i 's/cargo test --workspace -- \$(bash scripts\/skip-list.sh)/cargo test --workspace/' .github/workflows/ci.yml
       bash scripts/check-skip-drift.sh
       ;;
-    m4-remove-nextest-install)
-      # the shuffle job loses the nextest install — the nightly
-      # randomized-order run silently degrades to the default runner
-      sed -i '/tool: nextest/d' .github/workflows/benchmark.yml
+    m4-remove-shuffle-flag)
+      # the run script loses the nightly libtest shuffle — the nightly
+      # randomized-order run silently degrades to a plain run (the old
+      # m4 mutated the nextest install step; L-22 moved the shuffle to
+      # pinned-nightly libtest, the only harness that shuffles)
+      sed -i 's/^cargo +nightly test .*/cargo +nightly test/' scripts/run-shuffle.sh
       bash scripts/check-shuffle-wiring.sh
       ;;
     m5-remove-pre-residue-sweep)
@@ -83,6 +86,19 @@ mutate() {
         && mv .github/workflows/benchmark.yml.tmp .github/workflows/benchmark.yml
       bash scripts/check-architecture-hygiene.sh
       ;;
+    m8-remove-nightly-install)
+      # the pinned-nightly install step drops — the shuffle job runs on
+      # stable, where -Z unstable-options errors, and the randomized-
+      # order run never starts
+      sed -i '/toolchain: nightly-/d' .github/workflows/benchmark.yml
+      bash scripts/check-shuffle-wiring.sh
+      ;;
+    m9-remove-shuffle-proof)
+      # the behavioral proof step drops — the shuffle keeps running but
+      # nothing proves it catches an order dependency anymore
+      sed -i '/shuffle-proof.sh/d' .github/workflows/benchmark.yml
+      bash scripts/check-shuffle-wiring.sh
+      ;;
     *)
       echo "unknown mutation: $id" >&2
       exit 2
@@ -105,7 +121,7 @@ case "${1:-}" in
       echo "mutation harness: gates stayed green on a damaged tree" >&2
       exit 1
     fi
-    echo "mutation harness: all seven caught"
+    echo "mutation harness: all nine caught"
     ;;
   "")
     echo "usage: mutation-harness.sh <id>|all" >&2

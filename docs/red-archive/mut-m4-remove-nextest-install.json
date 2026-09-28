@@ -1,9 +1,0 @@
-{
-  "id": "mut-m4-remove-nextest-install",
-  "pre_fix_commit": "25ea8e5",
-  "command": "bash scripts/mutation-harness.sh m4-remove-nextest-install",
-  "captured_at": "2026-09-28T22:39:51Z",
-  "captured_head": "d27f4ccb356ceebcaf4727eb1c65f4a54d2754f3",
-  "exit_code": 1,
-  "note": "mutation RED: the shuffle job loses the nextest install \u2014 the randomized-order run degrades to the default runner; caught by check-shuffle-wiring.sh"
-}
