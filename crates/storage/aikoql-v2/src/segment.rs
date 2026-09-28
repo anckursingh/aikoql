@@ -1247,6 +1247,8 @@ impl SegmentReader {
     }
 
     /// The head version of `key` (highest seq — entries sort seq-descending).
+    /// Byte surface: the newest rid-0 row — identity rows (rid ≠ 0) are
+    /// another layer's data and never answer (§11, TDD-006/L-04).
     pub fn get(&self, key: &[u8]) -> Result<Option<SegmentEntry>, FormatError> {
         let t0 = self.stats.as_ref().map(|_| Instant::now());
         let located = self.locate(key);
@@ -1295,7 +1297,7 @@ impl SegmentReader {
             let payload = &raw[BLOCK_HEADER_LEN..];
             for pos in positions {
                 let t1 = self.stats.as_ref().map(|_| Instant::now());
-                let res = self.block_get_v2(keys[pos], payload, b, None)?;
+                let res = self.block_get_v2(keys[pos], payload, b, Some(ReplicaId(0)))?;
                 if let (Some(st), Some(t1)) = (&self.stats, t1) {
                     st.block_decode_ns
                         .fetch_add(t1.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -1432,7 +1434,7 @@ impl SegmentReader {
         }
         let raw = self.block_raw(i)?;
         let t0 = self.stats.as_ref().map(|_| Instant::now());
-        let out = self.block_get_v2(key, &raw[BLOCK_HEADER_LEN..], b, None)?;
+        let out = self.block_get_v2(key, &raw[BLOCK_HEADER_LEN..], b, Some(ReplicaId(0)))?;
         if let (Some(st), Some(t0)) = (&self.stats, t0) {
             st.block_decode_ns
                 .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
