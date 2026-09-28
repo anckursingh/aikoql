@@ -124,6 +124,116 @@ fn sorted_publish_rejects_out_of_order_input() {
     }
 }
 
+/// L-02 (TDD-002) — the three duplicate-placement classes the review's
+/// matrix prescribes: the pair inside one block, the pair straddling a
+/// block boundary, and the pair as a whole key run at the run edge. The
+/// 16 KiB target + the dry-pass estimate (25 + keylen − shared + valuelen
+/// for v4, distinct-key entries) place the across fixture's pair at
+/// 16107/20135 bytes — straddling the 16384 boundary, verified by the
+/// control test below.
+fn dup_fixtures() -> Vec<Vec<SegmentEntry>> {
+    vec![
+        // inside-block: both duplicates well within the first block.
+        vec![
+            entry("dup", 8, 5, FLAG_PUT, 0),
+            entry("dup", 8, 5, FLAG_PUT, 7), // same (key, seq), different rid
+            entry("k0", 8, 1, FLAG_PUT, 0),
+            entry("k0", 8, 2, FLAG_PUT, 0),
+        ],
+        // across-boundary: the pair would land in blocks 1 and 2.
+        vec![
+            entry("a0", 4000, 1, FLAG_PUT, 0),
+            entry("a1", 4000, 2, FLAG_PUT, 0),
+            entry("a2", 4000, 3, FLAG_PUT, 0),
+            entry("dup", 4000, 5, FLAG_PUT, 7),
+            entry("dup", 4000, 5, FLAG_PUT, 8),
+        ],
+        // run-edge: the pair is key "a"'s ENTIRE run (the reversal no-op
+        // edge), immediately followed by the next key's run.
+        vec![
+            entry("a", 8, 5, FLAG_PUT, 0),
+            entry("a", 8, 5, FLAG_PUT, 7),
+            entry("b", 8, 2, FLAG_PUT, 0),
+        ],
+    ]
+}
+
+#[test]
+fn duplicate_matrix_rejects_every_placement_class() {
+    for corpus in dup_fixtures() {
+        // The sorting writer: deliberately unsorted input — the sort must
+        // still land the duplicate pair adjacently for the shared guard.
+        let mut unsorted = corpus.clone();
+        unsorted.reverse();
+        let d = dir("dup-matrix-sort");
+        let path = d.join("SEGMENT-001.log");
+        let mut w = SegmentWriter::new_v4(16 << 10);
+        for e in unsorted {
+            w.push(e);
+        }
+        let err = w.publish_with_anchors(&path).unwrap_err();
+        assert!(
+            matches!(err, FormatError::Invalid(_)),
+            "duplicate (key, seq) must be Invalid, got {err:?}"
+        );
+        assert!(
+            std::fs::read_dir(&d).unwrap().next().is_none(),
+            "a rejected publish must leave no segment visible"
+        );
+
+        // The sorted writer: memtable order straight in (the reversal runs
+        // first, then the shared guard — the matrix pins the pair of them).
+        let d = dir("dup-matrix-sorted");
+        let path = d.join("SEGMENT-001.log");
+        let mut w = SegmentWriter::new_v4(16 << 10);
+        for e in corpus {
+            w.push(e);
+        }
+        let err = w.publish_with_anchors_sorted(&path).unwrap_err();
+        assert!(
+            matches!(err, FormatError::Invalid(_)),
+            "duplicate (key, seq) must be Invalid, got {err:?}"
+        );
+        assert!(
+            std::fs::read_dir(&d).unwrap().next().is_none(),
+            "a rejected publish must leave no segment visible"
+        );
+    }
+}
+
+#[test]
+fn across_boundary_fixture_really_straddles() {
+    // Control: the across fixture with the second duplicate's seq bumped —
+    // no duplicate, the publish succeeds, and the pair's two rids land in
+    // DIFFERENT blocks. The matrix's across-boundary leg is only honest if
+    // this holds.
+    let corpus = vec![
+        entry("a0", 4000, 1, FLAG_PUT, 0),
+        entry("a1", 4000, 2, FLAG_PUT, 0),
+        entry("a2", 4000, 3, FLAG_PUT, 0),
+        entry("dup", 4000, 5, FLAG_PUT, 7),
+        entry("dup", 4000, 6, FLAG_PUT, 8),
+    ];
+    let d = dir("dup-matrix-straddle");
+    let path = d.join("SEGMENT-001.log");
+    let mut w = SegmentWriter::new_v4(16 << 10);
+    for e in corpus {
+        w.push(e);
+    }
+    let (_size, _ck, anchors) = w.publish_with_anchors_sorted(&path).unwrap();
+    let b7 = anchors
+        .iter()
+        .find(|a| a.replica_id == ReplicaId(7))
+        .expect("rid 7 anchored")
+        .block_id;
+    let b8 = anchors
+        .iter()
+        .find(|a| a.replica_id == ReplicaId(8))
+        .expect("rid 8 anchored")
+        .block_id;
+    assert_ne!(b7, b8, "the control pair must straddle a block boundary");
+}
+
 #[test]
 fn sorted_publish_decodes_to_key_asc_seq_desc_within_key() {
     let d = dir("sorted-order");
