@@ -1,0 +1,3 @@
+# L-23 (TDD-034): every strong claim in the audited scope maps to an
+executable evidence test that EXISTS (scripts/check-strong-claims.sh).
+# A claim with no evidence loses its claim: soften the text, remove its row.
