@@ -1,0 +1,3 @@
+SKIP DRIFT: duplicate test name(s) in the registry:
+test = "sfm009_large_wal_snapshot_has_bounded_rss"
+EXIT=1
