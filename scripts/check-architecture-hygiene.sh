@@ -289,7 +289,11 @@ if grep -qE '^  paths:|^    paths:' "$CIWF"; then
   fail=1
 fi
 for path in crates/storage crates/kernel crates/engines benchmarks scripts/competitor_bench Cargo.lock; do
-  if ! grep -q "'$path" "$BENCH"; then
+  # BOTH trigger blocks (pull_request AND push) must carry each path: a
+  # path dropped from one block keeps a whole-file grep green while the
+  # per-PR guard silently dies for it — the L-20 mutation harness caught
+  # exactly that (m7-remove-protected-path).
+  if [ "$(grep -c "'$path" "$BENCH")" -lt 2 ]; then
     echo "ARCH: $BENCH trigger paths lack the CI-06 protected path: $path" >&2
     fail=1
   fi
