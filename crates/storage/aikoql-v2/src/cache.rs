@@ -376,4 +376,141 @@ mod tests {
         );
         assert_eq!(st.entries.len(), 64, "the cap still holds");
     }
+
+    /// L-07 (TDD-011) — exact survivor sets after EVERY op at caps 1/2/3:
+    /// the whole LRU order is pinned, not just the next victim. (Probes
+    /// read the map directly — a `get` probe would itself bump a gen and
+    /// perturb the order being asserted.)
+    #[test]
+    fn exact_survivor_sets_at_caps_one_two_three() {
+        fn assert_set(cache: &BlockCache, want: &[u32]) {
+            let st = cache.state.lock().unwrap();
+            let mut keys: Vec<u32> = st.entries.keys().map(|&(_, b)| b).collect();
+            keys.sort();
+            assert_eq!(keys, want, "survivor set mismatch");
+            assert_eq!(st.bytes, keys.len() * BLOCK, "bytes track the set");
+        }
+
+        // cap 1 — the set is always exactly one block.
+        let cache = BlockCache::new(1 * BLOCK);
+        cache.insert(1, 0, block());
+        assert_set(&cache, &[0]);
+        cache.get(1, 0);
+        assert_set(&cache, &[0]); // a hit changes nothing
+        cache.insert(1, 1, block());
+        assert_set(&cache, &[1]); // 0 evicted
+        cache.insert(1, 1, block());
+        assert_set(&cache, &[1]); // overwrite: still one
+        cache.get(1, 9);
+        assert_set(&cache, &[1]); // a miss changes nothing
+        cache.insert(1, 2, block());
+        assert_set(&cache, &[2]);
+
+        // cap 2 — hits reorder, overwrites refresh, LRU leaves.
+        let cache = BlockCache::new(2 * BLOCK);
+        cache.insert(1, 0, block());
+        assert_set(&cache, &[0]);
+        cache.insert(1, 1, block());
+        assert_set(&cache, &[0, 1]);
+        cache.get(1, 0); // 1 is now the LRU
+        assert_set(&cache, &[0, 1]);
+        cache.insert(1, 2, block());
+        assert_set(&cache, &[0, 2]); // 1 evicted
+        cache.insert(1, 0, block()); // overwrite refreshes 0
+        assert_set(&cache, &[0, 2]);
+        cache.insert(1, 3, block());
+        assert_set(&cache, &[0, 3]); // 2 evicted
+
+        // cap 3 — mixed hits and overwrites, three evictions deep.
+        let cache = BlockCache::new(3 * BLOCK);
+        cache.insert(1, 0, block());
+        cache.insert(1, 1, block());
+        cache.insert(1, 2, block());
+        assert_set(&cache, &[0, 1, 2]);
+        cache.get(1, 2);
+        cache.get(1, 0);
+        cache.insert(1, 3, block());
+        assert_set(&cache, &[0, 2, 3]); // 1 evicted
+        cache.insert(1, 4, block());
+        assert_set(&cache, &[0, 3, 4]); // 2 next
+        cache.get(1, 3); // 3 MRU, 0 LRU
+        cache.insert(1, 5, block());
+        assert_set(&cache, &[3, 4, 5]); // 0 evicted
+        cache.insert(1, 3, block()); // overwrite: 3 MRU
+        assert_set(&cache, &[3, 4, 5]);
+        cache.insert(1, 6, block());
+        assert_set(&cache, &[3, 5, 6]); // 4 evicted
+    }
+
+    /// L-07 (TDD-011) — 100k churn invariants: bytes never exceed the cap
+    /// after ANY op (evict_for must fit before the insert lands), the
+    /// heap garbage stays bounded, and eviction strands never outlive the
+    /// 2x rebuild trigger — no stale node can dictate a wrong victim.
+    #[test]
+    fn hundred_k_churn_keeps_the_invariants() {
+        let mut s = 0x0ddc_00ee;
+        let mut rng = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let cap = 64 * BLOCK;
+        let cache = BlockCache::new(cap);
+        for _ in 0..100_000 {
+            let key = (rng() % 4096) as u32;
+            if rng() % 5 < 3 {
+                cache.insert(1, key, block());
+            } else {
+                cache.get(1, key);
+            }
+            let st = cache.state.lock().unwrap();
+            assert!(
+                st.bytes <= cap,
+                "bytes {} exceeded the cap {} after an op",
+                st.bytes,
+                cap
+            );
+            drop(st);
+        }
+        let st = cache.state.lock().unwrap();
+        assert!(
+            st.heap.len() <= 2 * st.entries.len(),
+            "heap {} vs map {} after 100k ops",
+            st.heap.len(),
+            st.entries.len()
+        );
+        assert!(st.bytes <= cap, "final bytes {} exceeded the cap", st.bytes);
+    }
+
+    /// L-07 (TDD-012) — the clock wraps: correctness must hold at
+    /// u64::MAX−2 (the next stamps are MAX−1, MAX, then 0). The wrapped
+    /// entry sorts as the OLDEST (LRU quality degrades — the documented
+    /// tradeoff), but eviction still terminates, bytes stay within the
+    /// cap, and no op panics or serves a stale strand as a victim.
+    #[test]
+    fn clock_wrap_degrades_lru_but_never_correctness() {
+        let cache = BlockCache::new(3 * BLOCK);
+        {
+            let mut st = cache.state.lock().unwrap();
+            st.clock = u64::MAX - 2;
+        }
+        cache.insert(1, 0, block()); // gen MAX-1
+        cache.insert(1, 1, block()); // gen MAX
+        cache.insert(1, 2, block()); // gen 0 — wrapped, sorts oldest
+        cache.get(1, 0).unwrap(); // gen 1
+        cache.get(1, 0).unwrap(); // gen 2
+        cache.insert(1, 3, block()); // evicts min-gen: key 2 (gen 0)
+        let st = cache.state.lock().unwrap();
+        assert!(
+            !st.entries.contains_key(&(1, 2)),
+            "the wrapped entry is the victim — oldest under wrap"
+        );
+        assert_eq!(st.entries.len(), 3, "cap 3 held exactly: 0, 1, 3 survive");
+        assert!(st.bytes <= 3 * BLOCK);
+        assert!(
+            st.heap.len() <= 2 * st.entries.len(),
+            "garbage bounded across the wrap"
+        );
+    }
 }
