@@ -377,7 +377,7 @@ real inline `--skip` still trips it, proven locally.)
 | id | milestone | review ids | RED (what fails now) | GREEN (after) |
 |---|---|---|---|---|
 | L-00 | CI base green: comment-aware skip-drift gate | TDD-032 leg | main's dag job RED on the round-4 comment (live, reproduced) | gate green; mutation leg still catches inline `--skip` |
-| L-01 | sorted-publish runtime precondition | TDD-001 | unsorted input: debug panics, release publishes silently | `Err(Invalid)` in both profiles; sorted callers unchanged |
+| L-01 | sorted-publish runtime precondition | TDD-001 | unsorted input: debug panics, release publishes silently | `Err(Invalid)` in both profiles; sorted callers unchanged ✅ 2026-09-28: the precondition moved into the shared `publish_sorted_entries` body as a real check (the two entry-point debug_asserts deleted — one definition covers both sorted entry points, and any memtable-order violation is mangled by the run-reversal into a detectable shape); pins `sorted_publish_rejects_out_of_order_input` + `staged_sorted_publish_rejects_out_of_order_input` (key + same-key-seq inversions, Invalid, no file written), GREEN in debug AND release profiles |
 | L-02 | duplicate `(key,seq)` matrix | TDD-002 | matrix unpinned (the guard exists, segment.rs:305) | inside-block / across-boundary / run-edge duplicates fail publish; no segment visible |
 | L-03 | memtable replacement accounting | TDD-004 | `put(k,10,1KiB)`×3 → bytes ≈ 3 entries | bytes ≈ 1 entry (replacement adjusts by the value-length delta) |
 | L-04 | byte/object interleave matrix | TDD-006 | unpinned | the review's 5-row sequence answers byte→seq3 / rid7→seq5 / rid8→seq4 / rid0→None through flush+compact+checkpoint+reopen |
