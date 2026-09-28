@@ -1106,3 +1106,149 @@ fn ckp008_growth_probe() {
     std::fs::create_dir_all(&artifacts).unwrap();
     common::report_write(&artifacts.join("directory-checkpoint.md"), out);
 }
+
+// ---------------------------------------------------------------------------
+// ckp010 — the review's checkpoint/WAL interleave windows (TDD-023): a
+// checkpoint lands between writes and a crash kills the process with the
+// WAL tail as the only delta source. All five layers — byte data, object
+// data, identity, replica, placement — must recover.
+// ---------------------------------------------------------------------------
+
+fn ckp010_child_cfg() -> Config {
+    let mut cfg = Config::new(child_dir());
+    cfg.checkpoint_bytes = 1; // every flush crosses the trigger — no size arithmetic
+    cfg
+}
+
+/// Byte + object rows before the checkpoint; the two object oids.
+fn ckp010_pre(db: &Db) -> [ObjectId; 2] {
+    db.put(b"b0", b"pre-byte").unwrap();
+    let a = oid(0xA1);
+    let b = oid(0xA2);
+    db.put_object(a, b"k1", b"pre-a").unwrap();
+    db.put_object(b, b"k1", b"pre-b").unwrap();
+    [a, b]
+}
+
+/// The tail: a byte row and a NEW oid whose identity/replica/placement
+/// records postdate the checkpoint — only the WAL carries them.
+fn ckp010_tail(db: &Db) -> ObjectId {
+    db.put(b"b1", b"tail-byte").unwrap();
+    let c = oid(0xA3);
+    db.put_object(c, b"k1", b"tail-c").unwrap();
+    c
+}
+
+/// Every layer of the review's list: byte data, object data, identity +
+/// replica (the rid resolves), placement (the rid is placed).
+fn verify_ckp010(db: &Db, pre: &[ObjectId], tail: ObjectId) {
+    assert_eq!(
+        db.get(b"b0").unwrap(),
+        Some(b"pre-byte".to_vec()),
+        "byte data: the pre-checkpoint row"
+    );
+    assert_eq!(
+        db.get(b"b1").unwrap(),
+        Some(b"tail-byte".to_vec()),
+        "byte data: the WAL-tail row"
+    );
+    for (i, a) in pre.iter().enumerate() {
+        assert_eq!(
+            db.get_object(*a, b"k1").unwrap(),
+            Some(format!("pre-{}", (b'a' + i as u8) as char).into_bytes()),
+            "object data: pre-checkpoint row {i}"
+        );
+    }
+    assert_eq!(
+        db.get_object(tail, b"k1").unwrap(),
+        Some(b"tail-c".to_vec()),
+        "object data: the WAL-tail row"
+    );
+    for o in pre.iter().copied().chain([tail]) {
+        assert!(
+            placement_of(db, rid_of(db, o)).is_some(),
+            "identity/replica/placement: every oid resolves and stays placed"
+        );
+    }
+}
+
+/// Window A — write → checkpoint starts → write → flush → crash. The
+/// first flush's checkpoint parks at its temp write (the parent releases
+/// it — the review's interleave: a checkpoint lands, MORE writes ride the
+/// WAL), the second flush parks at its own temp write and is killed there.
+/// The reopened state must carry the pre rows, the tail rows, and the
+/// tail object's directory — checkpoint #1 plus the WAL.
+#[test]
+fn ckp010_window_a_checkpoint_starts_then_tail_write() {
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let db = Db::open(ckp010_child_cfg()).unwrap();
+        ckp010_pre(&db);
+        db.flush().unwrap(); // checkpoint #1 parks at its temp write
+                             // released by the parent — the checkpoint lands, then the tail
+        ckp010_tail(&db);
+        db.flush().unwrap(); // checkpoint #2 parks at its temp write
+        unreachable!("the parent kills the parked child");
+    }
+    let d = dir("ckp010-window-a");
+    let mut child = spawn_ckp_child(
+        "ckp010_window_a_checkpoint_starts_then_tail_write",
+        &d,
+        PLACE_ENV,
+        "FAIL_AFTER_CHECKPOINT_WRITE",
+    );
+    let marker = d.join("FAIL_AFTER_CHECKPOINT_WRITE");
+    wait_for(&marker, Duration::from_secs(60));
+    // the interleave handshake: release the parked checkpoint #1 so the
+    // tail writes land, then kill at checkpoint #2's temp write
+    std::fs::remove_file(&marker).unwrap();
+    wait_for(&marker, Duration::from_secs(60));
+    child.kill().expect("kill child");
+    child.wait().expect("wait child");
+
+    let db = Db::open(Config::new(d.clone())).unwrap();
+    verify_ckp010(&db, &[oid(0xA1), oid(0xA2)], oid(0xA3));
+}
+
+/// Window B — write → checkpoint → WAL tail remains → reopen. The flush's
+/// checkpoint completes and its prune runs; the tail (a byte row and a NEW
+/// object) rides the WAL alone. Killed with no flush since, the reopen
+/// must rebuild the tail from the WAL on the checkpoint base — the prune
+/// proves no delta log carries the tail's directory rows.
+#[test]
+fn ckp010_window_b_checkpoint_then_wal_tail_replays() {
+    if std::env::var_os(CHILD_ENV).is_some() {
+        let db = Db::open(ckp010_child_cfg()).unwrap();
+        ckp010_pre(&db);
+        db.flush().unwrap(); // checkpoint + prune complete, the WAL truncates
+        ckp010_tail(&db);
+        // the tail is durable in the WAL only — signal and hold
+        std::fs::write(child_dir().join("tail_written"), b"1").unwrap();
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+    let d = dir("ckp010-window-b");
+    let mut child = spawn_ckp_child(
+        "ckp010_window_b_checkpoint_then_wal_tail_replays",
+        &d,
+        CKP_ENV,
+        "ckp010-unused",
+    );
+    wait_for(&d.join("tail_written"), Duration::from_secs(60));
+    child.kill().expect("kill child");
+    child.wait().expect("wait child");
+
+    // the prune ran: the checkpoint is the sole directory source, so the
+    // tail object's identity/replica/placement rows must come from the WAL
+    assert_eq!(
+        log_file_count(&d),
+        0,
+        "the checkpoint's prune must have deleted the delta history"
+    );
+    assert!(
+        !checkpoint_gens(&d).is_empty(),
+        "the checkpoint must be durable"
+    );
+    let db = Db::open(Config::new(d.clone())).unwrap();
+    verify_ckp010(&db, &[oid(0xA1), oid(0xA2)], oid(0xA3));
+}
