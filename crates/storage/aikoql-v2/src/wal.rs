@@ -82,17 +82,27 @@ pub struct WalFrame {
     pub ops: Vec<Op>,
 }
 
+/// TDD-015 — checked sum of the parts (32-bit targets can overflow the
+/// plain `+` with a single 3 GiB length; the failure must be Invalid, not
+/// a truncated frame).
+fn checked_len(parts: &[usize]) -> Result<usize, FormatError> {
+    parts.iter().try_fold(0usize, |acc, &n| {
+        acc.checked_add(n)
+            .ok_or_else(|| FormatError::Invalid("WAL op length overflows".into()))
+    })
+}
+
 /// PERF-4 — the encoded byte length of one op (the `encoded_len` idiom the
 /// directory records use). One definition of the layout lengths, so an
 /// under-counted arm shows up as a realloc in the pin instead of a
 /// truncated frame.
-fn op_encoded_len(op: &Op) -> usize {
+fn op_encoded_len(op: &Op) -> Result<usize, FormatError> {
     match op {
-        Op::Put(k, v) => 1 + 4 + k.len() + 4 + v.len(),
-        Op::Delete(k) => 1 + 4 + k.len(),
-        Op::CreateObject { .. } => 1 + 16 + 8 + 8 + 8,
-        Op::PutObject(_, k, v) => 1 + 8 + 4 + k.len() + 4 + v.len(),
-        Op::DeleteObject(_, k) => 1 + 8 + 4 + k.len(),
+        Op::Put(k, v) => checked_len(&[1, 4, k.len(), 4, v.len()]),
+        Op::Delete(k) => checked_len(&[1, 4, k.len()]),
+        Op::CreateObject { .. } => checked_len(&[1, 16, 8, 8, 8]),
+        Op::PutObject(_, k, v) => checked_len(&[1, 8, 4, k.len(), 4, v.len()]),
+        Op::DeleteObject(_, k) => checked_len(&[1, 8, 4, k.len()]),
     }
 }
 
@@ -104,14 +114,37 @@ pub fn encode_frame(seq: u64, ops: &[Op]) -> Result<Vec<u8>, FormatError> {
     // the ops, then the frame is the header + payload + checksum written
     // straight into the final buffer (no intermediate payload Vec to copy).
     // Byte-identical to the old two-buffer build (wal_golden pins it).
-    let payload_len = 4 + ops.iter().map(op_encoded_len).sum::<usize>();
-    let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + payload_len + 8);
+    // TDD-015 — checked end to end: every length the frame writes is part
+    // of `payload_len`, so the one u32 guard on the sum bounds every
+    // per-op `as u32` below (a length can never exceed the payload it
+    // sits inside). A payload past the u32 field must fail safely here —
+    // before the frame buffer is sized — never truncate into a frame the
+    // decoder reads as Corrupt.
+    let payload_u32 = {
+        let mut payload_len = 4usize;
+        for op in ops {
+            payload_len = payload_len
+                .checked_add(op_encoded_len(op)?)
+                .ok_or_else(|| FormatError::Invalid("WAL frame payload overflows".into()))?;
+        }
+        u32::try_from(payload_len).map_err(|_| {
+            FormatError::Invalid("WAL frame payload exceeds the format's u32 field".into())
+        })?
+    };
+    let entry_count = u32::try_from(ops.len()).map_err(|_| {
+        FormatError::Invalid("WAL frame op count exceeds the format's u32 field".into())
+    })?;
+    let total = FRAME_HEADER_LEN
+        .checked_add(payload_u32 as usize)
+        .and_then(|t| t.checked_add(8))
+        .ok_or_else(|| FormatError::Invalid("WAL frame size overflows".into()))?;
+    let mut frame = Vec::with_capacity(total);
     frame.extend_from_slice(WAL_MAGIC);
     frame.extend_from_slice(&WAL_FORMAT_VERSION.to_le_bytes());
     frame.push(FRAME_BATCH);
     frame.extend_from_slice(&seq.to_le_bytes());
-    frame.extend_from_slice(&(payload_len as u32).to_le_bytes());
-    frame.extend_from_slice(&(ops.len() as u32).to_le_bytes());
+    frame.extend_from_slice(&payload_u32.to_le_bytes());
+    frame.extend_from_slice(&entry_count.to_le_bytes());
     for op in ops {
         match op {
             Op::Put(k, v) => {
