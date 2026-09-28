@@ -1,0 +1,2 @@
+SHUFFLE: benchmark.yml lacks the nextest install step
+EXIT=1

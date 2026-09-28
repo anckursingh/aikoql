@@ -639,4 +639,10 @@ jobs:
           # (the P3-M0/P3-M9/R2-012 historical pins were deleted here).
           echo "Checking architecture hygiene (storage + workflow legs)..."
           bash scripts/check-architecture-hygiene.sh
+          # L-20 (TDD-031): the mutation harness re-applies the seven
+          # estate mutations to detached-worktree copies and fails if any
+          # gate stays green on the damaged tree — the teeth the mut-*
+          # RED archives capture (docs/red-archive/).
+          echo "Checking gate mutation teeth..."
+          bash scripts/mutation-harness.sh all
           echo "Dependency DAG OK"
