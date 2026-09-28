@@ -132,6 +132,14 @@ jobs:
             && cargo test --release -p aikoql-ingestion --test wave31_scale
         timeout-minutes: 60
 
+      # L-18 (TDD-013): the cache contention ladder — 1..64 readers × four
+      # regimes with the wait-fraction cells (the review's "shard only on
+      # data" gate rides these numbers; report cells only, answers pinned
+      # in-test). Env-armed: the test is a no-op without the gate.
+      - name: Cache contention ladder (1..64 readers)
+        run: AIKOQL_V2_CACHE_CELLS=1 cargo test --release -p aikoql-storage-v2 --test cache_concurrency
+        timeout-minutes: 45
+
       # PR6-F2 (P0-2): the gated cells with no other ungated home (the
       # registry's ungated_by = "none" entries) — run ungated so their
       # limits can't silently regress. Default regime; where a cell's
