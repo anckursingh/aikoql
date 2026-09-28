@@ -1,0 +1,2 @@
+SHUFFLE: benchmark.yml lacks the shuffle proof step
+EXIT=1
