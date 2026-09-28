@@ -13,7 +13,11 @@
 //! the segment-walk loop, the cache insert on a miss, and the phase-
 //! boundary timestamps themselves — the fixed per-get cost the unit bound
 //! tolerates explicitly (`INSTRUMENTATION_NS_PER_GET`). Counter pins are
-//! mechanism asserts; absolute timings are report cells (the M8 rule).
+//! mechanism asserts; absolute timings are report cells (the M8 rule) —
+//! every wall-clock ratio cell in this suite (the 10%-close bounds of
+//! M21-01/M21-05 and the dominance ratios of M21-02..04) gates behind
+//! `SE2M21_ATTRIB` for the same reason: a scheduling pause lands in one
+//! timed span and the ratio flaps under parallel-suite load.
 //!
 //! The adoption-scale legs (W1/W2 kernel vs engine, memtable/cache
 //! hit/cache miss) live in `kse_m7_v2_workloads.rs` behind
@@ -53,7 +57,8 @@ fn key(i: usize) -> Vec<u8> {
     format!("k/{i:03}").into_bytes()
 }
 
-/// Dominance-ratio asserts are timing cells (the M8 rule in this file's
+/// Ratio asserts — the 10%-close bounds (M21-01/M21-05) and the dominance
+/// legs (M21-02..04) — are timing cells (the M8 rule in this file's
 /// header: counter pins are mechanism asserts, absolute timings are report
 /// cells) — on a shared CI runner a scheduling pause lands inside one timed
 /// phase and the ratio flaps (run 34101854185: decode+cache 644/1707 ns vs
@@ -72,7 +77,9 @@ fn row(b: u8) -> Vec<u8> {
 /// (memtable hits, cache hits, cache misses) the untimed residual beyond
 /// the documented fixed per-get instrumentation cost is at most 10% of the
 /// measured whole. Aggregate, not per-op — a sub-µs memtable hit carries
-/// ~100 ns of entry/exit overhead the bound must not hinge on.
+/// ~100 ns of entry/exit overhead the bound must not hinge on. The ratio
+/// itself is a gated timing cell (SE2M21_ATTRIB); the mechanism pins
+/// (lookups, path counts) always run.
 #[test]
 fn m21_01_attribution_accounting_closes_within_10pct() {
     let path = tmp("attrib-account");
@@ -119,17 +126,19 @@ fn m21_01_attribution_accounting_closes_within_10pct() {
     let total = d.get_wall_ns;
     assert!(total > 0, "the whole-get timer must run");
     let residual = total.saturating_sub(phases(d));
-    assert!(
-        residual.saturating_sub(INSTRUMENTATION_NS_PER_GET * d.lookups) * 10 <= total,
-        "attribution residual {residual} ns beyond the fixed per-get cost exceeds 10% of {total} ns — phases: lock {} memtable {} bloom {} index {} cache {} io {} decode {}",
-        d.lock_wait_ns,
-        d.memtable_lookup_ns,
-        d.bloom_probe_ns,
-        d.index_lookup_ns,
-        d.block_cache_lookup_ns,
-        d.block_io_ns,
-        d.block_decode_ns,
-    );
+    if timing_cells() {
+        assert!(
+            residual.saturating_sub(INSTRUMENTATION_NS_PER_GET * d.lookups) * 10 <= total,
+            "attribution residual {residual} ns beyond the fixed per-get cost exceeds 10% of {total} ns — phases: lock {} memtable {} bloom {} index {} cache {} io {} decode {}",
+            d.lock_wait_ns,
+            d.memtable_lookup_ns,
+            d.bloom_probe_ns,
+            d.index_lookup_ns,
+            d.block_cache_lookup_ns,
+            d.block_io_ns,
+            d.block_decode_ns,
+        );
+    }
     // the mixed workload really exercised all three paths
     assert!(d.memtable_hits >= 10);
     assert!(d.block_cache_hits >= 30);
@@ -172,11 +181,13 @@ fn m21_02_attribution_memtable_hit_leg() {
     // the memtable probe + clone dominate the leg's timed work
     let parts = phases(d);
     assert!(parts > 0, "the leg must do timed work");
-    assert!(
-        d.memtable_lookup_ns * 2 >= parts,
-        "memtable phase {} ns is not dominant in a memtable-only leg (parts {parts} ns)",
-        d.memtable_lookup_ns
-    );
+    if timing_cells() {
+        assert!(
+            d.memtable_lookup_ns * 2 >= parts,
+            "memtable phase {} ns is not dominant in a memtable-only leg (parts {parts} ns)",
+            d.memtable_lookup_ns
+        );
+    }
     drop(db);
 }
 
@@ -300,17 +311,19 @@ fn m21_05_merged_segment_reads_are_cached_and_counted() {
     );
     let parts = phases(d);
     let residual = d.get_wall_ns.saturating_sub(parts);
-    assert!(
-        residual.saturating_sub(INSTRUMENTATION_NS_PER_GET * d.lookups) * 10 <= d.get_wall_ns,
-        "merged-segment gets must attribute: residual {residual} ns beyond the fixed per-get cost of {} ns — phases: lock {} memtable {} bloom {} index {} cache {} io {} decode {}",
-        d.get_wall_ns,
-        d.lock_wait_ns,
-        d.memtable_lookup_ns,
-        d.bloom_probe_ns,
-        d.index_lookup_ns,
-        d.block_cache_lookup_ns,
-        d.block_io_ns,
-        d.block_decode_ns,
-    );
+    if timing_cells() {
+        assert!(
+            residual.saturating_sub(INSTRUMENTATION_NS_PER_GET * d.lookups) * 10 <= d.get_wall_ns,
+            "merged-segment gets must attribute: residual {residual} ns beyond the fixed per-get cost of {} ns — phases: lock {} memtable {} bloom {} index {} cache {} io {} decode {}",
+            d.get_wall_ns,
+            d.lock_wait_ns,
+            d.memtable_lookup_ns,
+            d.bloom_probe_ns,
+            d.index_lookup_ns,
+            d.block_cache_lookup_ns,
+            d.block_io_ns,
+            d.block_decode_ns,
+        );
+    }
     drop(db);
 }
