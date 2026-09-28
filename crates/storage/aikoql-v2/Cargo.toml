@@ -18,3 +18,6 @@ aikoql-kernel = { path = "../../kernel" }
 # assemble; 0.11 `x86-sha` demands compile-time `target_feature=sha` (crashes
 # non-SHA CPUs). Soft sha2 stays (~10 µs/16 KiB — the miss-path floor).
 sha2 = "0.10"
+
+[dev-dependencies]
+proptest = "1"

@@ -304,6 +304,7 @@ name = "aikoql-storage-v2"
 version = "0.1.19"
 dependencies = [
  "aikoql-kernel",
+ "proptest",
  "sha2 0.10.9",
 ]
 

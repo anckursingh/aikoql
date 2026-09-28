@@ -140,6 +140,14 @@ jobs:
         run: AIKOQL_V2_CACHE_CELLS=1 cargo test --release -p aikoql-storage-v2 --test cache_concurrency
         timeout-minutes: 45
 
+      # L-19 (TDD-029): proptest model oracles — elevated cases (the three
+      # default-config legs read PROPTEST_CASES via Config::default(); the
+      # WAL leg keeps its pinned 96). A caught failure persists under
+      # proptest-regressions/ — commit that regression file.
+      - name: Proptest model oracles (elevated cases)
+        run: PROPTEST_CASES=4096 cargo test --release -p aikoql-storage-v2 --test proptest_oracles
+        timeout-minutes: 45
+
       # PR6-F2 (P0-2): the gated cells with no other ungated home (the
       # registry's ungated_by = "none" entries) — run ungated so their
       # limits can't silently regress. Default regime; where a cell's
