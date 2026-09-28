@@ -117,6 +117,7 @@ pub fn stats_delta(after: ReadPathStats, before: ReadPathStats) -> ReadPathStats
         batch_retain_scans: after
             .batch_retain_scans
             .saturating_sub(before.batch_retain_scans),
+        restart_parses: after.restart_parses.saturating_sub(before.restart_parses),
     }
 }
 
