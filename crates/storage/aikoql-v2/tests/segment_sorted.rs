@@ -93,6 +93,38 @@ fn sorted_publish_rejects_duplicate_key_seq_pairs() {
 }
 
 #[test]
+fn sorted_publish_rejects_out_of_order_input() {
+    // L-01 (TDD-001) — the sorted-input contract must be a real precondition
+    // in BOTH profiles: debug used to panic on a debug_assert, release used
+    // to publish unsorted input silently. Two violations of memtable order
+    // (key asc, seq asc within key): a key inversion and a same-key seq
+    // inversion.
+    for corpus in [
+        vec![
+            entry("beta", 8, 2, FLAG_PUT, 0),
+            entry("alpha", 8, 1, FLAG_PUT, 0),
+        ],
+        vec![
+            entry("alpha", 8, 4, FLAG_PUT, 0),
+            entry("alpha", 8, 1, FLAG_PUT, 0),
+        ],
+    ] {
+        let d = dir("sorted-unsorted");
+        let path = d.join("SEGMENT-001.log");
+        let mut w = SegmentWriter::new_v4(16 << 10);
+        for e in corpus {
+            w.push(e);
+        }
+        let err = w.publish_with_anchors_sorted(&path).unwrap_err();
+        assert!(
+            matches!(err, FormatError::Invalid(_)),
+            "unsorted input must be Invalid, got {err:?}"
+        );
+        assert!(!path.exists(), "a rejected publish must not write a file");
+    }
+}
+
+#[test]
 fn sorted_publish_decodes_to_key_asc_seq_desc_within_key() {
     let d = dir("sorted-order");
     let path = d.join("SEGMENT-001.log");
