@@ -254,14 +254,22 @@ impl Client {
         }
     }
 
-    /// Send + read the matching response frame.
+    /// Send + read the matching response frame. Only a frame carrying
+    /// `result` or `error` counts as the response — a stray frame with the
+    /// right id but neither key (an echo, a racing notification) is skipped
+    /// and the read keeps waiting for the real reply.
     fn call(&mut self, method: &str, params: J) -> J {
         let id = self.send(method, params);
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             assert!(Instant::now() < deadline, "no response to {method} in 30s");
             match self.recv() {
-                Some(f) if f.get("id").and_then(|i| i.as_u64()) == Some(id) => return f,
+                Some(f)
+                    if f.get("id").and_then(|i| i.as_u64()) == Some(id)
+                        && (f.get("result").is_some() || f.get("error").is_some()) =>
+                {
+                    return f;
+                }
                 Some(_) => continue,
                 None => panic!("connection EOF awaiting {method} response"),
             }
