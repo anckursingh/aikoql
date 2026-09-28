@@ -61,5 +61,16 @@ if [ -n "$dead" ]; then
   fail=1
 fi
 
+# 4. no duplicate test names (TDD-032): two rows for one name pass legs
+# 1-3 untouched — the shape counts still match, and the name exists —
+# while one row's reason can rot behind the other and the accounting
+# disagrees. RED archived: docs/red-archive/skip-drift-vs-duplicate-entry.
+dup="$(grep '^test = ' "$toml" | sort | uniq -d)"
+if [ -n "$dup" ]; then
+  echo "SKIP DRIFT: duplicate test name(s) in the registry:" >&2
+  printf '%s\n' "$dup" >&2
+  fail=1
+fi
+
 [ $fail -eq 0 ] || exit 1
 echo "gated-cell registry clean — OK"
