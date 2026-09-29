@@ -79,7 +79,18 @@ the **MCP boundary**, which is now in place:
   loss. The pin guards the ack-durability contract at the MCP boundary, not
   power-loss semantics.
 
-## 4. Open items carried forward
+## 4. Dependabot — `lru` advisory (L-26 addendum)
+
+Alert #2 (`GHSA-rhfx-m35p-ff5j`, `lru` `IterMut` Stacked-Borrows UB, severity
+low, vulnerable `< 0.16.3`): **fixed** — not just investigated. The only
+path pulling the vulnerable `lru` 0.12.5 into the graph was the StarRocks
+harness dev-dependency `mysql` 26 (a test-only adapter, and its only `lru`
+calls were `LruCache::pop_lru` — the advisory's `IterMut` API was never
+called). `mysql` bumped 26 → 28 (Cargo.lock: lru 0.12.5 → 0.18.5), the
+graph now carries only lru 0.16.4 (tantivy) and 0.18.5, both patched. The
+alert auto-resolves on GitHub when this lands.
+
+## 5. Open items carried forward
 
 - The 28 alerts remain `open` on GitHub — this doc is the disposition
   record; dismissal on GitHub (with reason per site) is a separate

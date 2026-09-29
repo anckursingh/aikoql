@@ -67,7 +67,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-benchmarks"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-certification"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-compiler"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
  "criterion",
@@ -104,14 +104,14 @@ dependencies = [
 
 [[package]]
 name = "aikoql-graph"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
 ]
 
 [[package]]
 name = "aikoql-ingestion"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-graph",
  "aikoql-kernel",
@@ -138,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-kernel"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "aikoql-compiler",
@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-mcp"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-mongodb"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
  "futures-util",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-neo4j"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
  "serde",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-postgres"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
  "postgres",
@@ -221,14 +221,14 @@ dependencies = [
 
 [[package]]
 name = "aikoql-provider-sdk"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
 ]
 
 [[package]]
 name = "aikoql-py"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
@@ -242,7 +242,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-reasoning"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
  "aikoql-scheduler",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-runtime"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-compiler",
  "aikoql-graph",
@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-scheduler"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
  "aikoql-storage-v2",
@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-semantic"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
  "aikoql-scheduler",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-sqlite"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
  "rusqlite",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-storage-v2"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
  "proptest",
@@ -310,7 +310,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-vector"
-version = "0.1.19"
+version = "0.2.0"
 dependencies = [
  "aikoql-kernel",
  "fast-hnsw",
@@ -547,9 +547,9 @@ dependencies = [
 
 [[package]]
 name = "btoi"
-version = "0.4.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9dd6407f73a9b8b6162d8a2ef999fe6afd7cc15902ebf42c5cd296addf17e0ad"
+checksum = "3b5ab9db53bcda568284df0fd39f6eac24ad6f7ba7ff1168b9e76eba6576b976"
 dependencies = [
  "num-traits",
 ]
@@ -2169,7 +2169,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.5",
+ "socket2",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -2367,7 +2367,7 @@ version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d40460c0ce33d6ce4b0630ad68ff63d6661961c48b6dba35e5a4d81cfb48222"
 dependencies = [
- "socket2 0.6.5",
+ "socket2",
  "widestring",
  "windows-registry",
  "windows-result",
@@ -2668,18 +2668,18 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
-
-[[package]]
-name = "lru"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f66e8d5d03f609abc3a39e6f08e4164ebf1447a732906d39eb9b99b7919ef39"
 dependencies = [
  "hashbrown 0.16.1",
 ]
+
+[[package]]
+name = "lru"
+version = "0.18.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
 
 [[package]]
 name = "lru-slab"
@@ -2912,7 +2912,7 @@ dependencies = [
  "serde_with",
  "sha1 0.11.0",
  "sha2 0.11.0",
- "socket2 0.6.5",
+ "socket2",
  "stringprep",
  "strsim",
  "take_mut",
@@ -2967,10 +2967,11 @@ checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
 
 [[package]]
 name = "mysql"
-version = "26.0.1"
+version = "28.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce2510a735f601bab18202b07ea0a197bd1d130d3a5ce2edf4577d225f0c3ee4"
+checksum = "7d3d30e2806645e218163f49c2656286061cc91ffce24d93d758fd136e70eb5d"
 dependencies = [
+ "arc-swap",
  "bufstream",
  "bytes",
  "crossbeam-queue",
@@ -2978,21 +2979,21 @@ dependencies = [
  "flate2",
  "io-enum",
  "libc",
- "lru 0.12.5",
+ "lru 0.18.5",
  "mysql_common",
  "named_pipe",
  "pem",
  "percent-encoding",
- "socket2 0.5.10",
+ "socket2",
  "twox-hash",
  "url",
 ]
 
 [[package]]
 name = "mysql_common"
-version = "0.35.5"
+version = "0.37.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbb9f371618ce723f095c61fbcdc36e8936956d2b62832f9c7648689b338e052"
+checksum = "0f27695f286b461da077b8c2f72f47feaa04ce3c3f9c0976257410e90e21208a"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.1",
@@ -3301,11 +3302,11 @@ dependencies = [
 
 [[package]]
 name = "pem"
-version = "3.0.6"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
+checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "serde_core",
 ]
 
@@ -3627,7 +3628,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.5",
+ "socket2",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
@@ -3665,7 +3666,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.5",
+ "socket2",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -4358,16 +4359,6 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "socket2"
-version = "0.5.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
-dependencies = [
- "libc",
- "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "socket2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
@@ -4851,7 +4842,7 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.6.5",
+ "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
 ]
@@ -4887,7 +4878,7 @@ dependencies = [
  "postgres-protocol",
  "postgres-types",
  "rand 0.10.2",
- "socket2 0.6.5",
+ "socket2",
  "tokio",
  "tokio-util",
  "whoami",

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 # P5-M12 (ND-12) version contract: the oldest server this SDK will talk to.
 # Pinned by tests/test_version_contract.py to the workspace version — a
 # workspace bump turns that test RED until this constant follows.
-MIN_SERVER_VERSION = "0.1.19"
+MIN_SERVER_VERSION = "0.2.0"
 
 
 def _parse_version(v: str) -> Tuple[int, ...]:

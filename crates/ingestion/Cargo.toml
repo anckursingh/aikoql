@@ -42,7 +42,7 @@ aikoql-storage-v2 = { path = "../storage/aikoql-v2" }
 aikoql-graph = { path = "../engines/graph" }
 # Wave 5 Phase C: StarRocks adapter for the OLAP comparative harness
 # (tests/wave5_olap.rs). Test-only — never in the product build.
-mysql = { version = "26", default-features = false }
+mysql = { version = "28", default-features = false }
 
 [features]
 # PR-F DoD row 14: optional VLM analyzer set (ureq, env-configured).

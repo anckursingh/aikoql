@@ -96,7 +96,7 @@ func TestInitializeSendsTokenAndClientInfo(t *testing.T) {
 		sawToken = p.Token
 		return []rpcFrame{{
 			JSONRPC: "2.0", ID: req.ID,
-			Result: json.RawMessage(`{"serverInfo":{"name":"aikoql-mcp","version":"0.1.19"}}`),
+			Result: json.RawMessage(`{"serverInfo":{"name":"aikoql-mcp","version":"0.2.0"}}`),
 		}}
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -231,7 +231,7 @@ func TestRequestSkipsNotifications(t *testing.T) {
 		return []rpcFrame{
 			{JSONRPC: "2.0", Method: "notifications/notify",
 				Params: json.RawMessage(`{"event":"audit"}`)},
-			{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(`{"serverInfo":{"version":"0.1.19"}}`)},
+			{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(`{"serverInfo":{"version":"0.2.0"}}`)},
 		}
 	})
 	ctx := context.Background()
@@ -302,7 +302,7 @@ func TestStdioHelper(t *testing.T) {
 		switch req.Method {
 		case "initialize":
 			out, _ = json.Marshal(rpcFrame{JSONRPC: "2.0", ID: req.ID,
-				Result: json.RawMessage(`{"serverInfo":{"name":"aikoql-mcp","version":"0.1.19"}}`)})
+				Result: json.RawMessage(`{"serverInfo":{"name":"aikoql-mcp","version":"0.2.0"}}`)})
 		case "tools/call":
 			out, _ = json.Marshal(rpcFrame{JSONRPC: "2.0", ID: req.ID,
 				Result: toolResult(map[string]any{"koid": "helper1"})})
