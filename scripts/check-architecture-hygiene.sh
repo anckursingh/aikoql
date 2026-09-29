@@ -401,6 +401,19 @@ if ! printf '%s\n' "$t3s" | grep -q -- 'scale.py --no-1m'; then
   echo "ARCH: the tier3-scale job must run the scale harness with --no-1m (the 1M leg cannot fit a 360m CI job, L-27 round 3)" >&2
   fail=1
 fi
+# L-27 release round 4: the harness's PG txn cells need the pgvector
+# extension (bench.py CREATE EXTENSION vector); the tier3-scale job's
+# service ran postgres:16-alpine, which lacks it, and the first release-path
+# run to reach the PG leg died on FeatureNotSupported (run 36608915855).
+# Both CI homes of the full harness must use the matrix job's image.
+for scale_home in "release.yml:tier3-scale" "benchmark.yml:competitor-scale"; do
+  wf=${scale_home%%:*}; job=${scale_home##*:}
+  blk=$(sed -n "/^  $job:/,/^  [a-z][a-z0-9_-]*:$/p" ".github/workflows/$wf")
+  if ! printf '%s\n' "$blk" | grep -q 'image: pgvector/pgvector:pg16'; then
+    echo "ARCH: the $job job's PG service must use pgvector/pgvector:pg16 (bench.py needs the vector extension, L-27 round 4)" >&2
+    fail=1
+  fi
+done
 if ! grep -q 'competitor_bench/bench.py' "$REL"; then
   echo "ARCH: $REL lacks the Tier-3 competitor-matrix leg (CI-09)" >&2
   fail=1
