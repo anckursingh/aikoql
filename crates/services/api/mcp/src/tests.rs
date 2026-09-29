@@ -854,3 +854,77 @@ fn register_schema_tool_drives_constraint_diagnostics() {
     drop(k);
     let _ = std::fs::remove_dir_all(&db);
 }
+
+/// Dogfood (EI ingest, 2026-09-29): the adapter's external-id lookup ran a
+/// full MATCH scan of ExternalIDIndex per object — ~600 ms at 150K objects,
+/// O(n) and growing. The idempotency key is already an O(1) engine lookup
+/// (get_idem); this tool exposes it read-only, and a miss classifies to
+/// NOT_FOUND (what the adapter maps to ErrNotFound).
+#[test]
+fn get_by_idem_tool_resolves_idempotency() {
+    let db = tmp_db("gbi");
+    let _ = std::fs::remove_dir_all(&db);
+    let engine = aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&db))
+        .expect("open store");
+    let k = crate::Kernel::open(
+        std::sync::Arc::new(engine),
+        std::sync::Arc::new(crate::SystemClock),
+        0,
+    )
+    .expect("open kernel");
+
+    let mut props = crate::PropertyMap::new();
+    props.insert(
+        "external_id".into(),
+        crate::Value::Text("github.com:repo:acme/widgets".into()),
+    );
+    let r = k
+        .remember(crate::RememberRequest {
+            context: crate::KnowledgeContext::from(&crate::Subject::with_roles(
+                "test",
+                &["admin"],
+            )),
+            koid: None,
+            expected_version: Some(0),
+            idempotency_key: Some("github.com:repo:acme/widgets".into()),
+            metadata: crate::Metadata {
+                type_name: "Repository".into(),
+                tenant: None,
+                schema_version: 1,
+                tags: vec![],
+            },
+            properties: props,
+            semantic: None,
+            relationships: vec![],
+            security: None,
+            extensions: crate::ExtensionMap::new(),
+            origin: crate::Origin::Human,
+            note: None,
+            referential_policy: crate::ReferentialPolicy::Permissive,
+        })
+        .expect("remember");
+
+    let out = crate::tools::knowledge::tool_get_by_idem(
+        &k,
+        &crate::json!({"key": "github.com:repo:acme/widgets", "subject": "test"}),
+    )
+    .expect("lookup");
+    assert_eq!(out["koid"], crate::json!(r.koid.to_hex()));
+    assert_eq!(out["type_name"], crate::json!("Repository"));
+    assert_eq!(
+        out["properties"]["external_id"],
+        crate::json!("github.com:repo:acme/widgets")
+    );
+
+    let miss = crate::tools::knowledge::tool_get_by_idem(&k, &crate::json!({"key": "nope"}))
+        .expect_err("missing key must be an error");
+    assert!(
+        miss.to_lowercase().contains("not found"),
+        "classifiable message, got: {miss}"
+    );
+    let wrapped = crate::error_codes::wrap_result(Err::<crate::J, _>(miss));
+    assert_eq!(wrapped["error"]["code"], crate::json!("NOT_FOUND"));
+
+    drop(k);
+    let _ = std::fs::remove_dir_all(&db);
+}
