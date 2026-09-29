@@ -7,13 +7,13 @@
 mod common;
 
 use aikoql_kernel::knowledge::kom::sha256;
-use aikoql_storage_v2::db::{manifest_path, CommitWriter, Config, Db, DurabilityMode};
+use aikoql_storage_v2::db::{manifest_path, Config, Db, DurabilityMode};
 use aikoql_storage_v2::format::{Current, Manifest};
 use aikoql_storage_v2::wal::Op;
-use common::{dir, percentiles};
+use common::dir;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The M1 bloom spec (m = 10·n, 4 probes, double hashing over sha256) —
 /// same independent re-implementation as the M8 suite: the test's
@@ -51,14 +51,21 @@ fn passing_key() -> String {
 
 #[test]
 fn get_does_not_stall_writers_during_disk_read() {
-    // One writer (GroupCommit — one fsync per batch) measures ack latency
-    // while a getter thread hammers a get that reads SIX 16 MiB blocks: the
-    // target is absent but provably inside every segment's range and bloom,
-    // so neither skip fires and all six blocks are read per get. With Arc
-    // segments the state lock is held only while the arcs are cloned — the
-    // writer's p50 ack latency stays in the fsync class. Without the fix the
-    // getter holds the lock across ~96 MiB of reads and the p50 inflates by
-    // the whole get duration (the W8 write-stall).
+    // One writer (GroupCommit — one fsync per batch) keeps submitting while
+    // a getter thread hammers a get that reads SIX 16 MiB blocks: the target
+    // is absent but provably inside every segment's range and bloom, so
+    // neither skip fires and all six blocks are read per get. With Arc
+    // segments the state guard covers only the memtable probes and the arc
+    // clone — the pin is the guard HOLD itself (SE2-M10 structural), the
+    // M38/M39 disjoint-window pattern carried to the read path. A get that
+    // holds the guard across its disk read inflates the mean hold by the
+    // whole get duration on any machine (the W8 write-stall).
+    // L-27 release round 6: the pin moved off writer ack latency — the old
+    // proxy (under-load ack p50 within control + 3 ms) lost both directions
+    // on modern runners: page-cache gets are µs-scale, so a real stall no
+    // longer reaches a 3 ms budget, while scheduler noise on the 2-core
+    // Windows runner reached one quantum (~16 ms) and tripped it falsely
+    // (runs 36617743360, 36626423586 — tiny lock_wait, cont_p50 ≈ quantum).
     const SEGS: usize = 6;
     const FILL: usize = 8 << 20; // two values per segment → one 16 MiB block
     let mut cfg = Config::new(dir("m10-stall"));
@@ -79,15 +86,9 @@ fn get_does_not_stall_writers_during_disk_read() {
     }
 
     let w = db.writer().unwrap();
-    let submit = |w: &CommitWriter| -> u128 {
-        let t = Instant::now();
-        w.write(&[Op::Put(b"a".to_vec(), vec![1])]).unwrap();
-        t.elapsed().as_micros()
-    };
-    let control: Vec<u128> = (0..20).map(|_| submit(&w)).collect();
 
     let stop = Arc::new(AtomicBool::new(false));
-    let (contention, gets, ok) = std::thread::scope(|s| {
+    let (gets, ok) = std::thread::scope(|s| {
         let h = s.spawn(|| {
             let mut ok = true;
             let mut gets = 0u64;
@@ -98,31 +99,36 @@ fn get_does_not_stall_writers_during_disk_read() {
             (ok, gets)
         });
         std::thread::sleep(Duration::from_millis(300)); // getter at speed
-        let contention: Vec<u128> = (0..20).map(|_| submit(&w)).collect();
+
+        // The writer keeps the contended regime: 20 GroupCommit submits
+        // while the getter hammers (the W8 shape — writers in flight during
+        // cold reads).
+        for _ in 0..20 {
+            w.write(&[Op::Put(b"a".to_vec(), vec![1])]).unwrap();
+        }
         stop.store(true, Ordering::Relaxed);
         let (ok, gets) = h.join().unwrap();
-        (contention, gets, ok)
+        (gets, ok)
     });
 
-    let (ctrl_p50, _, _) = percentiles(control);
-    let (cont_p50, _, _) = percentiles(contention);
     assert!(ok, "the getter diverged under concurrent writes");
     assert!(
         gets >= 10,
         "the getter made {gets} gets — the stall pin needs real reads"
     );
-    // R4-P2-06 budget note — the message carries the getter intensity and
-    // the read-side lock-wait so a budget miss is diagnosable from the log:
-    // a large lock_wait means the getter queues behind the committer; a
-    // small one with a high p50 means committer scheduling delay (2-core
-    // runner) — the stall pin itself is structural (Arc segments).
+    // The structural pin: the guard covers the memtable probes + the arc
+    // clone only, so the mean hold stays sub-µs on any machine — measured
+    // directly, not proxied through writer ack latency. A get holding the
+    // guard across its disk read inflates the mean hold by the whole get
+    // duration.
     let r = db.read_path_stats();
+    let hold_per_get = r.lock_hold_ns / gets;
     assert!(
-        cont_p50 < ctrl_p50 + 3_000,
-        "writer ack p50 inflates by the get duration: {cont_p50}µs under \
-         contention vs {ctrl_p50}µs control — a get must not hold the state \
-         lock across the disk read [gets={gets} lookups={} considered={} \
-         lock_wait_ns={}]",
+        hold_per_get < 2_000,
+        "the getter held the state lock for {}ns across {gets} gets \
+         ({hold_per_get}ns/get) — a get must not hold the state lock across \
+         the disk read [lookups={} considered={} lock_wait_ns={}]",
+        r.lock_hold_ns,
         r.lookups,
         r.segments_considered,
         r.lock_wait_ns

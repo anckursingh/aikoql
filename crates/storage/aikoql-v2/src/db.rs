@@ -1738,12 +1738,19 @@ impl Db {
             self.stats
                 .lock_wait_ns
                 .fetch_add(t_lock.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            // L-27 — the guard HOLD, recorded at the same three exits as the
+            // memtable lookup (the guard's scope IS the probes + arc clone —
+            // SE2-M10; the stall pin asserts the hold stays in that class).
+            let t_hold = Instant::now();
             let t0 = Instant::now();
             if let Some(e) = state.active.get(key) {
                 let value = e.value.clone();
                 self.stats
                     .memtable_lookup_ns
                     .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                self.stats
+                    .lock_hold_ns
+                    .fetch_add(t_hold.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 self.stats.memtable_hits.fetch_add(1, Ordering::Relaxed);
                 return Ok(value);
             }
@@ -1753,6 +1760,9 @@ impl Db {
                     self.stats
                         .memtable_lookup_ns
                         .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    self.stats
+                        .lock_hold_ns
+                        .fetch_add(t_hold.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     self.stats.memtable_hits.fetch_add(1, Ordering::Relaxed);
                     return Ok(value);
                 }
@@ -1760,6 +1770,9 @@ impl Db {
             self.stats
                 .memtable_lookup_ns
                 .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            self.stats
+                .lock_hold_ns
+                .fetch_add(t_hold.elapsed().as_nanos() as u64, Ordering::Relaxed);
             Arc::clone(&state.segments)
         };
         // SE2-M22 — one key hash per get, shared by every segment's bloom
