@@ -185,7 +185,7 @@ jobs:
           set -euo pipefail
           cargo build --release -p aikoql-mcp
           python -m venv .venv
-          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client
+          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client pymongo
           export VIRTUAL_ENV="$PWD/.venv"
           cd crates/sdk/python
           "$VIRTUAL_ENV/bin/maturin" develop --release
@@ -586,7 +586,19 @@ jobs:
         run: |
           cat aikoql-mcp-*.sha256 > checksums.txt
           sha256sum checksums.txt > checksums.txt.sha256
+      - name: Skip if the release already exists
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ needs.validate-versions.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::release v${{ needs.validate-versions.outputs.version }} already published — keeping the original artifacts (rescue over an existing cut)"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Create Release
+        if: steps.existing.outputs.exists != 'true'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ needs.validate-versions.outputs.version }}
@@ -636,7 +648,14 @@ jobs:
           node "$OLDPWD/smoke-mcp.js" npx aikoql-mcp serve "$clean/db"
       - name: Publish
         working-directory: npm-publish
-        run: npm publish --provenance
+        run: |
+          set -euo pipefail
+          published="$(npm view aikoql-mcp version 2>/dev/null || true)"
+          if [ "$published" = "${{ needs.validate-versions.outputs.version }}" ]; then
+            echo "::notice::npm aikoql-mcp@$published already published — skip (rescue over an existing cut)"
+            exit 0
+          fi
+          npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ''  # force pure OIDC — GitHub injects a managed token that npmjs.org 404s (v0.1.18)
 
@@ -728,6 +747,7 @@ jobs:
         if: needs.github-release.result == 'success'
         env:
           V: ${{ needs.validate-versions.outputs.version }}
+          GH_TOKEN: ${{ github.token }}  # gh in CI needs an explicit token (v0.2.0 first run: exit 4 without it)
         run: |
           set -euo pipefail
           got="$(gh api "repos/anckursingh/aikoql/releases/tags/v${V}" --jq .tag_name)"
