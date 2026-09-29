@@ -2242,7 +2242,10 @@ fn m_abrupt_kill_preserves_acked_writes() {
         // the db handles before the reopen.
         hard_kill(&c.child);
         let status = c.child.wait().expect("reap killed server");
-        assert!(!status.success(), "server must have been killed, not exited");
+        assert!(
+            !status.success(),
+            "server must have been killed, not exited"
+        );
         koid
     };
 
