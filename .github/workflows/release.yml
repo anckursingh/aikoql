@@ -79,7 +79,10 @@ jobs:
           TAG: v${{ needs.validate-versions.outputs.version }}
         run: |
           set -euo pipefail
-          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+          # Remote check, not rev-parse: the dispatch checkout is shallow
+          # and never fetches tags, so a local check would "create" an
+          # existing tag and die on the rejected push (v0.2.0 rescue).
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
             echo "::notice::tag $TAG already exists — skipping (rescue re-dispatch)"
             exit 0
           fi
