@@ -341,31 +341,31 @@ evidence = "m42_batch_sweep_cells"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 2093
+line = 2106
 text = "// authoritative backlog (O(flushed), never O(all segments))."
 evidence = "lba002_authoritative_counters_match_scan_l0_after_every_change"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 2694
+line = 2707
 text = "// P5-M40 — recompute the authoritative backlog (O(segments) once per"
 evidence = "lba002_authoritative_counters_match_scan_l0_after_every_change"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 2757
+line = 2770
 text = "/// write trigger reads the authoritative State counters in O(1) — this"
 evidence = "lba001_write_trigger_never_rescans_l0"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 3100
+line = 3113
 text = "/// The committer: drain the queue into groups bounded by the caps and"
 evidence = "group_commit_coalesces_batches_into_one_fsync"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/db.rs"
-line = 3120
+line = 3133
 text = "// O(g²) fold (P1-02), the seqs buffer is cleared and reused (P1-03)."
 evidence = "per_group_allocations_drop_with_the_hoisted_seqs_buffer"
 [[claim]]
@@ -436,25 +436,25 @@ evidence = "m21_01_attribution_accounting_closes_within_10pct"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/stats.rs"
-line = 62
+line = 68
 text = "/// examined): the per-resolution retain made it O(B²) worst case;"
 evidence = "m42_batch_sweep_cells"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/stats.rs"
-line = 63
+line = 69
 text = "/// the per-pass compaction makes it O(B)."
 evidence = "m42_batch_sweep_cells"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/stats.rs"
-line = 241
+line = 249
 text = "/// true but O(segments)); M40 moved the write trigger to the O(1)"
 evidence = "lba001_write_trigger_never_rescans_l0"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/src/stats.rs"
-line = 345
+line = 353
 text = "/// open/flush/compaction — the write trigger reads them in O(1)); they"
 evidence = "lba001_write_trigger_never_rescans_l0"
 
@@ -604,7 +604,7 @@ evidence = "hundred_k_churn_keeps_the_invariants"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/tests/common/mod.rs"
-line = 180
+line = 181
 text = "/// sfm009 bounded-memory cell measures the same quantity the certification"
 evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
 
