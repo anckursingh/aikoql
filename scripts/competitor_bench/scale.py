@@ -275,8 +275,15 @@ def mcp_column(ds, server, db_dir, n_ops):
 
     def build_vector(agent):
         def op():
+            # The MCP path is eventually consistent by design (P5-M27): a
+            # query right after ingest answers from a lagging ANN unless the
+            # client asks for freshness. The oracle needs the caught-up
+            # index — the wait is the client's bound, and the first cold op
+            # absorbs it (run 36617743360: the lagging index flunked this
+            # cell on the 2-core runner).
             hits = agent.find_similar(vector=QUERY_VEC, k=10,
-                                      fusion="vector_only")
+                                      fusion="vector_only",
+                                      wait_for_freshness_ms=10_000)
             return (len(hits) == 10
                     and all(h["koid"] in cats_set for h in hits))
 

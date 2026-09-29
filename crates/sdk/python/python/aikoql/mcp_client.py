@@ -207,7 +207,8 @@ class McpClient:
 
     def find_similar(self, text: Optional[str] = None, vector: Optional[List[float]] = None,
                      type_name: Optional[str] = None, k: int = 10,
-                     fusion: Optional[str] = None, subject: Optional[str] = None) -> dict:
+                     fusion: Optional[str] = None, subject: Optional[str] = None,
+                     wait_for_freshness_ms: Optional[int] = None) -> dict:
         args: Dict[str, Any] = {}
         if text:
             args["text"] = text
@@ -220,6 +221,8 @@ class McpClient:
             args["fusion"] = fusion
         if subject:
             args["subject"] = subject
+        if wait_for_freshness_ms is not None:
+            args["wait_for_freshness_ms"] = wait_for_freshness_ms
         return self.call_tool("find_similar", args)
 
     def aikoql(self, query: str, subject: Optional[str] = None) -> dict:
