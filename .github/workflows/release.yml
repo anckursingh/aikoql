@@ -163,7 +163,10 @@ jobs:
     timeout-minutes: 360
     services:
       pg:
-        image: postgres:16-alpine
+        # L-27 round 4: the harness's PG txn cells need pgvector (bench.py
+        # CREATE EXTENSION vector) — postgres:16-alpine lacks it and the
+        # first release-path run to reach the leg died on it.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: bench
           POSTGRES_PASSWORD: bench
