@@ -880,10 +880,7 @@ fn get_by_idem_tool_resolves_idempotency() {
     );
     let r = k
         .remember(crate::RememberRequest {
-            context: crate::KnowledgeContext::from(&crate::Subject::with_roles(
-                "test",
-                &["admin"],
-            )),
+            context: crate::KnowledgeContext::from(&crate::Subject::with_roles("test", &["admin"])),
             koid: None,
             expected_version: Some(0),
             idempotency_key: Some("github.com:repo:acme/widgets".into()),
