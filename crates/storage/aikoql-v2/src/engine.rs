@@ -43,7 +43,7 @@ pub trait StorageAdminApi: Send + Sync {
     fn restore_from(&self, dir: &Path) -> KResult<RestoreInfo>;
 }
 
-/// AIKOQL v2 engine: bounded WAL → memtable → immutable segments, served
+/// AIKOQL v2 engine: WAL → memtable → immutable segments, served
 /// through the kernel's storage contract. NOT the production default —
 /// the V2-Adopt gate (KSE-20 conformance + §26 matrix) decides that.
 pub struct AikoqlStorageEngineV2 {

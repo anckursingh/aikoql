@@ -301,7 +301,7 @@ pub(crate) struct State {
 }
 
 /// One queued batch waiting on its group: the ops plus the ack channel
-/// (a fresh bounded(1) per batch — std has no oneshot).
+/// (a fresh one-slot channel per batch — std has no oneshot).
 type Batch = (Vec<Op>, mpsc::SyncSender<Result<u64, FormatError>>);
 
 /// P3-M8 — the write path ↔ compactor handshake. `pending` = a kick was
@@ -2193,7 +2193,7 @@ impl Db {
             // the phase-A capture rides the published segments, so the
             // tail is saved, the file reset, and the tail re-appended —
             // replay sees exactly the frames no segment covers. ponytail:
-            // the tail copy is O(writes interleaved into B's I/O window);
+            // the tail copy is the writes interleaved into B's I/O window;
             // a WAL base-offset in the manifest replaces it if that
             // volume ever dominates.
             let now = wal
@@ -2332,7 +2332,7 @@ impl Db {
 }
 
 /// P5-M39 — the merge staging namespace: a child of the data dir (same
-/// volume, so the C-phase renames are O(1) directory moves). Per-process
+/// volume, so the C-phase renames are directory moves). Per-process
 /// nonce so concurrent merges never share a namespace.
 static COMPACT_STAGING_NONCE: AtomicU64 = AtomicU64::new(0);
 
@@ -2472,7 +2472,7 @@ fn compact_impl(
     }
     // Fresh: allocate real ids under the lock and rename the staged files
     // into the real namespace (same volume — the staging dir is a child
-    // of the data dir, so the renames are O(1) directory moves; the open
+    // of the data dir, so the renames are directory moves; the open
     // readers stay valid — their handles were opened with share-delete).
     let mut remap: HashMap<u64, u64> = HashMap::new();
     let mut chunks = chunks;
@@ -3392,7 +3392,7 @@ fn lock_directory(dir: &Path) -> Result<File, FormatError> {
         .map_err(|e| FormatError::Io(format!("open LOCK {}: {e}", path.display())))?;
     // CI observed a Locked on a reopen microseconds after the previous
     // holder's drop (Linux, one run in three) — a hold-over the code
-    // cannot produce. Retry a bounded window on WouldBlock; a live second
+    // cannot produce. Retry a short window on WouldBlock; a live second
     // writer still fails closed (§19), and the OS reason rides the error
     // so a recurrence names its real cause.
     let mut attempt = 0;

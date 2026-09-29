@@ -1,6 +1,6 @@
 //! v0.3 K5 — Agent Experience: record_experience / match_experiences as
 //! first-class kernel ops — evidence-mandated capture, agent_derived
-//! authority, TTL-bounded validity, reuse-condition gating,
+//! authority, TTL-gated validity, reuse-condition gating,
 //! confidence-weighted ranking, and ACL-scoped cross-agent reuse.
 //! Acceptance targets: K5 exit criteria + cross-agent reuse proof.
 

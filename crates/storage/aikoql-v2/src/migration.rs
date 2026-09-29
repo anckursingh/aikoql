@@ -5,9 +5,9 @@
 //! modified or deleted: the operator's retention policy decides, the
 //! migrator reports.
 //!
-//! PR#2 review SE-04: the migration streams — frames are read in bounded
+//! PR#2 review SE-04: the migration streams — frames are read in fixed-size
 //! chunks, decoded one at a time, applied to the destination and verified
-//! against it immediately, then discarded. Memory is O(chunk + largest
+//! against it immediately, then discarded. Memory is one chunk plus the largest
 //! frame), never the complete WAL, all decoded batches, or a full
 //! expected-state map. (A corrupted header claiming a huge payload still
 //! grows the carry buffer until EOF fails closed — no worse than the
@@ -35,7 +35,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// Read-ahead for the streaming pass: memory is bounded by this plus one
+/// Read-ahead for the streaming pass: memory is this buffer plus one
 /// frame (a larger frame grows the carry until it completes or EOF fails
 /// closed — see the module doc).
 const CHUNK: usize = 8 * 1024 * 1024;
@@ -112,7 +112,7 @@ fn decode_legacy_batch(payload: &[u8]) -> Result<Vec<Op>, FormatError> {
 /// scan errs in the safe direction: a false positive needs a whole valid
 /// record to hide inside the tail (~2^-64 per candidate checksum), and it
 /// would fail closed where recovery could have proceeded — never the reverse.
-/// ponytail: O(remaining bytes), once per migration, only when a torn tail
+/// ponytail: linear in the remaining bytes, once per migration, only when a torn tail
 /// exists.
 fn valid_record_after(bytes: &[u8], pos: usize) -> bool {
     (pos + 1..bytes.len()).any(|off| {

@@ -84,7 +84,7 @@ const DEEP_VERSIONS: usize = 10; // "10+ versions each" (§27 W3)
 /// 1.5× absorbs runner noise with headroom while catching real storage
 /// regressions — the v1-relative 8× design envelope (SE2-M22) died with
 /// the v1 baseline in S-02. The per-commit smoke keeps its 3× budget
-/// (perf-smoke-check.py) as the cheap O(n²)-class net; this is the
+/// (perf-smoke-check.py) as the cheap quadratic-class net; this is the
 /// full-scale gate.
 const GATE5_SELF_REGRESSION_BOUND: f64 = 1.5;
 

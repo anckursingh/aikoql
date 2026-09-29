@@ -12,9 +12,9 @@
 //!
 //! # ponytail: LRU via generation stamps + a lazy-deletion min-heap on
 //! gen — hits stay O(1) (hash + stamp only); eviction pops the min-gen
-//! heap node (O(log n)) and discards stale nodes (a key touched since
+//! heap node (log n) and discards stale nodes (a key touched since
 //! its push, or already gone). The heap rebuilds when it doubles past
-//! the map, so garbage stays bounded; an intrusive list (O(1) evict,
+//! the map, so garbage stays bounded; an intrusive list (constant-time evict,
 //! unsafe) is the upgrade path only if a churn profile demands it.
 //! Ties pick any — exact-LRU ordering per distinct touch.
 
@@ -147,7 +147,7 @@ impl State {
         evicted
     }
 
-    /// Rebuilds the heap from the live entries (O(n) heapify) — the
+    /// Rebuilds the heap from the live entries (linear heapify) — the
     /// rebuild itself is the one map scan on the evict path.
     fn rebuild_heap(&mut self) {
         self.heap.clear();

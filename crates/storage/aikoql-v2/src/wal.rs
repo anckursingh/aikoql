@@ -331,8 +331,8 @@ where
                 pos += len;
             }
             Err(_) => {
-                // ponytail: O(n²) probe for a valid frame after the damage —
-                // the active WAL is bounded, linear resync would be M3 polish.
+                // ponytail: quadratic probe for a valid frame after the damage —
+                // the active WAL is small, linear resync would be M3 polish.
                 for probe in pos + 1..bytes.len() {
                     if decode_frame(&bytes[probe..]).is_ok() {
                         return Err(FormatError::Corrupt(format!(
@@ -459,8 +459,8 @@ pub fn valid_prefix_len(r: &mut (impl Read + Seek)) -> Result<u64, FormatError> 
                 pos += total as u64;
             }
             None => {
-                // The same probe as replay_frames, per-offset: O(n) seeks,
-                // memory bounded — the active WAL is small.
+                // The same probe as replay_frames, per-offset: one seek per offset,
+                // memory is per-frame — the active WAL is small.
                 for probe in pos + 1..end {
                     if validate_frame_at(r, probe, end)?.is_some() {
                         return Err(FormatError::Corrupt(format!(
@@ -475,7 +475,7 @@ pub fn valid_prefix_len(r: &mut (impl Read + Seek)) -> Result<u64, FormatError> 
     Ok(pos)
 }
 
-/// M28 — the bounded-memory "is there a valid frame after `pos`" probe:
+/// M28 — the "is there a valid frame after `pos`" probe:
 /// the torn-tail vs damage classifier for the reader replay, where the
 /// tail can be arbitrarily long (a 100 MB torn tail would mean ~100M
 /// per-offset decodes). Scan 64 KiB chunks for the magic, overlapping 3

@@ -704,7 +704,7 @@ impl InferenceEngine {
         if non_null < 2 {
             return None; // Can't infer uniqueness from 0-1 rows
         }
-        // ponytail: O(n²) duplicate scan — inference is off the write path
+        // ponytail: quadratic duplicate scan — inference is off the write path
         let mut duplicate_count = 0usize;
         for i in 0..values.len() {
             for j in (i + 1)..values.len() {

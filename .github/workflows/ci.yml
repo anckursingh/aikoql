@@ -519,6 +519,12 @@ jobs:
           # source and every registered name must exist in the tree.
           echo "Checking gated-cell registry..."
           bash scripts/check-skip-drift.sh
+          # L-23 (TDD-034): every strong claim in the storage estate —
+          # complexity (O(...)), boundedness, exactly/at-most-once,
+          # zero-alloc — must be pinned in tests/strong-claims.toml to an
+          # evidence test that exists, or the claim loses its claim.
+          echo "Checking strong-claims evidence registry..."
+          bash scripts/check-strong-claims.sh
           # PR6-F4 (P1-4): test env hygiene + seed determinism — new test
           # code may not mutate the process-global environment (the
           # 2026-09-18 AIKOQL_BACKEND parallel-child leak class) nor use
@@ -639,7 +645,7 @@ jobs:
           # (the P3-M0/P3-M9/R2-012 historical pins were deleted here).
           echo "Checking architecture hygiene (storage + workflow legs)..."
           bash scripts/check-architecture-hygiene.sh
-          # L-20 (TDD-031): the mutation harness re-applies the seven
+          # L-20 (TDD-031): the mutation harness re-applies the ten
           # estate mutations to detached-worktree copies and fails if any
           # gate stays green on the damaged tree — the teeth the mut-*
           # RED archives capture (docs/red-archive/).

@@ -981,7 +981,7 @@ impl Kernel {
     ///
     /// Scans all committed objects of `new_schema.type_name` and runs every
     /// constraint (domain, check, unique) against each one.  Returns violations
-    /// Record detected violations on the bounded in-memory diagnostics ring
+    /// Record detected violations on the in-memory diagnostics ring
     /// (MRFC-0060 §32; P3-M5 M5a — oldest evicted past 256 entries).
     fn record_events<I>(&self, events: I)
     where
@@ -3182,7 +3182,7 @@ impl Kernel {
     // ---- type scanning ---------------------------------------------------
 
     /// Return all readable KOs of a given type (ACL-filtered).
-    /// R9: walks the `type/` secondary index (O(log N + per-type)) instead of
+    /// R9: walks the `type/` secondary index instead of
     /// the whole head space; the payload type re-check guards against stale
     /// index entries from type changes.
     pub fn scan_by_type(
@@ -3219,7 +3219,7 @@ impl Kernel {
     /// P5-M7: canonical scan for catalog metadata — walks ko/ heads (the
     /// authority), NOT the derived type index (catalog rows are deliberately
     /// never indexed there; write_type_index guards it). Catalog rows are
-    /// few and metadata ops are rare, so the O(heads) walk is fine.
+    /// few and metadata ops are rare, so the heads walk is fine.
     pub(crate) fn scan_catalog_rows(&self) -> KResult<Vec<KnowledgeObject>> {
         let mut out = Vec::new();
         for (koid, _version, ts, state) in self.repo.scan_heads()? {
@@ -3237,7 +3237,7 @@ impl Kernel {
 
     /// The index-backed koid list for a type, unfiltered — the streaming
     /// scan's snapshot-at-open (P5-M4, ND-04): payload batches resolve from
-    /// this list via `scan_by_type_range`, so memory is bounded by the batch
+    /// this list via `scan_by_type_range`, so memory follows the batch
     /// size, not the result cardinality.
     pub fn type_koids(&self, type_name: &str) -> KResult<Vec<KOID>> {
         self.repo.scan_type(type_name)
@@ -3334,7 +3334,7 @@ impl Kernel {
         Ok(Some(ko))
     }
 
-    /// Return all distinct type names from head objects. O(n) scan;
+    /// Return all distinct type names from head objects. Linear scan;
     /// ponytail: add a type-name index if enumeration becomes frequent.
     pub fn list_types(&self) -> KResult<Vec<String>> {
         let mut types = std::collections::BTreeSet::new();

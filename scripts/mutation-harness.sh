@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # L-20 (TDD-031) / ARCHITECT-REVIEW P2-10: mutation harness for the gate
 # scripts themselves. The gates that guard the CI estate (skip-drift,
-# shuffle-wiring, architecture-hygiene) are grep checkers — a bad merge can
-# rot a wiring the way a rotten step rots a workflow. Each mutation below
-# applies ONE surgical damage to a detached-worktree copy of the tree and
-# runs the gate that must catch it. The gate's exit code propagates:
+# shuffle-wiring, architecture-hygiene, strong-claims) are grep checkers —
+# a bad merge can rot a wiring the way a rotten step rots a workflow. Each
+# mutation below applies ONE surgical damage to a detached-worktree copy
+# of the tree and runs the gate that must catch it. The gate's exit code
+# propagates:
 #
 #   non-zero = the mutation IS caught (that exit is the RED the archive
 #              captures via scripts/red-archive.sh)
 #   zero     = UNCAUGHT — the gate stayed green on a damaged tree
 #
 #   mutation-harness.sh <id>   apply one mutation, run its gate
-#   mutation-harness.sh all    run all nine; exit 0 iff all are caught
+#   mutation-harness.sh all    run all ten; exit 0 iff all are caught
 #
 # Every mutation targets the estate as it stands NOW (the post-CI-01..16
 # consolidation tree) — the worktree is HEAD, so the teeth stay honest as
@@ -25,7 +26,8 @@ mutations() {
   echo "m1-remove-gated-test m2-rename-gated-test m3-remove-skip-wiring \
 m4-remove-shuffle-flag m5-remove-pre-residue-sweep \
 m6-remove-post-residue-sweep m7-remove-protected-path \
-m8-remove-nightly-install m9-remove-shuffle-proof"
+m8-remove-nightly-install m9-remove-shuffle-proof \
+m10-drop-strong-claim-row"
 }
 
 mutate() {
@@ -99,6 +101,13 @@ mutate() {
       sed -i '/shuffle-proof.sh/d' .github/workflows/benchmark.yml
       bash scripts/check-shuffle-wiring.sh
       ;;
+    m10-drop-strong-claim-row)
+      # ONE registry row drops in a merge — its claim is uncovered again
+      # and the sweep's uncovered-hit leg must flag it (every [[claim]]
+      # block is 5 lines; the file+line pair pins the lib.rs:8 block alone)
+      sed -i '/^\[\[claim\]\]$/{N;N;N;N;/\nfile = "crates\/storage\/aikoql-v2\/src\/lib.rs"\nline = 8\n/d;}' tests/strong-claims.toml
+      bash scripts/check-strong-claims.sh
+      ;;
     *)
       echo "unknown mutation: $id" >&2
       exit 2
@@ -121,7 +130,7 @@ case "${1:-}" in
       echo "mutation harness: gates stayed green on a damaged tree" >&2
       exit 1
     fi
-    echo "mutation harness: all nine caught"
+    echo "mutation harness: all ten caught"
     ;;
   "")
     echo "usage: mutation-harness.sh <id>|all" >&2

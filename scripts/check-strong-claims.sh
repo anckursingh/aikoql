@@ -22,6 +22,11 @@ reg="$root/tests/strong-claims.toml"
 
 python3 - "$root" "$reg" <<'PYEOF'
 import re, subprocess, sys
+# Windows consoles are cp1252 — claim text carries arrows/²/—; a hard
+# UnicodeEncodeError mid-print would truncate the sweep (it died on the
+# last hit at RED time). Reconfigure so output never crashes the gate.
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 root, reg = sys.argv[1], sys.argv[2]
 vocab = re.compile(r'\b(exactly.once|at most once|zero.alloc)\b|\bO\(|\bbounded\b')
 comment = re.compile(r'^\s*(//|///|//!)')

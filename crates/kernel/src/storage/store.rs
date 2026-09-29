@@ -66,9 +66,9 @@ pub trait StorageEngine: Send + Sync {
     }
     /// Prefix scan, sorted ascending by key.
     ///
-    /// Implementations MUST seek directly to the prefix range (O(log n) +
-    /// O(prefix-range)) rather than iterating from the beginning of the key
-    /// space (O(all-keys)). Backends that cannot support this (e.g. external
+    /// Implementations MUST seek directly to the prefix range rather than
+    /// iterating from the beginning of the key space. Backends that cannot
+    /// support this (e.g. external
     /// stores without native prefix iteration) must document the limitation.
     fn scan(&self, prefix: &[u8]) -> KResult<Vec<(Vec<u8>, Vec<u8>)>>;
     /// P4-M4 — bounded forward seek: ascending entries with the given

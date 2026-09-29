@@ -32,7 +32,7 @@ fn probes(key: &[u8], m: u32) -> [u32; 4] {
 /// An ABSENT key between "b-a" and "b-z" whose four probes all land on bits
 /// the two filler keys set (m = 20, two entries per segment): it provably
 /// passes every filler segment's bloom, so a get of it can never be skipped
-/// — every block is read. The search is bounded and deterministic.
+/// — every block is read. The search is deterministic.
 fn passing_key() -> String {
     let mut set = [false; 20];
     for k in [b"b-a".as_slice(), b"b-z".as_slice()] {

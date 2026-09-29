@@ -68,7 +68,7 @@ impl TenantManager {
             if *state == LifecycleState::Deleted {
                 continue;
             }
-            // Determine tenant by loading the KO — ponytail: O(n) scan,
+            // Determine tenant by loading the KO — ponytail: linear scan,
             // amortized over startup. For hundreds of tenants, add a tenant
             // index prefix when this becomes a bottleneck.
             if let Some(_type_name) = type_resolver(koid) {

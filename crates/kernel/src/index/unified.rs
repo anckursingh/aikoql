@@ -208,7 +208,7 @@ impl Index for VectorIndexAdapter {
         Ok(())
     }
     fn commit_batch(&self) -> KResult<()> {
-        // P4-M7 (TDD-VECTOR-002): fires at most once per threshold crossing,
+        // P4-M7 (TDD-VECTOR-002): fires once per threshold crossing,
         // never per delete.
         let _ = self.inner.maybe_rebuild();
         Ok(())

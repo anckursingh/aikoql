@@ -50,7 +50,7 @@
 //! Footer: `AKFT | version u16 | entry_count u64 | sha256-8(skeleton)`.
 //! The skeleton covers the header, every 28-byte block header, the index
 //! and bloom blocks whole, and the footer fields — but not data payloads,
-//! so open() stays O(block count) no matter the file size. Torn segments
+//! so open() reads metadata only, no matter the file size. Torn segments
 //! are impossible (atomic publication); data payloads are validated lazily
 //! on the read that touches the block. Structural damage fails at open,
 //! payload damage fails on access.
@@ -683,8 +683,8 @@ fn encode_block(kind: u8, entries: u32, payload: &[u8], version: u16) -> Vec<u8>
 }
 
 /// A read-only handle on a published segment. Open reads only the skeleton
-/// (header, block headers, index, bloom, footer) — O(block count), never
-/// O(file size) — and defers data-block payloads to the read that touches
+/// (header, block headers, index, bloom, footer) — never the data
+/// payloads — and defers data-block payloads to the read that touches
 /// the block, which validates that block's checksum on first touch.
 #[derive(Debug)]
 pub struct SegmentReader {
@@ -1137,7 +1137,7 @@ impl SegmentReader {
 
         // Footer checksum over the skeleton (the index header + index
         // payload + bloom header + bloom payload are contiguous in the
-        // file, so one bounded read covers that span).
+        // file, so one read covers that span).
         let mut skeleton = Vec::with_capacity(
             header.len()
                 + data.len() * BLOCK_HEADER_LEN
@@ -1368,7 +1368,7 @@ impl SegmentReader {
     /// payload), served from the shared cache when present (SE2-M7, now raw
     /// bytes — SE2-M9). Only validated bytes enter the cache, so a decode
     /// failure reproduces deterministically on a hit. Lazy: open() stays
-    /// O(block count); the payload is validated on the first read that
+    /// metadata-only; the payload is validated on the first read that
     /// touches it.
     fn block_raw(&self, i: usize) -> Result<std::sync::Arc<Vec<u8>>, FormatError> {
         let b = &self.data[i];
@@ -1912,8 +1912,8 @@ fn restart_key(payload: &[u8], o: usize) -> Result<&[u8], FormatError> {
 }
 
 /// Streaming iterator over every entry in key order — compaction's k-way
-/// merge pulls one entry at a time, so the merge is O(k) memory, not
-/// O(dataset). Blocks load (and validate) as the cursor reaches them.
+/// merge pulls one entry at a time — memory per key, never the whole
+/// dataset. Blocks load (and validate) as the cursor reaches them.
 pub struct SegmentIter<'a> {
     reader: &'a SegmentReader,
     block: usize,
