@@ -301,6 +301,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true",
                     help="smoke run: 1000 notes, n=10 cells")
+    ap.add_argument("--no-1m", action="store_true",
+                    help="skip the 1M embedded leg (the CI release path: "
+                         "its cells cannot fit a 360-minute job on the "
+                         "2-core public runner — L-27 release round 3)")
     ap.add_argument("--out", default=None, help="result path override")
     args = ap.parse_args()
 
@@ -315,7 +319,7 @@ def main():
 
     # (a) scale — embedded aikoql.
     sizes = [(1000, "1k")] if args.quick \
-        else [(100_000, "100k"), (1_000_000, "1m")]
+        else [(100_000, "100k")] + ([] if args.no_1m else [(1_000_000, "1m")])
     result["scale"] = {tag: scale_run(n_notes, n_ops)
                        for n_notes, tag in sizes}
 

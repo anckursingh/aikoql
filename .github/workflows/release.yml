@@ -156,7 +156,7 @@ jobs:
         run: bash scripts/check-coverage-floor.sh
 
   tier3-scale:
-    name: Tier-3 scale certification (100k + 1M)
+    name: Tier-3 scale certification (100k + MCP + txn)
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: validate-versions
     runs-on: ubuntu-latest
@@ -193,10 +193,18 @@ jobs:
           cd crates/sdk/python
           "$VIRTUAL_ENV/bin/maturin" develop --release
           cd "$GITHUB_WORKSPACE"
-      - name: Run the full scale harness (100k + 1M + MCP + txn)
+      - name: Run the scale harness (100k + MCP + txn; --no-1m)
+        # L-27 release round 3: the 1M embedded leg runs with --no-1m. On
+        # the public 2-core runner the 100k cells alone cost ~50 min (the
+        # per-connect index rebuilds the M9 stats contract requires); the
+        # 1M leg ran 5h00m without finishing before the 360-minute job cap
+        # cancelled it (run 36562237765). The 1M storage cells ride the
+        # weekly benchmark.yml guard (CI-10); the full 1M embedded numbers
+        # live in the published dev-machine report. The arch gate pins the
+        # --no-1m flag on this line — see check-architecture-hygiene.sh.
         run: |
           set -euo pipefail
-          .venv/bin/python scripts/competitor_bench/scale.py \
+          .venv/bin/python scripts/competitor_bench/scale.py --no-1m \
             --out "$RUNNER_TEMP/scale-result.json"
           cp "$RUNNER_TEMP/scale-result.json" scale-result.json
       - uses: actions/upload-artifact@v4
@@ -698,7 +706,20 @@ jobs:
             echo "::error::wheel version does not match tag '${v}' (sdk001 parity)"
             exit 1
           }
+      - name: Publish (skip if this version is already published)
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          published="$(curl -fsS https://pypi.org/pypi/aikoql/json 2>/dev/null | jq -r .info.version || echo '')"
+          if [ "$published" = "${{ needs.validate-versions.outputs.version }}" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::PyPI aikoql@$published already published — skip (rescue over an existing cut)"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: pypa/gh-action-pypi-publish@release/v1
+        if: steps.existing.outputs.exists != 'true'
         with:
           packages-dir: crates/sdk/python/dist/
 
