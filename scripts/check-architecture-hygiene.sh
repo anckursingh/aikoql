@@ -384,7 +384,21 @@ if ! grep -q 'check-coverage-floor.sh' "$REL"; then
   fail=1
 fi
 if ! grep -q 'competitor_bench/scale.py' "$REL"; then
-  echo "ARCH: $REL lacks the Tier-3 full-scale harness leg (CI-09)" >&2
+  echo "ARCH: $REL lacks the Tier-3 scale harness leg (CI-09)" >&2
+  fail=1
+fi
+# L-27 release round 3: the 1M embedded leg cannot fit a 360-minute job on
+# the public 2-core runner (measured: the 100k cells alone cost ~50 min;
+# the 1M leg ran 5h00m without finishing before the job cap killed it).
+# The release-path scale job carries 100k + MCP + txn; the 1M storage cells
+# ride the weekly benchmark.yml guard (CI-10) and the full 1M embedded
+# numbers live in the published dev-machine report. The --no-1m pin keeps
+# the 1M leg out of the release path — a drift back fails this gate. The
+# pin is a one-line live-invocation match (the L-20 lesson), so the flag
+# must sit on the scale.py line itself.
+t3s=$(sed -n '/^  tier3-scale:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL")
+if ! printf '%s\n' "$t3s" | grep -q -- 'scale.py --no-1m'; then
+  echo "ARCH: the tier3-scale job must run the scale harness with --no-1m (the 1M leg cannot fit a 360m CI job, L-27 round 3)" >&2
   fail=1
 fi
 if ! grep -q 'competitor_bench/bench.py' "$REL"; then
