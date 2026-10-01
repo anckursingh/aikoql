@@ -6,6 +6,7 @@ Talks to a aikoql-mcp server over TCP. No native dependencies.
 import json
 import socket
 import time
+import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 # P5-M12 (ND-12) version contract: the oldest server this SDK will talk to.
@@ -43,6 +44,57 @@ class McpError(Exception):
             retryable=err.get("retryable", False),
             suggestion=err.get("suggestion", ""),
         )
+
+
+class Transaction:
+    """A staged write handle (§3.5): begin on the connection, execute
+    stages ops, commit or rollback closes it. The txn_id is a first-class
+    attribute — it never leaks as a bare tool argument.
+    """
+
+    def __init__(self, client: "McpClient", txn_id: str):
+        self._client = client
+        self.txn_id = txn_id
+        self._done = False
+
+    def _guard(self):
+        if self._done:
+            raise McpError(
+                code="INVALID_ARGUMENT",
+                message=f"transaction {self.txn_id} is closed",
+                suggestion="Begin a new transaction.",
+            )
+
+    def execute(self, action: str, type_name: Optional[str] = None,
+                koid: Optional[str] = None,
+                properties: Optional[dict] = None) -> dict:
+        """Stage one write: action is "create" or "update"."""
+        self._guard()
+        op: Dict[str, Any] = {"action": action}
+        if type_name is not None:
+            op["type_name"] = type_name
+        if koid is not None:
+            op["koid"] = koid
+        if properties is not None:
+            op["properties"] = properties
+        return self._client.call_tool(
+            "txn_stage", {"txn_id": self.txn_id, "op": op})
+
+    def commit(self) -> dict:
+        """Apply the staged writes and close the handle."""
+        self._guard()
+        result = self._client.call_tool(
+            "txn_commit", {"txn_id": self.txn_id})
+        self._done = True
+        return result
+
+    def rollback(self) -> dict:
+        """Discard the staged writes and close the handle."""
+        self._guard()
+        result = self._client.call_tool(
+            "txn_rollback", {"txn_id": self.txn_id})
+        self._done = True
+        return result
 
 
 class McpClient:
@@ -222,6 +274,15 @@ class McpClient:
         return data.get("data", data)
 
     # -- Tool wrappers (high-level API) ---------------------------------
+
+    def begin(self, txn_id: Optional[str] = None) -> "Transaction":
+        """Open a transaction (§3.5). A generated 32-hex id by default;
+        pass one to retry the same begin idempotently (P5-M20).
+        """
+        if txn_id is None:
+            txn_id = uuid.uuid4().hex
+        self.call_tool("txn_begin", {"txn_id": txn_id})
+        return Transaction(self, txn_id)
 
     def remember(self, type_name: str, properties: Optional[dict] = None,
                  koid: Optional[str] = None, subject: Optional[str] = None,

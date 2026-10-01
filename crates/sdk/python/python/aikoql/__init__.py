@@ -15,7 +15,7 @@ Unified interface for AI agents. Supports embedded (PyO3) and server (MCP) modes
 """
 
 from aikoql.agent import Agent
-from aikoql.mcp_client import McpClient, McpError
+from aikoql.mcp_client import McpClient, McpError, Transaction
 from aikoql.adapters.crewai import AikoqlCrewAIMemory
 from aikoql.adapters.langgraph import AikoqlLangGraphSaver
 
@@ -26,6 +26,6 @@ except ImportError:
     aikoql = None  # type: ignore
 
 __all__ = [
-    "Agent", "McpClient", "McpError",
+    "Agent", "McpClient", "McpError", "Transaction",
     "aikoql", "AikoqlCrewAIMemory", "AikoqlLangGraphSaver",
 ]
