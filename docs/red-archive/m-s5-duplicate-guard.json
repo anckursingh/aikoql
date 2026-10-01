@@ -1,0 +1,8 @@
+{
+  "id": "m-s5-duplicate-guard",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/storage-mutation-harness.sh m-s5-duplicate-guard",
+  "captured_at": "2026-10-01T11:07:09Z",
+  "captured_head": "f0caaaea2f1e189dc2c1916ff4752a365b15bf69",
+  "exit_code": 101
+}

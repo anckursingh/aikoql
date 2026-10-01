@@ -1,0 +1,8 @@
+{
+  "id": "m-s6-delta-coverage",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/storage-mutation-harness.sh m-s6-delta-coverage",
+  "captured_at": "2026-10-01T11:07:45Z",
+  "captured_head": "f0caaaea2f1e189dc2c1916ff4752a365b15bf69",
+  "exit_code": 101
+}

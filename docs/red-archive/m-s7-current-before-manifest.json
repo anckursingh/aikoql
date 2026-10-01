@@ -1,0 +1,8 @@
+{
+  "id": "m-s7-current-before-manifest",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/storage-mutation-harness.sh m-s7-current-before-manifest",
+  "captured_at": "2026-10-01T11:08:21Z",
+  "captured_head": "f0caaaea2f1e189dc2c1916ff4752a365b15bf69",
+  "exit_code": 101
+}

@@ -1,0 +1,8 @@
+{
+  "id": "m-s1-restart-count",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/storage-mutation-harness.sh m-s1-restart-count",
+  "captured_at": "2026-10-01T11:38:31Z",
+  "captured_head": "9a07880bcc0aca17ce997fdd88f2d44cc7294555",
+  "exit_code": 101
+}

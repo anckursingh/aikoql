@@ -1,0 +1,16 @@
+failures:
+
+---- ci007_fail_after_publish stdout ----
+
+thread 'ci007_fail_after_publish' (18980) panicked at crates\storage\aikoql-v2\tests\crash_injection.rs:427:47:
+called `Result::unwrap()` on an `Err` value: Io("read manifest C:\\Users\\ancku\\AppData\\Local\\Temp\\aikoql-v2-ci007-29960\\MANIFEST-000004: The system cannot find the file specified. (os error 2)")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ci007_fail_after_publish
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.24s
+
+error: test failed, to rerun pass `--test crash_injection`
+EXIT=101
