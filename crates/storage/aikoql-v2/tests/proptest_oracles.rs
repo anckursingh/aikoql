@@ -7,7 +7,7 @@
 //! shrinks any divergence to a minimal failing case and persists it under
 //! proptest-regressions/, so a caught bug reproduces forever.
 //!
-//! Four properties, one per layer:
+//! Five properties, one per layer plus the lifecycle state machine:
 //! - memtable: random churn with NO flush — every read answers from the
 //!   memtable alone;
 //! - segments: flush every N ops while churn continues — reads merge
@@ -16,6 +16,10 @@
 //! - compaction: a multi-segment set merged by compact(); the L-04 class
 //!   rides along — object rows survive the merge, never answer byte scans
 //!   — checked before and after reopen;
+//! - lifecycle (F-02): data ops interleaved with Flush/Compact/Checkpoint/
+//!   CloseReopen commands, the model checked after EVERY command — the
+//!   other four props reopen only terminally, this one reopens mid-stream
+//!   wherever the case lands;
 //! - WAL: the crash-child pattern (resource_adversarial.rs) — the child
 //!   applies the case and exits WITHOUT Db::drop (the graceful drop would
 //!   flush the memtable out of the WAL), so the WAL is the rows' only
@@ -155,6 +159,28 @@ fn op_strategy() -> impl Strategy<Value = Op> {
 
 fn ops_strategy() -> impl Strategy<Value = Vec<Op>> {
     proptest::collection::vec(op_strategy(), 32..96)
+}
+
+/// F-02 (review §5) — a lifecycle command wraps a data op or one of the
+/// public state-machine verbs. CloseReopen is the interesting one: the
+/// other props reopen only terminally.
+#[derive(Debug, Clone)]
+enum Cmd {
+    Data(Op),
+    Flush,
+    Compact,
+    Checkpoint,
+    Reopen,
+}
+
+fn cmd_strategy() -> impl Strategy<Value = Cmd> {
+    prop_oneof![
+        6 => op_strategy().prop_map(Cmd::Data),
+        1 => Just(Cmd::Flush),
+        1 => Just(Cmd::Compact),
+        1 => Just(Cmd::Checkpoint),
+        2 => Just(Cmd::Reopen),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +339,50 @@ proptest! {
         drop(db);
         let db = open_big(&d);
         check_model(&db, &model, &oids, "post-compact reopen");
+    }
+
+    /// The lifecycle oracle (F-02): the I3 layer-equivalence chain as a
+    /// state machine — data ops interleaved with flush/compact/checkpoint
+    /// and mid-stream CloseReopen, the model checked after every command.
+    /// A reopen must carry the full logical state: memtable AND WAL AND
+    /// segments AND checkpointed identity floors. Object ids from the
+    /// first session must keep answering through every boundary.
+    #[test]
+    fn prop_lifecycle_state_machine_matches_model_across_reopens(
+        cmds in proptest::collection::vec(cmd_strategy(), 24..80)
+    ) {
+        let d = dir("prop-lifecycle");
+        let (mut db, oids) = new_session(&d);
+        let mut model = Model::default();
+        for (i, cmd) in cmds.iter().enumerate() {
+            match cmd {
+                Cmd::Data(op) => {
+                    apply_db(&db, op, &oids);
+                    apply_model(&mut model, op);
+                }
+                Cmd::Flush => {
+                    db.flush().unwrap();
+                }
+                Cmd::Compact => {
+                    // l0_compact_trigger=0: only explicit compact() moves
+                    // rows; a no-op under two segments is fine — the merge
+                    // path is prop 3's job, this one just exercises the verb.
+                    let _ = db.compact().unwrap();
+                }
+                Cmd::Checkpoint => {
+                    db.checkpoint_now().unwrap();
+                }
+                Cmd::Reopen => {
+                    drop(db);
+                    db = open_big(&d);
+                }
+            }
+            check_model(&db, &model, &oids, &format!("lifecycle cmd {i} ({cmd:?})"));
+        }
+        // The terminal check rides recovery alone — no live handles left.
+        drop(db);
+        let db = open_big(&d);
+        check_model(&db, &model, &oids, "lifecycle final reopen");
     }
 }
 
