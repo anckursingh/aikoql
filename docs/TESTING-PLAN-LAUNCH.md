@@ -91,6 +91,10 @@ S/CI milestone evidenc — no item closed without a named GREEN run.
 | L-24 | `*_us` baseline stale | committed v2 baseline refreshed; guard green | 1M rides the guard |
 | L-25 | alerts/threads open; kernel write loss | disposition recorded per site; threads resolved; durable-by-default flush pinned by a RED | — |
 | L-26/L-27 | LICENSE/CHANGELOG absent; pipeline unexercised | files present; release tag run green end-to-end incl. Tier-3 report | — |
+| F-01 | block_target=0 opens + acks, dies at the first flush (product bug the matrix caught) | every knob × {0,1,b−1,b,b+1} opens, runs a fixed 16-op script, equals the byte-surface model, reopens, equals again — clean `Invalid` at open is the accepted fail-safe, a panic/overflow/silent divergence the RED | — |
+| F-02 | mid-stream CloseReopen un-oracled (the other four props reopen only terminally) | state-machine proptest: Flush/Compact/Checkpoint/Reopen interleaved with data ops (24..80 cmds), model checked after EVERY command; pin-only — 256 debug + 4096 release, no regression file | PROPTEST_CASES=4096 nightly |
+| F-03 | eleven §12 storage mutants unkilled | `storage-mutation-harness.sh`: each mutant surgically applied to a detached-worktree copy of HEAD, killed by its named regression — a survivor is a test-suite defect; all-mode exit 0 = all eleven fired | weekly storage-mutation job |
+| F-04 | fuzz estate unpinned (removing coverage is undetected) | arch-gate workflow test 17: nightly proptest arm, the storage-mutation job + all-mode, the eleven ids in the harness, the F-02 state machine in proptest_oracles.rs; the job rides test 6's rust-cache spec | — |
 
 ## 4. Performance evidence rules (review 1 §30 + review 2 §5/§13)
 
@@ -121,6 +125,9 @@ S/CI milestone evidenc — no item closed without a named GREEN run.
   (L-16), proptest regression file (L-19), contention ladder (L-18).
 - Tier 2: 100K/1M self-regression + the competitor matrix + the hybrid
   knowledge workload (CI-07) with the report trio.
+- Storage mutation harness (F-03): all eleven §12 mutants, weekly
+  `storage-mutation` job (240-min budget, dispatched parallel to the
+  benchmark job whose steps sit near the 360-min cap).
 
 ## 6. Launch certification (Tier 3, on the release tag)
 
