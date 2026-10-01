@@ -97,5 +97,43 @@ then
   fail=1
 fi
 
+# 7. errors.json: the frozen SDK-012 taxonomy — exactly the 14 codes,
+#    each carrying code/message/retryable/suggestion; every code must
+#    appear in docs/DATABASE-API.md's error table.
+errf="$root/protocol/errors.json"
+[ -f "$errf" ] || { echo "SDK COMPAT: missing $errf" >&2; exit 1; }
+if ! python3 - "$errf" "$root/docs/DATABASE-API.md" <<'PY'
+import json, re, sys
+er = json.load(open(sys.argv[1], encoding="utf-8"))
+doc = open(sys.argv[2], encoding="utf-8").read()
+CODES = ["AUTHENTICATION_FAILED", "AUTHORIZATION_FAILED", "NOT_FOUND",
+         "INVALID_ARGUMENT", "INVALID_QUERY", "CONFLICT",
+         "VERSION_MISMATCH", "TIMEOUT", "CANCELLED", "RESOURCE_EXHAUSTED",
+         "UNAVAILABLE", "INTERNAL", "PROTOCOL_ERROR", "DATA_CORRUPTION"]
+errs = []
+if er.get("api_major") != 1:
+    errs.append(f"api_major {er.get('api_major')!r} != 1")
+codes = [c.get("code") for c in er.get("codes", [])]
+if sorted(codes) != sorted(CODES):
+    errs.append(f"codes {codes!r} != the SDK-012 taxonomy")
+for c in er.get("codes", []):
+    for k in ("code", "message", "suggestion"):
+        if not isinstance(c.get(k), str) or not c[k].strip():
+            errs.append(f"{c.get('code')}: {k} missing or empty")
+    if not isinstance(c.get("retryable"), bool):
+        errs.append(f"{c.get('code')}: retryable must be a bool")
+for code in CODES:
+    if not re.search(rf"\b{code}\b", doc):
+        errs.append(f"{code} missing from docs/DATABASE-API.md")
+if errs:
+    for e in errs:
+        print(f"SDK COMPAT: errors: {e}", file=sys.stderr)
+    sys.exit(1)
+print("error taxonomy OK")
+PY
+then
+  fail=1
+fi
+
 [ "$fail" -eq 0 ] && echo "SDK COMPAT: workspace/go/python all pinned to $min"
 exit "$fail"
