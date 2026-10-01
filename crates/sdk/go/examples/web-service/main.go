@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ancku/aikoql-sdk"
+	"github.com/anckursingh/aikoql/sdk/go"
 )
 
 func main() {

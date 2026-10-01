@@ -1,3 +1,3 @@
-module github.com/ancku/aikoql-sdk
+module github.com/anckursingh/aikoql/sdk/go
 
 go 1.22
