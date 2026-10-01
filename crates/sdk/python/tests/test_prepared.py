@@ -137,6 +137,7 @@ def test_prepared_transaction_interaction(mcp_server):
     host_port, _db, token = mcp_server
     host, port = host_port.split(":")
     client = McpClient(host, int(port), token=token).connect()
+    client.initialize()
     ps = client.prepare("MATCH person WHERE name == :who RETURN *")
     assert ps.execute({"who": "ada"})["results"] == []  # nothing yet
     tx = client.begin()

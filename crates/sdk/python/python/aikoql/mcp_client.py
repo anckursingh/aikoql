@@ -342,6 +342,26 @@ class McpClient:
             args["subject"] = subject
         return self.call_tool("aikoql", args)
 
+    def prepare(self, query: str) -> "PreparedStatement":
+        """Prepare a statement (§3.6): validates the query client-side and
+        extracts its :name placeholders. Compiles on every execute until a
+        native prepare protocol lands."""
+        from aikoql.prepared import PreparedStatement, _PLACEHOLDER
+
+        if not query.strip():
+            raise McpError(
+                code="INVALID_ARGUMENT",
+                message="prepared statement query is empty",
+                suggestion="Pass a non-empty AikoQL query.",
+            )
+        params = []
+        seen = set()
+        for m in _PLACEHOLDER.finditer(query):
+            if m.group(1) not in seen:
+                seen.add(m.group(1))
+                params.append(m.group(1))
+        return PreparedStatement(self, query, tuple(params))
+
     def relate(self, from_koid: str, to_koid: str, rel_type: str,
                subject: Optional[str] = None) -> dict:
         args = {"from": from_koid, "to": to_koid, "rel_type": rel_type}
