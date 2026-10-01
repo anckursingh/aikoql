@@ -1,0 +1,7 @@
+{
+  "name": "vector_recall",
+  "operations": [
+    {"op": "remember", "type": "v_item", "properties": {"name": "needle"}},
+    {"op": "find_similar", "text": "needle", "wait_for_freshness_ms": 1000, "assert_any": {"path": "results", "match": {"type_name": "v_item"}}}
+  ]
+}

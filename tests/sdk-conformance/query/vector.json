@@ -1,0 +1,9 @@
+{
+  "name": "query_surface",
+  "operations": [
+    {"op": "remember", "type": "q_person", "properties": {"name": "cora"}},
+    {"op": "query", "query": "MATCH q_person RETURN *", "assert": {"results.0.properties.name": "cora"}},
+    {"op": "query", "query": "MATCH q_person WHERE name == \"nobody\" RETURN *", "assert": {"results": []}},
+    {"op": "query", "query": "MATCH q_person WHERE name == \"cora\" RETURN *", "assert": {"results.0.properties.name": "cora"}}
+  ]
+}

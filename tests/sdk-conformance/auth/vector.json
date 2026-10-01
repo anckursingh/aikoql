@@ -1,0 +1,8 @@
+{
+  "name": "auth_handshake",
+  "operations": [
+    {"op": "connect", "token": "wrong-token", "expect_error": "AUTHENTICATION_FAILED"},
+    {"op": "connect"},
+    {"op": "health", "assert": {"status": "healthy"}}
+  ]
+}
