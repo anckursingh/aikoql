@@ -5,7 +5,7 @@
 # and asserts the identical expected results. Pure dispatch — no server
 # management here.
 #
-#   scripts/sdk-conformance.sh --language {python,go,rust,typescript} [--bin PATH] \
+#   scripts/sdk-conformance.sh --language {python,go,rust,typescript,java} [--bin PATH] \
 #       [--vectors DIR] [--protocol DIR] [--token TOKEN]
 #
 # Path handling: MSYS2 skips arg conversion for python.exe (Python is
@@ -32,11 +32,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$LANGUAGE" in
-  python|go|rust|typescript) ;;
-  java)
-    echo "sdk-conformance: language '$LANGUAGE' not implemented yet (D-14)" >&2
-    exit 2 ;;
-  "") echo "usage: $0 --language {python,go,rust,typescript}" >&2; exit 1 ;;
+  python|go|rust|typescript|java) ;;
+  "") echo "usage: $0 --language {python,go,rust,typescript,java}" >&2; exit 1 ;;
   *) echo "unknown language: $LANGUAGE" >&2; exit 1 ;;
 esac
 
@@ -106,4 +103,18 @@ case "$LANGUAGE" in
     [[ "$PROTOCOL_T" = /* || "$PROTOCOL_T" = [A-Za-z]:* ]] || PROTOCOL_T="$ROOT/$PROTOCOL_T"
     exec node src/sdk-conformance.ts \
       --bin "$TBIN" --vectors "$VECTORS_T" --protocol "$PROTOCOL_T" --token "$TOKEN" ;;
+  java)
+    cd "$ROOT/crates/sdk/java"
+    JBIN="$BIN"
+    VECTORS_J="$VECTORS"
+    PROTOCOL_J="$PROTOCOL"
+    # Defaults are ROOT-relative; the adapter resolves vs its own cwd
+    # (crates/sdk/java), so re-anchor them to the repo root. MSYS2 converts
+    # args for java.exe (like node.exe), so bash-form paths are fine.
+    [[ "$JBIN" = /* || "$JBIN" = [A-Za-z]:* ]] || JBIN="$ROOT/$JBIN"
+    [[ "$VECTORS_J" = /* || "$VECTORS_J" = [A-Za-z]:* ]] || VECTORS_J="$ROOT/$VECTORS_J"
+    [[ "$PROTOCOL_J" = /* || "$PROTOCOL_J" = [A-Za-z]:* ]] || PROTOCOL_J="$ROOT/$PROTOCOL_J"
+    mvn -q -DskipTests compile
+    exec java -cp target/classes io.aikoql.client.SdkConformance \
+      --bin "$JBIN" --vectors "$VECTORS_J" --protocol "$PROTOCOL_J" --token "$TOKEN" ;;
 esac

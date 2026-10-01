@@ -74,7 +74,7 @@ the architect review.
 | `crates/engines/` | graph, vector, scheduler, semantic, reasoning |
 | `crates/compiler/`, `crates/runtime/` | aikoql language → KIR → planner → runtime |
 | `crates/services/api/mcp/` | the MCP server (stdio/TCP, auth, tenancy) |
-| `crates/sdk/{python,go,rust,typescript}/` | the first-party SDKs — Python, Go, the Rust reference (D-12), and TypeScript `@aikoql/client` (D-13); all four run the shared conformance runner (`scripts/sdk-conformance.sh`) |
+| `crates/sdk/{python,go,rust,typescript,java}/` | the first-party SDKs — Python, Go, the Rust reference (D-12), TypeScript `@aikoql/client` (D-13), and Java `io.aikoql:aikoql-client` (D-14); all five run the shared conformance runner (`scripts/sdk-conformance.sh`) |
 | `crates/ingestion/`, `crates/providers/` | document ingestion; postgres/sqlite/mongo/neo4j import providers |
 | `crates/certification/`, `benchmarks/` | certification suites; benchmark harness |
 | `scripts/` | every CI gate + the dogfood loop + benchmark tooling |
