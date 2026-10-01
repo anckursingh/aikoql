@@ -34,6 +34,7 @@ pub(crate) fn print_usage() {
         "\n",
         "Server options (serve mode):\n",
         "  --listen ADDR          TCP listen address (e.g., 127.0.0.1:9090; empty host = loopback)\n",
+        "  --native-port ADDR     D-15 framed native protocol listener (loopback-only; requires --tcp-token)\n",
         "  --tcp-token SPEC       TCP auth: TOKEN[:TENANT[:ROLE1,ROLE2]] (repeatable, required with --listen)\n",
         "                         (dev-only: tokens hit the process list — set AIKOQL_TCP_TOKEN or\n",
         "                         AIKOQL_TCP_TOKEN_FILE in production instead; env replaces flags)\n",

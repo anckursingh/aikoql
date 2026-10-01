@@ -1,5 +1,6 @@
-//! The remote client: MCP JSON-RPC over TCP. Mirrors the Go SDK's wire
-//! layer (crates/sdk/go/aikoql.go) — newline frames, id correlation, the
+//! The remote client: MCP JSON-RPC over TCP — or the D-15 native framed
+//! protocol (connect_native). Mirrors the Go SDK's wire layer
+//! (crates/sdk/go/aikoql.go) — newline frames, id correlation, the
 //! tools/call envelope — and the frozen §3.3 semantics: a response with a
 //! smaller id is skipped, a larger id is PROTOCOL_ERROR, deadline reads
 //! map to the retryable TIMEOUT, and a call on a closed client is
@@ -8,12 +9,13 @@
 //! file (the canonical API does not change when the transport changes).
 
 use crate::error::{Error, McpError};
+use aikoql_native as nat;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tokio_stream::wrappers::ReceiverStream;
@@ -87,6 +89,8 @@ struct Inner {
     io: Mutex<Option<BufReader<TcpStream>>>,
     next_id: AtomicU64,
     closed: AtomicBool,
+    /// Set once by connect_native — every call after that speaks §6 frames.
+    native: AtomicBool,
     cfg: std::sync::Mutex<ClientConfig>,
 }
 
@@ -118,6 +122,7 @@ impl Client {
                 io: Mutex::new(Some(BufReader::new(stream))),
                 next_id: AtomicU64::new(0),
                 closed: AtomicBool::new(false),
+                native: AtomicBool::new(false),
                 cfg: std::sync::Mutex::new(ClientConfig {
                     token: None,
                     name: "aikoql-rust-sdk".into(),
@@ -125,6 +130,62 @@ impl Client {
                 }),
             }),
         })
+    }
+
+    /// Opens a connection on the D-15 native framed protocol ("host:port")
+    /// and performs the HELLO handshake: the protocol version and the
+    /// ND-12 server version are both enforced here, before any call. The
+    /// token still arrives at initialize (the AUTH frame) — the API surface
+    /// is exactly dial + initialize, only the transport differs.
+    pub async fn connect_native(addr: &str) -> Result<Client, Error> {
+        let client = Self::dial(addr).await?;
+        let (name, version) = {
+            let cfg = client.inner.cfg.lock().unwrap();
+            (cfg.name.clone(), cfg.version.clone())
+        };
+        let mut guard = client.inner.io.lock().await;
+        let io = guard
+            .as_mut()
+            .ok_or_else(|| Error::Mcp(McpError::unavailable()))?;
+        let id = client.inner.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let hello = serde_json::to_vec(&serde_json::json!({
+            "protocol_version": nat::PROTOCOL_VERSION,
+            "capabilities": [],
+            "client": {"name": name, "version": version},
+        }))
+        .map_err(Error::Json)?;
+        native_send(io, id, nat::HELLO, &hello).await?;
+        let (mt, rid, payload) = native_recv(io).await?;
+        if rid != id {
+            return Err(Error::Mcp(McpError::protocol_error(id, rid)));
+        }
+        if mt == nat::ERROR {
+            return Err(Error::Mcp(native_error(&payload)));
+        }
+        if mt != nat::HELLO {
+            return Err(Error::Mcp(McpError::protocol_error(id, mt as u64)));
+        }
+        let hello: Value = serde_json::from_slice(&payload).map_err(Error::Json)?;
+        if hello.get("protocol_version").and_then(|v| v.as_u64())
+            != Some(nat::PROTOCOL_VERSION as u64)
+        {
+            return Err(Error::Mcp(McpError::version_mismatch(
+                &hello
+                    .get("protocol_version")
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            )));
+        }
+        let server = hello
+            .get("server_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if version_less(&parse_version(server), &parse_version(MIN_SERVER_VERSION)) {
+            return Err(Error::Mcp(McpError::version_mismatch(server)));
+        }
+        drop(guard);
+        client.inner.native.store(true, Ordering::Relaxed);
+        Ok(client)
     }
 
     /// Sends the --tcp-token credential in the initialize handshake
@@ -145,6 +206,21 @@ impl Client {
 
     /// Closes the connection. Safe to call more than once.
     pub async fn close(&self) -> Result<(), Error> {
+        if self.inner.native.load(Ordering::Relaxed) {
+            // A best-effort CLOSE frame before dropping the socket — the
+            // server acks it and closes; a dead peer must not fail the
+            // close itself.
+            let mut guard = self.inner.io.lock().await;
+            if !self.inner.closed.swap(true, Ordering::Relaxed) {
+                if let Some(io) = guard.as_mut() {
+                    let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+                    let _ = native_send(io, id, nat::CLOSE, b"{}").await;
+                }
+            }
+            // Taking the reader drops the TcpStream, closing the socket.
+            *guard = None;
+            return Ok(());
+        }
         self.inner.closed.store(true, Ordering::Relaxed);
         // Taking the reader drops the TcpStream, closing the socket.
         let mut guard = self.inner.io.lock().await;
@@ -155,6 +231,9 @@ impl Client {
     /// Sends one JSON-RPC request and returns its result frame, skipping
     /// pushed notifications by id correlation (§3.3).
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<Value, Error> {
+        if self.inner.native.load(Ordering::Relaxed) {
+            return self.native_request(method, params).await;
+        }
         let mut guard = self.inner.io.lock().await;
         if self.inner.closed.load(Ordering::Relaxed) {
             return Err(Error::Mcp(McpError::unavailable()));
@@ -201,10 +280,94 @@ impl Client {
         }
     }
 
+    /// The native transport for one call: initialize maps to the AUTH
+    /// frame, tools/call unwraps {name, arguments}, anything else is an
+    /// EXECUTE with the method as the tool. The response is the {ok, data,
+    /// error} envelope — an ERROR frame or ok:false is an McpError, and
+    /// everything else returns data (the whole payload when there is no
+    /// data field).
+    async fn native_request(&self, method: &str, params: Option<Value>) -> Result<Value, Error> {
+        let (msg_type, payload) = if method == "initialize" {
+            let token = self
+                .inner
+                .cfg
+                .lock()
+                .unwrap()
+                .token
+                .clone()
+                .unwrap_or_default();
+            (
+                nat::AUTH,
+                serde_json::to_vec(&serde_json::json!({"token": token})).map_err(Error::Json)?,
+            )
+        } else if method == "tools/call" {
+            let p = params.unwrap_or(Value::Null);
+            (
+                nat::EXECUTE,
+                serde_json::to_vec(&serde_json::json!({
+                    "tool": p.get("name").cloned().unwrap_or(Value::Null),
+                    "args": p.get("arguments").cloned().unwrap_or(Value::Null),
+                }))
+                .map_err(Error::Json)?,
+            )
+        } else {
+            (
+                nat::EXECUTE,
+                serde_json::to_vec(&serde_json::json!({
+                    "tool": method,
+                    "args": params.unwrap_or(Value::Null),
+                }))
+                .map_err(Error::Json)?,
+            )
+        };
+        let mut guard = self.inner.io.lock().await;
+        if self.inner.closed.load(Ordering::Relaxed) {
+            return Err(Error::Mcp(McpError::unavailable()));
+        }
+        let io = guard
+            .as_mut()
+            .ok_or_else(|| Error::Mcp(McpError::unavailable()))?;
+        let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+        native_send(io, id, msg_type, &payload).await?;
+        loop {
+            let (mt, rid, payload) = native_recv(io).await?;
+            if rid < id {
+                continue; // a late frame from a dropped stream — never an error
+            }
+            if rid > id {
+                return Err(Error::Mcp(McpError::protocol_error(id, rid)));
+            }
+            if mt == nat::ERROR {
+                return Err(Error::Mcp(native_error(&payload)));
+            }
+            let env: Value = serde_json::from_slice(&payload).map_err(Error::Json)?;
+            if env.get("ok") == Some(&serde_json::json!(false)) {
+                if let Some(e) = env.get("error") {
+                    let m: McpError = serde_json::from_value(e.clone()).map_err(Error::Json)?;
+                    return Err(Error::Mcp(m));
+                }
+                return Err(Error::Mcp(McpError {
+                    code: "INTERNAL".into(),
+                    message: format!("tool {method} failed without an error envelope"),
+                    retryable: false,
+                    suggestion: String::new(),
+                }));
+            }
+            return Ok(env.get("data").cloned().unwrap_or(env));
+        }
+    }
+
     /// Performs the MCP handshake (protocol version, client info, token)
     /// and enforces the ND-12 version contract: a server older than
     /// MIN_SERVER_VERSION fails fast with VERSION_MISMATCH.
     pub async fn initialize(&self) -> Result<(), Error> {
+        if self.inner.native.load(Ordering::Relaxed) {
+            // The version contract was already enforced at connect_native
+            // (the HELLO response); initialize is the AUTH frame carrying
+            // the token.
+            self.request("initialize", None).await?;
+            return Ok(());
+        }
         let (name, version, token) = {
             let cfg = self.inner.cfg.lock().unwrap();
             (cfg.name.clone(), cfg.version.clone(), cfg.token.clone())
@@ -256,6 +419,10 @@ impl Client {
         let raw = self
             .request("tools/call", Some(Value::Object(params)))
             .await?;
+        if self.inner.native.load(Ordering::Relaxed) {
+            // request() already unwrapped the {ok:true, data} envelope.
+            return Ok(raw);
+        }
         let env: ToolEnvelope = serde_json::from_value(raw).map_err(Error::Json)?;
         let text = env
             .content
@@ -293,6 +460,9 @@ impl Client {
         query: &str,
         subject: &str,
     ) -> Result<ReceiverStream<Result<Value, Error>>, Error> {
+        if self.inner.native.load(Ordering::Relaxed) {
+            return self.native_stream(query, subject).await;
+        }
         let mut params = Map::new();
         params.insert("query".into(), Value::String(query.into()));
         if !subject.is_empty() {
@@ -306,6 +476,178 @@ impl Client {
             }
         });
         Ok(ReceiverStream::new(rx))
+    }
+
+    /// The native streaming query: a QUERY frame with stream:true, then the
+    /// head chunk (QUERY) and each QUERY_CHUNK yielded as they arrive,
+    /// ending on QUERY_END. Dropping the stream cancels the read — the
+    /// connection is released, and the server's pump observes the cancel on
+    /// its next send (§6 invariant 10).
+    async fn native_stream(
+        &self,
+        query: &str,
+        subject: &str,
+    ) -> Result<ReceiverStream<Result<Value, Error>>, Error> {
+        let mut params = Map::new();
+        params.insert("query".into(), Value::String(query.into()));
+        if !subject.is_empty() {
+            params.insert("subject".into(), Value::String(subject.into()));
+        }
+        params.insert("stream".into(), serde_json::json!(true));
+        let payload = serde_json::to_vec(&Value::Object(params)).map_err(Error::Json)?;
+        let (tx, rx) = mpsc::channel(16);
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            if let Err(e) = native_stream_pump(inner, payload, &tx).await {
+                let _ = tx.send(Err(e)).await;
+            }
+        });
+        Ok(ReceiverStream::new(rx))
+    }
+}
+
+/// Writes one native request frame — header, payload, checksum (§6).
+async fn native_send(
+    io: &mut BufReader<TcpStream>,
+    request_id: u64,
+    msg_type: u16,
+    payload: &[u8],
+) -> Result<(), Error> {
+    if payload.len() > nat::MAX_PAYLOAD {
+        return Err(Error::Mcp(McpError {
+            code: "FRAME_TOO_LARGE".into(),
+            message: format!(
+                "payload of {} bytes exceeds the {} byte frame cap — use a stream",
+                payload.len(),
+                nat::MAX_PAYLOAD
+            ),
+            retryable: false,
+            suggestion: String::new(),
+        }));
+    }
+    let header = nat::header_bytes(0, request_id, msg_type, payload.len() as u32);
+    let mut buf = Vec::with_capacity(nat::HEADER_LEN + payload.len() + 4);
+    buf.extend_from_slice(&header);
+    buf.extend_from_slice(payload);
+    let crc = nat::crc32(&buf);
+    buf.extend_from_slice(&crc.to_le_bytes());
+    io.write_all(&buf).await.map_err(Error::Io)?;
+    io.flush().await.map_err(Error::Io)?;
+    Ok(())
+}
+
+/// Reads one full native frame. A mid-frame EOF is UnexpectedEof (the same
+/// "connection closed by the server" shape the MCP path reports) and a
+/// decode failure is InvalidData — §3.3 transport errors.
+async fn native_recv(io: &mut BufReader<TcpStream>) -> Result<(u16, u64, Vec<u8>), Error> {
+    let mut header = [0u8; nat::HEADER_LEN];
+    io.read_exact(&mut header).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "connection closed by the server",
+            ))
+        } else {
+            Error::Io(e)
+        }
+    })?;
+    let h = nat::parse_header(&header).map_err(|e| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            e.to_string(),
+        ))
+    })?;
+    if h.flags & nat::FLAG_RESPONSE == 0 {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "native frame without the response flag",
+        )));
+    }
+    let mut payload = vec![0u8; h.payload_len];
+    io.read_exact(&mut payload).await.map_err(Error::Io)?;
+    let mut crc = [0u8; 4];
+    io.read_exact(&mut crc).await.map_err(Error::Io)?;
+    if !nat::verify(&header, &payload, u32::from_le_bytes(crc)) {
+        return Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "native frame checksum mismatch",
+        )));
+    }
+    Ok((h.msg_type, h.request_id, payload))
+}
+
+/// An ERROR frame → McpError. The server sends the native codes directly;
+/// the legacy "-32001" spelling (the MCP auth vector's frozen expectation)
+/// maps to AUTHENTICATION_FAILED.
+fn native_error(payload: &[u8]) -> McpError {
+    let env: Value = serde_json::from_slice(payload).unwrap_or(Value::Null);
+    let code = env
+        .get("code")
+        .and_then(|c| c.as_str())
+        .map(|c| {
+            if c == "-32001" {
+                "AUTHENTICATION_FAILED"
+            } else {
+                c
+            }
+        })
+        .unwrap_or("INTERNAL")
+        .to_string();
+    let message = env
+        .get("message")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .to_string();
+    McpError {
+        code,
+        message,
+        retryable: false,
+        suggestion: String::new(),
+    }
+}
+
+/// The native stream read loop (the §6 mirror of stream_call): QUERY head →
+/// yield, QUERY_CHUNK → yield, QUERY_END → done. Holds the connection
+/// mutex for the stream's whole life; dropping the receiver cancels the
+/// read and releases the connection.
+async fn native_stream_pump(
+    inner: Arc<Inner>,
+    payload: Vec<u8>,
+    tx: &mpsc::Sender<Result<Value, Error>>,
+) -> Result<(), Error> {
+    let mut guard = inner.io.lock().await;
+    if inner.closed.load(Ordering::Relaxed) {
+        return Err(Error::Mcp(McpError::unavailable()));
+    }
+    let io = guard
+        .as_mut()
+        .ok_or_else(|| Error::Mcp(McpError::unavailable()))?;
+    let id = inner.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+    native_send(io, id, nat::QUERY, &payload).await?;
+    loop {
+        let (mt, rid, payload) = tokio::select! {
+            r = native_recv(io) => r?,
+            _ = tx.closed() => return Ok(()),
+        };
+        if rid < id {
+            continue; // a late frame from a dropped stream — never an error
+        }
+        if rid > id {
+            return Err(Error::Mcp(McpError::protocol_error(id, rid)));
+        }
+        match mt {
+            nat::QUERY => {
+                let head: Value = serde_json::from_slice(&payload).map_err(Error::Json)?;
+                let _ = tx.send(Ok(head)).await;
+            }
+            nat::QUERY_CHUNK => {
+                let chunk: Value = serde_json::from_slice(&payload).map_err(Error::Json)?;
+                let _ = tx.send(Ok(chunk)).await;
+            }
+            nat::QUERY_END => return Ok(()),
+            nat::ERROR => return Err(Error::Mcp(native_error(&payload))),
+            _ => continue, // unrelated frames mid-stream
+        }
     }
 }
 

@@ -12,6 +12,7 @@ aikoql-storage-v2 = { path = "../../../storage/aikoql-v2" }
 aikoql-graph = { path = "../../../engines/graph" }
 aikoql-runtime = { path = "../../../runtime" }
 aikoql-compiler = { path = "../../../compiler" }
+aikoql-native = { path = "../../../protocol/native" }
 aikoql-postgres = { path = "../../../providers/postgres" }
 aikoql-sqlite = { path = "../../../providers/sqlite" }
 aikoql-mongodb = { path = "../../../providers/mongodb" }

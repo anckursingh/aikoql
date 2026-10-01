@@ -59,7 +59,11 @@ const fn crc_table() -> [u32; 256] {
         let mut c = i as u32;
         let mut k = 0;
         while k < 8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
             k += 1;
         }
         table[i] = c;
@@ -147,11 +151,13 @@ impl RawConn {
             }
         }
         assert_eq!(&hdr[0..4], MAGIC, "response must carry the magic");
-        let flags = u16::from_be_bytes([hdr[4], hdr[5]]);
+        let version = u16::from_be_bytes([hdr[4], hdr[5]]);
+        assert_eq!(version, PROTOCOL_VERSION, "response must carry the version");
+        let flags = u16::from_be_bytes([hdr[6], hdr[7]]);
         assert_ne!(flags & FLAG_RESPONSE, 0, "expected a response frame");
-        let request_id = u64::from_be_bytes(hdr[6..14].try_into().unwrap());
-        let msg_type = u16::from_be_bytes([hdr[14], hdr[15]]);
-        let len = u32::from_be_bytes([hdr[16], hdr[17], hdr[18], hdr[19]]) as usize;
+        let request_id = u64::from_be_bytes(hdr[8..16].try_into().unwrap());
+        let msg_type = u16::from_be_bytes([hdr[16], hdr[17]]);
+        let len = u32::from_be_bytes([hdr[18], hdr[19], hdr[20], hdr[21]]) as usize;
         assert!(len <= MAX_PAYLOAD, "server sent an oversized frame");
         let mut payload = vec![0u8; len];
         let mut n = 0;
@@ -306,7 +312,10 @@ fn hello_negotiates_version_and_capabilities() {
         "the server must list its capabilities explicitly"
     );
     assert!(
-        f["session_id"].as_str().map(|s| !s.is_empty()).unwrap_or(false),
+        f["session_id"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
         "the server must hand out a session id"
     );
 }
@@ -444,30 +453,38 @@ fn prepare_execute_and_query_surface() {
     let srv = spawn_native(&bin, "conformance");
     let mut c = RawConn::connect(&srv.addr);
     c.hello_auth();
-    // PREPARE is validation-only: a compiled query says prepared:true,
-    // garbage says prepared:false with the compiler's reason.
-    c.send(1, PREPARE, json!({"aikoql": "MATCH st_row RETURN *"}));
-    let p = c.recv_expect(PREPARE, 1).json();
-    assert_eq!(p["prepared"], true);
-    c.send(2, PREPARE, json!({"aikoql": "definitely not aikoql"}));
-    let p2 = c.recv_expect(PREPARE, 2).json();
-    assert_eq!(p2["prepared"], false);
     // EXECUTE carries the whole tool surface in one message class; the
-    // response is the {ok, data, error} envelope.
+    // response is the {ok, data, error} envelope. Seed a row first — the
+    // compiler resolves types, so an unknown st_row fails to prepare.
     c.send(
-        3,
+        1,
         EXECUTE,
-        json!({"tool": "remember", "args": {"type": "st_row", "properties": {"name": "n1"}}}),
+        json!({"tool": "remember", "args": {"type_name": "st_row", "properties": {"name": "n1"}}}),
     );
-    let r = c.recv_expect(EXECUTE, 3).json();
+    let r = c.recv_expect(EXECUTE, 1).json();
     assert_eq!(r["ok"], true);
-    let koid = r["data"]["koid"].as_str().expect("remember returns a koid").to_string();
-    c.send(4, EXECUTE, json!({"tool": "get", "args": {"koid": koid}}));
-    let g = c.recv_expect(EXECUTE, 4).json();
+    let koid = r["data"]["koid"]
+        .as_str()
+        .expect("remember returns a koid")
+        .to_string();
+    c.send(2, EXECUTE, json!({"tool": "get", "args": {"koid": koid}}));
+    let g = c.recv_expect(EXECUTE, 2).json();
     assert_eq!(g["ok"], true);
     assert_eq!(g["data"]["koid"], koid.as_str());
+    // PREPARE is validation-only: a compiled query says prepared:true,
+    // garbage says prepared:false with the compiler's reason.
+    c.send(3, PREPARE, json!({"aikoql": "MATCH st_row RETURN *"}));
+    let p = c.recv_expect(PREPARE, 3).json();
+    assert_eq!(p["prepared"], true);
+    c.send(4, PREPARE, json!({"aikoql": "definitely not aikoql"}));
+    let p2 = c.recv_expect(PREPARE, 4).json();
+    assert_eq!(p2["prepared"], false);
     // A non-streaming QUERY answers in one frame.
-    c.send(5, QUERY, json!({"query": "MATCH st_row RETURN *", "stream": false}));
+    c.send(
+        5,
+        QUERY,
+        json!({"query": "MATCH st_row RETURN *", "stream": false}),
+    );
     let q = c.recv_expect(QUERY, 5).json();
     assert!(!q["results"].as_array().expect("results list").is_empty());
     // CLOSE is acknowledged, then the server drops the connection.
@@ -527,16 +544,24 @@ fn cancellation_is_observable() {
     for batch in 0..4u64 {
         let ops: Vec<Value> = (0..400)
             .map(|i| {
-                json!({"remember": {"type": "st_row", "properties": {
+                json!({"op": "remember", "type_name": "st_row", "properties": {
                     "name": format!("seed{}", batch * 400 + i),
                     "pad": "x".repeat(2000),
-                }}})
+                }})
             })
             .collect();
-        c.send(10 + batch, EXECUTE, json!({"tool": "batch", "args": {"operations": ops}}));
+        c.send(
+            10 + batch,
+            EXECUTE,
+            json!({"tool": "batch", "args": {"operations": ops}}),
+        );
         assert_eq!(c.recv_expect(EXECUTE, 10 + batch).json()["ok"], true);
     }
-    c.send(100, QUERY, json!({"query": "MATCH st_row RETURN *", "stream": true}));
+    c.send(
+        100,
+        QUERY,
+        json!({"query": "MATCH st_row RETURN *", "stream": true}),
+    );
     let head = c.recv_expect(QUERY, 100).json();
     assert_eq!(head["total_chunks"], 16);
     assert_eq!(head["results"].as_array().expect("first chunk").len(), 100);
@@ -639,7 +664,23 @@ async fn transaction_state_is_per_connection() {
         )
         .await
         .expect_err("cross-connection stage must fail");
-    assert!(matches!(err, Error::Mcp(_)), "expected a protocol error, got {err:?}");
+    assert!(
+        matches!(err, Error::Mcp(_)),
+        "expected a protocol error, got {err:?}"
+    );
+    // A's own txn is untouched by B's attempt — one stage, one result.
+    tx.execute(StagedOp {
+        action: "create".into(),
+        type_name: "st_row".into(),
+        properties: {
+            let mut p = Map::new();
+            p.insert("name".into(), json!("conn-a"));
+            Some(p)
+        },
+        ..Default::default()
+    })
+    .await
+    .expect("stage on A");
     let res = tx.commit().await.expect("A's commit still works");
     assert_eq!(res.results.len(), 1);
     let mut t2 = b.begin(None).await.expect("begin on B");
@@ -651,13 +692,16 @@ async fn server_disconnect_never_deadlocks_client() {
     let Some(bin) = mcp_bin() else { return };
     let mut srv = spawn_native(&bin, "conformance");
     let c = native_client(&srv.addr).await;
-    for b in 0..2 {
+    // 10 batches of 400 = 40 chunks — far more than the client's 16-slot
+    // channel, so the pump cannot have drained the stream before the kill:
+    // the disconnect lands mid-stream deterministically.
+    for b in 0..10 {
         let ops: Vec<Value> = (0..400)
             .map(|i| {
-                json!({"remember": {"type": "st_row", "properties": {
+                json!({"op": "remember", "type_name": "st_row", "properties": {
                     "name": format!("seed{}", b * 400 + i),
                     "pad": "x".repeat(2000),
-                }}})
+                }})
             })
             .collect();
         c.call_tool("batch", Some(json!({"operations": ops})))

@@ -10,6 +10,10 @@ use serde::Deserialize;
 pub(crate) struct RuntimeConfig {
     pub db_path: String,
     pub listen_addr: Option<String>,
+    /// D-15: the framed native protocol listener (§5/§6, ECO-2). Same
+    /// loopback-only + token rules as the MCP TCP listener; CLI-only for
+    /// now (add a [server] TOML key when someone asks).
+    pub native_port: Option<String>,
     pub metrics_addr: Option<String>,
     pub tcp_tokens: Vec<String>,
     /// P3-M1 (§53): HTTP login users ([auth].users), plus the
@@ -244,6 +248,7 @@ pub(crate) fn load(
     let mut cfg = RuntimeConfig {
         db_path: DEFAULT_DB_PATH.into(),
         listen_addr: None,
+        native_port: None,
         metrics_addr: None,
         tcp_tokens: Vec::new(),
         auth_users: Vec::new(),
@@ -440,6 +445,14 @@ pub(crate) fn load(
                     args.get(i + 1)
                         .cloned()
                         .unwrap_or_else(|| "127.0.0.1:9090".into()),
+                );
+                i += 2;
+            }
+            "--native-port" => {
+                cfg.native_port = Some(
+                    args.get(i + 1)
+                        .cloned()
+                        .unwrap_or_else(|| "127.0.0.1:9070".into()),
                 );
                 i += 2;
             }

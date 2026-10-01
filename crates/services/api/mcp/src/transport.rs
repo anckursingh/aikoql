@@ -24,8 +24,9 @@ pub(crate) static STREAM_ID: AtomicU64 = AtomicU64::new(0);
 /// P5-M11: live client sockets, keyed by stream id — the shutdown drain
 /// shutdown(Both)s them so idle handlers blocked in fill_buf wake and close
 /// instead of holding the drain to its deadline. Handlers remove their entry
-/// on exit, so the registry stays bounded.
-static CLIENT_STREAMS: Mutex<Vec<(u64, TcpStream)>> = Mutex::new(Vec::new());
+/// on exit, so the registry stays bounded. Shared with the D-15 native
+/// listener (its readers block on framed reads, the same drain wakes them).
+pub(crate) static CLIENT_STREAMS: Mutex<Vec<(u64, TcpStream)>> = Mutex::new(Vec::new());
 /// P5-M11: set by the `shutdown` method — stops the accept loop and makes
 /// every handler close its connection after its current exchange.
 pub(crate) static SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
@@ -317,6 +318,17 @@ pub(crate) fn run_tcp_listener(
     // socket (wakes idle handlers blocked in fill_buf), then wait for the
     // handlers to exit. The deadline is a backstop only — the handlers are
     // all unblocked now and close promptly.
+    drain_listener(request_timeout_secs);
+    info!(
+        connections = ACTIVE_CONNECTIONS.load(Ordering::Relaxed),
+        "TCP server drained and stopped"
+    );
+}
+
+/// P5-M11 drain, shared by the MCP and D-15 native listeners: cancel
+/// in-flight queries, actively close every registered socket, then wait for
+/// the handlers to exit (bounded by the request-timeout deadline).
+pub(crate) fn drain_listener(request_timeout_secs: u64) {
     {
         let mut active = ACTIVE_QUERIES.lock().unwrap(); // justified: Mutex poison is unrecoverable
         for t in active.iter() {
@@ -334,10 +346,6 @@ pub(crate) fn run_tcp_listener(
     while ACTIVE_CONNECTIONS.load(Ordering::Relaxed) > 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(20));
     }
-    info!(
-        connections = ACTIVE_CONNECTIONS.load(Ordering::Relaxed),
-        "TCP server drained and stopped"
-    );
 }
 pub(crate) fn run_stdio(
     kernel: &Arc<Kernel>,

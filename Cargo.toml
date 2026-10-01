@@ -14,6 +14,7 @@ members = [
     "crates/engines/reasoning",
     "crates/runtime",
     "crates/compiler",
+    "crates/protocol/native",
     "benchmarks",
     "crates/services/api/mcp",
     "crates/sdk/python",

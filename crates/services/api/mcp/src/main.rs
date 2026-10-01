@@ -26,6 +26,7 @@ mod imports;
 mod ingest;
 mod knowledge_runtime;
 mod model;
+mod native;
 mod protocol;
 mod rate_limiter;
 mod session;
@@ -143,6 +144,7 @@ pub(crate) const PROTOCOL_VERSION: &str = "2024-11-05";
 // else lives in the modules above (R7).
 use crate::cli::*;
 use crate::http::*;
+use crate::native::*;
 use crate::session::TcpAuthTable;
 use crate::transport::*;
 
@@ -207,6 +209,7 @@ fn main() {
         info!(config = %path, "configuration loaded");
     }
     let listen_addr = cfg.listen_addr;
+    let native_addr = cfg.native_port;
     let metrics_addr = cfg.metrics_addr;
     let tcp_tokens = cfg.tcp_tokens;
     let db_path = cfg.db_path;
@@ -502,9 +505,10 @@ fn main() {
         );
     }
 
-    if let Some(addr) = listen_addr {
+    if listen_addr.is_some() || native_addr.is_some() {
         // PRR-2: TCP requires token auth (fail-closed). Stdio keeps the
-        // process-boundary trust model and needs no token.
+        // process-boundary trust model and needs no token. D-15: the native
+        // listener carries the same bearer token, so it inherits the gate.
         if tcp_tokens.is_empty() {
             eprintln!(
                 "TCP mode requires at least one --tcp-token TOKEN[:TENANT[:ROLE1,ROLE2]] — refusing to serve without authentication (stdio mode needs no token)"
@@ -518,34 +522,64 @@ fn main() {
                 std::process::exit(2);
             }
         };
-        // R1 (review round 3): loopback-only plaintext TCP — a non-loopback
-        // bind would put the bearer token on the wire unencrypted, so it is
-        // rejected fail-closed. TLS arrives post-MVP (terminate TLS at a
-        // reverse proxy in front of the loopback listener).
-        let addr = match validate_listen(&addr) {
-            Ok(a) => a,
-            Err(e) => {
-                eprintln!("{e}");
-                std::process::exit(2);
-            }
-        };
-        let listener = match TcpListener::bind(&addr) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("bind TCP listener {}: {}", addr, e);
-                std::process::exit(1);
-            }
-        };
-        run_tcp_listener(
-            kernel,
-            listener,
-            auth,
-            db_path,
-            mcp_rate_limit,
-            admin,
-            cfg.request_timeout_secs,
-            cfg.max_connections,
-        );
+        if let Some(addr) = listen_addr {
+            // R1 (review round 3): loopback-only plaintext TCP — a non-loopback
+            // bind would put the bearer token on the wire unencrypted, so it is
+            // rejected fail-closed. TLS arrives post-MVP (terminate TLS at a
+            // reverse proxy in front of the loopback listener).
+            let addr = match validate_listen(&addr) {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(2);
+                }
+            };
+            let listener = match TcpListener::bind(&addr) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("bind TCP listener {}: {}", addr, e);
+                    std::process::exit(1);
+                }
+            };
+            run_tcp_listener(
+                kernel.clone(),
+                listener,
+                auth.clone(),
+                db_path.clone(),
+                mcp_rate_limit.clone(),
+                admin.clone(),
+                cfg.request_timeout_secs,
+                cfg.max_connections,
+            );
+        }
+        if let Some(addr) = native_addr {
+            // D-15: the same R1 loopback-only rule — the framed protocol
+            // carries the same bearer token in plaintext.
+            let addr = match validate_listen(&addr) {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(2);
+                }
+            };
+            let listener = match TcpListener::bind(&addr) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("bind native listener {}: {}", addr, e);
+                    std::process::exit(1);
+                }
+            };
+            run_native_listener(
+                kernel,
+                listener,
+                auth,
+                db_path,
+                mcp_rate_limit,
+                admin,
+                cfg.request_timeout_secs,
+                cfg.max_connections,
+            );
+        }
     } else {
         run_stdio(
             &kernel,

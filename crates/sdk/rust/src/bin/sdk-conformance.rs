@@ -476,11 +476,7 @@ fn load_vectors(dir: &str) -> Result<Vec<VectorFile>, String> {
 
 /// The integration_test pattern: a probed free port and a db path that
 /// does not exist (the server auto-creates it as aikoql-v2).
-fn spawn_server(
-    bin: &str,
-    token: &str,
-    native: bool,
-) -> Result<(Child, String, PathBuf), String> {
+fn spawn_server(bin: &str, token: &str, native: bool) -> Result<(Child, String, PathBuf), String> {
     let probe = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let port = probe.local_addr().map_err(|e| e.to_string())?.port();
     drop(probe);
