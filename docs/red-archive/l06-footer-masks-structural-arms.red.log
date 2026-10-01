@@ -1,0 +1,21 @@
+    |                       |
+    |                       arguments to this function are incorrect
+    |
+    = note: expected reference `&Result<Option<SegmentEntry>, _>`
+               found reference `&Result<Vec<SegmentEntry>, _>`
+note: expected because the closure was earlier called with an argument of type `&Result<Option<SegmentEntry>, FormatError>`
+   --> crates\storage\aikoql-v2\tests\restart_corruption.rs:190:16
+    |
+190 |         closed(&g) || closed(&s),
+    |         ------ ^^ expected because this argument is of type `&Result<Option<SegmentEntry>, FormatError>`
+    |         |
+    |         in this closure call
+note: closure parameter defined here
+   --> crates\storage\aikoql-v2\tests\restart_corruption.rs:185:19
+    |
+185 |     let closed = |e: &Result<_, FormatError>| match e {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `aikoql-storage-v2` (test "restart_corruption") due to 1 previous error
+EXIT=101

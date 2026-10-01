@@ -19,6 +19,10 @@ use std::path::Path;
 
 const BLOCK_MAGIC: &[u8; 4] = b"AKBL";
 const BLOCK_HEADER_LEN: usize = 28;
+const FOOTER_MAGIC: &[u8; 4] = b"AKFT";
+const BLOCK_DATA: u8 = 0;
+const BLOCK_INDEX: u8 = 1;
+const BLOCK_BLOOM: u8 = 2;
 
 fn entry(key: &str, value_len: usize, seq: u64, rid: u64) -> SegmentEntry {
     SegmentEntry {
@@ -79,9 +83,10 @@ fn payload_len(bytes: &[u8]) -> usize {
     u32_at(bytes, block_off(bytes) + 12) as usize
 }
 
-/// Re-stamp the data block's checksum after a mutation (header[..20] +
-/// payload — the corruption must survive the checksum and reach the
-/// structural validation).
+/// Re-stamp BOTH checksums after a mutation: the data block's (header
+/// [..20] + payload) and the footer skeleton's (which covers the block
+/// headers — see restamp_footer). The corruption must survive both to
+/// reach the structural validation.
 fn restamp(bytes: &mut [u8]) {
     let bo = block_off(bytes);
     let pl = payload_len(bytes);
@@ -90,6 +95,45 @@ fn restamp(bytes: &mut [u8]) {
     sk.extend_from_slice(&bytes[bo + BLOCK_HEADER_LEN..bo + BLOCK_HEADER_LEN + pl]);
     let ck = checksum8(&sk);
     bytes[bo + 20..bo + 28].copy_from_slice(&ck);
+    restamp_footer(bytes);
+}
+
+/// Re-stamp the footer skeleton checksum after a mutation. The skeleton
+/// covers the header, every 28-byte data-block header, the contiguous
+/// index..bloom span, and the footer's own magic/version/entry_count — so
+/// a block re-stamp ALONE invalidates the footer and open fails on the
+/// skeleton before any structural validation runs (TDD-009's checksum
+/// mask, one layer up). The corruption must survive BOTH checksums to
+/// reach the structural arms.
+fn restamp_footer(bytes: &mut [u8]) {
+    // Header: magic(4) version(2) block_count(4) entry_count(8)
+    // key_min_len(4) | key_min | key_max_len(4) | key_max | 24-byte tail.
+    let key_min_len = u32_at(bytes, 18) as usize;
+    let header_len = 22 + key_min_len + 4 + u32_at(bytes, 22 + key_min_len) as usize + 24;
+    let mut skeleton = Vec::new();
+    skeleton.extend_from_slice(&bytes[..header_len]);
+    let mut cur = header_len;
+    let mut index_header = None;
+    let mut bloom_end = None;
+    while &bytes[cur..cur + 4] != FOOTER_MAGIC {
+        let kind = bytes[cur + 6];
+        let compressed = u32_at(bytes, cur + 12) as usize; // magic4 ver2 kind1 comp1 entries4
+        if kind == BLOCK_DATA {
+            skeleton.extend_from_slice(&bytes[cur..cur + BLOCK_HEADER_LEN]);
+        } else if kind == BLOCK_INDEX {
+            index_header = Some(cur);
+        }
+        cur += BLOCK_HEADER_LEN + compressed;
+        if kind == BLOCK_BLOOM {
+            bloom_end = Some(cur);
+        }
+    }
+    let footer_start = cur;
+    // The index..bloom span is contiguous in the file — one slice.
+    skeleton.extend_from_slice(&bytes[index_header.unwrap()..bloom_end.unwrap()]);
+    skeleton.extend_from_slice(&bytes[footer_start..footer_start + 14]);
+    let ck = checksum8(&skeleton);
+    bytes[footer_start + 14..footer_start + 22].copy_from_slice(&ck);
 }
 
 fn write_segment(tag: &str, bytes: &[u8]) -> std::path::PathBuf {
@@ -128,6 +172,29 @@ fn assert_fails_closed(path: &Path) {
             );
         }
     }
+}
+
+/// The sharper pin: both checksums (block + footer) are re-stamped, so
+/// open MUST succeed and only the STRUCTURAL validation may fail — a
+/// fail-closed Err from get or scan on clean code is the guard doing its
+/// job. A wrong answer on every surface (or an open-time failure) is a
+/// mask, not a pin.
+fn closed<T>(e: &Result<T, FormatError>) -> bool {
+    match e {
+        Err(e) => matches!(e, FormatError::Corrupt(_) | FormatError::Unsupported(_)),
+        Ok(_) => false,
+    }
+}
+
+fn assert_fails_closed_structural(path: &Path) {
+    let r = SegmentReader::open(path)
+        .unwrap_or_else(|e| panic!("open masked the structural arm: {e:?}"));
+    let g = r.get(b"k00");
+    let s = r.scan(b"", b"~");
+    assert!(
+        closed(&g) || closed(&s),
+        "no structural arm failed closed: get={g:?} scan={s:?}"
+    );
 }
 
 /// Walk the v2+ entries of a block from `start`, recording each entry's
@@ -179,19 +246,19 @@ fn every_corruption_class_fails_closed() {
     let mut b = base.clone();
     put_u32(&mut b, table + 2, (pl / 4 + 10) as u32);
     restamp(&mut b);
-    assert_fails_closed(&write_segment("restart-count-overrun", &b));
+    assert_fails_closed_structural(&write_segment("restart-count-overrun", &b));
 
     // 2. an offset past the payload end.
     let mut b = base.clone();
     put_u32(&mut b, table + 6, (pl + 64) as u32);
     restamp(&mut b);
-    assert_fails_closed(&write_segment("restart-offset-oob", &b));
+    assert_fails_closed_structural(&write_segment("restart-offset-oob", &b));
 
     // 3. an offset inside the table itself.
     let mut b = base.clone();
     put_u32(&mut b, table + 6, 0);
     restamp(&mut b);
-    assert_fails_closed(&write_segment("restart-offset-in-table", &b));
+    assert_fails_closed_structural(&write_segment("restart-offset-in-table", &b));
 
     // 4. an offset into the middle of another entry (its shared-prefix
     //    bytes read nonzero — restart entries must carry shared = 0).
@@ -199,7 +266,7 @@ fn every_corruption_class_fails_closed() {
     let o1 = u32_at(&b, table + 10) as usize;
     put_u32(&mut b, table + 6, (o1 + 2) as u32);
     restamp(&mut b);
-    assert_fails_closed(&write_segment("restart-offset-mid-entry", &b));
+    assert_fails_closed_structural(&write_segment("restart-offset-mid-entry", &b));
 
     // 5. swapped offsets — restart keys must be strictly increasing.
     let mut b = base.clone();
@@ -207,14 +274,14 @@ fn every_corruption_class_fails_closed() {
     put_u32(&mut b, table + 6, y);
     put_u32(&mut b, table + 10, x);
     restamp(&mut b);
-    assert_fails_closed(&write_segment("restart-keys-descending", &b));
+    assert_fails_closed_structural(&write_segment("restart-keys-descending", &b));
 
     // 6. duplicate offsets — equal restart keys.
     let mut b = base.clone();
     let o0 = u32_at(&b, table + 6);
     put_u32(&mut b, table + 10, o0);
     restamp(&mut b);
-    assert_fails_closed(&write_segment("restart-keys-equal", &b));
+    assert_fails_closed_structural(&write_segment("restart-keys-equal", &b));
 
     // 7. an entry's shared prefix exceeds the previous key.
     let payload = &base[table..table + pl];
@@ -223,7 +290,7 @@ fn every_corruption_class_fails_closed() {
     let mut b = base.clone();
     b[table + second..table + second + 2].copy_from_slice(&0xFFFFu16.to_le_bytes());
     restamp(&mut b);
-    assert_fails_closed(&write_segment("entry-shared-overrun", &b));
+    assert_fails_closed_structural(&write_segment("entry-shared-overrun", &b));
 
     // 8. an entry's value length overruns the payload.
     let payload = &base[table..table + pl];
@@ -234,7 +301,7 @@ fn every_corruption_class_fails_closed() {
     let mut b = base.clone();
     put_u32(&mut b, value_len_at, 0xFFFF_FFFF);
     restamp(&mut b);
-    assert_fails_closed(&write_segment("entry-value-overrun", &b));
+    assert_fails_closed_structural(&write_segment("entry-value-overrun", &b));
 
     // v4 legs.
     let base4 = publish_v4("restart-corrupt-v4");
@@ -247,7 +314,7 @@ fn every_corruption_class_fails_closed() {
     let mut b = base4.clone();
     put_u32(&mut b, dense_at, 0xFFFF_FFFF);
     restamp(&mut b);
-    assert_fails_closed(&write_segment("v4-dense-overrun", &b));
+    assert_fails_closed_structural(&write_segment("v4-dense-overrun", &b));
 
     // 10. an unknown block version with a valid checksum is Unsupported,
     //     not a decode (a future format).
