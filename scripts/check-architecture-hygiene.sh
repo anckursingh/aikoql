@@ -36,7 +36,9 @@
 # instrumentation), CI-13 adds tests 14-15 (the docker job parses the
 # compose files; the go-sdk binary path is pinned at the right depth),
 # CI-14 adds test 16 (the committed 1M v2 baseline validates against the
-# §13/M47 schema).
+# §13/M47 schema). F-04 adds test 17 (the fuzz-estate pins, PR #7 fuzz
+# review F-TDD-07: the nightly proptest arm, the storage-mutation job +
+# all eleven §12 mutants, the F-02 lifecycle state machine).
 # Wired into the dag job at CI-04 (a RED gate must not enter CI).
 set -euo pipefail
 root="${TESTS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -263,7 +265,7 @@ fi
 # again. The dependency-dag job never compiles (grep-only) and the
 # docker job builds inside the image — neither is a build job.
 for spec in "ci check test-linux lint build-release connectors python-sdk perf-smoke coverage-floor" \
-            "benchmark shuffle benchmark guard self-regression-main competitor-scale competitor-matrix" \
+            "benchmark shuffle benchmark guard self-regression-main competitor-scale competitor-matrix storage-mutation" \
             "release windows linux-gnu linux-musl macos-intel macos-arm pypi-publish tier3-correctness tier3-correctness-windows tier3-coverage tier3-scale tier3-matrix"; do
   wf="${spec%% *}"
   for job in ${spec#* }; do
@@ -512,6 +514,41 @@ fi
 # stale baseline let the whole guard fail at the last step.
 if ! python3 -c "import sys; sys.path.insert(0, 'scripts'); from artifact_schema import validate_1m; validate_1m('artifacts/storage-engine-v2/result-1m-aikoql-v2.json', fresh=False)" >/dev/null 2>&1; then
   echo "ARCH: the committed 1M v2 baseline fails the §13/M47 schema (CI-14)" >&2
+  fail=1
+fi
+
+# workflow test 17 — test_fuzz_estate_wired (F-04, PR #7 fuzz review
+# F-TDD-07 "removing a target or nightly invocation is undetected"): the
+# nightly proptest arm, the storage-mutation job (all eleven §12 mutants),
+# and the F-02 lifecycle state machine must all stay wired — a silent drop
+# of fuzz coverage must fail this gate. The §12 acceptance is "every
+# selected mutant is killed by at least one named regression"; a surviving
+# mutant is a test-suite defect, so the harness's all-mode exit 0 means
+# every killer fired.
+if ! grep -q 'PROPTEST_CASES=4096' "$BENCH"; then
+  echo "ARCH: $BENCH lost the nightly proptest arm (PROPTEST_CASES=4096, F-04)" >&2
+  fail=1
+fi
+if ! grep -qE '^  storage-mutation:' "$BENCH"; then
+  echo "ARCH: $BENCH lost the storage-mutation job (F-04)" >&2
+  fail=1
+fi
+if ! grep -qE '^  storage-mutation:' "$BENCH" || \
+   ! sed -n '/^  storage-mutation:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q 'storage-mutation-harness.sh all'; then
+  echo "ARCH: the storage-mutation job must run the harness in all-mode (F-04)" >&2
+  fail=1
+fi
+for mid in m-s1-restart-count m-s2-checksum m-s3-tombstone m-s4-newest-wins \
+           m-s5-duplicate-guard m-s6-delta-coverage m-s7-current-before-manifest \
+           m-s8-wal-truncate-early m-s9-cache-transparency m-s10-scan-skip \
+           m-s11-placement-direct; do
+  if ! grep -q "$mid" scripts/storage-mutation-harness.sh; then
+    echo "ARCH: storage-mutation-harness.sh lost the §12 mutant: $mid (F-04)" >&2
+    fail=1
+  fi
+done
+if ! grep -q 'prop_lifecycle_state_machine_matches_model_across_reopens' crates/storage/aikoql-v2/tests/proptest_oracles.rs; then
+  echo "ARCH: proptest_oracles.rs lost the F-02 lifecycle state machine (F-04)" >&2
   fail=1
 fi
 

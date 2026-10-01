@@ -214,6 +214,29 @@ jobs:
           overwrite: true
           if-no-files-found: error
 
+  # F-03 (PR #7 fuzz review §12) — the storage mutation harness: eleven
+  # deliberate damages to segment/compaction/db internals, each killed by
+  # a named regression (the review's acceptance). A surviving mutant fails
+  # the job — a surviving mutant is a test-suite defect, not a successful
+  # experiment. Worktree-per-mutant + the shared CARGO_TARGET_DIR keeps
+  # the pass to one crate rebuild per mutant. Weekly tier: the L-20 grep
+  # mutations stay in the dag job (every PR); the storage mutants are a
+  # ~45-70 min cold pass and ride the weekly/dispatch runs. Gate:
+  # scripts/check-architecture-hygiene.sh workflow test 17.
+  storage-mutation:
+    name: Storage mutation harness (11 mutants)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+      - name: Mutation harness — all 11 mutants killed
+        run: bash scripts/storage-mutation-harness.sh all
+
   # CI-07 — the hybrid knowledge workload rides the nightly tier
   # (TESTING-PLAN §5): bench.py's full matrix incl. the knowledge_query
   # cell — identity resolution -> metadata filter -> traversal -> semantic
