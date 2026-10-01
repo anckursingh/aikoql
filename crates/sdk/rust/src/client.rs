@@ -495,7 +495,12 @@ impl Client {
         }
         params.insert("stream".into(), serde_json::json!(true));
         let payload = serde_json::to_vec(&Value::Object(params)).map_err(Error::Json)?;
-        let (tx, rx) = mpsc::channel(16);
+        // A 2-slot channel bounds the read-ahead: the pump can buffer at most
+        // 2 frames ahead of the consumer, so backpressure stalls it while the
+        // server is mid-stream — a disconnect or cancel surfaces within a
+        // couple of chunks instead of draining the whole stream first
+        // (worst-case buffered memory is 2 × MAX_PAYLOAD).
+        let (tx, rx) = mpsc::channel(2);
         let inner = self.inner.clone();
         tokio::spawn(async move {
             if let Err(e) = native_stream_pump(inner, payload, &tx).await {

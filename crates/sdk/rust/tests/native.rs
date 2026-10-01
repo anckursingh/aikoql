@@ -692,10 +692,11 @@ async fn server_disconnect_never_deadlocks_client() {
     let Some(bin) = mcp_bin() else { return };
     let mut srv = spawn_native(&bin, "conformance");
     let c = native_client(&srv.addr).await;
-    // 10 batches of 400 = 40 chunks — far more than the client's 16-slot
-    // channel, so the pump cannot have drained the stream before the kill:
-    // the disconnect lands mid-stream deterministically.
-    for b in 0..10 {
+    // 8 chunks against the client's 2-slot channel: the pump can only stay
+    // two frames ahead, so it has stalled with most of the stream unwritten
+    // when the kill lands — the disconnect surfaces mid-stream
+    // deterministically.
+    for b in 0..2 {
         let ops: Vec<Value> = (0..400)
             .map(|i| {
                 json!({"op": "remember", "type_name": "st_row", "properties": {
