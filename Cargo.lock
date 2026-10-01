@@ -275,6 +275,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "aikoql-sdk"
+version = "0.2.0"
+
+[[package]]
 name = "aikoql-semantic"
 version = "0.2.0"
 dependencies = [

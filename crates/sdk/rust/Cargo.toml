@@ -1,0 +1,11 @@
+[package]
+name = "aikoql-sdk"
+description = "Rust SDK for Aikoql — the reference implementation of the canonical Database API (D-12): embedded + remote modes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[dev-dependencies]

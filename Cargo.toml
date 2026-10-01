@@ -17,6 +17,7 @@ members = [
     "benchmarks",
     "crates/services/api/mcp",
     "crates/sdk/python",
+    "crates/sdk/rust",
     "crates/ingestion",
     "crates/providers/sdk",
     "crates/providers/postgres",
