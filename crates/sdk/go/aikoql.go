@@ -285,14 +285,33 @@ func (c *Client) request(ctx context.Context, method string, params any) (result
 	for {
 		line, err := c.r.ReadString('\n')
 		if err != nil {
+			// The transport deadline can fire a hair before the ctx timer
+			// marks DeadlineExceeded — either one is the frozen TIMEOUT.
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+				errors.Is(err, os.ErrDeadlineExceeded) {
+				return nil, &McpError{
+					Code:      "TIMEOUT",
+					Message:   fmt.Sprintf("no response for request %d within the deadline", id),
+					Retryable: true,
+					Suggestion: "Retry with backoff; the request may have " +
+						"committed.",
+				}
+			}
 			return nil, fmt.Errorf("aikoql: read %s: %w", method, err)
 		}
 		var resp rpcResponse
 		if err := json.Unmarshal([]byte(line), &resp); err != nil {
 			continue // tolerate non-JSON noise frames
 		}
-		if resp.ID != id {
-			continue // push or another call's frame
+		if resp.ID < id {
+			continue // id-less (0), notification, duplicate, or late — never an error
+		}
+		if resp.ID > id {
+			return nil, &McpError{
+				Code:       "PROTOCOL_ERROR",
+				Message:    fmt.Sprintf("response id %d does not match request %d", resp.ID, id),
+				Suggestion: "Check SDK/server version pairing.",
+			}
 		}
 		if resp.Error != nil {
 			return nil, resp.Error.mcpError()
@@ -331,6 +350,16 @@ func (c *Client) stream(ctx context.Context, method string, params any, yieldFn 
 	for {
 		line, err := c.r.ReadString('\n')
 		if err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+				errors.Is(err, os.ErrDeadlineExceeded) {
+				return &McpError{
+					Code:      "TIMEOUT",
+					Message:   fmt.Sprintf("no response for request %d within the deadline", id),
+					Retryable: true,
+					Suggestion: "Retry with backoff; the request may have " +
+						"committed.",
+				}
+			}
 			return fmt.Errorf("aikoql: read %s: %w", method, err)
 		}
 		var resp rpcResponse
