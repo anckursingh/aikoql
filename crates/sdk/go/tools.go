@@ -49,6 +49,7 @@ func (c *Client) Remember(ctx context.Context, p RememberParams) (*Remembered, e
 type KnowledgeObject struct {
 	KOID       string         `json:"koid"`
 	Version    uint64         `json:"version"`
+	State      string         `json:"state,omitempty"`
 	Properties map[string]any `json:"properties"`
 }
 
@@ -124,9 +125,9 @@ func (c *Client) Aikoql(ctx context.Context, query, subject string) (json.RawMes
 	return c.CallTool(ctx, "aikoql", args)
 }
 
-// AikoqlStream runs a streaming query; each chunk frame (its params JSON)
-// is handed to yieldFn until the server's done frame. The Client must not
-// be shared while the stream is open.
+// AikoqlStream runs a streaming query; yields the response frame (the
+// first data chunk), then each notify chunk until its done flag. The
+// Client must not be shared while the stream is open.
 func (c *Client) AikoqlStream(ctx context.Context, query, subject string, yieldFn func(chunk json.RawMessage) error) error {
 	params := map[string]any{"query": query}
 	if subject != "" {

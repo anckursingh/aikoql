@@ -1,0 +1,14 @@
+E:\dreams\Mnemosyne\crates\sdk\python\tests\test_conformance.py: line 8: scripts/sdk-conformance.sh: No such file or directory
+E:\dreams\Mnemosyne\crates\sdk\python\tests\test_conformance.py: line 8: D-11: the shared conformance runner (§7, §23).
+
+ executes the §23 canonical
+workload and the §7 category vectors from tests/sdk-conformance/ (plus the
+frozen protocol/test-vectors/) against a real server through this SDK, with
+the same expected results every language must produce. The runner is the
+single entry point, so this test pins only the CLI contract.
+: No such file or directory
+E:\dreams\Mnemosyne\crates\sdk\python\tests\test_conformance.py: line 10: import: command not found
+E:\dreams\Mnemosyne\crates\sdk\python\tests\test_conformance.py: line 11: import: command not found
+E:\dreams\Mnemosyne\crates\sdk\python\tests\test_conformance.py: line 13: syntax error near unexpected token `('
+E:\dreams\Mnemosyne\crates\sdk\python\tests\test_conformance.py: line 13: `ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))'
+EXIT=2

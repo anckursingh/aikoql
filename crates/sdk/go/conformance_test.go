@@ -15,7 +15,7 @@ import (
 )
 
 func TestSDKConformance(t *testing.T) {
-	script := filepath.Join("..", "..", "scripts", "sdk-conformance.sh")
+	script := filepath.Join("..", "..", "..", "scripts", "sdk-conformance.sh")
 	if _, err := os.Stat(script); err != nil {
 		t.Fatalf("sdk-conformance runner missing (%v) — D-11 RED", err)
 	}

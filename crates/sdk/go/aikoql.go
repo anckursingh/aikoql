@@ -98,6 +98,7 @@ type Client struct {
 	r      *bufio.Reader
 	mu     sync.Mutex // serializes frames: one in-flight call per conn
 	nextID int64
+	closed bool
 	cfg    clientConfig
 }
 
@@ -206,6 +207,9 @@ func (s *stdioTransport) Close() error {
 
 // Close closes the transport. Safe to call more than once.
 func (c *Client) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
 	return c.tr.Close()
 }
 
@@ -251,6 +255,15 @@ func (e *rpcError) mcpError() *McpError {
 func (c *Client) applyDeadline(ctx context.Context) (clear func() error, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err // already cancelled — nothing is sent, the connection stays clean
+	}
+	if c.closed {
+		// A call on a closed client fails observably (§7 principle 11: a
+		// dead connection never deadlocks the caller) and a fresh Dial
+		// recovers it. Checked before SetDeadline — the transport is gone
+		// and would answer with a bare "use of closed network connection".
+		return nil, &McpError{Code: "UNAVAILABLE",
+			Message:    "the client is closed",
+			Suggestion: "Connect again."}
 	}
 	var d time.Time
 	if dl, ok := ctx.Deadline(); ok {
@@ -350,6 +363,7 @@ func (c *Client) stream(ctx context.Context, method string, params any, yieldFn 
 		return fmt.Errorf("aikoql: send %s: %w", method, err)
 	}
 	var streamID string
+	total, received := 0, 0
 	for {
 		line, err := c.r.ReadString('\n')
 		if err != nil {
@@ -374,12 +388,24 @@ func (c *Client) stream(ctx context.Context, method string, params any, yieldFn 
 				return resp.Error.mcpError()
 			}
 			var head struct {
-				StreamID string `json:"stream_id"`
+				StreamID    string `json:"stream_id"`
+				TotalChunks int    `json:"total_chunks"`
 			}
 			if err := json.Unmarshal(resp.Result, &head); err != nil {
 				return fmt.Errorf("aikoql: %s stream head: %w", method, err)
 			}
 			streamID = head.StreamID
+			total = head.TotalChunks
+			// The response frame IS the first chunk (it carries the data;
+			// for total_chunks == 1 there is no notify at all) — the Python
+			// SDK yields it too, and the conformance transcript must match.
+			if err := yieldFn(resp.Result); err != nil {
+				return fmt.Errorf("aikoql: %s consumer: %w", method, err)
+			}
+			received++
+			if total > 0 && received >= total {
+				return nil // the whole stream arrived in the response frame
+			}
 			continue
 		}
 		if streamID == "" || resp.Method != "notifications/notify" {
@@ -398,8 +424,9 @@ func (c *Client) stream(ctx context.Context, method string, params any, yieldFn 
 		if err := yieldFn(resp.Params); err != nil {
 			return fmt.Errorf("aikoql: %s consumer: %w", method, err)
 		}
-		if p.Done {
-			return nil
+		received++
+		if p.Done || (total > 0 && received >= total) {
+			return nil // Python's exit condition: received == total_chunks, or done
 		}
 	}
 }

@@ -8,15 +8,18 @@ single entry point, so this test pins only the CLI contract.
 """
 
 import os
+import re
 import subprocess
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 
 def test_sdk_conformance_python():
-    # bash mangles Windows backslash paths — hand it forward slashes.
-    script = (ROOT + os.sep + "scripts" + os.sep
-              + "sdk-conformance.sh").replace("\\", "/")
+    # bash mangles Windows paths — Git Bash mounts the drive as /mnt/<d>
+    # (a bare E:/... or /e/... is "no such file" to it). On Linux the
+    # regex is a no-op.
+    script = os.path.join(ROOT, "scripts", "sdk-conformance.sh").replace("\\", "/")
+    script = re.sub(r"^([A-Za-z]):", lambda m: "/mnt/" + m.group(1).lower(), script)
     proc = subprocess.run(
         ["bash", script, "--language", "python"],
         capture_output=True, text=True, timeout=300)

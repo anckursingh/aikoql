@@ -3,8 +3,8 @@
   "operations": [
     {"op": "remember", "type": "person", "properties": {"name": "ada"}, "as": "person", "assert": {"version": 1}},
     {"op": "remember", "type": "company", "properties": {"name": "acme"}, "as": "company", "assert": {"version": 1}},
+    {"op": "update", "type": "person", "koid": "$person", "properties": {"name": "ada", "role": "engineer"}, "assert": {"version": 2}},
     {"op": "relate", "from": "$person", "to": "$company", "rel_type": "works_at", "assert": {"koid": "$person"}},
-    {"op": "update", "type": "person", "koid": "$person", "properties": {"name": "ada", "role": "engineer"}, "assert": {"version": 3}},
     {"op": "query", "query": "MATCH person WHERE name == \"ada\" RETURN *", "assert": {"results.0.properties.name": "ada", "results.0.properties.role": "engineer"}},
     {"op": "traverse", "koid": "$person", "assert": {"hits.0.koid": "$company", "hits.0.rel_type": "works_at"}},
     {"op": "find_similar", "text": "ada", "wait_for_freshness_ms": 1000, "assert_any": {"path": "results", "match": {"type_name": "person"}}},

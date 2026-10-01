@@ -150,6 +150,15 @@ class McpClient:
 
     def _rpc(self, method: str, params: Optional[dict] = None,
              timeout: Optional[float] = None) -> dict:
+        if self._sock is None:
+            # A call on a closed client fails observably (§7 principle 11:
+            # a dead connection never deadlocks the caller) and a fresh
+            # connect() recovers it.
+            raise McpError(
+                code="UNAVAILABLE",
+                message="the client is closed",
+                suggestion="Connect again.",
+            )
         self._next_id += 1
         req = {"jsonrpc": "2.0", "id": self._next_id, "method": method}
         if params is not None:

@@ -273,10 +273,13 @@ func TestAikoqlStreamChunks(t *testing.T) {
 		t.Fatalf("AikoqlStream: %v", err)
 	}
 	if len(chunks) != 2 {
-		t.Fatalf("expected 2 chunks, got %d: %v", len(chunks), chunks)
+		t.Fatalf("expected 2 chunks (head + total_chunks-1 notifies), got %d: %v", len(chunks), chunks)
 	}
-	if !strings.Contains(chunks[1], `"done":true`) {
-		t.Fatalf("last chunk must be the done frame: %v", chunks[1])
+	if !strings.Contains(chunks[0], `"stream_id":"s1"`) {
+		t.Fatalf("first chunk must be the response frame (the data chunk): %v", chunks[0])
+	}
+	if !strings.Contains(chunks[1], `"results":[{"koid":"a"}]`) {
+		t.Fatalf("second chunk must be the first notify: %v", chunks[1])
 	}
 }
 

@@ -565,5 +565,31 @@ if [ ! -f protocol/compatibility.json ]; then
   fail=1
 fi
 
+# workflow test 19 — test_conformance_vectors_frozen_schema (D-11, SDK plan
+# §7/§23): every vector under tests/sdk-conformance/ uses only the frozen
+# api-v1 operation set and SDK-012 error codes — a drift would silently
+# fork what "identical across languages" means for the shared runner.
+if ! python3 -c "
+import glob, json, sys
+root = 'tests/sdk-conformance'
+ops = {o['name'] for o in json.load(open('protocol/api-v1.json'))['operations']}
+codes = {e['code'] for e in json.load(open('protocol/errors.json'))['codes']}
+bad = []
+for p in sorted(glob.glob(root + '/**/*.json', recursive=True)):
+    v = json.load(open(p))
+    for i, op in enumerate(v.get('operations', [])):
+        name = op.get('op')
+        if name not in ops:
+            bad.append(f'{p} op {i}: {name} not in api-v1')
+        ee = op.get('expect_error')
+        if ee and ee not in codes:
+            bad.append(f'{p} op {i}: expect_error {ee} not in SDK-012')
+if bad:
+    print('\n'.join(bad)); sys.exit(1)
+" >/dev/null 2>&1; then
+  echo "ARCH: a conformance vector drifts from the frozen api-v1/SDK-012 schema (D-11)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
