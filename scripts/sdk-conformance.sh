@@ -19,6 +19,7 @@ LANGUAGE=""
 BIN="${AIKOQL_MCP_BIN:-}"
 VECTORS=""
 PROTOCOL=""
+TRANSPORT="mcp" # D-15: --transport native rides the framed binary protocol
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,6 +28,7 @@ while [[ $# -gt 0 ]]; do
     --vectors)   VECTORS="$2"; shift 2 ;;
     --protocol)  PROTOCOL="$2"; shift 2 ;;
     --token)     TOKEN="$2"; shift 2 ;;
+    --transport) TRANSPORT="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -36,6 +38,15 @@ case "$LANGUAGE" in
   "") echo "usage: $0 --language {python,go,rust,typescript,java}" >&2; exit 1 ;;
   *) echo "unknown language: $LANGUAGE" >&2; exit 1 ;;
 esac
+
+case "$TRANSPORT" in
+  mcp|native) ;;
+  *) echo "unknown transport: $TRANSPORT (mcp|native)" >&2; exit 1 ;;
+esac
+if [[ "$TRANSPORT" == "native" && "$LANGUAGE" != "rust" ]]; then
+  echo "native transport: the rust arm only (D-15 — the protocol lands in the reference SDK first)" >&2
+  exit 1
+fi
 
 if [[ -z "$BIN" ]]; then
   # Default: relative to the repo root — each arm resolves it against the
@@ -88,8 +99,11 @@ case "$LANGUAGE" in
     [[ "$RBIN" = /* || "$RBIN" = [A-Za-z]:* ]] || RBIN="$ROOT/$RBIN"
     [[ "$VECTORS_R" = /* || "$VECTORS_R" = [A-Za-z]:* ]] || VECTORS_R="$ROOT/$VECTORS_R"
     [[ "$PROTOCOL_R" = /* || "$PROTOCOL_R" = [A-Za-z]:* ]] || PROTOCOL_R="$ROOT/$PROTOCOL_R"
+    NATIVE_ARGS=()
+    [[ "$TRANSPORT" == "native" ]] && NATIVE_ARGS=(--native)
     exec cargo run --quiet --bin sdk-conformance -- \
-      --bin "$RBIN" --vectors "$VECTORS_R" --protocol "$PROTOCOL_R" --token "$TOKEN" ;;
+      --bin "$RBIN" --vectors "$VECTORS_R" --protocol "$PROTOCOL_R" --token "$TOKEN" \
+      "${NATIVE_ARGS[@]}" ;;
   typescript)
     cd "$ROOT/crates/sdk/typescript"
     TBIN="$BIN"

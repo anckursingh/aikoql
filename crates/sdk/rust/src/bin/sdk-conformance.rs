@@ -41,6 +41,9 @@ struct Runner {
     client: Option<Client>,
     vars: HashMap<String, Var>,
     last: String,
+    /// D-15: run the whole workload over the native framed protocol
+    /// instead of MCP JSON-RPC — the SDK API does not change.
+    native: bool,
 }
 
 /// Kills the server and sweeps its temp dir on EVERY exit path — the Go
@@ -153,7 +156,11 @@ impl Runner {
     }
 
     async fn connect(&mut self, token: &str) -> Result<(), Error> {
-        let c = Client::dial(&self.addr).await?;
+        let c = if self.native {
+            Client::connect_native(&self.addr).await?
+        } else {
+            Client::dial(&self.addr).await?
+        };
         let c = c.with_token(token.to_string());
         if let Err(e) = c.initialize().await {
             let _ = c.close().await;
@@ -469,7 +476,11 @@ fn load_vectors(dir: &str) -> Result<Vec<VectorFile>, String> {
 
 /// The integration_test pattern: a probed free port and a db path that
 /// does not exist (the server auto-creates it as aikoql-v2).
-fn spawn_server(bin: &str, token: &str) -> Result<(Child, String, PathBuf), String> {
+fn spawn_server(
+    bin: &str,
+    token: &str,
+    native: bool,
+) -> Result<(Child, String, PathBuf), String> {
     let probe = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let port = probe.local_addr().map_err(|e| e.to_string())?.port();
     drop(probe);
@@ -481,10 +492,13 @@ fn spawn_server(bin: &str, token: &str) -> Result<(Child, String, PathBuf), Stri
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let db = dir.join("db.aikoql"); // does not exist → auto-create (aikoql-v2)
     let addr = format!("127.0.0.1:{port}");
+    // D-15: --native serves the framed binary protocol on the same port
+    // contract as --listen (probed free port + the same token table).
+    let listen_flag = if native { "--native-port" } else { "--listen" };
     let mut child = Command::new(bin)
         .arg("serve")
         .arg(&db)
-        .arg("--listen")
+        .arg(listen_flag)
         .arg(&addr)
         .arg("--tcp-token")
         .arg(format!("{token}::admin"))
@@ -506,8 +520,14 @@ fn spawn_server(bin: &str, token: &str) -> Result<(Child, String, PathBuf), Stri
     Err(format!("server did not come up on {addr}"))
 }
 
-async fn run(bin: &str, vectors: &str, protocol: &str, token: &str) -> Result<(), String> {
-    let (child, addr, dir) = spawn_server(bin, token)?;
+async fn run(
+    bin: &str,
+    vectors: &str,
+    protocol: &str,
+    token: &str,
+    native: bool,
+) -> Result<(), String> {
+    let (child, addr, dir) = spawn_server(bin, token, native)?;
     let _guard = ServerGuard {
         child: Some(child),
         dir,
@@ -519,6 +539,7 @@ async fn run(bin: &str, vectors: &str, protocol: &str, token: &str) -> Result<()
         client: None,
         vars: HashMap::new(),
         last: String::new(),
+        native,
     };
     let mut vectors_run = 0usize;
     let mut ops_run = 0usize;
@@ -532,7 +553,8 @@ async fn run(bin: &str, vectors: &str, protocol: &str, token: &str) -> Result<()
             println!("  ok {} ({} ops)", vf.name, vf.operations.len());
         }
     }
-    println!("sdk-conformance (rust): {vectors_run} vectors, {ops_run} ops — all passed");
+    let tag = if native { " native" } else { "" };
+    println!("sdk-conformance (rust{tag}): {vectors_run} vectors, {ops_run} ops — all passed");
     Ok(())
 }
 
@@ -541,6 +563,7 @@ fn main() {
     let mut vectors = String::new();
     let mut protocol = String::new();
     let mut token = "conformance".to_string();
+    let mut native = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -548,6 +571,7 @@ fn main() {
             "--vectors" => vectors = args.next().unwrap_or_default(),
             "--protocol" => protocol = args.next().unwrap_or_default(),
             "--token" => token = args.next().unwrap_or_default(),
+            "--native" => native = true,
             other => {
                 eprintln!("unknown arg: {other}");
                 std::process::exit(1);
@@ -555,7 +579,7 @@ fn main() {
         }
     }
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    if let Err(e) = rt.block_on(run(&bin, &vectors, &protocol, &token)) {
+    if let Err(e) = rt.block_on(run(&bin, &vectors, &protocol, &token, native)) {
         eprintln!("sdk-conformance (rust): {e}");
         std::process::exit(1);
     }
