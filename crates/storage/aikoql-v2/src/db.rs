@@ -479,9 +479,7 @@ impl Db {
         // shape). The publish-side check (segment.rs) still guards direct
         // SegmentWriter users.
         if config.block_target == 0 {
-            return Err(FormatError::Invalid(
-                "target block size must be > 0".into(),
-            ));
+            return Err(FormatError::Invalid("target block size must be > 0".into()));
         }
         let lock = lock_directory(&config.dir)?;
         // P5-M39 — a crash between a merge and its publication can leave
