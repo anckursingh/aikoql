@@ -1,0 +1,33 @@
+[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.399 s <<< FAILURE! -- in io.aikoql.client.ConformancePinTest
+[ERROR] io.aikoql.client.ConformancePinTest.conformanceJavaArm -- Time elapsed: 0.364 s <<< FAILURE!
+org.opentest4j.AssertionFailedError: 
+sdk-conformance --language java failed (exit 2):
+sdk-conformance: language 'java' not implemented yet (D-14)
+ ==> expected: <0> but was: <2>
+	at org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+	at org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+	at org.junit.jupiter.api.AssertEquals.failNotEqual(AssertEquals.java:197)
+	at org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:150)
+	at org.junit.jupiter.api.Assertions.assertEquals(Assertions.java:563)
+	at io.aikoql.client.ConformancePinTest.conformanceJavaArm(ConformancePinTest.java:73)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+[ERROR] Failures: 
+[ERROR]   ConformancePinTest.conformanceJavaArm:73 sdk-conformance --language java failed (exit 2):
+sdk-conformance: language 'java' not implemented yet (D-14)
+ ==> expected: <0> but was: <2>
+[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.2:test (default-test) on project aikoql-client: There are test failures.
+[ERROR] 
+[ERROR] See E:\dreams\Mnemosyne\crates\sdk\java\target\surefire-reports for the individual test results.
+[ERROR] See dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+EXIT=1
