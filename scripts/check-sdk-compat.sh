@@ -54,5 +54,48 @@ for src in "workspace:$ws" "go:$gogo" "python:$pymin"; do
   fi
 done
 
+# 6. api-v1.json: the frozen canonical surface — valid JSON, api_major 1,
+#    the §4.1 lifecycle names, the §4.2 operation set; every name must
+#    appear in docs/DATABASE-API.md (JSON = machine pin, doc = prose
+#    contract — a rename in one but not the other is the exact drift).
+apiv1="$root/protocol/api-v1.json"
+[ -f "$apiv1" ] || { echo "SDK COMPAT: missing $apiv1" >&2; exit 1; }
+if ! python3 - "$apiv1" "$root/docs/DATABASE-API.md" <<'PY'
+import json, re, sys
+api = json.load(open(sys.argv[1], encoding="utf-8"))
+doc = open(sys.argv[2], encoding="utf-8").read()
+LIFECYCLE = ["Database", "Connection", "Session", "Transaction",
+             "Statement", "Result", "Row"]
+OPS = ["connect", "close", "ping", "health", "remember", "get", "update",
+       "delete", "execute", "query", "prepare", "begin", "commit",
+       "rollback", "batch", "find_similar", "relate", "traverse",
+       "create_schema", "discover_schema", "create_index", "drop_index",
+       "explain", "trace", "prove", "backup", "restore", "metrics"]
+errs = []
+if api.get("api_major") != 1:
+    errs.append(f"api_major {api.get('api_major')!r} != 1")
+life = api.get("lifecycle")
+if sorted(life) != sorted(LIFECYCLE):
+    errs.append(f"lifecycle {life!r} != the 4.1 set")
+names = sorted(o.get("name") for o in api.get("operations", []))
+if names != sorted(OPS):
+    errs.append(f"operations {names!r} != the 4.2 set")
+st = api.get("streaming", {})
+if st.get("query") != "ResultSet" or "query_stream" not in st or \
+        st.get("cancellation") is not True:
+    errs.append(f"streaming {st!r} must carry query/query_stream/cancellation (4.3)")
+for name in LIFECYCLE + OPS:
+    if not re.search(rf"\b{name}\b", doc):
+        errs.append(f"{name} missing from docs/DATABASE-API.md")
+if errs:
+    for e in errs:
+        print(f"SDK COMPAT: api-v1: {e}", file=sys.stderr)
+    sys.exit(1)
+print("api-v1 contract OK")
+PY
+then
+  fail=1
+fi
+
 [ "$fail" -eq 0 ] && echo "SDK COMPAT: workspace/go/python all pinned to $min"
 exit "$fail"
