@@ -1,0 +1,47 @@
+{
+  "api_major": 1,
+  "lifecycle": [
+    "Database",
+    "Connection",
+    "Session",
+    "Transaction",
+    "Statement",
+    "Result",
+    "Row"
+  ],
+  "operations": [
+    {"name": "connect", "category": "session"},
+    {"name": "close", "category": "session"},
+    {"name": "ping", "category": "session"},
+    {"name": "health", "category": "session"},
+    {"name": "remember", "category": "crud"},
+    {"name": "get", "category": "crud"},
+    {"name": "update", "category": "crud"},
+    {"name": "delete", "category": "crud"},
+    {"name": "execute", "category": "query"},
+    {"name": "query", "category": "query"},
+    {"name": "prepare", "category": "query"},
+    {"name": "begin", "category": "transaction"},
+    {"name": "commit", "category": "transaction"},
+    {"name": "rollback", "category": "transaction"},
+    {"name": "batch", "category": "batch"},
+    {"name": "find_similar", "category": "graph"},
+    {"name": "relate", "category": "graph"},
+    {"name": "traverse", "category": "graph"},
+    {"name": "create_schema", "category": "schema"},
+    {"name": "discover_schema", "category": "schema"},
+    {"name": "create_index", "category": "schema"},
+    {"name": "drop_index", "category": "schema"},
+    {"name": "explain", "category": "introspection"},
+    {"name": "trace", "category": "introspection"},
+    {"name": "prove", "category": "introspection"},
+    {"name": "backup", "category": "admin"},
+    {"name": "restore", "category": "admin"},
+    {"name": "metrics", "category": "observability"}
+  ],
+  "streaming": {
+    "query": "ResultSet",
+    "query_stream": "Stream<Result>",
+    "cancellation": true
+  }
+}
