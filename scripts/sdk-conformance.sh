@@ -5,7 +5,7 @@
 # and asserts the identical expected results. Pure dispatch — no server
 # management here.
 #
-#   scripts/sdk-conformance.sh --language {python,go} [--bin PATH] \
+#   scripts/sdk-conformance.sh --language {python,go,rust} [--bin PATH] \
 #       [--vectors DIR] [--protocol DIR] [--token TOKEN]
 #
 # Path handling: MSYS2 skips arg conversion for python.exe (Python is
@@ -32,11 +32,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$LANGUAGE" in
-  python|go) ;;
-  rust|typescript|java)
-    echo "sdk-conformance: language '$LANGUAGE' not implemented yet (D-12..D-14)" >&2
+  python|go|rust) ;;
+  typescript|java)
+    echo "sdk-conformance: language '$LANGUAGE' not implemented yet (D-13..D-14)" >&2
     exit 2 ;;
-  "") echo "usage: $0 --language {python,go}" >&2; exit 1 ;;
+  "") echo "usage: $0 --language {python,go,rust}" >&2; exit 1 ;;
   *) echo "unknown language: $LANGUAGE" >&2; exit 1 ;;
 esac
 
@@ -81,4 +81,16 @@ case "$LANGUAGE" in
     [[ "$PROTOCOL_G" = /* || "$PROTOCOL_G" = [A-Za-z]:* ]] || PROTOCOL_G="$ROOT/$PROTOCOL_G"
     exec go run ./cmd/sdk-conformance \
       -bin "$GBIN" -vectors "$VECTORS_G" -protocol "$PROTOCOL_G" -token "$TOKEN" ;;
+  rust)
+    cd "$ROOT/crates/sdk/rust"
+    RBIN="$BIN"
+    VECTORS_R="$VECTORS"
+    PROTOCOL_R="$PROTOCOL"
+    # Defaults are ROOT-relative; the adapter resolves vs its own cwd
+    # (crates/sdk/rust), so re-anchor them to the repo root.
+    [[ "$RBIN" = /* || "$RBIN" = [A-Za-z]:* ]] || RBIN="$ROOT/$RBIN"
+    [[ "$VECTORS_R" = /* || "$VECTORS_R" = [A-Za-z]:* ]] || VECTORS_R="$ROOT/$VECTORS_R"
+    [[ "$PROTOCOL_R" = /* || "$PROTOCOL_R" = [A-Za-z]:* ]] || PROTOCOL_R="$ROOT/$PROTOCOL_R"
+    exec cargo run --quiet --bin sdk-conformance -- \
+      --bin "$RBIN" --vectors "$VECTORS_R" --protocol "$PROTOCOL_R" --token "$TOKEN" ;;
 esac
