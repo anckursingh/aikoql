@@ -101,7 +101,7 @@ func TestTxScriptedRollbackRoundTrip(t *testing.T) {
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
-	err = tx.Commit(ctx)
+	_, err = tx.Commit(ctx)
 	var me *McpError
 	if !errors.As(err, &me) || me.Code != "INVALID_ARGUMENT" {
 		t.Fatalf("commit after rollback must be INVALID_ARGUMENT, got %v", err)
