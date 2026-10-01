@@ -64,5 +64,25 @@ the canonical API, not an SDK-specific extension.
 The frozen taxonomy lives in `protocol/errors.json`: every error carries
 `code`, `message`, `retryable`, `suggestion`, `request_id`. SDKs map
 protocol errors to their idiomatic exception type **while preserving all
-five fields** — a mapped error must never lose its code. The code table
-lands with D-02.
+five fields** — a mapped error must never lose its code.
+
+| code | retryable | meaning |
+|---|---|---|
+| AUTHENTICATION_FAILED | no | credentials rejected |
+| AUTHORIZATION_FAILED | no | principal lacks permission |
+| NOT_FOUND | no | object does not exist |
+| INVALID_ARGUMENT | no | argument malformed or out of range |
+| INVALID_QUERY | no | query failed to compile |
+| CONFLICT | no | conflicts with current state |
+| VERSION_MISMATCH | no | server older than the SDK minimum |
+| TIMEOUT | yes | deadline exceeded |
+| CANCELLED | no | cancelled by the caller |
+| RESOURCE_EXHAUSTED | yes | server limit reached |
+| UNAVAILABLE | yes | server unreachable or not ready |
+| INTERNAL | no | server internal error |
+| PROTOCOL_ERROR | no | peer violated the protocol |
+| DATA_CORRUPTION | no | stored data failed integrity checks |
+
+Retryable codes are the only ones an SDK may retry automatically, and
+only with backoff; a retried operation must be safe against
+at-least-once execution (idempotency keys for writes).
