@@ -8,10 +8,7 @@ fully established session (connected + initialized) for one connection.
 """
 
 import json
-import os
 import socket
-import subprocess
-import tempfile
 import threading
 import time
 
@@ -20,7 +17,7 @@ import pytest
 from aikoql import McpError, Pool
 from aikoql.mcp_client import McpClient
 
-from conftest import _wait_ready, find_binary
+from conftest import restartable_server
 from scripted import ScriptedServer
 
 
@@ -166,41 +163,20 @@ def test_pool_fill_min_idle():
 
 
 def test_pool_reconnects_after_server_restart():
-    binary = find_binary()  # skips the test when the binary is not built
-    fd, db = tempfile.mkstemp(prefix="aikoql-py-", suffix=".redb")
-    os.close(fd)
-    os.unlink(db)  # non-existent path → serve auto-creates aikoql-v2
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    probe.bind(("127.0.0.1", 0))
-    port = probe.getsockname()[1]
-    probe.close()
-    procs = []
+    with restartable_server() as (spawn, port, _db):
+        def factory():
+            c = McpClient("127.0.0.1", port, token="test-token").connect()
+            c.initialize()  # auth reset: the factory re-establishes the session
+            return c
 
-    def spawn():
-        proc = subprocess.Popen(
-            [binary, "serve", db, "--listen", f"127.0.0.1:{port}",
-             "--tcp-token", "test-token::admin"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        procs.append(proc)
-        _wait_ready(proc, "127.0.0.1", port)
-        return proc
-
-    def factory():
-        c = McpClient("127.0.0.1", port, token="test-token").connect()
-        c.initialize()  # auth reset: the factory re-establishes the session
-        return c
-
-    try:
-        spawn()
+        proc = spawn()
         pool = Pool(factory, max_connections=1, acquire_timeout=10.0,
                     health_check_interval=0.0)  # 0 = ping every borrow
         pc = pool.acquire()
         pc.remember("person", {"name": "ada"})
         pc.release()
-        procs[-1].terminate()
-        procs[-1].wait(timeout=5)  # the server dies
+        proc.terminate()
+        proc.wait(timeout=5)  # the server dies
         # Borrow while the server is down: the pool keeps reconnecting...
         borrowed = {}
 
@@ -219,23 +195,3 @@ def test_pool_reconnects_after_server_restart():
         assert rows["results"]  # the db survived the restart
         pc2.release()
         pool.close()
-    finally:
-        for proc in procs:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-        if os.path.isdir(db):
-            import shutil
-            shutil.rmtree(db, ignore_errors=True)
-        else:
-            try:
-                os.remove(db)
-            except OSError:
-                pass
-        try:
-            os.remove(db + ".audit.log")
-        except OSError:
-            pass

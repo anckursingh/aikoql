@@ -14,6 +14,7 @@ import socket
 import subprocess
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,55 @@ def _wait_ready(proc, host, port, timeout=15.0):
         except OSError:
             time.sleep(0.1)
     raise RuntimeError(f"aikoql-mcp did not listen on {host}:{port} within {timeout}s")
+
+
+@contextmanager
+def restartable_server():
+    """A real aikoql-mcp server whose lifecycle the test controls (§21/§22
+    restart legs): spawn() (re)starts it on a fixed probed port and returns
+    the proc; the store dir and its audit log are removed at teardown.
+    Shared by the pool and prepared-statement restart legs."""
+    fd, db = tempfile.mkstemp(prefix=_PREFIX, suffix=".redb")
+    os.close(fd)
+    os.unlink(db)  # non-existent path → serve auto-creates aikoql-v2
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    procs = []
+
+    def spawn():
+        proc = subprocess.Popen(
+            [find_binary(), "serve", db, "--listen", f"127.0.0.1:{port}",
+             "--tcp-token", "test-token::admin"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        procs.append(proc)
+        _wait_ready(proc, "127.0.0.1", port)
+        return proc
+
+    try:
+        yield spawn, port, db
+    finally:
+        for proc in procs:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        if os.path.isdir(db):
+            shutil.rmtree(db, ignore_errors=True)
+        else:
+            try:
+                os.remove(db)
+            except OSError:
+                pass
+        try:
+            os.remove(db + ".audit.log")
+        except OSError:
+            pass
 
 
 def _purge_stale() -> None:
