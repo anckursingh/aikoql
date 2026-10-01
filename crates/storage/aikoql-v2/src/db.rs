@@ -473,6 +473,16 @@ pub struct CheckpointInfo {
 impl Db {
     pub fn open(config: Config) -> Result<Db, FormatError> {
         let open_t = Instant::now();
+        // F-01 (PBT-10) — the config trust boundary: a knob value the
+        // format can never serve must fail here, not at the first flush
+        // (an acked memtable that can never persist is a silent-loss
+        // shape). The publish-side check (segment.rs) still guards direct
+        // SegmentWriter users.
+        if config.block_target == 0 {
+            return Err(FormatError::Invalid(
+                "target block size must be > 0".into(),
+            ));
+        }
         let lock = lock_directory(&config.dir)?;
         // P5-M39 — a crash between a merge and its publication can leave
         // a staging directory behind; sweep it at open (the manifest
