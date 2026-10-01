@@ -103,6 +103,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "aikoql-fault-proxy"
+version = "0.2.0"
+dependencies = [
+ "aikoql-native",
+]
+
+[[package]]
 name = "aikoql-graph"
 version = "0.2.0"
 dependencies = [

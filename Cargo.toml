@@ -19,6 +19,7 @@ members = [
     "crates/services/api/mcp",
     "crates/sdk/python",
     "crates/sdk/rust",
+    "crates/sdk/fault-proxy",
     "crates/ingestion",
     "crates/providers/sdk",
     "crates/providers/postgres",

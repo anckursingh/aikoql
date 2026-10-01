@@ -328,9 +328,24 @@ impl Client {
             .as_mut()
             .ok_or_else(|| Error::Mcp(McpError::unavailable()))?;
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        native_send(io, id, msg_type, &payload).await?;
+        if let Err(e) = native_send(io, id, msg_type, &payload).await {
+            self.inner.closed.store(true, Ordering::Relaxed);
+            return Err(e);
+        }
         loop {
-            let (mt, rid, payload) = native_recv(io).await?;
+            let (mt, rid, payload) = match native_recv(io).await {
+                Ok(f) => f,
+                Err(e) => {
+                    // A transport or integrity failure on a live connection
+                    // (mid-frame EOF, checksum mismatch, over-cap frame):
+                    // the stream cannot be trusted again — latch closed so
+                    // subsequent calls fail fast with UNAVAILABLE instead
+                    // of touching a poisoned socket (§18 close/truncate/
+                    // corrupt/half-close).
+                    self.inner.closed.store(true, Ordering::Relaxed);
+                    return Err(e);
+                }
+            };
             if rid < id {
                 continue; // a late frame from a dropped stream — never an error
             }
@@ -541,44 +556,62 @@ async fn native_send(
     Ok(())
 }
 
-/// Reads one full native frame. A mid-frame EOF is UnexpectedEof (the same
-/// "connection closed by the server" shape the MCP path reports) and a
-/// decode failure is InvalidData — §3.3 transport errors.
+/// Reads the next native response frame. A mid-frame EOF is
+/// UnexpectedEof (the same "connection closed by the server" shape the
+/// MCP path reports), a decode failure is InvalidData — §3.3 transport
+/// errors. An over-cap frame is rejected from its header, before a byte
+/// of payload is read, as the classified FRAME_TOO_LARGE (§19 — a
+/// malicious server cannot make the client allocate what it claims).
+/// A well-formed frame without the response flag is skipped (the §6 wire
+/// has no notification class; MCP parity — CI-16's "call() skips
+/// non-response frames").
 async fn native_recv(io: &mut BufReader<TcpStream>) -> Result<(u16, u64, Vec<u8>), Error> {
-    let mut header = [0u8; nat::HEADER_LEN];
-    io.read_exact(&mut header).await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::UnexpectedEof {
-            Error::Io(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "connection closed by the server",
-            ))
-        } else {
-            Error::Io(e)
+    loop {
+        let mut header = [0u8; nat::HEADER_LEN];
+        io.read_exact(&mut header).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "connection closed by the server",
+                ))
+            } else {
+                Error::Io(e)
+            }
+        })?;
+        let h = nat::parse_header(&header).map_err(|e| match e {
+            nat::DecodeError::Oversized { claimed } => Error::Mcp(McpError {
+                code: "FRAME_TOO_LARGE".into(),
+                message: format!(
+                    "server claimed a {claimed} byte payload — exceeds the {} byte frame cap",
+                    nat::MAX_PAYLOAD
+                ),
+                retryable: false,
+                suggestion: String::new(),
+            }),
+            other => Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                other.to_string(),
+            )),
+        })?;
+        if h.flags & nat::FLAG_RESPONSE == 0 {
+            // Not a response: read the rest of the frame so the stream
+            // stays aligned, then keep looking for the actual response.
+            let mut rest = vec![0u8; h.payload_len + 4];
+            io.read_exact(&mut rest).await.map_err(Error::Io)?;
+            continue;
         }
-    })?;
-    let h = nat::parse_header(&header).map_err(|e| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            e.to_string(),
-        ))
-    })?;
-    if h.flags & nat::FLAG_RESPONSE == 0 {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "native frame without the response flag",
-        )));
+        let mut payload = vec![0u8; h.payload_len];
+        io.read_exact(&mut payload).await.map_err(Error::Io)?;
+        let mut crc = [0u8; 4];
+        io.read_exact(&mut crc).await.map_err(Error::Io)?;
+        if !nat::verify(&header, &payload, u32::from_le_bytes(crc)) {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "native frame checksum mismatch",
+            )));
+        }
+        return Ok((h.msg_type, h.request_id, payload));
     }
-    let mut payload = vec![0u8; h.payload_len];
-    io.read_exact(&mut payload).await.map_err(Error::Io)?;
-    let mut crc = [0u8; 4];
-    io.read_exact(&mut crc).await.map_err(Error::Io)?;
-    if !nat::verify(&header, &payload, u32::from_le_bytes(crc)) {
-        return Err(Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "native frame checksum mismatch",
-        )));
-    }
-    Ok((h.msg_type, h.request_id, payload))
 }
 
 /// An ERROR frame → McpError. The server sends the native codes directly;

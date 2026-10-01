@@ -20,8 +20,10 @@
 //!     both calls succeed
 //!   reorder-response → the victim times out (its response was held
 //!     back) and the follow-up skips the out-of-order frame and succeeds
-//!   truncate-frame → fast Io error, then the connection is poisoned
-//!     (a mid-frame EOF cannot be resynchronized) → UNAVAILABLE
+//!   truncate-frame → the missing bytes never arrive: the victim's own
+//!     deadline bounds it (TIMEOUT, never a hang — indistinguishable
+//!     from a slow server), and the follow-up still succeeds (the wire
+//!     is self-delimiting)
 //!   corrupt-frame → fast checksum-mismatch (InvalidData) error, then
 //!     poisoned → UNAVAILABLE
 //!   inject-notification → a well-formed frame without the response flag
@@ -85,47 +87,53 @@ fn free_addr() -> String {
 }
 
 fn spawn_server(bin: &str, token: &str) -> Server {
-    let addr = free_addr();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("fault-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let db = dir.join("db.aikoql"); // does not exist → auto-create (aikoql-v2)
-    let child = Command::new(bin)
-        .arg("serve")
-        .arg(&db)
-        .arg("--native-port")
-        .arg(&addr)
-        .arg("--tcp-token")
-        .arg(format!("{token}::admin"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn aikoql-mcp with --native-port");
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if TcpStream::connect(&addr).is_ok() {
-            return Server {
-                addr,
-                _child: Killed(child),
-                dir,
-            };
+    // The probe port is released before the child binds it — under
+    // parallel legs another leg can steal the port, so retry.
+    for _ in 0..3 {
+        let addr = free_addr();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("fault-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let db = dir.join("db.aikoql"); // does not exist → auto-create (aikoql-v2)
+        let mut child = Command::new(bin)
+            .arg("serve")
+            .arg(&db)
+            .arg("--native-port")
+            .arg(&addr)
+            .arg("--tcp-token")
+            .arg(format!("{token}::admin"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn aikoql-mcp with --native-port");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if TcpStream::connect(&addr).is_ok() {
+                return Server {
+                    addr,
+                    _child: Killed(child),
+                    dir,
+                };
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
-        assert!(
-            Instant::now() < deadline,
-            "server did not come up on {addr}"
-        );
-        std::thread::sleep(Duration::from_millis(50));
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
     }
+    panic!("server did not come up after 3 attempts");
 }
 
 /// The D-16 fault proxy: one instance, one fault mode, one client
 /// connection. Spawned with `--listen/--target/--mode ...`; RED by
 /// construction — the binary does not exist until the GREEN lands.
 fn spawn_proxy(server_addr: &str, args: &[&str]) -> (Killed, String) {
-    let listen = free_addr();
     let bin = proxy_bin();
     if !bin.exists() {
         panic!(
@@ -133,27 +141,33 @@ fn spawn_proxy(server_addr: &str, args: &[&str]) -> (Killed, String) {
             bin.display()
         );
     }
-    let child = Command::new(&bin)
-        .arg("--listen")
-        .arg(&listen)
-        .arg("--target")
-        .arg(server_addr)
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn aikoql-fault-proxy");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if TcpStream::connect(&listen).is_ok() {
-            return (Killed(child), listen);
+    // same port-steal retry as spawn_server
+    for _ in 0..3 {
+        let listen = free_addr();
+        let mut child = Command::new(&bin)
+            .arg("--listen")
+            .arg(&listen)
+            .arg("--target")
+            .arg(server_addr)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn aikoql-fault-proxy");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if TcpStream::connect(&listen).is_ok() {
+                return (Killed(child), listen);
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
-        assert!(
-            Instant::now() < deadline,
-            "proxy did not come up on {listen}"
-        );
-        std::thread::sleep(Duration::from_millis(50));
+        let _ = child.kill();
+        let _ = child.wait();
     }
+    panic!("proxy did not come up after 3 attempts");
 }
 
 fn proxy_bin() -> PathBuf {
@@ -175,7 +189,7 @@ async fn victim_client(addr: &str) -> Client {
     let c = Client::connect_native(addr)
         .await
         .expect("connect_native must dial + HELLO through the proxy");
-    let c = c.with_token("conformance".to_string());
+    let c = c.with_token("fault".to_string());
     c.initialize().await.expect("initialize must AUTH");
     c
 }
@@ -207,7 +221,9 @@ async fn fault_drop_request() {
         .await
         .expect_err("the dropped request must not be answered");
     assert!(is_timeout(&err), "expected TIMEOUT, got {err}");
-    c.health().await.expect("the follow-up must succeed — only frame 3 was dropped");
+    c.health()
+        .await
+        .expect("the follow-up must succeed — only frame 3 was dropped");
 }
 
 /// drop-response: the server answers but the proxy eats the response.
@@ -222,7 +238,9 @@ async fn fault_drop_response() {
         .await
         .expect_err("the dropped response must not satisfy the call");
     assert!(is_timeout(&err), "expected TIMEOUT, got {err}");
-    c.health().await.expect("the follow-up must succeed — only frame 3 was dropped");
+    c.health()
+        .await
+        .expect("the follow-up must succeed — only frame 3 was dropped");
 }
 
 /// delay-response: a tight deadline times out; a generous one still gets
@@ -231,18 +249,38 @@ async fn fault_drop_response() {
 async fn fault_delay_response() {
     let Some(bin) = mcp_bin() else { return };
     let srv = spawn_server(&bin, "fault");
-    let (_px, px_addr) =
-        spawn_proxy(&srv.addr, &["--mode", "delay-response", "--from", "3", "--delay-ms", "400"]);
+    let (_px, px_addr) = spawn_proxy(
+        &srv.addr,
+        &[
+            "--mode",
+            "delay-response",
+            "--from",
+            "3",
+            "--delay-ms",
+            "400",
+        ],
+    );
     let c = victim_client(&px_addr).await;
     let err = aikoql_sdk::with_deadline(Duration::from_millis(100), c.health())
         .await
         .expect_err("a 400ms delay must beat a 100ms deadline");
     assert!(is_timeout(&err), "expected TIMEOUT, got {err}");
     // a fresh client, no deadline: the delayed response still arrives.
-    let (_px2, px_addr2) =
-        spawn_proxy(&srv.addr, &["--mode", "delay-response", "--from", "3", "--delay-ms", "400"]);
+    let (_px2, px_addr2) = spawn_proxy(
+        &srv.addr,
+        &[
+            "--mode",
+            "delay-response",
+            "--from",
+            "3",
+            "--delay-ms",
+            "400",
+        ],
+    );
     let c2 = victim_client(&px_addr2).await;
-    c2.health().await.expect("without a deadline the delayed response must still complete");
+    c2.health()
+        .await
+        .expect("without a deadline the delayed response must still complete");
 }
 
 /// duplicate-response: the victim's response arrives twice. The follow-up
@@ -254,7 +292,9 @@ async fn fault_duplicate_response() {
     let (_px, px_addr) = spawn_proxy(&srv.addr, &["--mode", "duplicate-response", "--n", "3"]);
     let c = victim_client(&px_addr).await;
     c.health().await.expect("the victim gets the first copy");
-    c.health().await.expect("the follow-up must skip the duplicate and read its own response");
+    c.health()
+        .await
+        .expect("the follow-up must skip the duplicate and read its own response");
 }
 
 /// reorder-response: the victim's response is held back until the next
@@ -275,28 +315,31 @@ async fn fault_reorder_response() {
         .expect("the follow-up must skip the reordered frame and succeed");
 }
 
-/// truncate-frame: the victim's response loses its tail mid-frame. Fast
-/// Io error (never a hang), then the connection is poisoned — a
-/// mid-frame EOF cannot be resynchronized — and the next call fails
-/// UNAVAILABLE.
+/// truncate-frame: the victim's response loses its tail mid-frame. The
+/// missing bytes never arrive — on a live connection that is
+/// indistinguishable from a slow server — so the victim's OWN deadline
+/// bounds it: the frozen retryable TIMEOUT (§19's resource bound, never
+/// a hang). The follow-up still succeeds: the frame format is
+/// self-delimiting, so a partial read does not corrupt the next call.
 #[tokio::test]
 async fn fault_truncate_frame() {
     let Some(bin) = mcp_bin() else { return };
     let srv = spawn_server(&bin, "fault");
-    let (_px, px_addr) =
-        spawn_proxy(&srv.addr, &["--mode", "truncate-response", "--n", "3", "--bytes", "10"]);
+    let (_px, px_addr) = spawn_proxy(
+        &srv.addr,
+        &["--mode", "truncate-response", "--n", "3", "--bytes", "10"],
+    );
     let c = victim_client(&px_addr).await;
     let err = aikoql_sdk::with_deadline(Duration::from_secs(2), c.health())
         .await
-        .expect_err("a truncated frame must fail the victim");
-    assert!(!is_timeout(&err), "a truncated frame must fail fast, not time out — got {err}");
-    let err2 = aikoql_sdk::with_deadline(Duration::from_secs(2), c.health())
-        .await
-        .expect_err("the poisoned connection must not serve another call");
+        .expect_err("a truncated frame must not be answered");
     assert!(
-        is_unavailable(&err2),
-        "the client must latch closed after a mid-frame EOF, got {err2}"
+        is_timeout(&err),
+        "the missing bytes never arrive — only the victim's deadline can bound it, got {err}"
     );
+    c.health()
+        .await
+        .expect("the follow-up must succeed — the wire is self-delimiting");
 }
 
 /// corrupt-frame: one payload byte flipped — the checksum fails. Fast
@@ -311,7 +354,10 @@ async fn fault_corrupt_frame() {
     let err = aikoql_sdk::with_deadline(Duration::from_secs(2), c.health())
         .await
         .expect_err("a corrupted frame must fail the victim");
-    assert!(!is_timeout(&err), "a checksum mismatch must fail fast, not time out — got {err}");
+    assert!(
+        !is_timeout(&err),
+        "a checksum mismatch must fail fast, not time out — got {err}"
+    );
     let err2 = aikoql_sdk::with_deadline(Duration::from_secs(2), c.health())
         .await
         .expect_err("the poisoned connection must not serve another call");
@@ -329,9 +375,14 @@ async fn fault_corrupt_frame() {
 async fn fault_inject_notification() {
     let Some(bin) = mcp_bin() else { return };
     let srv = spawn_server(&bin, "fault");
-    let (_px, px_addr) = spawn_proxy(&srv.addr, &["--mode", "inject-notification", "--after", "3"]);
+    let (_px, px_addr) = spawn_proxy(
+        &srv.addr,
+        &["--mode", "inject-notification", "--after", "3"],
+    );
     let c = victim_client(&px_addr).await;
-    c.health().await.expect("the victim must not see the injected frame");
+    c.health()
+        .await
+        .expect("the victim must not see the injected frame");
     c.health()
         .await
         .expect("the follow-up must skip the injected frame and succeed");
@@ -343,10 +394,17 @@ async fn fault_inject_notification() {
 async fn fault_inject_stale_response() {
     let Some(bin) = mcp_bin() else { return };
     let srv = spawn_server(&bin, "fault");
-    let (_px, px_addr) = spawn_proxy(&srv.addr, &["--mode", "inject-stale-response", "--after", "3"]);
+    let (_px, px_addr) = spawn_proxy(
+        &srv.addr,
+        &["--mode", "inject-stale-response", "--after", "3"],
+    );
     let c = victim_client(&px_addr).await;
-    c.health().await.expect("the victim must succeed before the replay lands");
-    c.health().await.expect("the follow-up must skip the stale id and succeed");
+    c.health()
+        .await
+        .expect("the victim must succeed before the replay lands");
+    c.health()
+        .await
+        .expect("the follow-up must skip the stale id and succeed");
 }
 
 /// close-connection: the proxy closes the socket after the victim's
@@ -358,11 +416,16 @@ async fn fault_close_connection() {
     let srv = spawn_server(&bin, "fault");
     let (_px, px_addr) = spawn_proxy(&srv.addr, &["--mode", "close-after", "--n", "3"]);
     let c = victim_client(&px_addr).await;
-    c.health().await.expect("the victim must complete before the close");
+    c.health()
+        .await
+        .expect("the victim must complete before the close");
     let err = aikoql_sdk::with_deadline(Duration::from_secs(2), c.health())
         .await
         .expect_err("the closed connection must fail the follow-up");
-    assert!(!is_timeout(&err), "a closed connection must fail fast, not time out — got {err}");
+    assert!(
+        !is_timeout(&err),
+        "a closed connection must fail fast, not time out — got {err}"
+    );
     let err2 = aikoql_sdk::with_deadline(Duration::from_secs(2), c.health())
         .await
         .expect_err("the closed connection must not serve a third call");
@@ -381,11 +444,16 @@ async fn fault_half_close() {
     let srv = spawn_server(&bin, "fault");
     let (_px, px_addr) = spawn_proxy(&srv.addr, &["--mode", "half-close-after", "--n", "3"]);
     let c = victim_client(&px_addr).await;
-    c.health().await.expect("the victim must complete before the half-close");
+    c.health()
+        .await
+        .expect("the victim must complete before the half-close");
     let err = aikoql_sdk::with_deadline(Duration::from_secs(2), c.health())
         .await
         .expect_err("the half-closed connection must fail the follow-up");
-    assert!(!is_timeout(&err), "a half-close must fail fast, not time out — got {err}");
+    assert!(
+        !is_timeout(&err),
+        "a half-close must fail fast, not time out — got {err}"
+    );
     let err2 = aikoql_sdk::with_deadline(Duration::from_secs(2), c.health())
         .await
         .expect_err("the half-closed connection must not serve a third call");
@@ -403,7 +471,16 @@ async fn fault_slow_server() {
     let srv = spawn_server(&bin, "fault");
     let (_px, px_addr) = spawn_proxy(
         &srv.addr,
-        &["--mode", "slow-server", "--from", "3", "--bytes", "16", "--delay-ms", "100"],
+        &[
+            "--mode",
+            "slow-server",
+            "--from",
+            "3",
+            "--bytes",
+            "16",
+            "--delay-ms",
+            "100",
+        ],
     );
     let c = victim_client(&px_addr).await;
     let err = aikoql_sdk::with_deadline(Duration::from_millis(300), c.health())
@@ -423,7 +500,14 @@ async fn fault_oversized_response() {
     let srv = spawn_server(&bin, "fault");
     let (_px, px_addr) = spawn_proxy(
         &srv.addr,
-        &["--mode", "oversized-response", "--n", "3", "--claim", "67108864"],
+        &[
+            "--mode",
+            "oversized-response",
+            "--n",
+            "3",
+            "--claim",
+            "67108864",
+        ],
     );
     let c = victim_client(&px_addr).await;
     let err = aikoql_sdk::with_deadline(Duration::from_secs(5), c.health())
