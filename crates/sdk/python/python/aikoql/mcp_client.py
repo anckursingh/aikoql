@@ -96,13 +96,14 @@ class McpClient:
                 raise ConnectionError("server closed connection")
             self._buf += chunk
 
-    def _rpc(self, method: str, params: Optional[dict] = None) -> dict:
+    def _rpc(self, method: str, params: Optional[dict] = None,
+             timeout: Optional[float] = None) -> dict:
         self._next_id += 1
         req = {"jsonrpc": "2.0", "id": self._next_id, "method": method}
         if params is not None:
             req["params"] = params
         self._send(req)
-        resp = self._recv()
+        resp = self._recv_response(self._next_id, timeout)
         if "error" in resp:
             err = resp["error"]
             raise McpError(
@@ -110,6 +111,55 @@ class McpClient:
                 message=err.get("message", str(err)),
             )
         return resp.get("result", resp)
+
+    def _recv_response(self, expected_id: int,
+                       timeout: Optional[float] = None) -> dict:
+        """Read frames until the response for expected_id arrives.
+
+        Serialized-but-ID-based (§3.3): a notification or id-less frame is
+        never a response, a stale id (duplicate or late, < expected) is
+        skipped, an impossible response (id > expected, or non-numeric) is
+        a protocol violation, and a malformed frame is never misread as
+        the response. A missing response is TIMEOUT (retryable).
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise McpError(
+                    code="TIMEOUT",
+                    message=f"no response for request {expected_id} "
+                            f"within {timeout}s",
+                    retryable=True,
+                    suggestion="Retry with backoff; the request may have "
+                               "committed.",
+                )
+            try:
+                frame = self._recv()
+            except socket.timeout:
+                if deadline is None:
+                    raise
+                continue  # bounded by the deadline check above
+            except ValueError:
+                continue  # malformed frame — never a response
+            rid = frame.get("id")
+            if rid is None:
+                continue  # notification / id-less frame
+            if not isinstance(rid, int):
+                raise McpError(
+                    code="PROTOCOL_ERROR",
+                    message=f"response id {rid!r} is not an integer",
+                    suggestion="Check SDK/server version pairing.",
+                )
+            if rid < expected_id:
+                continue  # stale: duplicate or late response
+            if rid > expected_id:
+                raise McpError(
+                    code="PROTOCOL_ERROR",
+                    message=f"response id {rid} does not match request "
+                            f"{expected_id}",
+                    suggestion="Check SDK/server version pairing.",
+                )
+            return frame
 
     # -- MCP protocol ---------------------------------------------------
 
