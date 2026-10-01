@@ -135,5 +135,70 @@ then
   fail=1
 fi
 
+# 8. D-05: protocol/test-vectors/ — the shared language-neutral operation
+#    vectors (§7) plus the tests/sdk-conformance/ skeleton. Every vector is
+#    valid JSON with a name and a non-empty operations list; every op must
+#    sit in the frozen api-v1 set and every expect_error in the frozen
+#    SDK-012 taxonomy — a vector referencing an unfrozen op is drift. All
+#    13 conformance category dirs must exist.
+tvd="$root/protocol/test-vectors"
+[ -d "$tvd" ] || { echo "SDK COMPAT: missing $tvd" >&2; exit 1; }
+if ! python3 - "$tvd" "$root/tests/sdk-conformance" <<'PY'
+import json, os, sys
+tv, cs = sys.argv[1], sys.argv[2]
+OPS = ["connect", "close", "ping", "health", "remember", "get", "update",
+       "delete", "execute", "query", "prepare", "begin", "commit",
+       "rollback", "batch", "find_similar", "relate", "traverse",
+       "create_schema", "discover_schema", "create_index", "drop_index",
+       "explain", "trace", "prove", "backup", "restore", "metrics"]
+CODES = ["AUTHENTICATION_FAILED", "AUTHORIZATION_FAILED", "NOT_FOUND",
+         "INVALID_ARGUMENT", "INVALID_QUERY", "CONFLICT",
+         "VERSION_MISMATCH", "TIMEOUT", "CANCELLED", "RESOURCE_EXHAUSTED",
+         "UNAVAILABLE", "INTERNAL", "PROTOCOL_ERROR", "DATA_CORRUPTION"]
+errs = []
+vecs = [os.path.join(dp, f) for dp, _, fs in os.walk(tv)
+        for f in fs if f.endswith(".json")]
+if not vecs:
+    errs.append("no vectors in protocol/test-vectors/")
+for path in sorted(vecs):
+    rel = os.path.relpath(path, tv).replace(os.sep, "/")
+    try:
+        v = json.load(open(path, encoding="utf-8"))
+    except Exception as e:
+        errs.append(f"{rel}: not valid JSON ({e})")
+        continue
+    if not isinstance(v.get("name"), str) or not v["name"].strip():
+        errs.append(f"{rel}: missing vector name")
+    ops = v.get("operations")
+    if not isinstance(ops, list) or not ops:
+        errs.append(f"{rel}: operations must be a non-empty list")
+        continue
+    for i, o in enumerate(ops):
+        op = o.get("op") if isinstance(o, dict) else None
+        if op not in OPS:
+            errs.append(f"{rel}: operation {i} op {op!r} not in the frozen api-v1 set")
+        if isinstance(o, dict) and "expect_error" in o and \
+                o["expect_error"] not in CODES:
+            errs.append(f"{rel}: operation {i} expect_error "
+                        f"{o['expect_error']!r} not in the SDK-012 taxonomy")
+CATS = ["protocol", "crud", "query", "transaction", "graph", "vector",
+        "schema", "errors", "auth", "streaming", "cancellation",
+        "versioning", "lifecycle"]
+if not os.path.isdir(cs):
+    errs.append("tests/sdk-conformance/ missing")
+else:
+    for c in CATS:
+        if not os.path.isdir(os.path.join(cs, c)):
+            errs.append(f"tests/sdk-conformance/{c}/ missing")
+if errs:
+    for e in errs:
+        print(f"SDK COMPAT: test-vectors: {e}", file=sys.stderr)
+    sys.exit(1)
+print(f"test-vectors OK ({len(vecs)} vectors, {len(CATS)} conformance dirs)")
+PY
+then
+  fail=1
+fi
+
 [ "$fail" -eq 0 ] && echo "SDK COMPAT: workspace/go/python all pinned to $min"
 exit "$fail"
