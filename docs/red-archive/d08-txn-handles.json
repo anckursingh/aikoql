@@ -1,0 +1,8 @@
+{
+  "id": "d08-txn-handles",
+  "pre_fix_commit": "HEAD",
+  "command": "go -C crates/sdk/go test ./...",
+  "captured_at": "2026-10-01T14:41:30Z",
+  "captured_head": "67917445b229b638e05e222b876aa6451920f484",
+  "exit_code": 1
+}

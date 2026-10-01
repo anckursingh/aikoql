@@ -12,11 +12,7 @@ The contract under test (serialized-but-ID-based, §3.3):
   - a missing response is TIMEOUT, and a late one cannot corrupt the next
 """
 
-import json
-import socket
 import sys
-import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -24,45 +20,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 from aikoql import McpClient, McpError
 
-
-def _frame_bytes(f):
-    if isinstance(f, str):
-        return (f + "\n").encode()
-    return (json.dumps(f) + "\n").encode()
-
-
-class ScriptedServer:
-    """One entry per expected request; entry frames go out in ONE sendall."""
-
-    def __init__(self, script):
-        self.script = script
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.bind(("127.0.0.1", 0))
-        self.sock.listen(1)
-        self.port = self.sock.getsockname()[1]
-        self.thread = threading.Thread(target=self._run, daemon=True)
-
-    def _run(self):
-        conn, _ = self.sock.accept()
-        try:
-            for frames in self.script:
-                data = conn.recv(4096)
-                if not data:
-                    break
-                if frames:
-                    conn.sendall(b"".join(_frame_bytes(f) for f in frames))
-                else:
-                    time.sleep(0.8)  # hold the conn open past the client deadline
-        finally:
-            conn.close()
-
-    def __enter__(self):
-        self.thread.start()
-        return self
-
-    def __exit__(self, *a):
-        self.sock.close()
-        self.thread.join(timeout=2)
+from scripted import ScriptedServer
 
 
 def _client(port):
