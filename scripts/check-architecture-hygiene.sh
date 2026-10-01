@@ -552,5 +552,18 @@ if ! grep -q 'prop_lifecycle_state_machine_matches_model_across_reopens' crates/
   fail=1
 fi
 
+# workflow test 18 — test_sdk_compat_wired (D-03, SDK plan §3.2): the dag
+# job must run scripts/check-sdk-compat.sh and the machine-readable
+# contract must exist — either can rot silently in a bad merge (the
+# check-chain precedent: every other gate has a wiring pin here).
+if ! grep -q 'bash scripts/check-sdk-compat.sh' "$CIWF"; then
+  echo "ARCH: the dag job does not run check-sdk-compat.sh (D-03)" >&2
+  fail=1
+fi
+if [ ! -f protocol/compatibility.json ]; then
+  echo "ARCH: protocol/compatibility.json missing (D-03)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"

@@ -537,6 +537,12 @@ jobs:
           # rot silently in a bad merge).
           echo "Checking shuffle-run wiring..."
           bash scripts/check-shuffle-wiring.sh
+          # D-03: the SDK ↔ server version contract lives in ONE
+          # machine-readable file (protocol/compatibility.json) — workspace,
+          # Go and Python constants must all pin to it; a version bump that
+          # misses a constant fails here, not at tag time (the review §3.2).
+          echo "Checking SDK compat contract..."
+          bash scripts/check-sdk-compat.sh
           # P5-M0 (gd001): the baseline-certification guard
           # (.github/workflows/benchmark.yml's guard job, CI-02) must stay
           # wired — it runs
