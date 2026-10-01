@@ -51,6 +51,10 @@ tests/e2e/node_modules/
 tests/e2e/test-results/
 *.png
 
+# TypeScript SDK (D-13)
+crates/sdk/typescript/node_modules/
+crates/sdk/typescript/*.tgz
+
 # Test database artifacts
 test-*.db
 --version

@@ -5,7 +5,7 @@
 # and asserts the identical expected results. Pure dispatch — no server
 # management here.
 #
-#   scripts/sdk-conformance.sh --language {python,go,rust} [--bin PATH] \
+#   scripts/sdk-conformance.sh --language {python,go,rust,typescript} [--bin PATH] \
 #       [--vectors DIR] [--protocol DIR] [--token TOKEN]
 #
 # Path handling: MSYS2 skips arg conversion for python.exe (Python is
@@ -32,11 +32,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$LANGUAGE" in
-  python|go|rust) ;;
-  typescript|java)
-    echo "sdk-conformance: language '$LANGUAGE' not implemented yet (D-13..D-14)" >&2
+  python|go|rust|typescript) ;;
+  java)
+    echo "sdk-conformance: language '$LANGUAGE' not implemented yet (D-14)" >&2
     exit 2 ;;
-  "") echo "usage: $0 --language {python,go,rust}" >&2; exit 1 ;;
+  "") echo "usage: $0 --language {python,go,rust,typescript}" >&2; exit 1 ;;
   *) echo "unknown language: $LANGUAGE" >&2; exit 1 ;;
 esac
 
@@ -93,4 +93,17 @@ case "$LANGUAGE" in
     [[ "$PROTOCOL_R" = /* || "$PROTOCOL_R" = [A-Za-z]:* ]] || PROTOCOL_R="$ROOT/$PROTOCOL_R"
     exec cargo run --quiet --bin sdk-conformance -- \
       --bin "$RBIN" --vectors "$VECTORS_R" --protocol "$PROTOCOL_R" --token "$TOKEN" ;;
+  typescript)
+    cd "$ROOT/crates/sdk/typescript"
+    TBIN="$BIN"
+    VECTORS_T="$VECTORS"
+    PROTOCOL_T="$PROTOCOL"
+    # Defaults are ROOT-relative; the adapter resolves vs its own cwd
+    # (crates/sdk/typescript), so re-anchor them to the repo root. MSYS2
+    # converts args for node.exe (like go.exe), so bash-form paths are fine.
+    [[ "$TBIN" = /* || "$TBIN" = [A-Za-z]:* ]] || TBIN="$ROOT/$TBIN"
+    [[ "$VECTORS_T" = /* || "$VECTORS_T" = [A-Za-z]:* ]] || VECTORS_T="$ROOT/$VECTORS_T"
+    [[ "$PROTOCOL_T" = /* || "$PROTOCOL_T" = [A-Za-z]:* ]] || PROTOCOL_T="$ROOT/$PROTOCOL_T"
+    exec node src/sdk-conformance.ts \
+      --bin "$TBIN" --vectors "$VECTORS_T" --protocol "$PROTOCOL_T" --token "$TOKEN" ;;
 esac
