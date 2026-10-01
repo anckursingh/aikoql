@@ -429,6 +429,62 @@ recorded in §4.
 | F-03 | storage mutation harness | §12, F-TDD-06 | 11 mutants unkilled | ✅ 2026-10-01: `scripts/storage-mutation-harness.sh` — the review's eleven storage mutants, one surgical damage each, applied to a detached-worktree copy of HEAD, each run against its named killer regression (the review's acceptance: "every selected mutant is killed by at least one named regression"; a surviving mutant is a test-suite defect, not a successful experiment). cargo's non-zero exit = killed = the RED the archive captures; the shared CARGO_TARGET_DIR keeps the pass to one crate rebuild per mutant. Four mutants re-aimed from vacuous/unkillable anchors after honest analysis: m-s6 lands on `validate_delta_coverage` (the "generation past CURRENT" sites are eprintln-ignore), m-s8 lands on the after_identity park (the flush funnel has NO park between manifest and WAL truncate — the review's reorder has no kill window there), m-s2 lands on the `!in_set` stale-checksum branch (the corruption tests re-stamp block checksums, so the header-check site is vacuous), and m-s7 moves the compact funnel's manifest publication PAST the FAIL_AFTER_PUBLISH park (a naive Current-before-manifest swap parks after both are durable). Two more were witness corrections after REAL survivors: m-s1's guard sits at THREE indent sites (block_get_v2 / block_entries / scan_seek_pos — the first pattern set missed one) AND the TDD-009 corruption matrix re-stamped only the block checksum, so the footer skeleton checksum masked every structural arm one layer up (RED `l06-footer-masks-structural-arms`; the F-03 test commit re-stamps BOTH checksums and pins open-must-succeed / get+scan-must-fail-closed — the mutant survives on the masked estate, dies on the un-masked one); m-s10's first killer pinned allocs on a fixture with no object rows, so the filter it deletes never fires there — the semantic pin (scan == byte oracle across layers WITH object rows) is the witness that fails; m-s8's first archive was a FAKE kill — its `\\n` anchor reached python uncollapsed ($code expansion skips the heredoc's backslash collapse) and the pymut crash exited 1, which the archive read as a kill; the anchors are triple-quoted real newlines now and a pymut crash exits 3 (a harness error), never masquerading as a kill. All eleven killed, each archived `mut-s<N>` (11 log/manifest pairs pinning the re-runnable command). GREEN all-mode |
 | F-04 | fuzz-estate wiring | F-TDD-07, §13 nightly strategy, §14 CI architecture | unpinned — removing fuzz coverage is undetected | ✅ 2026-10-01: arch-gate workflow test 17 pins the estate: benchmark.yml keeps the `PROPTEST_CASES=4096` nightly proptest arm, the `storage-mutation` job exists and runs the harness in all-mode (weekly/dispatch, 240-min budget, parallel to the benchmark job whose steps already sit near the 360-min cap — the L-20 grep mutations stay in the dag job), the harness carries all eleven §12 mutant ids, and proptest_oracles.rs carries the F-02 lifecycle state machine. The job also entered workflow test 6's rust-cache spec (CI-05: every build job cached). RED archived `f04-fuzz-estate-unwired` (exit 1 at HEAD: no storage-mutation job — the three new pins fire) |
 
+### Phase D — first-class multi-language SDKs (review 4: the SDK TDD/fuzz plan)
+
+Disposition of `AIKOQL_First_Class_DB_Multi_Language_SDK_TDD_Fuzz_Plan.md`
+(PR #7, §33/§34). **ACCEPT the program.** Its §3 defect list verified
+against the tree: the Go module is `github.com/ancku/aikoql-sdk` — a
+path we cannot own (§3.1); `MIN_SERVER_VERSION` exists in Go AND Python
+but only Python carries a workspace-parity test and no machine-readable
+contract exists (§3.2 — the L-26 version gate fires at tag time only);
+the Python client's `_rpc` takes the next frame with no ID correlation,
+so a notification is misread as the response (§3.3, the CI-16 echo-flake
+class's client-side twin); no pool (§3.4), no transaction abstraction
+over the server's `txn_*` tools (§3.5), no prepared statements (§3.6);
+TS/Java/Rust SDKs absent (§3.7 — the P3-M9 decision, Go re-adopted in
+GO-SDK-01/02); no SDK fuzz estate; Py/Go suites separate (no shared
+conformance). The §2.1 POC assessment undersells the Go SDK slightly —
+it already carries stdio transport, the docker `run -i` contract, and
+deadline semantics (GO-SDK-01/02) — but the "MCP-shaped, not DB-driver"
+verdict stands. This phase executes GOAL-2's ECO-1..4 objectives
+(`docs/GOAL-2-ECOSYSTEM-PLAN.md`) under the repo's TDD/fuzz discipline;
+the §4 post-launch entry for ECO routes here. The review's sequencing
+rule is binding: contract → vectors → reference implementation → shared
+conformance → SDKs (five SDKs first would accumulate five interpretations
+of the same database). §24's readiness matrix is re-verified at each
+milestone's RED, never trusted.
+
+| id | milestone | review ids | RED (what fails now) | GREEN (after) |
+|---|---|---|---|---|
+| D-01 | canonical Database API frozen | Phase 0, §4, ECO-1 | five SDKs = five interpretations of `get` | `docs/DATABASE-API.md` + `protocol/api-v1.json` — the neutral lifecycle (Database/Connection/Session/Transaction/Statement/Result/Row) + the §4.2 core surface every SDK implements; no new SDK lands before this freezes |
+| D-02 | error model frozen | §12, SDK-012 | SDKs raise ad-hoc strings | `protocol/errors.json` — the 14-code taxonomy; every SDK maps protocol errors to its idiomatic type preserving code/message/retryable/suggestion/request_id |
+| D-03 | machine-readable compatibility contract | §3.2, SDK-001 | Go `MIN_SERVER_VERSION` can drift silently (Python release-gated only) | `protocol/compatibility.json` + `scripts/check-sdk-compat.sh` — Go+Python constants and the workspace version validated against the one file on every check run; the review's own RED (bump workspace, leave SDK constants) mutation-verified |
+| D-04 | Go module identity frozen | §3.1, SDK-001 | module = `github.com/ancku/aikoql-sdk` — unownable | frozen canonical `github.com/anckursingh/aikoql/sdk/go` (in-repo submodule; `replace`-redirectable if the SDK ever moves to its own repo) + identity test in the go-sdk CI job |
+| D-05 | shared test vectors | Phase 0, §7 | every suite hand-rolls its own fixtures | `protocol/test-vectors/` — language-neutral operation vectors (the §7 example shape) + `tests/sdk-conformance/` runner skeleton |
+| D-06 | Python transport hardening | §3.3, SDK-002/008 | a notification is misread as the response | ID-correlated receive loop (serialized-but-correct: skip notifications, PROTOCOL_ERROR on foreign ids, duplicate/missing/late all defined) + the seven §3.3 RED cases |
+| D-07 | Go transport hardening | §3.3 analog, SDK-002/008 | Go correlates, the notification matrix is thinner | the §3.3 case list as Go tests against a scripted transport |
+| D-08 | transaction abstraction | §3.5, SDK-007, ECO-3 | `txn_*` reachable only as raw tool args | `conn.begin` / `tx.execute` / `tx.commit` / `tx.rollback` in Python+Go; the handle is never a bare tool argument |
+| D-09 | connection pool | §3.4, §21 | the web example serializes with a Mutex | Pool in Python+Go: max/min-idle/acquire-timeout/idle-timeout/lifetime/health/reconnect/txn-pinning/session-reset/cancellation-cleanup/auth-reset; the §21 behavioral spec (exhaustion→RESOURCE_EXHAUSTED, pinning, cancellation, server restart) |
+| D-10 | prepared statements | §3.6, §22, ECO-4 | no prepare/bind/execute/close surface | PreparedStatement in Python+Go (initial impl compiles AikoQL — the abstraction precedes the native protocol) + the §22 lifecycle tests |
+| D-11 | shared conformance runner | §7, §23 | Py/Go suites separate; nothing executes one vector in both | `sdk-conformance --language {rust,python,go,typescript,java}` running `tests/sdk-conformance/{protocol,crud,query,transaction,graph,vector,schema,errors,auth,streaming,cancellation,versioning,lifecycle}` + the §23 canonical workload with identical expected results |
+| D-12 | Rust SDK | §25 Phase 2, §15 | no public Rust client | `crates/sdk/rust` — embedded + remote modes; the reference implementation of the canonical API; cargo-fuzz targets |
+| D-13 | TypeScript SDK | §25 Phase 3 | no TS client | `sdk/typescript` `@aikoql/client` — Node + browser transport, async/await, AsyncIterable streaming, AbortSignal, pool; fast-check |
+| D-14 | Java SDK | §25 Phase 5 | no Java client | `sdk/java` `io.aikoql:aikoql-client` — AikoqlClient/Connection/Transaction/PreparedStatement/ResultSet/AikoqlException; JUnit + Jazzer |
+| D-15 | native protocol | §5/§6, ECO-2, Phase B | MCP JSON-RPC is the only DB transport | framed binary protocol (magic/version/flags/request_id/type/length/payload/checksum) with the 12 §6 invariants + NativeTransport; the SDK API does not change when the transport changes |
+| D-16 | fault proxy + fuzz estate | §10–§20, RED 3/GREEN 3 | no SDK fuzz anywhere | the §18 fault matrix proxy (drop/delay/duplicate/reorder/truncate/corrupt/notify/stale/close/half-close/slow/oversized); Go native fuzz targets (§11), hypothesis + stateful model (§12), fast-check (§13), Jazzer (§14), cargo-fuzz (§15), cross-language golden corpus `sdk-fuzz-corpus/` (§16 — same input, same classification in all five) |
+| D-17 | SDK mutation testing | §29 | a surviving mutation = a missing test | the twelve §29 mutations killed per SDK, the F-03 pattern (named killer per mutant) |
+| D-18 | release automation | §27 | Go has no tagged module; TS/Java/Rust unpublished | PyPI trusted publishing + wheel matrix, Go tagged module + pkg.go.dev, npm provenance, Maven Central signed, crates.io; every release: version parity, conformance, fuzz smoke, real-server integration, package install, example, docs, SBOM |
+| D-19 | CI gates | §28 | sdk jobs exist, no contract/fuzz/cross-language gates | `sdk-contract` / `sdk-integration` / `sdk-fuzz-smoke` (PR) + long fuzz / state-machine / fault / pool-stress / cross-language corpus (nightly) + full conformance (release) |
+| D-20 | scale/performance certification | §30 | no SDK benchmark | engine/protocol/serialization/SDK/application tiers × embedded/MCP/REST/native; p50/p95/p99/throughput/allocs/CPU/RSS/wire bytes; SDK latency never claimed as engine latency |
+
+Execution order is the table order (the review's §33): D-01..D-05 freeze
+the contract, D-06/D-07 harden the two live SDKs, D-08..D-10 complete the
+driver surface, D-11 makes conformance shared, D-12..D-14 add the three
+missing languages, D-15 migrates the transport, D-16..D-20 certify. The
+§34 RED/GREEN slices map onto D-05..D-11 (RED 1/GREEN 1), D-08..D-10
+(RED 2/GREEN 2), D-16 (RED 3/GREEN 3), D-12..D-14 (RED 4/GREEN 4),
+D-11/D-15 (RED 5..6/GREEN 5..6).
+
 ## 3. Definition of done (launch boundary)
 
 Everything from review 1's §36, plus review 2's §23:
@@ -461,8 +517,10 @@ Everything from review 1's §36, plus review 2's §23:
   automation (point 2), Phase 1 perf parity on demand.
 - Goal 2 ecosystem plan (`docs/GOAL-2-ECOSYSTEM-PLAN.md`): ECO-1..15 —
   Database API extraction, native wire protocol, SQL/PG/JDBC-ODBC/Cypher
-  adapters, migrations. Starts after launch per its own §32; conflicts
-  with the P3-M9 driver re-adopt triggers to resolve first; evidence-gated
-  like the roadmap phases.
+  adapters, migrations. ECO-1..4 (Database API, wire protocol, txn
+  semantics, prepared statements) now execute inside **Phase D** above —
+  its milestones are their evidence-gated, TDD/fuzz-disciplined execution
+  record; ECO-5..15 stay post-launch per §32 with the P3-M9 re-adopt
+  triggers resolved as recorded in D-04.
 - CI runtime refinement toward the review's 5–10 min PR target as measured
   data arrives (cache hit ratios, Windows split decisions).

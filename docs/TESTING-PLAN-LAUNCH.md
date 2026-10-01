@@ -136,3 +136,54 @@ floor, 1M+ cold/warm/concurrency/mixed/recovery/resource benchmarks,
 competitor matrix, and the benchmark report artifact — the release
 evidence pack that ships with the tag. VERIFY.md is the operator-facing
 smoke; it runs from the built release artifacts, not the dev tree.
+
+## 7. Phase D — SDK program mechanics
+
+The review's §8 ladder is binding for every D-* capability — no SDK
+capability is complete from a happy-path test alone:
+
+```text
+RED → minimal GREEN → SDK unit tests → shared conformance →
+real-server integration → failure injection → fuzz → benchmark → release test
+```
+
+- **Contract gates (D-01..D-05)** are schema-checked like the §13
+  result.json leg: `api-v1.json` / `errors.json` / `compatibility.json`
+  validated by a checker that fails on drift, and the SDK
+  `MIN_SERVER_VERSION` constants held against `compatibility.json` by
+  `scripts/check-sdk-compat.sh` (D-03). Its own RED doubles as a drift
+  mutation: bump the workspace version, leave the SDK constants — the
+  check must fail.
+- **Shared conformance (D-11)** lives in `tests/sdk-conformance/` with
+  language-neutral vectors from `protocol/test-vectors/`; every SDK
+  executes the same vector — expected results byte-identical where the
+  contract says so, semantic-identical everywhere. The runner is the
+  §23 canonical workload, not a curated subset.
+- **Failure injection (D-16)** is one fault proxy in front of a real
+  server — drop/delay/duplicate/reorder/truncate/corrupt/inject-notify/
+  stale/close/half-close/slow/oversized, the §18 matrix — and every SDK
+  must pass it. §19's resource-safety rules are enforced per target:
+  max frame, max JSON nesting, max string/array, max chunks, max
+  concurrent requests, max retries, max txn duration — a malicious
+  server cannot cause unbounded client memory.
+- **Fuzz layers (§10)**: L1 codec/parser, L2 protocol state machine
+  (§17 — illegal transition sequences must error deterministically,
+  never panic/deadlock/leak/bypass/phantom-commit), L3 semantic/property,
+  L4 server fault. Go = native fuzz targets (§11 names), Python =
+  hypothesis + the §12 stateful model (DISCONNECTED→CONNECTED→
+  INITIALIZED→TRANSACTION→STREAMING→CLOSED), TS = fast-check, Java =
+  Jazzer (JVM + native), Rust = cargo-fuzz (§15 names). The
+  cross-language golden corpus (`sdk-fuzz-corpus/`) pins the §16
+  invariant: same malformed input → same classification in all five
+  languages, different idiomatic exception types allowed.
+- **Mutation testing (D-17)**: the twelve §29 mutations killed per SDK
+  under the F-03 pattern — named killer per mutant, survivor = missing
+  test, every kill RED-archived.
+- **CI (D-19)**: PR = unit + contract + integration + small fuzz +
+  package smoke; nightly = long fuzz + state-machine + fault injection +
+  cross-language corpus + pool/stream stress + large payloads; release =
+  full conformance + full fuzz smoke + real server + all packages +
+  platforms + benchmark + security.
+- **Benchmarks (D-20)** report p50/p95/p99/throughput/allocs/CPU/RSS/
+  wire bytes per tier and per operation; SDK latency is never presented
+  as engine latency.
