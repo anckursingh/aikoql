@@ -249,6 +249,9 @@ func (e *rpcError) mcpError() *McpError {
 // disarms it when the call ends — on stdio the armed deadline is a kill
 // timer and must not outlive the call it bounds.
 func (c *Client) applyDeadline(ctx context.Context) (clear func() error, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err // already cancelled — nothing is sent, the connection stays clean
+	}
 	var d time.Time
 	if dl, ok := ctx.Deadline(); ok {
 		d = dl

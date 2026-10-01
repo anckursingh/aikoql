@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"sync"
 	"time"
 
 	"github.com/anckursingh/aikoql/sdk/go"
@@ -42,23 +41,42 @@ func main() {
 		defer stop()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	client, err := aikoql.Dial(ctx, *mcp, aikoql.WithToken(*token), aikoql.WithClientInfo("web-service-example", "0.0.0"))
+	// The pool replaces the one-client-plus-mutex serialization: each HTTP
+	// request borrows a connection; the factory re-dials and re-initializes
+	// (auth reset) on every reconnect.
+	pool := aikoql.NewPool(aikoql.PoolConfig{
+		Factory: func(ctx context.Context) (*aikoql.Client, error) {
+			c, err := aikoql.Dial(ctx, *mcp, aikoql.WithToken(*token), aikoql.WithClientInfo("web-service-example", "0.0.0"))
+			if err != nil {
+				return nil, err
+			}
+			if err := c.Initialize(ctx); err != nil {
+				_ = c.Close()
+				return nil, err
+			}
+			return c, nil
+		},
+		MaxConns: 8,
+	})
+	defer pool.Close()
+	// One warm-up acquire: dial errors surface at startup, not per-request.
+	warmCtx, warmCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	pc, err := pool.Acquire(warmCtx)
+	warmCancel()
 	if err != nil {
-		log.Fatalf("dial: %v", err)
+		log.Fatalf("connect to mcp: %v", err)
 	}
-	defer client.Close()
-	if err := client.Initialize(ctx); err != nil {
-		log.Fatalf("initialize: %v", err)
-	}
+	pc.Release()
 
-	var mu sync.Mutex // serializes HTTP requests over the one connection
 	call := func(fn func(*aikoql.Client, *http.Request) (any, error)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			mu.Lock()
-			defer mu.Unlock()
-			body, err := fn(client, r)
+			pc, err := pool.Acquire(r.Context())
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			body, err := fn(pc.Client(), r)
+			pc.Release()
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadGateway)
 				return
