@@ -754,5 +754,20 @@ if grep -q '^  sdk-fuzz-smoke:' "$CIWF" && \
   fail=1
 fi
 
+# workflow test 30 — test_sdk_nightly_battery (D-19, SDK plan §28): the
+# nightly SDK battery (long fuzz + state machine + fault injection +
+# cross-language corpus + pool/stream stress + large payloads) must ride
+# the benchmark owner's weekly/dispatch tier — the PR gates run the short
+# arms only, and losing the nightly job loses the long arms silently.
+if ! grep -q '^  sdk-nightly:' "$BENCH"; then
+  echo "ARCH: benchmark.yml lost the sdk-nightly job (D-19)" >&2
+  fail=1
+fi
+if grep -q '^  sdk-nightly:' "$BENCH" && \
+   ! sed -n '/^  sdk-nightly:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q 'bash scripts/sdk-nightly.sh'; then
+  echo "ARCH: the sdk-nightly job lost its battery script (D-19)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
