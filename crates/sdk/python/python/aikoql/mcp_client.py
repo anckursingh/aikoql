@@ -31,6 +31,18 @@ def _parse_version(v: str) -> Tuple[int, ...]:
     return tuple(parts)
 
 
+def _stream_notify(frame: dict, stream_id: str):
+    """The stream loop's notify verdict primitive: the method gate, params
+    extraction and stream-id filter in one place (the aikoql_stream loop
+    and the §16 corpus pin share it)."""
+    if frame.get("method") != "notifications/notify":
+        return None
+    p = frame.get("params", {})
+    if p.get("stream_id") != stream_id:
+        return None
+    return p
+
+
 class McpError(Exception):
     """Structured error from the MCP server (MRFC-0040 error codes)."""
 
@@ -487,10 +499,8 @@ class McpClient:
         received = 1
         while received < total:
             frame = self._recv()
-            if frame.get("method") != "notifications/notify":
-                continue
-            p = frame.get("params", {})
-            if p.get("stream_id") != stream_id:
+            p = _stream_notify(frame, stream_id)
+            if p is None:
                 continue
             yield p
             received += 1

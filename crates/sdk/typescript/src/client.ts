@@ -72,6 +72,19 @@ export function classifyID(want: number, got: number): "skip" | "match" | "proto
   return "match";
 }
 
+/** The stream loop's notify verdict primitive: the method gate, params
+ * extraction and stream-id filter in one place (the aikoqlStream loop and
+ * the §16 corpus pin share it). */
+export function streamNotify(frame: Record<string, unknown>, streamId: string): { stream_id?: string; done?: boolean } | null {
+  if (frame["method"] !== "notifications/notify") return null;
+  const p = (frame["params"] ?? null) as {
+    stream_id?: string;
+    done?: boolean;
+  } | null;
+  if (p === null || p.stream_id !== streamId) return null;
+  return p;
+}
+
 /**
  * One MCP JSON-RPC connection to an aikoql-mcp server. One in-flight call
  * per connection (a stream holds the connection for its whole life); calls
@@ -336,12 +349,8 @@ export class Client {
           continue;
         }
         if (streamId === null) continue; // push before the response frame
-        if (resp["method"] !== "notifications/notify") continue; // unrelated event
-        const p = (resp["params"] ?? null) as {
-          stream_id?: string;
-          done?: boolean;
-        } | null;
-        if (p === null || p.stream_id !== streamId) continue;
+        const p = streamNotify(resp, streamId);
+        if (p === null) continue;
         yield p;
         received += 1;
         if (p.done === true || (total > 0 && received >= total)) {

@@ -3,14 +3,14 @@
 // Removing a case id is a detected coverage loss; a column mismatch is a
 // wire-behavior drift (or an undocumented divergence — document it in the
 // spec's note and re-stamp). Real primitives run where they exist
-// (parseVersion/classifyID/rpcError); the request/stream verdicts are
-// restated inline at their client.ts lines.
+// (parseVersion/classifyID/rpcError/streamNotify); the request verdicts
+// are restated inline at their client.ts lines.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { classifyID, parseVersion, rpcError } from "../src/client.ts";
+import { classifyID, parseVersion, rpcError, streamNotify } from "../src/client.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CORPUS = path.resolve(__dirname, "..", "..", "..", "..", "sdk-fuzz-corpus", "corpus.json");
@@ -62,14 +62,11 @@ function classify(surface: string, input: unknown): unknown {
       return classifyID(1, rid);
     }
     case "notify": {
-      // The stream loop's verdict, restated (client.ts ~:338-345,
-      // streamId="s1"): ts yields the raw params object as-is.
-      const frame = JSON.parse(input as string) as { method?: string; params?: Record<string, unknown> | null };
-      if (frame.method !== "notifications/notify") return { verdict: "skip", pair: null };
-      const p = frame.params;
-      if (p === null || p === undefined || p.stream_id !== "s1") {
-        return { verdict: "skip", pair: null };
-      }
+      // The real primitive: streamNotify (client.ts) — the same verdict
+      // the aikoqlStream loop runs; ts yields the raw params object as-is.
+      const frame = JSON.parse(input as string) as Record<string, unknown>;
+      const p = streamNotify(frame, "s1");
+      if (p === null) return { verdict: "skip", pair: null };
       return { verdict: "yield", pair: p };
     }
     case "correlation": {

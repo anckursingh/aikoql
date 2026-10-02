@@ -4,17 +4,32 @@ sdk-fuzz-corpus/corpus.json and this SDK's column holds for every case.
 Removing a case id is a detected coverage loss; a column mismatch is a
 wire-behavior drift (or an undocumented divergence — document it in the
 spec's note and re-stamp). Where a real primitive exists the pin calls it
-(_parse_version, McpError.from_response); the request/stream verdicts are
-restated inline at the exact source lines, because the real code reads
-sockets (_recv_response, aikoql_stream).
+(_parse_version, McpError.from_response, _stream_notify); the request
+verdicts are restated inline at the exact source lines, because the real
+code reads sockets (_recv_response).
 """
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
-from aikoql.mcp_client import McpError, _parse_version
-
 ROOT = Path(__file__).resolve().parents[4]
+_MODULE = ROOT / "crates" / "sdk" / "python" / "python" / "aikoql" / "mcp_client.py"
+
+# `import aikoql` resolves to the INSTALLED site-packages snapshot (the
+# package __init__ pulls the compiled Rust extension), which would pin the
+# installed snapshot instead of this repo's source — a repo drift would
+# never redden the pin. Load the source file directly instead: it is
+# stdlib-only (json/socket/time/uuid/typing), so the file import is viable.
+_spec = importlib.util.spec_from_file_location("aikoql_mcp_client_under_test", _MODULE)
+_mcp = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _mcp
+_spec.loader.exec_module(_mcp)
+McpError = _mcp.McpError
+_parse_version = _mcp._parse_version
+_stream_notify = _mcp._stream_notify
+
 CORPUS = ROOT / "sdk-fuzz-corpus" / "corpus.json"
 
 CASE_IDS = [
@@ -66,12 +81,11 @@ def _classify(surface, inp):
         return "match"
     if surface == "notify":
         frame = json.loads(inp)
-        # aikoql_stream's verdict, restated (mcp_client.py ~:488-498,
-        # stream_id="s1"): python yields the raw params dict as-is.
-        if frame.get("method") != "notifications/notify":
-            return {"verdict": "skip", "pair": None}
-        p = frame.get("params", {})
-        if p.get("stream_id") != "s1":
+        # The real primitive: _stream_notify (mcp_client.py) — the same
+        # verdict the aikoql_stream loop runs; python yields the raw params
+        # dict as-is.
+        p = _stream_notify(frame, "s1")
+        if p is None:
             return {"verdict": "skip", "pair": None}
         return {"verdict": "yield", "pair": p}
     if surface == "correlation":

@@ -19,10 +19,11 @@
 # extracted verdict primitive after the GREEN — so the same mutation code
 # holds across the arc.
 #
-# The Python killer sets PYTHONPATH to the worktree's source: the pin
-# imports aikoql bare, which resolves to the INSTALLED package in normal
-# runs (D-16's green pin tested site-packages, not the repo) — a repo
-# drift would otherwise never redden the pin.
+# The Python pin loads the repo source by file (importlib) — `import
+# aikoql` would resolve to the INSTALLED site-packages snapshot (its
+# package __init__ pulls the compiled Rust extension), pinning the installed
+# snapshot instead of the worktree — a repo drift would never redden it.
+# The worktree's mcp_client.py is stdlib-only, so the file import works.
 #
 # CARGO_TARGET_DIR is shared with the main tree so dependency artifacts
 # are reused — CONSEQUENCE: the mutant's aikoql-sdk artifacts land in the
@@ -110,7 +111,7 @@ s = s.replace("|| p.stream_id !== streamId", "", 1)'
       # base-10 refuses (the frozen uniform refusal)
       pymut "$tree/crates/sdk/python/python/aikoql/mcp_client.py" '
 s = s.replace("""parts.append(int(seg))""", """parts.append(int(seg, 0))""", 1)'
-      (cd "$tree/crates/sdk/python" && PYTHONPATH="$tree/crates/sdk/python/python" python -m pytest tests/test_corpus_pin.py -q 2>&1 | tail -15)
+      (cd "$tree/crates/sdk/python" && python -m pytest tests/test_corpus_pin.py -q 2>&1 | tail -15)
       ;;
     m-k08-py-error)
       # the missing-code INTERNAL default drops — "" reaches the caller
@@ -118,15 +119,15 @@ s = s.replace("""parts.append(int(seg))""", """parts.append(int(seg, 0))""", 1)'
 s = s.replace("""            code=err.get("code", "INTERNAL"),
             message=err.get("message", "unknown error"),""", """            code=err.get("code", ""),
             message=err.get("message", "unknown error"),""", 1)'
-      (cd "$tree/crates/sdk/python" && PYTHONPATH="$tree/crates/sdk/python/python" python -m pytest tests/test_corpus_pin.py -q 2>&1 | tail -15)
+      (cd "$tree/crates/sdk/python" && python -m pytest tests/test_corpus_pin.py -q 2>&1 | tail -15)
       ;;
     m-k09-py-notify)
       # the stream filter drops — a foreign stream_id notify is yielded
       pymut "$tree/crates/sdk/python/python/aikoql/mcp_client.py" '
-s = s.replace("""            if p.get("stream_id") != stream_id:
-                continue
+s = s.replace("""    if p.get("stream_id") != stream_id:
+        return None
 """, "", 1)'
-      (cd "$tree/crates/sdk/python" && PYTHONPATH="$tree/crates/sdk/python/python" python -m pytest tests/test_corpus_pin.py -q 2>&1 | tail -15)
+      (cd "$tree/crates/sdk/python" && python -m pytest tests/test_corpus_pin.py -q 2>&1 | tail -15)
       ;;
     m-k10-java-version)
       # the parse failure arm returns 0 instead of -1
