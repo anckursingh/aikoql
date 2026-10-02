@@ -78,4 +78,15 @@ export class McpError extends Error {
   static json(message: string): McpError {
     return new McpError("JSON", message, false, "");
   }
+
+  /** §19: an over-cap frame tripped the 1 MiB cap mid-accumulation — the
+   * stream is desynced, the transport is poisoned. */
+  static frameTooLarge(): McpError {
+    return new McpError(
+      "FRAME_TOO_LARGE",
+      "response frame exceeds the 1 MiB cap",
+      false,
+      "The server sent an over-cap frame; reconnect.",
+    );
+  }
 }

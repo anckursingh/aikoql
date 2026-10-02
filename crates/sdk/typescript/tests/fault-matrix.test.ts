@@ -138,7 +138,7 @@ async function freePort(): Promise<number> {
 }
 
 async function dial(t: TestContext, addr: string): Promise<Client> {
-  const c = Client.dial(addr).withToken(TOKEN);
+  const c = (await Client.dial(addr)).withToken(TOKEN);
   t.after(() => {
     void c.close().catch(() => {});
   });

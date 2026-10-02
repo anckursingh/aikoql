@@ -134,8 +134,20 @@ export class Client {
       if (params !== undefined) frame.params = params;
       this.transport.write(JSON.stringify(frame));
       for (;;) {
-        const line = await this.transport.readLine(signal);
-        if (line === null) throw McpError.io("connection closed by the server");
+        let line: string | null;
+        try {
+          line = await this.transport.readLine(signal);
+        } catch (e) {
+          // FRAME_TOO_LARGE poisons the stream — latch before rethrowing.
+          if (e instanceof McpError && e.code === "FRAME_TOO_LARGE") this.closed = true;
+          throw e;
+        }
+        if (line === null) {
+          // The server closed (or half-closed): latch — later calls fail
+          // fast with UNAVAILABLE instead of dialing a dead socket.
+          this.closed = true;
+          throw McpError.io("connection closed by the server");
+        }
         let resp: Record<string, unknown>;
         try {
           resp = JSON.parse(line) as Record<string, unknown>;
@@ -259,8 +271,17 @@ export class Client {
       let total = 0;
       let received = 0;
       for (;;) {
-        const line = await this.transport.readLine(opts.signal);
-        if (line === null) throw McpError.io("connection closed by the server");
+        let line: string | null;
+        try {
+          line = await this.transport.readLine(opts.signal);
+        } catch (e) {
+          if (e instanceof McpError && e.code === "FRAME_TOO_LARGE") this.closed = true;
+          throw e;
+        }
+        if (line === null) {
+          this.closed = true;
+          throw McpError.io("connection closed by the server");
+        }
         let resp: Record<string, unknown>;
         try {
           resp = JSON.parse(line) as Record<string, unknown>;

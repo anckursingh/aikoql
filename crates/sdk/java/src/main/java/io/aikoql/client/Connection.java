@@ -69,26 +69,51 @@ public final class Connection implements AutoCloseable {
         frame.put("id", id);
         frame.put("method", method);
         if (params != null) frame.put("params", params);
-        transport.write(Json.stringify(Json.from(frame)));
-        for (;;) {
-            String line = transport.readLine(dl);
-            if (line == null) throw AikoqlException.io("connection closed by the server");
-            Json.Value resp;
-            try {
-                resp = Json.parse(line);
-            } catch (AikoqlException e) {
-                continue; // tolerate non-JSON noise frames
-            }
-            Json.Value ridV = Json.dotGet(resp, "id");
-            if (!(ridV instanceof Json.Num n)) continue; // not our numeric correlation
-            long rid = (long) n.v();
-            if (rid < id) continue; // id-less, notification, duplicate, or late — never an error
-            if (rid > id) throw AikoqlException.protocolError(id, rid);
-            Json.Value err = Json.dotGet(resp, "error");
-            if (err != null) throw rpcError(err);
-            Json.Value result = Json.dotGet(resp, "result");
-            return result == null ? Json.Null.NULL : result;
+        try {
+            transport.write(Json.stringify(Json.from(frame)));
+        } catch (AikoqlException e) {
+            closed = true; // the transport is gone — latch
+            throw e;
         }
+        try {
+            for (;;) {
+                String line = transport.readLine(dl);
+                if (line == null) {
+                    // The server closed (or half-closed): latch — later
+                    // calls fail fast with UNAVAILABLE instead of dialing
+                    // a dead socket.
+                    closed = true;
+                    throw AikoqlException.io("connection closed by the server");
+                }
+                Json.Value resp;
+                try {
+                    resp = Json.parse(line);
+                } catch (AikoqlException e) {
+                    continue; // tolerate non-JSON noise frames
+                }
+                Json.Value ridV = Json.dotGet(resp, "id");
+                if (!(ridV instanceof Json.Num n)) continue; // not our numeric correlation
+                long rid = (long) n.v();
+                if (rid < id) continue; // id-less, notification, duplicate, or late — never an error
+                if (rid > id) throw AikoqlException.protocolError(id, rid);
+                Json.Value err = Json.dotGet(resp, "error");
+                if (err != null) throw rpcError(err);
+                Json.Value result = Json.dotGet(resp, "result");
+                return result == null ? Json.Null.NULL : result;
+            }
+        } catch (AikoqlException e) {
+            if ("FRAME_TOO_LARGE".equals(e.getCode())) {
+                closed = true; // the stream is desynced — latch
+            }
+            throw e;
+        }
+    }
+
+    /** A dead transport poisons the session: every later call fails fast
+     * with UNAVAILABLE before the wire is touched (§19). Package-private
+     * for ResultSet, which owns the stream read path. */
+    void latchClosed() {
+        closed = true;
     }
 
     /** An RPC-level error keeps only code/message; codes normalize to
@@ -232,7 +257,12 @@ public final class Connection implements AutoCloseable {
             frame.put("id", id);
             frame.put("method", "aikoql/stream");
             frame.put("params", params);
-            transport.write(Json.stringify(Json.from(frame)));
+            try {
+                transport.write(Json.stringify(Json.from(frame)));
+            } catch (AikoqlException e) {
+                closed = true; // the transport is gone — latch
+                throw e;
+            }
             return new ResultSet(this, id, dl);
         } catch (RuntimeException e) {
             lock.unlock();

@@ -17,6 +17,12 @@ import java.util.Queue;
 // (stream teardown) wake the waiter, exactly like the TS transport's
 // signal.resolve.
 final class Transport implements AutoCloseable {
+    /** §19: refuse a line before it can grow past the cap mid-read
+     * (readLine() would allocate the whole line first). The cap counts
+     * chars — UTF-8 decodes one char to at most 4 bytes, so the bound
+     * holds either way. */
+    private static final int MAX_FRAME = 1024 * 1024;
+
     private final Socket socket;
     private final BufferedReader in;
     private final OutputStream out;
@@ -71,7 +77,9 @@ final class Transport implements AutoCloseable {
                         if (registeredDl == dl) {
                             registeredDl = null;
                             pendingErr = AikoqlException.deadline();
-                            pendingDone = true;
+                            // pendingDone stays false: that flag means "a
+                            // line was delivered" — a premature null here
+                            // would latch the session closed.
                             Transport.this.notifyAll();
                         }
                     }
@@ -88,14 +96,9 @@ final class Transport implements AutoCloseable {
             }
             for (;;) {
                 if (!lines.isEmpty()) return lines.poll();
-                if (closed) return null;
-                try {
-                    wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw AikoqlException.io("interrupted waiting for a response");
-                }
                 if (pendingErr != null) {
+                    // Checked before closed: the cap sets both (the stream
+                    // is desynced) and the error must win over a bare EOF.
                     AikoqlException e = pendingErr;
                     pendingErr = null;
                     // The abort set the pending marker alongside the error;
@@ -104,6 +107,13 @@ final class Transport implements AutoCloseable {
                     pendingDone = false;
                     registeredDl = null;
                     throw e;
+                }
+                if (closed) return null;
+                try {
+                    wait();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw AikoqlException.io("interrupted waiting for a response");
                 }
                 if (pendingDone) {
                     String l = pending;
@@ -152,34 +162,71 @@ final class Transport implements AutoCloseable {
         }
     }
 
+    /** Hands a line to the waiting reader, or queues it (the §3.3
+     * late-response self-heal). */
+    private void deliver(String line) {
+        synchronized (this) {
+            if (registeredDl != null) {
+                registeredDl = null;
+                pending = line;
+                pendingDone = true;
+                notifyAll();
+            } else {
+                lines.add(line);
+                notifyAll();
+            }
+        }
+    }
+
     private void readLoop() {
+        char[] chunk = new char[4096];
+        StringBuilder line = new StringBuilder();
+        boolean capped = false;
         try {
-            String line;
-            while ((line = in.readLine()) != null) {
-                synchronized (this) {
-                    if (registeredDl != null) {
-                        registeredDl = null;
-                        pending = line;
-                        pendingDone = true;
-                        notifyAll();
-                    } else {
-                        lines.add(line);
-                        notifyAll();
+            int n;
+            while ((n = in.read(chunk)) != -1) {
+                int start = 0;
+                for (int i = 0; i < n; i++) {
+                    if (chunk[i] == '\n') {
+                        line.append(chunk, start, i - start);
+                        if (line.length() > MAX_FRAME) {
+                            // §19: a terminated over-cap line — refuse it
+                            // before delivering (the stream is desynced).
+                            capped = true;
+                            break;
+                        }
+                        deliver(line.toString());
+                        line.setLength(0);
+                        start = i + 1;
                     }
+                }
+                if (capped) break;
+                line.append(chunk, start, n - start);
+                if (line.length() > MAX_FRAME) {
+                    // §19: the unterminated tail past the cap — refuse
+                    // mid-accumulation, before it can grow unboundedly.
+                    capped = true;
+                    break;
                 }
             }
         } catch (IOException e) {
             // closed socket — same as EOF
-        } finally {
-            synchronized (this) {
-                closed = true;
-                if (registeredDl != null) {
-                    registeredDl = null;
-                    pending = null;
-                    pendingDone = true;
-                    notifyAll();
-                }
+        }
+        synchronized (this) {
+            closed = true;
+            if (capped) {
+                // Fail the waiter (or the next reader) with FRAME_TOO_LARGE,
+                // never a bare EOF — the stream is desynced either way.
+                pendingErr = AikoqlException.frameTooLarge();
+                registeredDl = null;
+                pending = null;
+                pendingDone = false;
+            } else if (registeredDl != null) {
+                registeredDl = null;
+                pending = null;
+                pendingDone = true;
             }
+            notifyAll(); // the deadline-less waiter must see the EOF too
         }
     }
 }

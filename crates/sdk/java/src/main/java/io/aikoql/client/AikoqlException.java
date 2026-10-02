@@ -89,4 +89,14 @@ public class AikoqlException extends RuntimeException {
     static AikoqlException json(String message) {
         return new AikoqlException("JSON", message, false, "The frame was not valid JSON.");
     }
+
+    /** §19: an over-cap frame tripped the 1 MiB cap mid-accumulation — the
+     * stream is desynced, the transport is poisoned. */
+    static AikoqlException frameTooLarge() {
+        return new AikoqlException(
+                "FRAME_TOO_LARGE",
+                "response frame exceeds the 1 MiB cap",
+                false,
+                "The server sent an over-cap frame; reconnect.");
+    }
 }

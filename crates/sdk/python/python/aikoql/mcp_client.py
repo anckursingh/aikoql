@@ -14,6 +14,11 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 # workspace bump turns that test RED until this constant follows.
 MIN_SERVER_VERSION = "0.2.0"
 
+# §19: a malicious server cannot cause unbounded client memory — an
+# unterminated line past this cap is refused mid-accumulation
+# (FRAME_TOO_LARGE) and the client latches closed.
+MAX_FRAME = 1024 * 1024
+
 
 def _parse_version(v: str) -> Tuple[int, ...]:
     """Dotted-int version tuple; non-numeric segments become -1 (never >=)."""
@@ -107,11 +112,16 @@ class McpClient:
         self.token = token
         self._sock: Optional[socket.socket] = None
         self._buf = b""
+        # The transport died (EOF / over-cap frame / write failure): a
+        # later call fails fast with UNAVAILABLE instead of dialing a dead
+        # socket (§7 principle 11). A fresh connect() clears it.
+        self._dead = False
         self._next_id = 0
 
     def connect(self, timeout: float = 5.0) -> "McpClient":
         self._sock = socket.create_connection((self.host, self.port), timeout=timeout)
         self._sock.settimeout(timeout)
+        self._dead = False
         return self
 
     def close(self):
@@ -145,15 +155,32 @@ class McpClient:
                 return json.loads(text)
             chunk = self._sock.recv(4096)
             if not chunk:
-                raise ConnectionError("server closed connection")
+                # EOF: the server (or the fault proxy) closed — latch so a
+                # later call fails fast instead of reading a dead socket.
+                self._dead = True
+                raise McpError(
+                    code="UNAVAILABLE",
+                    message="the server closed the connection",
+                    suggestion="Connect again.",
+                )
             self._buf += chunk
+            if len(self._buf) > MAX_FRAME:
+                # §19: the cap trips mid-accumulation, before an
+                # unterminated line can grow the buffer past the bound.
+                # The stream is desynced — latch.
+                self._dead = True
+                raise McpError(
+                    code="FRAME_TOO_LARGE",
+                    message="response frame exceeds the 1 MiB cap",
+                    suggestion="The server sent an over-cap frame; reconnect.",
+                )
 
     def _rpc(self, method: str, params: Optional[dict] = None,
              timeout: Optional[float] = None) -> dict:
-        if self._sock is None:
-            # A call on a closed client fails observably (§7 principle 11:
-            # a dead connection never deadlocks the caller) and a fresh
-            # connect() recovers it.
+        if self._sock is None or self._dead:
+            # A call on a closed (or transport-failed) client fails
+            # observably (§7 principle 11: a dead connection never
+            # deadlocks the caller) and a fresh connect() recovers it.
             raise McpError(
                 code="UNAVAILABLE",
                 message="the client is closed",
@@ -173,6 +200,16 @@ class McpClient:
             )
         return resp.get("result", resp)
 
+    @staticmethod
+    def _deadline_error(expected_id: int, timeout: float) -> McpError:
+        return McpError(
+            code="TIMEOUT",
+            message=f"no response for request {expected_id} within {timeout}s",
+            retryable=True,
+            suggestion="Retry with backoff; the request may have "
+                       "committed.",
+        )
+
     def _recv_response(self, expected_id: int,
                        timeout: Optional[float] = None) -> dict:
         """Read frames until the response for expected_id arrives.
@@ -186,14 +223,7 @@ class McpClient:
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             if deadline is not None and time.monotonic() >= deadline:
-                raise McpError(
-                    code="TIMEOUT",
-                    message=f"no response for request {expected_id} "
-                            f"within {timeout}s",
-                    retryable=True,
-                    suggestion="Retry with backoff; the request may have "
-                               "committed.",
-                )
+                raise self._deadline_error(expected_id, timeout)
             try:
                 frame = self._recv()
             except socket.timeout:
@@ -202,6 +232,11 @@ class McpClient:
                 continue  # bounded by the deadline check above
             except ValueError:
                 continue  # malformed frame — never a response
+            if deadline is not None and time.monotonic() >= deadline:
+                # The frame arrived after the deadline: as good as missing
+                # — the frozen TIMEOUT, never a late delivery (the socket
+                # timeout is not per-call, so the check rides the frame).
+                raise self._deadline_error(expected_id, timeout)
             rid = frame.get("id")
             if rid is None:
                 continue  # notification / id-less frame

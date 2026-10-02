@@ -79,7 +79,7 @@ class FaultMatrixTest {
     @AfterEach
     void tearDown() throws IOException {
         killAll();
-        if (tmpDir != null && Files.exists(tmpDir)) {
+        if (System.getenv("AIKOQL_KEEP_TMP") == null && tmpDir != null && Files.exists(tmpDir)) {
             try (var walk = Files.walk(tmpDir)) {
                 walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
             }
@@ -119,7 +119,9 @@ class FaultMatrixTest {
     private static void waitUp(int port, Process proc, File errFile, String what) throws Exception {
         for (int i = 0; i < 100; i++) {
             if (!proc.isAlive()) {
-                throw new AssertionError(what + " exited early (" + proc.exitValue() + "):\n"
+                // IOException (not AssertionError): faultEnv's retry loop
+                // only catches Exception — an Error would skip the retry.
+                throw new IOException(what + " exited early (" + proc.exitValue() + "):\n"
                         + Files.readString(errFile.toPath()));
             }
             try (Socket s = new Socket("127.0.0.1", port)) {
@@ -128,7 +130,7 @@ class FaultMatrixTest {
                 Thread.sleep(100);
             }
         }
-        throw new AssertionError(what + " never listened on 127.0.0.1:" + port);
+        throw new IOException(what + " never listened on 127.0.0.1:" + port);
     }
 
     /** A real server + one fault-proxy instance (one fault mode) behind

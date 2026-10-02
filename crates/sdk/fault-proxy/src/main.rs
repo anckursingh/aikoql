@@ -1,24 +1,34 @@
 //! D-16: the §18 fault proxy — one instance, one fault mode, one client
 //! connection at a time (the matrix test spawns an instance per fault).
-//! Sits between an SDK client and a real server and mangles the native
-//! wire in exactly one of the thirteen §18 ways, so every SDK can run
-//! the same fault matrix against the same misbehaving server.
+//! Sits between an SDK client and a real server and mangles the wire in
+//! exactly one of the thirteen §18 ways, so every SDK can run the same
+//! fault matrix against the same misbehaving server.
 //!
-//! Modes (frame accounting starts at the client's HELLO):
-//!   drop-request --n N        drop the Nth client→server frame
-//!   drop-response --n N       drop the Nth server→client frame
+//! Wires (--wire, default native):
+//!   native  the §6 frames (header + payload + crc)
+//!   line    newline-delimited JSON-RPC (the MCP wire the four SDKs speak)
+//! A message is one raw byte blob either way — only the read/write
+//! primitives and three structural modes (corrupt/oversized/truncate)
+//! care which wire is in use.
+//!
+//! Modes (frame accounting starts at the client's first message):
+//!   drop-request --n N        drop the Nth client→server message
+//!   drop-response --n N       drop the Nth server→client message
 //!   delay-response --from N --delay-ms D
 //!                             delay responses N+ by D ms
 //!   duplicate-response --n N  forward response N twice
 //!   reorder-response --n N    hold response N until the next request
 //!                             passes, then send it (out of order)
 //!   truncate-response --n N --bytes K
-//!                             cut the last K bytes off response N
-//!   corrupt-response --n N    flip one payload byte (checksum fails)
+//!                             cut the last K bytes off response N (on the
+//!                             line wire the newline is re-appended — a
+//!                             cut newline would glue the next response on)
+//!   corrupt-response --n N    flip one byte (checksum fails / noise)
 //!   inject-notification --after N
-//!                             after response N, push a well-formed frame
-//!                             without the response flag (the §6 wire has
-//!                             no notification class — the closest analog)
+//!                             after response N, push a message without
+//!                             the response marker (a PING frame on the
+//!                             native wire, an id-less JSON line on the
+//!                             line wire — the closest analog either has)
 //!   inject-stale-response --after N
 //!                             replay response #1 after response N
 //!   close-after --n N         close the socket after response N
@@ -27,20 +37,23 @@
 //!   slow-server --from N --bytes K --delay-ms D
 //!                             drip responses N+ at K bytes per D ms
 //!   oversized-response --n N --claim B
-//!                             rewrite response N's header to claim B
-//!                             bytes, send junk, close — the client must
-//!                             reject from the header before allocating
+//!                             rewrite response N to claim B bytes, then
+//!                             close — the client must reject from the
+//!                             1 MiB cap before buffering B (§19)
 //!
 //! ponytail: two blocking read/forward threads and one shared Mutex —
 //! this is a test tool, throughput is not a concern.
 
 use aikoql_native as nat;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
+
+/// The proxy-side sanity bound on one line (the SDKs cap at 1 MiB).
+const LINE_MAX: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -67,6 +80,7 @@ struct Mode {
     bytes: usize,
     delay_ms: u64,
     claim: usize,
+    line: bool,
 }
 
 fn parse_args() -> (String, String, Mode) {
@@ -80,12 +94,14 @@ fn parse_args() -> (String, String, Mode) {
         bytes: 0,
         delay_ms: 0,
         claim: 0,
+        line: false,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut val = || args.next().expect("missing value");
         match a.as_str() {
             "--listen" => listen = val(),
+            "--wire" => m.line = val() == "line",
             "--target" => target = val(),
             "--mode" => {
                 kind = Some(match val().as_str() {
@@ -119,36 +135,46 @@ fn parse_args() -> (String, String, Mode) {
     (listen, target, m)
 }
 
-/// The frame's three parts, read raw — the proxy does not validate what
+/// One wire message as a raw byte blob — the proxy does not validate what
 /// it forwards (it mangles a healthy stream, it does not police it).
-fn read_frame(r: &mut impl Read) -> std::io::Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
-    let mut h = vec![0u8; nat::HEADER_LEN];
-    r.read_exact(&mut h)?;
-    let len = u32::from_be_bytes(h[18..22].try_into().expect("4 bytes")) as usize;
-    assert!(len <= nat::MAX_PAYLOAD, "server sent an over-cap frame");
-    let mut p = vec![0u8; len];
-    r.read_exact(&mut p)?;
-    let mut c = vec![0u8; 4];
-    r.read_exact(&mut c)?;
-    Ok((h, p, c))
+fn read_msg(r: &mut impl BufRead, m: &Mode) -> std::io::Result<Vec<u8>> {
+    if m.line {
+        let mut buf = Vec::new();
+        if r.read_until(b'\n', &mut buf)? == 0 {
+            return Err(std::io::ErrorKind::UnexpectedEof.into());
+        }
+        if buf.len() > LINE_MAX {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "over-cap line",
+            ));
+        }
+        Ok(buf)
+    } else {
+        let mut buf = vec![0u8; nat::HEADER_LEN];
+        r.read_exact(&mut buf)?;
+        let len = u32::from_be_bytes(buf[18..22].try_into().expect("4 bytes")) as usize;
+        assert!(len <= nat::MAX_PAYLOAD, "server sent an over-cap frame");
+        buf.resize(nat::HEADER_LEN + len + 4, 0);
+        r.read_exact(&mut buf[nat::HEADER_LEN..])?;
+        Ok(buf)
+    }
 }
 
-fn write_frame(w: &mut impl Write, h: &[u8], p: &[u8], c: &[u8]) -> std::io::Result<()> {
-    w.write_all(h)?;
-    w.write_all(p)?;
-    w.write_all(c)?;
+fn write_msg(w: &mut TcpStream, msg: &[u8]) -> std::io::Result<()> {
+    w.write_all(msg)?;
     w.flush()
 }
 
 struct Shared {
     /// The response held back by reorder-response.
-    held: Mutex<Option<(Vec<u8>, Vec<u8>, Vec<u8>)>>,
+    held: Mutex<Option<Vec<u8>>>,
     /// Set by the client→server pump when the next request passes while a
     /// response is held; wakes the holding thread.
     release_flag: Mutex<bool>,
     release_cv: Condvar,
     /// Response #1, replayed by inject-stale-response.
-    recorded: Mutex<Option<(Vec<u8>, Vec<u8>, Vec<u8>)>>,
+    recorded: Mutex<Option<Vec<u8>>>,
     /// The connection is done: both pumps wind down.
     down: AtomicBool,
 }
@@ -169,14 +195,14 @@ fn handle(client: TcpStream, server: TcpStream, m: &Mode) {
         let s = s.clone();
         let m = m.clone();
         thread::spawn(move || {
-            let (mut cr, mut sw) = (client, server_w);
+            let (mut cr, mut sw) = (BufReader::new(client), server_w);
             let mut idx = 0usize;
             loop {
                 if s.down.load(Ordering::Relaxed) {
                     break;
                 }
-                match read_frame(&mut cr) {
-                    Ok(frame) => {
+                match read_msg(&mut cr, &m) {
+                    Ok(msg) => {
                         idx += 1;
                         if m.kind == Kind::DropRequest && idx == m.n {
                             continue;
@@ -187,7 +213,7 @@ fn handle(client: TcpStream, server: TcpStream, m: &Mode) {
                             *s.release_flag.lock().unwrap() = true;
                             s.release_cv.notify_all();
                         }
-                        if write_frame(&mut sw, &frame.0, &frame.1, &frame.2).is_err() {
+                        if write_msg(&mut sw, &msg).is_err() {
                             break;
                         }
                     }
@@ -206,14 +232,14 @@ fn handle(client: TcpStream, server: TcpStream, m: &Mode) {
         let s = s.clone();
         let m = m.clone();
         thread::spawn(move || {
-            let (mut sr, mut cw) = (server, client_w);
+            let (mut sr, mut cw) = (BufReader::new(server), client_w);
             let mut idx = 0usize;
             let mut half = false;
             loop {
                 if s.down.load(Ordering::Relaxed) {
                     break;
                 }
-                let frame = match read_frame(&mut sr) {
+                let msg = match read_msg(&mut sr, &m) {
                     Ok(f) => f,
                     Err(_) => {
                         s.down.store(true, Ordering::Relaxed);
@@ -223,71 +249,85 @@ fn handle(client: TcpStream, server: TcpStream, m: &Mode) {
                 };
                 idx += 1;
                 if idx == 1 {
-                    *s.recorded.lock().unwrap() = Some(frame.clone());
+                    *s.recorded.lock().unwrap() = Some(msg.clone());
                 }
                 if half {
                     continue; // half-closed: the client reads EOF, we discard
                 }
-                let write =
-                    |cw: &mut TcpStream, h: &[u8], p: &[u8], c: &[u8]| write_frame(cw, h, p, c);
                 match m.kind {
                     Kind::DropResponse if idx == m.n => {}
                     Kind::DelayResponse if idx >= m.from => {
                         thread::sleep(Duration::from_millis(m.delay_ms));
-                        let _ = write(&mut cw, &frame.0, &frame.1, &frame.2);
+                        let _ = write_msg(&mut cw, &msg);
                     }
                     Kind::DuplicateResponse if idx == m.n => {
-                        let _ = write(&mut cw, &frame.0, &frame.1, &frame.2);
-                        let _ = write(&mut cw, &frame.0, &frame.1, &frame.2);
+                        let _ = write_msg(&mut cw, &msg);
+                        let _ = write_msg(&mut cw, &msg);
                     }
                     Kind::ReorderResponse if idx == m.n => {
-                        *s.held.lock().unwrap() = Some(frame);
+                        *s.held.lock().unwrap() = Some(msg);
                         let mut g = s.release_flag.lock().unwrap();
                         while !*g {
                             g = s.release_cv.wait(g).unwrap();
                         }
                         let f = s.held.lock().unwrap().take().unwrap();
-                        let _ = write(&mut cw, &f.0, &f.1, &f.2);
+                        let _ = write_msg(&mut cw, &f);
                     }
                     Kind::TruncateResponse if idx == m.n => {
-                        let mut buf = Vec::new();
-                        buf.extend_from_slice(&frame.0);
-                        buf.extend_from_slice(&frame.1);
-                        buf.extend_from_slice(&frame.2);
+                        let mut buf = msg.clone();
+                        if m.line {
+                            // keep the newline: cutting it would glue the
+                            // next response onto the truncated line
+                            if buf.last() == Some(&b'\n') {
+                                buf.pop();
+                            }
+                        }
                         let cut = m.bytes.min(buf.len());
                         let _ = cw.write_all(&buf[..buf.len() - cut]);
+                        if m.line {
+                            let _ = cw.write_all(b"\n");
+                        }
                         let _ = cw.flush();
                     }
                     Kind::CorruptResponse if idx == m.n => {
-                        let mut p = frame.1.clone();
-                        p[0] ^= 0xFF; // the wire checksum still covers the original
-                        let _ = write(&mut cw, &frame.0, &p, &frame.2);
+                        let mut buf = msg.clone();
+                        // the line's first byte becomes noise; the frame's
+                        // payload flips while the checksum covers the
+                        // original — the client rejects it either way
+                        let off = if m.line { 0 } else { nat::HEADER_LEN };
+                        buf[off] ^= 0xFF;
+                        let _ = write_msg(&mut cw, &buf);
                     }
                     Kind::InjectNotification => {
-                        let _ = write(&mut cw, &frame.0, &frame.1, &frame.2);
+                        let _ = write_msg(&mut cw, &msg);
                         if idx == m.n {
-                            // a well-formed frame without the response flag
-                            // (no notification class exists on the §6 wire)
-                            let payload = b"{}";
-                            let hdr = nat::header_bytes(0, 999, nat::PING, payload.len() as u32);
-                            let mut buf = hdr.to_vec();
-                            buf.extend_from_slice(payload);
-                            let crc = nat::crc32(&buf).to_le_bytes();
-                            let _ = cw.write_all(&buf);
-                            let _ = cw.write_all(&crc);
-                            let _ = cw.flush();
+                            if m.line {
+                                // an id-less JSON line is never a response
+                                let _ =
+                                    write_msg(&mut cw, b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}\n");
+                            } else {
+                                // a well-formed frame without the response
+                                // flag (no notification class on the §6 wire)
+                                let payload = b"{}";
+                                let hdr = nat::header_bytes(0, 999, nat::PING, payload.len() as u32);
+                                let mut buf = hdr.to_vec();
+                                buf.extend_from_slice(payload);
+                                let crc = nat::crc32(&buf).to_le_bytes();
+                                buf.extend_from_slice(&crc);
+                                let _ = write_msg(&mut cw, &buf);
+                            }
                         }
                     }
                     Kind::InjectStaleResponse => {
-                        let _ = write(&mut cw, &frame.0, &frame.1, &frame.2);
+                        let _ = write_msg(&mut cw, &msg);
                         if idx == m.n {
                             if let Some(f) = s.recorded.lock().unwrap().clone() {
-                                let _ = write(&mut cw, &f.0, &f.1, &f.2);
+                                let _ = write_msg(&mut cw, &f);
                             }
                         }
                     }
                     Kind::CloseAfter => {
-                        let _ = write(&mut cw, &frame.0, &frame.1, &frame.2);
+                        let _ = write_msg(&mut cw, &msg);
                         if idx == m.n {
                             s.down.store(true, Ordering::Relaxed);
                             let _ = cw.shutdown(Shutdown::Both);
@@ -295,7 +335,7 @@ fn handle(client: TcpStream, server: TcpStream, m: &Mode) {
                         }
                     }
                     Kind::HalfCloseAfter => {
-                        let _ = write(&mut cw, &frame.0, &frame.1, &frame.2);
+                        let _ = write_msg(&mut cw, &msg);
                         if idx == m.n {
                             // half-close: the client can still write, but
                             // its reads get EOF — keep draining the server.
@@ -304,30 +344,43 @@ fn handle(client: TcpStream, server: TcpStream, m: &Mode) {
                         }
                     }
                     Kind::SlowServer if idx >= m.from => {
-                        let mut buf = Vec::new();
-                        buf.extend_from_slice(&frame.0);
-                        buf.extend_from_slice(&frame.1);
-                        buf.extend_from_slice(&frame.2);
-                        for chunk in buf.chunks(m.bytes) {
+                        for chunk in msg.chunks(m.bytes) {
                             let _ = cw.write_all(chunk);
                             let _ = cw.flush();
                             thread::sleep(Duration::from_millis(m.delay_ms));
                         }
                     }
                     Kind::OversizedResponse if idx == m.n => {
-                        // claim B bytes, deliver a fraction, close: the
-                        // client must reject from the header alone (§19).
-                        let mut h = frame.0.clone();
-                        h[18..22].copy_from_slice(&(m.claim as u32).to_be_bytes());
-                        let _ = cw.write_all(&h);
-                        let _ = cw.write_all(&[0u8; 64]);
-                        let _ = cw.flush();
+                        // Claim B bytes, deliver a fraction, close: the
+                        // client must reject from its 1 MiB cap before
+                        // buffering B (§19). The native client rejects from
+                        // the patched header alone; the line clients trip
+                        // mid-accumulation on the unterminated junk.
+                        if m.line {
+                            // ponytail: drip 1 MiB slices; a client that
+                            // stops reading stalls one slice, not the pump
+                            // forever — the test kills us anyway.
+                            let junk = vec![b'x'; m.claim.min(1 << 20)];
+                            let mut remaining = m.claim;
+                            while remaining > 0 {
+                                let n = junk.len().min(remaining);
+                                if cw.write_all(&junk[..n]).is_err() {
+                                    break;
+                                }
+                                remaining -= n;
+                            }
+                            let _ = cw.flush();
+                        } else {
+                            let mut buf = msg.clone();
+                            buf[18..22].copy_from_slice(&(m.claim as u32).to_be_bytes());
+                            let _ = write_msg(&mut cw, &buf);
+                        }
                         s.down.store(true, Ordering::Relaxed);
                         let _ = cw.shutdown(Shutdown::Both);
                         break;
                     }
                     _ => {
-                        let _ = write(&mut cw, &frame.0, &frame.1, &frame.2);
+                        let _ = write_msg(&mut cw, &msg);
                     }
                 }
             }

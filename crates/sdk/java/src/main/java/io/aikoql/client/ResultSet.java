@@ -62,7 +62,10 @@ public final class ResultSet implements Iterator<Json.Value>, AutoCloseable {
     private boolean pull() throws AikoqlException {
         for (;;) {
             String line = conn.transport.readLine(dl);
-            if (line == null) throw AikoqlException.io("connection closed by the server");
+            if (line == null) {
+                conn.latchClosed(); // §19: a dead stream read poisons the session
+                throw AikoqlException.io("connection closed by the server");
+            }
             Json.Value resp;
             try {
                 resp = Json.parse(line);

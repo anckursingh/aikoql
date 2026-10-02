@@ -248,6 +248,32 @@ func (e *rpcError) mcpError() *McpError {
 	return &McpError{Code: code, Message: e.Message}
 }
 
+// maxFrame is the §19 cap: an unterminated line past it is refused before
+// the buffer can grow past the bound (ReadString would allocate the whole
+// line first, transiently violating the memory bound).
+const maxFrame = 1 << 20
+
+// readLine reads one newline-terminated line under the §19 cap. ReadSlice
+// reuses the bufio buffer; ErrBufferFull means the line does not fit, so
+// bounded pieces accumulate until the cap trips.
+func (c *Client) readLine() (string, error) {
+	var buf []byte
+	for {
+		part, err := c.r.ReadSlice('\n')
+		buf = append(buf, part...)
+		if len(buf) > maxFrame {
+			return "", &McpError{
+				Code:       "FRAME_TOO_LARGE",
+				Message:    "response frame exceeds the 1 MiB cap",
+				Suggestion: "The server sent an over-cap frame; reconnect.",
+			}
+		}
+		if err != bufio.ErrBufferFull {
+			return string(buf), err
+		}
+	}
+}
+
 // applyDeadline projects the context deadline onto the transport so a
 // stalled server cannot hang the caller past ctx. The returned clear func
 // disarms it when the call ends — on stdio the armed deadline is a kill
@@ -296,10 +322,11 @@ func (c *Client) request(ctx context.Context, method string, params any) (result
 		return nil, fmt.Errorf("aikoql: marshal %s: %w", method, err)
 	}
 	if _, err := c.tr.Write(append(frame, '\n')); err != nil {
+		c.closed = true // the transport is gone — latch
 		return nil, fmt.Errorf("aikoql: send %s: %w", method, err)
 	}
 	for {
-		line, err := c.r.ReadString('\n')
+		line, err := c.readLine()
 		if err != nil {
 			// The transport deadline can fire a hair before the ctx timer
 			// marks DeadlineExceeded — either one is the frozen TIMEOUT.
@@ -312,6 +339,14 @@ func (c *Client) request(ctx context.Context, method string, params any) (result
 					Suggestion: "Retry with backoff; the request may have " +
 						"committed.",
 				}
+			}
+			// The transport failed (EOF, close, over-cap frame): latch —
+			// later calls fail fast with UNAVAILABLE instead of writing
+			// into a dead socket. TIMEOUT above does NOT latch.
+			c.closed = true
+			var me *McpError
+			if errors.As(err, &me) {
+				return nil, err // keep the code (FRAME_TOO_LARGE)
 			}
 			return nil, fmt.Errorf("aikoql: read %s: %w", method, err)
 		}
@@ -360,12 +395,13 @@ func (c *Client) stream(ctx context.Context, method string, params any, yieldFn 
 		return fmt.Errorf("aikoql: marshal %s: %w", method, err)
 	}
 	if _, err := c.tr.Write(append(frame, '\n')); err != nil {
+		c.closed = true // the transport is gone — latch
 		return fmt.Errorf("aikoql: send %s: %w", method, err)
 	}
 	var streamID string
 	total, received := 0, 0
 	for {
-		line, err := c.r.ReadString('\n')
+		line, err := c.readLine()
 		if err != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) ||
 				errors.Is(err, os.ErrDeadlineExceeded) {
@@ -376,6 +412,11 @@ func (c *Client) stream(ctx context.Context, method string, params any, yieldFn 
 					Suggestion: "Retry with backoff; the request may have " +
 						"committed.",
 				}
+			}
+			c.closed = true
+			var me *McpError
+			if errors.As(err, &me) {
+				return err
 			}
 			return fmt.Errorf("aikoql: read %s: %w", method, err)
 		}

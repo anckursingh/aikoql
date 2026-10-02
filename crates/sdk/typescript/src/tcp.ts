@@ -6,6 +6,11 @@
 import net from "node:net";
 import { McpError } from "./error.ts";
 
+/** §19: a malicious server cannot cause unbounded client memory — an
+ * unterminated line past this cap is refused mid-accumulation
+ * (FRAME_TOO_LARGE) and the transport is poisoned. */
+export const MAX_FRAME = 1024 * 1024;
+
 /** One newline-framed byte pipe: write a frame, read lines in order. */
 export interface Transport {
   write(line: string): void;
@@ -26,13 +31,26 @@ export class TcpTransport implements Transport {
   private buffer = "";
   private lines: string[] = [];
   // Exactly one reader at a time (the client serializes calls on a lock).
-  private current: { resolve: (line: string | null) => void } | null = null;
+  private current: { resolve: (line: string | null) => void; reject: (e: McpError) => void } | null = null;
   private closed = false;
 
   private constructor(socket: net.Socket) {
     this.socket = socket;
     socket.on("data", (chunk: Buffer) => {
       this.buffer += chunk.toString("utf8");
+      if (this.buffer.length > MAX_FRAME) {
+        // §19: the cap trips mid-accumulation, before an unterminated line
+        // can grow the buffer past the bound. The stream is desynced —
+        // fail the pending read and poison the transport.
+        this.closed = true;
+        this.socket.destroy();
+        if (this.current) {
+          const waiter = this.current;
+          this.current = null;
+          waiter.reject(McpError.frameTooLarge());
+        }
+        return;
+      }
       let idx: number;
       while ((idx = this.buffer.indexOf("\n")) >= 0) {
         const line = this.buffer.slice(0, idx);
@@ -91,7 +109,7 @@ export class TcpTransport implements Transport {
     if (signal?.aborted) return Promise.reject(McpError.deadline());
     if (this.current) throw new Error("aikoql: concurrent readers on one transport");
     return new Promise((resolve, reject) => {
-      const entry = { resolve };
+      const entry = { resolve, reject };
       const onAbort = () => {
         if (this.current === entry) {
           this.current = null;
