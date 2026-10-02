@@ -397,6 +397,60 @@ jobs:
           # (CI's first run caught this one short: ../../target = crates/target).
           AIKOQL_MCP_BIN="$PWD/../../../target/release/aikoql-mcp" go test -v ./...
 
+  # D-19 (SDK plan §28): the three remaining SDKs get the same PR contract
+  # shape — build the real server, run the SDK's own suite against it (the
+  # real-server legs skip unless AIKOQL_MCP_BIN names the binary).
+  ts-sdk:
+    name: TypeScript SDK contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build server binary (the contract target)
+        run: cargo build -p aikoql-mcp
+      - name: Real-server suite (fuzz estate + pool + wire ride the same run)
+        run: |
+          set -euo pipefail
+          cd crates/sdk/typescript
+          AIKOQL_MCP_BIN="$PWD/../../../target/debug/aikoql-mcp" node --test tests/*.test.ts
+
+  java-sdk:
+    name: Java SDK contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build server binary (the contract target)
+        run: cargo build -p aikoql-mcp
+      - name: Surefire suite (real-server pin + fuzz seed sweep)
+        run: |
+          set -euo pipefail
+          cd crates/sdk/java
+          AIKOQL_MCP_BIN="$PWD/../../../target/debug/aikoql-mcp" mvn -B test
+
+  rust-sdk:
+    name: Rust SDK contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build server binary (the contract target)
+        run: cargo build -p aikoql-mcp
+      - name: Suite (conformance + embedded + fault + native + fuzz pins)
+        run: |
+          set -euo pipefail
+          AIKOQL_MCP_BIN="$PWD/target/debug/aikoql-mcp" cargo test -p aikoql-sdk
+
   # PR6-F6 (P1-6) → CI-03 (the review's §16 trap): the per-commit perf
   # smoke folded into ci.yml. An always-run job with a fast exit on
   # non-matching paths — a path-gated required workflow skips and a

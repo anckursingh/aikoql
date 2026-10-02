@@ -73,7 +73,8 @@ done_
 #    AIKOQL_BINARY hatch keeps it off the download path).
 say "6/8 typescript suite + npm install smoke"
 ( cd crates/sdk/typescript
-  node --test tests/ )
+  # the glob, not the dir — node resolves `tests/` as a module on Windows
+  node --test tests/*.test.ts )
 ( cd npm-publish
   mkdir -p /tmp/aikoql-pkg          # npm pack does not create --pack-destination
   npm pack --pack-destination /tmp/aikoql-pkg

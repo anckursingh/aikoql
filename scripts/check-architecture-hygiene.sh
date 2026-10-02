@@ -689,7 +689,7 @@ if ! grep -q '^  ts-sdk:' "$CIWF"; then
   fail=1
 fi
 if grep -q '^  ts-sdk:' "$CIWF" && \
-   ! sed -n '/^  ts-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'node --test tests/'; then
+   ! sed -n '/^  ts-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'node --test tests/\*.test.ts'; then
   echo "ARCH: the ts-sdk job lost its suite command (D-19)" >&2
   fail=1
 fi
