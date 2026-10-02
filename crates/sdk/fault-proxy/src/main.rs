@@ -303,13 +303,16 @@ fn handle(client: TcpStream, server: TcpStream, m: &Mode) {
                         if idx == m.n {
                             if m.line {
                                 // an id-less JSON line is never a response
-                                let _ =
-                                    write_msg(&mut cw, b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}\n");
+                                let _ = write_msg(
+                                    &mut cw,
+                                    b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}\n",
+                                );
                             } else {
                                 // a well-formed frame without the response
                                 // flag (no notification class on the §6 wire)
                                 let payload = b"{}";
-                                let hdr = nat::header_bytes(0, 999, nat::PING, payload.len() as u32);
+                                let hdr =
+                                    nat::header_bytes(0, 999, nat::PING, payload.len() as u32);
                                 let mut buf = hdr.to_vec();
                                 buf.extend_from_slice(payload);
                                 let crc = nat::crc32(&buf).to_le_bytes();
