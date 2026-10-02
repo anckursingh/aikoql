@@ -681,5 +681,42 @@ if grep -q '^  sdk-release-cert:' "$REL" && \
   fail=1
 fi
 
+# workflow test 25 — test_ts_sdk_job (D-19, SDK plan §28): the TypeScript
+# SDK's real-server suite must run on every PR or a TS regression ships
+# without the client ever touching the freshly built server.
+if ! grep -q '^  ts-sdk:' "$CIWF"; then
+  echo "ARCH: ci.yml lost the ts-sdk job (D-19)" >&2
+  fail=1
+fi
+if grep -q '^  ts-sdk:' "$CIWF" && \
+   ! sed -n '/^  ts-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'node --test tests/'; then
+  echo "ARCH: the ts-sdk job lost its suite command (D-19)" >&2
+  fail=1
+fi
+# workflow test 26 — test_java_sdk_job (D-19, SDK plan §28): the Java
+# SDK's surefire suite (real-server pin + fuzz seed sweep included) must
+# run on every PR.
+if ! grep -q '^  java-sdk:' "$CIWF"; then
+  echo "ARCH: ci.yml lost the java-sdk job (D-19)" >&2
+  fail=1
+fi
+if grep -q '^  java-sdk:' "$CIWF" && \
+   ! sed -n '/^  java-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'mvn -B test'; then
+  echo "ARCH: the java-sdk job lost its surefire suite (D-19)" >&2
+  fail=1
+fi
+# workflow test 27 — test_rust_sdk_job (D-19, SDK plan §28): the reference
+# SDK's suite (conformance + embedded + fault + native + fuzz pins) must
+# run on every PR.
+if ! grep -q '^  rust-sdk:' "$CIWF"; then
+  echo "ARCH: ci.yml lost the rust-sdk job (D-19)" >&2
+  fail=1
+fi
+if grep -q '^  rust-sdk:' "$CIWF" && \
+   ! sed -n '/^  rust-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'cargo test -p aikoql-sdk'; then
+  echo "ARCH: the rust-sdk job lost its suite command (D-19)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
