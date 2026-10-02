@@ -96,9 +96,17 @@ cargo install cargo-fuzz --locked -q
   done )
 done_
 
-# 8. SBOM — syft catalogs every manifest in the tree (Cargo, npm, maven,
+# 8. Docs — every package ships a README (pkg.go.dev, PyPI, npm, crates.io
+#    and Maven all render it): a release must not publish a bare package.
+say "8/9 docs"
+for d in crates/sdk/go crates/sdk/python crates/sdk/rust crates/sdk/typescript crates/sdk/java npm-publish; do
+  [ -s "$d/README.md" ] || { echo "sdk-release-cert: $d has no README.md" >&2; exit 1; }
+done
+done_
+
+# 9. SBOM — syft catalogs every manifest in the tree (Cargo, npm, maven,
 #    python) into one SPDX document stamped with the release.
-say "8/8 SBOM"
+say "9/9 SBOM"
 syft dir:"$root" --exclude "./target" -o "spdx-json=aikoql-release.sbom.spdx.json"
 done_
 
