@@ -40,7 +40,7 @@ interface ClientConfig {
 /** Mirrors the Python SDK's int(seg) exactly (the Go Atoi agrees on the
  * canonical cases): only an optionally-signed decimal integer segment is
  * numeric — Number("") would read "" as 0 and "0x10" as 16 where int()
- * refuses — everything else becomes -1 (never >=). */
+ * refuses (base 10 by default) — everything else becomes -1 (never >=). */
 export function parseVersion(v: string): number[] {
   return v.split(".").map((seg) => {
     const s = seg.trim();

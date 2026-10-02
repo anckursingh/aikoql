@@ -152,7 +152,8 @@ pub fn map_native_error(payload: &[u8]) -> McpError {
 
 /// Mirrors the Go SDK's dotted-int tuple: non-numeric segments become -1
 /// (never >=). Agrees with Python's int(seg) — "0x10" and "" both refuse
-/// (the TS SDK's Number() accepted them; the D-16 slice 5 fix).
+/// (int() defaults to base 10; the TS regex refuses where Number() would
+/// read 16). The §16 corpus pins the uniform refusal (corp-v02).
 pub fn parse_version(v: &str) -> Vec<i64> {
     v.split('.')
         .map(|seg| seg.parse::<i64>().unwrap_or(-1))
