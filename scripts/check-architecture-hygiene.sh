@@ -620,13 +620,18 @@ if ! grep -q 'CRATES="aikoql-native aikoql-kernel aikoql-storage-v2 aikoql-graph
 fi
 
 # workflow test 22 — test_maven_central_publish (D-18, SDK plan §27):
-# the Java SDK must ship to Maven Central through the Central Portal
-# (central.sonatype.com — OSSRH staging is closed to new projects), and
-# like every publisher it gates on github-release so a failed release
-# never publishes artifacts. The pom version parity + skip guards live
-# in the job body (version parity is a §27 every-release requirement).
-if ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'central.sonatype.com'; then
-  echo "ARCH: the maven-central-publish job does not use the Central Portal (D-18)" >&2
+# the Java SDK must ship to Maven Central (the job's skip guard probes
+# repo1.maven.org — the published location — and the pom version must
+# equal the release version before any upload; the pom's Central Portal
+# plugin does the upload itself). Like every publisher it gates on
+# github-release so a failed release never publishes artifacts.
+if ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'repo1.maven.org/maven2/io/aikoql/aikoql-client'; then
+  echo "ARCH: the maven-central-publish job loses the Maven Central skip guard (D-18)" >&2
+  fail=1
+fi
+if grep -q '^  maven-central-publish:' "$REL" && \
+   ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'help:evaluate'; then
+  echo "ARCH: the maven-central-publish job lost the pom/release version parity assert (D-18)" >&2
   fail=1
 fi
 if grep -q '^  maven-central-publish:' "$REL" && \
