@@ -214,6 +214,108 @@ def validate_competitor(path, fresh=False):
     return rows
 
 
+# D-20 (§30): the tier×transport artifact's contract — the three measured
+# tiers (protocol/serialization/SDK) each with the §30 metric set, the
+# cited tiers (engine/application) named by their covering artifact, REST
+# explicitly N/A, and the honest-labeling pin: an SDK cell whose claim
+# does not say "SDK latency" — or dares to say "engine latency" — is a
+# SchemaError (§30: SDK latency is never presented as engine latency).
+
+MEASURED_TIERS = ("protocol", "serialization", "sdk")
+MEASURED_TRANSPORTS = ("mcp", "native", "embedded", "transportless")
+TIER_OPS = ("remember", "get", "scan", "encode", "decode")
+CELL_METRICS = ("p50_ns", "p95_ns", "p99_ns", "throughput_ops_s",
+                "allocs_per_op", "wire_bytes_req", "wire_bytes_resp",
+                "decodes_per_op", "cpu_seconds", "rss_mb")
+
+
+def validate_tiers(path, fresh=False):
+    """Validated cells from the D-20 tier artifact:
+    {(tier, transport, op): p50_ns} — the §30 schema.
+
+    fresh=True additionally enforces the git_sha stamp (the committed
+    certification artifact is fresh; the checker runs the same dispatch).
+    """
+    data = load(path)
+    tiers = data.get("tiers")
+    if not isinstance(tiers, dict):
+        raise SchemaError(f"{path}: missing field: tiers (§30)")
+    for key, label in (("engine", "engine tier"),
+                       ("application", "application tier")):
+        t = tiers.get(key)
+        if not isinstance(t, dict) or not t.get("covered_by"):
+            raise SchemaError(
+                f"{path}: tiers.{key} must cite its covering artifact "
+                f"(§30: the {label} is covered elsewhere, not re-measured)")
+    if tiers.get("rest", {}).get("status") != "N/A — no REST transport exists":
+        raise SchemaError(f"{path}: tiers.rest must be the explicit N/A")
+    cells = data.get("cells")
+    if not isinstance(cells, list) or not cells:
+        raise SchemaError(f"{path}: missing field: cells (non-empty list)")
+    rows = {}
+    seen = set()
+    for ci, c in enumerate(cells):
+        where = f"{path}: cells[{ci}]"
+        for f in ("tier", "transport", "op"):
+            if not isinstance(c.get(f), str):
+                raise SchemaError(f"{where}: missing field: {f}")
+        if c["tier"] not in MEASURED_TIERS:
+            raise SchemaError(f"{where}: unknown tier {c['tier']!r}")
+        if c["transport"] not in MEASURED_TRANSPORTS:
+            raise SchemaError(f"{where}: unknown transport "
+                              f"{c['transport']!r}")
+        if c["op"] not in TIER_OPS:
+            raise SchemaError(f"{where}: unknown op {c['op']!r}")
+        for f in CELL_METRICS + ("n",):
+            if f not in c:
+                raise SchemaError(f"{where}: missing field: {f} (§30)")
+            _num(c[f], where, f)
+        if c["correct"] is not True:
+            raise SchemaError(
+                f"{where}: correct={c['correct']!r} — an artifact with a "
+                "failed oracle is uncommittable (§30)")
+        if c.get("proc_scope") not in ("server", "harness"):
+            raise SchemaError(f"{where}: proc_scope must name the measured "
+                              "process (§30: CPU/RSS without a scope is "
+                              "an unlabeled number)")
+        claim = c.get("claim")
+        if not isinstance(claim, str) or not claim:
+            raise SchemaError(f"{where}: missing field: claim (§30: every "
+                              "number carries its label)")
+        if c["tier"] == "sdk" and ("SDK latency" not in claim
+                                   or "engine latency" in claim):
+            raise SchemaError(
+                f"{where}: an SDK cell must claim 'SDK latency' and must "
+                "never claim engine latency (§30)")
+        key = (c["tier"], c["transport"], c["op"])
+        if key in seen:
+            raise SchemaError(f"{where}: duplicate cell {key}")
+        seen.add(key)
+        rows[key] = _num(c["p50_ns"], where, "p50_ns")
+    # The certification's shape: every measured tier × transport the
+    # deliverable names must carry cells (REST is N/A by design).
+    for key in (("protocol", "mcp"), ("protocol", "native"),
+                ("serialization", "transportless"),
+                ("sdk", "mcp"), ("sdk", "embedded")):
+        if not any(k[:2] == key for k in seen):
+            raise SchemaError(f"{path}: no cells for {key[0]}×{key[1]} "
+                              "(§30 tier×transport matrix)")
+    for f in ("commit", "seed", "engine_version"):
+        if f not in data:
+            raise SchemaError(f"{path}: missing field: {f} (§13)")
+    env = data.get("environment")
+    if not isinstance(env, dict):
+        raise SchemaError(f"{path}: missing field: environment (§13)")
+    for f in ("os", "cpu", "ram_mb", "cache_state", "git_sha",
+              "harness_sha"):
+        if not env.get(f):
+            raise SchemaError(f"{path}: missing field: environment.{f} (§13)")
+    _num(env["ram_mb"], path, "environment.ram_mb")
+    if fresh:
+        check_fresh(path, data)
+    return rows
+
+
 def main():
     if len(sys.argv) != 2:
         print("usage: python scripts/artifact_schema.py <artifact.json>", file=sys.stderr)
@@ -221,15 +323,17 @@ def main():
     path = sys.argv[1]
     try:
         # CI-08: dispatch on the artifact's own shape — the competitor
-        # matrix (§13) vs the 1M harness rows.
+        # matrix (§13) vs the 1M harness rows. D-20 adds the tiers shape.
         data = load(path)
         if "engines" in data:
             rows = validate_competitor(path, fresh=True)
         elif "backends" in data:
             rows = validate_1m(path, fresh=True)
+        elif "tiers" in data:
+            rows = validate_tiers(path, fresh=True)
         else:
-            raise SchemaError(f"{path}: neither engines nor backends — "
-                              "unknown artifact shape")
+            raise SchemaError(f"{path}: neither engines, backends nor "
+                              "tiers — unknown artifact shape")
     except SchemaError as e:
         print(f"FRESH FAIL: {e}", file=sys.stderr)
         sys.exit(1)
