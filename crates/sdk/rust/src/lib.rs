@@ -8,6 +8,10 @@
 pub mod client;
 pub mod embedded;
 pub mod error;
+/// The shared pure wire logic + the eight §15 fuzz checks (doc(hidden): the
+/// out-of-workspace fuzz crate is the consumer).
+#[doc(hidden)]
+pub mod fuzz;
 pub mod tools;
 pub mod tx;
 

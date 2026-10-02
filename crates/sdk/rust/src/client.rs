@@ -9,6 +9,9 @@
 //! file (the canonical API does not change when the transport changes).
 
 use crate::error::{Error, McpError};
+use crate::fuzz::{
+    decode_notify, decode_response, map_native_error, parse_version, version_less, RpcResponse,
+};
 use aikoql_native as nat;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -33,49 +36,6 @@ struct RpcRequest {
     method: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     params: Option<Value>,
-}
-
-#[derive(Deserialize)]
-struct RpcResponse {
-    #[serde(default)]
-    id: Option<u64>,
-    #[serde(default)]
-    method: Option<String>,
-    #[serde(default)]
-    result: Option<Value>,
-    #[serde(default)]
-    params: Option<Value>,
-    #[serde(default)]
-    error: Option<RpcError>,
-}
-
-#[derive(Deserialize)]
-struct RpcError {
-    code: Value,
-    message: String,
-}
-
-impl RpcError {
-    fn mcp_error(self) -> McpError {
-        // The RPC-level error only carries code/message; string-encoded
-        // codes and numbers both normalize to their string form.
-        let code = match &self.code {
-            Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
-            other => other.to_string(),
-        };
-        let code = if code.is_empty() {
-            "INTERNAL".into()
-        } else {
-            code
-        };
-        McpError {
-            code,
-            message: self.message,
-            retryable: false,
-            suggestion: String::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -160,7 +120,7 @@ impl Client {
             return Err(Error::Mcp(McpError::protocol_error(id, rid)));
         }
         if mt == nat::ERROR {
-            return Err(Error::Mcp(native_error(&payload)));
+            return Err(Error::Mcp(map_native_error(&payload)));
         }
         if mt != nat::HELLO {
             return Err(Error::Mcp(McpError::protocol_error(id, mt as u64)));
@@ -262,21 +222,21 @@ impl Client {
                     "connection closed by the server",
                 )));
             }
-            let resp: RpcResponse = match serde_json::from_str(line.trim()) {
-                Ok(r) => r,
-                Err(_) => continue, // tolerate non-JSON noise frames
+            // Tolerate non-JSON noise frames and non-numeric ids (the
+            // frozen §3.3 skip) — decode_response is the shared pure parse.
+            let Some((rid, err, result)) = decode_response(line.trim()) else {
+                continue;
             };
-            let rid = resp.id.unwrap_or(0);
             if rid < id {
                 continue; // id-less, notification, duplicate, or late — never an error
             }
             if rid > id {
                 return Err(Error::Mcp(McpError::protocol_error(id, rid)));
             }
-            if let Some(e) = resp.error {
-                return Err(Error::Mcp(e.mcp_error()));
+            if let Some(e) = err {
+                return Err(Error::Mcp(e));
             }
-            return Ok(resp.result.unwrap_or(Value::Null));
+            return Ok(result.unwrap_or(Value::Null));
         }
     }
 
@@ -353,7 +313,7 @@ impl Client {
                 return Err(Error::Mcp(McpError::protocol_error(id, rid)));
             }
             if mt == nat::ERROR {
-                return Err(Error::Mcp(native_error(&payload)));
+                return Err(Error::Mcp(map_native_error(&payload)));
             }
             let env: Value = serde_json::from_slice(&payload).map_err(Error::Json)?;
             if env.get("ok") == Some(&serde_json::json!(false)) {
@@ -614,36 +574,6 @@ async fn native_recv(io: &mut BufReader<TcpStream>) -> Result<(u16, u64, Vec<u8>
     }
 }
 
-/// An ERROR frame → McpError. The server sends the native codes directly;
-/// the legacy "-32001" spelling (the MCP auth vector's frozen expectation)
-/// maps to AUTHENTICATION_FAILED.
-fn native_error(payload: &[u8]) -> McpError {
-    let env: Value = serde_json::from_slice(payload).unwrap_or(Value::Null);
-    let code = env
-        .get("code")
-        .and_then(|c| c.as_str())
-        .map(|c| {
-            if c == "-32001" {
-                "AUTHENTICATION_FAILED"
-            } else {
-                c
-            }
-        })
-        .unwrap_or("INTERNAL")
-        .to_string();
-    let message = env
-        .get("message")
-        .and_then(|m| m.as_str())
-        .unwrap_or("")
-        .to_string();
-    McpError {
-        code,
-        message,
-        retryable: false,
-        suggestion: String::new(),
-    }
-}
-
 /// The native stream read loop (the §6 mirror of stream_call): QUERY head →
 /// yield, QUERY_CHUNK → yield, QUERY_END → done. Holds the connection
 /// mutex for the stream's whole life; dropping the receiver cancels the
@@ -683,7 +613,7 @@ async fn native_stream_pump(
                 let _ = tx.send(Ok(chunk)).await;
             }
             nat::QUERY_END => return Ok(()),
-            nat::ERROR => return Err(Error::Mcp(native_error(&payload))),
+            nat::ERROR => return Err(Error::Mcp(map_native_error(&payload))),
             _ => continue, // unrelated frames mid-stream
         }
     }
@@ -758,20 +688,18 @@ async fn stream_call(
         let Some(sid) = stream_id.as_ref() else {
             continue; // push before the response frame
         };
-        if resp.method.as_deref() != Some("notifications/notify") {
-            continue; // an unrelated event while streaming
-        }
-        let params = resp.params.unwrap_or(Value::Null);
-        let p: NotifyChunk = match serde_json::from_value(params.clone()) {
-            Ok(p) => p,
-            Err(_) => continue,
+        // The shared pure notify decode (method + chunk shape + defaults);
+        // an unrelated event while streaming is never an error.
+        let Some((nsid, done)) = decode_notify(&resp) else {
+            continue;
         };
-        if p.stream_id != *sid {
+        if nsid != *sid {
             continue;
         }
+        let params = resp.params.clone().unwrap_or(Value::Null);
         let _ = tx.send(Ok(params)).await;
         received += 1;
-        if p.done || (total > 0 && received >= total) {
+        if done || (total > 0 && received >= total) {
             return Ok(()); // the Go exit condition: done, or received == total_chunks
         }
     }
@@ -818,14 +746,6 @@ struct StreamHead {
     total_chunks: usize,
 }
 
-#[derive(Deserialize)]
-struct NotifyChunk {
-    #[serde(default)]
-    stream_id: String,
-    #[serde(default)]
-    done: bool,
-}
-
 /// SessionParams establishes session identity (MRFC-0040).
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SessionParams {
@@ -837,24 +757,6 @@ pub struct SessionParams {
     pub tenant: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roles: Option<Vec<String>>,
-}
-
-/// Mirrors the Go SDK's dotted-int tuple: non-numeric segments become -1
-/// (never >=).
-fn parse_version(v: &str) -> Vec<i64> {
-    v.split('.')
-        .map(|seg| seg.parse::<i64>().unwrap_or(-1))
-        .collect()
-}
-
-/// Compares two dotted version tuples segment by segment.
-fn version_less(a: &[i64], b: &[i64]) -> bool {
-    for i in 0..a.len().min(b.len()) {
-        if a[i] != b[i] {
-            return a[i] < b[i];
-        }
-    }
-    a.len() < b.len()
 }
 
 #[cfg(test)]
