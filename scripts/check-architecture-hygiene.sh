@@ -640,5 +640,21 @@ if grep -q '^  maven-central-publish:' "$REL" && \
   fail=1
 fi
 
+# workflow test 23 — test_pypi_wheel_matrix (D-18, SDK plan §27):
+# the Python SDK ships abi3-py39 wheels — one wheel per platform covers
+# py3.9+, so the release must build on all four (x86_64 linux/windows/
+# macos + arm64 macos) and install-check each wheel against the artifact
+# itself before upload: a wheel that cannot be installed or imported
+# fails the release here, not in the wild.
+if ! grep -qF 'os: [ubuntu-latest, windows-latest, macos-13, macos-14]' "$REL"; then
+  echo "ARCH: release.yml lost the 4-OS pypi wheel matrix (D-18)" >&2
+  fail=1
+fi
+if grep -q '^  pypi-wheel-matrix:' "$REL" && \
+   ! sed -n '/^  pypi-wheel-matrix:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'python -c "import aikoql"'; then
+  echo "ARCH: the pypi-wheel-matrix job lost the wheel install smoke (D-18)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
