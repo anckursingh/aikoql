@@ -661,6 +661,46 @@ jobs:
           git push origin "$TAG"
           echo "::notice::pushed tag $TAG"
 
+  # ── crates.io publish, gated on the release + version match ─────
+  # Publishes the Rust SDK closure (aikoql-native → … → aikoql-sdk) in
+  # dependency order with a real token (crates.io has no OIDC trusted
+  # publishing). Each crate is skipped when its version already exists
+  # (rescue re-dispatch); a failed publish is retried — the sparse index
+  # lags a fresh sibling publish by up to a minute.
+  crates-io-publish:
+    name: Publish Rust crates to crates.io
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [github-release, validate-versions]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish the closure in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ needs.validate-versions.outputs.version }}
+        run: |
+          set -euo pipefail
+          CRATES="aikoql-native aikoql-kernel aikoql-storage-v2 aikoql-graph aikoql-vector aikoql-scheduler aikoql-semantic aikoql-compiler aikoql-runtime aikoql-sdk"
+          for crate in $CRATES; do
+            # crates.io API, not `cargo` — publish 0.2.0 twice is a hard error.
+            if curl -sf "https://crates.io/api/v1/crates/${crate}/${VERSION}" >/dev/null 2>&1; then
+              echo "::notice::${crate} ${VERSION} already published — skipping (rescue re-dispatch)"
+              continue
+            fi
+            ok=0
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              if cargo publish -p "${crate}"; then ok=1; break; fi
+              echo "::warning::publish ${crate} failed (attempt ${attempt}) — sparse-index lag, retrying in 60s"
+              sleep 60
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "::error::${crate} failed after 10 attempts"
+              exit 1
+            fi
+          done
+
   # ── npm publish, gated on the release + version match ──────────
   # Publishes via npm trusted publishing (GitHub Actions OIDC, no token).
   # Also runs standalone on workflow_dispatch (rescue path: publishes the

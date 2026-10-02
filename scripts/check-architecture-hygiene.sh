@@ -614,7 +614,7 @@ fi
 # does not exist yet). The frozen order is the [dependencies] topo sort:
 # native → kernel → storage-v2 → graph → vector → scheduler → semantic →
 # compiler → runtime → sdk.
-if ! grep -q 'CRATES="aikoql-native aikoql-storage-v2 aikoql-graph aikoql-vector aikoql-scheduler aikoql-semantic aikoql-compiler aikoql-kernel aikoql-runtime aikoql-sdk"' "$REL"; then
+if ! grep -q 'CRATES="aikoql-native aikoql-kernel aikoql-storage-v2 aikoql-graph aikoql-vector aikoql-scheduler aikoql-semantic aikoql-compiler aikoql-runtime aikoql-sdk"' "$REL"; then
   echo "ARCH: release.yml loses the frozen crates.io publish chain (D-18)" >&2
   fail=1
 fi

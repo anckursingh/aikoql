@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-aikoql-kernel = { path = "../../kernel" }
+aikoql-kernel = { workspace = true }
 # SE2-M3: legacy WAL migration rides the vendored v1 envelope parser
 # (legacy_envelope.rs — frozen when the v1 crate was deleted, launch S-02);
 # the frozen batch-payload codec is re-implemented in migration.rs.
