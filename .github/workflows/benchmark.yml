@@ -273,6 +273,29 @@ jobs:
       - name: Mutation harness — all 11 mutants killed
         run: bash scripts/storage-mutation-harness.sh all
 
+  # F-05 — the Layer B cargo-fuzz estate (FZ-01..07, PR #7 fuzz review):
+  # the storage engine's seven decode boundaries under libFuzzer (the
+  # Linux engine arm; the default-build sweep in tests/fuzz_estate.rs
+  # covers the other platforms). Each target runs AIKOQL_FUZZ_SECONDS
+  # with no seed corpus — every check embeds its own valid inputs, so the
+  # engine reaches the deep paths from the first run. Weekly/dispatch
+  # tier, like storage-mutation (a cold pass is ~10-15 min incl. the
+  # cargo-fuzz install). Gate: scripts/check-architecture-hygiene.sh
+  # workflow test 17b.
+  storage-fuzz:
+    name: Storage decode-boundary fuzz (FZ-01..07)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
+      - name: FZ-01..07 decode boundaries under libFuzzer
+        run: AIKOQL_FUZZ_SECONDS=30 bash crates/storage/aikoql-v2/fuzz/smoke.sh
+
   # CI-07 — the hybrid knowledge workload rides the nightly tier
   # (TESTING-PLAN §5): bench.py's full matrix incl. the knowledge_query
   # cell — identity resolution -> metadata filter -> traversal -> semantic
