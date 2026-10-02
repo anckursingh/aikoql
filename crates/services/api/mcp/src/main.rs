@@ -541,16 +541,35 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            run_tcp_listener(
+            // D-20 (§30): one server serves both transports. With
+            // --native-port set, the TCP loop moves to its own thread so the
+            // main thread reaches the native loop below; otherwise it blocks
+            // main as before. The clones keep the originals for that loop.
+            let has_native = native_addr.is_some();
+            let (k, a, d, rl, adm) = (
                 kernel.clone(),
-                listener,
                 auth.clone(),
                 db_path.clone(),
                 mcp_rate_limit.clone(),
                 admin.clone(),
-                cfg.request_timeout_secs,
-                cfg.max_connections,
             );
+            let serve = move || {
+                run_tcp_listener(
+                    k,
+                    listener,
+                    a,
+                    d,
+                    rl,
+                    adm,
+                    cfg.request_timeout_secs,
+                    cfg.max_connections,
+                )
+            };
+            if has_native {
+                thread::spawn(serve);
+            } else {
+                serve();
+            }
         }
         if let Some(addr) = native_addr {
             // D-15: the same R1 loopback-only rule — the framed protocol

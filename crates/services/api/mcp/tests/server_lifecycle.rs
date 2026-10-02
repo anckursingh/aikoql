@@ -36,7 +36,7 @@
 //! The binary must be built first: `cargo build --bin aikoql-mcp`
 //! (cargo test does NOT build bins — the txn_crasher trap).
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -435,6 +435,7 @@ fn sv002_restart_recovery_sees_previous_writes() {
     {
         let mut c = Client::new(s1.port(), "tok1");
         create_node(&mut c, 2);
+        eprintln!("t2 {}", std::time::Instant::now().elapsed().as_secs_f32());
         c.call("shutdown", json!({}));
         let _ = c.recv(); // drain to EOF
     }
@@ -856,6 +857,7 @@ fn sv011_mcp_transaction_tools_round_trip() {
     assert_eq!(result_of(&r).get("rolled_back"), Some(&json!(true)), "{r}");
     assert_eq!(query_nodes(&mut c), 1, "rollback must leave no residue");
 
+    eprintln!("t2 {}", std::time::Instant::now().elapsed().as_secs_f32());
     c.call("shutdown", json!({}));
     server.stop("sv011 server");
     let _ = std::fs::remove_dir_all(&db); // v2 database = directory
@@ -900,5 +902,79 @@ fn sv012_connection_cap_is_never_exceeded() {
     drop(burst);
     a.call("shutdown", json!({}));
     server.stop("sv012 server");
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// --- sv013 — one server, both transports (D-20 §30) --------------------------
+
+/// D-20 (§30): the tier certification runs ONE server on both transports —
+/// `--listen` plus `--native-port`. Both accept loops must serve. The
+/// native loop is the second blocking loop in main(), so an unspawned
+/// sequence binds only --listen and the native port never opens (RED: the
+/// connect deadline fires).
+#[test]
+fn sv013_both_transports_serve_on_one_server() {
+    use aikoql_native as nat;
+
+    let db = tmp_db("sv013");
+    let mcp_port = free_port();
+    let native_port = loop {
+        let p = free_port();
+        if p != mcp_port {
+            break p;
+        }
+    };
+    let mut cmd = Command::new(server_bin());
+    cmd.arg("serve")
+        .arg("--listen")
+        .arg(format!("127.0.0.1:{mcp_port}"))
+        .arg("--native-port")
+        .arg(format!("127.0.0.1:{native_port}"))
+        .arg("--tcp-token")
+        .arg("tokA:tenA:user")
+        .arg(&db)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = cmd.spawn().expect("spawn aikoql-mcp serve");
+    let mut server = Server {
+        child,
+        port: mcp_port,
+    };
+
+    // Both loops bound and serving: MCP answers initialize on --listen ...
+    let mut c = Client::new(server.port(), "tokA");
+    // ... and the framed wire answers HELLO on --native-port.
+    let mut native = connect(native_port);
+    let hello = b"{\"protocol_version\":1,\"capabilities\":[],\"client\":{\"name\":\"sv013\",\"version\":\"0\"}}";
+    let header = nat::header_bytes(0, 1, nat::HELLO, hello.len() as u32);
+    let mut frame = header.to_vec();
+    frame.extend_from_slice(hello);
+    frame.extend_from_slice(&nat::crc32(&frame).to_le_bytes());
+    native.write_all(&frame).expect("write HELLO");
+    let mut h = [0u8; nat::HEADER_LEN];
+    native
+        .read_exact(&mut h)
+        .expect("read the HELLO answer header");
+    let parsed = nat::parse_header(&h).expect("valid response header");
+    assert_eq!(parsed.msg_type, nat::HELLO, "HELLO must answer HELLO");
+    assert_ne!(
+        parsed.flags & nat::FLAG_RESPONSE,
+        0,
+        "the HELLO answer is a response frame"
+    );
+    // The shutdown must drain even with the native connection STILL OPEN
+    // (native.rs: shutdown() on a duplicated socket handle does not wake
+    // the blocked read on Windows — the read timeout is the wake). Without
+    // the wake the drain stalls for its whole deadline (~30s); with it the
+    // exit lands well inside this bound.
+    let t0 = std::time::Instant::now();
+    c.call("shutdown", json!({}));
+    server.stop("sv013 server");
+    assert!(
+        t0.elapsed() < std::time::Duration::from_secs(15),
+        "the drain must not stall on the open native connection ({:?})",
+        t0.elapsed()
+    );
+    drop(native);
     let _ = std::fs::remove_dir_all(&db);
 }

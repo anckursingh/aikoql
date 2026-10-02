@@ -59,14 +59,34 @@ fn respond(writer: &Arc<Mutex<TcpStream>>, request_id: u64, msg_type: u16, paylo
 /// clean EOF before any byte of the frame; any decode failure (truncated,
 /// corrupt, oversized — §6 invariants 4/5) closes the connection.
 fn read_native_frame(reader: &mut TcpStream) -> Result<Option<(nat::Header, Vec<u8>)>, String> {
+    // D-20 (sv013): a blocked read is only woken by the drain's timeout (on
+    // Windows, shutdown() on a duplicated socket handle does not wake a
+    // pending recv on another handle). WouldBlock/TimedOut => the timeout
+    // fired: check the shutdown flag, else keep waiting.
+    fn wake(e: &std::io::Error) -> Result<(), Option<String>> {
+        match e.kind() {
+            std::io::ErrorKind::Interrupted => Ok(()),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                if SHUTDOWN_FLAG.load(Ordering::Relaxed) {
+                    Err(None)
+                } else {
+                    Ok(())
+                }
+            }
+            _ => Err(Some(e.to_string())),
+        }
+    }
     let mut header = [0u8; nat::HEADER_LEN];
     let mut n = 0;
     while n < header.len() {
         match reader.read(&mut header[n..]) {
             Ok(0) => return Ok(None),
             Ok(k) => n += k,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(format!("header read: {e}")),
+            Err(e) => match wake(&e) {
+                Ok(()) => continue,
+                Err(None) => return Ok(None), // shutdown timeout — clean close
+                Err(Some(m)) => return Err(format!("header read: {m}")),
+            },
         }
     }
     let h = nat::parse_header(&header).map_err(|e| e.to_string())?;
@@ -76,8 +96,11 @@ fn read_native_frame(reader: &mut TcpStream) -> Result<Option<(nat::Header, Vec<
         match reader.read(&mut payload[n..]) {
             Ok(0) => return Err("truncated payload".into()),
             Ok(k) => n += k,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(format!("payload read: {e}")),
+            Err(e) => match wake(&e) {
+                Ok(()) => continue,
+                Err(None) => return Ok(None),
+                Err(Some(m)) => return Err(format!("payload read: {m}")),
+            },
         }
     }
     let mut crc = [0u8; 4];
@@ -86,8 +109,11 @@ fn read_native_frame(reader: &mut TcpStream) -> Result<Option<(nat::Header, Vec<
         match reader.read(&mut crc[n..]) {
             Ok(0) => return Err("truncated checksum".into()),
             Ok(k) => n += k,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(format!("checksum read: {e}")),
+            Err(e) => match wake(&e) {
+                Ok(()) => continue,
+                Err(None) => return Ok(None),
+                Err(Some(m)) => return Err(format!("checksum read: {m}")),
+            },
         }
     }
     if !nat::verify(&header, &payload, u32::from_le_bytes(crc)) {
@@ -181,6 +207,12 @@ pub(crate) fn handle_native_client(
         ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
         return;
     };
+    // D-20 (sv013): the read timeout is the shutdown wake — on Windows the
+    // drain's shutdown() on the registered clone does NOT wake a blocked
+    // recv on this duplicate handle, so without it an idle connection
+    // stalls the drain for its whole deadline (read_native_frame checks
+    // SHUTDOWN_FLAG on each timeout).
+    let _ = reader.set_read_timeout(Some(Duration::from_millis(200)));
     let writer = Arc::new(Mutex::new(stream));
     // PRR-2: identity comes exclusively from a verified --tcp-token.
     let mut session = McpSession {
@@ -199,7 +231,7 @@ pub(crate) fn handle_native_client(
             Ok(Some(f)) => f,
             Ok(None) => break 'conn,
             Err(e) => {
-                warn!(%peer, error = %e, "native frame rejected — dropping connection");
+                warn!(%peer, %e, "native read failed — closing connection");
                 break 'conn;
             }
         };
