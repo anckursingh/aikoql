@@ -238,14 +238,24 @@ type rpcError struct {
 }
 
 func (e *rpcError) mcpError() *McpError {
-	code := string(e.Code)
-	if len(code) > 0 && code[0] == '"' { // string-encoded code: strip quotes
-		code = strings.Trim(code, `"`)
+	return &McpError{Code: normalizeCode(string(e.Code)), Message: e.Message}
+}
+
+// normalizeCode maps a raw JSON-RPC code to the string code the SDK
+// surfaces. A string-encoded code is decoded exactly as Python's
+// json.loads does (escapes included); an absent code is INTERNAL.
+// (FuzzErrorMapping.)
+func normalizeCode(code string) string {
+	if len(code) > 0 && code[0] == '"' {
+		var s string
+		if err := json.Unmarshal([]byte(code), &s); err == nil {
+			code = s
+		}
 	}
 	if code == "" {
 		code = "INTERNAL"
 	}
-	return &McpError{Code: code, Message: e.Message}
+	return code
 }
 
 // maxFrame is the §19 cap: an unterminated line past it is refused before
@@ -301,6 +311,28 @@ func (c *Client) applyDeadline(ctx context.Context) (clear func() error, err err
 	return func() error { return c.tr.SetDeadline(time.Time{}) }, nil
 }
 
+// The frozen §3.3 response-id correlation rules: a smaller id is skipped
+// (id-less, notification, duplicate, or late — never an error), a larger id
+// is a PROTOCOL_ERROR, equality matches.
+const (
+	corrSkip = iota
+	corrMatch
+	corrProtocol
+)
+
+// classifyID applies the frozen correlation rules to one response id.
+// (FuzzRequestIDCorrelation.)
+func classifyID(want, got int64) int {
+	switch {
+	case got < want:
+		return corrSkip
+	case got > want:
+		return corrProtocol
+	default:
+		return corrMatch
+	}
+}
+
 // request sends one JSON-RPC request and returns its result frame,
 // skipping pushed notifications by id correlation.
 func (c *Client) request(ctx context.Context, method string, params any) (result json.RawMessage, err error) {
@@ -354,10 +386,10 @@ func (c *Client) request(ctx context.Context, method string, params any) (result
 		if err := json.Unmarshal([]byte(line), &resp); err != nil {
 			continue // tolerate non-JSON noise frames
 		}
-		if resp.ID < id {
-			continue // id-less (0), notification, duplicate, or late — never an error
-		}
-		if resp.ID > id {
+		switch classifyID(id, resp.ID) {
+		case corrSkip:
+			continue
+		case corrProtocol:
 			return nil, &McpError{
 				Code:       "PROTOCOL_ERROR",
 				Message:    fmt.Sprintf("response id %d does not match request %d", resp.ID, id),
@@ -452,24 +484,34 @@ func (c *Client) stream(ctx context.Context, method string, params any, yieldFn 
 		if streamID == "" || resp.Method != "notifications/notify" {
 			continue // push before the response, or an unrelated event
 		}
-		var p struct {
-			StreamID string `json:"stream_id"`
-			Done     bool   `json:"done"`
-		}
-		if err := json.Unmarshal(resp.Params, &p); err != nil {
+		pStreamID, done, err := decodeStreamNotify(resp.Params)
+		if err != nil {
 			continue
 		}
-		if p.StreamID != streamID {
+		if pStreamID != streamID {
 			continue
 		}
 		if err := yieldFn(resp.Params); err != nil {
 			return fmt.Errorf("aikoql: %s consumer: %w", method, err)
 		}
 		received++
-		if p.Done || (total > 0 && received >= total) {
+		if done || (total > 0 && received >= total) {
 			return nil // Python's exit condition: received == total_chunks, or done
 		}
 	}
+}
+
+// decodeStreamNotify decodes one notifications/notify params frame:
+// stream_id plus the done flag. (FuzzDecodeStreamChunk.)
+func decodeStreamNotify(params json.RawMessage) (streamID string, done bool, err error) {
+	var p struct {
+		StreamID string `json:"stream_id"`
+		Done     bool   `json:"done"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return "", false, err
+	}
+	return p.StreamID, p.Done, nil
 }
 
 // Initialize performs the MCP handshake (protocol version, client info,
@@ -536,6 +578,13 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments any) (json
 	if err != nil {
 		return nil, fmt.Errorf("aikoql: %s: %w", name, err)
 	}
+	return decodeToolEnvelope(name, raw)
+}
+
+// decodeToolEnvelope decodes the MCP tools/call envelope: the first content
+// text block carries the tool's own {ok, data, error} payload (the name is
+// only used in error text). (FuzzDecodeToolEnvelope.)
+func decodeToolEnvelope(name string, raw json.RawMessage) (json.RawMessage, error) {
 	var env struct {
 		Content []struct {
 			Text string `json:"text"`
