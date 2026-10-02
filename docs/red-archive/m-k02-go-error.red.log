@@ -1,0 +1,7 @@
+--- FAIL: TestCorpusPin (0.00s)
+    corpus_test.go:185: case corp-e03 (rpc_error): go column drift — got {"code":"","message":"m"}, want {"code": "INTERNAL", "message": "m"}
+    corpus_test.go:185: case corp-e05 (rpc_error): go column drift — got {"code":"","message":"no code"}, want {"code": "INTERNAL", "message": "no code"}
+FAIL
+FAIL	github.com/anckursingh/aikoql/sdk/go	0.080s
+FAIL
+EXIT=1

@@ -1,0 +1,16 @@
+                f"case {c['id']} ({c['surface']}): python column drift — "
+                f"got {got!r}, want {want!r}"
+            )
+E           AssertionError: case corp-e05 (rpc_error): python column drift — got {'code': '', 'message': 'no code'}, want {'code': 'INTERNAL', 'message': 'no code'}
+E           assert {'code': '', ...e': 'no code'} == {'code': 'INT...e': 'no code'}
+E             
+E             Omitting 1 identical items, use -vv to show
+E             Differing items:
+E             {'code': ''} != {'code': 'INTERNAL'}
+E             Use -v to get more diff
+
+tests\test_corpus_pin.py:116: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_corpus_pin.py::test_corpus_pin - AssertionError: case corp-...
+1 failed in 0.83s
+EXIT=1
