@@ -19,6 +19,20 @@ import java.util.concurrent.locks.ReentrantLock;
 public final class Connection implements AutoCloseable {
     private static final SecureRandom RNG = new SecureRandom();
 
+    /** The frozen §3.3 correlation verdicts, restated (the Go corr*
+     * constants): smaller ids skip, larger ids are PROTOCOL_ERROR, equal
+     * ids match. */
+    enum Corr { SKIP, PROTOCOL, MATCH }
+
+    /** The frozen §3.3 correlation rules: a smaller id is skipped (id-less,
+     * notification, duplicate, or late — never an error), a larger id is
+     * PROTOCOL_ERROR, equal ids match. */
+    static Corr classifyID(long want, long got) {
+        if (got < want) return Corr.SKIP;
+        if (got > want) return Corr.PROTOCOL;
+        return Corr.MATCH;
+    }
+
     final Transport transport;
     final ReentrantLock lock = new ReentrantLock();
     private int nextId;
@@ -94,8 +108,12 @@ public final class Connection implements AutoCloseable {
                 Json.Value ridV = Json.dotGet(resp, "id");
                 if (!(ridV instanceof Json.Num n)) continue; // not our numeric correlation
                 long rid = (long) n.v();
-                if (rid < id) continue; // id-less, notification, duplicate, or late — never an error
-                if (rid > id) throw AikoqlException.protocolError(id, rid);
+                switch (classifyID(id, rid)) {
+                    // id-less, notification, duplicate, or late — never an error
+                    case SKIP -> { continue; }
+                    case PROTOCOL -> throw AikoqlException.protocolError(id, rid);
+                    case MATCH -> { }
+                }
                 Json.Value err = Json.dotGet(resp, "error");
                 if (err != null) throw rpcError(err);
                 Json.Value result = Json.dotGet(resp, "result");
@@ -208,6 +226,15 @@ public final class Connection implements AutoCloseable {
         } finally {
             lock.unlock();
         }
+        return decodeToolEnvelope(name, raw);
+    }
+
+    /** The pure tools/call envelope decode: the inner text payload out of
+     * the result frame. Mirrors the Python SDK: an absent "ok" means
+     * success; the "data" field, when present, wraps the payload; ok:false
+     * throws the mapped error. */
+    static Json.Value decodeToolEnvelope(String toolName, Json.Value raw)
+            throws AikoqlException {
         String text = Json.jsonStr(Json.dotGet(raw, "content.0.text"));
         Json.Value payload;
         try {
@@ -215,8 +242,6 @@ public final class Connection implements AutoCloseable {
         } catch (AikoqlException e) {
             throw AikoqlException.json(e.getMessage());
         }
-        // Mirrors the Python SDK: an absent "ok" means success; the "data"
-        // field, when present, wraps the payload.
         Json.Value ok = Json.dotGet(payload, "ok");
         if (ok instanceof Json.Bool b && !b.v()) {
             Json.Value err = Json.dotGet(payload, "error");
@@ -230,7 +255,7 @@ public final class Connection implements AutoCloseable {
                 throw new AikoqlException(code, message, retryable, suggestion);
             }
             throw new AikoqlException(
-                    "INTERNAL", "tool " + name + " failed without an error envelope");
+                    "INTERNAL", "tool " + toolName + " failed without an error envelope");
         }
         Json.Value data = Json.dotGet(payload, "data");
         if (data != null) return data;

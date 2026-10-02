@@ -88,18 +88,13 @@ public final class ResultSet implements Iterator<Json.Value>, AutoCloseable {
                 return true;
             }
             if (streamId == null || streamId.isEmpty()) continue; // push before the response frame
-            Json.Value method = Json.dotGet(resp, "method");
-            if (!(method instanceof Json.Str ms) || !ms.v().equals("notifications/notify")) {
-                continue; // unrelated event
-            }
+            StreamNotify sn = decodeStreamNotify(resp);
+            if (sn == null || !sn.streamId().equals(streamId)) continue; // unrelated event
             Json.Value p = Json.dotGet(resp, "params");
-            Json.Value sid = Json.dotGet(p, "stream_id");
-            if (!(sid instanceof Json.Str s) || !s.v().equals(streamId)) continue;
             next = p == null ? Json.Null.NULL : p;
             received++;
-            Json.Value done = Json.dotGet(p, "done");
             // The Go exit condition: done, or received == total_chunks.
-            if ((done instanceof Json.Bool b && b.v()) || (total > 0 && received >= total)) {
+            if (sn.done() || (total > 0 && received >= total)) {
                 eof = true;
             }
             return true;
@@ -109,6 +104,22 @@ public final class ResultSet implements Iterator<Json.Value>, AutoCloseable {
     private static long numVal(Json.Value v) {
         return v instanceof Json.Num n ? (long) n.v() : 0;
     }
+
+    /** The pure §4.3 notify decode: a parsed frame's (stream_id, done)
+     * pair, or null for anything that is not a notify frame. */
+    static StreamNotify decodeStreamNotify(Json.Value resp) {
+        Json.Value method = Json.dotGet(resp, "method");
+        if (!(method instanceof Json.Str ms) || !ms.v().equals("notifications/notify")) {
+            return null;
+        }
+        Json.Value p = Json.dotGet(resp, "params");
+        Json.Value sid = Json.dotGet(p, "stream_id");
+        if (!(sid instanceof Json.Str s)) return null;
+        Json.Value done = Json.dotGet(p, "done");
+        return new StreamNotify(s.v(), done instanceof Json.Bool b && b.v());
+    }
+
+    record StreamNotify(String streamId, boolean done) {}
 
     private void finish() {
         if (finished) return;
