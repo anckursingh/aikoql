@@ -631,6 +631,36 @@ jobs:
             checksums.txt.sha256
           generate_release_notes: true
 
+  # ── Go module tag (D-18): pkg.go.dev serves github.com/anckursingh/
+  # aikoql/sdk/go from the subdirectory tag sdk/go/v<version> — the repo
+  # tag alone never exposes the module. Gated on the github-release job:
+  # a module tag for a release that never landed is a phantom version.
+  go-tag:
+    name: Tag the Go SDK module (sdk/go)
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [github-release, validate-versions]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push tag sdk/go/v${{ needs.validate-versions.outputs.version }}
+        env:
+          TAG: sdk/go/v${{ needs.validate-versions.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Remote check, not rev-parse (the create-tag precedent): the
+          # dispatch checkout is shallow and never fetches tags.
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+            echo "::notice::tag $TAG already exists — skipping (rescue re-dispatch)"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "::notice::pushed tag $TAG"
+
   # ── npm publish, gated on the release + version match ──────────
   # Publishes via npm trusted publishing (GitHub Actions OIDC, no token).
   # Also runs standalone on workflow_dispatch (rescue path: publishes the
