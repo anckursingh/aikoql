@@ -451,6 +451,95 @@ jobs:
           set -euo pipefail
           AIKOQL_MCP_BIN="$PWD/target/debug/aikoql-mcp" cargo test -p aikoql-sdk
 
+  # D-19 (SDK plan §28): the cross-language §16 golden corpus as ONE gate —
+  # the five per-SDK pins plus version parity, so the same-input →
+  # same-classification agreement across all five languages is checked as a
+  # whole on every PR. The pins are offline (wire primitives in-process):
+  # no server build, no maturin (the python pin loads mcp_client.py by file).
+  sdk-contract:
+    name: SDK cross-language contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Version parity + the five §16 corpus pins
+        run: |
+          set -euo pipefail
+          bash scripts/check-sdk-compat.sh
+          (cd crates/sdk/go && go test -run TestCorpusPin .)
+          python -m pip install -q pytest
+          python -m pytest crates/sdk/python/tests/test_corpus_pin.py -q
+          (cd crates/sdk/typescript && node --test tests/corpus-pin.test.ts)
+          (cd crates/sdk/java && mvn -B test -Dtest=CorpusPinTest)
+          cargo test -p aikoql-sdk --test fuzz_corpus_pin
+
+  # D-19 (SDK plan §28): a short fuzz smoke per SDK on every PR — the
+  # nightly long fuzz can catch the deep cases only if the PR gate catches
+  # the shallow ones (the rust engine arm is nightly-only by design: rustc
+  # ships libFuzzer only on Linux/macOS, so the PR leg is the stable sweep).
+  sdk-fuzz-smoke:
+    name: SDK fuzz smoke (5 languages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Go native fuzz (one 5s smoke per target)
+        run: |
+          set -euo pipefail
+          cd crates/sdk/go
+          for name in $(grep -o '^func Fuzz[A-Za-z0-9]*' fuzz_test.go | awk '{print $2}'); do
+            go test -fuzz "^${name}\$" -fuzztime 5s .
+          done
+      - name: Python hypothesis estate (§12 model + L1/L3 properties)
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          .venv/bin/pip install -q maturin pytest hypothesis
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop
+          "$VIRTUAL_ENV/bin/python" -m pytest tests/test_fuzz_estate.py tests/test_fuzz_estate_pin.py -q
+      - name: TypeScript fast-check estate (§17 model + properties)
+        run: |
+          set -euo pipefail
+          cd crates/sdk/typescript
+          node --test tests/fuzz-estate.test.ts tests/fuzz-estate-pin.test.ts
+      - name: Java jazzer smokes (7 targets, short budget)
+        run: |
+          set -euo pipefail
+          cd crates/sdk/java
+          bash jazzer-smoke.sh
+      - name: Rust default-build sweep (the engine arm is nightly-only)
+        run: cargo test -p aikoql-sdk --test fuzz_estate --test fuzz_estate_pin
+
   # PR6-F6 (P1-6) → CI-03 (the review's §16 trap): the per-commit perf
   # smoke folded into ci.yml. An always-run job with a fast exit on
   # non-matching paths — a path-gated required workflow skips and a
