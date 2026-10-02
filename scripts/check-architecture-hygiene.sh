@@ -718,5 +718,41 @@ if grep -q '^  rust-sdk:' "$CIWF" && \
   fail=1
 fi
 
+# workflow test 28 — test_sdk_contract_gate (D-19, SDK plan §28): the
+# cross-language §16 golden corpus must be a PR gate — the five pins plus
+# version parity run in ONE job so the cross-language classification
+# agreement is checked as a whole, not per-SDK.
+if ! grep -q '^  sdk-contract:' "$CIWF"; then
+  echo "ARCH: ci.yml lost the sdk-contract gate (D-19)" >&2
+  fail=1
+fi
+if grep -q '^  sdk-contract:' "$CIWF" && \
+   ! sed -n '/^  sdk-contract:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'scripts/check-sdk-compat.sh'; then
+  echo "ARCH: the sdk-contract gate lost the version-parity leg (D-19)" >&2
+  fail=1
+fi
+if grep -q '^  sdk-contract:' "$CIWF" && \
+   ! sed -n '/^  sdk-contract:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'fuzz_corpus_pin'; then
+  echo "ARCH: the sdk-contract gate lost the rust corpus pin (D-19)" >&2
+  fail=1
+fi
+# workflow test 29 — test_sdk_fuzz_smoke_gate (D-19, SDK plan §28): a
+# short fuzz smoke per SDK must run on every PR — the nightly long fuzz
+# can catch the deep cases only if the PR gate catches the shallow ones.
+if ! grep -q '^  sdk-fuzz-smoke:' "$CIWF"; then
+  echo "ARCH: ci.yml lost the sdk-fuzz-smoke gate (D-19)" >&2
+  fail=1
+fi
+if grep -q '^  sdk-fuzz-smoke:' "$CIWF" && \
+   ! sed -n '/^  sdk-fuzz-smoke:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'jazzer-smoke.sh'; then
+  echo "ARCH: the sdk-fuzz-smoke gate lost the java jazzer leg (D-19)" >&2
+  fail=1
+fi
+if grep -q '^  sdk-fuzz-smoke:' "$CIWF" && \
+   ! sed -n '/^  sdk-fuzz-smoke:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'fuzztime 5s'; then
+  echo "ARCH: the sdk-fuzz-smoke gate lost the go fuzz leg (D-19)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
