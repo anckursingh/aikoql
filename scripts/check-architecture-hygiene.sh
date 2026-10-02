@@ -693,6 +693,23 @@ if grep -q '^  ts-sdk:' "$CIWF" && \
   echo "ARCH: the ts-sdk job lost its suite command (D-19)" >&2
   fail=1
 fi
+# the fault matrix rides the same suite and skips silently without the §18
+# proxy — the proxy build is pinned so the legs cannot quietly drop out.
+# python-sdk runs the same matrix in its suite with the same silent skip.
+if grep -q '^  ts-sdk:' "$CIWF" && \
+   ! sed -n '/^  ts-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q -- '-p aikoql-fault-proxy'; then
+  echo "ARCH: the ts-sdk job lost the fault-proxy build (D-19)" >&2
+  fail=1
+fi
+if ! grep -q '^  python-sdk:' "$CIWF"; then
+  echo "ARCH: ci.yml lost the python-sdk job (D-19)" >&2
+  fail=1
+fi
+if grep -q '^  python-sdk:' "$CIWF" && \
+   ! sed -n '/^  python-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q -- '-p aikoql-fault-proxy'; then
+  echo "ARCH: the python-sdk job lost the fault-proxy build (D-19)" >&2
+  fail=1
+fi
 # workflow test 26 — test_java_sdk_job (D-19, SDK plan §28): the Java
 # SDK's surefire suite (real-server pin + fuzz seed sweep included) must
 # run on every PR.
@@ -715,6 +732,13 @@ fi
 if grep -q '^  rust-sdk:' "$CIWF" && \
    ! sed -n '/^  rust-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q 'cargo test -p aikoql-sdk'; then
   echo "ARCH: the rust-sdk job lost its suite command (D-19)" >&2
+  fail=1
+fi
+# the fault suite panics without the §18 proxy (not a skip — a RED), so
+# the rust-sdk job must build it.
+if grep -q '^  rust-sdk:' "$CIWF" && \
+   ! sed -n '/^  rust-sdk:/,/^  [a-z][a-z0-9_-]*:$/p' "$CIWF" | grep -q -- '-p aikoql-fault-proxy'; then
+  echo "ARCH: the rust-sdk job lost the fault-proxy build (D-19)" >&2
   fail=1
 fi
 
