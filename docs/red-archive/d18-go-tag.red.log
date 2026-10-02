@@ -1,0 +1,2 @@
+ARCH: release.yml has no go-tag job pushing the sdk/go/ module tag (D-18)
+EXIT=1

@@ -591,5 +591,21 @@ if bad:
   fail=1
 fi
 
+# workflow test 20 — test_go_module_tag_wired (D-18, SDK plan §27): the
+# release must tag the Go module at sdk/go/v<version> — pkg.go.dev serves
+# the module from that tag; a module that only exists at the repo tag is
+# invisible to the Go ecosystem (the D-18 row's RED: "Go has no tagged
+# module"). The job gates on github-release success (a module tag for a
+# release that never landed is a phantom version).
+if ! sed -n '/^  go-tag:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'sdk/go/'; then
+  echo "ARCH: release.yml has no go-tag job pushing the sdk/go/ module tag (D-18)" >&2
+  fail=1
+fi
+if grep -q '^  go-tag:' "$REL" && \
+   ! sed -n '/^  go-tag:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'github-release'; then
+  echo "ARCH: the go-tag job is not gated on the github-release job (D-18)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
