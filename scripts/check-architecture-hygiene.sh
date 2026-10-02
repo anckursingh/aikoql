@@ -793,5 +793,20 @@ if grep -q '^  sdk-nightly:' "$BENCH" && \
   fail=1
 fi
 
+# workflow test 31 — test_tier_benchmark (D-20, SDK plan §30): the
+# tier×transport certification is the launch plan's D-20 RED state — no
+# SDK benchmark. The harness (protocol/serialization/SDK tiers) and its
+# §13-schema validator arm must exist: an artifact the schema cannot
+# validate is an uncommittable number (§30), and a missing harness is a
+# missing certification.
+if [ ! -f scripts/bench-tiers.py ]; then
+  echo "ARCH: scripts/bench-tiers.py missing (D-20)" >&2
+  fail=1
+fi
+if ! grep -q 'def validate_tiers' scripts/artifact_schema.py; then
+  echo "ARCH: artifact_schema.py lost the validate_tiers arm (D-20)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
