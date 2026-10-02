@@ -266,7 +266,7 @@ fi
 # docker job builds inside the image — neither is a build job.
 for spec in "ci check test-linux lint build-release connectors python-sdk perf-smoke coverage-floor" \
             "benchmark shuffle benchmark guard self-regression-main competitor-scale competitor-matrix storage-mutation" \
-            "release windows linux-gnu linux-musl macos-intel macos-arm pypi-publish tier3-correctness tier3-correctness-windows tier3-coverage tier3-scale tier3-matrix"; do
+            "release windows linux-gnu linux-musl macos-intel macos-arm pypi-wheel-matrix tier3-correctness tier3-correctness-windows tier3-coverage tier3-scale tier3-matrix"; do
   wf="${spec%% *}"
   for job in ${spec#* }; do
     if ! sed -n "/^  $job:/,/^  [a-z][a-z0-9_-]*:$/p" ".github/workflows/$wf.yml" | grep -q 'Swatinem/rust-cache'; then

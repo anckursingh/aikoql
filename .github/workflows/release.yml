@@ -742,21 +742,24 @@ jobs:
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import
           keyid="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
           mkdir -p ~/.m2
-          cat > ~/.m2/settings.xml <<EOF
-<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
-  <servers>
-    <server>
-      <id>central</id>
-      <username>${MAVEN_CENTRAL_USERNAME}</username>
-      <password>${MAVEN_CENTRAL_PASSWORD}</password>
-    </server>
-    <server>
-      <id>gpg</id>
-      <passphrase>${GPG_PASSPHRASE}</passphrase>
-    </server>
-  </servers>
-</settings>
-EOF
+          # printf, not a heredoc — column-0 lines end a YAML block scalar
+          # (spec-compliant parsers read the XML as mapping keys) and an
+          # indented heredoc delimiter never terminates in bash.
+          printf '%s\n' \
+            '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">' \
+            '  <servers>' \
+            '    <server>' \
+            '      <id>central</id>' \
+            "      <username>${MAVEN_CENTRAL_USERNAME}</username>" \
+            "      <password>${MAVEN_CENTRAL_PASSWORD}</password>" \
+            '    </server>' \
+            '    <server>' \
+            '      <id>gpg</id>' \
+            "      <passphrase>${GPG_PASSPHRASE}</passphrase>" \
+            '    </server>' \
+            '  </servers>' \
+            '</settings>' \
+            > ~/.m2/settings.xml
           mvn -B -DskipTests clean deploy -Dgpg.keyname="$keyid"
 
   # ── npm publish, gated on the release + version match ──────────
@@ -801,18 +804,24 @@ EOF
         env:
           NODE_AUTH_TOKEN: ''  # force pure OIDC — GitHub injects a managed token that npmjs.org 404s (v0.1.18)
 
-  # ── PyPI publish (P3-M9): the adopted Python SDK, versioned from the
-  # workspace (pyproject dynamic = ["version"] → the crate's
-  # version.workspace; sdk001 pins the parity). Trusted publishing (OIDC) —
-  # requires the PyPI project configured for GitHub trusted publishing.
-  pypi-publish:
-    name: Publish Python SDK to PyPI
+  # ── Python wheel matrix (D-18) ──────────────────────────────────
+  # abi3-py39 wheels: one wheel per platform covers py3.9+. Each leg
+  # builds its wheel, gates the tag version (PR6-009: the tag's version
+  # comes from the gate output), install-checks the artifact itself and
+  # uploads it for the pypi-publish job. Trusted publishing (OIDC)
+  # happens in pypi-publish — requires the PyPI project configured for
+  # GitHub trusted publishing.
+  pypi-wheel-matrix:
+    name: Build Python wheel (${{ matrix.os }})
     if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -822,21 +831,50 @@ EOF
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build wheel + tag-version gate
+      - name: Build wheel + tag-version gate + install smoke
+        shell: bash
         run: |
           set -euo pipefail
           pip install -q maturin
           cd crates/sdk/python
+          rm -rf dist  # stale wheels (e.g. pre-rename builds) ride the
+                        # upload glob and PyPI rejects the batch
           maturin build --release --out dist
-          # PR6-009: the tag's version comes from the gate output — on
-          # workflow_dispatch GITHUB_REF_NAME is the BRANCH, so the old
-          # `GITHUB_REF_NAME#v` rescue path compared the wheel against
-          # garbage (or failed a legitimate rescue).
           v="${{ needs.validate-versions.outputs.version }}"
           ls "dist/aikoql-${v}"-*.whl >/dev/null || {
             echo "::error::wheel version does not match tag '${v}' (sdk001 parity)"
             exit 1
           }
+          # Install-check the artifact itself — a wheel that cannot be
+          # installed (or imported) fails the release here, not in the
+          # wild (D-18 §27: package install per release).
+          pip install "dist/aikoql-${v}"-*.whl
+          python -c "import aikoql"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: crates/sdk/python/dist/*.whl
+          if-no-files-found: error
+
+  # ── PyPI publish, gated on the wheel matrix + release ───────────
+  # Trusted publishing (OIDC): collects the four matrix wheels and
+  # publishes them in one shot. The skip guard is the rescue path —
+  # re-dispatch over an already-published version must not re-publish.
+  pypi-publish:
+    name: Publish Python SDK to PyPI
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [pypi-wheel-matrix, github-release, validate-versions]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
       - name: Publish (skip if this version is already published)
         id: existing
         env:
@@ -852,7 +890,7 @@ EOF
       - uses: pypa/gh-action-pypi-publish@release/v1
         if: steps.existing.outputs.exists != 'true'
         with:
-          packages-dir: crates/sdk/python/dist/
+          packages-dir: dist/
 
   # ── Post-publish identity verification (PR6-009) ────────────────
   # The review's after-block: once a channel has published, it must answer
