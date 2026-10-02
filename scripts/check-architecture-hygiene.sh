@@ -607,5 +607,17 @@ if grep -q '^  go-tag:' "$REL" && \
   fail=1
 fi
 
+# workflow test 21 — test_crates_io_publish_chain (D-18, SDK plan §27):
+# the release publishes the Rust SDK's closure to crates.io in dependency
+# order — a path-only dep fails `cargo publish` (no version requirement)
+# and an out-of-order publish is rejected by the registry (the dependency
+# does not exist yet). The frozen order is the [dependencies] topo sort:
+# native → kernel → storage-v2 → graph → vector → scheduler → semantic →
+# compiler → runtime → sdk.
+if ! grep -q 'CRATES="aikoql-native aikoql-storage-v2 aikoql-graph aikoql-vector aikoql-scheduler aikoql-semantic aikoql-compiler aikoql-kernel aikoql-runtime aikoql-sdk"' "$REL"; then
+  echo "ARCH: release.yml loses the frozen crates.io publish chain (D-18)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
