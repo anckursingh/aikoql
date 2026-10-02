@@ -552,6 +552,35 @@ if ! grep -q 'prop_lifecycle_state_machine_matches_model_across_reopens' crates/
   fail=1
 fi
 
+# workflow test 17b — Layer B cargo-fuzz estate (F-05, the PR#7-deferred
+# FZ-01..07 surface adopted): the storage fuzz crate (seven decode-boundary
+# targets), its weekly engine arm, and the default-build sweep must all
+# stay wired — a silent drop of the coverage must fail this gate.
+if ! grep -qE '^  storage-fuzz:' "$BENCH"; then
+  echo "ARCH: $BENCH lost the storage-fuzz job (F-05)" >&2
+  fail=1
+fi
+if ! grep -qE '^  storage-fuzz:' "$BENCH" || \
+   ! sed -n '/^  storage-fuzz:/,/^  [a-z][a-z0-9_-]*:$/p' "$BENCH" | grep -q 'fuzz/smoke.sh'; then
+  echo "ARCH: the storage-fuzz job must run the fuzz crate's smoke.sh (F-05)" >&2
+  fail=1
+fi
+for tgt in fuzz_current fuzz_manifest fuzz_wal_frame fuzz_wal_replay \
+           fuzz_checkpoint fuzz_directories fuzz_envelope_snapshot; do
+  if ! grep -q "$tgt" crates/storage/aikoql-v2/fuzz/Cargo.toml; then
+    echo "ARCH: the storage fuzz crate lost the FZ target: $tgt (F-05)" >&2
+    fail=1
+  fi
+done
+if ! grep -q 'pub mod fuzz' crates/storage/aikoql-v2/src/lib.rs; then
+  echo "ARCH: the storage crate lost the doc(hidden) fuzz surface (F-05)" >&2
+  fail=1
+fi
+if ! grep -q 'fn seeds_and_sweep' crates/storage/aikoql-v2/tests/fuzz_estate.rs; then
+  echo "ARCH: the storage fuzz sweep lost seeds_and_sweep (F-05)" >&2
+  fail=1
+fi
+
 # workflow test 18 — test_sdk_compat_wired (D-03, SDK plan §3.2): the dag
 # job must run scripts/check-sdk-compat.sh and the machine-readable
 # contract must exist — either can rot silently in a bad merge (the
