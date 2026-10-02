@@ -357,7 +357,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Build server binary (the contract target)
-        run: cargo build -p aikoql-mcp
+        run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
       - name: Build native module + run SDK suite
         run: |
           set -euo pipefail
@@ -411,7 +411,7 @@ jobs:
         with:
           node-version: 24
       - name: Build server binary (the contract target)
-        run: cargo build -p aikoql-mcp
+        run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
       - name: Real-server suite (fuzz estate + pool + wire ride the same run)
         run: |
           set -euo pipefail
@@ -445,7 +445,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build server binary (the contract target)
-        run: cargo build -p aikoql-mcp
+        run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
       - name: Suite (conformance + embedded + fault + native + fuzz pins)
         run: |
           set -euo pipefail
