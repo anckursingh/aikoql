@@ -619,5 +619,21 @@ if ! grep -q 'CRATES="aikoql-native aikoql-kernel aikoql-storage-v2 aikoql-graph
   fail=1
 fi
 
+# workflow test 22 — test_maven_central_publish (D-18, SDK plan §27):
+# the Java SDK must ship to Maven Central through the Central Portal
+# (central.sonatype.com — OSSRH staging is closed to new projects), and
+# like every publisher it gates on github-release so a failed release
+# never publishes artifacts. The pom version parity + skip guards live
+# in the job body (version parity is a §27 every-release requirement).
+if ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'central.sonatype.com'; then
+  echo "ARCH: the maven-central-publish job does not use the Central Portal (D-18)" >&2
+  fail=1
+fi
+if grep -q '^  maven-central-publish:' "$REL" && \
+   ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'github-release'; then
+  echo "ARCH: the maven-central-publish job is not gated on the github-release job (D-18)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
