@@ -37,17 +37,19 @@ interface ClientConfig {
   version: string;
 }
 
-/** Mirrors the Go SDK's dotted-int tuple: non-numeric segments become -1
- * (never >=). */
-function parseVersion(v: string): number[] {
+/** Mirrors the Python SDK's int(seg) exactly (the Go Atoi agrees on the
+ * canonical cases): only an optionally-signed decimal integer segment is
+ * numeric — Number("") would read "" as 0 and "0x10" as 16 where int()
+ * refuses — everything else becomes -1 (never >=). */
+export function parseVersion(v: string): number[] {
   return v.split(".").map((seg) => {
-    const n = Number(seg);
-    return Number.isInteger(n) ? n : -1;
+    const s = seg.trim();
+    return /^[+-]?\d+$/.test(s) ? Number(s) : -1;
   });
 }
 
 /** Compares two dotted version tuples segment by segment. */
-function versionLess(a: number[], b: number[]): boolean {
+export function versionLess(a: number[], b: number[]): boolean {
   for (let i = 0; i < Math.min(a.length, b.length); i++) {
     if (a[i] !== b[i]) return a[i]! < b[i]!;
   }
@@ -56,9 +58,18 @@ function versionLess(a: number[], b: number[]): boolean {
 
 /** An RPC-level error keeps only code/message; codes normalize to their
  * string form (string-encoded and numeric codes both occur). */
-function rpcError(e: { code?: unknown; message?: string }): McpError {
+export function rpcError(e: { code?: unknown; message?: string }): McpError {
   const code = e.code === undefined || e.code === null ? "" : String(e.code);
   return new McpError(code === "" ? "INTERNAL" : code, e.message ?? "", false, "");
+}
+
+/** The frozen §3.3 correlation rules, restated: a smaller id is skipped
+ * (id-less, notification, duplicate, or late — never an error), a larger
+ * id is PROTOCOL_ERROR, equal ids match. */
+export function classifyID(want: number, got: number): "skip" | "match" | "protocol" {
+  if (got < want) return "skip";
+  if (got > want) return "protocol";
+  return "match";
 }
 
 /**
@@ -73,6 +84,9 @@ export class Client {
   private closed = false;
   private cfg: ClientConfig = { name: "aikoql-ts-sdk", version: "0.2.0" };
   private chain: Promise<unknown> = Promise.resolve();
+  // The open stream's release (null when none): close() cancels a
+  // mid-stream close through it (§17).
+  private streamGate: (() => void) | null = null;
 
   private constructor(transport: Transport) {
     this.transport = transport;
@@ -100,10 +114,14 @@ export class Client {
     return this;
   }
 
-  /** Closes the connection. Safe to call more than once. */
+  /** Closes the connection. Safe to call more than once, and safe with an
+   * open stream: the stream gate is released first — otherwise close (and
+   * every call behind it) deadlocks on the chain (§17). */
   async close(): Promise<void> {
+    this.closed = true; // refuse new calls before the gate is released
+    this.streamGate?.();
+    this.streamGate = null;
     await this.withLock(async () => {
-      this.closed = true;
       this.transport.close();
     });
   }
@@ -156,8 +174,14 @@ export class Client {
         }
         const rid = resp["id"] ?? 0;
         if (typeof rid !== "number") continue; // not our numeric correlation
-        if (rid < id) continue; // id-less, notification, duplicate, or late — never an error
-        if (rid > id) throw McpError.protocolError(id, rid);
+        switch (classifyID(id, rid)) {
+          case "skip":
+            continue; // id-less, notification, duplicate, or late — never an error
+          case "protocol":
+            throw McpError.protocolError(id, rid);
+          case "match":
+            break;
+        }
         if (resp["error"] !== undefined) {
           throw rpcError(resp["error"] as { code?: unknown; message?: string });
         }
@@ -260,6 +284,10 @@ export class Client {
     });
     const prev = this.chain;
     this.chain = prev.then(() => gate);
+    // Registered so close() can cancel a mid-stream close (§17); the
+    // generator's finally clears it (identity-checked against a newer
+    // stream's gate).
+    this.streamGate = release;
     await prev;
     try {
       if (this.closed) throw McpError.unavailable();
@@ -321,6 +349,7 @@ export class Client {
         }
       }
     } finally {
+      if (this.streamGate === release) this.streamGate = null;
       this.transport.cancelPendingRead();
       release();
     }
