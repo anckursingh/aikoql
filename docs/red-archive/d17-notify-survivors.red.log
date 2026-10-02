@@ -1,0 +1,161 @@
+--- FAIL: TestCorpusPin (0.00s)
+    corpus_test.go:185: case corp-v02 (version): go column drift — got [0], want [-1]
+    corpus_test.go:185: case corp-v03 (version): go column drift — got [0], want [-1]
+    corpus_test.go:185: case corp-v05 (version): go column drift — got [1,2,0], want [1, 2, -1]
+FAIL
+FAIL	github.com/anckursingh/aikoql/sdk/go	0.056s
+FAIL
+killed: m-k01-go-version
+--- FAIL: TestCorpusPin (0.00s)
+    corpus_test.go:185: case corp-e03 (rpc_error): go column drift — got {"code":"","message":"m"}, want {"code": "INTERNAL", "message": "m"}
+    corpus_test.go:185: case corp-e05 (rpc_error): go column drift — got {"code":"","message":"no code"}, want {"code": "INTERNAL", "message": "no code"}
+FAIL
+FAIL	github.com/anckursingh/aikoql/sdk/go	0.054s
+FAIL
+killed: m-k02-go-error
+--- FAIL: TestCorpusPin (0.00s)
+    corpus_test.go:185: case corp-c02 (correlation): go column drift — got "skip", want "protocol"
+FAIL
+FAIL	github.com/anckursingh/aikoql/sdk/go	0.055s
+FAIL
+killed: m-k03-go-classify
+  -   -1
+    ]
+  
+      at TestContext.<anonymous> (file:///C:/Users/ancku/AppData/Local/Temp/tmp.g7lkfPR20O/tree/crates/sdk/typescript/tests/corpus-pin.test.ts:97:12)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1106:25)
+      at Test.start (node:internal/test_runner/test:1003:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:358:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 16 ],
+    expected: [ -1 ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+killed: m-k04-ts-version
+  -   message: '[INTERNAL] m'
+    }
+  
+      at TestContext.<anonymous> (file:///C:/Users/ancku/AppData/Local/Temp/tmp.SDBYkogK3k/tree/crates/sdk/typescript/tests/corpus-pin.test.ts:97:12)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1106:25)
+      at Test.start (node:internal/test_runner/test:1003:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:358:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: { code: 'null', message: '[null] m' },
+    expected: { code: 'INTERNAL', message: '[INTERNAL] m' },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+killed: m-k05-ts-error
+✔ the §16 corpus pin (4.9139ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 259.6243
+SURVIVED: m-k06-ts-notify
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_corpus_pin.py:15: in <module>
+    from aikoql.mcp_client import McpError, _parse_version
+python\aikoql\__init__.py:21: in <module>
+    from aikoql.adapters.crewai import AikoqlCrewAIMemory
+python\aikoql\adapters\__init__.py:3: in <module>
+    from aikoql.adapters.crewai import AikoqlCrewAIMemory
+python\aikoql\adapters\crewai.py:12: in <module>
+    from aikoql._aikoql import aikoql
+E   ModuleNotFoundError: No module named 'aikoql._aikoql'
+=========================== short test summary info ===========================
+ERROR tests/test_corpus_pin.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 1.15s
+killed: m-k07-py-version
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_corpus_pin.py:15: in <module>
+    from aikoql.mcp_client import McpError, _parse_version
+python\aikoql\__init__.py:21: in <module>
+    from aikoql.adapters.crewai import AikoqlCrewAIMemory
+python\aikoql\adapters\__init__.py:3: in <module>
+    from aikoql.adapters.crewai import AikoqlCrewAIMemory
+python\aikoql\adapters\crewai.py:12: in <module>
+    from aikoql._aikoql import aikoql
+E   ModuleNotFoundError: No module named 'aikoql._aikoql'
+=========================== short test summary info ===========================
+ERROR tests/test_corpus_pin.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 1.27s
+killed: m-k08-py-error
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_corpus_pin.py:15: in <module>
+    from aikoql.mcp_client import McpError, _parse_version
+python\aikoql\__init__.py:21: in <module>
+    from aikoql.adapters.crewai import AikoqlCrewAIMemory
+python\aikoql\adapters\__init__.py:3: in <module>
+    from aikoql.adapters.crewai import AikoqlCrewAIMemory
+python\aikoql\adapters\crewai.py:12: in <module>
+    from aikoql._aikoql import aikoql
+E   ModuleNotFoundError: No module named 'aikoql._aikoql'
+=========================== short test summary info ===========================
+ERROR tests/test_corpus_pin.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 1.08s
+killed: m-k09-py-notify
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  7.222 s
+[INFO] Finished at: 2026-10-02T15:32:38+02:00
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.2:test (default-test) on project aikoql-client: There are test failures.
+[ERROR] 
+[ERROR] See C:\Users\ancku\AppData\Local\Temp\tmp.tl6fEwMeDy\tree\crates\sdk\java\target\surefire-reports for the individual test results.
+[ERROR] See dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+killed: m-k10-java-version
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  7.692 s
+[INFO] Finished at: 2026-10-02T15:32:53+02:00
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.2:test (default-test) on project aikoql-client: There are test failures.
+[ERROR] 
+[ERROR] See C:\Users\ancku\AppData\Local\Temp\tmp.fMnz3UB6yF\tree\crates\sdk\java\target\surefire-reports for the individual test results.
+[ERROR] See dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+killed: m-k11-java-error
+---- corpus_pin stdout ----
+
+thread 'corpus_pin' (316) panicked at crates\sdk\rust\tests\fuzz_corpus_pin.rs:129:9:
+assertion `left == right` failed: case corp-v02 (version): rust column drift — got [0], want [-1]
+  left: Array [Number(0)]
+ right: Array [Number(-1)]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    corpus_pin
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test fuzz_corpus_pin`
+killed: m-k12-rust-version
+sdk mutation harness: a mutant survived its killer
+EXIT=1
