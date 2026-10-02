@@ -656,5 +656,30 @@ if grep -q '^  pypi-wheel-matrix:' "$REL" && \
   fail=1
 fi
 
+# workflow test 24 — test_sdk_release_cert (D-18, SDK plan §27): every
+# release must certify the SDKs before the tag means anything — one
+# sdk-release-cert job runs the battery (version parity, conformance,
+# fuzz smoke, real-server integration, install smokes, example, SBOM)
+# after github-release succeeded, or a broken SDK ships green.
+if ! grep -q '^  sdk-release-cert:' "$REL"; then
+  echo "ARCH: release.yml lost the sdk-release-cert job (D-18)" >&2
+  fail=1
+fi
+if grep -q '^  sdk-release-cert:' "$REL" && \
+   ! sed -n '/^  sdk-release-cert:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'scripts/sdk-release-cert.sh'; then
+  echo "ARCH: the sdk-release-cert job lost its certification script (D-18)" >&2
+  fail=1
+fi
+if grep -q '^  sdk-release-cert:' "$REL" && \
+   ! sed -n '/^  sdk-release-cert:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'github-release'; then
+  echo "ARCH: the sdk-release-cert job lost its github-release gate (D-18)" >&2
+  fail=1
+fi
+if grep -q '^  sdk-release-cert:' "$REL" && \
+   ! sed -n '/^  sdk-release-cert:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'syft'; then
+  echo "ARCH: the sdk-release-cert job lost the SBOM leg (D-18)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
