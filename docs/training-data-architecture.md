@@ -565,3 +565,59 @@ The §6 CI wiring lands here: `training-data.yml` (fast-exit on
 `training/**` + workflow paths per the CI-03 pattern) runs the unit
 leg, the corpus cells, the eval set and the mutation leg.
 
+## 19. Fine-tune run + scorecard (T-15)
+
+Phase 18–19 (§32/33/34): the scorecard precedes any training run —
+as code, not just prose. `scripts/finetune.py train` calls
+`_require_scorecard()` and exits unless an artifact exists under
+`training/artifacts/scorecards/`.
+
+- **`src/aikoql_training/scorecard.py`** — `compute_scorecard(predictions,
+  ds, split)` joins prediction records to examples by example_id and
+  computes six metrics (each `{value, detail}` with counts):
+  query_compile_rate (the live `compiled` flag when recorded, else
+  the E3 static head check), ko_recall / ko_precision (oracle
+  targets rule: TRAVERSE never returns the source KO, so multi-koid
+  examples check `koids[1:]`), groundedness (predicted answer re-run
+  through `validate_grounding` as a pseudo-example — the T-07
+  deterministic ceiling), refusal_rate (UNKNOWN: prefix on unknown
+  examples; detail counts false refusals), secret_leak_rate
+  (gates' `_SECRET_PATTERNS` over query+answer — one list, never a
+  second). Missing predictions fail every metric.
+- **`src/aikoql_training/inference.py`** — the §40 prompt/parse
+  contract: `build_query_prompt` / `build_answer_prompt` (context
+  bullets + UNKNOWN: refusal instruction) and `parse_model_reply`
+  (marker split; no QUERY marker → the whole reply is the answer).
+  ponytail: plain marker search — a marker inside a query literal
+  would mis-split; the corpus grammar values never carry them.
+- **`scripts/finetune.py`** — two skill rows per example,
+  completion-only labels (-100 prompt masking; a BPE merge across
+  the boundary mislabels one token), `_collate` pads labels with
+  -100, left-padded batched greedy generation sliced back by
+  `attention_mask.sum(dim=1)` so the prompt's own instruction text
+  never confuses `parse_model_reply`. `--device` defaults to cuda
+  when torch sees the GPU (fp32 — the 1650's 4 GB holds the 0.5B
+  base; no bf16 autoconversion), cpu otherwise; `predict
+  --db/--token` runs live: each predicted query compiles and
+  executes against the corpus server, recording real
+  `compiled`/`retrieved` per example.
+- **`scripts/scorecard.py`** — joins dataset + predictions.jsonl
+  into a committed artifact (`model_id`, `model_class`, adapter,
+  dataset_id, seed, split, git revision, created_at + the six
+  metrics).
+
+**One-slice corpora can land train-only.** Split assignment hashes
+`f"{seed}:{split_key}"` into ratio buckets with the seed pinned by
+the snapshot; a single slice produces six component keys, and under
+the pinned seed all six hash into train — the test split is empty,
+predict writes zero records and the scorecard never forms. Three
+slices give 18 keys and a real 8:1:1 spread (24/24/1802 on the
+laptop POC); the CI 10K sweep (seed 1..19) was never at risk. A
+stale HF OAuth token was the second trap: an expired refresh_token
+poisons even public model downloads (401 → "Repository Not Found");
+`huggingface_hub.logout()` clears it. The third: a `+cpu` torch
+wheel keeps a present GPU invisible (`torch.cuda.is_available()`
+false) and pip skips the same-version swap — force-reinstall the
+cu126 wheel (`--force-reinstall --no-deps`); the first CPU training
+attempt (0 steps in 20 minutes) made the GPU the only sane path.
+

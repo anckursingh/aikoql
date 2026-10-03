@@ -461,6 +461,50 @@ fast-exit per the CI-03 pattern) lands with this commit set — the
 "lands at T-12" note above is superseded: the workflow needs the
 corpus scripts it runs.
 
+T-15 shipped 2026-10-04 — fine-tune run + scorecard (design ph 18–19,
+§32/33/34). `src/aikoql_training/scorecard.py` computes the six
+metrics over a split from `scripts/finetune.py predict` records —
+query_compile_rate (the live `compiled` flag wins over the E3 static
+head check), ko_recall / ko_precision (the oracle targets rule:
+`koids[1:]` for TRAVERSE), groundedness (the predicted answer re-run
+through `validate_grounding` — the T-07 deterministic ceiling),
+refusal_rate (UNKNOWN: prefix, false refusals counted in detail),
+secret_leak_rate (the gates' `_SECRET_PATTERNS`, never a second list);
+an example with no prediction record fails everywhere.
+`src/aikoql_training/inference.py` is the §40 prompt/parse seam — two
+skills per example (question → `QUERY:` aikoql, question+context →
+answer or `UNKNOWN:` refusal), completion-only labels with -100
+prompt masking. `scripts/finetune.py` LoRA-tunes
+Qwen2.5-0.5B-Instruct (r=4, all-linear, fp32 — the 1650's 4 GB holds
+the 0.5B base, `--device` defaults to cuda when torch sees the GPU)
+and
+predicts live against the corpus server (each query compiled+executed
+for real retrieval numbers); `scripts/scorecard.py` writes the
+artifacts under `training/artifacts/scorecards/` — the design law is
+enforced as code: `train` refuses to start without a scorecard
+artifact. Baseline (raw model, live): compile 0.00, recall 0.00,
+precision 0.00, groundedness 0.33, refusal 0.00, leak 0.00 over 24
+test examples; finetuned (600 rows, one epoch, live): compile 0.46,
+recall 0.375, precision 1.0, groundedness 0.33, refusal 0.00, leak
+0.00 — the model learned the query format, retrieval is exact when
+it compiles, and the refusal skill needs more data (a 600-row POC
+ceiling, not a design gap).
+
+**Three traps, all fixed at the root.** (1) A one-slice corpus can
+hash every component key into the train bucket under the pinned
+split seed — the test split is empty, predict writes zero records
+and the scorecard never forms; the laptop POC seeds three slices
+(18 component keys → 24/24/1802), and the CI 10K sweep was never at
+risk. (2) A stale Hugging Face OAuth token poisons every download —
+an expired `refresh_token` turns even public model repos into 401
+"Repository Not Found"; `huggingface_hub.logout()` clears it and
+anonymous access works. (3) A `+cpu` torch wheel leaves a present
+GPU invisible (`torch.cuda.is_available()` false) and pip skips the
+same-version swap — `--force-reinstall --no-deps` against the cu126
+index is the fix, and the first CPU training attempt (0 steps in 20
+minutes) made the GPU the only sane path. RED archived as
+`t-15-scorecard`. GREEN: training suite 294/294.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
