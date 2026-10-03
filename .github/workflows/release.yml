@@ -46,6 +46,7 @@ jobs:
           cargo_ver="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           npm_ver="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' npm-publish/package.json | head -1)"
           plugin_ver="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' .claude-plugin/plugin.json | head -1)"
+          ts_ver="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' crates/sdk/typescript/package.json | head -1)"
           # Python is version.workspace = true — resolve through cargo so the
           # gate reads the RESOLVED version, not the literal (PR6-009: every
           # release channel asserts against the tag).
@@ -55,6 +56,7 @@ jobs:
           [ "$tag" = "$npm_ver" ] || { echo "::error::npm version '$npm_ver' != tag '$tag'"; fail=1; }
           [ "$tag" = "$plugin_ver" ] || { echo "::error::plugin version '$plugin_ver' != tag '$tag'"; fail=1; }
           [ "$tag" = "$py_ver" ] || { echo "::error::Python SDK version '$py_ver' != tag '$tag'"; fail=1; }
+          [ "$tag" = "$ts_ver" ] || { echo "::error::TypeScript SDK version '$ts_ver' != tag '$tag'"; fail=1; }
           grep -q "releases/download/v$tag/" website/index.html || { echo "::error::website/index.html not pinned to v$tag"; fail=1; }
           grep -q "releases/download/v$tag/" website/docs/getting-started.md || { echo "::error::getting-started.md not pinned to v$tag"; fail=1; }
           echo "version=$tag" >> "$GITHUB_OUTPUT"
@@ -803,6 +805,54 @@ jobs:
           npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ''  # force pure OIDC — GitHub injects a managed token that npmjs.org 404s (v0.1.18)
+
+  # ── TypeScript SDK publish — the client, not the plugin (D-13's
+  # @aikoql/client ships as TypeScript source: main = src/index.ts, zero
+  # runtime deps). The npm-publish job above only ships aikoql-mcp, so the
+  # SDK itself needs its own leg. Same OIDC provenance as the plugin; the
+  # smoke packs the tarball, installs it into a clean prefix and checks the
+  # installed package.json version — the exact file the build-derived
+  # CLIENT_VERSION reads at runtime — against the tag's version.
+  ts-sdk-publish:
+    name: Publish the TypeScript SDK
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [github-release, validate-versions]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Pack + install the exact tarball + identity import
+        working-directory: crates/sdk/typescript
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aikoql-client-pkg
+          npm pack --pack-destination /tmp/aikoql-client-pkg >/dev/null
+          tarball=$(ls /tmp/aikoql-client-pkg/aikoql-client-*.tgz | head -1)
+          clean=$(mktemp -d)
+          npm install --prefix "$clean" "$tarball" >/dev/null
+          got=$(node -p "JSON.parse(require('fs').readFileSync('$clean/node_modules/@aikoql/client/package.json','utf8')).version")
+          want="${{ needs.validate-versions.outputs.version }}"
+          if [ "$got" != "$want" ]; then
+            echo "::error::tarball identity $got != release version $want"
+            exit 1
+          fi
+      - name: Publish
+        working-directory: crates/sdk/typescript
+        run: |
+          set -euo pipefail
+          published="$(npm view @aikoql/client version 2>/dev/null || true)"
+          if [ "$published" = "${{ needs.validate-versions.outputs.version }}" ]; then
+            echo "::notice::npm @aikoql/client@$published already published — skip (rescue over an existing cut)"
+            exit 0
+          fi
+          npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ''  # pure OIDC, same as the plugin
 
   # ── Python wheel matrix (D-18) ──────────────────────────────────
   # abi3-py39 wheels: one wheel per platform covers py3.9+. Each leg
