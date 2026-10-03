@@ -194,3 +194,27 @@ following contract is load-bearing for every T-05+ generator:
 emitting a bad query; `verify_scenario` (the oracle) proves each
 emitted query compiles, plans, executes and recovers its scenario's
 hop targets over the public `tool_aikoql` surface.
+
+## 11. Grounding (T-07)
+
+`build_answer(scenario, context)` (`generators/answer.py`) certifies the
+scenario's expected answer against the compiled package: the claim must
+appear in a fact statement and every supporting fact's evidence must be
+present in `context.evidence` — otherwise the example is REFUSED (None),
+never emitted ungrounded. `validate_grounding(example)`
+(`validation/grounding.py`) enforces the same trace fail-closed on the
+schema shape: a grounded example that does not trace, an ungrounded one
+that does, or `expected.evidence_ids` that do not trace to the
+supporting evidence are all violations (§26 grounding gate: 100% of
+accepted examples grounded).
+
+- **Trace rule**: substring match of the answer inside the fact
+  statement — the deterministic ceiling; semantic-equivalence grounding
+  is the fine-tuned model's job at T-15, not a Python
+  re-implementation.
+- **Evidence identity**: the canonical sort-keyed JSON of the evidence
+  dict — content-derived, stable across compiler runs (same IR ⇒ same
+  package rows), shared between generator and validator.
+- **Refusal semantics**: `build_answer` returns None, matching
+  `build_queries`' skip pattern — a refused example is dropped, never a
+  false positive.

@@ -217,6 +217,22 @@ IR-version boundary — the compiler reads the live ir_json and its
 old fact gone). RED archived as `t-06-context-adapter` (11 tests
 blocked). GREEN 95/95.
 
+T-07 shipped 2026-10-03 — `generators/answer.py` (`build_answer`)
+certifies the scenario's expected answer against the compiled context:
+the claim must trace to a fact statement (substring match — the
+deterministic ceiling; semantic equivalence is the T-15 model's job)
+and every supporting fact's evidence must be present in the context's
+evidence rows, or the example is REFUSED (None) — an unsupported claim
+is never emitted. `validation/grounding.py` (`validate_grounding`)
+enforces the same claim→context→evidence trace fail-closed in both
+directions of `labels.grounded`, and `expected.evidence_ids` must trace
+exactly to the supporting evidence (identity = the canonical sort-keyed
+JSON of the evidence dict, shared between generator and validator).
+RED archived as `t-07-grounding` (15 tests blocked). GREEN 110/110,
+incl. the hypothesis law "generator accepts ⇒ validator accepts" and a
+live cell proving the answer traces to the compiled evidence over the
+spawned MCP server.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
