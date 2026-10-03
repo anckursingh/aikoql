@@ -7,6 +7,7 @@ import json
 import socket
 import time
 import uuid
+from importlib import metadata as _importlib_metadata
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 # P5-M12 (ND-12) version contract: the oldest server this SDK will talk to.
@@ -18,6 +19,17 @@ MIN_SERVER_VERSION = "0.2.1"
 # unterminated line past this cap is refused mid-accumulation
 # (FRAME_TOO_LARGE) and the client latches closed.
 MAX_FRAME = 1024 * 1024
+
+
+def _default_client_version() -> str:
+    """The SDK's own version advertised as the default client identity:
+    the installed distribution's version (pyproject: dynamic, from the
+    Rust crate), or the honest "dev" marker when imported without
+    installation metadata (a source-tree checkout, a vendored copy)."""
+    try:
+        return _importlib_metadata.version("aikoql")
+    except Exception:
+        return "dev"
 
 
 def _parse_version(v: str) -> Tuple[int, ...]:
@@ -271,7 +283,9 @@ class McpClient:
 
     # -- MCP protocol ---------------------------------------------------
 
-    def initialize(self, client_name: str = "aikoql-py", client_version: str = "0.1.0"):
+    def initialize(self, client_name: str = "aikoql-py", client_version: Optional[str] = None):
+        if client_version is None:
+            client_version = _default_client_version()
         params = {
             "protocolVersion": "2024-11-05",
             "capabilities": {},

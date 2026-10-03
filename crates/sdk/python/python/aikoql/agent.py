@@ -45,7 +45,7 @@ class Agent:
             agent._backend = McpClient(host, port, kwargs.get("token")).connect(timeout=kwargs.get("timeout", 5.0))
             agent._backend.initialize(
                 kwargs.get("client_name", "aikoql-py"),
-                kwargs.get("client_version", "0.1.0"),
+                kwargs.get("client_version"),
             )
         elif isinstance(target, str):
             # Server mode iff the string is a bare host:port — no path

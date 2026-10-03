@@ -48,6 +48,13 @@ import (
 // against the workspace version by the go-sdk CI job).
 const MIN_SERVER_VERSION = "0.2.1"
 
+// Version is the SDK's own version, advertised as the client identity by
+// default. Distributors pin it at build time: -ldflags
+// "-X github.com/anckursingh/aikoql/sdk/go.Version=<version>". The default
+// is the honest marker — a library cannot know its own module version at
+// runtime (debug.ReadBuildInfo reports the MAIN module's).
+var Version = "dev"
+
 // McpError is a structured error from the MCP server (MRFC-0040 error
 // codes): the tool-level ok/error envelope and RPC-level failures both
 // carry it.
@@ -106,7 +113,7 @@ type Client struct {
 // separate (Initialize) so a pooled Client can dial first and authenticate
 // later; every aikoql-mcp TCP server requires the token.
 func Dial(ctx context.Context, addr string, opts ...Option) (*Client, error) {
-	cfg := clientConfig{name: "aikoql-go-sdk", version: "0.1.0", dialTimeout: 5 * time.Second}
+	cfg := clientConfig{name: "aikoql-go-sdk", version: Version, dialTimeout: 5 * time.Second}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -128,7 +135,7 @@ func Dial(ctx context.Context, addr string, opts ...Option) (*Client, error) {
 // the call deadlines (a hung stdio server is killed at the deadline: a
 // pipe has no socket deadline to set).
 func DialStdio(ctx context.Context, bin string, args ...string) (*Client, error) {
-	cfg := clientConfig{name: "aikoql-go-sdk", version: "0.1.0", dialTimeout: 5 * time.Second}
+	cfg := clientConfig{name: "aikoql-go-sdk", version: Version, dialTimeout: 5 * time.Second}
 	cmd := exec.Command(bin, args...)
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()

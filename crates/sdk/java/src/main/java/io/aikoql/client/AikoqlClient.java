@@ -10,10 +10,28 @@ public final class AikoqlClient {
     /** The oldest aikoql-mcp server this SDK will talk to (the ND-12
      * version contract, mirrored from the Python, Go, Rust and TS SDKs). */
     public static final String MIN_SERVER_VERSION = "0.2.1";
-    /** The SDK's own package version, advertised as the client identity. */
-    public static final String VERSION = "0.2.1";
+    /** The SDK's own package version, advertised as the client identity.
+     * Injected by Maven resource filtering from pom.xml (version.properties)
+     * — not a restated literal; "dev" outside a Maven build. */
+    public static final String VERSION = loadVersion();
 
     static final int DIAL_TIMEOUT_MS = 5000;
+
+    private static String loadVersion() {
+        try (java.io.InputStream in = AikoqlClient.class.getResourceAsStream("version.properties")) {
+            if (in != null) {
+                var props = new java.util.Properties();
+                props.load(in);
+                String v = props.getProperty("version", "");
+                if (!v.isEmpty() && !v.startsWith("${")) {
+                    return v;
+                }
+            }
+        } catch (java.io.IOException e) {
+            // no resource — the un-filtered build falls through to "dev"
+        }
+        return "dev";
+    }
 
     private static final ScheduledThreadPoolExecutor TIMER =
             new ScheduledThreadPoolExecutor(1, r -> {
