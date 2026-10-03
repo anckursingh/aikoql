@@ -7,9 +7,7 @@ name = "aikoql-training"
 version = "0.1.0"
 description = "Training Data Engine for AikoQL — deterministic, validated training/evaluation dataset generation"
 requires-python = ">=3.9"
-dependencies = []
-# The aikoql SDK dependency lands at T-02 (snapshot adapter) — T-01 models
-# are stdlib-only.
+dependencies = ["aikoql>=0.2.1"]  # T-02: the installed SDK is the only AIKOQL boundary
 
 [tool.setuptools.packages.find]
 where = ["src"]

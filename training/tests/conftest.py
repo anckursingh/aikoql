@@ -95,10 +95,12 @@ def mcp_server():
     port = sock.getsockname()[1]
     sock.close()
 
-    token = "test-token::admin"
+    # The server registers the base token as the lookup key (SDK conftest
+    # pattern): spawn with TOKEN::admin, the client sends the base TOKEN.
+    token = "test-token"
     proc = subprocess.Popen(
         [find_binary(), "serve", db, "--listen", f"127.0.0.1:{port}",
-         "--tcp-token", token],
+         "--tcp-token", f"{token}::admin"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )

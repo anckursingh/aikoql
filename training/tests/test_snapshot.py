@@ -78,11 +78,27 @@ def test_captures_source_manifest_hash():
     manifest = ["factual:policy:p-01", "relation:ownership:o-02"]
     snap = capture_snapshot("acmepay", _HEALTH, source_manifest=manifest)
     assert snap.source_manifest_hash.startswith("sha256:")
-    reordered = list(reversed(manifest))
+    # Canonical: the SAME manifest hashes identically across captures;
+    # key order in a dict-shaped manifest does not matter; list order is
+    # semantic and a changed manifest moves the hash.
     assert (
-        capture_snapshot("acmepay", _HEALTH, source_manifest=reordered).source_manifest_hash
+        capture_snapshot("acmepay", _HEALTH, source_manifest=list(manifest)).source_manifest_hash
         == snap.source_manifest_hash
     )
+    assert (
+        capture_snapshot(
+            "acmepay", _HEALTH,
+            source_manifest={"b": manifest[1], "a": manifest[0]},
+        ).source_manifest_hash
+        == capture_snapshot(
+            "acmepay", _HEALTH,
+            source_manifest={"a": manifest[0], "b": manifest[1]},
+        ).source_manifest_hash
+    )
+    changed = capture_snapshot(
+        "acmepay", _HEALTH, source_manifest=manifest + ["extra"]
+    )
+    assert changed.source_manifest_hash != snap.source_manifest_hash
 
 
 def test_same_state_same_identity():
