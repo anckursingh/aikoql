@@ -496,3 +496,72 @@ impossible under every seed. Regression-pinned both sides:
 component keys violation-free across a 50-seed sweep; the old
 set-join keys straddle some seed.
 
+## 18. Corpus + eval set + mutation leg (T-14)
+
+`scripts/generate_corpus.py` is the §35–37 pipeline over a live
+server, one process, one Agent connection for the whole run (a second
+opens only for validation):
+
+- **the seed graph** (`_seed_slice`, §35 counts per slice): 24
+  services, 6 teams, 12 persons, 8 accounts, 4 regions; edges OWNS
+  24, DEPENDS_ON 23, WORKS_IN 12, IN 8; three services versioned on
+  the same KOID after a ~1s real-time gap (packed-HLC millis differ,
+  so AS_OF distinguishes v1/v2); one service contradicted via the raw
+  MCP `contradict` tool, producing a counter-claim and a persisted
+  Conflict KO;
+- **scenario assembly** (`_generate`): the T-03..T-10 families run
+  over the live graph; each candidate passes the live oracle
+  (`verify_scenario`), context compile, and `build_answer` (refused
+  candidates never become examples); the target is reached in seed 0
+  alone (~507 examples/slice), the 10K sweep is seed 1..19 on CI;
+- **determinism**: examples are koid-free (question multiset +
+  task-type histogram), so two independent servers must produce the
+  same corpus — pinned by `test_corpus_regenerates_identically_across_servers`;
+- **eval set** (`validation/eval_set.py`): E1–E9 as machine-checkable
+  cases over the generated dataset (compile rate, recall, grounding,
+  refusal, leakage, security, determinism, schema, duplication);
+- **mutation leg** (`scripts/mutation_leg.py`, §37): mutant datasets
+  (tampered manifest, planted secret, dropped fact, forged id) must
+  each fail their gate with `publishable=false`.
+
+**Three traps, all root-caused here:**
+
+1. **`remember()`-with-koid replaces caller-created edges wholesale**
+   (kernel.rs update path — deliberate semantics). A versioned
+   re-remember AFTER linking orphans the edges from the relationship
+   index (the update restates only kernel-managed edges), and TRAVERSE
+   then goes empty. The corpus orders every slice versioning-first,
+   linking-after; `relate` restates the full relationship list, so
+   post-update links survive.
+2. **An undrained stderr pipe can hang the validator's connect.** The
+   tantivy commit storm after seeding writes thousands of log lines;
+   a full pipe blocks the logging thread, the next handler to log
+   ("client connected") stalls before it ever reads initialize, and
+   the client waits out its socket timeout. The test fixture now
+   sends server stderr to a file (no backpressure; the CI-15
+   early-exit diagnostic reads the file instead of the pipe). The
+   validator also connects with a generous timeout — post-seed index
+   churn is real.
+3. **The manifest sha256 check must be a gate, not a raise.** The
+   writer's tamper refusal (`read_dataset`, FZ-T2) raised out of the
+   validator, so a tampered dataset produced no report at all —
+   `validate` died with a stderr line and the security test's
+   expected report never appeared. `tampered_splits()` is now the one
+   comparison, shared by `read_dataset(verify=True)` (raises) and the
+   validator (`verify=False`, reports it as the `integrity` gate);
+   every other gate — secret_scan included — still runs over the
+   tampered content.
+
+Multi-hop emits **same-rel paths only**: the example contract stores
+ONE query, and a mixed-rel path needs one query per hop, so its
+stored query could never recover the far hop under the
+scenario_match gate (which checks `koids[1:]` against the TRAVERSE
+closure — the runtime never returns the source KO). Same-rel paths
+ride a single DEPTH-n query whose closure covers every hop. The
+mixed-rel generator stays exercised by the scenario unit tests; only
+the corpus subset is filtered.
+
+The §6 CI wiring lands here: `training-data.yml` (fast-exit on
+`training/**` + workflow paths per the CI-03 pattern) runs the unit
+leg, the corpus cells, the eval set and the mutation leg.
+

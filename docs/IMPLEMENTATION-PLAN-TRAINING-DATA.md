@@ -421,6 +421,46 @@ again). The T-12 paragraph's "the key rule fixed it" claim is
 corrected by this paragraph. RED archived as
 `t-13-observability-errors-benchmark`. GREEN 270/270.
 
+T-14 shipped 2026-10-03 — AcmePay POC corpus + eval set + mutation leg
+(design ph 17, §35–37). `scripts/generate_corpus.py` seeds the §35
+AcmePay graph per slice — 24 services, 6 teams, 12 persons, 8 accounts,
+4 regions; edges OWNS 24, DEPENDS_ON 23, WORKS_IN 12, IN 8 — then runs
+the scenario families over the live graph: factual, relation,
+multi-hop, temporal (three services versioned on the same KOID after a
+real-time gap so AS_OF can distinguish the versions), unknown,
+ambiguity, contradiction (one service contradicted through the raw MCP
+tool, preserving the Conflict KO), authorization, provenance. The
+oracle gate refuses anything the live server cannot answer; the target
+is reached in seed 0 alone (~507 examples/slice); determinism is pinned
+koid-free (question multiset + task-type histogram equal across two
+independent servers), so the 10K seed sweep is CI work. The eval set
+(`validation/eval_set.py`, E1–E9 as machine-checkable cases) rides the
+corpus, and `scripts/mutation_leg.py` kills validator mutants (the §37
+leg: tampered manifest, planted secrets, dropped facts, forged ids —
+each must fail its gate and leave `publishable=false`).
+
+**Three traps, all fixed at the root.** (1) `remember()`-with-koid
+replaces caller-created edges wholesale (kernel semantics) — seeding
+must link AFTER any versioned re-remember or the relationship index
+silently orphans the edges and TRAVERSE goes empty; the corpus orders
+the slice accordingly. (2) The test fixture fed server stderr into an
+undrained pipe: the tantivy commit storm after seeding fills it, the
+next handler blocks on its own log write before ever answering
+initialize, and the validator's connect times out — logs now go to a
+file (no backpressure, CI-15 diagnostic kept). (3) The manifest sha256
+check raised out of the validator, so a tampered dataset produced no
+report at all — integrity is now a gate and the other gates
+(secret_scan included) still run over the tampered content, so the
+security test's planted secret is caught and reported. Multi-hop emits
+same-rel paths only: the example contract stores ONE query, and a
+mixed-rel path's per-hop queries could never satisfy the
+scenario_match gate's koid recovery. RED archived as
+`t-14-corpus-eval-mutation`. GREEN: corpus 5/5, full training suite
+288/288, arch hygiene OK. The §6 CI wiring (`training-data.yml`,
+fast-exit per the CI-03 pattern) lands with this commit set — the
+"lands at T-12" note above is superseded: the workflow needs the
+corpus scripts it runs.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
