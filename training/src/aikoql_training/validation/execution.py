@@ -82,6 +82,38 @@ def verify_scenario(db: Any, scenario: Scenario, queries: List[str]) -> dict:
                 errors.append(f"query {i}: candidates not recovered: {missing}")
         return {"ok": not errors, "errors": errors}
 
+    if scenario.task_type == "authorization":
+        # The anchor KO must be recovered AND the live policy engine
+        # must agree with the answer's verdict prefix — the scenario
+        # asserts what the ACL evaluates, never a re-derived verdict.
+        row = next(
+            (r for r in result_sets[0] if r.get("koid") == scenario.koids[0]),
+            None,
+        )
+        if row is None:
+            errors.append(
+                f"authorization: anchor {scenario.koids[0]} not in results"
+            )
+        else:
+            try:
+                verdict = db._backend.call_tool("evaluate_policies", {
+                    "principal": scenario.subject,
+                    "action": scenario.action,
+                    "resource_type": scenario.type_name,
+                })
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "errors": [f"authorization: policy evaluation failed: {e}"],
+                }
+            live_allowed = bool(verdict.get("allowed"))
+            if live_allowed != scenario.expected_answer.startswith("ALLOWED:"):
+                errors.append(
+                    f"authorization: live ACL disagrees with "
+                    f"{scenario.expected_answer!r}"
+                )
+        return {"ok": not errors, "errors": errors}
+
     if scenario.property is not None:
         found = False
         for r in result_sets[0]:

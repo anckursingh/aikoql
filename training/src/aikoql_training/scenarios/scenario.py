@@ -33,3 +33,6 @@ class Scenario:
     anchor_value: Any = None
     candidates: Tuple[Tuple[str, str], ...] = ()
     type_name: Optional[str] = None
+    # T-10 authorization: the ACL principal and action of the verdict.
+    subject: Optional[str] = None
+    action: Optional[str] = None

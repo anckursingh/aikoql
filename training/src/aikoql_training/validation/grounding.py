@@ -16,7 +16,8 @@ job at T-15, not a Python re-implementation.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Tuple
 
 from aikoql_training.scenarios.answer_formats import (
     AMBIGUOUS_PREFIX,
@@ -43,6 +44,29 @@ def _supporting_facts(example: Dict[str, Any]) -> List[dict]:
         f for f in example["context"]["facts"]
         if isinstance(f.get("statement"), str) and answer in f["statement"]
     ]
+
+
+def _trace(example: Dict[str, Any]) -> Tuple[List[dict], List[dict], List[str]]:
+    """The grounded trace shared by the generic and authorization
+    branches: the supporting facts, the unbacked ones, and the traced
+    evidence ids (context order)."""
+    context = example["context"]
+    supporting = _supporting_facts(example)
+    unbacked = [
+        f for f in supporting
+        if not isinstance(f.get("evidence"), dict)
+        or not _in_context(f["evidence"], context["evidence"])
+    ]
+    traced_ids: List[str] = []
+    seen = set()
+    for f in supporting:
+        ev = f.get("evidence")
+        if isinstance(ev, dict) and _in_context(ev, context["evidence"]):
+            key = evidence_id(ev)
+            if key not in seen:
+                seen.add(key)
+                traced_ids.append(key)
+    return supporting, unbacked, traced_ids
 
 
 def _in_context(evidence: dict, rows: List[Any]) -> bool:
@@ -168,6 +192,70 @@ def _validate_contradiction(example: Dict[str, Any]) -> dict:
     )
 
 
+# "whose <prop> is <value>?" — the anchor of an authorization question
+_ANCHOR_RE = re.compile(r"whose ([A-Za-z_][A-Za-z0-9_]*) is ([^?]+)\?")
+
+
+def _validate_authorization(example: Dict[str, Any]) -> dict:
+    """Authorization examples carry the kernel's verdict machine-readably
+    (ALLOWED:/DENIED: prefix). The labels are verdict-shaped, the policy
+    section flags the example, and the trace is the generic one.
+    Fail-closed on leakage: a DENIED example's context may carry the
+    decision fact and nothing else that names the denied object —
+    unauthorized knowledge never reaches the dataset context."""
+    errors: List[str] = []
+    answer = example["expected"]["answer"]
+    labels = example["labels"]
+    denied = answer.startswith("DENIED:")
+    if not denied and not answer.startswith("ALLOWED:"):
+        errors.append(
+            "authorization answer must carry the ALLOWED:/DENIED: verdict"
+        )
+    if not (example.get("policy") or {}).get("authorization_required"):
+        errors.append(
+            "policy.authorization_required is false on an authorization example"
+        )
+    if not labels["grounded"]:
+        errors.append("labels.grounded is false on an authorization example")
+    if not labels["answerable"]:
+        errors.append("labels.answerable is false on an authorization example")
+    if labels["ambiguous"] or labels["contradictory"]:
+        errors.append(
+            "authorization example cannot be ambiguous or contradictory"
+        )
+    supporting, unbacked, traced_ids = _trace(example)
+    if not answer.strip():
+        errors.append("grounded example has an empty answer")
+    if not supporting:
+        errors.append(
+            "grounding failure: answer is not grounded — it does not "
+            "trace to any context fact"
+        )
+    if unbacked:
+        errors.append(
+            f"{len(unbacked)} supporting fact(s) lack evidence in context"
+        )
+    if sorted(example["expected"]["evidence_ids"]) != sorted(traced_ids):
+        errors.append(
+            "evidence_ids do not trace to the supporting facts' evidence"
+        )
+    if denied:
+        m = _ANCHOR_RE.search(example["input"]["question"])
+        if m:
+            anchor_value = m.group(2)
+            leaks = [
+                f for f in example["context"]["facts"]
+                if isinstance(f.get("statement"), str)
+                and anchor_value in f["statement"]
+                and f not in supporting
+            ]
+            if leaks:
+                errors.append(
+                    f"{len(leaks)} context fact(s) leak the denied object"
+                )
+    return {"ok": not errors, "errors": errors}
+
+
 def validate_grounding(example: Dict[str, Any]) -> dict:
     """Fail-closed grounding check. Returns {"ok", "errors"}; errors are
     strings, counted by T-12's gates — never raises on grounding
@@ -181,27 +269,14 @@ def validate_grounding(example: Dict[str, Any]) -> dict:
         return _validate_ambiguity(example)
     if task_type == "contradiction":
         return _validate_contradiction(example)
+    if task_type == "authorization":
+        return _validate_authorization(example)
     errors: List[str] = []
     expected = example["expected"]
     labels = example["labels"]
-    context = example["context"]
     answer = expected["answer"]
 
-    supporting = _supporting_facts(example)
-    unbacked = [
-        f for f in supporting
-        if not isinstance(f.get("evidence"), dict)
-        or not _in_context(f["evidence"], context["evidence"])
-    ]
-    traced_ids: List[str] = []
-    seen = set()
-    for f in supporting:
-        ev = f.get("evidence")
-        if isinstance(ev, dict) and _in_context(ev, context["evidence"]):
-            key = evidence_id(ev)
-            if key not in seen:
-                seen.add(key)
-                traced_ids.append(key)
+    supporting, unbacked, traced_ids = _trace(example)
 
     if labels["grounded"]:
         if not answer.strip():

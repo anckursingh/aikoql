@@ -3,9 +3,11 @@
 T-03: factual (Phase 3) + relation (Phase 4). T-04: multi-hop (Phase
 5) + the FZ-T4 template engine. T-08: temporal (Phase 6) + provenance
 (Phase 7). T-09: unknown + ambiguity + contradiction (Phase 8).
+T-10: authorization (Phase 9) — verdicts through the real ACL path.
 """
 
 from aikoql_training.scenarios.ambiguity import ambiguity_scenarios
+from aikoql_training.scenarios.authorization import authorization_scenarios
 from aikoql_training.scenarios.contradiction import contradiction_scenarios
 from aikoql_training.scenarios.factual import factual_scenarios
 from aikoql_training.scenarios.multi_hop import multi_hop_scenarios
@@ -25,4 +27,5 @@ __all__ = [
     "unknown_scenarios",
     "ambiguity_scenarios",
     "contradiction_scenarios",
+    "authorization_scenarios",
 ]

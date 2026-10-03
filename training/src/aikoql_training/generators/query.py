@@ -91,10 +91,11 @@ def _match(
     return f"{query} RETURN {ret}"
 
 
-def _uncertainty_query(scenario: Scenario, by_koid: dict) -> List[str]:
-    """Unknown/ambiguity/contradiction: one anchored MATCH whose result
-    set proves the uncertainty — no row carrying the property (unknown)
-    or both sides (ambiguity/contradiction)."""
+def _anchored_query(scenario: Scenario, by_koid: dict) -> List[str]:
+    """Unknown/ambiguity/contradiction/authorization: one anchored MATCH
+    whose result set proves the claim — no row carrying the property
+    (unknown), both sides (ambiguity/contradiction), or the object the
+    verdict names (authorization)."""
     type_name = scenario.type_name
     if scenario.koids and scenario.koids[0] in by_koid:
         type_name = by_koid[scenario.koids[0]]["type_name"]
@@ -117,10 +118,12 @@ def _uncertainty_query(scenario: Scenario, by_koid: dict) -> List[str]:
 
 def build_queries(scenario: Scenario, kos: List[dict]) -> List[str]:
     by_koid = {k["koid"]: k for k in kos}
-    if scenario.task_type in ("unknown", "ambiguity", "contradiction"):
+    if scenario.task_type in (
+        "unknown", "ambiguity", "contradiction", "authorization",
+    ):
         # unknown entities carry no KO — the branch precedes the
         # koids-present check
-        return _uncertainty_query(scenario, by_koid)
+        return _anchored_query(scenario, by_koid)
     if not scenario.koids or any(k not in by_koid for k in scenario.koids):
         return []  # dangling grounding: no honest query exists
     start = by_koid[scenario.koids[0]]

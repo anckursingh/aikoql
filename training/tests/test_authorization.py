@@ -131,7 +131,7 @@ def test_build_answer_refuses_untraced_verdict():
 
 # -- the validator ----------------------------------------------------------
 
-def _example(decision=None, facts=None, labels=None, policy=None):
+def _example(decision=None, facts=None, labels=None, policy=None, answer=None):
     decision = decision or _decision()
     kos = [ko(_K, name="settlement")]
     [s] = authorization_scenarios(kos, [decision])
@@ -148,7 +148,8 @@ def _example(decision=None, facts=None, labels=None, policy=None):
                  "evidence": _EV},
             ],
         },
-        expected={"answer": s.expected_answer, "koids": list(s.koids),
+        expected={"answer": answer if answer is not None else s.expected_answer,
+                  "koids": list(s.koids),
                   "evidence_ids": [evidence_id(_EV)]},
         policy=policy or {"authorization_required": True},
         labels=labels or _VERDICT_LABELS,
@@ -160,8 +161,8 @@ def test_validator_accepts_grounded_verdict():
 
 
 def test_validator_rejects_non_verdict_answer():
-    out = validate_grounding(_example(facts=[{"statement": "Maybe",
-                                              "evidence": _EV}]))
+    out = validate_grounding(_example(
+        answer="Maybe", facts=[{"statement": "Maybe", "evidence": _EV}]))
     assert out["ok"] is False
     assert any("ALLOWED" in e or "DENIED" in e for e in out["errors"])
 
@@ -215,9 +216,17 @@ def test_live_authorization_runs_through_the_real_acl(mcp_server):
     with aikoql.Agent.connect(host, token=token) as db:
         koid = db.remember("service", {"name": "settlement",
                                        "owner": "Payments Team"})["koid"]
+        # the policy KO's action property is the enum's Debug spelling
+        # (kom.rs Action: "Read"/"Write"/...) — kernel.rs evaluate_policies
+        # compares it to format!("{:?}", action); lowercase never matches.
+        # Default-deny: an ALLOWED verdict needs an explicit Allow policy.
         db._backend.call_tool("deploy_policy", {
             "name": "reader-deny-service", "effect": "Deny",
-            "principal": "reader", "action": "read", "resource_type": "service",
+            "principal": "reader", "action": "Read", "resource_type": "service",
+        })
+        db._backend.call_tool("deploy_policy", {
+            "name": "admin-allow-service", "effect": "Allow",
+            "principal": "admin", "action": "Read", "resource_type": "service",
         })
         denied = db._backend.call_tool("evaluate_policies", {
             "principal": "reader", "action": "read", "resource_type": "service",
