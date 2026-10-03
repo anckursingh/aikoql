@@ -61,7 +61,10 @@ def test_answer_grounds_on_evidenced_fact():
         [_EV],
     )
     out = build_answer(_scenario(), ctx)
-    assert out == {"answer": "Payments Team", "evidence_ids": [evidence_id(_EV)]}
+    assert out == {"answer": "Payments Team",
+                   "evidence_ids": [evidence_id(_EV)],
+                   "labels": {"grounded": True, "answerable": True,
+                              "ambiguous": False, "contradictory": False}}
 
 
 def test_answer_refuses_unsupported_claim():

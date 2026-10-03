@@ -18,6 +18,14 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
+from aikoql_training.scenarios.answer_formats import (
+    AMBIGUOUS_PREFIX,
+    CONTRADICTED_PREFIX,
+    UNKNOWN_PREFIX,
+    ambiguity_values,
+    contradiction_values,
+)
+
 
 def evidence_id(evidence: Dict[str, Any]) -> str:
     """The content-derived identity of an evidence entry: its canonical
@@ -65,12 +73,114 @@ def _validate_provenance(example: Dict[str, Any]) -> dict:
     return {"ok": not errors, "errors": errors}
 
 
+def _validate_unknown(example: Dict[str, Any]) -> dict:
+    """Unknown examples are refusals: grounded=False, answerable=False,
+    no evidence_ids, the answer carries the UNKNOWN: prefix. Anything
+    else is a false positive."""
+    errors: List[str] = []
+    expected = example["expected"]
+    labels = example["labels"]
+    if not expected["answer"].startswith(UNKNOWN_PREFIX):
+        errors.append("unknown answer must carry the UNKNOWN: prefix")
+    if labels["grounded"]:
+        errors.append("labels.grounded is true on an unknown example")
+    if labels["answerable"]:
+        errors.append("labels.answerable is true on an unknown example")
+    if labels["ambiguous"] or labels["contradictory"]:
+        errors.append("unknown example cannot be ambiguous or contradictory")
+    if expected["evidence_ids"]:
+        errors.append("unknown example carries evidence_ids")
+    return {"ok": not errors, "errors": errors}
+
+
+def _validate_enumeration(
+    example: Dict[str, Any],
+    prefix: str,
+    label: str,
+    word: str,
+    values: List[str],
+    no_values_error: str,
+) -> dict:
+    """Ambiguity/contradiction: the answer carries the family prefix and
+    the family label, every parsed candidate value traces to a context
+    fact whose evidence is present, and expected.evidence_ids traces
+    exactly to that evidence."""
+    errors: List[str] = []
+    expected = example["expected"]
+    labels = example["labels"]
+    answer = expected["answer"]
+    if not answer.startswith(prefix):
+        errors.append(f"{word} answer must start with {prefix!r}")
+    if not labels[label]:
+        errors.append(f"labels.{label} is false on a {word} example")
+    if not labels["grounded"]:
+        errors.append(f"labels.grounded is false on a {word} example")
+    if not values:
+        errors.append(no_values_error)
+        return {"ok": False, "errors": errors}
+    traced_ids: List[str] = []
+    seen = set()
+    for value in values:
+        supporting = [
+            f for f in example["context"]["facts"]
+            if isinstance(f.get("statement"), str) and value in f["statement"]
+        ]
+        if not supporting:
+            errors.append(f"candidate value {value!r} does not trace to a fact")
+            continue
+        for fact in supporting:
+            ev = fact.get("evidence")
+            if not isinstance(ev, dict) or not _in_context(
+                ev, example["context"]["evidence"]
+            ):
+                errors.append(
+                    f"candidate value {value!r}: evidence absent from context"
+                )
+                continue
+            key = evidence_id(ev)
+            if key not in seen:
+                seen.add(key)
+                traced_ids.append(key)
+    if sorted(expected["evidence_ids"]) != sorted(traced_ids):
+        errors.append("evidence_ids do not trace to the candidates' evidence")
+    return {"ok": not errors, "errors": errors}
+
+
+def _validate_ambiguity(example: Dict[str, Any]) -> dict:
+    return _validate_enumeration(
+        example,
+        AMBIGUOUS_PREFIX,
+        "ambiguous",
+        "ambiguity",
+        ambiguity_values(example["expected"]["answer"]),
+        "ambiguity answer parses to no candidate values",
+    )
+
+
+def _validate_contradiction(example: Dict[str, Any]) -> dict:
+    return _validate_enumeration(
+        example,
+        CONTRADICTED_PREFIX,
+        "contradictory",
+        "contradiction",
+        contradiction_values(example["expected"]["answer"]),
+        "contradiction answer must preserve the conflict metadata",
+    )
+
+
 def validate_grounding(example: Dict[str, Any]) -> dict:
     """Fail-closed grounding check. Returns {"ok", "errors"}; errors are
     strings, counted by T-12's gates — never raises on grounding
     violations."""
-    if (example.get("task") or {}).get("type") == "provenance":
+    task_type = (example.get("task") or {}).get("type")
+    if task_type == "provenance":
         return _validate_provenance(example)
+    if task_type == "unknown":
+        return _validate_unknown(example)
+    if task_type == "ambiguity":
+        return _validate_ambiguity(example)
+    if task_type == "contradiction":
+        return _validate_contradiction(example)
     errors: List[str] = []
     expected = example["expected"]
     labels = example["labels"]

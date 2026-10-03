@@ -91,8 +91,36 @@ def _match(
     return f"{query} RETURN {ret}"
 
 
+def _uncertainty_query(scenario: Scenario, by_koid: dict) -> List[str]:
+    """Unknown/ambiguity/contradiction: one anchored MATCH whose result
+    set proves the uncertainty — no row carrying the property (unknown)
+    or both sides (ambiguity/contradiction)."""
+    type_name = scenario.type_name
+    if scenario.koids and scenario.koids[0] in by_koid:
+        type_name = by_koid[scenario.koids[0]]["type_name"]
+    if (
+        type_name is None
+        or scenario.property is None
+        or scenario.anchor_prop is None
+        or scenario.anchor_value is None
+        or not _ident_ok(scenario.property)
+    ):
+        return []
+    rendered = _render(scenario.anchor_value)
+    if rendered is None:
+        return []
+    q = _match(
+        type_name, scenario.anchor_prop, rendered, None, 0, scenario.property
+    )
+    return [q] if q is not None else []
+
+
 def build_queries(scenario: Scenario, kos: List[dict]) -> List[str]:
     by_koid = {k["koid"]: k for k in kos}
+    if scenario.task_type in ("unknown", "ambiguity", "contradiction"):
+        # unknown entities carry no KO — the branch precedes the
+        # koids-present check
+        return _uncertainty_query(scenario, by_koid)
     if not scenario.koids or any(k not in by_koid for k in scenario.koids):
         return []  # dangling grounding: no honest query exists
     start = by_koid[scenario.koids[0]]

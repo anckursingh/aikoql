@@ -26,3 +26,10 @@ class Scenario:
     property: Optional[str] = None  # the source property (factual scenarios)
     as_of: Optional[int] = None  # temporal: the real commit_ts (epoch ms)
     evidence: Tuple[Dict[str, Any], ...] = ()  # provenance: the cited evidence
+    # T-09 uncertainty: the identifying predicate/value the question
+    # anchors on, the enumerated (koid, value) candidates, and the type
+    # name for scenarios that carry no anchor KO (unknown entities).
+    anchor_prop: Optional[str] = None
+    anchor_value: Any = None
+    candidates: Tuple[Tuple[str, str], ...] = ()
+    type_name: Optional[str] = None

@@ -245,7 +245,11 @@ def test_live_conflicting_claims_preserve_conflict(mcp_server):
         conflict = db.get(conflict_koid)
         assert conflict["properties"]["claim_a"] == a
         assert conflict["properties"]["claim_b"] == r["counter"]
-        assert conflict["resolution"] == "unresolved"
+        # the kernel stores the Conflict state under extensions
+        # (assertion snapshots + resolution, ops.rs) — the live get()
+        # envelope nests it, unlike the operator-shaped records the
+        # unit fixtures use
+        assert conflict["extensions"]["resolution"] == "unresolved"
         claims = [db.get(a), db.get(r["counter"])]
         scenarios = contradiction_scenarios(
             [{"conflict": conflict, "claims": claims}])

@@ -103,7 +103,11 @@ def test_build_answer_provenance_emits_real_evidence_ids():
     s = provenance_scenarios([ko])[0]
     ctx = {"entities": [], "facts": [], "relations": [], "evidence": [_EV_IR]}
     assert build_answer(s, ctx) == {"answer": _CITE,
-                                    "evidence_ids": [evidence_id(_EV_IR)]}
+                                    "evidence_ids": [evidence_id(_EV_IR)],
+                                    "labels": {
+                                        "grounded": True, "answerable": True,
+                                        "ambiguous": False,
+                                        "contradictory": False}}
 
 
 def test_build_answer_refuses_evidence_absent_from_context():

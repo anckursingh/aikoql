@@ -23,6 +23,7 @@ GENERATOR_VERSION = "0.1.0"
 TASK_TYPES = {
     "intent", "query", "grounded_qa", "reasoning",
     "unknown", "temporal", "provenance", "authorization",
+    "ambiguity", "contradiction",
 }
 DIFFICULTIES = {"factual", "one_hop", "multi_hop", "comparison"}
 

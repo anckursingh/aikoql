@@ -18,15 +18,28 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from aikoql_training.scenarios.answer_formats import UNKNOWN_PREFIX
 from aikoql_training.scenarios.scenario import Scenario
 from aikoql_training.validation.grounding import evidence_id
+
+# The label truth table per task family (T-09: machine-readable labels;
+# uncertainty never becomes a false positive).
+_GROUNDED_LABELS = {"grounded": True, "answerable": True,
+                    "ambiguous": False, "contradictory": False}
+_UNKNOWN_LABELS = {"grounded": False, "answerable": False,
+                   "ambiguous": False, "contradictory": False}
+_AMBIGUOUS_LABELS = {"grounded": True, "answerable": True,
+                     "ambiguous": True, "contradictory": False}
+_CONTRADICTED_LABELS = {"grounded": True, "answerable": True,
+                        "ambiguous": False, "contradictory": True}
 
 
 def build_answer(scenario: Scenario, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Ground `scenario.expected_answer` in `context` (the adapter's
     {entities, facts, relations, evidence} shape) and return
-    {"answer", "evidence_ids"} — or None when the claim cannot be
-    fully traced (no supporting fact, or required evidence absent)."""
+    {"answer", "evidence_ids", "labels"} — or None when the claim
+    cannot be fully traced (no supporting fact, or required evidence
+    absent)."""
     answer = scenario.expected_answer
     if not answer.strip():
         return None
@@ -44,7 +57,52 @@ def build_answer(scenario: Scenario, context: Dict[str, Any]) -> Optional[Dict[s
             ):
                 return None
         return {"answer": answer,
-                "evidence_ids": [evidence_id(e) for e in scenario.evidence]}
+                "evidence_ids": [evidence_id(e) for e in scenario.evidence],
+                "labels": dict(_GROUNDED_LABELS)}
+
+    if scenario.task_type == "unknown":
+        # The refusal IS the answer: grounded=False, no evidence.
+        # Fail-closed on the premise — if the context actually knows
+        # the missing name the question was never unknown.
+        if not answer.startswith(UNKNOWN_PREFIX):
+            return None
+        if not scenario.koids and scenario.anchor_value is not None:
+            needle = str(scenario.anchor_value)
+            if any(isinstance(f.get("statement"), str) and needle in f["statement"]
+                   for f in context.get("facts", [])):
+                return None
+        return {"answer": answer, "evidence_ids": [],
+                "labels": dict(_UNKNOWN_LABELS)}
+
+    if scenario.task_type in ("ambiguity", "contradiction"):
+        # Every candidate value must trace, or the enumeration would be
+        # a partial claim — refused. Each supporting fact's evidence
+        # must be present in the context rows.
+        if not scenario.candidates:
+            return None
+        ids: List[str] = []
+        seen = set()
+        for _, value in scenario.candidates:
+            supporting = [
+                f for f in context.get("facts", [])
+                if isinstance(f.get("statement"), str) and value in f["statement"]
+            ]
+            if not supporting:
+                return None
+            for fact in supporting:
+                ev = fact.get("evidence")
+                if not isinstance(ev, dict) or not any(
+                    isinstance(e, dict) and evidence_id(e) == evidence_id(ev)
+                    for e in evidence_rows
+                ):
+                    return None
+                key = evidence_id(ev)
+                if key not in seen:
+                    seen.add(key)
+                    ids.append(key)
+        labels = (_AMBIGUOUS_LABELS if scenario.task_type == "ambiguity"
+                  else _CONTRADICTED_LABELS)
+        return {"answer": answer, "evidence_ids": ids, "labels": dict(labels)}
 
     supporting = [
         f for f in context.get("facts", [])
@@ -67,4 +125,5 @@ def build_answer(scenario: Scenario, context: Dict[str, Any]) -> Optional[Dict[s
             seen.add(key)
             ids.append(key)
 
-    return {"answer": answer, "evidence_ids": ids}
+    return {"answer": answer, "evidence_ids": ids,
+            "labels": dict(_GROUNDED_LABELS)}

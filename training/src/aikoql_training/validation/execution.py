@@ -57,6 +57,31 @@ def verify_scenario(db: Any, scenario: Scenario, queries: List[str]) -> dict:
             )
         return {"ok": not errors, "errors": errors}
 
+    if scenario.task_type == "unknown":
+        # The refusal is true only if the DB really has nothing: no
+        # result row may carry the asked property.
+        for i, rows in enumerate(result_sets):
+            for r in rows:
+                props = r.get("properties") or {}
+                if scenario.property in props and props[scenario.property] is not None:
+                    errors.append(
+                        f"unknown: row in query {i} carries {scenario.property}"
+                    )
+        return {"ok": not errors, "errors": errors}
+
+    if scenario.task_type in ("ambiguity", "contradiction"):
+        # Both sides must be retrievable — the uncertainty is real.
+        for i, rows in enumerate(result_sets):
+            found = {
+                str(r.get("properties", {}).get(scenario.property))
+                for r in rows
+                if scenario.property in (r.get("properties") or {})
+            }
+            missing = [v for _, v in scenario.candidates if v not in found]
+            if missing:
+                errors.append(f"query {i}: candidates not recovered: {missing}")
+        return {"ok": not errors, "errors": errors}
+
     if scenario.property is not None:
         found = False
         for r in result_sets[0]:
