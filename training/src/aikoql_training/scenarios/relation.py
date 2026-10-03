@@ -11,27 +11,8 @@ from __future__ import annotations
 
 from typing import List
 
-from aikoql_training.scenarios.scenario import Scenario, ref_of
-
-# Third-person ("Who OWNS B?") and base ("What does A own?") verb forms
-# for the POC's relation types. Fallback is the raw lowercased type —
-# unmapped relations may read awkwardly; the FZ-T4 template engine
-# (T-04+) owns question phrasing properly.
-_REL_VERBS = {
-    "OWNS": ("owns", "own"),
-    "DEPENDS_ON": ("depends on", "depend on"),
-    "MENTIONS": ("mentions", "mention"),
-    "REPORTS_TO": ("reports to", "report to"),
-    "CONTAINS": ("contains", "contain"),
-    "USES": ("uses", "use"),
-}
-
-
-def _verbs(rel_type: str):
-    third, base = _REL_VERBS.get(rel_type, (None, None))
-    if third is None:
-        return rel_type.lower(), rel_type.lower()
-    return third, base
+from aikoql_training.scenarios.scenario import Scenario
+from aikoql_training.scenarios.templates import _verbs, ref_of
 
 
 def relation_scenarios(edges: List[dict], kos: List[dict], rel_type: str) -> List[Scenario]:

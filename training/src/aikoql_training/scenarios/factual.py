@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import List
 
-from aikoql_training.scenarios.scenario import Scenario, ref_of
+from aikoql_training.scenarios.scenario import Scenario
+from aikoql_training.scenarios.templates import ref_of
 
 _SCALAR = (str, int, float)  # bool passes via int
 
