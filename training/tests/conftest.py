@@ -142,7 +142,8 @@ _BASE = {
     "semantic_target": {"operation": "query"},
     "query_target": {
         "language": "aikoql",
-        "query": "MATCH Service WHERE name == 'settlement' RETURN owner",
+        # T-05: text string literals are double-quoted only (lexer.rs).
+        "query": 'MATCH Service WHERE name == "settlement" RETURN owner',
     },
     "context": {"entities": [], "facts": [], "relations": [], "evidence": []},
     "expected": {"answer": "Payments Team", "koids": [], "evidence_ids": []},

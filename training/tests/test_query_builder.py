@@ -209,7 +209,7 @@ def test_oracle_passes_when_factual_anchor_value_matches():
     s = _scen("factual", ("a",), prop="name")
     s = Scenario(**{**s.__dict__, "expected_answer": "settlement"})
     db = _FakeDb([{"results": [{"koid": "a", "properties": {"name": "settlement"}}]}])
-    report = verify_scenario(db, s, ["q"], [ko])
+    report = verify_scenario(db, s, ["q"])
     assert report["ok"] is True
     assert report["errors"] == []
 
@@ -218,7 +218,7 @@ def test_oracle_fails_when_anchor_ko_missing():
     ko = _ko("a", "service", {"name": "settlement"})
     s = _scen("factual", ("a",), prop="name")
     db = _FakeDb([{"results": []}])
-    report = verify_scenario(db, s, ["q"], [ko])
+    report = verify_scenario(db, s, ["q"])
     assert report["ok"] is False
 
 
@@ -227,7 +227,7 @@ def test_oracle_fails_when_hop_target_missing():
     b = _ko("b", "service", {"name": "checkout"})
     s = _scen("one_hop", ("a", "b"), path=(("a", "DEPENDS_ON", "b"),))
     db = _FakeDb([{"results": [{"koid": "a"}]}])  # b never came back
-    report = verify_scenario(db, s, ["q"], [a, b])
+    report = verify_scenario(db, s, ["q"])
     assert report["ok"] is False
 
 
@@ -246,7 +246,7 @@ def test_oracle_passes_multi_hop_when_every_hop_recovers():
             {"results": [{"koid": "c"}]},
         ]
     )
-    report = verify_scenario(db, s, ["q1", "q2"], [a, b, c])
+    report = verify_scenario(db, s, ["q1", "q2"])
     assert report["ok"] is True
     assert db.queries == ["q1", "q2"]
 
@@ -258,7 +258,7 @@ def test_oracle_records_compile_failures():
 
     ko = _ko("a", "service", {"name": "settlement"})
     s = _scen("factual", ("a",), prop="name")
-    report = verify_scenario(_Boom(), s, ["MATCH ???"], [ko])
+    report = verify_scenario(_Boom(), s, ["MATCH ???"])
     assert report["ok"] is False
     assert any("parse failure" in e for e in report["errors"])
 
@@ -295,7 +295,7 @@ def test_live_every_generated_query_passes_compile_to_scenario_match(mcp_server)
                 env = db.aikoql(q)  # compile -> plan -> execute over the wire
                 assert isinstance(env.get("results"), list), q
                 compiled += 1
-            report = verify_scenario(db, s, queries, kos)
+            report = verify_scenario(db, s, queries)
             assert report["ok"], (s.scenario_id, report["errors"])
 
         # 6 factual (3 KOs x 2 props) + 2+2 relation + 2 multi-hop queries
