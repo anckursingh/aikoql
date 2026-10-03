@@ -28,6 +28,14 @@ done_
 #    servers (each arm spawns its own), plus the native transport on rust
 #    (D-15: the framed binary protocol).
 say "2/8 conformance (5 languages + native)"
+# The python leg imports the SOURCE tree (sys.path[0] in
+# tests/sdk_conformance.py), so its native module must exist in place
+# first — a fresh runner has nothing there and no repo .venv to mask it
+# (RED v02-cert-python-native: ModuleNotFoundError on the v0.2.1 run).
+( cd crates/sdk/python
+  python3 -m venv /tmp/aikoql-cert-venv
+  /tmp/aikoql-cert-venv/bin/pip install -q maturin
+  /tmp/aikoql-cert-venv/bin/maturin develop --release )
 for lang in python go rust typescript java; do
   bash scripts/sdk-conformance.sh --language "$lang" --bin "$BIN"
 done
