@@ -7,7 +7,7 @@ through the public health tool. Context/auth conveniences grow here
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from aikoql_training.snapshot import Snapshot, capture_snapshot
 
@@ -32,3 +32,25 @@ def capture_from_agent(
         seed=seed,
         now=now,
     )
+
+
+def scan_edges(agent, koids) -> List[dict]:
+    """Recover the live relation edges for the given KOs through the
+    public traverse surface. Returns deduplicated, normalized
+    {"from", "rel", "to"} dicts — an edge reached from either endpoint
+    appears once."""
+    seen = set()
+    edges = []
+    for koid in koids:
+        result = agent.traverse(koid, None, 1)
+        hits = result.get("hits", []) if isinstance(result, dict) else result
+        for h in hits:
+            if h.get("direction") == "inbound":
+                edge = (h["koid"], h["rel_type"], koid)
+            else:
+                edge = (koid, h["rel_type"], h["koid"])
+            if edge in seen:
+                continue
+            seen.add(edge)
+            edges.append({"from": edge[0], "rel": edge[1], "to": edge[2]})
+    return edges
