@@ -32,9 +32,11 @@ _FIELDS = {"dataset_id": "poc-1", "seed": 7, "snapshot_id": "snap-1",
 
 def _ex(split_key="k", question=None, facts=None, koids=None, **overrides):
     """A grounding-valid grounded_qa example."""
-    question = question or "What is the owner of the settlement service?"
-    facts = facts or [{"statement": "The owner of the settlement service "
-                                    "is Payments Team", "evidence": _EV}]
+    if question is None:
+        question = "What is the owner of the settlement service?"
+    if facts is None:
+        facts = [{"statement": "The owner of the settlement service "
+                              "is Payments Team", "evidence": _EV}]
     return make_example(
         input={"question": question},
         context={"entities": [], "relations": [], "evidence": [_EV],
@@ -137,12 +139,13 @@ def test_cross_holdout_koid_sharing_poisons_publishability(tmp_path):
 
 def test_misplaced_split_poisons_the_leakage_gate(tmp_path):
     # the example's recorded split disagrees with the recomputed home
+    # (the writer only materializes the three canonical split files)
     a = _ex(split_key="k-1")
     seed = 7
     splits, _ = assign_splits([a], seed, (8, 1, 1))
     home = next(n for n in _SPLITS if splits[n])
     wrong = next(n for n in _SPLITS if n != home)
-    write_dataset({wrong: [a], "train": [], "val": [], "test": []},
+    write_dataset({n: ([a] if n == wrong else []) for n in _SPLITS},
                   str(tmp_path), **{**_FIELDS, "seed": seed})
     out = validate_dataset(str(tmp_path))
     assert out["publishable"] is False

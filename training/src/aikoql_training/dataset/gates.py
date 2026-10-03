@@ -1,0 +1,227 @@
+"""The dataset validator + gates (design §26).
+
+validate_dataset enforces every §5 gate fail-closed; a poisoned
+dataset passes only when the gate that should catch it is missing.
+Static gates run on the artifact alone (schema, grounding,
+authorization, secrets, leakage, duplicates); the live gates
+(compiler, execution, scenario_match) run only with a db and report
+"skipped" otherwise; determinism compares against a reference dataset
+directory. The leakage gate recomputes the split assignment from the
+manifest seed — recorded placement must agree AND the cross-holdout
+koid pair count must be zero.
+
+`publishable` is True only when every evaluated gate passes; skipped
+and disabled gates never veto.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any, Dict, List, Optional
+
+from aikoql_training.dataset.config import load_config
+from aikoql_training.dataset.splitter import assign_splits
+from aikoql_training.dataset.writer import read_dataset
+from aikoql_training.errors import DatasetError, TrainingDataError
+from aikoql_training.models import validate as validate_schema
+from aikoql_training.validation.grounding import validate_grounding
+
+_SPLITS = ("train", "val", "test")
+
+# ponytail: local pattern set is the static ceiling — the ingestion
+# secret-filter (Rust, S1-S8) binds at corpus time (T-14), never bypassed.
+_SECRET_PATTERNS = [
+    re.compile(r"sk-(?:live|test)-[0-9A-Za-z]{16,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"xox[bap]-[0-9A-Za-z-]{10,}"),
+    re.compile(r"ghp_[0-9A-Za-z]{20,}"),
+    re.compile(r"Bearer eyJ[A-Za-z0-9_-]{20,}"),
+]
+
+
+def _gate(ok: bool, status: str, count: int = 0, detail: str = "") -> dict:
+    return {"ok": ok, "status": status, "count": count, "detail": detail}
+
+
+def _secret_hits(examples: List[dict]) -> int:
+    hits = 0
+    for ex in examples:
+        texts = [ex.get("input", {}).get("question", ""),
+                 ex.get("expected", {}).get("answer", "")]
+        texts += [f.get("statement", "") for f in
+                  ex.get("context", {}).get("facts", [])]
+        for t in texts:
+            if isinstance(t, str) and any(p.search(t) for p in _SECRET_PATTERNS):
+                hits += 1
+    return hits
+
+
+def validate_dataset(
+    dataset: str,
+    *,
+    db: Optional[str] = None,
+    token: Optional[str] = None,
+    config_path: Optional[str] = None,
+    reference: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Run every §5 gate over the dataset at `dataset` (a directory)."""
+    if db is not None and token is None:
+        raise DatasetError("a db requires a token")
+    config = load_config(config_path)
+    got = read_dataset(dataset)
+    examples: List[dict] = [e for n in _SPLITS for e in got[n]]
+    manifest = got["manifest"]
+    gates: Dict[str, dict] = {}
+
+    # -- schema --------------------------------------------------------------
+    schema_errors = 0
+    for ex in examples:
+        try:
+            validate_schema(ex)
+        except TrainingDataError:  # SchemaError and DatasetError both
+            schema_errors += 1
+    gates["schema"] = _gate(schema_errors == 0, "pass" if schema_errors == 0
+                            else "fail", schema_errors)
+
+    # -- grounding + evidence coverage (one pass, two counts) ----------------
+    grounding_errors = evidence_errors = 0
+    grounding_detail = ""
+    for ex in examples:
+        out = validate_grounding(ex)
+        if not out["ok"]:
+            grounding_errors += 1
+            if not grounding_detail and out["errors"]:
+                grounding_detail = out["errors"][0]
+            evidence_errors += sum(1 for e in out["errors"]
+                                   if "evidence" in e)
+    gates["grounding"] = _gate(grounding_errors == 0,
+                               "pass" if grounding_errors == 0 else "fail",
+                               grounding_errors, grounding_detail)
+    gates["evidence"] = _gate(evidence_errors == 0,
+                              "pass" if evidence_errors == 0 else "fail",
+                              evidence_errors)
+
+    # -- authorization ---------------------------------------------------------
+    flag_mismatches = 0
+    for ex in examples:
+        is_auth = ex.get("task", {}).get("type") == "authorization"
+        required = ex.get("policy", {}).get("authorization_required", False)
+        if is_auth != required:
+            flag_mismatches += 1
+    gates["authorization"] = _gate(flag_mismatches == 0,
+                                   "pass" if flag_mismatches == 0 else "fail",
+                                   flag_mismatches)
+
+    # -- secrets ---------------------------------------------------------------
+    if config["secret_scan"]:
+        hits = _secret_hits(examples)
+        gates["secrets"] = _gate(hits == 0, "pass" if hits == 0 else "fail",
+                                 hits)
+    else:
+        gates["secrets"] = _gate(True, "disabled")
+
+    # -- leakage: recomputed assignment must agree AND be violation-free ------
+    leakage_detail = ""
+    try:
+        splits, violations = assign_splits(examples, manifest["seed"],
+                                           config["ratios"])
+        misplaced = 0
+        for name in _SPLITS:
+            home_ids = {e["example_id"] for e in splits[name]}
+            misplaced += sum(1 for e in got[name]
+                             if e["example_id"] not in home_ids)
+        ok = misplaced == 0 and not violations
+        if misplaced:
+            leakage_detail = f"{misplaced} example(s) misplaced"
+        elif violations:
+            leakage_detail = f"{len(violations)} cross-holdout koid pair(s)"
+        gates["leakage"] = _gate(ok, "pass" if ok else "fail",
+                                 misplaced + len(violations), leakage_detail)
+    except DatasetError as e:
+        gates["leakage"] = _gate(False, "fail", 1, str(e))
+
+    # -- duplicates ------------------------------------------------------------
+    ids = [e["example_id"] for e in examples]
+    dup_count = len(ids) - len(set(ids))
+    bound = config["max_duplicate_rate"] * max(len(ids), 1)
+    gates["duplicates"] = _gate(dup_count <= bound,
+                                "pass" if dup_count <= bound else "fail",
+                                dup_count)
+
+    # -- live gates -------------------------------------------------------------
+    for name in ("compiler", "execution", "scenario_match"):
+        gates[name] = _gate(True, "skipped")
+    if db is not None:
+        import aikoql
+        with aikoql.Agent.connect(db, token=token) as agent:
+            compile_errors = exec_errors = match_errors = 0
+            match_detail = ""
+            for ex in examples:
+                q = ex.get("query_target", {}).get("query", "")
+                if not q:
+                    continue
+                try:
+                    env = agent.aikoql(q)
+                except Exception:
+                    compile_errors += 1
+                    exec_errors += 1
+                    match_errors += 1
+                    continue
+                if "results" not in env:
+                    exec_errors += 1
+                    match_errors += 1
+                    continue
+                rows = {r.get("koid") for r in env["results"]}
+                koids = ex.get("expected", {}).get("koids", [])
+                # The oracle's match rule: every hop TARGET must be
+                # recovered. A TRAVERSE result never carries the source
+                # KO (runtime RowSet::Traversal), so multi-koid examples
+                # check koids[1:] — the single-koid (anchored MATCH)
+                # shapes check the koid itself.
+                targets = koids[1:] if len(koids) > 1 else koids
+                missing = [k for k in targets if k not in rows]
+                if missing:
+                    match_errors += 1
+                    if not match_detail:
+                        match_detail = f"koid(s) not recovered: {missing[:3]}"
+            gates["compiler"] = _gate(compile_errors == 0,
+                                      "pass" if compile_errors == 0 else "fail",
+                                      compile_errors)
+            gates["execution"] = _gate(exec_errors == 0,
+                                       "pass" if exec_errors == 0 else "fail",
+                                       exec_errors)
+            gates["scenario_match"] = _gate(match_errors == 0,
+                                            "pass" if match_errors == 0
+                                            else "fail",
+                                            match_errors, match_detail)
+
+    # -- determinism -------------------------------------------------------------
+    if reference is not None:
+        try:
+            ref = read_dataset(reference)
+        except DatasetError as e:
+            gates["determinism"] = _gate(False, "fail", 1,
+                                         f"reference unreadable: {e}")
+        else:
+            same = ref["manifest"] == manifest
+            if same:
+                from pathlib import Path
+                for name in _SPLITS:
+                    if (Path(dataset, manifest["splits"][name]["file"])
+                            .read_bytes()
+                            != Path(reference,
+                                    ref["manifest"]["splits"][name]["file"])
+                            .read_bytes()):
+                        same = False
+                        break
+            gates["determinism"] = _gate(same, "pass" if same else "fail",
+                                         0 if same else 1)
+    else:
+        gates["determinism"] = _gate(True, "skipped")
+
+    publishable = all(
+        g["ok"] for g in gates.values()
+        if g["status"] not in ("skipped", "disabled"))
+    return {"publishable": publishable, "gates": gates,
+            "example_count": manifest["example_count"]}

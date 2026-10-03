@@ -18,21 +18,34 @@ import json
 import pytest
 
 from aikoql_training.cli import main
+from aikoql_training.dataset.splitter import assign_splits
 from aikoql_training.dataset.writer import read_dataset, write_dataset
+from aikoql_training.validation.grounding import evidence_id
 from conftest import make_example
 
 _CREATED = "2026-10-03T00:00:00Z"
+_EV = {"document_id": "d1", "extractor": "e"}
 _FIELDS = {"dataset_id": "poc-1", "seed": 7, "snapshot_id": "snap-1",
            "configuration_hash": "c" * 64, "created_at": _CREATED}
 
 
 def _dataset(tmp_path, n=1):
-    examples = [make_example(split_key=f"k{i}",
-                             input={"question": f"What is the owner of "
-                                                f"service {i}?"})
-                for i in range(n)]
-    write_dataset({"train": examples, "val": [], "test": []},
-                  str(tmp_path), **_FIELDS)
+    examples = []
+    for i in range(n):
+        examples.append(make_example(
+            split_key=f"k{i}",
+            input={"question": f"What is the owner of service {i}?"},
+            context={"entities": [], "relations": [], "evidence": [_EV],
+                     "facts": [{"statement": f"The owner of service {i} is "
+                                            "Payments Team",
+                                "evidence": _EV}]},
+            expected={"answer": "Payments Team", "koids": [],
+                      "evidence_ids": [evidence_id(_EV)]},
+        ))
+    # placement by the splitter itself — the leakage gate recomputes the
+    # home from the manifest seed, so a hardcoded split would poison it
+    splits, _ = assign_splits(examples, _FIELDS["seed"], (8, 1, 1))
+    write_dataset(splits, str(tmp_path), **_FIELDS)
     return str(tmp_path)
 
 
@@ -72,7 +85,7 @@ def test_stats_counts_splits_and_exits_zero(capsys, tmp_path):
     assert main(["stats", _dataset(tmp_path, n=3)]) == 0
     stats = json.loads(capsys.readouterr().out)
     assert stats["example_count"] == 3
-    assert stats["splits"]["train"] == 3
+    assert sum(stats["splits"].values()) == 3
 
 
 # -- export ------------------------------------------------------------------
@@ -95,7 +108,8 @@ def test_snapshot_captures_against_a_real_server(capsys, mcp_server):
                  "--database-id", "acmepay"]) == 0
     snap = json.loads(capsys.readouterr().out)
     assert snap["database_id"] == "acmepay"
-    assert len(snap["snapshot_id"]) == 64
+    # the house contract (T-02): content-derived identity, "sha256:" + 64
+    assert len(snap["snapshot_id"]) == len("sha256:") + 64
 
 
 def test_generate_runs_end_to_end_on_a_fixture_db(capsys, mcp_server,

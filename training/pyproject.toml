@@ -9,6 +9,9 @@ description = "Training Data Engine for AikoQL — deterministic, validated trai
 requires-python = ">=3.9"
 dependencies = ["aikoql>=0.2.1"]  # T-02: the installed SDK is the only AIKOQL boundary
 
+[project.scripts]
+aikoql-training = "aikoql_training.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
