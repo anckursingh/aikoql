@@ -743,13 +743,13 @@ evidence = "scan_drain_allocs_scale_with_entries_not_groups"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/tests/snapshot_matrix.rs"
-line = 553
+line = 583
 text = "/// row 9 — large WAL snapshot has bounded RSS (PR6-R3-003): snapshot"
 evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
 
 [[claim]]
 file = "crates/storage/aikoql-v2/tests/snapshot_matrix.rs"
-line = 557
+line = 587
 text = "/// afterwards proves the bounded copy lost nothing."
 evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
 

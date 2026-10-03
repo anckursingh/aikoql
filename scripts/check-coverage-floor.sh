@@ -31,7 +31,18 @@ echo "Coverage floor — instrumented storage-v2 suite run..."
 # absolute-budget pin (restart_index_reparse_pin, warm a2<=4) is enforced
 # by BOTH plain CI suites and skipped here (PR #7's first llvm-cov run saw
 # 5 while the plain Linux/Windows suites passed it).
+# cargo llvm-cov keeps every generated artifact (test exes AND .profraws)
+# until its clean; on a reused local target dir the report step then globs
+# ALL of them — generations of test binaries — and the spawn crosses
+# Windows' ~32k CreateProcess cap (os error 206). CI never sees it (fresh
+# runner); a local laptop does, once ~400 exes accumulate. Cleaning first
+# leaves exactly this battery's ~111 exes (~13k chars — fits), and the
+# merge can't mix stale .profraws into the profdata (mixed generations
+# drop the binary ids and llvm-cov attributes 0% everywhere).
+cargo llvm-cov clean
 cargo llvm-cov test -p aikoql-storage-v2 --all-features --no-report -- --skip restart_index_reparse_pin
+# The report step merges the raw profiles itself, then compares per-file
+# numbers against the committed baseline.
 cargo llvm-cov report --summary-only > "$tmp/report.txt"
 
 python3 - "$BASE" "$tmp/report.txt" <<'EOF'

@@ -1,0 +1,9 @@
+{
+  "id": "v02-coverage-object-list",
+  "pre_fix_commit": "2c710c1",
+  "command": "cargo llvm-cov report --summary-only",
+  "captured_at": "2026-10-03T07:14:31Z",
+  "captured_head": "2c710c100f56db9e2539960ce59f8277da9ddabd",
+  "exit_code": 1,
+  "note": "the gate script's report step, run standalone against the gate chain's own profdata \u2014 the instrumented battery (the preceding script step) is green; the report's -object list (one entry per test binary x feature variant) overflows Windows' ~32k CreateProcess cap (os error 206)"
+}
