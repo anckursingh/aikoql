@@ -1,0 +1,8 @@
+{
+  "id": "v021-sdk-pins-behind",
+  "pre_fix_commit": "246c0ab64e0b165c62040acc7581145488d8eadb",
+  "command": "bash scripts/check-sdk-compat.sh",
+  "captured_at": "2026-10-03T05:51:23Z",
+  "captured_head": "246c0ab64e0b165c62040acc7581145488d8eadb",
+  "exit_code": 1
+}
