@@ -126,7 +126,9 @@ first, one MCP full-path cell for the wire surface (T-06+).
 
 T-03's live cell proves the pattern end to end: seed KOs → relate →
 `scan_edges` → generate → assert every answer equals the live value,
-all over the spawned MCP server.
+all over the spawned MCP server. T-04 extends it to a 3-KO chain
+(settlement → checkout → gateway): the multi-hop scenario's
+`expected_path` re-verifies edge by edge against the traversed graph.
 
 ## 9. Crate anchors the design §3 assumed
 

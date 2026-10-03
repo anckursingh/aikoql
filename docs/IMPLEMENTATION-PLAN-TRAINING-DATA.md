@@ -163,6 +163,18 @@ list) and **hits carry direction "outbound"/"inbound"** —
 `scan_edges` normalizes both (`docs/training-data-architecture.md`
 §7/§8).
 
+T-04 shipped 2026-10-03 — `templates.py` (the FZ-T4 template engine:
+refs escape quotes/backslashes, strip control chars, own the verb
+map) and `multi_hop.py` (design Phase 5): every two-edge path
+A→B→C yields one scenario with the exact path in `expected_path` and
+the intermediate as the answer; paths are built only from the scanned
+graph — a fabricated edge never generates. Question grammar pinned by
+the RED: first verb base ("What does A own…"), second verb
+third-person ("…that depends on C?"). RED archived as `t-04-multihop`
+(20 tests blocked). GREEN 63/63: unit + the FZ-T4 hypothesis
+escape-round-trip property + the live 3-KO chain over the spawned MCP
+server.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
