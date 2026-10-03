@@ -234,6 +234,33 @@ func TestRememberGetRoundTrip(t *testing.T) {
 	}
 }
 
+// V-02: the default client identity is the honest dev marker — never a
+// stale literal like the 0.1.0 pin this replaced (a library cannot know
+// its own module version at runtime; distributors pin Version via
+// -ldflags). RED: Dial still ships the stale 0.1.0.
+func TestDefaultClientIdentityIsNotAFakePin(t *testing.T) {
+	var sentVersion string
+	addr := fakeServer(t, func(t *testing.T, req rpcFrame) []rpcFrame {
+		var p struct {
+			ClientInfo struct {
+				Version string `json:"version"`
+			} `json:"clientInfo"`
+		}
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			t.Fatalf("initialize params: %v", err)
+		}
+		sentVersion = p.ClientInfo.Version
+		return []rpcFrame{{JSONRPC: "2.0", ID: req.ID, Result: infoReply("")}}
+	})
+	c := mustDial(t, addr)
+	if err := c.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if sentVersion != "dev" {
+		t.Fatalf("the default client identity must be the honest dev marker, got %q", sentVersion)
+	}
+}
+
 func TestRequestSkipsNotifications(t *testing.T) {
 	// The server may push notify frames between request and response (e.g.
 	// audit events). The client must correlate by id, not by order.

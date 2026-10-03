@@ -95,7 +95,7 @@ export class Client {
   private transport: Transport;
   private nextId = 0;
   private closed = false;
-  private cfg: ClientConfig = { name: "aikoql-ts-sdk", version: "0.2.1" };
+  private cfg: ClientConfig = { name: "aikoql-ts-sdk", version: "" };
   private chain: Promise<unknown> = Promise.resolve();
   // The open stream's release (null when none): close() cancels a
   // mid-stream close through it (§17).
