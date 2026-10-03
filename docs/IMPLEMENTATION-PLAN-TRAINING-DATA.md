@@ -130,7 +130,9 @@ landed with two findings: **query_target is TEXT aikoql** (tool_aikoql →
 `aikoql_compiler::parser::parse`; the design's aikoql-json payload does
 not exist) and **no context-compiler tool exists on the MCP surface** —
 T-06 must compose retrieval primitives or propose a server change (see
-`docs/training-data-architecture.md` §3/§7). T-05's builder now targets
+`docs/training-data-architecture.md` §3/§7). (Corrected at T-06:
+`compile_context` **is** on the MCP surface — `tools/agent_knowledge.rs`;
+the adapter calls it directly.) T-05's builder now targets
 the text grammar.
 
 T-02 shipped 2026-10-03 — `snapshot.py` captures the design §10
@@ -194,6 +196,26 @@ the compile gate stays green. RED archived as `t-05-query-builder`
 compile over the spawned MCP server — compile rate 100%. The conftest
 schema example was fixed to double-quoted literals (the single-quoted
 form does not lex).
+
+T-06 shipped 2026-10-03 — `context/adapter.py` (`compile_context`)
+wraps the server's Context Compiler through the public client:
+`call_tool("compile_context", ...)` maps the envelope into the
+schema's context shape (entities/facts/relations verbatim, evidence =
+deduped fact evidence in package order); server errors
+(ACCESS_DENIED) propagate, never masked as empty rows. No Python
+retrieval logic — the arch assertion holds structurally (the unit fake
+exposes ONLY call_tool). The T-01 recon's §7 "no context-compiler
+tool" finding was **wrong**: `compile_context` has been on the MCP
+surface since MRFC-0070-A6 (`tools/agent_knowledge.rs`) — no server
+change was needed. Two live findings: (1) over TCP every authenticated
+connection gets agent_id "tcp-agent" (`transport.rs`) — the subject
+name is connection-invariant, so the TCP denial boundary is the TENANT
+(`tcp_tenant_isolation_across_tokens`), and the unauthorized cell
+spawns two tokens in different tenants; (2) staleness is the
+IR-version boundary — the compiler reads the live ir_json and its
+5-min cache is fingerprint-keyed (CTX-003: update → new fingerprint →
+old fact gone). RED archived as `t-06-context-adapter` (11 tests
+blocked). GREEN 95/95.
 
 ### Phase B — model experiments (design phases 18–19)
 

@@ -96,18 +96,41 @@ object; KOIDs are 32-char hex. The exact envelope fields (origin, status,
 confidence, valid_from/valid_to, version) are pinned by T-02's tests
 against a live server, not restated here from memory.
 
-## 7. Retrieval and context — an honest gap
+## 7. Retrieval and context — compile_context (T-06 correction)
 
-The MCP surface exposes retrieval primitives (`find_similar`, `traverse`,
-`aikoql`) but **no context-compiler tool**. The design's §15 assumes a
-`ContextPackage` comes back from AIKOQL; at this tip it must be composed
-from those primitives, or a context tool must be added to the server.
-Decision deferred to T-06 with two options on the table: (a) adapter
-composes ranked entities/facts/relations from the primitives; (b) a small
-server change exposes the existing `crates/ingestion/src/context.rs`
-compiler as a tool. Option (b) touches the core — it needs its own RED
-and the product owner's call, per the no-core-changes scope of this
-branch.
+The T-01 recon recorded "no context-compiler tool" — that finding was
+**wrong**. `compile_context` has been on the MCP surface since
+MRFC-0070-A6 (`tool_registry.rs` → `tools/agent_knowledge.rs`), and
+T-06's adapter (`training/src/aikoql_training/context/adapter.py`)
+calls it directly through the public client — no Python retrieval
+logic, no server change.
+
+- **Contract**: `{koid, task, token_budget (default 2000), subject?}` →
+  `{context_markdown, package, koid, task, token_budget, semantic,
+  experiences}`. The koid names a KO carrying `ir_json` (direct
+  knowledge) or an ingested document's sha256; anything else errors.
+- **Package**: ranked `entities` / `facts` / `relations` with scores
+  and justifications; `estimated_tokens`, `trimmed`, `status`
+  ("healthy" / "semantic_fallback"). The adapter maps only the rows
+  plus the facts' evidence (deduped, package order) into the schema's
+  context shape.
+- **ACL is server-side**: `get_ir_for_koid` reads the KO as the calling
+  subject; unauthorized → ACCESS_DENIED, never rows (CTX-001). Over
+  stdio the subject is per-call; over TCP every authenticated
+  connection gets agent_id `"tcp-agent"` (`transport.rs`) — the subject
+  name is connection-invariant, so the TCP denial boundary is the
+  TENANT (`tcp_tenant_isolation_across_tokens`). T-06's unauthorized
+  cell spawns two tokens in different tenants.
+- **Staleness is the IR-version boundary**: the compiler compiles the
+  live KO's `ir_json`, and its 5-min cache is fingerprint-keyed
+  (task + budget + IR fingerprint + semantic fingerprint), so an
+  updated document never serves its superseded facts (CTX-003). The
+  kernel's validity bridge (`compile_context_with_validity`) is not
+  wired into the tool; superseded-KO filtering is T-08's temporal work.
+- **Client surface**: the Python SDK has no compile_context wrapper —
+  `McpClient.call_tool` is the generic path; the adapter does the mode
+  dispatch and rejects clients without a tool surface (embedded mode
+  cannot compile).
 
 T-03 adds the traverse-shape finding: `Agent.traverse(koid, rel,
 depth)` returns `{"hits": [...]}` over MCP but a flat list in embedded
