@@ -268,3 +268,51 @@ server:
    them into a context that can never carry them would ground nothing
    (fail-closed seam, `test_non_citable_evidence_skipped`).
 
+## 13. Uncertainty and conflict scenarios (T-09)
+
+The uncertainty family (design ph 8) is three generators over one
+shared format module, `scenarios/answer_formats.py` (no local imports —
+used by scenarios, generators and validation alike):
+
+- `unknown_scenarios(kos, missing)` — a missing entity (a name no KO of
+  the type carries) or a missing property (an existing KO without it)
+  is answered by an `UNKNOWN:` refusal, `koids` empty for missing
+  entities, labels grounded=False/answerable=False. An existing
+  name/property is skipped: uncertainty is never a false positive.
+- `ambiguity_scenarios(kos)` — same-type pairs sharing a scalar anchor
+  value are enumerated as `AMBIGUOUS (n candidates): koid -> value; ...`
+  sorted by koid, labels ambiguous=True. The asked property is the
+  first sorted common scalar with distinct values; pairs whose common
+  properties all agree, or whose candidate values contain an
+  enumeration delimiter (`"; "`, `" -> "`), are skipped.
+- `contradiction_scenarios(conflicts)` — one example per real kernel
+  Conflict record; the answer preserves the Conflict metadata verbatim
+  (`CONTRADICTED: vA (claim a) vs vB (claim b); conflict c, resolution
+  r`), labels contradictory=True, never picking a side. The claims are
+  ordered by the record's `claim_a`/`claim_b`, never the input list;
+  claims that do not match the record, identical claims, mixed types or
+  records with no shared anchor are skipped.
+
+`Scenario` gains `anchor_prop`/`anchor_value`/`candidates`/`type_name`
+(all defaulted, additive). `build_queries` emits one anchored MATCH
+whose result set PROVES the uncertainty: no row carrying the property
+(unknown) or both candidate values (ambiguity/contradiction) — the
+`unknown` branch precedes the koids-present check because missing
+entities carry no KO. `build_answer` returns `labels` on every family
+(T-07/T-08 exact-dict assertions extended); unknown refuses when the
+context actually knows the missing name, ambiguity/contradiction refuse
+unless every candidate value traces to an evidenced fact.
+`validate_grounding` dispatches on the task type: refusals must not be
+marked answerable/grounded and must carry no evidence_ids; the
+enumeration families require the family label, the prefix, a full
+per-candidate trace, and — for contradiction — the conflict metadata
+(the parser is fail-closed: an answer without `"; conflict ..., resolution ..."`
+parses to nothing).
+
+One seam found live: **the Conflict KO's `resolution` lives under
+`extensions`** on the `get()` envelope (kernel `ops.rs`), while
+operator-shaped records carry it top-level — the generator reads both.
+`extensions.assertions` (the per-claim authority/evidence/timestamp
+snapshots) is not surfaced into examples; the claims' evidence traces
+through the compiled context instead.
+

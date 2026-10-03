@@ -256,6 +256,35 @@ blocked). GREEN 138/138, incl. both hypothesis laws and live cells
 for real version intervals and both evidence surfaces over the
 spawned MCP server.
 
+T-09 shipped 2026-10-03 — the uncertainty family (design ph 8), three
+generators over one shared answer-format module
+(`scenarios/answer_formats.py`, no local imports): UNKNOWN: refusals
+(`scenarios/unknown.py`), AMBIGUOUS enumerations
+(`scenarios/ambiguity.py`) and CONTRADICTED answers
+(`scenarios/contradiction.py`). The existing labels block
+{grounded, answerable, ambiguous, contradictory} is the
+machine-readable label carrier — `build_answer` now returns `labels`
+on every family (the T-07/T-08 exact-dict assertions were extended,
+not weakened). Uncertainty never becomes a false positive at four
+layers: generation (an existing name/property is never "unknown";
+ambiguous pairs need distinct values and parse-safe ones;
+contradiction input must match the kernel's Conflict record), the
+answer generator (unknown refuses when the context actually knows the
+missing name; ambiguity/contradiction refuse unless EVERY candidate
+value fully traces), the oracle (`verify_scenario` proves absence —
+no row carries the property — or recovers both sides), and the
+validator (label semantics; the contradiction branch rejects answers
+that dropped the conflict metadata). Contradictions preserve the
+kernel's Conflict metadata verbatim: both claim koids plus the
+conflict koid and its resolution state (read from the live envelope's
+`extensions` or the operator-shaped record), never picking a side.
+Two new task types (`ambiguity`, `contradiction`) join TASK_TYPES.
+RED archived as `t-09-uncertainty` (3 collection errors, exit 2 —
+the modules were missing). GREEN 183/183, incl. the ambiguity
+hypothesis law, three live cells (real absence, a real same-name
+pair, a real `contradict` Conflict), and the unit/live seam for the
+conflict envelope.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
