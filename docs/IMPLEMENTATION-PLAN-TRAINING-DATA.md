@@ -109,7 +109,7 @@ ends with the dogfood re-stamp tip; the user pushes.
 | T-02 | snapshot adapter (ph 2) | snapshot tests fail: db identity, knowledge revision, config hash, seed captured; same-state ⇒ same snapshot identity | `snapshot.py` + `client.py` over the real SDK/MCP; manifest reproducibility pinned |
 | T-03 | factual + relation scenarios (ph 3+4) | one-KO/one-property/one-question/one-answer; one-hop, inverse, relation-filter, missing-relation tests fail | deterministic generators; expected path stored and validated |
 | T-04 | multi-hop scenarios (ph 5) | A→B→C fixture: generated scenario must carry the exact path; fabricated-edge case fails | graph-path generator; no fabricated edges (assertion over real graph data) |
-| T-05 | query builder + oracle (ph 10) | expected-query tests fail; the builder's output does not compile | builder emits aikoql-json against the compiler contract; EVERY generated query passes compile → plan → execute → scenario-match (the design's 6-point acceptance) |
+| T-05 | query builder + oracle (ph 10) | expected-query tests fail; the builder's output does not compile | builder emits TEXT aikoql against the compiler's real grammar (recon §3); EVERY generated query passes compile → plan → execute → scenario-match (the design's 6-point acceptance) |
 | T-06 | context adapter (ph 11) | context tests fail: required entities/facts/relations + evidence present, no unauthorized/stale data | adapter calls the existing Context Compiler via the client; no Python retrieval logic (arch assertion) |
 | T-07 | grounded answers + grounding validator (ph 12) | unsupported-claim rejection fails | deterministic answer generator; validator enforces claim→context/evidence tracing; 100% of accepted examples grounded |
 | T-08 | temporal + provenance scenarios (ph 6+7) | March/August version questions; evidence-ID expectations fail | temporal generator over real version intervals; provenance examples point at real evidence |
@@ -119,6 +119,19 @@ ends with the dogfood re-stamp tip; the user pushes.
 | T-12 | dataset validator + gates + CLI (ph 15, §26) | validator rejects a poisoned dataset only if each gate is enforced; CLI absent | `aikoql-training snapshot/generate/validate/stats/export`; fail-closed gates: compile < 100%, unauthorized > 0, secrets > 0, invalid schema > 0, leakage > 0 ⇒ publishable=no |
 | T-13 | observability + errors + benchmark (ph 16, §27/28) | metrics/error-category tests fail | typed error model (§28 categories), structured metrics (§27, no sensitive content), `scripts/benchmark_dataset.py` (throughput, rates, size; laptop = quick cells) |
 | T-14 | AcmePay POC corpus + eval set (ph 17, §35–37) | determinism-across-seeds, leakage, security, E1–E9 dataset checks fail | seeded AcmePay KB (§35 counts), 10K-example generation (seed sweep), eval set, artifacts committed; mutation leg: validator mutants are killed |
+
+T-01 shipped 2026-10-03 — `models.py` fail-closed schema validation
+(required/unknown/typed fields, task/difficulty enums, JSON-serializable
+content, forged-ID rejection), canonical sort-keyed `to_json`, and
+content-derived `example_id` (design §24, sha256 over schema_version +
+snapshot + task_type + question + query + scenario_id). RED archived as
+`t-01-schema` (ModuleNotFoundError, 21 tests blocked). The recon doc
+landed with two findings: **query_target is TEXT aikoql** (tool_aikoql →
+`aikoql_compiler::parser::parse`; the design's aikoql-json payload does
+not exist) and **no context-compiler tool exists on the MCP surface** —
+T-06 must compose retrieval primitives or propose a server change (see
+`docs/training-data-architecture.md` §3/§7). T-05's builder now targets
+the text grammar.
 
 ### Phase B — model experiments (design phases 18–19)
 
