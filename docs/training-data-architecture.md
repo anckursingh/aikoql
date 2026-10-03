@@ -138,3 +138,36 @@ ingest_incremental}.rs`; `crates/compiler/src/{parser, planner,
 semantic}`; `crates/runtime/src/backend.rs` routes production opening
 through Storage V2. The design's reuse claims hold; training code must
 not import any of these directly — the SDK/MCP surface is the boundary.
+
+## 10. TEXT grammar pins (T-05 recon)
+
+`build_queries` renders against the real lexer/parser/lowering, so the
+following contract is load-bearing for every T-05+ generator:
+
+1. **String literals are double-quoted ONLY and have NO escape
+   mechanism** (`parser/lexer.rs` `read_string` stops at the next `"`).
+   A value containing `"` is unrepresentable; the single-quoted form
+   does not lex at all.
+2. **MATCH predicates address properties, never the KOID.** Text-level
+   KOID addressing exists only in `UPDATE`/`DELETE` (as a
+   double-quoted string).
+3. **TRAVERSE is outbound-only, one rel_type per clause**, optional
+   `DEPTH n` (default 1, 0 rejected at compile). This differs from the
+   MCP `traverse` tool (inbound+outbound, CI-07) — same word, different
+   semantics on the two surfaces.
+4. **A traverse query must project a field.** `RETURN *` after
+   TRAVERSE yields `RowSet::Traversal`, which `tool_aikoql` renders as
+   `{"results": []}`; the Project op is what loads the KOs back.
+5. **Literal typing is fail-closed** (`mod.rs` kq010): integral
+   literals lower to `Value::Int` and cross-type property comparison
+   fails closed, so ints render as integers and floats as decimals;
+   negative numbers (`-` does not lex) and scientific notation (`e`
+   lexes as an ident) are unrepresentable.
+6. **Ident names** (type/property/relation) must match
+   `[A-Za-z_][A-Za-z0-9_:]*` and must not be keywords (they lex as
+   tokens).
+
+`build_queries` therefore skips unrepresentable scenarios instead of
+emitting a bad query; `verify_scenario` (the oracle) proves each
+emitted query compiles, plans, executes and recovers its scenario's
+hop targets over the public `tool_aikoql` surface.

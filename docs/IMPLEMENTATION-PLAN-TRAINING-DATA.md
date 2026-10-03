@@ -175,6 +175,26 @@ third-person ("…that depends on C?"). RED archived as `t-04-multihop`
 escape-round-trip property + the live 3-KO chain over the spawned MCP
 server.
 
+T-05 shipped 2026-10-03 — `generators/query.py` (`build_queries`) emits
+TEXT aikoql against the compiler's real grammar and
+`validation/execution.py` (`verify_scenario`) is the oracle: every
+generated query passes compile → plan → execute → scenario-match (the
+design's 6-point acceptance; auth and evidence join in T-08/T-10).
+Grammar pins from the recon: string literals are double-quoted with no
+escapes, MATCH predicates address properties only, TRAVERSE is
+outbound-only with one rel_type per clause (same-rel paths compile as
+one DEPTH-n query, mixed-rel paths chain one query per hop), and a
+traverse query must project a field (RETURN * after TRAVERSE comes
+back as `{"results": []}`). Fail-closed rendering: a quote in a value,
+negative/scientific numbers, non-ident or keyword names, or a KO with
+no scalar anchor skips the scenario — a bad query is never emitted, so
+the compile gate stays green. RED archived as `t-05-query-builder`
+(22 tests blocked). GREEN 83/83: the live cell seeds the 3-service KB
+(including a mixed-rel chain) and proves 12/12 generated queries
+compile over the spawned MCP server — compile rate 100%. The conftest
+schema example was fixed to double-quoted literals (the single-quoted
+form does not lex).
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
