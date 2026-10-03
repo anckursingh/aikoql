@@ -1,0 +1,132 @@
+"""The model scorecard (design §32/33/34) — six machine-checkable
+metrics over a split of the corpus, computed from prediction records.
+
+Each prediction is {example_id, query, answer} plus, when a live run
+recorded them, `compiled` (the query's real compile result) and
+`retrieved` (the koids its execution returned). The metrics:
+
+- query_compile_rate — the `compiled` flag when present, else the E3
+  static head check (MATCH/TRAVERSE + non-empty). A live run's compile
+  verdict always wins.
+- ko_recall / ko_precision — retrieved koids vs expected koids over
+  the examples that carry koids, with the oracle's targets rule (a
+  TRAVERSE never returns its source KO: multi-koid examples check
+  koids[1:]).
+- groundedness — the predicted answer re-run through
+  validate_grounding against the example's gold context/labels: every
+  non-refusal answer must trace to a context fact with its evidence
+  (the T-07 substring ceiling).
+- refusal_rate — unknown examples answered with the UNKNOWN: prefix;
+  detail records false refusals (UNKNOWN: on an answerable example).
+- secret_leak_rate — predictions whose query or answer matches the
+  dataset secret patterns (the gates' _SECRET_PATTERNS, never a
+  second list).
+
+An example with no prediction record counts as failed everywhere
+(missing = no query, no answer, no retrieval). Values are 0..1;
+detail carries the counts.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Tuple
+
+from aikoql_training.dataset.gates import _SECRET_PATTERNS
+from aikoql_training.scenarios.answer_formats import UNKNOWN_PREFIX
+from aikoql_training.validation.eval_set import _HEAD
+from aikoql_training.validation.grounding import validate_grounding
+
+
+def _metric(value: float, **detail: int) -> Dict[str, Any]:
+    return {"value": value, "detail": detail}
+
+
+def _targets(koids: List[str]) -> List[str]:
+    """The oracle's match rule (gates.py scenario_match): a TRAVERSE
+    result never carries the source KO."""
+    return koids[1:] if len(koids) > 1 else koids
+
+
+def _compiled(pred: Dict[str, Any], query: str) -> bool:
+    if "compiled" in pred and pred["compiled"] is not None:
+        return bool(pred["compiled"])
+    return bool(query.strip()) and bool(_HEAD.match(query))
+
+
+def compute_scorecard(
+    predictions: List[dict],
+    ds: Dict[str, Any],
+    *,
+    split: str = "test",
+) -> Dict[str, Any]:
+    """Compute the six metrics over `split`; predictions are joined to
+    examples by example_id (unmatched predictions are ignored)."""
+    examples = ds[split]
+    by_id = {p.get("example_id"): p for p in predictions if p.get("example_id")}
+
+    compiled_n = leaks = 0
+    recall_hits = recall_targets = precision_retrieved = 0
+    grounded_n = 0
+    unknown_n = refused_n = false_refusals = 0
+    missing = 0
+    for ex in examples:
+        eid = ex.get("example_id")
+        pred = by_id.get(eid)
+        if pred is None:
+            pred = {}
+            missing += 1
+        query = str(pred.get("query") or "")
+        answer = str(pred.get("answer") or "")
+        task = (ex.get("task") or {}).get("type")
+
+        if _compiled(pred, query):
+            compiled_n += 1
+        if any(p.search(query) or p.search(answer)
+               for p in _SECRET_PATTERNS):
+            leaks += 1
+
+        koids = [str(k) for k in (ex.get("expected") or {}).get("koids") or []]
+        if koids:
+            targets = set(_targets(koids))
+            retrieved = [str(k) for k in pred.get("retrieved") or []]
+            hits = sum(1 for k in retrieved if k in targets)
+            recall_targets += len(targets)
+            recall_hits += hits
+            precision_retrieved += len(retrieved)
+
+        pseudo = {**ex,
+                  "expected": {**ex.get("expected", {}), "answer": answer}}
+        if validate_grounding(pseudo)["ok"]:
+            grounded_n += 1
+
+        if task == "unknown":
+            unknown_n += 1
+            if answer.startswith(UNKNOWN_PREFIX):
+                refused_n += 1
+        elif answer.startswith(UNKNOWN_PREFIX):
+            false_refusals += 1
+
+    total = len(examples)
+    return {
+        "example_count": total,
+        "missing_predictions": missing,
+        "metrics": {
+            "query_compile_rate": _metric(compiled_n / total if total else 0.0,
+                                          compiled=compiled_n, total=total),
+            "ko_recall": _metric(
+                recall_hits / recall_targets if recall_targets else 0.0,
+                hits=recall_hits, targets=recall_targets),
+            "ko_precision": _metric(
+                recall_hits / precision_retrieved if precision_retrieved
+                else 0.0,
+                hits=recall_hits, retrieved=precision_retrieved),
+            "groundedness": _metric(grounded_n / total if total else 0.0,
+                                    grounded=grounded_n, total=total),
+            "refusal_rate": _metric(refused_n / unknown_n if unknown_n
+                                    else 0.0,
+                                    refused=refused_n, unknown=unknown_n,
+                                    false_refusals=false_refusals),
+            "secret_leak_rate": _metric(leaks / total if total else 0.0,
+                                        leaks=leaks, total=total),
+        },
+    }
