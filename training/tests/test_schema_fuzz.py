@@ -28,6 +28,17 @@ _json = st.recursive(
     max_leaves=40,
 )
 
+# Context rows are KO-shaped data: the JSON-safe domain of a JSONL schema
+# (non-serializable content is invalid by construction, so "stays valid"
+# only applies to JSON-safe rows).
+_json_safe = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False)
+    | st.text(max_size=200),
+    lambda children: st.lists(children, max_size=8)
+    | st.dictionaries(st.text(max_size=40), children, max_size=8),
+    max_leaves=40,
+)
+
 
 @given(_json)
 @settings(max_examples=200)
@@ -49,7 +60,7 @@ def test_arbitrary_json_fails_closed_or_validates(value):
 @given(
     question=st.text(min_size=1, max_size=200),
     context_rows=st.lists(
-        st.dictionaries(st.text(max_size=40), _json, max_size=8), max_size=5
+        st.dictionaries(st.text(max_size=40), _json_safe, max_size=8), max_size=5
     ),
 )
 @settings(max_examples=100)
