@@ -73,6 +73,7 @@ done_
 #    AIKOQL_BINARY hatch keeps it off the download path).
 say "6/8 typescript suite + npm install smoke"
 ( cd crates/sdk/typescript
+  npm ci      # fast-check is a devDependency — the fresh release runner has none
   # the glob, not the dir — node resolves `tests/` as a module on Windows
   node --test tests/*.test.ts )
 ( cd npm-publish

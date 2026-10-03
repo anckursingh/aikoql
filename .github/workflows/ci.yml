@@ -412,6 +412,12 @@ jobs:
           node-version: 24
       - name: Build server binary (the contract target)
         run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
+      # fast-check is a devDependency of the SDK package — the fresh runner
+      # has no node_modules, and node --test resolves the import from the
+      # package's tree (the pushed-head run died on ERR_MODULE_NOT_FOUND).
+      - name: Install the SDK's devDependencies (lockfile-pinned)
+        run: npm ci
+        working-directory: crates/sdk/typescript
       - name: Real-server suite (fuzz estate + pool + wire ride the same run)
         run: |
           set -euo pipefail
@@ -430,12 +436,17 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Build server binary (the contract target)
-        run: cargo build -p aikoql-mcp
+        run: cargo build -p aikoql-mcp -p aikoql-fault-proxy
       - name: Surefire suite (real-server pin + fuzz seed sweep)
         run: |
           set -euo pipefail
           cd crates/sdk/java
-          AIKOQL_MCP_BIN="$PWD/../../../target/debug/aikoql-mcp" mvn -B test
+          # FaultMatrixTest spawns the fault proxy for every matrix cell —
+          # the empty env string surfaced as 13× "Cannot run program \"\""
+          # on the pushed head (the job built only aikoql-mcp until now).
+          AIKOQL_MCP_BIN="$PWD/../../../target/debug/aikoql-mcp" \
+            AIKOQL_FAULT_PROXY="$PWD/../../../target/debug/aikoql-fault-proxy" \
+            mvn -B test
 
   rust-sdk:
     name: Rust SDK contract tests
@@ -531,6 +542,7 @@ jobs:
         run: |
           set -euo pipefail
           cd crates/sdk/typescript
+          npm ci
           node --test tests/fuzz-estate.test.ts tests/fuzz-estate-pin.test.ts
       - name: Java jazzer smokes (7 targets, short budget)
         run: |
