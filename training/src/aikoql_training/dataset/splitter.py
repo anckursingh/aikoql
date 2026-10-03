@@ -30,6 +30,34 @@ _SPLITS = ("train", "val", "test")
 Violation = Tuple[str, str, str]
 
 
+def component_ids(edges: Sequence[dict]) -> Dict[str, str]:
+    """Connected-component ids over `edges` (each with from/rel/to).
+
+    Union-find with the root = the min koid, so a component's id is
+    the component's lexicographically smallest koid — deterministic
+    and independent of edge order. Every koid touched by an edge maps
+    to its component root; the builder stamps that root as the
+    example's split_key, so ALL examples touching a knowledge
+    component (factual {s}, relation {s,c}, ...) share ONE key and
+    can never straddle a holdout under any seed (the mixed-cardinality
+    trap the leakage gate caught on the T-12 koid-set-join keys).
+    """
+    parent: Dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for edge in edges:
+        a, b = find(edge["from"]), find(edge["to"])
+        if a != b:
+            parent[max(a, b)] = min(a, b)
+    return {k: find(k) for k in list(parent)}
+
+
 def assign_splits(
     examples: Sequence[dict],
     seed: int,

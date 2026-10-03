@@ -21,17 +21,19 @@ import json
 import shutil
 import sys
 import tempfile
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from aikoql_training.client import capture_from_agent
 from aikoql_training.context import compile_context
 from aikoql_training.dataset.config import load_config
 from aikoql_training.dataset.gates import validate_dataset
-from aikoql_training.dataset.splitter import assign_splits
+from aikoql_training.dataset.splitter import assign_splits, component_ids
 from aikoql_training.dataset.writer import read_dataset, write_dataset
 from aikoql_training.errors import TrainingDataError
 from aikoql_training.generators.answer import build_answer
 from aikoql_training.generators.query import build_queries
+from aikoql_training.metrics import Metrics
 from aikoql_training.models import GENERATOR_VERSION, SCHEMA_VERSION, compute_id
 from aikoql_training.scenarios.factual import factual_scenarios
 from aikoql_training.scenarios.relation import relation_scenarios
@@ -78,7 +80,7 @@ def _fixture_ir(kos: List[dict], edge: dict) -> Dict[str, Any]:
 
 
 def _assemble(scenario: Scenario, snap, query: str, ctx: dict,
-              answer: dict) -> Dict[str, Any]:
+              answer: dict, comp: dict) -> Dict[str, Any]:
     example = {
         "schema_version": SCHEMA_VERSION,
         "generator_version": GENERATOR_VERSION,
@@ -100,10 +102,13 @@ def _assemble(scenario: Scenario, snap, query: str, ctx: dict,
                      "evidence_ids": answer["evidence_ids"]},
         "policy": {"authorization_required": False},
         "labels": answer["labels"],
-        # the koid component's canonical key: every example sharing any
-        # koid lands in the same bucket, so cross-holdout pairs are
-        # impossible by construction (the leakage gate verifies it)
-        "split_key": ":".join(sorted(set(scenario.koids)))
+        # the knowledge COMPONENT's canonical key: the union-find root
+        # (min koid) of the component the example's koids belong to —
+        # factual {s} and relation {s,c} share the root, so cross-holdout
+        # pairs are impossible under any seed (the leakage gate verifies
+        # it); koids outside the edge graph fall back to the set join
+        "split_key": ":".join(sorted({comp.get(k, k)
+                                      for k in scenario.koids}))
         or scenario.scenario_id,
     }
     example["example_id"] = compute_id(example)
@@ -144,31 +149,45 @@ def cmd_generate(args) -> int:
                                   seed=args.seed)
         scenarios = (factual_scenarios(kos)
                      + relation_scenarios([edge], kos, "DEPENDS_ON"))
+        comp = component_ids([edge])
         doc = db.remember("KnowledgeSnapshot",
                           {"ir_json": json.dumps(_fixture_ir(kos, edge))})
+        metrics = Metrics()
         examples = []
         for s in scenarios:
+            metrics.count("scenarios")
             queries = build_queries(s, kos)
             if not queries:
+                metrics.count("unexpressible")
                 continue  # unexpressible scenario: skipped, compile stays green
             verdict = verify_scenario(db, s, queries)
             if not verdict["ok"]:
                 raise TrainingDataError(
-                    f"oracle failed for {s.scenario_id}: {verdict['errors']}")
+                    f"oracle failed for {s.scenario_id}: {verdict['errors']}",
+                    stage="oracle", scenario=s.scenario_id,
+                    code="oracle_failed")
             ctx = compile_context(db, doc["koid"], s.question)
             answer = build_answer(s, ctx)
             if answer is None:
+                metrics.count("refused")
                 continue  # refused: an unsupported claim is never emitted
-            examples.append(_assemble(s, snap, queries[0], ctx, answer))
+            metrics.count("emitted")
+            examples.append(_assemble(s, snap, queries[0], ctx, answer,
+                                      comp))
+        metrics.rate("refusal", "refused", "scenarios")
     if not examples:
-        raise TrainingDataError("generate produced no examples")
+        raise TrainingDataError("generate produced no examples",
+                                stage="generate", code="no_examples")
 
     splits, violations = assign_splits(examples, snap.seed, config["ratios"])
     if violations:
         raise TrainingDataError(
-            f"split leakage: {len(violations)} cross-holdout pair(s)")
+            f"split leakage: {len(violations)} cross-holdout pair(s)",
+            stage="split", code="split_leakage")
     dataset_id = config.get("dataset_id") or args.database_id
     _write(splits, args.out, snap, dataset_id)
+    for name in _SPLITS:
+        metrics.count(f"split_{name}", len(splits[name]))
 
     scratch = tempfile.mkdtemp(prefix="aikoql-tr-")
     try:
@@ -177,6 +196,11 @@ def cmd_generate(args) -> int:
                                   config_path=args.config, reference=scratch)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+    if args.metrics:
+        Path(args.metrics).write_text(
+            json.dumps(metrics.as_dict(), sort_keys=True,
+                       separators=(",", ":")),
+            encoding="utf-8")
     _emit(report)
     return 0 if report["publishable"] else 1
 
@@ -228,6 +252,7 @@ def _parser() -> argparse.ArgumentParser:
                               "validated report")
     live(gen)
     gen.add_argument("--out", required=True, help="dataset output directory")
+    gen.add_argument("--metrics", help="write the pipeline metrics JSON here")
 
     val = sub.add_parser("validate", help="run every §5 gate on a dataset")
     val.add_argument("dataset")

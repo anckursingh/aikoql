@@ -115,6 +115,52 @@ def test_same_split_koid_sharing_is_not_a_violation():
         assert violations == []
 
 
+# -- component keys (the T-13 fix: mixed-cardinality koid sets) -------------
+
+def test_component_keys_make_mixed_koid_sets_violation_free():
+    """Factual examples key on one koid, relation examples on both —
+    the koid-set join makes different KEYS for the same knowledge
+    component, and the bucket lottery straddles them. Component ids
+    (union-find over the edges, root = min koid) give every example
+    touching a component the SAME key, so cross-holdout koid pairs
+    are impossible under EVERY seed."""
+    from aikoql_training.dataset.splitter import component_ids
+    s, c = "b" * 32, "a" * 32
+    ids = component_ids([{"from": s, "rel": "DEPENDS_ON", "to": c}])
+    assert ids[s] == ids[c] == "a" * 32  # root = min koid
+    key = ids[s]
+    for seed in range(50):
+        examples = [
+            _ex(split_key=key, koids=[s]),
+            _ex(split_key=key, koids=[c],
+                question="What is the owner of the checkout service?"),
+            _ex(split_key=key, koids=[s, c],
+                question="Which service does settlement depend on?"),
+        ]
+        _, violations = assign_splits(examples, seed, _RATIOS)
+        assert violations == [], f"seed {seed}"
+
+
+def test_koid_set_join_keys_do_straddle_some_seed():
+    """The trap the component fix closes: with per-example koid-set
+    join keys, the mixed sets {s} and {s,c} hash to different buckets
+    and some seed produces cross-holdout pairs (the T-12 hole, caught
+    by the leakage gate on a live generate run)."""
+    s, c = "b" * 32, "a" * 32
+    straddles = 0
+    for seed in range(50):
+        examples = [
+            _ex(split_key=s, koids=[s]),
+            _ex(split_key=c, koids=[c],
+                question="What is the owner of the checkout service?"),
+            _ex(split_key=":".join(sorted((s, c))), koids=[s, c],
+                question="Which service does settlement depend on?"),
+        ]
+        _, violations = assign_splits(examples, seed, _RATIOS)
+        straddles += bool(violations)
+    assert straddles > 0
+
+
 @settings(max_examples=25)
 @given(
     keys=st.lists(st.text(min_size=1, max_size=8),
