@@ -104,8 +104,25 @@ def write_dataset(
     return manifest
 
 
-def read_dataset(dataset_dir: str) -> Dict[str, Any]:
-    """Read a canonical dataset back, verifying every byte (FZ-T2)."""
+def tampered_splits(dataset_dir: str, manifest: Dict[str, Any]) -> List[str]:
+    """Split names whose file sha256 disagrees with the manifest ([] = intact).
+
+    The one tamper comparison, shared by read_dataset (raises) and the
+    validator (reports it as the integrity gate). The manifest cells are
+    assumed structurally valid — read_dataset checks that first.
+    """
+    d = Path(dataset_dir)
+    return [name for name in _SPLITS
+            if _sha256(d / manifest["splits"][name]["file"])
+            != manifest["splits"][name].get("sha256")]
+
+
+def read_dataset(dataset_dir: str, *, verify: bool = True) -> Dict[str, Any]:
+    """Read a canonical dataset back; verify=True checks every byte
+    (FZ-T2) and refuses a tampered/truncated dataset with DatasetError.
+    verify=False skips the sha256 check so a tampered dataset can still
+    be gated (the validator reports integrity as a gate, then runs the
+    rest over whatever is readable)."""
     d = Path(dataset_dir)
     if not d.is_dir():
         raise DatasetError(f"dataset dir not found: {d}")
@@ -119,6 +136,7 @@ def read_dataset(dataset_dir: str) -> Dict[str, Any]:
     if not isinstance(manifest, dict) or "splits" not in manifest:
         raise DatasetError("dataset manifest malformed: no splits")
 
+    tampered = tampered_splits(dataset_dir, manifest) if verify else []
     out: Dict[str, Any] = {"manifest": manifest}
     for name in _SPLITS:
         cell = manifest["splits"].get(name)
@@ -127,7 +145,7 @@ def read_dataset(dataset_dir: str) -> Dict[str, Any]:
         file = d / cell["file"]
         if not file.is_file():
             raise DatasetError(f"split file missing: {file}")
-        if _sha256(file) != cell.get("sha256"):
+        if name in tampered:
             raise DatasetError(f"split {name} tampered: sha256 mismatch")
         try:
             # split on "\n" ONLY: splitlines() also splits on U+0085 and

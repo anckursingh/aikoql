@@ -61,7 +61,7 @@ def _clean(tmp_path):
 def test_clean_dataset_passes_all_static_gates(tmp_path):
     out = validate_dataset(_clean(tmp_path))
     assert out["publishable"] is True
-    for name in ("schema", "grounding", "authorization", "secrets",
+    for name in ("schema", "grounding", "authorization", "secret_scan",
                  "leakage", "duplicates"):
         assert out["gates"][name]["ok"], name
     for name in ("compiler", "execution", "scenario_match", "determinism"):
@@ -107,12 +107,12 @@ def test_secret_in_context_poisons_publishability(tmp_path):
                       "evidence": _EV}])
     out = validate_dataset(_dataset(tmp_path, [bad]))
     assert out["publishable"] is False
-    assert out["gates"]["secrets"]["ok"] is False
+    assert out["gates"]["secret_scan"]["ok"] is False
 
 
 def test_ordinary_text_is_not_a_secret(tmp_path):
     out = validate_dataset(_clean(tmp_path))
-    assert out["gates"]["secrets"]["ok"] is True
+    assert out["gates"]["secret_scan"]["ok"] is True
 
 
 # -- leakage -----------------------------------------------------------------

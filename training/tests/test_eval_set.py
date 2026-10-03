@@ -54,13 +54,13 @@ def _write(tmp_path, example):
 
 def _example(**overrides):
     from conftest import make_example
-    return make_example(
-        task={"type": "factual", "difficulty": "factual", "requires": []},
-        input={"question": "What is the owner of the settlement service?"},
-        query_target={"language": "aikoql",
-                      "query": 'MATCH service WHERE name == "settlement" '
-                               "RETURN name"},
-        context={
+    base = {
+        "task": {"type": "factual", "difficulty": "factual", "requires": []},
+        "input": {"question": "What is the owner of the settlement service?"},
+        "query_target": {"language": "aikoql",
+                         "query": 'MATCH service WHERE name == "settlement" '
+                                  "RETURN name"},
+        "context": {
             "entities": [{"name": "settlement", "type_hint": "service",
                           "mentions": ["settlement"], "confidence": 0.9,
                           "evidence": _EV}],
@@ -70,14 +70,15 @@ def _example(**overrides):
                        "evidence": _EV}],
             "relations": [], "evidence": [_EV],
         },
-        expected={"answer": "Payments Team", "koids": ["a" * 32],
-                  "evidence_ids": []},
-        policy={"authorization_required": False},
-        labels={"grounded": True, "answerable": True, "ambiguous": False,
-                "contradictory": False},
-        split_key="k",
-        **overrides,
-    )
+        "expected": {"answer": "Payments Team", "koids": ["a" * 32],
+                     "evidence_ids": []},
+        "policy": {"authorization_required": False},
+        "labels": {"grounded": True, "answerable": True, "ambiguous": False,
+                   "contradictory": False},
+        "split_key": "k",
+    }
+    base.update(overrides)
+    return make_example(**base)
 
 
 def _eval(tmp_path, example):

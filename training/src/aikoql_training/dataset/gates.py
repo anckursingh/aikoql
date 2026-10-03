@@ -69,10 +69,26 @@ def validate_dataset(
     if db is not None and token is None:
         raise DatasetError("a db requires a token")
     config = load_config(config_path)
-    got = read_dataset(dataset)
+    try:
+        got = read_dataset(dataset, verify=False)
+    except DatasetError as e:
+        # an unreadable dataset cannot be gated — but the validator must
+        # still emit a report (fail-closed), never die without one
+        return {"publishable": False,
+                "gates": {"integrity": _gate(False, "fail", 1, str(e))},
+                "example_count": 0}
     examples: List[dict] = [e for n in _SPLITS for e in got[n]]
     manifest = got["manifest"]
     gates: Dict[str, dict] = {}
+
+    # -- integrity --------------------------------------------------------------
+    # the manifest sha256 check, as a gate instead of a raise: a tampered
+    # split must not stop the other gates (a planted secret must still be
+    # caught by secret_scan and reported).
+    from aikoql_training.dataset.writer import tampered_splits
+    bad = tampered_splits(dataset, manifest)
+    gates["integrity"] = _gate(not bad, "pass" if not bad else "fail",
+                               len(bad), f"tampered: {bad[0]}" if bad else "")
 
     # -- schema --------------------------------------------------------------
     schema_errors = 0
@@ -113,13 +129,13 @@ def validate_dataset(
                                    "pass" if flag_mismatches == 0 else "fail",
                                    flag_mismatches)
 
-    # -- secrets ---------------------------------------------------------------
+    # -- secret scan ------------------------------------------------------------
     if config["secret_scan"]:
         hits = _secret_hits(examples)
-        gates["secrets"] = _gate(hits == 0, "pass" if hits == 0 else "fail",
-                                 hits)
+        gates["secret_scan"] = _gate(hits == 0,
+                                     "pass" if hits == 0 else "fail", hits)
     else:
-        gates["secrets"] = _gate(True, "disabled")
+        gates["secret_scan"] = _gate(True, "disabled")
 
     # -- leakage: recomputed assignment must agree AND be violation-free ------
     leakage_detail = ""
@@ -154,7 +170,11 @@ def validate_dataset(
         gates[name] = _gate(True, "skipped")
     if db is not None:
         import aikoql
-        with aikoql.Agent.connect(db, token=token) as agent:
+        # generous connect timeout: validation runs right after seeding,
+        # when the server is busy with Tantivy indexer commits — the
+        # default 5s socket timeout flakes there (initialize has no
+        # per-call deadline and re-raises the raw socket timeout).
+        with aikoql.Agent.connect(db, token=token, timeout=60.0) as agent:
             compile_errors = exec_errors = match_errors = 0
             match_detail = ""
             for ex in examples:

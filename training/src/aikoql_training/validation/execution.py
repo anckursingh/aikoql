@@ -35,7 +35,11 @@ def verify_scenario(db: Any, scenario: Scenario, queries: List[str]) -> dict:
             return {"ok": False, "errors": [f"query {i} failed: {e}"]}
 
     for i, (_, _, target) in enumerate(scenario.expected_path):
-        if not any(r.get("koid") == target for r in result_sets[i]):
+        # A same-rel path compiles as ONE DEPTH-n query, so hop i lives
+        # in result_sets[0] for every i — clamp instead of indexing past
+        # the single result set.
+        rows = result_sets[i] if i < len(result_sets) else result_sets[-1]
+        if not any(r.get("koid") == target for r in rows):
             errors.append(f"hop {i}: target {target} not recovered")
 
     if scenario.task_type == "provenance":

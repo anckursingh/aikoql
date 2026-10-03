@@ -41,13 +41,14 @@ def find_binary():
     pytest.skip("aikoql-mcp binary not built. Run: cargo build -p aikoql-mcp")
 
 
-def _wait_ready(proc, host, port, timeout=15.0):
+def _wait_ready(proc, host, port, errf, timeout=15.0):
     """Poll until the server listens; surface its stderr if it exits early
-    (CI-15: the real error sits in the stderr pipe, not in a refused socket)."""
+    (CI-15: the real error sits in the log file, not in a refused socket)."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         if proc.poll() is not None:
-            stderr = proc.stderr.read().decode(errors="replace")
+            with open(errf, "r", errors="replace") as f:
+                stderr = f.read()
             raise RuntimeError(
                 f"aikoql-mcp exited early (code {proc.returncode}):\n{stderr}"
             )
@@ -91,19 +92,35 @@ def _serve(tcp_tokens):
     os.close(fd)
     os.unlink(db)  # non-existent path -> serve auto-creates aikoql-v2
 
+    # PRR-4: the 120 calls/min default throttles corpus generation
+    # (~150 tool calls per seed slice) — test servers disable it.
+    fd, cfg = tempfile.mkstemp(prefix=_PREFIX, suffix=".toml")
+    os.close(fd)
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write("[rate_limit]\nenabled = false\n")
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
     sock.close()
 
+    # CI-15 + T-14: server logs go to a FILE, never an undrained pipe —
+    # the tantivy commit storm after corpus seeding writes thousands of
+    # lines; a full pipe blocks the logging thread, and the next handler
+    # that logs ("client connected") stalls before it ever answers
+    # initialize — the validator then times out. A file has no
+    # backpressure and is still read for the CI-15 early-exit diagnostic.
+    fdf, errf = tempfile.mkstemp(prefix=_PREFIX, suffix=".log")
+    log_handle = os.fdopen(fdf, "wb")
     proc = subprocess.Popen(
-        [find_binary(), "serve", db, "--listen", f"127.0.0.1:{port}"]
+        [find_binary(), "--config", cfg, "serve", db,
+         "--listen", f"127.0.0.1:{port}"]
         + [arg for tok in tcp_tokens for arg in ("--tcp-token", tok)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,  # TCP mode: all server logs go to stderr
+        stderr=log_handle,
     )
     try:
-        _wait_ready(proc, "127.0.0.1", port)
+        _wait_ready(proc, "127.0.0.1", port, errf)
         yield f"127.0.0.1:{port}", tcp_tokens
     finally:
         proc.terminate()
@@ -111,6 +128,11 @@ def _serve(tcp_tokens):
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+        log_handle.close()
+        try:
+            os.remove(errf)
+        except OSError:
+            pass
         # The v2 store is a directory at the path; tolerate either shape.
         if os.path.isdir(db):
             shutil.rmtree(db, ignore_errors=True)
@@ -121,6 +143,10 @@ def _serve(tcp_tokens):
                 pass
         try:
             os.remove(db + ".audit.log")  # the kernel's sibling audit log
+        except OSError:
+            pass
+        try:
+            os.remove(cfg)
         except OSError:
             pass
 

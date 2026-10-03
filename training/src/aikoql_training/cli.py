@@ -220,6 +220,15 @@ def cmd_stats(args) -> int:
     return 0
 
 
+def cmd_eval(args) -> int:
+    from aikoql_training.validation.eval_set import eval_dataset
+    cases = eval_dataset(read_dataset(args.dataset))
+    report = {"publishable": all(c["ok"] for c in cases.values()),
+              "cases": cases}
+    _emit(report)
+    return 0 if report["publishable"] else 1
+
+
 def cmd_export(args) -> int:
     got = read_dataset(args.src)
     m = got["manifest"]
@@ -265,6 +274,10 @@ def _parser() -> argparse.ArgumentParser:
     st = sub.add_parser("stats", help="count examples per split")
     st.add_argument("dataset")
 
+    ev = sub.add_parser("eval",
+                        help="run the E1-E9 dataset checks, exit 0 iff ok")
+    ev.add_argument("dataset")
+
     ex = sub.add_parser("export", help="copy a canonical dataset")
     ex.add_argument("src")
     ex.add_argument("--out", required=True, help="destination directory")
@@ -280,6 +293,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "generate": cmd_generate,
             "validate": cmd_validate,
             "stats": cmd_stats,
+            "eval": cmd_eval,
             "export": cmd_export,
         }[args.command](args)
     except TrainingDataError as e:
