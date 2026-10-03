@@ -9,7 +9,9 @@ import java.util.concurrent.TimeUnit;
 public final class AikoqlClient {
     /** The oldest aikoql-mcp server this SDK will talk to (the ND-12
      * version contract, mirrored from the Python, Go, Rust and TS SDKs). */
-    public static final String MIN_SERVER_VERSION = "0.2.0";
+    public static final String MIN_SERVER_VERSION = "0.2.1";
+    /** The SDK's own package version, advertised as the client identity. */
+    public static final String VERSION = "0.2.1";
 
     static final int DIAL_TIMEOUT_MS = 5000;
 

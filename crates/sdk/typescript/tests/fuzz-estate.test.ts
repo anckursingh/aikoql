@@ -28,7 +28,7 @@ import {
 } from "fast-check";
 
 import { Client, McpError, withDeadline } from "../src/index.ts";
-import { classifyID, parseVersion, rpcError, versionLess } from "../src/client.ts";
+import { MIN_SERVER_VERSION, classifyID, parseVersion, rpcError, versionLess } from "../src/client.ts";
 import { MAX_FRAME } from "../src/tcp.ts";
 import type { Tx } from "../src/tx.ts";
 import { respond, toolResult } from "./helpers.ts";
@@ -343,7 +343,7 @@ const COMMANDS: Cmd[] = [
     await assert.rejects(w.client!.callTool("probe"), isCode("UNAVAILABLE"));
   }),
   new Cmd("initializeOk", (m) => m.state === "CONNECTED", async (m, w) => {
-    w.script = (req) => [respond(req["id"], "0.2.0")];
+    w.script = (req) => [respond(req["id"], MIN_SERVER_VERSION)];
     await w.client!.initialize();
     m.state = "INITIALIZED";
   }),

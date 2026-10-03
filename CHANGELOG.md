@@ -5,6 +5,36 @@ Format: <https://keepachangelog.com/>-inspired, but terser. This file starts
 at v0.1.19 (the last pre-launch tag); older history lives in the git tags
 (`git log v0.1.0..v0.1.19`).
 
+## [0.2.1] — 2026-10-03 (SDK wave + fuzz hardening)
+
+The five-language SDK wave and the Layer B fuzz estate. No storage-format
+or protocol change — a pure pin bump: the workspace, the protocol contract,
+all five SDKs, the Claude Code plugin, and the npm package move in lockstep
+(server and SDK refuse anything older than `0.2.1`).
+
+### Added
+
+- **Five first-party SDKs** (Phase D): Go, Python, Rust, TypeScript
+  (all zero-dependency) and Java, sharing one cross-language conformance
+  runner (16 identical vectors) and an eight-legged release-cert battery
+  (`scripts/sdk-release-cert.sh`). Ships via PyPI / crates.io /
+  npm / Maven Central / GitHub, release-cut automatically on tag
+  (D-13..D-20).
+- **SDK mutation harness** (D-17): twelve §29 mutants of the conformance
+  truth, all killed by the shared runner.
+- **Fuzz estate, Layer B** (F-05): seven cargo-fuzz decode boundaries over
+  the real SDK wire logic (FZ-01..07), golden corpus, and a weekly
+  `storage-fuzz` CI job.
+
+### Changed
+
+- The sfm004 pin-window flake in the storage snapshot matrix is hunted to
+  a deterministic fix (F-06): the interleaved op now joins under the armed
+  pin, making the pinned-segment assertion a real tooth.
+- Workspace version `0.2.0` → `0.2.1` everywhere the contract touches:
+  SDK `MIN_SERVER_VERSION`s, protocol `compatibility.json`, plugin,
+  npm package, website and quickstart download pins.
+
 ## [0.2.0] — 2026-09-29 (launch)
 
 The production launch: storage v2 as the default engine, hardened by the

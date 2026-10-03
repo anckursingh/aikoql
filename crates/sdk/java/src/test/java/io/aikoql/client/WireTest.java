@@ -52,7 +52,7 @@ class WireTest {
         try (ServerSocket srv = Scripted.scripted(req -> {
             methods.add(Json.jsonStr(req.fields.get("method")));
             return List.of(new Scripted.Frame(
-                    Scripted.respond(Scripted.num(req.fields.get("id")), "0.2.0"), 0));
+                    Scripted.respond(Scripted.num(req.fields.get("id")), AikoqlClient.MIN_SERVER_VERSION), 0));
         })) {
             try (Connection c = dial(srv)) {
                 c.initialize(null);
@@ -68,7 +68,7 @@ class WireTest {
                 new Scripted.Frame("{}", 0), // id-less push
                 new Scripted.Frame("{\"id\":0,\"result\":{}}", 0), // stale
                 new Scripted.Frame(
-                        Scripted.respond(Scripted.num(req.fields.get("id")), "0.2.0"), 0)))) {
+                        Scripted.respond(Scripted.num(req.fields.get("id")), AikoqlClient.MIN_SERVER_VERSION), 0)))) {
             try (Connection c = dial(srv)) {
                 c.initialize(null);
             }
@@ -102,7 +102,7 @@ class WireTest {
         try (ServerSocket srv = Scripted.scripted(req -> List.of(
                 new Scripted.Frame("not json", 0),
                 new Scripted.Frame(
-                        Scripted.respond(Scripted.num(req.fields.get("id")), "0.2.0"), 0)))) {
+                        Scripted.respond(Scripted.num(req.fields.get("id")), AikoqlClient.MIN_SERVER_VERSION), 0)))) {
             try (Connection c = dial(srv)) {
                 c.initialize(null);
             }
@@ -266,7 +266,7 @@ class WireTest {
             calls[0]++;
             long delay = calls[0] == 1 ? 300 : 0;
             return List.of(new Scripted.Frame(
-                    Scripted.respond(Scripted.num(req.fields.get("id")), "0.2.0"), delay));
+                    Scripted.respond(Scripted.num(req.fields.get("id")), AikoqlClient.MIN_SERVER_VERSION), delay));
         })) {
             try (Connection c = dial(srv)) {
                 assertEquals("TIMEOUT", thrownCode(() -> {

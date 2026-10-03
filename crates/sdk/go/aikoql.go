@@ -46,7 +46,7 @@ import (
 // MIN_SERVER_VERSION is the oldest aikoql-mcp server this SDK will talk
 // to (the ND-12 version contract, mirrored from the Python SDK; pinned
 // against the workspace version by the go-sdk CI job).
-const MIN_SERVER_VERSION = "0.2.0"
+const MIN_SERVER_VERSION = "0.2.1"
 
 // McpError is a structured error from the MCP server (MRFC-0040 error
 // codes): the tool-level ok/error envelope and RPC-level failures both

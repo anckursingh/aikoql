@@ -39,7 +39,7 @@ public final class Connection implements AutoCloseable {
     private boolean closed;
     private String token;
     private String name = "aikoql-java";
-    private String version = "0.2.0";
+    private String version = AikoqlClient.VERSION;
 
     Connection(String addr) {
         this.transport = Transport.connect(addr, AikoqlClient.DIAL_TIMEOUT_MS);

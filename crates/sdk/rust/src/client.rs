@@ -25,7 +25,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 /// The oldest aikoql-mcp server this SDK will talk to (the ND-12 version
 /// contract, mirrored from the Go and Python SDKs).
-pub const MIN_SERVER_VERSION: &str = "0.2.0";
+pub const MIN_SERVER_VERSION: &str = "0.2.1";
 
 const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -86,7 +86,7 @@ impl Client {
                 cfg: std::sync::Mutex::new(ClientConfig {
                     token: None,
                     name: "aikoql-rust-sdk".into(),
-                    version: "0.2.0".into(),
+                    version: env!("CARGO_PKG_VERSION").into(),
                 }),
             }),
         })
@@ -815,7 +815,7 @@ mod tests {
         let seen = reqs.clone();
         let addr = scripted(move |req| {
             seen.lock().unwrap().push(req.clone());
-            vec![(respond(&req["id"], "0.2.0"), Duration::ZERO)]
+            vec![(respond(&req["id"], MIN_SERVER_VERSION), Duration::ZERO)]
         })
         .await;
         let c = dial(&addr).await;
@@ -834,7 +834,7 @@ mod tests {
                     serde_json::json!({"id": 0, "result": {}}).to_string(),
                     Duration::ZERO,
                 ), // stale
-                (respond(&req["id"], "0.2.0"), Duration::ZERO),
+                (respond(&req["id"], MIN_SERVER_VERSION), Duration::ZERO),
             ]
         })
         .await;
@@ -882,7 +882,7 @@ mod tests {
         let addr = scripted(|req| {
             vec![
                 ("not json".to_string(), Duration::ZERO),
-                (respond(&req["id"], "0.2.0"), Duration::ZERO),
+                (respond(&req["id"], MIN_SERVER_VERSION), Duration::ZERO),
             ]
         })
         .await;
@@ -1059,7 +1059,7 @@ mod tests {
             } else {
                 Duration::ZERO
             };
-            vec![(respond(&req["id"], "0.2.0"), delay)]
+            vec![(respond(&req["id"], MIN_SERVER_VERSION), delay)]
         })
         .await;
         let c = dial(&addr).await;

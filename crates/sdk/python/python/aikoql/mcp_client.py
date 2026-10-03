@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 # P5-M12 (ND-12) version contract: the oldest server this SDK will talk to.
 # Pinned by tests/test_version_contract.py to the workspace version — a
 # workspace bump turns that test RED until this constant follows.
-MIN_SERVER_VERSION = "0.2.0"
+MIN_SERVER_VERSION = "0.2.1"
 
 # §19: a malicious server cannot cause unbounded client memory — an
 # unterminated line past this cap is refused mid-accumulation

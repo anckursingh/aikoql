@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { McpError, withDeadline } from "../src/index.ts";
+import { McpError, MIN_SERVER_VERSION, withDeadline } from "../src/index.ts";
 import { dial, respond, scripted, toolResult } from "./helpers.ts";
 
 function isCode(e: unknown, code: string): boolean {
@@ -17,7 +17,7 @@ test("initialize sends the handshake", async (t) => {
   const reqs: Record<string, unknown>[] = [];
   const addr = await scripted(t, (req) => {
     reqs.push(req);
-    return [[respond(req["id"], "0.2.0"), 0]];
+    return [[respond(req["id"], MIN_SERVER_VERSION), 0]];
   });
   const c = await dial(t, addr);
   await c.initialize();
@@ -29,7 +29,7 @@ test("skips stale and id-less frames", async (t) => {
   const addr = await scripted(t, (req) => [
     ["{}", 0], // id-less push
     [JSON.stringify({ id: 0, result: {} }), 0], // stale
-    [respond(req["id"], "0.2.0"), 0],
+    [respond(req["id"], MIN_SERVER_VERSION), 0],
   ]);
   const c = await dial(t, addr);
   await c.initialize();
@@ -54,7 +54,7 @@ test("rpc error envelope", async (t) => {
 test("noise frames are skipped", async (t) => {
   const addr = await scripted(t, (req) => [
     ["not json", 0],
-    [respond(req["id"], "0.2.0"), 0],
+    [respond(req["id"], MIN_SERVER_VERSION), 0],
   ]);
   const c = await dial(t, addr);
   await c.initialize();
@@ -178,7 +178,7 @@ test("a late response after a timeout is skipped (self-healing)", async (t) => {
   const addr = await scripted(t, (req) => {
     calls += 1;
     const delay = calls === 1 ? 300 : 0;
-    return [[respond(req["id"], "0.2.0"), delay]];
+    return [[respond(req["id"], MIN_SERVER_VERSION), delay]];
   });
   const c = await dial(t, addr);
   await assert.rejects(

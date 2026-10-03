@@ -306,7 +306,7 @@ fn hello_negotiates_version_and_capabilities() {
     );
     let f = c.recv_expect(HELLO, 1).json();
     assert_eq!(f["protocol_version"], 1);
-    assert_eq!(f["server_version"], "0.2.0");
+    assert_eq!(f["server_version"], env!("CARGO_PKG_VERSION"));
     assert!(
         f["capabilities"].is_array(),
         "the server must list its capabilities explicitly"

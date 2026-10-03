@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-kernel"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-storage-v2"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aikoql-kernel",
  "sha2",

@@ -27,7 +27,7 @@ import { Tx } from "./tx.ts";
  * The oldest aikoql-mcp server this SDK will talk to (the ND-12 version
  * contract, mirrored from the Go, Python and Rust SDKs).
  */
-export const MIN_SERVER_VERSION = "0.2.0";
+export const MIN_SERVER_VERSION = "0.2.1";
 
 const DIAL_TIMEOUT_MS = 5000;
 
@@ -95,7 +95,7 @@ export class Client {
   private transport: Transport;
   private nextId = 0;
   private closed = false;
-  private cfg: ClientConfig = { name: "aikoql-ts-sdk", version: "0.2.0" };
+  private cfg: ClientConfig = { name: "aikoql-ts-sdk", version: "0.2.1" };
   private chain: Promise<unknown> = Promise.resolve();
   // The open stream's release (null when none): close() cancels a
   // mid-stream close through it (§17).

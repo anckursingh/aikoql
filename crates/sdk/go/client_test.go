@@ -5,12 +5,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+// The acceptance mocks speak the current MIN_SERVER_VERSION — one pin per
+// language; the refusal fixtures (0.1.18 and older) stay literal.
+func infoReply(name string) json.RawMessage {
+	if name == "" {
+		return json.RawMessage(fmt.Sprintf(`{"serverInfo":{"version":%q}}`, MIN_SERVER_VERSION))
+	}
+	return json.RawMessage(fmt.Sprintf(`{"serverInfo":{"name":%q,"version":%q}}`, name, MIN_SERVER_VERSION))
+}
 
 // rpcFrame is one newline-delimited JSON-RPC frame the fake server reads
 // or writes. Fields are loose so canned frames can be partial.
@@ -96,7 +106,7 @@ func TestInitializeSendsTokenAndClientInfo(t *testing.T) {
 		sawToken = p.Token
 		return []rpcFrame{{
 			JSONRPC: "2.0", ID: req.ID,
-			Result: json.RawMessage(`{"serverInfo":{"name":"aikoql-mcp","version":"0.2.0"}}`),
+			Result: infoReply("aikoql-mcp"),
 		}}
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -231,7 +241,7 @@ func TestRequestSkipsNotifications(t *testing.T) {
 		return []rpcFrame{
 			{JSONRPC: "2.0", Method: "notifications/notify",
 				Params: json.RawMessage(`{"event":"audit"}`)},
-			{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(`{"serverInfo":{"version":"0.2.0"}}`)},
+			{JSONRPC: "2.0", ID: req.ID, Result: infoReply("")},
 		}
 	})
 	ctx := context.Background()
@@ -305,7 +315,7 @@ func TestStdioHelper(t *testing.T) {
 		switch req.Method {
 		case "initialize":
 			out, _ = json.Marshal(rpcFrame{JSONRPC: "2.0", ID: req.ID,
-				Result: json.RawMessage(`{"serverInfo":{"name":"aikoql-mcp","version":"0.2.0"}}`)})
+				Result: infoReply("aikoql-mcp")})
 		case "tools/call":
 			out, _ = json.Marshal(rpcFrame{JSONRPC: "2.0", ID: req.ID,
 				Result: toolResult(map[string]any{"koid": "helper1"})})

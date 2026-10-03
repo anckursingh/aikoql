@@ -74,7 +74,7 @@ func TestCorrelationNotificationAndResponseInOneChunk(t *testing.T) {
 	notify := frameLine(rpcFrame{JSONRPC: "2.0", Method: "notifications/notify",
 		Params: json.RawMessage(`{"event":"audit"}`)})
 	resp := frameLine(rpcFrame{JSONRPC: "2.0", ID: 1,
-		Result: json.RawMessage(`{"serverInfo":{"version":"0.2.0"}}`)})
+		Result: infoReply("")})
 	addr := rawServer(t, append(notify, resp...)) // one write, two frames
 	c := mustDial(t, addr)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
