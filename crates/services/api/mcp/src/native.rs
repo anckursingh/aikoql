@@ -177,7 +177,7 @@ pub(crate) fn handle_native_client(
     // P1-19 CAS admission — the same slot-reservation pattern as the MCP
     // listener, so the shared ACTIVE_CONNECTIONS counter stays exact.
     let admitted = ACTIVE_CONNECTIONS
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
             (cur < max_connections).then_some(cur + 1)
         })
         .is_ok();

@@ -102,7 +102,7 @@ pub(crate) fn handle_tcp_client(
     // atomically here, so an accept burst can never push the served count
     // over the cap (sv012). Rejection keeps sv003's frame-before-drop order.
     let admitted = ACTIVE_CONNECTIONS
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
             (cur < max_connections).then_some(cur + 1)
         })
         .is_ok();
