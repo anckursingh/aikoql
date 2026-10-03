@@ -418,9 +418,10 @@ gate — skipped and disabled never veto.**
   recomputed home, and the cross-holdout shared-koid pair count must
   be zero. This gate caught a real generator bug in its first run:
   relation examples carried the checkout koid but split on the
-  settlement one — the koid-component split_key (all of an example's
-  koids, sorted and joined) makes cross-holdout pairs impossible by
-  construction, and the gate proves it held.
+  settlement one. The T-12 split_key (all of an example's koids,
+  sorted and joined) then claimed cross-holdout pairs "impossible by
+  construction" — wrong for mixed-cardinality koid sets, and the gate
+  proved it at T-13 (see §17).
 - **Live gates** run with `db`/`token` (the §24 client boundary):
   compiler = raised aikoql counts against all three of
   compiler/execution/scenario_match; execution = no `results` in the
@@ -443,9 +444,55 @@ relation scenarios, every query proven through the oracle (a failed
 scenario raises), context compiled per question through the server
 Context Compiler over a mocked-ir KnowledgeSnapshot, answers
 certified (refused examples are never emitted), examples split by
-koid-component keys, written canonically, re-run to a scratch dir to
+component-root keys (union-find over the edges, §17), written canonically, re-run to a scratch dir to
 prove byte-identical regeneration, validated against that scratch as
 the reference — **exit 0 iff publishable**. `validate`/`stats`/
 `export` share the same reader/writer; stats and export never judge.
 
+## 17. Observability + errors + benchmark (T-13)
+
+The §28 typed error model (`errors.py`): `TrainingDataError` with four
+optional category fields — `stage` (pipeline phase), `scenario`
+(scenario id), `code` (machine-readable short tag), `example_id` —
+and a JSON-serializable `to_info()` carrying all of them. SchemaError
+and DatasetError stay siblings with no category fields; the pipeline
+raises carry the ones their stage knows (oracle_failed carries
+stage+scenario+code, split_leakage stage+code, no_examples stage+code).
+The CLI's `main` catches `TrainingDataError` and exits 1, so the
+categories are for callers and tests to observe, not for the user to
+parse.
+
+The §27 `Metrics` accumulator (`metrics.py`): `count(name, n=1)`,
+`rate(name, numerator, denominator)`, `as_dict()` →
+`{counts, rates}`. **The no-sensitive-content rule is structural:**
+every leaf value of a metrics dict is a number under a fixed key
+name (the accumulator only ever adds ints and ratios), so no
+question, answer, fact statement or KO text can land in one. An
+undefined rate is None, not zero — a zero denominator is absence of
+signal, not a measured 0.0. generate counts scenarios / unexpressible
+/ refused / emitted / per-split sizes and derives the refusal rate;
+`--metrics FILE` writes the JSON after validation succeeds.
+
+`scripts/benchmark_dataset.py` is the §27 benchmark surface: it runs
+the full generate pipeline as a subprocess against a live server
+(PYTHONPATH = src) and reports one JSON object with three cells —
+throughput (wall seconds, examples, examples/second), rates (the
+`--metrics` rates verbatim) and size (dataset bytes on disk,
+per-split counts). Laptop scale by design; the corpus-scale cell
+arrives with T-14.
+
+**The split-key correction (the T-13 regression catch).** The
+koid-set join keys factual `{s}` and relation `{s,c}` differently
+for the same knowledge component, so fresh HLC koids drew straddling
+buckets on live runs (the T-12 greens were bucket-lottery luck).
+`component_ids` in `splitter.py` is union-find over the edges
+(each with from/rel/to): path-compressed find, union by min koid, so
+a component's id is its lexicographically smallest koid —
+deterministic and independent of edge order. The builder stamps the
+component root as the example's split_key (koids outside the edge
+graph fall back to the set join), so every example touching a
+knowledge component shares ONE key and cross-holdout pairs are
+impossible under every seed. Regression-pinned both sides:
+component keys violation-free across a 50-seed sweep; the old
+set-join keys straddle some seed.
 

@@ -387,6 +387,40 @@ to the T-14 corpus (its legs need the POC artifact set; a red gate
 never enters CI — CI-04). RED archived as `t-12-gates-cli` (3
 collection errors). GREEN 256/256.
 
+T-13 shipped 2026-10-03 — observability + errors + benchmark (design
+ph 16, §27/28). The §28 typed error model: `TrainingDataError` grows
+four optional category fields (stage/scenario/code/example_id) with a
+JSON-serializable `to_info()`; pipeline raises carry the ones their
+stage knows (oracle_failed carries stage+scenario+code, split_leakage
+stage+code) while the schema raises carry none — the categories are
+the pipeline's observability surface, not retrofit noise. The §27
+`Metrics` accumulator (counts + derived rates; an undefined rate is
+None, not zero) is wired through generate with a `--metrics` file;
+the no-sensitive-content rule is structural — every leaf value of a
+metrics dict is a number under a fixed key name, so no question,
+answer, fact statement or KO text can land in one.
+`scripts/benchmark_dataset.py` runs the full generate pipeline
+against a live server and reports the three cells as one JSON object:
+throughput (wall seconds, examples, examples/second), rates (the
+pipeline's derived rates) and size (dataset bytes, per-split counts)
+— laptop scale by design, the corpus-scale cell arrives with T-14.
+
+**The new tests caught a real hole in the T-12 split-key rule.** The
+koid-set join gives factual `{s}` and relation `{s,c}` DIFFERENT
+keys for the same knowledge component — fresh HLC koids drew
+straddling buckets on live runs (2 cross-holdout pairs under seed 0;
+the T-12 greens were bucket-lottery luck, a flake-by-construction the
+T-13 additions surfaced). Fixed at the root: `component_ids`
+(union-find over the edges, root = the component's min koid) in the
+splitter; the builder stamps the component root as the split_key, so
+every example touching a knowledge component shares ONE key and
+cross-holdout pairs are impossible under every seed. The regression
+pins both sides: component keys are violation-free across a 50-seed
+sweep; the old set-join keys straddle some seed (the gate's teeth,
+again). The T-12 paragraph's "the key rule fixed it" claim is
+corrected by this paragraph. RED archived as
+`t-13-observability-errors-benchmark`. GREEN 270/270.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
