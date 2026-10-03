@@ -247,9 +247,8 @@ pub fn check_native_frame(data: &[u8]) {
     good.extend_from_slice(b"{}");
     let crc = nat::crc32(&good);
     good.extend_from_slice(&crc.to_le_bytes());
-    assert_eq!(
+    assert!(
         nat::verify(&good_header, b"{}", crc),
-        true,
         "a well-formed frame must verify"
     );
     let bad = [0u8; nat::HEADER_LEN];
@@ -321,7 +320,8 @@ pub fn check_stream_frame(data: &[u8]) {
     }
     // Embedded: the notify shapes decode to their pairs; anything else is
     // None; a missing stream_id decodes to "" (the serde default).
-    let cases: &[(&[u8], Option<(&str, bool)>)] = &[
+    type NotifyCase = (&'static [u8], Option<(&'static str, bool)>);
+    let cases: &[NotifyCase] = &[
         (
             br#"{"method":"notifications/notify","params":{"stream_id":"s1","done":true}}"#,
             Some(("s1", true)),
@@ -339,7 +339,7 @@ pub fn check_stream_frame(data: &[u8]) {
     ];
     for (frame, want) in cases {
         let r: RpcResponse = serde_json::from_slice(frame).expect("embedded frame parses");
-        let got = decode_notify(&r).map(|(s, d)| (s, d));
+        let got = decode_notify(&r);
         assert_eq!(
             got.as_ref().map(|(s, d)| (s.as_str(), *d)),
             *want,
