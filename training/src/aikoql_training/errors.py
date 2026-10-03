@@ -7,3 +7,8 @@ class TrainingDataError(Exception):
 
 class SchemaError(TrainingDataError):
     """A training example violates the canonical schema (fail-closed)."""
+
+
+class DatasetError(TrainingDataError):
+    """A dataset on disk is missing, tampered or malformed (fail-closed)."""
+
