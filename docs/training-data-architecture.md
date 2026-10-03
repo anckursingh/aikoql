@@ -109,6 +109,13 @@ compiler as a tool. Option (b) touches the core — it needs its own RED
 and the product owner's call, per the no-core-changes scope of this
 branch.
 
+T-03 adds the traverse-shape finding: `Agent.traverse(koid, rel,
+depth)` returns `{"hits": [...]}` over MCP but a flat list in embedded
+mode; hits carry `koid, depth, rel_type, direction`, with direction
+`"outbound"`/`"inbound"` (`knowledge.rs:88-105`). `client.scan_edges`
+normalizes both surfaces and inverts inbound hits into (from, rel, to)
+edges.
+
 ## 8. Fixtures and test patterns
 
 The SDK's tests are the house pattern to follow: `test_agent_embedded.py`
@@ -116,6 +123,10 @@ runs against an embedded in-process server (`Agent.connect(tmp_path)` —
 no socket, no spawn); `scripted.py` drives scripted server scenarios;
 conformance rides a real binary. Training integration tests use embedded
 first, one MCP full-path cell for the wire surface (T-06+).
+
+T-03's live cell proves the pattern end to end: seed KOs → relate →
+`scan_edges` → generate → assert every answer equals the live value,
+all over the spawned MCP server.
 
 ## 9. Crate anchors the design §3 assumed
 

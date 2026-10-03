@@ -147,6 +147,22 @@ aikoql-mcp server. Recon added two findings: **embedded
 serverInfo) — `database_id` is an explicit operator parameter
 (`docs/training-data-architecture.md` §4).
 
+T-03 shipped 2026-10-03 — `scenarios/` deterministic generators over
+actual knowledge (design §11): `factual_scenarios` (one scenario per
+scalar property; nested/blank/None skipped; sorted koid then property)
+and `relation_scenarios` (forward + inverse per edge; verb map for the
+POC relation types; dangling edges skipped; missing relation → empty).
+Every `Scenario` stores the exact `expected_path` used — validated,
+never invented. RED archived as `t-03-scenarios` (16 tests blocked).
+Live cell green over the spawned MCP server: seeded KOs + DEPENDS_ON
+edges, `scan_edges` recovers the edges through the public traverse
+surface, and every generated answer equals the live property value.
+Recon finding: **the traverse envelope is shape-inconsistent across
+surfaces** (MCP returns `{"hits": [...]}`, embedded returns a flat
+list) and **hits carry direction "outbound"/"inbound"** —
+`scan_edges` normalizes both (`docs/training-data-architecture.md`
+§7/§8).
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
