@@ -1,0 +1,11 @@
+t-04-multihop — RED captured 2026-10-03 (pre-fix head 76f49ad)
+
+T-04 multi-hop scenarios (design Phase 5) + FZ-T4 template engine.
+Tests: tests/test_multi_hop.py (11), tests/test_templates.py (9).
+Command: ..\.venv\Scripts\python.exe -m pytest tests/test_multi_hop.py tests/test_templates.py -q
+Exit: 2 (2 errors during collection)
+
+findings:
+1. ImportError: cannot import name 'multi_hop_scenarios' from 'aikoql_training.scenarios' (test_multi_hop.py:13) — the generator does not exist.
+2. ModuleNotFoundError: No module named 'aikoql_training.scenarios.templates' (test_templates.py:16) — the FZ-T4 template engine does not exist.
+3. 20 tests blocked at collection (2 collection errors) — no scenario test ran.
