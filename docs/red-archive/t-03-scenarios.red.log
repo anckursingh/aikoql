@@ -1,0 +1,19 @@
+T-03 RED — factual + relation scenario generators (design Phase 3+4, §11)
+pre-fix head: d5776a2
+date: 2026-10-03
+
+pytest tests/test_scenarios.py -q
+-> ERROR collecting tests/test_scenarios.py
+   ImportError while importing test module 'tests/test_scenarios.py'
+   tests/test_scenarios.py:19: from aikoql_training.client import scan_edges
+   ImportError: cannot import name 'scan_edges' from 'aikoql_training.client'
+-> 1 error during collection (16 tests blocked), PYTEST-RED-EXIT=2
+
+Blocked tests (design's Phase 3+4 RED lists): one KO/one property/one
+question/one answer, name-based question refs, one scenario per scalar
+property (sorted), nested/empty/None skipped, factual determinism,
+scenario shape, one-hop forward + inverse, expected path stored and
+validated, relation filtering by rel_type, missing relation generates
+nothing, dangling edges never fabricated, relation determinism,
+scenario-feeds-example-schema, and the 100% live acceptance (factual
+answers re-read via get, relation paths recovered via traverse).
