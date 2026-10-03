@@ -320,6 +320,33 @@ kernel's own evaluations denied and allowed, scenarios emitted from
 those verdicts, the oracle re-checking the live engine, and the leak
 rule proven against a denied object.
 
+T-11 shipped 2026-10-03 — knowledge-level splitter + canonical dataset
+writer (design ph 13+14). `assign_splits(examples, seed, ratios)`
+(`dataset/splitter.py`) assigns every example to train/val/test by its
+`split_key` alone — a seeded stable hash of the key — so
+near-duplicate questions (template variants of the same fact) sharing
+a key can never straddle a holdout under any seed or input order
+(FZ-T7), and assignment is a pure function of (split_key, seed):
+reordering or re-shuffling the example list cannot move an example
+(determinism law 3). The splitter also reports cross-holdout
+violations: example pairs in different splits sharing any
+`expected.koid` (recorded, not raised — the §26 leakage gate counts
+them at T-12). `write_dataset`/`read_dataset`
+(`dataset/writer.py`) are the publication boundary: canonical
+single-line `to_json` sorted by example_id per split, temp-file +
+`os.replace` atomicity (a reader never sees a half-written file),
+stale temp files from an interrupted run swept at start, and
+manifest.json written LAST — its presence is dataset visibility —
+carrying per-split count/file/sha256 plus example_count and the
+identity fields; `created_at` is an explicit operator parameter so
+the same inputs regenerate byte-identical output. `read_dataset`
+verifies manifest + per-file sha256 + counts and refuses any
+tampered/truncated dataset via a new `DatasetError` (fail-closed,
+FZ-T2). FZ-T6 found a real seam: `str.splitlines()` splits on
+U+0085/U+2028/U+2029, which `ensure_ascii=False` JSON emits raw
+inside strings — the reader splits on `"\n"` only. RED archived as
+`t-11-split-writer` (2 collection errors). GREEN 219/219.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |

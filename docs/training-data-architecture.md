@@ -350,3 +350,46 @@ Three kernel contracts pinned by live probes (kernel.rs
    verdict from the policy text itself (the oracle re-checks the
    prefix against the live engine at validation time).
 
+## 15. Dataset layer — splitter + writer (T-11)
+
+The dataset layer (`dataset/splitter.py`, `dataset/writer.py`) is the
+publication boundary between generation (T-03..T-10) and
+validation/gates (T-12):
+
+- **Holdout assignment is the split_key's hash.** `assign_splits`
+  buckets every example by `sha256(seed:split_key)[0] % total` over
+  integer weights (default 8/1/1 train/val/test). Near-duplicate
+  questions (template variants of the same fact) share a key, so they
+  can never straddle a holdout — structurally, under any seed or
+  input order (FZ-T7) — and assignment is a pure function of
+  (split_key, seed): determinism law 3 holds by construction. Weights
+  must be three positive ints (DatasetError otherwise); an example
+  without a split_key is refused, not silently bucketed.
+- **Cross-holdout leakage is reported, not raised.** Example pairs in
+  different splits sharing any `expected.koid` are returned as
+  (example_id_a, example_id_b, koid) violations — the §26 leakage
+  gate counts them at dataset validation, the splitter itself never
+  moves an example.
+- **Publication is atomic and manifest-last.** Split files are the
+  canonical single-line `to_json` (models.py) sorted by example_id,
+  written to temp names and `os.replace`d — a reader never sees a
+  half-written file. Stale `*.tmp*` files from an interrupted run are
+  swept at start; `manifest.json` is written LAST (its presence is
+  dataset visibility) with per-split count/file/sha256 plus
+  example_count and the identity fields (dataset_id, schema_version,
+  generator_version, seed, snapshot_id, configuration_hash,
+  created_at). `created_at` is an EXPLICIT operator parameter —
+  wall-clock in the manifest would break byte-identical regeneration.
+- **Reading is verification.** `read_dataset` re-hashes every split
+  file, re-counts every split and refuses any mismatch with
+  `DatasetError` (new typed error in errors.py — the T-13 §28 model
+  extends the set). FZ-T2: a tampered file, a truncated file, a
+  tampered manifest or a count mismatch all refuse; arbitrary mutated
+  content either refuses or round-trips, never reads silently wrong.
+- **FZ-T6 seam, found by the property:** `str.splitlines()` splits on
+  U+0085/U+2028/U+2029, which canonical `ensure_ascii=False` JSON
+  emits RAW inside strings — the reader must split on `"\n"` only.
+  Surrogates (Cs) are outside the text domain entirely (no real KB
+  value can carry one — Rust strings are valid UTF-8) and are
+  excluded from the adversarial strategy, not handled by the writer.
+
