@@ -83,9 +83,10 @@ def _purge_stale():
 _purge_stale()
 
 
-@pytest.fixture
-def mcp_server():
-    """A real aikoql-mcp TCP server on a free port, fresh store per test."""
+def _serve(tcp_tokens):
+    """Spawn a real aikoql-mcp TCP server on a free port with the given
+    token specs (repeated --tcp-token flags accumulate). Yields
+    (host, tokens) once ready; fresh store per spawn."""
     fd, db = tempfile.mkstemp(prefix=_PREFIX, suffix=".redb")
     os.close(fd)
     os.unlink(db)  # non-existent path -> serve auto-creates aikoql-v2
@@ -95,18 +96,15 @@ def mcp_server():
     port = sock.getsockname()[1]
     sock.close()
 
-    # The server registers the base token as the lookup key (SDK conftest
-    # pattern): spawn with TOKEN::admin, the client sends the base TOKEN.
-    token = "test-token"
     proc = subprocess.Popen(
-        [find_binary(), "serve", db, "--listen", f"127.0.0.1:{port}",
-         "--tcp-token", f"{token}::admin"],
+        [find_binary(), "serve", db, "--listen", f"127.0.0.1:{port}"]
+        + [arg for tok in tcp_tokens for arg in ("--tcp-token", tok)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
     try:
         _wait_ready(proc, "127.0.0.1", port)
-        yield f"127.0.0.1:{port}", token
+        yield f"127.0.0.1:{port}", tcp_tokens
     finally:
         proc.terminate()
         try:
@@ -125,6 +123,27 @@ def mcp_server():
             os.remove(db + ".audit.log")  # the kernel's sibling audit log
         except OSError:
             pass
+
+
+@pytest.fixture
+def mcp_server():
+    """A real aikoql-mcp TCP server on a free port, fresh store per test.
+
+    The server registers the base token as the lookup key (SDK conftest
+    pattern): spawn with TOKEN::admin, the client sends the base TOKEN.
+    """
+    for host, _specs in _serve(["test-token::admin"]):
+        yield host, "test-token"
+
+
+@pytest.fixture
+def mcp_server_two_tokens():
+    """One server, two TCP identities: alice (admin) owns the knowledge,
+    bob (viewer, no grant) must be denied. PRR-2 pins TCP identity to
+    the token (session.rs inject_session_forced), so the denied reader
+    is a second --tcp-token, never a per-call subject argument."""
+    for host, _specs in _serve(["alice-tok::admin", "bob-tok::viewer"]):
+        yield {"host": host, "alice": "alice-tok", "bob": "bob-tok"}
 
 
 _BASE = {
