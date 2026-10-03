@@ -704,7 +704,7 @@ jobs:
           done
 
   # ── Maven Central publish, gated on the release + version match ─
-  # Publishes io.aikoql:aikoql-client through the Central Portal
+  # Publishes com.aikoql:aikoql-client through the Central Portal
   # (central.sonatype.com — OSSRH staging is closed to new projects),
   # GPG-signed, with sources + javadoc jars. Version parity is asserted
   # before any upload: the pom version is the publish truth.
@@ -737,8 +737,8 @@ jobs:
             exit 1
           fi
           # Skip when this version is already on Maven Central (rescue re-dispatch).
-          if curl -sf "https://repo1.maven.org/maven2/io/aikoql/aikoql-client/$VERSION/" | grep -q "aikoql-client-$VERSION.pom"; then
-            echo "::notice::io.aikoql:aikoql-client:$VERSION already published — skipping"
+          if curl -sf "https://repo1.maven.org/maven2/com/aikoql/aikoql-client/$VERSION/" | grep -q "aikoql-client-$VERSION.pom"; then
+            echo "::notice::com.aikoql:aikoql-client:$VERSION already published — skipping"
             exit 0
           fi
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import

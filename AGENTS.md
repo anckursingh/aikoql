@@ -76,7 +76,7 @@ the architect review.
 | `crates/services/api/mcp/` | the MCP server (stdio/TCP, auth, tenancy) |
 | `crates/protocol/native/` | the D-15 framed binary protocol codec — zero-dep, §6 wire format, spec in `docs/NATIVE-PROTOCOL.md` |
 | `crates/sdk/fault-proxy/` | the D-16 §18 fault proxy — one instance = one fault mode, two blocking pump threads + a shared Mutex; the matrix test is `crates/sdk/rust/tests/fault.rs` |
-| `crates/sdk/{python,go,rust,typescript,java}/` | the first-party SDKs — Python, Go, the Rust reference (D-12), TypeScript `@aikoql/client` (D-13), and Java `io.aikoql:aikoql-client` (D-14); all five run the shared conformance runner (`scripts/sdk-conformance.sh`) |
+| `crates/sdk/{python,go,rust,typescript,java}/` | the first-party SDKs — Python, Go, the Rust reference (D-12), TypeScript `@aikoql/client` (D-13), and Java `com.aikoql:aikoql-client` (D-14); all five run the shared conformance runner (`scripts/sdk-conformance.sh`) |
 | `crates/ingestion/`, `crates/providers/` | document ingestion; postgres/sqlite/mongo/neo4j import providers |
 | `crates/certification/`, `benchmarks/` | certification suites; benchmark harness |
 | `scripts/` | every CI gate + the dogfood loop + benchmark tooling |

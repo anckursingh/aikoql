@@ -12,7 +12,7 @@ ResultSet rows = conn.query("MATCH person RETURN *");
 
 ```xml
 <dependency>
-  <groupId>io.aikoql</groupId>
+  <groupId>com.aikoql</groupId>
   <artifactId>aikoql-client</artifactId>
   <version>0.2.1</version>
 </dependency>
