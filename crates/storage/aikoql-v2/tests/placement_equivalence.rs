@@ -40,12 +40,11 @@ fn direct_read(dir: &std::path::Path, loc: &impl Fn() -> Option<Placement>) -> S
     let Placement::Segment(loc) = loc().expect("the placement must be a Segment here") else {
         panic!("a Segment placement is required for a direct read");
     };
-    let entry = SegmentReader::open(&segment_path(dir, loc.segment_id.0))
+    SegmentReader::open(&segment_path(dir, loc.segment_id.0))
         .unwrap()
         .entry_at(loc.block_id, loc.entry_offset)
         .unwrap()
-        .expect("the anchor names an entry");
-    entry
+        .expect("the anchor names an entry")
 }
 
 /// The full three-way agreement for every object at this stage: the

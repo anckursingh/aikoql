@@ -44,7 +44,11 @@ fn corpus(r: &mut impl FnMut() -> u64) -> Vec<SegmentEntry> {
                 1 => (r() % 32) as usize,
                 _ => 4000,
             };
-            let flags = if r() % 6 == 0 { FLAG_DELETE } else { FLAG_PUT };
+            let flags = if r().is_multiple_of(6) {
+                FLAG_DELETE
+            } else {
+                FLAG_PUT
+            };
             let rid = [0u64, 7, 8, 9][(r() % 4) as usize];
             out.push(SegmentEntry {
                 key: k.clone(),

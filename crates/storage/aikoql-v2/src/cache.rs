@@ -392,7 +392,7 @@ mod tests {
         }
 
         // cap 1 — the set is always exactly one block.
-        let cache = BlockCache::new(1 * BLOCK);
+        let cache = BlockCache::new(BLOCK);
         cache.insert(1, 0, block());
         assert_set(&cache, &[0]);
         cache.get(1, 0);

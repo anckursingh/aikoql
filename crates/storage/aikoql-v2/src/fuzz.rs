@@ -291,13 +291,11 @@ fn round_trip_placement(data: &[u8]) {
 /// `parse_at`'s accepted `Complete` stays inside the input; an accepted
 /// marker re-encodes byte-identically.
 pub fn check_envelope_snapshot(data: &[u8]) {
-    if let Ok(outcome) = legacy_envelope::parse_at(data, 0) {
-        if let ParseOutcome::Complete { end, .. } = outcome {
-            assert!(
-                end <= data.len(),
-                "the record end must not exceed the input"
-            );
-        }
+    if let Ok(ParseOutcome::Complete { end, .. }) = legacy_envelope::parse_at(data, 0) {
+        assert!(
+            end <= data.len(),
+            "the record end must not exceed the input"
+        );
     }
     if let Ok(m) = SnapshotMarker::decode(data) {
         let enc = m.encode();

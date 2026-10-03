@@ -203,7 +203,7 @@ fn v4_dense_cadence_inside_a_run_and_the_byte_surface_split() {
 
     // the flush really wrote v4 data blocks (the dense table exists)
     let loc = placement_of(&db, rid_of(&db, ox)).unwrap();
-    assert!(data_block_versions(&d, &loc).iter().any(|&v| v == 4));
+    assert!(data_block_versions(&d, &loc).contains(&4));
 
     // object gets answer the newest rows
     assert_eq!(db.get_object(ox, b"hot").unwrap(), Some(vec![18]));
