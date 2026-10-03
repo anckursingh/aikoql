@@ -654,7 +654,7 @@ fi
 # equal the release version before any upload; the pom's Central Portal
 # plugin does the upload itself). Like every publisher it gates on
 # github-release so a failed release never publishes artifacts.
-if ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'repo1.maven.org/maven2/io/aikoql/aikoql-client'; then
+if ! sed -n '/^  maven-central-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL" | grep -q 'repo1.maven.org/maven2/com/aikoql/aikoql-client'; then
   echo "ARCH: the maven-central-publish job loses the Maven Central skip guard (D-18)" >&2
   fail=1
 fi
