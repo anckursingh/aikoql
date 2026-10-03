@@ -19,7 +19,7 @@
 //!   aikoql-kernel — R6)
 //! - BFS traversal at depth 1/2/3 on an N-edge graph (binary tree, N-1 edges)
 //! - 5 canonical aikoql query patterns, planning + execution
-//! - dataset metrics: KO count, edge count, on-disk (redb) bytes/KO,
+//! - dataset metrics: KO count, edge count, on-disk (v2) bytes/KO,
 //!   peak RSS (Linux only — /proc/self/status VmHWM)
 
 use aikoql_compiler::{parser, Compiler};
@@ -144,19 +144,18 @@ fn scale() -> usize {
         .unwrap_or(100_000)
 }
 
-/// One-shot dataset metrics: KO/edge counts, redb on-disk bytes at 1K KOs,
+/// One-shot dataset metrics: KO/edge counts, v2 on-disk bytes at 1K KOs,
 /// peak RSS (Linux). Printed once per run — not benchmarked.
 fn report_metrics(ds: &Dataset) {
     let n = ds.koids.len();
 
-    // On-disk size via a throwaway redb store (MemoryEngine has no disk).
-    let redb_path = std::env::temp_dir().join(format!("aikoql-bench-{}.redb", std::process::id()));
-    let _ = std::fs::remove_file(&redb_path);
-    let mut disk_bytes_per_ko = 0u64;
-    {
+    // On-disk size via a throwaway v2 store (MemoryEngine has no disk).
+    let v2_path = std::env::temp_dir().join(format!("aikoql-bench-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&v2_path);
+    let disk_bytes_per_ko = {
         let clock = Arc::new(ManualClock::new(20_000));
         let kernel = Kernel::open(
-            Arc::new(RedbEngine::open(&redb_path).unwrap()),
+            Arc::new(aikoql_storage_v2::AikoqlStorageEngineV2::open(&v2_path).unwrap()),
             clock,
             0x5CA1E,
         )
@@ -166,11 +165,18 @@ fn report_metrics(ds: &Dataset) {
             remember_doc(&kernel, &alice, i);
         }
         drop(kernel);
-        if let Ok(md) = std::fs::metadata(&redb_path) {
-            disk_bytes_per_ko = md.len() / 1_000;
-        }
-        let _ = std::fs::remove_file(&redb_path);
-    }
+        // Walk the v2 directory — the data lives across manifest +
+        // segments + logs.
+        let bytes: u64 = std::fs::read_dir(&v2_path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.metadata().ok())
+            .map(|m| m.len())
+            .sum();
+        let _ = std::fs::remove_dir_all(&v2_path);
+        bytes / 1_000
+    };
 
     #[cfg(target_os = "linux")]
     let rss = std::fs::read_to_string("/proc/self/status")
@@ -185,7 +191,7 @@ fn report_metrics(ds: &Dataset) {
     let rss = "n/a (non-Linux)";
 
     eprintln!(
-        "aikoql-bench scale={n} edges={} redb_disk_bytes_per_ko={} peak_rss_kb={}",
+        "aikoql-bench scale={n} edges={} v2_disk_bytes_per_ko={} peak_rss_kb={}",
         n - 1,
         disk_bytes_per_ko,
         rss

@@ -124,8 +124,8 @@ fn validation_benchmark(c: &mut Criterion) {
 }
 
 fn storage_scan_benchmark(c: &mut Criterion) {
-    // R6 guard: a narrow-prefix scan over a 100K-key store must stay bounded
-    // (seek to prefix + break at first non-matching key), not walk the store.
+    // R6 guard: a narrow-prefix scan over a 100K-key store (seek to prefix
+    // + break at first non-matching key), not a store walk.
     let engine = MemoryEngine::new();
     let mut batch = WriteBatch::new();
     for i in 0..100_000u32 {

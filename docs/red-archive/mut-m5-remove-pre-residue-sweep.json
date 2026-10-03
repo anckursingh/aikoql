@@ -1,0 +1,9 @@
+{
+  "id": "mut-m5-remove-pre-residue-sweep",
+  "pre_fix_commit": "25ea8e5",
+  "command": "bash scripts/mutation-harness.sh m5-remove-pre-residue-sweep",
+  "captured_at": "2026-09-28T22:39:54Z",
+  "captured_head": "d27f4ccb356ceebcaf4727eb1c65f4a54d2754f3",
+  "exit_code": 1,
+  "note": "mutation RED: the before snapshot is dropped \u2014 residue 'after' diffs against nothing and the sweep can never fail; caught by the check-residue.sh count>=2 wiring"
+}

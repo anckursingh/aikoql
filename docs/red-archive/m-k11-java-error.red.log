@@ -1,0 +1,16 @@
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  7.100 s
+[INFO] Finished at: 2026-10-02T15:45:50+02:00
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.2:test (default-test) on project aikoql-client: There are test failures.
+[ERROR] 
+[ERROR] See C:\Users\ancku\AppData\Local\Temp\tmp.QfnzRbkVDS\tree\crates\sdk\java\target\surefire-reports for the individual test results.
+[ERROR] See dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+EXIT=1

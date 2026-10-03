@@ -2,12 +2,13 @@
 //! No behavior changes.
 
 use crate::{json, Kernel, LifecycleState, Ordering, Subject, ACTIVE_CONNECTIONS, J, SERVER_START};
-use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
-// Design §22 storage admin tools — v2 backend only. A None capability means
-// the serving backend (redb/v1) has no admin surface: the tool answers with
-// an error inside the normal tool-result envelope, never a transport error.
+// Design §22 storage admin tools — v2 is the only backend (launch S-02), so
+// the admin capability is always present at runtime. The Option survives
+// because the capability surfaces through the runtime `Opened` tuple; a None
+// answers with an error inside the normal tool-result envelope, never a
+// transport error.
 // ---------------------------------------------------------------------------
 
 pub(crate) fn tool_storage_stats(
@@ -146,10 +147,7 @@ fn snapshot_marker_in(dir: &std::path::Path) -> Option<std::path::PathBuf> {
         .map(|e| e.path())
 }
 
-pub(crate) fn tool_verify_backup(
-    args: &J,
-    admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
-) -> Result<J, String> {
+pub(crate) fn tool_verify_backup(args: &J) -> Result<J, String> {
     let backup = args
         .get("backup")
         .and_then(|b| b.as_str())
@@ -160,16 +158,10 @@ pub(crate) fn tool_verify_backup(
     let expected_seq = meta["journal_seq"].as_u64().unwrap_or(0);
     let expected_objects = meta["object_count"].as_u64().unwrap_or(0) as usize;
     // P3-M3: a v2-native backup verifies through its marker (decode +
-    // checksum). Any other backup on a v2 server — or any backup on
-    // redb/v1 — verifies through the redb open below.
-    let ok = if let (Some(_), Some(marker)) =
-        (admin, snapshot_marker_in(std::path::Path::new(backup)))
-    {
-        aikoql_storage_v2::snapshot::SnapshotMarker::read(&marker).is_ok()
-    } else {
-        let data_path = backup_data_file(backup)?;
-        verify_backup_file(&data_path, expected_seq, expected_objects)
-    };
+    // checksum) — the only backup format post-S-02.
+    let marker = snapshot_marker_in(std::path::Path::new(backup))
+        .ok_or("not a v2-native backup: no SNAPSHOT marker")?;
+    let ok = aikoql_storage_v2::snapshot::SnapshotMarker::read(&marker).is_ok();
     Ok(json!({
         "backup": backup,
         "verified": ok,
@@ -238,116 +230,35 @@ pub(crate) fn tool_backup(
         PathBuf::from(p)
     };
 
-    // P3-M3 §58: a v2 backend takes the engine-native snapshot — pinned
-    // generation, verified byte-for-byte, marker published LAST (its
-    // presence IS the commit point, so `verified` needs no extra pass).
-    // Recovery-point metadata is read BEFORE the snapshot pins the
-    // generation: the reported seq is a point the snapshot contains.
-    if let Some(admin) = admin {
-        let (seq, _audit) = k.journal_head().map_err(|e| e.to_string())?;
-        let obj_count = k.scan_heads().map_err(|e| e.to_string())?.len();
-        let info = admin.snapshot_to(&backup_dir).map_err(|e| e.to_string())?;
-        let meta_path = backup_dir.join("meta.json");
-        std::fs::write(
-            &meta_path,
-            json!({
-                "timestamp": ts, "source": db_path, "journal_seq": seq,
-                "object_count": obj_count, "engine": "aikoql-v2",
-                "generation": info.generation, "file_count": info.file_count
-            })
-            .to_string(),
-        )
-        .map_err(|e| e.to_string())?;
-        return Ok(json!({
-            "backup": backup_dir, "timestamp": ts, "journal_seq": seq,
-            "object_count": obj_count, "verified": true, "engine": "aikoql-v2",
-            "generation": info.generation, "file_count": info.file_count,
-            "bytes_copied": info.bytes_copied
-        }));
-    }
-
-    // redb/v1 backends keep the REC-002 trait-default scan (untouched).
-    std::fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
-
-    // Snapshot the store through the kernel — the live file is region-locked
-    // on Windows, so a file-level copy cannot read it (os error 33).
-    let src_file = src.file_name().ok_or("invalid db path: no filename")?;
-    let dest_path = backup_dir.join(src_file);
-    k.backup_store_to(&dest_path).map_err(|e| e.to_string())?;
-
-    // Record source metadata.
+    // P3-M3 §58: the engine-native snapshot — pinned generation, verified
+    // byte-for-byte, marker published LAST (its presence IS the commit
+    // point, so `verified` needs no extra pass). Recovery-point metadata is
+    // read BEFORE the snapshot pins the generation: the reported seq is a
+    // point the snapshot contains.
+    let admin = admin.ok_or("storage admin unavailable on this backend")?;
     let (seq, _audit) = k.journal_head().map_err(|e| e.to_string())?;
     let obj_count = k.scan_heads().map_err(|e| e.to_string())?.len();
+    let info = admin.snapshot_to(&backup_dir).map_err(|e| e.to_string())?;
     let meta_path = backup_dir.join("meta.json");
     std::fs::write(
         &meta_path,
-        json!({"timestamp": ts, "source": db_path, "journal_seq": seq, "object_count": obj_count})
-            .to_string(),
+        json!({
+            "timestamp": ts, "source": db_path, "journal_seq": seq,
+            "object_count": obj_count, "engine": "aikoql-v2",
+            "generation": info.generation, "file_count": info.file_count
+        })
+        .to_string(),
     )
     .map_err(|e| e.to_string())?;
-
-    // Verify: open backup in a temp kernel and check integrity.
-    let dest_str = dest_path.to_string_lossy().to_string();
-    let verified = verify_backup_file(&dest_str, seq, obj_count);
-
-    Ok(
-        json!({"backup": backup_dir, "timestamp": ts, "journal_seq": seq, "object_count": obj_count, "verified": verified}),
-    )
-}
-
-/// Open a backup file in a throwaway kernel and check basic integrity.
-///
-/// The snapshot format is redb regardless of the production backend
-/// (engine-independent snapshot_to — KSE-14), so verification opens the
-/// backup AS redb explicitly, never through the AIKOQL_BACKEND-selected
-/// default.
-pub(crate) fn verify_backup_file(path: &str, expected_seq: u64, expected_objects: usize) -> bool {
-    let k = match crate::RedbEngine::open(path) {
-        Ok(e) => match Kernel::open(Arc::new(e), Arc::new(crate::SystemClock), 0xA9C9) {
-            Ok(k) => k,
-            Err(_) => return false,
-        },
-        Err(_) => return false,
-    };
-    let (seq, _) = match k.journal_head() {
-        Ok(h) => h,
-        Err(_) => return false,
-    };
-    let count = match k.scan_heads() {
-        Ok(h) => h.len(),
-        Err(_) => return false,
-    };
-    seq == expected_seq && count == expected_objects
-}
-
-/// The data file inside a backup dir. tool_backup stores it under the source
-/// db's filename (meta.json "source") — never a hard-coded data.redb.
-fn backup_data_file(backup: &str) -> Result<String, String> {
-    let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
-        .map_err(|e| format!("not a valid backup: {}", e))?;
-    let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
-    if let Some(f) = meta
-        .get("source")
-        .and_then(|s| s.as_str())
-        .and_then(|s| std::path::Path::new(s).file_name())
-    {
-        let p = format!("{}/{}", backup, f.to_string_lossy());
-        if std::path::Path::new(&p).exists() {
-            return Ok(p);
-        }
-    }
-    // Fallback: any redb file in the backup dir.
-    std::fs::read_dir(backup)
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("redb"))
-        .map(|p| p.to_string_lossy().to_string())
-        .ok_or_else(|| "backup data file missing".into())
+    Ok(json!({
+        "backup": backup_dir, "timestamp": ts, "journal_seq": seq,
+        "object_count": obj_count, "verified": true, "engine": "aikoql-v2",
+        "generation": info.generation, "file_count": info.file_count,
+        "bytes_copied": info.bytes_copied
+    }))
 }
 
 pub(crate) fn tool_restore(
-    k: &Kernel,
     args: &J,
     admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
 ) -> Result<J, String> {
@@ -358,42 +269,22 @@ pub(crate) fn tool_restore(
     let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
-    // P3-M3 §60: a v2-native backup (marker present) on a v2 server takes
-    // the engine-native path — verify, materialize, swap rows in one frame.
-    // A redb-format backup on a v2 server still restores through the
-    // trait-default scan below.
-    if let (Some(admin), Some(_marker)) = (admin, snapshot_marker_in(std::path::Path::new(backup)))
-    {
-        let info = admin
-            .restore_from(std::path::Path::new(backup))
-            .map_err(|e| e.to_string())?;
-        let pitr_seq = meta.get("journal_seq").and_then(|v| v.as_u64());
-        let pitr_ts = meta.get("timestamp").and_then(|v| v.as_u64());
-        return Ok(json!({
-            "restored": true,
-            "engine": "aikoql-v2",
-            "generation": info.generation,
-            "rows_restored": info.rows_restored,
-            "meta": meta,
-            "recovery_point": {
-                "journal_seq": pitr_seq,
-                "timestamp": pitr_ts,
-            }
-        }));
-    }
-    let data_file = backup_data_file(backup)?;
-    // Engine-level restore: the live file cannot be overwritten while the
-    // server holds it open (region lock), so rows are swapped through the
-    // kernel in one atomic batch.
-    // ponytail: in-memory derived state is stale until restart — restart
-    // the server after restore (TESTING-PLAN §9.4 REC-002).
-    k.restore_store_from(std::path::Path::new(&data_file))
+    // P3-M3 §60: the engine-native path — verify, materialize, swap rows in
+    // one frame. A v2-native backup (marker present) is the only backup
+    // format post-S-02.
+    let admin = admin.ok_or("storage admin unavailable on this backend")?;
+    snapshot_marker_in(std::path::Path::new(backup))
+        .ok_or("not a v2-native backup: no SNAPSHOT marker")?;
+    let info = admin
+        .restore_from(std::path::Path::new(backup))
         .map_err(|e| e.to_string())?;
-    // Report PITR recovery point from backup metadata.
     let pitr_seq = meta.get("journal_seq").and_then(|v| v.as_u64());
     let pitr_ts = meta.get("timestamp").and_then(|v| v.as_u64());
     Ok(json!({
         "restored": true,
+        "engine": "aikoql-v2",
+        "generation": info.generation,
+        "rows_restored": info.rows_restored,
         "meta": meta,
         "recovery_point": {
             "journal_seq": pitr_seq,

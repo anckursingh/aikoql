@@ -1,0 +1,8 @@
+{
+  "id": "d19-sdk-proxy",
+  "pre_fix_commit": "b51ce414b4cd63fb59382b8cc57a163c81ee7a78",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-02T15:07:32Z",
+  "captured_head": "b51ce414b4cd63fb59382b8cc57a163c81ee7a78",
+  "exit_code": 1
+}

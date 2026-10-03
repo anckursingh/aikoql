@@ -1,0 +1,16 @@
+---- tombstone_winner_retires_only_its_replica_and_can_resurrect stdout ----
+
+thread 'tombstone_winner_retires_only_its_replica_and_can_resurrect' (23208) panicked at crates\storage\aikoql-v2\tests\winner_matrix.rs:143:5:
+assertion `left == right` failed: v3 + o7 + b
+  left: 4
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tombstone_winner_retires_only_its_replica_and_can_resurrect
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `--test winner_matrix`
+EXIT=101

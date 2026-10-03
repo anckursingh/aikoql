@@ -1,0 +1,9 @@
+{
+  "name": "cancelled_connection_recovers",
+  "operations": [
+    {"op": "close"},
+    {"op": "query", "query": "MATCH person RETURN *", "expect_error": "UNAVAILABLE"},
+    {"op": "connect"},
+    {"op": "health", "assert": {"status": "healthy"}}
+  ]
+}

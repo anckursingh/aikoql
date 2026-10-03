@@ -9,9 +9,7 @@
 
 use aikoql_ingestion::{compile_context_semantic_with, cosine_similarity, KnowledgeIr};
 use aikoql_kernel::knowledge::kom::Value;
-use aikoql_kernel::{
-    EmbeddingProvider, Kernel, KnowledgeContext, RedbEngine, Subject, SystemClock,
-};
+use aikoql_kernel::{EmbeddingProvider, Kernel, KnowledgeContext, Subject, SystemClock};
 use aikoql_semantic::provider::CandleEmbedding;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,7 +26,8 @@ fn main() {
     let weight: f32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(3.0);
     let min: f32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(0.30);
 
-    let engine = RedbEngine::open(db).expect("open db");
+    let engine =
+        aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(db)).expect("open db");
     let k = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0).expect("kernel");
     let ctx = KnowledgeContext::from(&Subject::with_roles("ingest-dir", &["admin"]));
 

@@ -7,7 +7,6 @@ pub mod cache;
 pub mod encrypted;
 pub mod repository;
 pub mod store;
-pub mod store_redb;
 
 pub use cache::KnowledgeCache;
 pub use encrypted::EncryptedStore;

@@ -1,0 +1,8 @@
+{
+  "id": "d09-connection-pool",
+  "pre_fix_commit": "HEAD",
+  "command": "/e/dreams/Mnemosyne/.venv/Scripts/python.exe -m pytest crates/sdk/python/tests/test_pool.py -q",
+  "captured_at": "2026-10-01T14:56:05Z",
+  "captured_head": "e83a585ec1a26af97e2f17086de1bb58e8f6dd56",
+  "exit_code": 2
+}

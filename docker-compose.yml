@@ -8,9 +8,13 @@ version: "3.8"
 services:
   aikoql:
     build: .
-    ports:
-      - "9090:9090"   # MCP TCP
-      - "9091:9091"   # HTTP /metrics + /health + Graph UI
+    # No host ports: the server fails closed on non-loopback binds (R1/R3
+    # validate_listen — CI pins that `--listen 0.0.0.0` exits 2), so
+    # docker's -p proxy would land on the container IP where nothing
+    # listens; the old 9090/9091 mappings were dead as shipped (CI-11).
+    # Host clients: MCP over stdio (`docker run -i ... aikoql`) — the
+    # e2e-volume-restart contract — or a sidecar service sharing the
+    # network namespace when host TCP is needed.
     volumes:
       - aikoql_data:/data
     environment:

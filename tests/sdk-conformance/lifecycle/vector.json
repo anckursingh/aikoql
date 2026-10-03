@@ -1,0 +1,9 @@
+{
+  "name": "reopen_persistence",
+  "operations": [
+    {"op": "remember", "type": "lc_item", "properties": {"name": "persist"}, "as": "item"},
+    {"op": "close"},
+    {"op": "connect"},
+    {"op": "get", "koid": "$item", "assert": {"properties.name": "persist"}}
+  ]
+}

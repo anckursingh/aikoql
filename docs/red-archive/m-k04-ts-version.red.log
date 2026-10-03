@@ -1,0 +1,16 @@
+  -   -1
+    ]
+  
+      at TestContext.<anonymous> (file:///C:/Users/ancku/AppData/Local/Temp/tmp.NDLPDxtjw7/tree/crates/sdk/typescript/tests/corpus-pin.test.ts:94:12)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1106:25)
+      at Test.start (node:internal/test_runner/test:1003:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:358:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 16 ],
+    expected: [ -1 ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+EXIT=1

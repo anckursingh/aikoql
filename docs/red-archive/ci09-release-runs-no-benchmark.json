@@ -1,0 +1,8 @@
+{
+  "id": "ci09-release-runs-no-benchmark",
+  "pre_fix_commit": "e659d1c",
+  "command": "grep -q tier3-matrix .github/workflows/release.yml",
+  "captured_at": "2026-09-25T09:26:53Z",
+  "captured_head": "e659d1c6a69081e80d741c36575824143707c925",
+  "exit_code": 1
+}

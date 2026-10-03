@@ -321,14 +321,14 @@ fn tmp_db(name: &str) -> (PathBuf, PathBuf) {
         .unwrap()
         .as_nanos();
     db.push(format!(
-        "aikoql_txn_{}_{}_{}.redb",
+        "aikoql_txn_{}_{}_{}",
         name,
         std::process::id(),
         stamp
     ));
     let mut marker = db.clone();
     marker.set_extension("marker");
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let _ = std::fs::remove_file(&marker);
     (db, marker)
 }
@@ -370,12 +370,12 @@ fn wait_for_marker(marker: &std::path::Path, child: &mut std::process::Child) {
     }
 }
 
-/// Reopen the store after a hard kill. Windows may release the file handle a
+/// Reopen the store after a hard kill. Windows may release the dir lock a
 /// beat after taskkill returns — retry until the open succeeds.
 fn reopen_after_kill(path: &std::path::Path) -> Kernel {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(engine) = RedbEngine::open(path) {
+        if let Ok(engine) = aikoql_storage_v2::AikoqlStorageEngineV2::open(path) {
             if let Ok(k) = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xBEEF) {
                 return k;
             }
@@ -436,7 +436,7 @@ fn tx006a_crash_before_commit_applies_nothing() {
     assert_eq!(node_count(&k), 1);
     assert_eq!(k.journal_head().unwrap().0, seq);
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let _ = std::fs::remove_file(&marker);
 }
 
@@ -465,7 +465,7 @@ fn tx006b_crash_after_commit_keeps_the_commit_and_dedupes() {
     let head = k.get(alice(), &koids[0]).unwrap();
     assert_eq!(head.properties.get("i"), Some(&Value::Int(7)));
 
-    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_dir_all(&db);
     let _ = std::fs::remove_file(&marker);
 }
 

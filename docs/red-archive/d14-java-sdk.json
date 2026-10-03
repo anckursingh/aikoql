@@ -1,0 +1,8 @@
+{
+  "id": "d14-java-sdk",
+  "pre_fix_commit": "db85e59ac853c1d8c82b0c5255f64effbb03315d",
+  "command": "env AIKOQL_MCP_BIN=E:/dreams/Mnemosyne/target/debug/aikoql-mcp.exe mvn -q test",
+  "captured_at": "2026-10-01T18:11:24Z",
+  "captured_head": "db85e59ac853c1d8c82b0c5255f64effbb03315d",
+  "exit_code": 1
+}

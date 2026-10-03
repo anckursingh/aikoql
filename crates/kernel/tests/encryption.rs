@@ -6,12 +6,38 @@ use aikoql_kernel::security::field_crypto::{EncryptionPolicy, FieldCrypto};
 use aikoql_kernel::security::kms::{KeyManager, LocalKms};
 use aikoql_kernel::storage::encrypted::EncryptedStore;
 use aikoql_kernel::storage::store::{MemoryEngine, StorageEngine, WriteBatch};
-use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_kernel::{
     Kernel, ManualClock, Metadata, Origin, ReferentialPolicy, RememberRequest, Subject, Value,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
+
+/// Recursive directory copy — v2 databases are directories (launch S-02).
+fn copy_dir(src: &str, dst: &str) {
+    std::fs::create_dir_all(dst).expect("create backup dir");
+    for e in std::fs::read_dir(src).expect("read db dir").flatten() {
+        let dp = std::path::Path::new(dst).join(e.file_name());
+        if e.path().is_dir() {
+            copy_dir(&e.path().to_string_lossy(), &dp.to_string_lossy());
+        } else {
+            std::fs::copy(e.path(), dp).expect("copy file");
+        }
+    }
+}
+
+/// Raw bytes of every file in the database directory (e01 scans for
+/// plaintext leaks on disk).
+fn dir_bytes(path: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(path).into_iter().flatten().flatten() {
+        if e.path().is_dir() {
+            out.extend(dir_bytes(&e.path().to_string_lossy()));
+        } else if let Ok(b) = std::fs::read(e.path()) {
+            out.extend(b);
+        }
+    }
+    out
+}
 
 fn temp_path(label: &str) -> String {
     format!(
@@ -23,15 +49,18 @@ fn temp_path(label: &str) -> String {
 }
 
 fn encrypted_redb(path: &str) -> (EncryptedStore, [u8; 32]) {
-    let _ = std::fs::remove_file(path);
-    let redb = Arc::new(RedbEngine::open(path).expect("open redb"));
+    let _ = std::fs::remove_dir_all(path);
+    let redb = Arc::new(
+        aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(path))
+            .expect("open store"),
+    );
     let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
     let key = crypto.generate_key();
     (EncryptedStore::new(redb, crypto, key), key)
 }
 
 #[test]
-fn e01_no_plaintext_in_redb_file() {
+fn e01_no_plaintext_in_db() {
     let path = temp_path("e01");
     let (store, _key) = encrypted_redb(&path);
 
@@ -41,11 +70,11 @@ fn e01_no_plaintext_in_redb_file() {
     store.write_batch(&batch).unwrap();
     drop(store);
 
-    let raw_bytes = std::fs::read(&path).unwrap_or_default();
+    let raw_bytes = dir_bytes(&path);
     let raw_str = String::from_utf8_lossy(&raw_bytes);
     assert!(!raw_str.contains("123-45-6789"), "SSN leaked");
     assert!(!raw_str.contains("150000"), "salary leaked");
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&path);
 }
 
 #[test]
@@ -54,18 +83,24 @@ fn e02_reopen_with_same_key_recovers_data() {
     let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
     let key = crypto.generate_key();
     {
-        let redb = Arc::new(RedbEngine::open(&path).expect("open"));
+        let redb = Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&path))
+                .expect("open"),
+        );
         let store = EncryptedStore::new(redb, crypto.clone(), key);
         let mut batch = WriteBatch::new();
         batch.put(b"data".to_vec(), b"recoverable".to_vec());
         store.write_batch(&batch).unwrap();
     } // store + redb dropped here
 
-    let redb2 = Arc::new(RedbEngine::open(&path).expect("reopen"));
+    let redb2 = Arc::new(
+        aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&path))
+            .expect("reopen"),
+    );
     let store2 = EncryptedStore::new(redb2, crypto, key);
     let val = store2.get(b"data").unwrap().unwrap();
     assert_eq!(val, b"recoverable");
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&path);
 }
 
 #[test]
@@ -74,7 +109,10 @@ fn e03_wrong_key_fails_decryption() {
     let crypto = Arc::new(Crypto::new(Box::new(Aes256Gcm::new())));
     let key = crypto.generate_key();
     {
-        let redb = Arc::new(RedbEngine::open(&path).expect("open"));
+        let redb = Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&path))
+                .expect("open"),
+        );
         let store = EncryptedStore::new(redb, crypto.clone(), key);
         let mut batch = WriteBatch::new();
         batch.put(b"data".to_vec(), b"secret".to_vec());
@@ -82,7 +120,10 @@ fn e03_wrong_key_fails_decryption() {
     }
 
     let wrong_key = crypto.generate_key();
-    let redb2 = Arc::new(RedbEngine::open(&path).expect("reopen"));
+    let redb2 = Arc::new(
+        aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&path))
+            .expect("reopen"),
+    );
     let store2 = EncryptedStore::new(redb2, crypto, wrong_key);
     assert!(store2.get(b"data").is_err());
     let _ = std::fs::remove_file(&path);
@@ -333,7 +374,10 @@ fn e08_encrypted_backup_restore() {
 
     // Write encrypted data.
     {
-        let redb = Arc::new(RedbEngine::open(&path).expect("open"));
+        let redb = Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&path))
+                .expect("open"),
+        );
         let store = EncryptedStore::new(redb, crypto.clone(), key);
         let mut batch = WriteBatch::new();
         batch.put(b"ko:001".to_vec(), b"encrypted-value".to_vec());
@@ -341,12 +385,15 @@ fn e08_encrypted_backup_restore() {
         store.write_batch(&batch).unwrap();
     }
 
-    // Backup: copy the file.
-    std::fs::copy(&path, &backup_path).expect("backup copy");
+    // Backup: copy the database directory.
+    copy_dir(&path, &backup_path);
 
     // Restore: open backup with same key, verify data.
     {
-        let redb = Arc::new(RedbEngine::open(&backup_path).expect("open backup"));
+        let redb = Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&backup_path))
+                .expect("open backup"),
+        );
         let store = EncryptedStore::new(redb, crypto.clone(), key);
         assert_eq!(store.get(b"ko:001").unwrap().unwrap(), b"encrypted-value");
         assert_eq!(store.get(b"ko:002").unwrap().unwrap(), b"another-secret");
@@ -355,13 +402,16 @@ fn e08_encrypted_backup_restore() {
     // Wrong key on backup should fail.
     let wrong_key = crypto.generate_key();
     {
-        let redb = Arc::new(RedbEngine::open(&backup_path).expect("open backup 2"));
+        let redb = Arc::new(
+            aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&backup_path))
+                .expect("open backup 2"),
+        );
         let store = EncryptedStore::new(redb, crypto.clone(), wrong_key);
         assert!(store.get(b"ko:001").is_err());
     }
 
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&backup_path);
+    let _ = std::fs::remove_dir_all(&path);
+    let _ = std::fs::remove_dir_all(&backup_path);
 }
 
 /// e09: DEKs persist through a full kernel restart (not just FieldCrypto).

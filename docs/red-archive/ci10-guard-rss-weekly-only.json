@@ -1,0 +1,8 @@
+{
+  "id": "ci10-guard-rss-weekly-only",
+  "pre_fix_commit": "fab6dcf",
+  "command": "grep -q AIKOQL_RSS .github/workflows/benchmark.yml",
+  "captured_at": "2026-09-27T08:01:09Z",
+  "captured_head": "fab6dcfcb1417f04382cc0b6755213e59d50af5b",
+  "exit_code": 1
+}

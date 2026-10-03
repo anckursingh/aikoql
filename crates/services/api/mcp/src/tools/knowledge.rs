@@ -641,6 +641,27 @@ pub(crate) fn tool_get(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(ko_json(&ko))
 }
 
+/// Dogfood (EI ingest, 2026-09-29): the adapter's external-id lookup ran a
+/// full MATCH scan of ExternalIDIndex per object — ~600 ms at 150K objects,
+/// O(n) and growing. The idempotency key is already an O(1) engine lookup
+/// (get_idem); this exposes it read-only. A miss classifies to NOT_FOUND.
+pub(crate) fn tool_get_by_idem(k: &Kernel, args: &J) -> Result<J, String> {
+    let key = args
+        .get("key")
+        .and_then(|v| v.as_str())
+        .ok_or("missing argument: key")?;
+    match k
+        .resolve_idempotency(key)
+        .map_err(|e| format!("idempotency lookup: {e}"))?
+    {
+        Some((koid, _, _)) => {
+            let ko = k.get(subject_of(args), &koid).map_err(|e| e.to_string())?;
+            Ok(ko_json(&ko))
+        }
+        None => Err(format!("not found: idempotency key '{key}'")),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // v0.3 K5 — Agent Experience
 // ---------------------------------------------------------------------------

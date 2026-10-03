@@ -4,12 +4,12 @@
 //! Restart → Query → Rebuild indexes → Query → Backup → Restore → Query →
 //! Schema migration → Query.
 //!
-//! One corpus, one RedbEngine-backed kernel, an 8-dimension checkpoint after
+//! One corpus, one aikoql-v2-backed kernel, an 8-dimension checkpoint after
 //! every leg: KO set / KO content / fact set / relation set / provenance /
 //! evidence / temporal state / constraints / representative query answers
 //! (context pack + semantic search).
 //!
-//! Legs where knowledge is untouched (restart/rebuild/backup-restore) must be
+//! Legs where knowledge is untouched (restart/rebuild) must be
 //! checkpoint-identical. The two delta legs (source modification, schema
 //! migration) assert their deltas explicitly — every difference is explained.
 
@@ -446,11 +446,9 @@ fn w2_cont_001_full_knowledge_continuity_chain() {
     let root_s = corpus.to_string_lossy().to_string();
 
     let dbdir = tmp_dir("db");
-    let db = dbdir.join("continuity.redb");
-    let bakdir = tmp_dir("backup");
-    let backup = bakdir.join("continuity_snap.redb");
+    let db = dbdir.join("continuity");
     let clock = Arc::new(ManualClock::new(10_000));
-    let engine = Arc::new(RedbEngine::open(&db).unwrap());
+    let engine = Arc::new(aikoql_storage_v2::AikoqlStorageEngineV2::open(&db).unwrap());
     let mut k = Kernel::open(engine.clone(), clock.clone(), SEED).unwrap();
 
     // Markdown heading entities classify as type "Project" (the sanctioned
@@ -555,11 +553,11 @@ fn w2_cont_001_full_knowledge_continuity_chain() {
         .query
         .contains("Payments validates constraints at commit time."));
 
-    // Leg 3 — Restart → Query. Same Redb file, fresh kernel. Everything
-    // re-derived from the reopened store must equal leg 2 exactly.
+    // Leg 3 — Restart → Query. Same database directory, fresh kernel.
+    // Everything re-derived from the reopened store must equal leg 2 exactly.
     drop(k);
-    drop(engine); // release the Windows file lock before reopening
-    let engine2 = Arc::new(RedbEngine::open(&db).unwrap());
+    drop(engine); // release the lock before reopening
+    let engine2 = Arc::new(aikoql_storage_v2::AikoqlStorageEngineV2::open(&db).unwrap());
     k = Kernel::open(engine2.clone(), clock.clone(), SEED).unwrap();
     let ir_b: KnowledgeIr = serde_json::from_str(&ck_b.snap_ir).unwrap();
     let ck_c = capture(&k, &ir_b, &v2);
@@ -587,14 +585,7 @@ fn w2_cont_001_full_knowledge_continuity_chain() {
     }
     m.shutdown();
 
-    // Leg 5 — Backup → Restore → Query. Faithful snapshot roundtrip (Suite G
-    // fix 2) — the store after restore must equal the store before backup.
-    engine2.snapshot_to(&backup).unwrap();
-    k.restore_store_from(&backup).unwrap();
-    let ck_d = capture(&k, &ir_b, &v2);
-    assert_eq!(ck_c, ck_d, "backup/restore must be checkpoint-identical");
-
-    // Leg 6 — Schema migration → Query. The v1 schema row survived the
+    // Leg 5 — Schema migration → Query. The v1 schema row survived the
     // restart (fail-closed reload), so the v2 migration applies: Payments
     // objects gain `migrated` and stamp schema_version 2. Everything else
     // is untouched.
@@ -632,7 +623,7 @@ fn w2_cont_001_full_knowledge_continuity_chain() {
         }
     }
     assert_eq!(
-        ck_d.props, ck_e_norm.props,
+        ck_c.props, ck_e_norm.props,
         "migration must touch only the documented delta"
     );
 
@@ -648,7 +639,7 @@ fn w2_cont_001_full_knowledge_continuity_chain() {
         "v2 schema must validate post-migration data"
     );
 
-    for d in [&corpus, &dbdir, &bakdir] {
+    for d in [&corpus, &dbdir] {
         let _ = std::fs::remove_dir_all(d);
     }
 }

@@ -1,0 +1,8 @@
+{
+  "id": "gosdk02-dialstdio-undefined",
+  "pre_fix_commit": "468b7ed",
+  "command": "go -C crates/sdk/go test ./...",
+  "captured_at": "2026-09-27T10:31:21Z",
+  "captured_head": "468b7ed323862aab54c8abedec4a2e8553ae1195",
+  "exit_code": 1
+}

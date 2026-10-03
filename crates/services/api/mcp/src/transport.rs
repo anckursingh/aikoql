@@ -10,7 +10,7 @@ use crate::{
 };
 // Test-only (the stdio client below) — unused in the bin target.
 #[cfg(test)]
-use crate::{json, RedbEngine, SystemClock};
+use crate::{json, SystemClock};
 
 use crate::dispatcher::*;
 use crate::protocol::*;
@@ -24,8 +24,9 @@ pub(crate) static STREAM_ID: AtomicU64 = AtomicU64::new(0);
 /// P5-M11: live client sockets, keyed by stream id — the shutdown drain
 /// shutdown(Both)s them so idle handlers blocked in fill_buf wake and close
 /// instead of holding the drain to its deadline. Handlers remove their entry
-/// on exit, so the registry stays bounded.
-static CLIENT_STREAMS: Mutex<Vec<(u64, TcpStream)>> = Mutex::new(Vec::new());
+/// on exit, so the registry stays bounded. Shared with the D-15 native
+/// listener (its readers block on framed reads, the same drain wakes them).
+pub(crate) static CLIENT_STREAMS: Mutex<Vec<(u64, TcpStream)>> = Mutex::new(Vec::new());
 /// P5-M11: set by the `shutdown` method — stops the accept loop and makes
 /// every handler close its connection after its current exchange.
 pub(crate) static SHUTDOWN_FLAG: AtomicBool = AtomicBool::new(false);
@@ -101,7 +102,7 @@ pub(crate) fn handle_tcp_client(
     // atomically here, so an accept burst can never push the served count
     // over the cap (sv012). Rejection keeps sv003's frame-before-drop order.
     let admitted = ACTIVE_CONNECTIONS
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
             (cur < max_connections).then_some(cur + 1)
         })
         .is_ok();
@@ -317,6 +318,17 @@ pub(crate) fn run_tcp_listener(
     // socket (wakes idle handlers blocked in fill_buf), then wait for the
     // handlers to exit. The deadline is a backstop only — the handlers are
     // all unblocked now and close promptly.
+    drain_listener(request_timeout_secs);
+    info!(
+        connections = ACTIVE_CONNECTIONS.load(Ordering::Relaxed),
+        "TCP server drained and stopped"
+    );
+}
+
+/// P5-M11 drain, shared by the MCP and D-15 native listeners: cancel
+/// in-flight queries, actively close every registered socket, then wait for
+/// the handlers to exit (bounded by the request-timeout deadline).
+pub(crate) fn drain_listener(request_timeout_secs: u64) {
     {
         let mut active = ACTIVE_QUERIES.lock().unwrap(); // justified: Mutex poison is unrecoverable
         for t in active.iter() {
@@ -334,10 +346,6 @@ pub(crate) fn run_tcp_listener(
     while ACTIVE_CONNECTIONS.load(Ordering::Relaxed) > 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(20));
     }
-    info!(
-        connections = ACTIVE_CONNECTIONS.load(Ordering::Relaxed),
-        "TCP server drained and stopped"
-    );
 }
 pub(crate) fn run_stdio(
     kernel: &Arc<Kernel>,
@@ -418,14 +426,14 @@ mod tcp_auth_tests {
     fn spawn_server_with_limit(token_specs: &[&str], max_per_minute: u64) -> std::net::SocketAddr {
         // ponytail: this db stays open in the detached listener thread for
         // the process lifetime, so no sweeper can remove it (Windows locks
-        // the file) — a ~1.5MB pid-unique file per spawn is the accepted leak.
+        // the dir) — a pid-unique dir per spawn is the accepted leak.
         let db = std::env::temp_dir().join(format!(
-            "mcp-tcp-auth-{}-{}.redb",
+            "mcp-tcp-auth-{}-{}",
             std::process::id(),
             DB_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
-        let _ = std::fs::remove_file(&db);
-        let engine = RedbEngine::open(db.to_str().unwrap()).expect("open engine");
+        let _ = std::fs::remove_dir_all(&db);
+        let engine = aikoql_storage_v2::AikoqlStorageEngineV2::open(&db).expect("open engine");
         let kernel =
             Kernel::open(Arc::new(engine), Arc::new(SystemClock), 0xA9C9).expect("open kernel");
         let specs: Vec<String> = token_specs.iter().map(|s| s.to_string()).collect();

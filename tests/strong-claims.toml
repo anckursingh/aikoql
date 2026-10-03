@@ -1,0 +1,767 @@
+# L-23 (TDD-034): strong-claims evidence registry. Every strong claim in
+# the audited scope (the launch's storage estate: crates/storage/aikoql-v2 +
+# crates/kernel) — complexity (O(...)), boundedness, exactly-once delivery,
+# zero allocation — maps to an evidence test that EXISTS, or the claim loses
+# its claim (the prose softened, its row removed). check-strong-claims.sh
+# sweeps the estate's comment lines for the claim vocabulary; every hit must
+# be pinned here by its (file,line) pair, and every evidence must be a live
+# `fn <name>(` in the tree. Rows are data, never prose guarantees: keep the
+# text verbatim from the pinned line, and only cite tests that actually pin
+# the claim.
+
+[[claim]]
+file = "crates/kernel/src/async_kernel.rs"
+line = 29
+text = "/// Queue-wait metrics for the bounded async facade (TDD-RUNTIME-001)."
+evidence = "run001_concurrency_is_bounded_by_permits"
+
+[[claim]]
+file = "crates/kernel/src/async_kernel.rs"
+line = 294
+text = "// P4-M7 (TDD-RUNTIME-001) — run001: overload is bounded + measurable."
+evidence = "run001_overload_queue_wait_is_measured_and_bounded"
+
+[[claim]]
+file = "crates/kernel/src/async_kernel.rs"
+line = 295
+text = "// RED state: `bounded`/`queue_stats`/`wait_p99_ns` do not exist yet."
+evidence = "run001_overload_queue_wait_is_measured_and_bounded"
+
+[[claim]]
+file = "crates/kernel/src/async_kernel.rs"
+line = 299
+text = "/// the semaphore and drain — overload creates bounded concurrent work,"
+evidence = "run001_concurrency_is_bounded_by_permits"
+
+[[claim]]
+file = "crates/kernel/src/async_kernel.rs"
+line = 338
+text = "/// record a measurable, bounded queue wait (p99 above zero, under 1 s"
+evidence = "run001_overload_queue_wait_is_measured_and_bounded"
+
+[[claim]]
+file = "crates/kernel/src/catalog.rs"
+line = 537
+text = "// ponytail: the open-time convergence is O(committed heads) per"
+evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
+
+[[claim]]
+file = "crates/kernel/src/catalog.rs"
+line = 538
+text = "// crashed declaration — bounded by the crash itself, not the"
+evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
+
+[[claim]]
+file = "crates/kernel/src/index.rs"
+line = 61
+text = "/// P5-M22: bounded wait until the maintainer has applied every"
+evidence = "idx4_002_restart_replays_only_events_after_the_checkpoint"
+
+[[claim]]
+file = "crates/kernel/src/index/property.rs"
+line = 154
+text = "// P5-M17b — the O(1) freshness proof. rebuild stamps the head it"
+evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
+
+[[claim]]
+file = "crates/kernel/src/knowledge/ontology.rs"
+line = 419
+text = "/// Audit counter: one increment per physical-type resolution. Pins O(1):"
+evidence = "comp001_physical_type_index_answers_in_one_probe"
+
+[[claim]]
+file = "crates/kernel/src/knowledge/ontology.rs"
+line = 521
+text = "/// TDD-COMP-001 (P4-M7): O(1) via the `by_physical_type` index — one hash"
+evidence = "comp001_physical_type_index_answers_in_one_probe"
+
+[[claim]]
+file = "crates/kernel/src/knowledge/ontology.rs"
+line = 536
+text = "/// for O(1) average resolution."
+evidence = "comp001_physical_type_index_answers_in_one_probe"
+
+[[claim]]
+file = "crates/kernel/src/knowledge/ontology.rs"
+line = 1315
+text = "// TDD-COMP-001 (P4-M7): physical-type index — O(1) resolution"
+evidence = "comp001_physical_type_index_answers_in_one_probe"
+
+[[claim]]
+file = "crates/kernel/src/knowledge/ontology.rs"
+line = 1320
+text = "// The probe counter pins O(1) average: each lookup costs exactly ONE"
+evidence = "comp001_physical_type_index_answers_in_one_probe"
+
+[[claim]]
+file = "crates/kernel/src/storage/repository.rs"
+line = 720
+text = "/// P4-M4 — bounded predecessor lookup (TDD-KERNEL-002): the newest"
+evidence = "ker002_version_count_sweep_latency_cell"
+
+[[claim]]
+file = "crates/kernel/src/storage/repository.rs"
+line = 858
+text = "/// the first seq past `after_seq` — no whole-journal scan, bounded by"
+evidence = "ker003_event_replay_cell"
+
+[[claim]]
+file = "crates/kernel/src/storage/store.rs"
+line = 74
+text = "/// P4-M4 — bounded forward seek: ascending entries with the given"
+evidence = "ker004_seek_parity_object_and_event"
+
+[[claim]]
+file = "crates/kernel/src/storage/store.rs"
+line = 87
+text = "/// P4-M4 — bounded predecessor lookup: the single row with the given"
+evidence = "ker002_version_count_sweep_latency_cell"
+
+[[claim]]
+file = "crates/kernel/src/storage/store.rs"
+line = 93
+text = "/// Default filters a full scan (correct, O(prefix-range)); engines with"
+evidence = "predecessor_boundary_cases"
+
+[[claim]]
+file = "crates/kernel/src/storage/store.rs"
+line = 156
+text = "/// next_back step finds the predecessor or proves absence (O(log n))."
+evidence = "predecessor_boundary_cases"
+
+[[claim]]
+file = "crates/kernel/src/transaction/kernel.rs"
+line = 314
+text = "/// Retried calls with the same key commit exactly once (MRFC-0011 req 10)."
+evidence = "t06_idempotent_retry_commits_exactly_once"
+
+[[claim]]
+file = "crates/kernel/tests/conformance.rs"
+line = 1146
+text = "// regression) and every write must land exactly once."
+evidence = "t25b_concurrent_readers_and_writers_see_only_committed_state"
+
+[[claim]]
+file = "crates/kernel/tests/conformance.rs"
+line = 1202
+text = "// Every write landed exactly once: 1 seed + WRITERS×UPDATES entries,"
+evidence = "t25b_concurrent_readers_and_writers_see_only_committed_state"
+
+[[claim]]
+file = "crates/kernel/tests/conformance.rs"
+line = 3691
+text = "// Wait for completion (bounded poll — the wait itself never journals)."
+evidence = "t11_class_b_admission_is_audited_and_out_of_the_class_a_stream"
+
+[[claim]]
+file = "crates/kernel/tests/index_lifecycle.rs"
+line = 285
+text = "/// cardinality (the per-upsert all-bucket sweep — O(buckets) every call) and"
+evidence = "idx4_005_property_index_cost_cells"
+
+[[claim]]
+file = "crates/kernel/tests/index_subsystem.rs"
+line = 285
+text = "// rebuild is O(committed heads). The SDK re-declares the same-shape index on"
+evidence = "idx5_001_caught_up_rebuild_is_a_noop_stale_still_rebuilds"
+
+[[claim]]
+file = "crates/kernel/tests/qa2_concurrency.rs"
+line = 48
+text = "// QA2-CONC-002 — concurrent ingestion commits exactly once per key"
+evidence = "w2_conc_002a_concurrent_same_key_ingest_commits_exactly_once"
+
+[[claim]]
+file = "crates/kernel/tests/qa2_concurrency.rs"
+line = 89
+text = "// The shared key commits exactly once; every thread saw the same KO."
+evidence = "w2_conc_002a_concurrent_same_key_ingest_commits_exactly_once"
+
+[[claim]]
+file = "crates/kernel/tests/qa2_concurrency.rs"
+line = 306
+text = "// Every update committed exactly once, in a gapless chain — and there is"
+evidence = "w2_conc_005_concurrent_overlapping_temporal_updates_keep_one_head"
+
+[[claim]]
+file = "crates/kernel/tests/transactions.rs"
+line = 630
+text = "// B appears exactly once and is stamped exactly once (one version bump)."
+evidence = "sweep_collapses_duplicate_edges_to_one_stamp"
+
+[[claim]]
+file = "crates/kernel/tests/txn_contract.rs"
+line = 265
+text = "// Every create committed exactly once — distinct koids, no conflicts."
+evidence = "tx004_concurrent_writers_serialize"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/cache.rs"
+line = 1
+text = "//! SE2-M7 — bounded raw-block cache, SE2-M9 — raw bytes (v2 blocks decode"
+evidence = "hundred_k_churn_keeps_the_invariants"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/cache.rs"
+line = 14
+text = "//! gen — hits stay O(1) (hash + stamp only); eviction pops the min-gen"
+evidence = "cache_hit_does_not_scan"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/cache.rs"
+line = 17
+text = "//! the map, so garbage stays bounded; an intrusive list (constant-time evict,"
+evidence = "heap_garbage_stays_bounded_under_churn"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/cache.rs"
+line = 270
+text = "/// P5-M25 RED — a hit must be O(1): it may hash and stamp, but it must"
+evidence = "cache_hit_does_not_scan"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/cache.rs"
+line = 355
+text = "/// P5-M30 (P0-04) — the lazy-deletion heap's garbage stays bounded:"
+evidence = "heap_garbage_stays_bounded_under_churn"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/cache.rs"
+line = 447
+text = "/// heap garbage stays bounded, and eviction strands never outlive the"
+evidence = "hundred_k_churn_keeps_the_invariants"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/compaction.rs"
+line = 17
+text = "//! sequence of bounded segments (chunk cap, 0 = one unbounded segment)"
+evidence = "merge_chunks_respect_chunk_cap"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/compaction.rs"
+line = 102
+text = "/// HashSet, taking the per-key cost from O(k²) to O(k). The M46"
+evidence = "set_tier_compare_pin"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/compaction.rs"
+line = 153
+text = "/// bounded L1 segments under `dir` (SE2-M20): live chunks publish as"
+evidence = "merge_chunks_respect_chunk_cap"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/compaction.rs"
+line = 238
+text = "// the per-key cost is O(k) instead of O(k²) — the k-cells put"
+evidence = "set_tier_compare_pin"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/compaction.rs"
+line = 247
+text = "// set tier (the O(k²) signature below the crossover)."
+evidence = "set_tier_compare_pin"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 10
+text = "//! queue up and commit as groups — one fsync per group, bounded by"
+evidence = "group_commit_coalesces_batches_into_one_fsync"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 167
+text = "/// amplification drops from quadratic to ~O(n log n)."
+evidence = "tiered_trigger_skips_small_l0"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 184
+text = "/// (one manifest record each) so compaction memory is bounded by the"
+evidence = "merge_chunks_respect_chunk_cap"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 238
+text = "/// compaction; the write trigger reads these in O(1) instead of"
+evidence = "lba001_write_trigger_never_rescans_l0"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 431
+text = "/// P4-M5 — bounded, sampled per-request read trace. `record` assigns the"
+evidence = "rd003_trace_records_per_request_enabled_zero_when_disabled"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 828
+text = "// over the manifest (O(segments) once per open, never per write)."
+evidence = "lba002_authoritative_counters_match_scan_l0_after_every_change"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 1187
+text = "/// 4th — write amplification ~O(n log n) instead of quadratic."
+evidence = "tiered_trigger_skips_small_l0"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 1195
+text = "// at open/flush/compaction): an O(1) read replaces the M35"
+evidence = "lba001_write_trigger_never_rescans_l0"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 1419
+text = "/// rid-filtered bounded probe, newest-first; the object's own tombstone"
+evidence = "pd001_tail_replica_decodes_bounded"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 1431
+text = "// its anchor decodes O(RESTART_INTERVAL) entries instead of"
+evidence = "pd001_tail_replica_decodes_bounded"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 1642
+text = "// per-resolution O(B) retain (O(B²) worst case per segment pass)"
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 1643
+text = "// becomes one O(B) compaction at the end of each pass."
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 1723
+text = "// R4-P1-03 — one O(B) compaction per segment pass; the counter"
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 2114
+text = "// authoritative backlog (O(flushed), never O(all segments))."
+evidence = "lba002_authoritative_counters_match_scan_l0_after_every_change"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 2715
+text = "// P5-M40 — recompute the authoritative backlog (O(segments) once per"
+evidence = "lba002_authoritative_counters_match_scan_l0_after_every_change"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 2778
+text = "/// write trigger reads the authoritative State counters in O(1) — this"
+evidence = "lba001_write_trigger_never_rescans_l0"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 3121
+text = "/// The committer: drain the queue into groups bounded by the caps and"
+evidence = "group_commit_coalesces_batches_into_one_fsync"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/db.rs"
+line = 3141
+text = "// O(g²) fold (P1-02), the seqs buffer is cleared and reused (P1-03)."
+evidence = "per_group_allocations_drop_with_the_hoisted_seqs_buffer"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/lib.rs"
+line = 8
+text = "//! SE2-M3: bounded recovery — replay only the active WAL, orphan/missing"
+evidence = "reopen_replays_only_the_active_wal"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/lib.rs"
+line = 15
+text = "//! the correctness baseline. SE2-M7: bounded decoded-block cache"
+evidence = "hundred_k_churn_keeps_the_invariants"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/segment.rs"
+line = 40
+text = "//! identically, so the restart table and bounded lookup are shared. Only"
+evidence = "block_v2_lookup_bounded"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/segment.rs"
+line = 101
+text = "/// The size of one decode interval — the bounded lookup never decodes more."
+evidence = "block_v2_lookup_bounded"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/segment.rs"
+line = 247
+text = "/// temporary memory is the payload buffers only, not an O(n) scratch."
+evidence = "publish_allocation_excludes_a_whole_input_sort"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/segment.rs"
+line = 758
+text = "/// and copies it into the compact layout. Runs exactly once per"
+evidence = "sequential_cold_read_parses_once_then_reuses"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/segment.rs"
+line = 1457
+text = "/// of `key` whose replica_id matches, decoding the same bounded"
+evidence = "block_v3_lookup_with_rid_filter_is_bounded"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/segment.rs"
+line = 1477
+text = "// get_entry_at, O(RESTART_INTERVAL)); it still walks the"
+evidence = "pd001_tail_replica_decodes_bounded"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/snapshot.rs"
+line = 303
+text = "/// Validate the WAL (bounded memory) and copy the torn-safe prefix to"
+evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/snapshot.rs"
+line = 492
+text = "// — bounded memory, PR6-R3-003. The marker records that"
+evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/stats.rs"
+line = 39
+text = "/// (the whole get — the denominator the residual is bounded against)."
+evidence = "m21_01_attribution_accounting_closes_within_10pct"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/stats.rs"
+line = 68
+text = "/// examined): the per-resolution retain made it O(B²) worst case;"
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/stats.rs"
+line = 69
+text = "/// the per-pass compaction makes it O(B)."
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/stats.rs"
+line = 249
+text = "/// true but O(segments)); M40 moved the write trigger to the O(1)"
+evidence = "lba001_write_trigger_never_rescans_l0"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/stats.rs"
+line = 353
+text = "/// open/flush/compaction — the write trigger reads them in O(1)); they"
+evidence = "lba001_write_trigger_never_rescans_l0"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/wal.rs"
+line = 414
+text = "/// checksum and the op decode. Memory is bounded by this one frame."
+evidence = "tdd017_replay_peak_overhead_stays_flat_across_wal_sizes"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/src/wal.rs"
+line = 436
+text = "/// PR6-R3-003 — the streamed, bounded-memory WAL scan: the byte length of"
+evidence = "tdd017_replay_peak_overhead_stays_flat_across_wal_sizes"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/allocation_scaling.rs"
+line = 18
+text = "//! scan must collapse the chain to one row. The plan's \"O(v) insert\""
+evidence = "tdd005_descending_seq_memtable_inserts_keep_the_newest_head"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/allocation_scaling.rs"
+line = 306
+text = "// chain (the plan row's \"O(v) insert\", ~50M element moves here)."
+evidence = "tdd005_descending_seq_memtable_inserts_keep_the_newest_head"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/allocation_scaling.rs"
+line = 315
+text = "// The O(v) path must not corrupt the head: the highest seq answers."
+evidence = "tdd005_descending_seq_memtable_inserts_keep_the_newest_head"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/attribution.rs"
+line = 11
+text = "//! `get_wall_ns` (the whole get — the denominator the residual is bounded"
+evidence = "m21_01_attribution_accounting_closes_within_10pct"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/attribution.rs"
+line = 238
+text = "/// cap here; each key is read exactly once, so every get is a first touch"
+evidence = "m21_03_attribution_cache_hit_leg"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/backlog_accounting.rs"
+line = 1
+text = "//! P5-M40 (R4-P1-01) — O(1) L0/L1 backlog accounting REDs. Today"
+evidence = "lba001_write_trigger_never_rescans_l0"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/backlog_accounting.rs"
+line = 3
+text = "//! 345 ns/write, 0.7% at ~64 segments — regime-true, but O(segments),"
+evidence = "lba001_write_trigger_never_rescans_l0"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/backlog_accounting.rs"
+line = 6
+text = "//! compaction — and the write trigger reads them in O(1). scan_l0 stays"
+evidence = "lba001_write_trigger_never_rescans_l0"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/batch_sweep.rs"
+line = 1
+text = "//! P5-M42 (R4-P1-03 + R4-P2-02) — get_many O(1) resolution tracking:"
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/batch_sweep.rs"
+line = 2
+text = "//! the review's batch sweep. The two findings — the per-resolution O(B)"
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/batch_sweep.rs"
+line = 3
+text = "//! `remaining.retain` (O(B²) worst case per segment pass, db.rs) and"
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/batch_sweep.rs"
+line = 12
+text = "//!   - retain scans scale O(B): `batch_retain_scans` at the large size"
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/batch_sweep.rs"
+line = 15
+text = "//!     fails on it; the per-pass compaction scans O(B) (≈ 32×)."
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/batch_sweep.rs"
+line = 17
+text = "//!   - allocs not worse than O(B): the same ratio shape with 4× slack —"
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/batch_sweep.rs"
+line = 181
+text = "// R4-P2-02 — allocations scale no worse than O(B) (the regression"
+evidence = "m42_batch_sweep_cells"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/block_v2.rs"
+line = 80
+text = "// Odd keys exist inside the block's range but are absent: the bounded"
+evidence = "block_v2_lookup_bounded"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/block_v2.rs"
+line = 118
+text = "// binary-searched bounded decode must agree with a full decode — 0"
+evidence = "restart_search_correctness"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/block_v2_alloc.rs"
+line = 4
+text = "//! scratch, the cached-payload Arc — never O(block). One test in its own"
+evidence = "block_v2_allocation_regression"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/block_v2_alloc.rs"
+line = 56
+text = "// Warm steady state: cache hit, bounded decode, winner clone."
+evidence = "block_v2_allocation_regression"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/block_v3.rs"
+line = 275
+text = "// bound stays O(1), never the key's run."
+evidence = "block_v3_lookup_with_rid_filter_is_bounded"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/cache.rs"
+line = 1
+text = "//! SE2-M7 — bounded block cache + bloom wiring REDs. A get() must never"
+evidence = "hundred_k_churn_keeps_the_invariants"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/cache.rs"
+line = 3
+text = "//! hold at most `cache_bytes` decoded entry bytes (bounded) with live"
+evidence = "hundred_k_churn_keeps_the_invariants"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/common/mod.rs"
+line = 181
+text = "/// sfm009 bounded-memory cell measures the same quantity the certification"
+evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/compaction_ksweep.rs"
+line = 3
+text = "//! `grouped.contains` scan — O(k²) per key with k surviving candidates"
+evidence = "dedup_compare_pin"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/compaction_ksweep.rs"
+line = 16
+text = "//! DEDUP_CROSSOVER=64 dedups on the hoisted HashSet (O(k) per key);"
+evidence = "dedup_compare_pin"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/compaction_ksweep.rs"
+line = 104
+text = "/// The O(k²) signature pin (ungated — 128 puts + one merge): k distinct"
+evidence = "dedup_compare_pin"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/db_recovery.rs"
+line = 1
+text = "//! SE2-M3 — bounded recovery (TESTING-PLAN-V2 row V2-M3): open reads only"
+evidence = "reopen_replays_only_the_active_wal"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/db_tiered_read.rs"
+line = 164
+text = "// segments reach the index search, and block I/O stays bounded by"
+evidence = "tier_depth_fanout_absorbed"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/directory_checkpoint.rs"
+line = 1
+text = "//! SE2-M40 — the directory checkpoint + bounded recovery (review P0-1 /"
+evidence = "ckp002_checkpoint_equals_full_replay"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/flush_alloc.rs"
+line = 6
+text = "//! scratch buffer, O(n) total. This pin holds the flush's entry point to"
+evidence = "publish_allocation_excludes_a_whole_input_sort"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/group_commit.rs"
+line = 2
+text = "//! groups bounded by `max_batch_ops` / `max_batch_bytes` / `max_wait_duration`"
+evidence = "group_commit_coalesces_batches_into_one_fsync"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs"
+line = 16
+text = "//! - gate 1 (bounded recovery): evidenced by the SE2-M3 suite —"
+evidence = "reopen_replays_only_the_active_wal"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs"
+line = 1280
+text = "// every answer byte-exact from the bounded-memory engine"
+evidence = "v2_gate2_3_dataset_larger_than_ram"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/kse_m7_v2_workloads.rs"
+line = 2712
+text = "// folded in), and the two backlog gauges inside maybe_compact's O(1)"
+evidence = "v2_p3m2_write_stats_overhead"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/merge_chunk.rs"
+line = 2
+text = "//! output as a sequence of bounded segments (`Config.merge_chunk_bytes`;"
+evidence = "merge_chunks_respect_chunk_cap"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/placement_read.rs"
+line = 2
+text = "//! Segment-placed replica must decode O(RESTART_INTERVAL) entries from its"
+evidence = "pd001_tail_replica_decodes_bounded"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/pr6_004_concurrency.rs"
+line = 74
+text = "/// current round exactly once (\"I have stopped entering new work\"), then"
+evidence = "concurrent_write_flush_compact_checkpoint_close_has_no_deadlock"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/profiles.rs"
+line = 7
+text = "//! the data that justified keeping the scan THEN), the O(1) authoritative"
+evidence = "prof002_scan_l0_cost_per_write_cell"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/profiles.rs"
+line = 8
+text = "//! counters made the scan O(segments)-asymptote argument win — prof002"
+evidence = "prof002_scan_l0_cost_per_write_cell"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/profiles.rs"
+line = 80
+text = "// (baseline). B: trigger 1<<30 — the O(1) counters are read, the"
+evidence = "prof002_scan_l0_cost_per_write_cell"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/resource_adversarial.rs"
+line = 9
+text = "//! window. The pins are structural: retained memory must be bounded by"
+evidence = "tdd017_replay_peak_overhead_stays_flat_across_wal_sizes"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/resource_adversarial.rs"
+line = 28
+text = "//! transient peak is bounded by the data volume with slack."
+evidence = "tdd018_compaction_allocation_scales_and_winners_survive"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/restart_index.rs"
+line = 4
+text = "//! O(restarts) key-parse walk per lookup — immutable metadata"
+evidence = "restart_index_reparse_pin"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/restart_once_lock.rs"
+line = 51
+text = "/// The sequential property: a cold lookup parses the table exactly once,"
+evidence = "sequential_cold_read_parses_once_then_reuses"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/scan_drain.rs"
+line = 10
+text = "//!   - the zero-alloc drain delta (counting allocator): scan a corpus"
+evidence = "scan_drain_allocs_scale_with_entries_not_groups"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/snapshot_matrix.rs"
+line = 583
+text = "/// row 9 — large WAL snapshot has bounded RSS (PR6-R3-003): snapshot"
+evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/snapshot_matrix.rs"
+line = 587
+text = "/// afterwards proves the bounded copy lost nothing."
+evidence = "sfm009_large_wal_snapshot_has_bounded_rss"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/snapshot_restore.rs"
+line = 715
+text = "/// 100K-key db must be O(disk) file copies — measured, never asserted — and"
+evidence = "p3m3_snapshot_copy_time_cell"
+
+[[claim]]
+file = "crates/storage/aikoql-v2/tests/sorted_staged_publish.rs"
+line = 8
+text = "//! full O(n log n) sort over heap-ordered entries is the R4 review's"
+evidence = "staged_sorted_publish_is_byte_identical_to_the_sorting_publish"
+

@@ -1,0 +1,20 @@
+ARCH: .github/workflows/benchmark.yml lost the storage-fuzz job (F-05)
+ARCH: the storage-fuzz job must run the fuzz crate's smoke.sh (F-05)
+grep: crates/storage/aikoql-v2/fuzz/Cargo.toml: No such file or directory
+ARCH: the storage fuzz crate lost the FZ target: fuzz_current (F-05)
+grep: crates/storage/aikoql-v2/fuzz/Cargo.toml: No such file or directory
+ARCH: the storage fuzz crate lost the FZ target: fuzz_manifest (F-05)
+grep: crates/storage/aikoql-v2/fuzz/Cargo.toml: No such file or directory
+ARCH: the storage fuzz crate lost the FZ target: fuzz_wal_frame (F-05)
+grep: crates/storage/aikoql-v2/fuzz/Cargo.toml: No such file or directory
+ARCH: the storage fuzz crate lost the FZ target: fuzz_wal_replay (F-05)
+grep: crates/storage/aikoql-v2/fuzz/Cargo.toml: No such file or directory
+ARCH: the storage fuzz crate lost the FZ target: fuzz_checkpoint (F-05)
+grep: crates/storage/aikoql-v2/fuzz/Cargo.toml: No such file or directory
+ARCH: the storage fuzz crate lost the FZ target: fuzz_directories (F-05)
+grep: crates/storage/aikoql-v2/fuzz/Cargo.toml: No such file or directory
+ARCH: the storage fuzz crate lost the FZ target: fuzz_envelope_snapshot (F-05)
+ARCH: the storage crate lost the doc(hidden) fuzz surface (F-05)
+grep: crates/storage/aikoql-v2/tests/fuzz_estate.rs: No such file or directory
+ARCH: the storage fuzz sweep lost seeds_and_sweep (F-05)
+EXIT=1

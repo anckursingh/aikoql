@@ -1,0 +1,8 @@
+{
+  "id": "d19-sdk-jobs",
+  "pre_fix_commit": "ed7fd39",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-02T14:36:40Z",
+  "captured_head": "ed7fd390ecfaf1ceb0634045f5e1f65c6aaa08e3",
+  "exit_code": 1
+}

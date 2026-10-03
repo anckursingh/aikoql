@@ -51,6 +51,13 @@ tests/e2e/node_modules/
 tests/e2e/test-results/
 *.png
 
+# TypeScript SDK (D-13)
+crates/sdk/typescript/node_modules/
+crates/sdk/typescript/*.tgz
+
+# Java SDK (D-14) — Maven build residue
+crates/sdk/java/target/
+
 # Test database artifacts
 test-*.db
 --version

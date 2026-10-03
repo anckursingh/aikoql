@@ -1,0 +1,68 @@
+[package]
+name = "aikoql-storage-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+aikoql-storage-v2 = { path = ".." }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "fuzz_current"
+path = "fuzz_targets/fuzz_current.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_manifest"
+path = "fuzz_targets/fuzz_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_wal_frame"
+path = "fuzz_targets/fuzz_wal_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_wal_replay"
+path = "fuzz_targets/fuzz_wal_replay.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_checkpoint"
+path = "fuzz_targets/fuzz_checkpoint.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_directories"
+path = "fuzz_targets/fuzz_directories.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_envelope_snapshot"
+path = "fuzz_targets/fuzz_envelope_snapshot.rs"
+test = false
+doc = false
+bench = false

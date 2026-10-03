@@ -1,0 +1,16 @@
+   --> crates\storage\aikoql-v2\src\compaction.rs:146:13
+    |
+146 |             other.entry.seq,
+    |             ^^^^^^^^^^^^^^^ expected `Reverse<u64>`, found `u64`
+    |
+    = note: expected struct `Reverse<u64>`
+                 found type `u64`
+help: try wrapping the expression in `std::cmp::Reverse`
+    |
+146 |             std::cmp::Reverse(other.entry.seq),
+    |             ++++++++++++++++++               +
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `aikoql-storage-v2` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+EXIT=101

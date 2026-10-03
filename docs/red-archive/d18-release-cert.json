@@ -1,0 +1,8 @@
+{
+  "id": "d18-release-cert",
+  "pre_fix_commit": "67f5a31",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-02T14:25:53Z",
+  "captured_head": "67f5a310361d615e9b5fd4b9cd1ae551130a0f03",
+  "exit_code": 1
+}

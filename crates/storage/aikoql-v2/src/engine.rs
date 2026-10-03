@@ -14,8 +14,7 @@
 //! (KSE-005 — `Db::write` rejects empty frames, so the adapter never
 //! forwards one). REC-002: snapshot/restore on v2 route through the
 //! engine-native path (§58–60) — `snapshot_to` here, `snapshot::restore_from`
-//! beside it; the trait defaults (full scan + redb snapshot) serve the
-//! other backends and stay untouched.
+//! beside it.
 
 use crate::compaction::CompactStats;
 use crate::db::{CheckpointInfo, Config, Db};
@@ -44,7 +43,7 @@ pub trait StorageAdminApi: Send + Sync {
     fn restore_from(&self, dir: &Path) -> KResult<RestoreInfo>;
 }
 
-/// AIKOQL v2 engine: bounded WAL → memtable → immutable segments, served
+/// AIKOQL v2 engine: WAL → memtable → immutable segments, served
 /// through the kernel's storage contract. NOT the production default —
 /// the V2-Adopt gate (KSE-20 conformance + §26 matrix) decides that.
 pub struct AikoqlStorageEngineV2 {

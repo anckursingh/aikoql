@@ -14,7 +14,7 @@ use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
-/// Simple LRU cache bounded by `capacity`.
+/// Simple LRU cache with a fixed `capacity`.
 #[derive(Clone, Debug)]
 struct Lru<K, V> {
     capacity: usize,

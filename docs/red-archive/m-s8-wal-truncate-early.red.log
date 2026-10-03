@@ -1,0 +1,16 @@
+aikoql-v2: orphan placement log PLACEMENT-000002.log ignored (generation past CURRENT)
+
+thread 'fl004_crash_before_flush_publication_preserves_old_state' (12504) panicked at crates\storage\aikoql-v2\tests\flush_identity.rs:209:5:
+assertion `left == right` failed
+  left: None
+ right: Some([118, 49])
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    fl004_crash_before_flush_publication_preserves_old_state
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `--test flush_identity`
+EXIT=101

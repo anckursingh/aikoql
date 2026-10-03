@@ -1,0 +1,2 @@
+SHUFFLE: run-shuffle.sh lost the nightly libtest shuffle
+EXIT=1

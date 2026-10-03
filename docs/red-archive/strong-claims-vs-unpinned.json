@@ -1,0 +1,9 @@
+{
+  "id": "strong-claims-vs-unpinned",
+  "pre_fix_commit": "e2f87f4a66e14e6185f7f1288ac83893dd29da8e",
+  "command": "bash scripts/check-strong-claims.sh",
+  "captured_at": "2026-09-28T23:25:43Z",
+  "captured_head": "e2f87f4a66e14e6185f7f1288ac83893dd29da8e",
+  "exit_code": 1,
+  "note": "TDD-034 (L-23) RED: the strong-claims audit runs against an EMPTY registry. The sweep (git ls-files over crates/storage/aikoql-v2 + crates/kernel, comment lines matching exactly-once/at-most-once/zero-alloc/O(/bounded) printed 92 uncovered claims before CRASHING mid-sweep: the Windows console is cp1252 and a claim text containing → (engine.rs:46, the last hit in sort order) raised UnicodeEncodeError — every hit sorting after it was never printed, so the archived 92 is a TRUNCATED prefix. The full sweep finds 178 uncovered claims: complexity (O(1)/O(n)/O(k) probes), boundedness (waits, overload, replay windows), and at-most/exactly-once delivery statements, none mapped to an evidence test. The RED stands either way (exit 1). Scope decision: the launch's storage estate only (storage-v2 + kernel, not the whole workspace); never/must/always excluded from the vocabulary as prose noise (858/857/63 raw hits). Root-cause fix landed in the gate script (stdout reconfigured to utf-8/replace — the sweep can never truncate again). Fix: tests/strong-claims.toml pins every hit (file:line) to an evidence test that exists, or the claim loses its claim (prose softened, row removed)."
+}

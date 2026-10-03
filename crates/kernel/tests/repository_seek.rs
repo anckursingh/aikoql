@@ -8,7 +8,6 @@
 use aikoql_kernel::knowledge::kom::{KnowledgeEvent, KnowledgeObject, Metadata, KOID};
 use aikoql_kernel::storage::repository::KnowledgeRepository;
 use aikoql_kernel::storage::store::MemoryEngine;
-use aikoql_kernel::storage::store_redb::RedbEngine;
 use aikoql_kernel::*;
 use std::sync::Arc;
 use std::time::Instant;
@@ -16,7 +15,7 @@ use std::time::Instant;
 fn tmp_db(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "aikoql_seek_{}_{}_{}.redb",
+        "aikoql_seek_{}_{}_{}",
         name,
         std::process::id(),
         std::time::SystemTime::now()
@@ -24,7 +23,7 @@ fn tmp_db(name: &str) -> std::path::PathBuf {
             .unwrap()
             .as_nanos()
     ));
-    let _ = std::fs::remove_file(&p);
+    let _ = std::fs::remove_dir_all(&p);
     p
 }
 
@@ -237,7 +236,9 @@ fn ker002_version_count_sweep_latency_cell() {
         return; // nightly cell
     }
     let path = tmp_db("sweep");
-    let repo = KnowledgeRepository::new(Arc::new(RedbEngine::open(&path).unwrap()));
+    let repo = KnowledgeRepository::new(Arc::new(
+        aikoql_storage_v2::AikoqlStorageEngineV2::open(&path).unwrap(),
+    ));
     let koid = KOID::from_bytes([0xCD; 16]);
     let counts = [10u64, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000];
     for n in counts {
@@ -271,7 +272,9 @@ fn ker003_event_replay_cell() {
     };
     let Some(n) = n else { return }; // nightly cell
     let path = tmp_db("events");
-    let repo = KnowledgeRepository::new(Arc::new(RedbEngine::open(&path).unwrap()));
+    let repo = KnowledgeRepository::new(Arc::new(
+        aikoql_storage_v2::AikoqlStorageEngineV2::open(&path).unwrap(),
+    ));
     let t0 = Instant::now();
     const BATCH: u64 = 10_000;
     for start in (1..=n).step_by(BATCH as usize) {

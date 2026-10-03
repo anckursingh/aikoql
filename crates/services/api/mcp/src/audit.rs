@@ -13,6 +13,7 @@ pub(crate) fn tool_detail(name: &str, args: &J) -> String {
         "get" | "explain" | "trace" | "forget" | "evolve" | "verify" => {
             format!("koid={}", s("koid"))
         }
+        "get_by_idem" => format!("key={}", s("key")),
         "find_similar" => format!("query={}", s("query")),
         "compile_context" => format!("task={}", s("task")),
         "document_ingest" => format!("path={}", s("path")),
@@ -22,6 +23,13 @@ pub(crate) fn tool_detail(name: &str, args: &J) -> String {
         _ => String::new(),
     }
 }
+
+/// Open-append-close per call costs ~300ms on Windows once the log grows
+/// (AV rescans the file on every open) — dogfood-measured at 15MB/146K
+/// lines. Keep one handle per process instead; the path is fixed per
+/// server instance (one db dir), reopened only if it ever changes.
+static AUDIT: std::sync::OnceLock<std::sync::Mutex<Option<(String, std::fs::File)>>> =
+    std::sync::OnceLock::new();
 
 /// Append a JSON line to the audit log.
 pub(crate) fn audit_log(db_path: &str, agent_id: &str, tool: &str, outcome: &str, detail: &str) {
@@ -37,11 +45,19 @@ pub(crate) fn audit_log(db_path: &str, agent_id: &str, tool: &str, outcome: &str
         "outcome": outcome,
         "detail": if detail.len() > 200 { &detail[..200] } else { detail },
     });
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
+    let mut guard = AUDIT
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap(); // justified: Mutex poison is unrecoverable
+    if guard.as_ref().map(|(p, _)| p != &log_path).unwrap_or(true) {
+        *guard = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .ok()
+            .map(|f| (log_path.clone(), f));
+    }
+    if let Some((_, f)) = guard.as_mut() {
         let _ = writeln!(f, "{}", entry);
     }
 }

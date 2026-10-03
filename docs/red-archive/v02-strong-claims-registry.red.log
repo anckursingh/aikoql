@@ -1,0 +1,7 @@
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/tests/snapshot_matrix.rs:583 - register it with an evidence test, or the claim loses its claim
+  /// row 9 — large WAL snapshot has bounded RSS (PR6-R3-003): snapshot
+STRONG CLAIMS: uncovered claim at crates/storage/aikoql-v2/tests/snapshot_matrix.rs:587 - register it with an evidence test, or the claim loses its claim
+  /// afterwards proves the bounded copy lost nothing.
+STRONG CLAIMS: dead row — crates/storage/aikoql-v2/tests/snapshot_matrix.rs:553 no longer carries the claim
+STRONG CLAIMS: dead row — crates/storage/aikoql-v2/tests/snapshot_matrix.rs:557 no longer carries the claim
+EXIT=1

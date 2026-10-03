@@ -25,7 +25,7 @@
 //! v0.3 K5 adds the agent-experience pair:
 //! - `record_experience`: an execution outcome captured as a first-class
 //!   `aikoql:experience` KO (agent_derived authority, evidence mandatory,
-//!   TTL-bounded valid time, confidence context);
+//!   TTL-gated valid time, confidence context);
 //! - `match_experiences`: reuse-condition gating over an ACL-filtered scan,
 //!   confidence-weighted ranking, expired/invalidated experiences filtered.
 

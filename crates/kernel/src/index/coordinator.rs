@@ -76,7 +76,7 @@ impl IndexCoordinator {
         // R9: a type-scoped query walks the type index instead of all heads.
         // The per-KO type filter below stays — it guards stale index entries.
         // M18: computed lazily — the ANN path ranks the index's own
-        // candidates and never needs this O(store) scan.
+        // candidates and never needs this store-wide scan.
         let heads = || -> KResult<Vec<(KOID, u64, u64, LifecycleState)>> {
             Ok(
                 match q.filter.as_ref().and_then(|f| f.type_name.as_deref()) {

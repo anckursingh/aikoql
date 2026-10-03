@@ -1,0 +1,9 @@
+{
+  "id": "mut-m9-remove-shuffle-proof",
+  "pre_fix_commit": "7d09fe73db2a84d02446d3fbe7840e818634903f",
+  "command": "bash scripts/mutation-harness.sh m9-remove-shuffle-proof",
+  "captured_at": "2026-09-28T23:01:10Z",
+  "captured_head": "7d09fe73db2a84d02446d3fbe7840e818634903f",
+  "exit_code": 1,
+  "note": "TDD-033 (L-22): the behavioral proof step (scripts/shuffle-proof.sh) drops from the shuffle job \u2014 the shuffle keeps running but nothing proves it catches an order dependency anymore; the wiring gate alone is grep-only. The gate's proof-step pin catches it."
+}

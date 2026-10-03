@@ -1,5 +1,7 @@
 # AIKOQL Storage Engine v2 — Implementation Plan
 
+> HISTORICAL (S-04, 2026-09-25): pre-launch plan record — kept for reference, not updated.
+
 Source: `docs/AIKOQL_Storage_Engine_V2_Production_Design.md` (2026-09-01). Branch `feature/sorage-engine`, commit per milestone, NO push (user pushes). TDD loop per milestone: PoV → RED → root-cause GREEN → regression → gates (`cargo fmt --all` + `cargo clippy --all-targets --all-features -- -D warnings`).
 
 ## Coder point of view (before implementation)

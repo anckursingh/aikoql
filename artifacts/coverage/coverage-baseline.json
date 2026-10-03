@@ -1,15 +1,15 @@
 {
-  "captured_at": "2026-09-24",
-  "captured_head": "dc97639",
-  "machine": "windows-latest CI runner (run 35938921395) — the gate's own measured report at ac1803e; product code identical at dc97639 (rounds 3-4 touched tests/workflow/docs only)",
+  "captured_at": "2026-09-29",
+  "captured_head": "f8a57cb",
+  "machine": "windows-latest CI runner (run 36550106310) — the gate's own measured report at the launch-branch head; the drop is L-08's checked-arithmetic error arms in wal.rs (19ddcd1), never hit by the suite (the >4 GiB overflow/truncation arms need payloads no test can allocate) — the same deliberate re-baseline class as 2026-09-24 (post-baseline code with untestable lines). checkpoint/snapshot unchanged at 96.40/81.05 (their cells held exactly), so the wal.rs drift is attributable to that one diff.",
   "rustc": "1.98.1",
   "cargo_llvm_cov": "0.9.1",
   "suite": "cargo llvm-cov test -p aikoql-storage-v2 --all-features --no-report",
   "tolerance_pct": 0.05,
-  "note": "Per-file line coverage of the PR6-003 codec/replay trio (checkpoint/snapshot/wal) under the storage-v2 suite. Tolerance 0.05% points absorbs report rounding only; a real decrease fails. Re-baseline deliberately when the toolchain changes. 2026-09-24 re-baseline: rustc 1.97.1 -> 1.98.1 AND the M28/M33/M34 snapshot.rs commits landed after the 09-20 capture (env-gated cells never execute under llvm-cov) — two drift causes, one deliberate re-baseline (ledger: TESTING-PLAN P5-M47).",
+  "note": "Per-file line coverage of the PR6-003 codec/replay trio (checkpoint/snapshot/wal) under the storage-v2 suite. Tolerance 0.05% points absorbs report rounding only; a real decrease fails. Re-baseline deliberately when the toolchain changes or post-baseline code adds untestable lines. 2026-09-24: rustc 1.97.1 -> 1.98.1 AND the M28/M33/M34 snapshot.rs commits (ledger: TESTING-PLAN P5-M47). 2026-09-29: L-08 checked arithmetic in wal.rs (TDD-015) added overflow error arms the suite cannot reach (wal 91.19 -> 90.05); checkpoint/snapshot held exactly — re-based to the gate's own measured trio (ledger: IMPLEMENTATION-PLAN-LAUNCH L-27 CI round).",
   "cells": {
     "checkpoint.rs": 96.40,
     "snapshot.rs": 81.05,
-    "wal.rs": 91.19
+    "wal.rs": 90.05
   }
 }

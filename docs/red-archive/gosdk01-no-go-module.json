@@ -1,0 +1,8 @@
+{
+  "id": "gosdk01-no-go-module",
+  "pre_fix_commit": "fab6dcf",
+  "command": "grep -q module github.com/ancku/aikoql-sdk crates/sdk/go/go.mod",
+  "captured_at": "2026-09-27T08:16:36Z",
+  "captured_head": "67b2d7463dae51e4819c6d2d73f9dc3fc42966fd",
+  "exit_code": 2
+}

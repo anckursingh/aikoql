@@ -1,0 +1,3 @@
+ARCH: the docker job does not parse docker-compose.yml (CI-13)
+ARCH: the docker job does not parse docker-compose.release.yml (CI-13)
+EXIT=1

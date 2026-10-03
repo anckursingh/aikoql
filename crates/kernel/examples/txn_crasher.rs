@@ -15,7 +15,10 @@ use std::sync::Arc;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     assert_eq!(args.len(), 3, "usage: txn_crasher <db path> <txn id>");
-    let engine: Arc<dyn StorageEngine> = Arc::new(RedbEngine::open(&args[1]).expect("open db"));
+    let engine: Arc<dyn StorageEngine> = Arc::new(
+        aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(&args[1]))
+            .expect("open db"),
+    );
     let k = Kernel::open(engine, Arc::new(SystemClock), 0xBEEF).expect("open kernel");
     let mut t = k
         .begin_transaction(Subject::new("alice"), args[2].clone())

@@ -1,0 +1,8 @@
+{
+  "id": "d02-error-model",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-sdk-compat.sh",
+  "captured_at": "2026-10-01T14:05:09Z",
+  "captured_head": "f396acd5c1fc986e6ff75744bded56b066d71ebb",
+  "exit_code": 1
+}

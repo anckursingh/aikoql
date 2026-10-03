@@ -1,0 +1,8 @@
+{
+  "id": "v02-identity-literals",
+  "pre_fix_commit": "54c060e",
+  "command": "bash -c cd crates/sdk/go && go test ./... ; cd ../typescript && npm test ; cd ../python && ../../../.venv/Scripts/python.exe -m pytest -q tests/test_default_identity.py ; cd ../java && mvn -q test",
+  "captured_at": "2026-10-03T06:36:49Z",
+  "captured_head": "54c060eb6997c224ead69a82d96eda2156edb92f",
+  "exit_code": 1
+}

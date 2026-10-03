@@ -1,0 +1,7 @@
+{
+  "name": "schema_discovery",
+  "operations": [
+    {"op": "remember", "type": "s_type", "properties": {"name": "x"}},
+    {"op": "discover_schema", "assert_any": {"path": "types", "match": "s_type"}}
+  ]
+}

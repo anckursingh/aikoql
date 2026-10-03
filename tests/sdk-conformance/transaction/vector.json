@@ -1,0 +1,13 @@
+{
+  "name": "transaction_semantics",
+  "operations": [
+    {"op": "begin", "as": "tx1"},
+    {"op": "execute", "txn": "$tx1", "action": "create", "type": "t_ghost", "properties": {"name": "g"}},
+    {"op": "rollback", "txn": "$tx1", "assert": {"rolled_back": true}},
+    {"op": "query", "query": "MATCH t_ghost RETURN *", "assert": {"results": []}},
+    {"op": "begin", "as": "tx2"},
+    {"op": "execute", "txn": "$tx2", "action": "create", "type": "t_keep", "properties": {"name": "k"}},
+    {"op": "commit", "txn": "$tx2", "as": "kept", "assert": {"deduped": false}},
+    {"op": "get", "koid": "$kept", "assert": {"properties.name": "k"}}
+  ]
+}

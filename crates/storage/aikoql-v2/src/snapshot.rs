@@ -226,7 +226,7 @@ pub struct RestoreInfo {
 }
 
 /// Copy one file while hashing it — the marker needs the fingerprint, and
-/// the read has to happen exactly once per file anyway.
+/// the read has to happen once per file anyway.
 fn copy_hashed(src: &Path, dst: &Path) -> Result<(u64, [u8; 8]), FormatError> {
     let mut input = File::open(src)
         .map_err(|e| FormatError::Io(format!("open {} for snapshot: {e}", src.display())))?;

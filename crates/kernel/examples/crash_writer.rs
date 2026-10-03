@@ -1,7 +1,8 @@
 //! crash_writer — crash-fault injection helper (used by tests/durability.rs
 //! and tests/crash_kill.rs).
 //!
-//! Commits N knowledge objects with well-known explicit KOIDs to a redb file,
+//! Commits N knowledge objects with well-known explicit KOIDs to a v2
+//! database directory,
 //! prints the committed journal head, then terminates ABRUPTLY via
 //! `std::process::exit(0)` — no destructors run, simulating a power-loss /
 //! kill -9 at the commit boundary. If `crash_after` is supplied, the process
@@ -15,6 +16,10 @@
 use aikoql_kernel::*;
 use std::sync::Arc;
 
+fn open_engine(path: &str) -> aikoql_storage_v2::AikoqlStorageEngineV2 {
+    aikoql_storage_v2::AikoqlStorageEngineV2::open(std::path::Path::new(path)).expect("open engine")
+}
+
 fn main() {
     let path = std::env::args()
         .nth(1)
@@ -25,7 +30,7 @@ fn main() {
         .unwrap_or(5);
     let crash_after: Option<u8> = std::env::args().nth(3).and_then(|s| s.parse().ok());
 
-    let engine = RedbEngine::open(&path).expect("open engine");
+    let engine = open_engine(&path);
     let k = Kernel::open(Arc::new(engine), Arc::new(SystemClock), 7).expect("open kernel");
 
     let subject = Subject::new("crasher");

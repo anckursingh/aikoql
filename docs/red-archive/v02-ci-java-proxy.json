@@ -1,0 +1,8 @@
+{
+  "id": "v02-ci-java-proxy",
+  "pre_fix_commit": "1017057",
+  "command": "env -u AIKOQL_FAULT_PROXY AIKOQL_MCP_BIN=/e/dreams/Mnemosyne/target/debug/aikoql-mcp mvn -B -q -Dtest=FaultMatrixTest test -f crates/sdk/java/pom.xml",
+  "captured_at": "2026-10-03T08:23:29Z",
+  "captured_head": "1017057ea84470e1f91af7e43defd47fa61083ec",
+  "exit_code": 1
+}

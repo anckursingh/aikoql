@@ -864,7 +864,10 @@ These are architecture gates, not current claims.
 - [ ] Dataset larger than RAM remains queryable.
 - [ ] Memory limits configurable.
 - [ ] Group commit improves concurrent write throughput without weakening Sync durability.
-- [ ] KO lookup remains competitive with MVP baseline.
+- [ ] KO lookup stays within the self-regression bound vs the committed v2
+  baseline (S-04 redefines gate 5: current-vs-committed-baseline, not
+  v1-vs-v2 — the v1 baseline died with the S-02 decommission; the bound is
+  1.5× on same-scale W1/W2 P50s, checked by scripts/gate5-check.py).
 
 ---
 

@@ -46,6 +46,7 @@ jobs:
           cargo_ver="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           npm_ver="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' npm-publish/package.json | head -1)"
           plugin_ver="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' .claude-plugin/plugin.json | head -1)"
+          ts_ver="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' crates/sdk/typescript/package.json | head -1)"
           # Python is version.workspace = true — resolve through cargo so the
           # gate reads the RESOLVED version, not the literal (PR6-009: every
           # release channel asserts against the tag).
@@ -55,6 +56,7 @@ jobs:
           [ "$tag" = "$npm_ver" ] || { echo "::error::npm version '$npm_ver' != tag '$tag'"; fail=1; }
           [ "$tag" = "$plugin_ver" ] || { echo "::error::plugin version '$plugin_ver' != tag '$tag'"; fail=1; }
           [ "$tag" = "$py_ver" ] || { echo "::error::Python SDK version '$py_ver' != tag '$tag'"; fail=1; }
+          [ "$tag" = "$ts_ver" ] || { echo "::error::TypeScript SDK version '$ts_ver' != tag '$tag'"; fail=1; }
           grep -q "releases/download/v$tag/" website/index.html || { echo "::error::website/index.html not pinned to v$tag"; fail=1; }
           grep -q "releases/download/v$tag/" website/docs/getting-started.md || { echo "::error::getting-started.md not pinned to v$tag"; fail=1; }
           echo "version=$tag" >> "$GITHUB_OUTPUT"
@@ -79,7 +81,10 @@ jobs:
           TAG: v${{ needs.validate-versions.outputs.version }}
         run: |
           set -euo pipefail
-          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+          # Remote check, not rev-parse: the dispatch checkout is shallow
+          # and never fetches tags, so a local check would "create" an
+          # existing tag and die on the rejected push (v0.2.0 rescue).
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
             echo "::notice::tag $TAG already exists — skipping (rescue re-dispatch)"
             exit 0
           fi
@@ -88,6 +93,213 @@ jobs:
           git tag "$TAG"
           git push origin "$TAG"
           echo "::notice::pushed tag $TAG"
+
+  # ── CI-09: Tier-3 launch certification (TESTING-PLAN §6) ──────────
+  # The release evidence pack that ships with the tag: the full
+  # correctness suite (incl. the concurrency/recovery cells — the suite IS
+  # their carrier) on Linux + Windows, the coverage floor, the full-scale
+  # benchmark harness (100k + 1M + MCP column + multi-op txn), and the
+  # competitor matrix with its §13/§18 schema-checked report trio (the
+  # benchmark report artifact). Every leg reuses the ci.yml/benchmark.yml
+  # invocation verbatim — a release measures exactly what CI measures,
+  # gated cells and pinned images included.
+  tier3-correctness:
+    name: Tier-3 correctness (Linux)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job.
+      - uses: Swatinem/rust-cache@v2
+      # The CI invocation verbatim — the skip list gates measurement-only
+      # cells (SE-06), never correctness (same as ci.yml's test-linux).
+      - run: cargo test --workspace -- $(bash scripts/skip-list.sh)
+        shell: bash
+        timeout-minutes: 180
+
+  tier3-correctness-windows:
+    name: Tier-3 correctness (Windows)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate-versions
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job.
+      - uses: Swatinem/rust-cache@v2
+      # bash, not pwsh: the $(...) here is bash word-splitting (the
+      # CI-rounds-2-3 lesson, same as ci.yml's Windows test job).
+      - run: cargo test --workspace -- $(bash scripts/skip-list.sh)
+        shell: bash
+        timeout-minutes: 180
+
+  tier3-coverage:
+    name: Tier-3 coverage floor
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate-versions
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      # CI-05: cargo cache in every build job.
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Coverage floor check
+        shell: bash
+        run: bash scripts/check-coverage-floor.sh
+
+  tier3-scale:
+    name: Tier-3 scale certification (100k + MCP + txn)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    services:
+      pg:
+        # L-27 round 4: the harness's PG txn cells need pgvector (bench.py
+        # CREATE EXTENSION vector) — postgres:16-alpine lacks it and the
+        # first release-path run to reach the leg died on it.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: bench
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: bench
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job.
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release aikoql-mcp + native SDK
+        run: |
+          set -euo pipefail
+          cargo build --release -p aikoql-mcp
+          python -m venv .venv
+          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client pymongo
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          cd "$GITHUB_WORKSPACE"
+      - name: Run the scale harness (100k + MCP + txn; --no-1m)
+        # L-27 release round 3: the 1M embedded leg runs with --no-1m. On
+        # the public 2-core runner the 100k cells alone cost ~50 min (the
+        # per-connect index rebuilds the M9 stats contract requires); the
+        # 1M leg ran 5h00m without finishing before the 360-minute job cap
+        # cancelled it (run 36562237765). The 1M storage cells ride the
+        # weekly benchmark.yml guard (CI-10); the full 1M embedded numbers
+        # live in the published dev-machine report. The arch gate pins the
+        # --no-1m flag on this line — see check-architecture-hygiene.sh.
+        run: |
+          set -euo pipefail
+          .venv/bin/python scripts/competitor_bench/scale.py --no-1m \
+            --out "$RUNNER_TEMP/scale-result.json"
+          cp "$RUNNER_TEMP/scale-result.json" scale-result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tier3-scale-result
+          path: scale-result.json
+          if-no-files-found: error
+
+  tier3-matrix:
+    name: Tier-3 competitor matrix + report artifact
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: validate-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    services:
+      pg:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: bench
+          POSTGRES_PASSWORD: bench
+          POSTGRES_DB: bench
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U bench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      neo4j:
+        image: neo4j:5-community
+        env:
+          NEO4J_AUTH: neo4j/benchmarkpass
+        ports:
+          - 7474:7474
+          - 7687:7687
+        options: >-
+          --health-cmd "wget --no-check-certificate -qO- http://localhost:7474 >/dev/null || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+      qdrant:
+        # CI-08 (§18): pinned competitor version — explicit tags only, the
+        # digest the run measured lands in result.json's engine_versions.
+        image: qdrant/qdrant:v1.19.1
+        ports:
+          - 6333:6333
+        options: >-
+          --health-cmd "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ping:1}).ok ? 0 : 2)'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job.
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build release SDK (maturin develop)
+        run: |
+          set -euo pipefail
+          python -m venv .venv
+          .venv/bin/pip install -q maturin psutil psycopg neo4j qdrant-client pymongo
+          export VIRTUAL_ENV="$PWD/.venv"
+          cd crates/sdk/python
+          "$VIRTUAL_ENV/bin/maturin" develop --release
+          cd "$GITHUB_WORKSPACE"
+      - name: Run the competitor matrix (hybrid knowledge cell)
+        run: .venv/bin/python scripts/competitor_bench/bench.py
+      # CI-08 (§13/§18/§14): the release artifact must satisfy the same
+      # schema contract the laptop evidence does.
+      - name: Schema-validate the competitor artifact
+        run: .venv/bin/python scripts/artifact_schema.py docs/certification/competitors/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tier3-competitor-matrix
+          path: |
+            docs/certification/competitors/result.json
+            docs/certification/competitors/result.csv
+          if-no-files-found: error
 
   # ── Windows binary ──────────────────────────────────────────────
   windows:
@@ -98,6 +310,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --release -p aikoql-mcp
       - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
@@ -124,6 +339,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --release -p aikoql-mcp
       - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
@@ -153,6 +371,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: cross
@@ -182,6 +403,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - name: Build release (x86_64)
         run: cargo build --release --target x86_64-apple-darwin -p aikoql-mcp
       - name: Generate SHA-256
@@ -204,6 +428,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - name: Build release
         run: cargo build --release -p aikoql-mcp
       - name: Smoke test binary (version + MCP initialize + tools/list + tools/call)
@@ -375,7 +602,19 @@ jobs:
         run: |
           cat aikoql-mcp-*.sha256 > checksums.txt
           sha256sum checksums.txt > checksums.txt.sha256
+      - name: Skip if the release already exists
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ needs.validate-versions.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::release v${{ needs.validate-versions.outputs.version }} already published — keeping the original artifacts (rescue over an existing cut)"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Create Release
+        if: steps.existing.outputs.exists != 'true'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ needs.validate-versions.outputs.version }}
@@ -393,6 +632,137 @@ jobs:
             checksums.txt
             checksums.txt.sha256
           generate_release_notes: true
+
+  # ── Go module tag (D-18): pkg.go.dev serves github.com/anckursingh/
+  # aikoql/sdk/go from the subdirectory tag sdk/go/v<version> — the repo
+  # tag alone never exposes the module. Gated on the github-release job:
+  # a module tag for a release that never landed is a phantom version.
+  go-tag:
+    name: Tag the Go SDK module (sdk/go)
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [github-release, validate-versions]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push tag sdk/go/v${{ needs.validate-versions.outputs.version }}
+        env:
+          TAG: sdk/go/v${{ needs.validate-versions.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Remote check, not rev-parse (the create-tag precedent): the
+          # dispatch checkout is shallow and never fetches tags.
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+            echo "::notice::tag $TAG already exists — skipping (rescue re-dispatch)"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "::notice::pushed tag $TAG"
+
+  # ── crates.io publish, gated on the release + version match ─────
+  # Publishes the Rust SDK closure (aikoql-native → … → aikoql-sdk) in
+  # dependency order with a real token (crates.io has no OIDC trusted
+  # publishing). Each crate is skipped when its version already exists
+  # (rescue re-dispatch); a failed publish is retried — the sparse index
+  # lags a fresh sibling publish by up to a minute.
+  crates-io-publish:
+    name: Publish Rust crates to crates.io
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [github-release, validate-versions]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish the closure in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ needs.validate-versions.outputs.version }}
+        run: |
+          set -euo pipefail
+          CRATES="aikoql-native aikoql-kernel aikoql-storage-v2 aikoql-graph aikoql-vector aikoql-scheduler aikoql-semantic aikoql-compiler aikoql-runtime aikoql-sdk"
+          for crate in $CRATES; do
+            # crates.io API, not `cargo` — publish 0.2.0 twice is a hard error.
+            if curl -sf "https://crates.io/api/v1/crates/${crate}/${VERSION}" >/dev/null 2>&1; then
+              echo "::notice::${crate} ${VERSION} already published — skipping (rescue re-dispatch)"
+              continue
+            fi
+            ok=0
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              if cargo publish -p "${crate}"; then ok=1; break; fi
+              echo "::warning::publish ${crate} failed (attempt ${attempt}) — sparse-index lag, retrying in 60s"
+              sleep 60
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "::error::${crate} failed after 10 attempts"
+              exit 1
+            fi
+          done
+
+  # ── Maven Central publish, gated on the release + version match ─
+  # Publishes com.aikoql:aikoql-client through the Central Portal
+  # (central.sonatype.com — OSSRH staging is closed to new projects),
+  # GPG-signed, with sources + javadoc jars. Version parity is asserted
+  # before any upload: the pom version is the publish truth.
+  maven-central-publish:
+    name: Publish Java SDK to Maven Central
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [github-release, validate-versions]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Publish to the Central Portal
+        working-directory: crates/sdk/java
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          VERSION: ${{ needs.validate-versions.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Version parity first — the pom version is the publish truth.
+          pom_version="$(mvn -q help:evaluate -Dexpression=project.version -DforceStdout)"
+          if [ "$pom_version" != "$VERSION" ]; then
+            echo "::error::pom version $pom_version != release version $VERSION"
+            exit 1
+          fi
+          # Skip when this version is already on Maven Central (rescue re-dispatch).
+          if curl -sf "https://repo1.maven.org/maven2/com/aikoql/aikoql-client/$VERSION/" | grep -q "aikoql-client-$VERSION.pom"; then
+            echo "::notice::com.aikoql:aikoql-client:$VERSION already published — skipping"
+            exit 0
+          fi
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          keyid="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
+          mkdir -p ~/.m2
+          # printf, not a heredoc — column-0 lines end a YAML block scalar
+          # (spec-compliant parsers read the XML as mapping keys) and an
+          # indented heredoc delimiter never terminates in bash.
+          printf '%s\n' \
+            '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">' \
+            '  <servers>' \
+            '    <server>' \
+            '      <id>central</id>' \
+            "      <username>${MAVEN_CENTRAL_USERNAME}</username>" \
+            "      <password>${MAVEN_CENTRAL_PASSWORD}</password>" \
+            '    </server>' \
+            '    <server>' \
+            '      <id>gpg</id>' \
+            "      <passphrase>${GPG_PASSPHRASE}</passphrase>" \
+            '    </server>' \
+            '  </servers>' \
+            '</settings>' \
+            > ~/.m2/settings.xml
+          mvn -B -DskipTests clean deploy -Dgpg.keyname="$keyid"
 
   # ── npm publish, gated on the release + version match ──────────
   # Publishes via npm trusted publishing (GitHub Actions OIDC, no token).
@@ -425,16 +795,26 @@ jobs:
           node "$OLDPWD/smoke-mcp.js" npx aikoql-mcp serve "$clean/db"
       - name: Publish
         working-directory: npm-publish
-        run: npm publish --provenance
+        run: |
+          set -euo pipefail
+          published="$(npm view aikoql-mcp version 2>/dev/null || true)"
+          if [ "$published" = "${{ needs.validate-versions.outputs.version }}" ]; then
+            echo "::notice::npm aikoql-mcp@$published already published — skip (rescue over an existing cut)"
+            exit 0
+          fi
+          npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ''  # force pure OIDC — GitHub injects a managed token that npmjs.org 404s (v0.1.18)
 
-  # ── PyPI publish (P3-M9): the adopted Python SDK, versioned from the
-  # workspace (pyproject dynamic = ["version"] → the crate's
-  # version.workspace; sdk001 pins the parity). Trusted publishing (OIDC) —
-  # requires the PyPI project configured for GitHub trusted publishing.
-  pypi-publish:
-    name: Publish Python SDK to PyPI
+  # ── TypeScript SDK publish — the client, not the plugin (D-13's
+  # @aikoql/client ships as TypeScript source: main = src/index.ts, zero
+  # runtime deps). The npm-publish job above only ships aikoql-mcp, so the
+  # SDK itself needs its own leg. Same OIDC provenance as the plugin; the
+  # smoke packs the tarball, installs it into a clean prefix and checks the
+  # installed package.json version — the exact file the build-derived
+  # CLIENT_VERSION reads at runtime — against the tag's version.
+  ts-sdk-publish:
+    name: Publish the TypeScript SDK
     if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
     needs: [github-release, validate-versions]
     runs-on: ubuntu-latest
@@ -443,28 +823,158 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Pack + install the exact tarball + identity import
+        working-directory: crates/sdk/typescript
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/aikoql-client-pkg
+          npm pack --pack-destination /tmp/aikoql-client-pkg >/dev/null
+          tarball=$(ls /tmp/aikoql-client-pkg/aikoql-client-*.tgz | head -1)
+          clean=$(mktemp -d)
+          npm install --prefix "$clean" "$tarball" >/dev/null
+          got=$(node -p "JSON.parse(require('fs').readFileSync('$clean/node_modules/@aikoql/client/package.json','utf8')).version")
+          want="${{ needs.validate-versions.outputs.version }}"
+          if [ "$got" != "$want" ]; then
+            echo "::error::tarball identity $got != release version $want"
+            exit 1
+          fi
+      - name: Publish
+        working-directory: crates/sdk/typescript
+        run: |
+          set -euo pipefail
+          published="$(npm view @aikoql/client version 2>/dev/null || true)"
+          if [ "$published" = "${{ needs.validate-versions.outputs.version }}" ]; then
+            echo "::notice::npm @aikoql/client@$published already published — skip (rescue over an existing cut)"
+            exit 0
+          fi
+          npm publish --provenance
+        env:
+          NODE_AUTH_TOKEN: ''  # pure OIDC, same as the plugin
+
+  # ── Python wheel matrix (D-18) ──────────────────────────────────
+  # abi3-py39 wheels: one wheel per platform covers py3.9+. Each leg
+  # builds its wheel, gates the tag version (PR6-009: the tag's version
+  # comes from the gate output), install-checks the artifact itself and
+  # uploads it for the pypi-publish job. Trusted publishing (OIDC)
+  # happens in pypi-publish — requires the PyPI project configured for
+  # GitHub trusted publishing.
+  pypi-wheel-matrix:
+    name: Build Python wheel (${{ matrix.os }})
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [github-release, validate-versions]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # CI-05: cargo cache in every build job (default key = OS + rust
+      # version + Cargo.lock).
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Build wheel + tag-version gate
+      - name: Build wheel + tag-version gate + install smoke
+        shell: bash
         run: |
           set -euo pipefail
           pip install -q maturin
           cd crates/sdk/python
+          rm -rf dist  # stale wheels (e.g. pre-rename builds) ride the
+                        # upload glob and PyPI rejects the batch
           maturin build --release --out dist
-          # PR6-009: the tag's version comes from the gate output — on
-          # workflow_dispatch GITHUB_REF_NAME is the BRANCH, so the old
-          # `GITHUB_REF_NAME#v` rescue path compared the wheel against
-          # garbage (or failed a legitimate rescue).
           v="${{ needs.validate-versions.outputs.version }}"
           ls "dist/aikoql-${v}"-*.whl >/dev/null || {
             echo "::error::wheel version does not match tag '${v}' (sdk001 parity)"
             exit 1
           }
-      - uses: pypa/gh-action-pypi-publish@release/v1
+          # Install-check the artifact itself — a wheel that cannot be
+          # installed (or imported) fails the release here, not in the
+          # wild (D-18 §27: package install per release).
+          pip install "dist/aikoql-${v}"-*.whl
+          python -c "import aikoql"
+      - uses: actions/upload-artifact@v4
         with:
-          packages-dir: crates/sdk/python/dist/
+          name: wheels-${{ matrix.os }}
+          path: crates/sdk/python/dist/*.whl
+          if-no-files-found: error
+
+  # ── PyPI publish, gated on the wheel matrix + release ───────────
+  # Trusted publishing (OIDC): collects the four matrix wheels and
+  # publishes them in one shot. The skip guard is the rescue path —
+  # re-dispatch over an already-published version must not re-publish.
+  pypi-publish:
+    name: Publish Python SDK to PyPI
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [pypi-wheel-matrix, github-release, validate-versions]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: Publish (skip if this version is already published)
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          published="$(curl -fsS https://pypi.org/pypi/aikoql/json 2>/dev/null | jq -r .info.version || echo '')"
+          if [ "$published" = "${{ needs.validate-versions.outputs.version }}" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::PyPI aikoql@$published already published — skip (rescue over an existing cut)"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        if: steps.existing.outputs.exists != 'true'
+        with:
+          packages-dir: dist/
+
+  # ── D-18 §27 every-release SDK certification ──────────────────
+  # The SDK battery (version parity, conformance, fuzz smoke, real-server
+  # integration, install smokes, example, SBOM) runs after the release
+  # artifacts exist, so a broken SDK never ships under a green tag.
+  sdk-release-cert:
+    name: Certify every SDK
+    if: ${{ github.event_name == 'workflow_dispatch' || (always() && github.event_name == 'push' && needs.github-release.result == 'success') }}
+    needs: [github-release, validate-versions]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build the release server
+        run: cargo build --release -p aikoql-mcp
+      - name: Install syft for the SBOM leg
+        run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+      - name: Certify every SDK
+        run: bash scripts/sdk-release-cert.sh
 
   # ── Post-publish identity verification (PR6-009) ────────────────
   # The review's after-block: once a channel has published, it must answer
@@ -514,6 +1024,7 @@ jobs:
         if: needs.github-release.result == 'success'
         env:
           V: ${{ needs.validate-versions.outputs.version }}
+          GH_TOKEN: ${{ github.token }}  # gh in CI needs an explicit token (v0.2.0 first run: exit 4 without it)
         run: |
           set -euo pipefail
           got="$(gh api "repos/anckursingh/aikoql/releases/tags/v${V}" --jq .tag_name)"

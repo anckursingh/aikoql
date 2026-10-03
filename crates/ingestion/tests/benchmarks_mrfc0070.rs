@@ -203,7 +203,7 @@ use crate::auth::{AuthProvider, Identity};
         // nightly runs and pass by 2.2% since — drift either way is
         // scoring noise, not a packing regression. Real savings
         // instruments: G12 cost bench, §32 memory bench, criterion
-        // baseline regression in benchmark-nightly.
+        // baseline regression in benchmark.yml.
     }
 
     /// Measure context quality: relevant entities rank above irrelevant.
@@ -546,7 +546,7 @@ use crate::auth::{AuthProvider, Identity};
         // and the post-gate 37% was the two honest refusals packing
         // zero, not pruning quality. Real savings instruments: the G12
         // cost bench, the §32 memory bench, and the criterion baseline
-        // regression in benchmark-nightly. The printed number stays as
+        // regression in benchmark.yml. The printed number stays as
         // an informational reading.
     }
 

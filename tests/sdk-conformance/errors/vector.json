@@ -1,0 +1,6 @@
+{
+  "name": "error_codes",
+  "operations": [
+    {"op": "get", "koid": "00000000000000000000000000000001", "expect_error": "NOT_FOUND"}
+  ]
+}

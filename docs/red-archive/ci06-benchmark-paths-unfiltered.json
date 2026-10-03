@@ -1,0 +1,8 @@
+{
+  "id": "ci06-benchmark-paths-unfiltered",
+  "pre_fix_commit": "e7a9366",
+  "command": "grep -qE [-] '(crates/engines|scripts/competitor_bench|benchmarks|Cargo.lock) .github/workflows/benchmark.yml",
+  "captured_at": "2026-09-25T08:10:21Z",
+  "captured_head": "e7a93667be6dde6e5d6fdad3d33ac0a564d9d516",
+  "exit_code": 1
+}
