@@ -1,0 +1,16 @@
+T-02 RED — snapshot adapter (design Phase 2 + §10)
+pre-fix head: 3664a1d
+date: 2026-10-03
+
+pytest tests/test_snapshot.py -q
+-> ERROR collecting tests/test_snapshot.py
+   ImportError while importing test module 'tests/test_snapshot.py'
+   tests/test_snapshot.py:27: from aikoql_training.client import capture_from_agent
+   ModuleNotFoundError: No module named 'aikoql_training.client'
+-> 1 error during collection (13 tests blocked), PYTEST-RED-EXIT=2
+
+Blocked tests (design's Phase 2 RED list): database identity captured,
+knowledge revision captured, configuration captured, seed captured,
+source manifest captured, same-state-same-identity acceptance, state
+change moves identity, manifest reproducibility, snapshot feeds the
+T-01 example schema, live capture over the real MCP health tool.
