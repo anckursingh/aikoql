@@ -218,3 +218,53 @@ accepted examples grounded).
 - **Refusal semantics**: `build_answer` returns None, matching
   `build_queries`' skip pattern — a refused example is dropped, never a
   false positive.
+
+## 12. Temporal and provenance scenarios (T-08)
+
+`temporal_scenarios(histories)` (`scenarios/temporal.py`) emits version
+questions over REAL version intervals: one scenario per property per
+version whose value changed, the question names the version's own
+commit month and `as_of` carries the real `commit_ts` — March ⇒ v1,
+August ⇒ v2. A property unchanged since the previous version earns no
+later question (it would repeat the earlier answer), and a month-label
+collision (two versions in one month asking the same question with
+different answers) is skipped, first emission wins. Versions without
+properties, non-scalar values and malformed records are skipped; the
+generator sorts by `(commit_ts, version)` and never invents an
+interval.
+
+`provenance_scenarios(kos)` (`scenarios/provenance.py`) emits one
+scenario per scalar property whose KO carries citable evidence:
+"What evidence supports that the X of A is <value>?" answered by the
+citation of the evidence rows. The oracle branch in
+`validation/execution.py` proves the anchor KO was recovered with the
+property (the citation is not a property value — evidence realness is
+`validate_grounding`'s job via `evidence_ids`).
+
+Four T-08 recon findings, all pinned by live cells over the spawned
+server:
+
+1. **trace `commit_ts` is the PACKED HLC** (`kernel.rs` `Hlc::now`:
+   `(millis << 16) | counter`) — decode with `commit_ts >> 16` before
+   feeding AS_OF, which wants plain epoch millis.
+2. **Evidence confidence is f32** — the kernel stores `Evidence`
+   confidence as f32, so 0.9 round-trips as 0.8999999761581421 and
+   breaks canonical evidence identity; fixtures use f32-exact values
+   (0.75).
+3. **Evidence is kernel-managed**: `remember` rejects the `evidence`
+   extension (`INVALID_OBJECT`) — the honest seed is `observe`
+   (`tools/knowledge.rs`), which stamps epistemic Observed. `trace` is
+   McpClient-surface only; over MCP `Agent._backend` IS the initialized
+   client (the adapter's `_call_tool` path).
+4. **Evidence has TWO real shapes** — the seam. The kernel stores
+   canonical evidence (`source_artifact`/`method`/`location`/
+   `revision`, `kom.rs evidence()`), while the compiled context carries
+   IR `Evidence` rows (`document_id`/`page`/`source`/`extractor`/
+   `model`/`confidence`, `ir.rs`, serialized with nulls — `extractor`
+   is required, so a canonical dict deserialized as IR evidence fails
+   with "missing field `extractor`"). Accepted examples ground in the
+   context, so the provenance generator cites the COMPILED shape
+   (`document (extractor) p.N`) and skips canonical entries — citing
+   them into a context that can never carry them would ground nothing
+   (fail-closed seam, `test_non_citable_evidence_skipped`).
+

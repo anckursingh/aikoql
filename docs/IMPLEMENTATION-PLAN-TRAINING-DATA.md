@@ -233,6 +233,29 @@ incl. the hypothesis law "generator accepts ⇒ validator accepts" and a
 live cell proving the answer traces to the compiled evidence over the
 spawned MCP server.
 
+T-08 shipped 2026-10-03 — `scenarios/temporal.py` emits version
+questions over REAL version intervals (design ph 6): one scenario per
+changed property per version, the question names the version's own
+commit month and `as_of` is the real `commit_ts` — March ⇒ v1, August
+⇒ v2; unchanged properties earn no later question and same-month
+label collisions are skipped (first emission wins).
+`scenarios/provenance.py` emits one scenario per scalar property
+citing REAL evidence (design ph 7). Four recon findings: trace
+`commit_ts` is the PACKED HLC (`(millis << 16) | counter`, decode
+with `>> 16` before AS_OF); kernel evidence confidence is f32
+(fixtures use f32-exact values); evidence is kernel-managed
+(`remember` rejects the extension — `observe` is the seed; `trace` is
+McpClient-surface only, reached via `Agent._backend`); and **evidence
+has two real shapes** — canonical kernel entries
+(source_artifact/method) vs compiled IR Evidence rows
+(document_id/extractor, `extractor` required) — so the provenance
+generator cites the COMPILED shape and skips canonical entries
+(fail-closed seam: an accepted example's evidence_ids must trace to
+context rows). RED archived as `t-08-temporal-provenance` (28 tests
+blocked). GREEN 138/138, incl. both hypothesis laws and live cells
+for real version intervals and both evidence surfaces over the
+spawned MCP server.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
