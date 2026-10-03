@@ -133,6 +133,20 @@ T-06 must compose retrieval primitives or propose a server change (see
 `docs/training-data-architecture.md` §3/§7). T-05's builder now targets
 the text grammar.
 
+T-02 shipped 2026-10-03 — `snapshot.py` captures the design §10
+DatasetSnapshot record: content-derived `snapshot_id` (database_id +
+knowledge_revision = journal_seq:audit_hash from the public health
+tool), canonical `configuration_hash`/`source_manifest_hash`, recorded
+seed/generator/schema versions, fail-closed on missing identity
+inputs. Acceptance pinned: two captures of the same immutable state
+produce the same identity (created_at is metadata). RED archived as
+`t-02-snapshot` (13 tests blocked). Live cell green over a spawned
+aikoql-mcp server. Recon added two findings: **embedded
+`Agent.health()` is a stub** (journal_seq/audit_hash are MCP-only) and
+**no database identity is exposed** (initialize carries only
+serverInfo) — `database_id` is an explicit operator parameter
+(`docs/training-data-architecture.md` §4).
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |

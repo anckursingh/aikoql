@@ -54,9 +54,28 @@ and T-05's query builder targets the compiler's text grammar.
 `tool_health` (`tools/admin.rs:190`) returns: `status, ready, journal_seq,
 journal_lag_ms, object_count, connection_pool, audit_hash` (32-byte hex),
 `uptime_seconds, semantic.state/detail`. `tool_metrics` (`admin.rs:78`)
-returns journal sequence and object counts. T-02's snapshot identity is
-`database_id + journal_seq + audit_hash + configuration_hash + seed` —
-journal_seq + audit_hash are the knowledge revision.
+returns journal sequence and object counts. T-02's knowledge revision is
+`journal_seq + audit_hash` from this tool.
+
+Two T-02 recon findings shape the implemented snapshot record
+(`training/src/aikoql_training/snapshot.py`):
+
+1. **Embedded health is a stub** — `Agent.health()` returns
+   `{"ready": True, "status": "healthy"}` in embedded mode
+   (`agent.py:187-190`); journal_seq/audit_hash exist only behind the
+   MCP health tool. Snapshot capture therefore always goes over the
+   server surface (`capture_from_agent` -> `Agent.health()`).
+2. **No database identity is exposed** — the MCP initialize handshake
+   carries only `serverInfo {name, version}` (`dispatcher.rs:100`);
+   nothing names the database instance. `snapshot_id` binds
+   `database_id + knowledge_revision`, with `database_id` an explicit
+   operator parameter (the operator names the KB, e.g. "acmepay").
+
+The invariant follows the design's split (§10): `snapshot_id` binds the
+database state; `configuration_hash`, `source_manifest_hash`,
+`generator_version` and `seed` are recorded fields — same snapshot +
+same generator + same configuration + same seed = same example IDs.
+`created_at` is metadata, excluded from identity.
 
 ## 5. Authorization
 
