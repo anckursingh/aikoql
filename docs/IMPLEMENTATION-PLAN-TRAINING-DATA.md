@@ -285,6 +285,41 @@ hypothesis law, three live cells (real absence, a real same-name
 pair, a real `contradict` Conflict), and the unit/live seam for the
 conflict envelope.
 
+T-10 shipped 2026-10-03 — authorization scenarios (design ph 9)
+through the real ACL path. `authorization_scenarios(kos, decisions)`
+(`scenarios/authorization.py`) consumes the kernel's own policy
+evaluations — records of (principal, action, resource_type) with the
+live verdict and, for denials, the kernel's reason — and pairs each
+decision with every KO of its resource type: the question names the
+object ("May reader read the service whose name is settlement?"), the
+answer is the machine-readable verdict (ALLOWED:/DENIED: prefix)
+preserving the reason verbatim (`"Denied by policy: KOID"`). The
+engine never re-derives a verdict: `verify_scenario`'s authorization
+branch recovers the anchor KO and re-evaluates policies live
+(`evaluate_policies`), asserting the verdict prefix agrees — and
+malformed decisions, unknown actions, denials without a reason,
+decisions over types with no KOs and anchors that would corrupt the
+question are skipped. `validate_grounding`'s authorization branch
+requires the verdict prefix, the `policy.authorization_required`
+flag, verdict-shaped labels and the generic grounded trace — plus the
+leak rule: a DENIED example's context may carry the decision fact and
+nothing else that names the denied object, so unauthorized knowledge
+never reaches the dataset context. `Scenario` gains `subject`/
+`action` (additive, defaulted); `build_queries` routes authorization
+through the anchored-match helper; `build_answer` needs no branch.
+Two live seams found and pinned: **policy KOs store `action` in the
+enum's Debug spelling** ("Read"/"Write"/... — `evaluate_policies`
+compares against `format!("{:?}", action)`, so a lowercase deployment
+never matches) and **the default is deny** — with no matching policy
+the reason is "No matching policy found" and `allowed` is false, so an
+ALLOWED verdict requires an explicit Allow policy
+(`docs/training-data-architecture.md` §14). RED archived as
+`t-10-authorization` (1 collection error). GREEN 198/198, incl. the
+live cell: a real Deny policy + a real Allow policy deployed, the
+kernel's own evaluations denied and allowed, scenarios emitted from
+those verdicts, the oracle re-checking the live engine, and the leak
+rule proven against a denied object.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |

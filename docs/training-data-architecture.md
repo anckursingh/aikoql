@@ -316,3 +316,37 @@ operator-shaped records carry it top-level — the generator reads both.
 snapshots) is not surfaced into examples; the claims' evidence traces
 through the compiled context instead.
 
+## 14. Authorization scenarios (T-10)
+
+The authorization family (design ph 9) runs verdict questions through
+the REAL ACL path — `evaluate_policies` over the kernel's policy KOs,
+never a Python re-implementation of checks. `authorization_scenarios`
+(`scenarios/authorization.py`) consumes decision records — the
+kernel's own policy evaluations for a (principal, action,
+resource_type) tuple: the verdict (allowed bool) and, for denials,
+the kernel's reason — and pairs each decision with every KO of its
+resource type. The question names the object; the answer is the
+machine-readable verdict (ALLOWED:/DENIED: prefix) with the reason
+preserved verbatim. `verify_scenario` re-evaluates policies live and
+asserts the verdict prefix agrees; `validate_grounding` requires the
+verdict prefix, the `policy.authorization_required` schema flag,
+verdict-shaped labels, the generic grounded trace, and — fail-closed
+on leakage — that a DENIED example's context carries the decision
+fact and nothing else that names the denied object.
+
+Three kernel contracts pinned by live probes (kernel.rs
+`deploy_policy`/`evaluate_policies`, kom.rs `Action`):
+
+1. **Policy `action` is the enum's Debug spelling.** The policy KO
+   stores `action` as text; `evaluate_policies` compares it to
+   `format!("{:?}", action)` — "Read"/"Write"/"Admin"/"Evolve"/
+   "Delete". A policy deployed with a lowercase action never matches.
+2. **The default is deny.** With no matching policy the reason is
+   "No matching policy found" and `allowed` is false — an ALLOWED
+   verdict requires an explicit Allow policy, never just the absence
+   of a Deny.
+3. **The verdict is the kernel's, not the operator's.** The engine
+   emits what `evaluate_policies` returned; it never derives a
+   verdict from the policy text itself (the oracle re-checks the
+   prefix against the live engine at validation time).
+
