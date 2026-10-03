@@ -1,0 +1,68 @@
+F                                                                        [100%]
+================================== FAILURES ===================================
+_________________________ TestProtocolMachine.runTest _________________________
+  + Exception Group Traceback (most recent call last):
+  |   File "E:\dreams\Mnemosyne\.venv\Lib\site-packages\hypothesis\stateful.py", line 507, in runTest
+  |     run_state_machine_as_test(cls, settings=self.settings)
+  |     ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "E:\dreams\Mnemosyne\.venv\Lib\site-packages\hypothesis\stateful.py", line 271, in run_state_machine_as_test
+  |     state_machine_test()
+  |     ~~~~~~~~~~~~~~~~~~^^
+  |   File "E:\dreams\Mnemosyne\.venv\Lib\site-packages\hypothesis\stateful.py", line 122, in run_state_machine
+  |     @given(st.data())
+  |                ^^^
+  |   File "E:\dreams\Mnemosyne\.venv\Lib\site-packages\hypothesis\core.py", line 2295, in wrapped_test
+  |     raise the_error_hypothesis_found
+  | BaseExceptionGroup: Hypothesis found 2 distinct failures. (2 sub-exceptions)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "E:\dreams\Mnemosyne\crates\sdk\python\tests\test_fuzz_estate.py", line 325, in stream_next_timeout
+    |     with pytest.raises(socket.timeout):
+    |          ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+    |   File "E:\dreams\Mnemosyne\.venv\Lib\site-packages\_pytest\raises.py", line 699, in __exit__
+    |     fail(f"DID NOT RAISE {self.expected_exceptions[0].__name__}")
+    |     ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "E:\dreams\Mnemosyne\.venv\Lib\site-packages\_pytest\outcomes.py", line 162, in __call__
+    |     raise Failed(msg=reason, pytrace=pytrace)
+    | Failed: DID NOT RAISE TimeoutError
+    | Failing test case:
+    | state = ProtocolMachine()
+    | state.buffer_bound()
+    | state.states_imply_transport()
+    | state.connect()
+    | state.buffer_bound()
+    | state.states_imply_transport()
+    | state.initialize_ok()
+    | state.buffer_bound()
+    | state.states_imply_transport()
+    | state.stream_open()
+    | state.buffer_bound()
+    | state.states_imply_transport()
+    | state.stream_next_timeout()
+    | state.teardown()
+    +---------------- 2 ----------------
+    | Traceback (most recent call last):
+    |   File "E:\dreams\Mnemosyne\crates\sdk\python\tests\test_fuzz_estate.py", line 317, in stream_next_done
+    |     assert chunk["params"]["done"]
+    |            ~~~~~^^^^^^^^^^
+    | KeyError: 'params'
+    | Failing test case:
+    | state = ProtocolMachine()
+    | state.buffer_bound()
+    | state.states_imply_transport()
+    | state.connect()
+    | state.buffer_bound()
+    | state.states_imply_transport()
+    | state.initialize_ok()
+    | state.buffer_bound()
+    | state.states_imply_transport()
+    | state.stream_open()
+    | state.buffer_bound()
+    | state.states_imply_transport()
+    | state.stream_next_done()
+    | state.teardown()
+    +------------------------------------
+=========================== short test summary info ===========================
+FAILED tests/test_fuzz_estate.py::TestProtocolMachine::runTest - BaseExceptio...
+1 failed in 1.32s
+EXIT=1

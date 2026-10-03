@@ -314,16 +314,26 @@ class ProtocolMachine(RuleBasedStateMachine):
     @precondition(lambda self: self.state == "STREAMING")
     def stream_next_done(self):
         chunk = next(self.gen)
-        assert chunk["params"]["done"]
+        # The stream yields the notify's PARAMS dict (the Go and TS SDKs
+        # yield the same shape), not the frame wrapper.
+        assert chunk["done"]
         self.state = "INITIALIZED"
 
     @rule()
     @precondition(lambda self: self.state == "STREAMING")
     def stream_next_timeout(self):
         """A truncated stream surfaces as the socket timeout — the frozen
-        classification for the deadline-less stream reads."""
+        classification for the deadline-less stream reads. The leg arms its
+        own head-only stream: the stream_open notify is still buffered, and
+        the stream-id filter must skip it (§3.3) before the fresh stream's
+        next read times out."""
+        head = {"stream_id": "t", "total_chunks": 2, "results": []}
+        self.responder = lambda req: [
+            {"id": req.get("id"), "result": head}]
+        gen = self.client.aikoql_stream("MATCH x")
+        assert next(gen) == head
         with pytest.raises(socket.timeout):
-            next(self.gen)
+            next(gen)
         self.state = "INITIALIZED"  # the generator died, the client lives
 
     @rule()
