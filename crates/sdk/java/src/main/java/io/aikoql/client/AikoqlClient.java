@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit;
 public final class AikoqlClient {
     /** The oldest aikoql-mcp server this SDK will talk to (the ND-12
      * version contract, mirrored from the Python, Go, Rust and TS SDKs). */
-    public static final String MIN_SERVER_VERSION = "0.2.1";
+    public static final String MIN_SERVER_VERSION = "0.2.2";
     /** The SDK's own package version, advertised as the client identity.
      * Injected by Maven resource filtering from pom.xml (version.properties)
      * — not a restated literal; "dev" outside a Maven build. */

@@ -6,7 +6,7 @@
 
   <groupId>com.aikoql</groupId>
   <artifactId>aikoql-client</artifactId>
-  <version>0.2.1</version>
+  <version>0.2.2</version>
   <packaging>jar</packaging>
   <name>aikoql-client</name>
   <description>The first-party Java SDK for aikoql (D-14) — the canonical

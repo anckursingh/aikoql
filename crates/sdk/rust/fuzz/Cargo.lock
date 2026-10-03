@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-compiler"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "serde",
@@ -57,7 +57,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-kernel"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -72,11 +72,11 @@ dependencies = [
 
 [[package]]
 name = "aikoql-native"
-version = "0.2.1"
+version = "0.2.2"
 
 [[package]]
 name = "aikoql-runtime"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aikoql-compiler",
  "aikoql-kernel",
@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-sdk"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "aikoql-native",
@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "aikoql-storage-v2"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aikoql-kernel",
  "sha2",

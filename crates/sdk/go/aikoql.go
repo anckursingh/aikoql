@@ -46,7 +46,7 @@ import (
 // MIN_SERVER_VERSION is the oldest aikoql-mcp server this SDK will talk
 // to (the ND-12 version contract, mirrored from the Python SDK; pinned
 // against the workspace version by the go-sdk CI job).
-const MIN_SERVER_VERSION = "0.2.1"
+const MIN_SERVER_VERSION = "0.2.2"
 
 // Version is the SDK's own version, advertised as the client identity by
 // default. Distributors pin it at build time: -ldflags

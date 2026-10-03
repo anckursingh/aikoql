@@ -28,7 +28,7 @@ import { Tx } from "./tx.ts";
  * The oldest aikoql-mcp server this SDK will talk to (the ND-12 version
  * contract, mirrored from the Go, Python and Rust SDKs).
  */
-export const MIN_SERVER_VERSION = "0.2.1";
+export const MIN_SERVER_VERSION = "0.2.2";
 
 /** The SDK's own package version, advertised as the client identity:
  * read from package.json so the manifest, not a literal, owns it. */
