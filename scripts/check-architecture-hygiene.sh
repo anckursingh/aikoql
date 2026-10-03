@@ -837,5 +837,37 @@ if ! grep -q 'def validate_tiers' scripts/artifact_schema.py; then
   fail=1
 fi
 
+# workflow test 32 — test_training_data_estate (T-14, training plan §6):
+# training-data.yml is the dataset engine's CI owner — five legs by name
+# (unit / fuzz-estate / determinism / integration / gate-teeth), path-gated
+# on training/** so the 10K-corpus budget rides only training changes.
+# gate-teeth runs the mutation leg: a mutant that survives is a toothless
+# gate, and determinism rides generate_corpus.py regeneration.
+TRAIN=.github/workflows/training-data.yml
+if [ ! -f "$TRAIN" ]; then
+  echo "ARCH: training-data.yml missing (T-14, training plan §6)" >&2
+  fail=1
+fi
+for job in unit fuzz-estate determinism integration gate-teeth; do
+  if [ -f "$TRAIN" ] && ! grep -q "^  $job:" "$TRAIN"; then
+    echo "ARCH: training-data.yml lost the $job leg (T-14)" >&2
+    fail=1
+  fi
+done
+if [ -f "$TRAIN" ] && ! grep -q 'training/\*\*' "$TRAIN"; then
+  echo "ARCH: training-data.yml is not path-gated on training/** (T-14)" >&2
+  fail=1
+fi
+if [ -f "$TRAIN" ] && \
+   ! sed -n '/^  gate-teeth:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q 'mutation_leg.py'; then
+  echo "ARCH: the gate-teeth leg lost the mutation leg (T-14)" >&2
+  fail=1
+fi
+if [ -f "$TRAIN" ] && \
+   ! sed -n '/^  determinism:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q 'generate_corpus.py'; then
+  echo "ARCH: the determinism leg lost the corpus regeneration cell (T-14)" >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"

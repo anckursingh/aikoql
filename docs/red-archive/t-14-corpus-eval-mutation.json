@@ -1,0 +1,8 @@
+{
+  "id": "t-14-corpus-eval-mutation",
+  "pre_fix_commit": "3ba8548",
+  "command": "bash -c cd /e/dreams/Mnemosyne && { ./.venv/Scripts/python.exe -m pytest training/tests/test_corpus.py training/tests/test_eval_set.py training/tests/test_mutation_leg.py -q -p no:cacheprovider; bash scripts/check-architecture-hygiene.sh; }",
+  "captured_at": "2026-10-03T20:03:59Z",
+  "captured_head": "3ba8548f5508a039df47fe36057670b7168dd90b",
+  "exit_code": 1
+}
