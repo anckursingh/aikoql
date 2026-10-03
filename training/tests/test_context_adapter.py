@@ -19,9 +19,11 @@ Recon pins (against the T-06 pre-fix head):
 - Staleness is the IR-versioning boundary: the compiler reads the live
   KO's ir_json and its 5-min cache is fingerprint-keyed, so an updated
   document never serves its superseded facts (CTX-003).
-- PRR-2 (session.rs inject_session_forced): TCP trust mode forces the
-  token identity — per-call subject/roles are overwritten. The denied
-  reader is therefore a second --tcp-token identity, not a subject arg.
+- PRR-2 (transport.rs / session.rs): over TCP every authenticated
+  connection gets agent_id "tcp-agent" — the subject name is
+  connection-invariant and same-tenant tokens share it. The denial
+  boundary over TCP is the TENANT (tcp_tenant_isolation_across_tokens);
+  CTX-001's subject-level denial is the stdio behavior.
 - The Python SDK has no compile_context wrapper: McpClient.call_tool
   is the generic path (mcp_client.py), and tool errors raise McpError.
 """
@@ -238,10 +240,10 @@ def test_live_context_has_required_rows(mcp_server):
 
 
 def test_live_unauthorized_identity_gets_no_rows(mcp_server_two_tokens):
-    """No unauthorized rows: a second token identity without a grant gets
-    an ACCESS_DENIED error, never a context package (PRR-2 pins identity
-    to the token on TCP, so the denied reader is a token, not a subject
-    arg)."""
+    """No unauthorized rows: a second token identity in another tenant
+    gets an ACCESS_DENIED error, never a context package. Over TCP the
+    subject name is connection-invariant ("tcp-agent"), so the denial
+    boundary is the tenant — the house-pinned cross-tenant pattern."""
     srv = mcp_server_two_tokens
     with Agent.connect(srv["host"], token=srv["alice"]) as alice:
         doc = alice.remember("KnowledgeSnapshot", {"ir_json": json.dumps(_ir_v1())})

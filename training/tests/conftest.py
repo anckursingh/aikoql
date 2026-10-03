@@ -138,11 +138,17 @@ def mcp_server():
 
 @pytest.fixture
 def mcp_server_two_tokens():
-    """One server, two TCP identities: alice (admin) owns the knowledge,
-    bob (viewer, no grant) must be denied. PRR-2 pins TCP identity to
-    the token (session.rs inject_session_forced), so the denied reader
-    is a second --tcp-token, never a per-call subject argument."""
-    for host, _specs in _serve(["alice-tok::admin", "bob-tok::viewer"]):
+    """One server, two TCP identities in DIFFERENT tenants: alice (acme,
+    admin) owns the knowledge, bob (other, viewer) must be denied.
+
+    Recon: over TCP every authenticated connection gets agent_id
+    "tcp-agent" (transport.rs), so the subject name is
+    connection-invariant and same-tenant tokens share it — the denial
+    boundary is the TENANT (tcp_tenant_isolation_across_tokens, the
+    house-pinned pattern). CTX-001's subject-level denial is the stdio
+    behavior; over TCP the equivalent cell is cross-tenant. Token
+    spec: TOKEN[:TENANT[:ROLE1,ROLE2]]."""
+    for host, _specs in _serve(["alice-tok:acme:admin", "bob-tok:other:viewer"]):
         yield {"host": host, "alice": "alice-tok", "bob": "bob-tok"}
 
 

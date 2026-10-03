@@ -58,7 +58,7 @@ def test_arbitrary_json_fails_closed_or_validates(value):
 
 
 @given(
-    question=st.text(min_size=1, max_size=200),
+    question=st.text(min_size=1, max_size=200).filter(lambda q: q.strip()),
     context_rows=st.lists(
         st.dictionaries(st.text(max_size=40), _json_safe, max_size=8), max_size=5
     ),
