@@ -347,6 +347,46 @@ U+0085/U+2028/U+2029, which `ensure_ascii=False` JSON emits raw
 inside strings — the reader splits on `"\n"` only. RED archived as
 `t-11-split-writer` (2 collection errors). GREEN 219/219.
 
+T-12 shipped 2026-10-03 — dataset validator + gates + CLI (design ph
+15, §26). `validate_dataset` (`dataset/gates.py`) enforces all eleven
+§5 gates fail-closed; `publishable` is True only when every EVALUATED
+gate passes — skipped (no db: compiler/execution/scenario_match; no
+reference: determinism) and disabled (secret_scan: false) gates never
+veto. Static gates: schema (models.validate), grounding + evidence
+coverage (one `validate_grounding` pass, two counts), authorization
+(flag-mismatch XOR tooth), secrets (fixed local pattern set — the
+ingestion secret-filter binds at corpus time, T-14 — with the FZ-T3
+config rule: absent `secret_scan` means ON, explicit `false` is the
+only way off), leakage (the split assignment is RECOMPUTED from the
+manifest seed — recorded placement must agree AND cross-holdout koid
+pairs must be zero), duplicates (rate bound from the config). Live
+gates run with `db`/`token`: compiler = raised aikoql, execution = no
+`results`, scenario_match follows the ORACLE's rule — hop TARGETS
+recovered, because a TRAVERSE result never carries the source KO
+(RowSet::Traversal, probe-pinned against the spawned server). The
+config parser (`dataset/config.py`, FZ-T3) merges one YAML/JSON file
+over fail-closed defaults; unknown keys, wrong types, non-positive
+ratios and non-bool `secret_scan` raise `DatasetError`. The CLI
+(`cli.py`, `[project.scripts] aikoql-training`): `snapshot` /
+`generate` / `validate` / `stats` / `export`; generate is the
+end-to-end pipeline on a live fixture DB — seed two services + a
+DEPENDS_ON edge, capture the snapshot, factual + relation scenarios,
+every query proven through the oracle, context compiled per question
+through the server Context Compiler over a mocked-ir
+KnowledgeSnapshot, answers certified (refused examples are never
+emitted), examples split by **koid-component keys** (the sorted koid
+set — any two examples sharing a koid share a bucket, so cross-holdout
+pairs are impossible by construction and the leakage gate verifies
+it), written canonically, re-run to a scratch dir to prove
+byte-identical regeneration, validated — exit 0 iff publishable. The
+leakage gate earned its keep during development: the first generate
+run grouped relation examples by `koids[0]`, splitting the
+settlement→checkout component across holdouts — the gate caught it,
+the key rule fixed it. §6's training-data.yml promise stays deferred
+to the T-14 corpus (its legs need the POC artifact set; a red gate
+never enters CI — CI-04). RED archived as `t-12-gates-cli` (3
+collection errors). GREEN 256/256.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |

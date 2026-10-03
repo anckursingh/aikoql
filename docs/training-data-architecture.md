@@ -393,3 +393,59 @@ validation/gates (T-12):
   value can carry one — Rust strings are valid UTF-8) and are
   excluded from the adversarial strategy, not handled by the writer.
 
+## 16. Dataset validation — gates + CLI (T-12)
+
+`validate_dataset` (`dataset/gates.py`) enforces all eleven §5 gates
+fail-closed. The report shape is
+`{publishable, gates: {name: {ok, status, count, detail}}, example_count}`.
+Statuses: `passed`/`failed` when evaluated, `skipped` when its inputs
+are absent (no `db` → compiler/execution/scenario_match; no
+`reference` → determinism), `disabled` when the operator turned it off
+(secret_scan: false). **`publishable` is the AND of every EVALUATED
+gate — skipped and disabled never veto.**
+
+- **Static gates** run on the artifact alone: schema (models.validate,
+  catching `TrainingDataError` — SchemaError and DatasetError are
+  siblings), grounding + evidence coverage (one `validate_grounding`
+  pass feeding two counts), authorization (task-type vs
+  authorization-required flag mismatch = fail, in both directions),
+  secrets (fixed local pattern set; the config rule is FZ-T3:
+  absent `secret_scan` means ON — an explicit `false` is the only way
+  off), leakage, duplicates (id rate bound from the config).
+- **Leakage recomputes, never trusts.** The split assignment is
+  re-derived from the manifest seed over each example's split_key.
+  Two teeth: every example's RECORDED split file must be its
+  recomputed home, and the cross-holdout shared-koid pair count must
+  be zero. This gate caught a real generator bug in its first run:
+  relation examples carried the checkout koid but split on the
+  settlement one — the koid-component split_key (all of an example's
+  koids, sorted and joined) makes cross-holdout pairs impossible by
+  construction, and the gate proves it held.
+- **Live gates** run with `db`/`token` (the §24 client boundary):
+  compiler = raised aikoql counts against all three of
+  compiler/execution/scenario_match; execution = no `results` in the
+  compiled env; scenario_match follows the ORACLE's rule — hop
+  TARGETS recovered, not the source. **The reason is runtime, not
+  taste: `RowSet::Traversal` rows carry only the reached objects, so
+  a TRAVERSE result NEVER contains the source KO** (probe-pinned
+  against the spawned server). Single-koid result shapes check the
+  koid itself; a hop with any missing target koid fails.
+- **Determinism** is a byte gate: the reference dataset's manifest
+  must equal the candidate's, then every split file is compared byte
+  for byte (the CLI's generate re-run already proved
+  regeneration; the gate re-proves it against the artifact).
+
+The CLI (`cli.py`, console script `aikoql-training`) has five
+subcommands: `snapshot`, `generate`, `validate`, `stats`, `export`.
+`generate` is the end-to-end pipeline on a live fixture DB: seed two
+services + a DEPENDS_ON edge, capture the snapshot, factual +
+relation scenarios, every query proven through the oracle (a failed
+scenario raises), context compiled per question through the server
+Context Compiler over a mocked-ir KnowledgeSnapshot, answers
+certified (refused examples are never emitted), examples split by
+koid-component keys, written canonically, re-run to a scratch dir to
+prove byte-identical regeneration, validated against that scratch as
+the reference — **exit 0 iff publishable**. `validate`/`stats`/
+`export` share the same reader/writer; stats and export never judge.
+
+
