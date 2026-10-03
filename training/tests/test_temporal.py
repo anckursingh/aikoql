@@ -194,36 +194,35 @@ def test_temporal_oracle_fails_on_wrong_reconstructed_value():
 
 @st.composite
 def _histories(draw):
-    def a_koid():
-        return draw(st.text(min_size=8, max_size=8,
-                            alphabet=st.characters(min_codepoint=ord("a"),
-                                                   max_codepoint=ord("f"))))
-
-    def versions():
-        return draw(st.lists(
-            st.fixed_dictionaries({
-                "version": st.integers(min_value=1, max_value=9),
-                "commit_ts": st.integers(min_value=0, max_value=10**12),
-                "properties": st.dictionaries(st.text(max_size=12),
-                                              st.text(max_size=20), max_size=4),
-            }),
-            min_size=1, max_size=4,
-            unique_by=lambda v: v["commit_ts"],  # one version per instant
-        ))
-
-    def a_record():
+    @st.composite
+    def a_record(draw):
         return {
-            "koid": a_koid(),
+            "koid": draw(st.text(min_size=8, max_size=8,
+                                 alphabet=st.characters(
+                                     min_codepoint=ord("a"),
+                                     max_codepoint=ord("f")))),
             "type_name": draw(st.text(min_size=1, max_size=10,
                                       alphabet=st.characters(
                                           min_codepoint=ord("a"),
                                           max_codepoint=ord("z")))),
             "properties": draw(st.dictionaries(st.text(max_size=12),
-                                               st.text(max_size=20), max_size=4)),
-            "versions": versions(),
+                                               st.text(max_size=20),
+                                               max_size=4)),
+            "versions": draw(st.lists(
+                st.fixed_dictionaries({
+                    "version": st.integers(min_value=1, max_value=9),
+                    "commit_ts": st.integers(min_value=0, max_value=10**12),
+                    "properties": st.dictionaries(st.text(max_size=12),
+                                                  st.text(max_size=20),
+                                                  max_size=4),
+                }),
+                min_size=1, max_size=4,
+                unique_by=lambda v: v["commit_ts"],  # one version per instant
+            )),
         }
 
-    return draw(st.lists(a_record, min_size=1, max_size=4))
+    return draw(st.lists(a_record(), min_size=1, max_size=4,
+                         unique_by=lambda r: r["koid"]))
 
 
 @given(histories=_histories())
@@ -249,8 +248,15 @@ def test_live_temporal_versions_over_the_wire(mcp_server):
     with aikoql.Agent.connect(host, token=token) as db:
         koid = db.remember("service", {"owner": "Alpha", "tier": 1})["koid"]
         db.remember("service", {"owner": "Beta", "tier": 1}, koid=koid)
-        versions = db.trace(koid)["versions"]
+        # trace is McpClient-surface only; over MCP Agent._backend IS the
+        # client (the adapter's _call_tool uses the same path)
+        versions = db._backend.trace(koid)["versions"]
         assert len(versions) == 2
+
+        # trace's commit_ts is the PACKED HLC ((millis << 16) | counter,
+        # kernel.rs); the AS_OF grammar wants plain epoch millis
+        def ms(v):
+            return v["commit_ts"] >> 16
 
         def snapshot(commit_ts):
             rows = db.aikoql(
@@ -259,10 +265,10 @@ def test_live_temporal_versions_over_the_wire(mcp_server):
 
         history = {
             "koid": koid, "type_name": "service",
-            "properties": snapshot(versions[-1]["commit_ts"]),
+            "properties": snapshot(ms(versions[-1])),
             "versions": [
-                {"version": v["version"], "commit_ts": v["commit_ts"],
-                 "properties": snapshot(v["commit_ts"])}
+                {"version": v["version"], "commit_ts": ms(v),
+                 "properties": snapshot(ms(v))}
                 for v in versions
             ],
         }

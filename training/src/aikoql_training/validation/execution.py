@@ -38,6 +38,25 @@ def verify_scenario(db: Any, scenario: Scenario, queries: List[str]) -> dict:
         if not any(r.get("koid") == target for r in result_sets[i]):
             errors.append(f"hop {i}: target {target} not recovered")
 
+    if scenario.task_type == "provenance":
+        # The answer is the evidence citation, not a property value: the
+        # oracle proves the anchor KO was recovered with its property.
+        # Evidence realness is validate_grounding's job (evidence_ids).
+        row = next(
+            (r for r in result_sets[0] if r.get("koid") == scenario.koids[0]),
+            None,
+        )
+        if row is None:
+            errors.append(f"provenance: anchor {scenario.koids[0]} not in results")
+        elif (
+            scenario.property is not None
+            and scenario.property not in row.get("properties", {})
+        ):
+            errors.append(
+                f"provenance: property {scenario.property} missing from the anchor"
+            )
+        return {"ok": not errors, "errors": errors}
+
     if scenario.property is not None:
         found = False
         for r in result_sets[0]:

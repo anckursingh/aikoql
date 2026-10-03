@@ -42,10 +42,35 @@ def _in_context(evidence: dict, rows: List[Any]) -> bool:
     return any(isinstance(e, dict) and evidence_id(e) == key for e in rows)
 
 
+def _validate_provenance(example: Dict[str, Any]) -> dict:
+    """Provenance examples (task.type == "provenance"): the answer IS a
+    citation — grounding means every evidence_id traces to a REAL
+    context evidence row."""
+    errors: List[str] = []
+    expected = example["expected"]
+    if not expected["answer"].strip():
+        errors.append("grounded example has an empty answer")
+    if not expected["evidence_ids"]:
+        errors.append("provenance example carries no evidence")
+    context_ids = {
+        evidence_id(e)
+        for e in example["context"]["evidence"]
+        if isinstance(e, dict)
+    }
+    missing = [i for i in expected["evidence_ids"] if i not in context_ids]
+    if missing:
+        errors.append(f"{len(missing)} evidence_id(s) absent from context")
+    if not example["labels"]["grounded"]:
+        errors.append("labels.grounded is false but the example cites evidence")
+    return {"ok": not errors, "errors": errors}
+
+
 def validate_grounding(example: Dict[str, Any]) -> dict:
     """Fail-closed grounding check. Returns {"ok", "errors"}; errors are
     strings, counted by T-12's gates — never raises on grounding
     violations."""
+    if (example.get("task") or {}).get("type") == "provenance":
+        return _validate_provenance(example)
     errors: List[str] = []
     expected = example["expected"]
     labels = example["labels"]

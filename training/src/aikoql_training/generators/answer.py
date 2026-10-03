@@ -31,6 +31,21 @@ def build_answer(scenario: Scenario, context: Dict[str, Any]) -> Optional[Dict[s
     if not answer.strip():
         return None
     evidence_rows = context.get("evidence", [])
+
+    if scenario.task_type == "provenance":
+        # The answer IS the citation of the scenario's evidence: every
+        # cited entry must appear in the compiled context, or refused.
+        if not scenario.evidence:
+            return None
+        for ev in scenario.evidence:
+            if not any(
+                isinstance(e, dict) and evidence_id(e) == evidence_id(ev)
+                for e in evidence_rows
+            ):
+                return None
+        return {"answer": answer,
+                "evidence_ids": [evidence_id(e) for e in scenario.evidence]}
+
     supporting = [
         f for f in context.get("facts", [])
         if isinstance(f.get("statement"), str) and answer in f["statement"]

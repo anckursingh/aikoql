@@ -98,6 +98,20 @@ def build_queries(scenario: Scenario, kos: List[dict]) -> List[str]:
     start = by_koid[scenario.koids[0]]
     type_name = start["type_name"]
 
+    if scenario.task_type == "temporal":
+        if (
+            scenario.as_of is None
+            or scenario.as_of < 0
+            or scenario.property is None
+            or not _ident_ok(type_name)
+            or not _ident_ok(scenario.property)
+        ):
+            return []
+        return [
+            f"MATCH {type_name} AS_OF {scenario.as_of}"
+            f" RETURN {scenario.property}"
+        ]
+
     if scenario.difficulty == "factual":
         if scenario.property is None:
             return []

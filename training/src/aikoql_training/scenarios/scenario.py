@@ -11,7 +11,7 @@ and ref rendering live in templates.py (FZ-T4).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -24,3 +24,5 @@ class Scenario:
     koids: Tuple[str, ...]
     expected_path: Tuple[Tuple[str, str, str], ...] = ()
     property: Optional[str] = None  # the source property (factual scenarios)
+    as_of: Optional[int] = None  # temporal: the real commit_ts (epoch ms)
+    evidence: Tuple[Dict[str, Any], ...] = ()  # provenance: the cited evidence
