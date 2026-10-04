@@ -98,6 +98,35 @@ def test_authorization_deterministic():
         list(reversed(kos)), list(reversed(decisions)))
 
 
+def test_scenario_carries_the_live_verdict():
+    [s] = authorization_scenarios(
+        [ko(_K, name="settlement")], [_decision()])
+    assert s.decision is True
+    assert s.reason == "allowed"
+
+
+def test_denied_scenario_carries_the_kernel_reason():
+    denied = _decision(allowed=False, reason="Denied by policy: " + "c" * 32)
+    [s] = authorization_scenarios([ko(_K, name="settlement")], [denied])
+    assert s.decision is False
+    assert s.reason == "Denied by policy: " + "c" * 32
+
+
+def test_policy_of_emits_the_verdict_metadata():
+    from aikoql_training.plan import policy_of
+
+    [s] = authorization_scenarios(
+        [ko(_K, name="settlement")], [_decision()])
+    assert policy_of(s) == {
+        "authorization_required": True,
+        "subject": "reader",
+        "action": "read",
+        "resource": "service",
+        "decision": True,
+        "reason": "allowed",
+    }
+
+
 # -- the query builder ------------------------------------------------------
 
 def test_authorization_query_anchors_the_object():
@@ -154,13 +183,59 @@ def _example(decision=None, facts=None, labels=None, policy=None, answer=None):
                   "koids": list(s.koids),
                   "evidence_ids": [evidence_id(_EV)]},
         policy=policy or {"authorization_required": True,
-                          "subject": s.subject, "action": s.action},
+                          "subject": s.subject, "action": s.action,
+                          "resource": s.type_name,
+                          "decision": s.decision, "reason": s.reason},
         labels=labels or _VERDICT_LABELS,
     )
 
 
 def test_validator_accepts_grounded_verdict():
     assert validate_grounding(_example()) == {"ok": True, "errors": []}
+
+
+def test_validator_accepts_grounded_denial():
+    # the denied path with full metadata is accepted — the verdict
+    # prefix, policy.decision and the preserved kernel reason agree
+    denied = _decision(allowed=False, reason="Denied by policy: " + "c" * 32)
+    assert validate_grounding(_example(decision=denied)) == {
+        "ok": True, "errors": []}
+
+
+def test_validator_rejects_verdict_decision_mismatch():
+    # the answer says ALLOWED but the recorded kernel decision is a
+    # denial — the dataset never asserts what the ACL does not
+    ex = _example(policy={"authorization_required": True,
+                          "subject": "reader", "action": "read",
+                          "resource": "service",
+                          "decision": False,
+                          "reason": "Denied by policy: " + "c" * 32})
+    out = validate_grounding(ex)
+    assert out["ok"] is False
+    assert any("disagrees" in e for e in out["errors"])
+
+
+def test_validator_rejects_denial_without_the_kernel_reason():
+    denied = _decision(allowed=False, reason="Denied by policy: " + "c" * 32)
+    ex = _example(decision=denied, policy={
+        "authorization_required": True, "subject": "reader", "action": "read",
+        "resource": "service", "decision": False})
+    out = validate_grounding(ex)
+    assert out["ok"] is False
+    assert any("reason" in e for e in out["errors"])
+
+
+def test_validator_rejects_reason_not_in_the_answer():
+    # the recorded reason differs from the reason the answer preserves —
+    # a stale or forged denial reason is rejected
+    denied = _decision(allowed=False, reason="Denied by policy: " + "c" * 32)
+    ex = _example(decision=denied, policy={
+        "authorization_required": True, "subject": "reader", "action": "read",
+        "resource": "service", "decision": False,
+        "reason": "Denied by policy: " + "d" * 32})
+    out = validate_grounding(ex)
+    assert out["ok"] is False
+    assert any("reason" in e for e in out["errors"])
 
 
 def test_validator_rejects_non_verdict_answer():
@@ -303,3 +378,72 @@ def test_live_authorization_runs_through_the_real_acl(mcp_server):
             labels=_VERDICT_LABELS,
         )
         assert validate_grounding(ex)["ok"] is False
+
+
+def test_verify_authorization_examples_agrees_with_the_live_acl(mcp_server):
+    """The dataset-level live-oracle leg (P0.6): every committed
+    authorization example's policy.decision and denial reason are
+    re-proved against the kernel's evaluate_policies — a tampered or
+    stale verdict is reported, never silently shipped."""
+    from aikoql_training.validation.execution import (
+        verify_authorization_examples,
+    )
+
+    host, token = mcp_server
+    with aikoql.Agent.connect(host, token=token) as db:
+        koid = db.remember("service", {"name": "settlement",
+                                       "owner": "Payments Team"})["koid"]
+        db._backend.call_tool("deploy_policy", {
+            "name": "reader-deny-service", "effect": "Deny",
+            "principal": "reader", "action": "Read", "resource_type": "service",
+        })
+        db._backend.call_tool("deploy_policy", {
+            "name": "admin-allow-service", "effect": "Allow",
+            "principal": "admin", "action": "Read", "resource_type": "service",
+        })
+        decisions = []
+        for principal in ("reader", "admin"):
+            verdict = db._backend.call_tool("evaluate_policies", {
+                "principal": principal, "action": "read",
+                "resource_type": "service",
+            })
+            decisions.append({
+                "principal": principal, "action": "read",
+                "resource_type": "service",
+                "allowed": bool(verdict.get("allowed")),
+                "reason": verdict.get("reason") or "",
+            })
+        scenarios = authorization_scenarios([db.get(koid)], decisions)
+        assert len(scenarios) == 2
+        examples = [
+            {"example_id": f"ex{i}",
+             "task": {"type": "authorization"},
+             "policy": {"authorization_required": True,
+                        "subject": s.subject, "action": s.action,
+                        "resource": s.type_name,
+                        "decision": s.decision, "reason": s.reason}}
+            for i, s in enumerate(scenarios)
+        ]
+        report = verify_authorization_examples(
+            db, {"train": examples, "val": [], "test": []})
+        assert report["ok"], report["errors"]
+        assert report["checked"] == 2
+
+        # a tampered verdict disagrees with the live ACL and is named
+        tampered = [{**e, "policy": dict(e["policy"])} for e in examples]
+        tampered[0]["policy"]["decision"] = not tampered[0]["policy"][
+            "decision"]
+        bad = verify_authorization_examples(
+            db, {"train": tampered, "val": [], "test": []})
+        assert bad["ok"] is False
+        assert any("disagrees" in e for e in bad["errors"])
+
+        # a stale denial reason disagrees with the kernel's live reason
+        stale = [{**e, "policy": dict(e["policy"])} for e in examples]
+        denied = [e for e in stale if e["policy"]["decision"] is False]
+        assert denied
+        denied[0]["policy"]["reason"] = "Denied by policy: " + "e" * 32
+        bad_reason = verify_authorization_examples(
+            db, {"train": stale, "val": [], "test": []})
+        assert bad_reason["ok"] is False
+        assert any("reason disagrees" in e for e in bad_reason["errors"])

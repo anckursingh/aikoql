@@ -170,6 +170,26 @@ def test_policy_authorization_demands_subject_and_action():
         validate(example)
 
 
+def test_policy_authorization_demands_full_decision_metadata():
+    # TDD-01 (T-25): authorization_required demands the complete
+    # machine-readable verdict — subject, action, resource, the kernel
+    # decision and the preserved reason — or the example is invalid.
+    base = {"authorization_required": True, "subject": "reader",
+            "action": "read", "resource": "service",
+            "decision": True, "reason": "allowed"}
+    for missing in ("subject", "action", "resource", "decision", "reason"):
+        example = make_example()
+        policy = dict(base)
+        del policy[missing]
+        example["policy"] = policy
+        with pytest.raises(SchemaError, match="authorization"):
+            validate(example)
+    example = make_example()
+    example["policy"] = dict(base, decision="yes")
+    with pytest.raises(SchemaError, match="decision"):
+        validate(example)
+
+
 def test_context_evidence_entries_must_be_dicts():
     example = make_example()
     example["context"]["evidence"] = [

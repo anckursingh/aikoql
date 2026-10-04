@@ -63,6 +63,11 @@ def test_corpus_reaches_the_target_and_is_publishable(mcp_server, tmp_path):
     assert report["gates"]["leakage"]["count"] == 0, report
     # the corpus-time secret binding holds: secret_scan evaluated and 0
     assert report["gates"]["secret_scan"]["ok"] is True, report
+    # T-25: the live-oracle authorization leg ran over the committed
+    # dataset (fail-loud wiring — the leg's verdict teeth live in
+    # test_authorization.py against the real ACL)
+    assert report["authorization"]["ok"] is True, report
+    assert isinstance(report["authorization"]["checked"], int), report
 
 
 def test_corpus_commits_manifest_and_statistics(tmp_path, mcp_server):

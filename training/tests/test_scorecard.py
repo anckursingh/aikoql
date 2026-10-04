@@ -185,6 +185,13 @@ def test_false_refusal_moves_precision_and_rate(tmp_path):
                query_target={"language": "aikoql",
                              "query": 'MATCH service WHERE name == '
                                       '"ledger" RETURN name'})
+    a2 = _base(expected={"answer": "Payments Team", "koids": ["c" * 32],
+                         "evidence_ids": [evidence_id(_EV)]},
+               input={"question": "What is the owner of the gateway "
+                                  "service?"},
+               query_target={"language": "aikoql",
+                             "query": 'MATCH service WHERE name == '
+                                      '"gateway" RETURN name'})
     preds = [
         {"example_id": u1["example_id"],
          "query": 'MATCH service WHERE name == "settlement" RETURN name',
@@ -196,17 +203,20 @@ def test_false_refusal_moves_precision_and_rate(tmp_path):
         {"example_id": a1["example_id"],
          "query": 'MATCH service WHERE name == "ledger" RETURN name',
          "answer": "UNKNOWN: no record"},
+        {"example_id": a2["example_id"],
+         "query": 'MATCH service WHERE name == "gateway" RETURN name',
+         "answer": "Payments Team"},
     ]
-    out = compute_scorecard(preds, _ds(tmp_path, u1, u2, a1), split="test")
+    out = compute_scorecard(preds, _ds(tmp_path, u1, u2, a1, a2), split="test")
     assert out["metrics"]["unknown_recall"]["value"] == 1.0
     # 2 true refusals out of 3 UNKNOWN: answers
     assert out["metrics"]["unknown_precision"]["value"] == pytest.approx(2 / 3)
     assert out["metrics"]["unknown_precision"]["detail"] == {
         "refused": 2, "false_refusals": 1}
-    # 1 false refusal out of the 1 answerable example
+    # 1 false refusal out of the 2 answerable examples
     assert out["metrics"]["false_refusal_rate"]["value"] == 0.5
     assert out["metrics"]["false_refusal_rate"]["detail"] == {
-        "false_refusals": 1, "answerable": 1}
+        "false_refusals": 1, "answerable": 2}
 
 
 def test_undefined_denominators_report_none(tmp_path):
