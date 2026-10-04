@@ -869,5 +869,16 @@ if [ -f "$TRAIN" ] && \
   fail=1
 fi
 
+# workflow test 6 — no column-1 body lines: a block-scalar body at
+# column 1 (embedded code, heredoc leftovers) silently ends the scalar
+# and GitHub rejects the whole workflow file — every run dies at 0s
+# with "workflow file issue" (training-data.yml first-run class, T-16)
+if bad=$(grep -nE '^[^[:space:]#]' .github/workflows/*.yml |
+         grep -vE ':[[:space:]]' | grep -vE ':[[:space:]]*$'); then
+  echo "ARCH: column-1 line inside a workflow block scalar:" >&2
+  echo "$bad" | sed 's/^/ARCH: /' >&2
+  fail=1
+fi
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"
