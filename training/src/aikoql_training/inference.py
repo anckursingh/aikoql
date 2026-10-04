@@ -20,6 +20,11 @@ Two skills, two shapes:
   UNKNOWN: answer with no claims and grounded=false; a grounded
   answer carries claims. The answer itself keeps the T-09
   machine-readable UNKNOWN: format.
+
+Missing fields, duplicate keys (a model emitting dupes is emitting
+garbage, not a vote the parser resolves) and JSON too deeply nested
+for the decoder all raise ModelOutputError — the caller refuses
+rather than guessing.
 """
 
 from __future__ import annotations
@@ -30,7 +35,20 @@ from typing import Dict, List
 from aikoql_training.errors import ModelOutputError
 from aikoql_training.scenarios.answer_formats import UNKNOWN_PREFIX
 
-_DECODER = json.JSONDecoder()
+
+def _strict_pairs(pairs: List) -> Dict:
+    """object_pairs_hook: a duplicate key anywhere in the reply (the
+    top level or a nested claim) is invalid protocol, not a silent
+    last-wins tie the decoder breaks for the model."""
+    obj: Dict = {}
+    for key, value in pairs:
+        if key in obj:
+            raise _fail(f"duplicate key in model reply: {key!r}")
+        obj[key] = value
+    return obj
+
+
+_DECODER = json.JSONDecoder(object_pairs_hook=_strict_pairs)
 
 
 def _json_object(text: str) -> Dict:
@@ -47,7 +65,7 @@ def _json_object(text: str) -> Dict:
                                stage="inference", code="MODEL_OUTPUT")
     try:
         obj, _ = _DECODER.raw_decode(text, start)
-    except ValueError as e:
+    except (ValueError, RecursionError) as e:
         raise ModelOutputError(f"model reply is not valid JSON: {e!r}",
                                stage="inference", code="MODEL_OUTPUT")
     if not isinstance(obj, dict):
@@ -97,6 +115,9 @@ def parse_query_reply(text: str) -> Dict:
     unknown = set(obj) - {"query", "refusal_reason"}
     if unknown:
         raise _fail(f"unknown fields in query reply: {sorted(unknown)!r}")
+    missing = {"query", "refusal_reason"} - set(obj)
+    if missing:
+        raise _fail(f"missing fields in query reply: {sorted(missing)!r}")
     query, reason = obj["query"], obj["refusal_reason"]
     if not isinstance(query, (str, type(None))):
         raise _fail("query must be a string or null")
@@ -120,6 +141,9 @@ def parse_answer_reply(text: str) -> Dict:
     unknown = set(obj) - {"answer", "grounded", "claims", "refusal_reason"}
     if unknown:
         raise _fail(f"unknown fields in answer reply: {sorted(unknown)!r}")
+    missing = {"answer", "grounded", "claims", "refusal_reason"} - set(obj)
+    if missing:
+        raise _fail(f"missing fields in answer reply: {sorted(missing)!r}")
     answer, grounded = obj["answer"], obj["grounded"]
     claims, reason = obj["claims"], obj["refusal_reason"]
     if not isinstance(answer, str) or not answer.strip():
