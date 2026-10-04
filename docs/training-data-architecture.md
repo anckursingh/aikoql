@@ -919,3 +919,34 @@ and a defined false_refusal_rate 0.0; the artifact test accepts
 
 RED archived as `t-24-unknown-precision-recall`.
 
+## 29. Live-oracle authorization (T-25)
+
+PR9 Finding #7 ("Authorization Untested Against the Live Server") +
+P0.6: authorization examples asserted the ACL *structurally* (a
+flag + subject/action) but were never re-proved against the kernel.
+Authorization is now a two-stage live oracle:
+
+- **At generation**: the policy section carries the complete
+  machine-readable verdict — `subject`, `action`, `resource`, the
+  kernel's `decision` (bool) and, for denials, the preserved `reason`
+  — straight from the deployed policies' `evaluate_policies` results.
+  `models.validate` fails closed on any missing/wrong-typed piece
+  (TDD-01 "invalid authorization metadata"), and the grounding
+  validator cross-checks verdict prefix ⇔ `decision` plus the
+  preserved reason appearing in a denied answer.
+- **At verification** (`verify_authorization_examples`): every
+  committed authorization example is re-evaluated through the live
+  `evaluate_policies` — `policy.decision` must equal the current
+  verdict and a denial's `policy.reason` the live reason verbatim.
+  The corpus builder runs the leg over the written dataset and
+  aborts fail-loud on any disagreement; the report carries
+  `authorization.{ok,errors,checked}`.
+
+The mutation leg registers the review's §26 authorization mutants —
+always-allow (grounding), ignore-subject / ignore-action /
+ignore-resource (schema) — each killed by its own suite, and the leg
+now targets per-mutant (file, suite) pairs instead of a single
+hardwired validator.
+
+RED archived as `t-25-live-oracle-authorization`.
+
