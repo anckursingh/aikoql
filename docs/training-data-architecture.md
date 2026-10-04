@@ -770,3 +770,39 @@ The poisoned-dataset tests plant exactly one dimension per test —
 canonical overlap fails the gate while answer/identifier overlap
 passes with the counts reported; a clean dataset reports all-zero
 dimensions. RED archived as `t-19-leakage-dims`.
+
+## 24. Structured JSON model protocol (T-20)
+
+PR9: the §40 seam spoke to the model in marker prefixes (QUERY: /
+ANSWER:) and the pipeline split replies on them — prose the parser
+sniffs for, with a bare-prose fallback that accepted anything. The
+model now speaks a schema-validated JSON protocol; refusal and
+grounding are FIELDS, not prose.
+
+- **Two shapes** — query: `{"query": str|null, "refusal_reason":
+  str|null}` with exactly one of the two set; answer: `{"answer",
+  "grounded", "claims": [{"statement", "evidence_ids"}],
+  "refusal_reason"}`.
+- **Fail-closed parser** (`inference.py`:
+  `parse_query_reply` / `parse_answer_reply`) — the first JSON
+  object in the reply is decoded (stdlib `raw_decode`, so a prose
+  wrapper is tolerated), then validated strictly: unknown fields,
+  wrong types, and every cross-constraint in BOTH directions —
+  refusal_reason set ⇔ UNKNOWN: answer with no claims and
+  grounded=false; a refusal cannot be grounded; grounded ⇔ claims
+  non-empty. Any deviation raises `ModelOutputError`
+  (errors.py) and the caller refuses — the T-16 bare-answer
+  fallback is gone.
+- **Chat path** — every refusal is a field: the model's own
+  refusal_reason passes through machine-readably; an unparseable
+  reply becomes `UNKNOWN: model reply was not valid protocol
+  JSON`; the record carries `claims`/`grounded`/`refusal_reason`.
+- **Fine-tune contract** — `finetune.py` emits JSON completions
+  (refusals and grounded answers with per-fact claims carrying
+  their evidence ids) and predicts through the parsers, fail-closed:
+  an unparseable reply predicts nothing.
+
+The protocol tests pin the shapes, the prose-wrapper tolerance, and
+each cross-constraint direction; the chat tests route refusals
+through the fields. RED archived as `t-20-json-protocol`. T-21 fuzzes
+this parser.
