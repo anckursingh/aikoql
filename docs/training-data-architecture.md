@@ -728,3 +728,45 @@ the scenario fields are dead input for the structured families.
 A path-family plan without steps never renders a query
 (fail-closed, same as the unrepresentable-input rule). RED
 archived as `t-18-renderer`.
+
+## 23. Leakage dimensions + group union (T-19)
+
+PR9 Finding #4 (TDD-10/FZ-08): the holdout must be checked along
+the review's leakage axes — entity, identifier, template,
+relation-pattern, graph-component, semantic-duplicate, answer. The
+T-12 leakage gate counted only two failure modes: recorded placement
+disagreeing with the recomputed hash assignment, and cross-holdout
+`expected.koid` pairs. T-19 adds the missing dimensions, split by
+whether they veto.
+
+- **Component group union** — `component_ids(edges, groups=())`:
+  ambiguity groups share an anchor value (two KOs with the same
+  name ARE one entity from the model's view) yet have no edge
+  between them, so the T-12 union-find left them in separate
+  components — ambiguity examples about {a, b} and factual examples
+  about a or b could straddle the holdout under some seed. A
+  declared group now unions its members onto the min-root, and the
+  corpus passes `[s.koids for s in ambiguity scenarios]`. Edgeless
+  group members form a component too (the group is knowledge
+  before any relation exists).
+- **HARD: canonical-question overlap == 0** — the exact question
+  text appearing in two splits (same question, two scenarios) means
+  the model saw the answer in one split, so the other can no longer
+  measure it. New tooth on the leakage gate.
+- **Diagnostic dimensions** — `identifier` (entity names in the
+  context), `normalized` (question with quoted refs masked),
+  `answer`, `relation_pattern` (sorted traverse relations from the
+  plan) — counted per split pair and reported on the gate entry as
+  `gates["leakage"]["dimensions"]`, never vetoed. Template corpora
+  share these STRUCTURALLY — "Payments Team" owns many services,
+  every factual question shares its template — and the review
+  itself consigns embedding/similarity overlap to the diagnostic
+  class. A hard normalized-question gate would veto every
+  template-generated corpus, the T-14 corpus included.
+- The dimensions report is a pure function of the example set
+  (shuffle-invariant, FZ-08).
+
+The poisoned-dataset tests plant exactly one dimension per test —
+canonical overlap fails the gate while answer/identifier overlap
+passes with the counts reported; a clean dataset reports all-zero
+dimensions. RED archived as `t-19-leakage-dims`.

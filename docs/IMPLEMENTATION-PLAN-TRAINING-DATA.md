@@ -590,7 +590,7 @@ workflow test 7c requires the package install in exactly those jobs
 |---|---|---|---|
 | T-17 | schema v2: structured semantic target (P0.2/TDD-01) | intent is an opaque string, no plan anywhere | `plan_of`/`policy_of` derivations: (intent, entities, requirements, plan) with closed role/op sets, temporal as_of, policy ACL pair; assemblers share one code path |
 | T-18 | plan→renderer seam | query text built inline with plan derivation | a renderer turns the semantic plan into the query_target aikoql text; plan derivation and rendering testable apart |
-| T-19 | leakage dimensions | split_key straddles component boundaries (mixed-cardinality koid sets) | component-level split key + gate teeth over every leakage axis (entity, relation, cross-component) |
+| T-19 | leakage dimensions | split_key straddles component boundaries (mixed-cardinality koid sets) | component-level split key + ambiguity group union; hard canonical-question tooth; identifier/normalized/answer/relation-pattern reported as diagnostics (arch §23) |
 | T-20 | structured JSON model protocol | model speaks free text, parseable only by brittle prefixes | model outputs structured JSON; schema-validated parser; refusal/grounding as fields, not prose |
 | T-21 | model-output fuzz | parser accepts garbage silently | hypothesis fuzz over the model-output parser; malformed/partial/adversarial replies fail closed |
 | T-22 | claim-level grounding | grounding checked once per answer | every claim in an answer carries claim→fact→evidence; `validate_grounding` walks claims, refuses on any dangling claim |
