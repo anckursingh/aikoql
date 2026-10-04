@@ -836,3 +836,28 @@ pins it on the T-20 seam:
   deterministic pin.
 
 RED archived as `t-21-model-output-fuzz`.
+
+## 26. Claim-level grounding (T-22)
+
+PR9 TDD-07 / P1.3 / Finding #2: grounding was one substring check per
+answer. Grounded answers now carry the claim decomposition, and the
+validator walks the claims — Level 1 of the review's three-level
+architecture (structural; claim/evidence alignment; semantic
+entailment — the latter two stay out, and no LLM becomes the
+production truth oracle).
+
+- **Representation** — `build_answer` emits one
+  `{"statement", "evidence_ids"}` claim per supporting fact (the
+  claim text IS the fact statement; paraphrase is the fine-tuned
+  model's job). `expected.claims` is schema-optional; refusals carry
+  none; the corpus assembler forwards it.
+- **The walk** (`_validate_claims`, wired into the generic and
+  authorization branches of `validate_grounding`) — every claim must
+  trace to an evidenced fact; every cited id must attach to a
+  supporting fact of that claim (a forged id fails); a claim without
+  ids fails; every answer-supporting fact must be covered by a
+  claim; the claims' evidence union equals `expected.evidence_ids`
+  exactly; claims on an ungrounded example fail. Examples without
+  claims keep the answer-level trace.
+
+RED archived as `t-22-claim-level-grounding`. T-23 mutates this.
