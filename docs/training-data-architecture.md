@@ -997,3 +997,31 @@ would flag as a denied-object leak (the trap the RED caught).
 
 RED archived as `t-27-multi-domain`.
 
+## 32. Held-out organizations (T-28)
+
+PR9 Finding #3 (P1.2): a corpus whose eval splits share the training
+orgs can only measure memorization — the eval questions must
+reference entities the model never saw. NovaEnergy is the held-out
+org: every example carries an `org` stamp (schema-optional, present
+on corpus examples), `assign_splits` hashes held-out examples into
+val/test only (their relative weights — the assignment law extends to
+a pure function of (split_key, org, seed)), and the manifest declares
+`held_out_orgs` so the leakage gate recomputes the placement with the
+same declaration (a held-out example recorded into train is
+misplaced, fail-closed). The corpus test pins the end-to-end tooth:
+no train context may reference a held-out entity.
+
+Two seam fixes the held-out split demanded: the org-neutral unknown
+scenarios anchor on a training org's service (a held-out anchor would
+leak its entities into a train context), and the authorization
+policy docs are keyed per (principal, action, verdict, domain) — the
+shared policy doc used to carry every org's decision lines, so an
+acmepay train example's context named held-out services. Temporal
+and provenance stay acmepay: only the training org seeds versioned
+services, so those capabilities are not yet measured on held-out
+data (a documented ceiling, not a leak). The mutation leg registers
+two mutants: the holdout force disarmed, and the gate's manifest
+declaration ignored — each dies in test_gates.
+
+RED archived as `t-28-held-out-orgs`.
+
