@@ -25,7 +25,7 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install -q maturin pytest hypothesis pyyaml
           cd crates/sdk/python
-          .venv/bin/maturin develop
+          "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
       - name: Unit suite (no corpus, no mutation leg)
         run: |
           .venv/bin/python -m pytest training/tests -q \
@@ -45,7 +45,7 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install -q pytest hypothesis maturin
           cd crates/sdk/python
-          .venv/bin/maturin develop
+          "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
       - name: Hypothesis estates
         run: |
           .venv/bin/python -m pytest training/tests/test_schema_fuzz.py \
@@ -68,7 +68,7 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install -q maturin pytest hypothesis pyyaml
           cd crates/sdk/python
-          .venv/bin/maturin develop
+          "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
       - name: Corpus regeneration (determinism cell)
         run: |
           printf '[rate_limit]\nenabled = false\n' > "$RUNNER_TEMP/rate.toml"
@@ -107,7 +107,7 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install -q maturin pytest hypothesis pyyaml
           cd crates/sdk/python
-          .venv/bin/maturin develop
+          "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
       - name: Full suite including the corpus contract
         run: |
           .venv/bin/python -m pytest training/tests -q \

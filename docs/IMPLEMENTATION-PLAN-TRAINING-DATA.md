@@ -551,6 +551,21 @@ venv-creating job, scoped per job so release.yml's legitimate system-
 python `maturin build` is untouched (RED archived as
 `t-16-ci-install-path`).
 
+Third CI round (run 37189254003): the install-path fix itself had the
+same class one level down — the corrected steps said
+`.venv/bin/maturin develop` *after* `cd crates/sdk/python`, and a
+relative path stops resolving after a `cd`, so all four Install steps
+died at exit 127 again with "No such file or directory". Fixed by
+anchoring the call to `"$GITHUB_WORKSPACE/.venv/bin/maturin"`, plus a
+gate tooth: arch-hygiene workflow test 7b rejects a relative `.venv/`
+path after a `cd` in the same run block, per block (each `run:` is its
+own shell, so a `cd` only poisons the block it lives in), with
+`$GITHUB_WORKSPACE`-anchored paths always allowed (RED archived as
+`t-16-ci-relative-venv`). The RED run also exposed a harness bug: the
+7b check tested `if bad=$(... | awk ...)`, which is true whenever awk
+exits 0 — even with no output — so every venv-creating job was flagged
+with an empty block; fixed to capture-then-test (`[ -n "$bad" ]`).
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
