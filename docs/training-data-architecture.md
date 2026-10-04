@@ -950,3 +950,24 @@ hardwired validator.
 
 RED archived as `t-25-live-oracle-authorization`.
 
+## 30. Per-capability scorecard (T-26)
+
+PR9 Finding #5 ("Scorecard Is Useful but Currently Too Coarse"): the
+eight T-15 metrics were aggregate-only, so a model that fails one
+capability while passing the rest could still look viable — not
+sufficient for AIKOQL-native model selection. §28 already demanded
+the breakdown (overall / factual / one-hop / multi-hop / temporal /
+provenance / unknown / ambiguity / contradiction / authorization).
+
+`compute_scorecard` now returns the aggregate plus `by_task`
+(task.type) and `by_difficulty` (task.difficulty) cells — each the
+same shape as the aggregate (`example_count`,
+`missing_predictions`, the eight metrics), only present capabilities
+listed, and §27 holds per cell: an absent denominator is None there
+too, never a silent 0.0. The per-example loop extracted as `_cell`
+and reused for every group; the artifact script picks the breakdown
+up automatically via `**score`, so the next training run commits it
+with no schema change.
+
+RED archived as `t-26-per-capability-scorecard`.
+
