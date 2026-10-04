@@ -33,6 +33,10 @@ An example with no prediction record counts as failed everywhere
 (missing = no query, no answer, no retrieval). Values are 0..1, or
 None when the metric's denominator is absent from the split (§27:
 an undefined rate must never read as 0.0); detail carries the counts.
+
+T-26: the same eight metrics are also reported per capability —
+by_task (task.type) and by_difficulty — so a failure concentrated in
+one capability cannot hide behind the aggregate (PR9 Finding #5).
 """
 
 from __future__ import annotations
@@ -61,17 +65,9 @@ def _compiled(pred: Dict[str, Any], query: str) -> bool:
     return bool(query.strip()) and bool(_HEAD.match(query))
 
 
-def compute_scorecard(
-    predictions: List[dict],
-    ds: Dict[str, Any],
-    *,
-    split: str = "test",
-) -> Dict[str, Any]:
-    """Compute the eight metrics over `split`; predictions are joined to
-    examples by example_id (unmatched predictions are ignored)."""
-    examples = ds[split]
-    by_id = {p.get("example_id"): p for p in predictions if p.get("example_id")}
-
+def _cell(examples: List[dict], by_id: Dict[str, dict]) -> Dict[str, Any]:
+    """The eight metrics over one example group (the whole split, or one
+    capability cell). §27 holds per group: an absent denominator is None."""
     compiled_n = leaks = 0
     recall_hits = recall_targets = precision_retrieved = 0
     grounded_n = 0
@@ -151,3 +147,31 @@ def compute_scorecard(
                                         leaks=leaks, total=total),
         },
     }
+
+
+def compute_scorecard(
+    predictions: List[dict],
+    ds: Dict[str, Any],
+    *,
+    split: str = "test",
+) -> Dict[str, Any]:
+    """The eight metrics over `split` plus a per-capability breakdown
+    (T-26): by_task keyed on task.type, by_difficulty on
+    task.difficulty — each cell the same shape as the aggregate, only
+    present capabilities listed. Predictions are joined to examples by
+    example_id (unmatched predictions are ignored)."""
+    examples = ds[split]
+    by_id = {p.get("example_id"): p for p in predictions if p.get("example_id")}
+    out = _cell(examples, by_id)
+
+    def _grouped(key: str) -> Dict[str, Dict[str, Any]]:
+        groups: Dict[str, List[dict]] = {}
+        for ex in examples:
+            name = (ex.get("task") or {}).get(key)
+            if isinstance(name, str) and name.strip():
+                groups.setdefault(name, []).append(ex)
+        return {name: _cell(g, by_id) for name, g in sorted(groups.items())}
+
+    out["by_task"] = _grouped("type")
+    out["by_difficulty"] = _grouped("difficulty")
+    return out
