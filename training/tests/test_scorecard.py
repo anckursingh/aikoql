@@ -266,6 +266,75 @@ def test_undefined_denominators_report_none(tmp_path):
     assert out["metrics"]["false_refusal_rate"]["value"] is None
 
 
+def test_capability_breakdown_surfaces_hidden_failures(tmp_path):
+    """Aggregates hide capability failures: a model perfect on factual
+    and useless on multi-hop scores decent overall — the by_task /
+    by_difficulty cells must surface the zero (PR9 Finding #5, T-26)."""
+    f1 = _base()
+    f2 = _base(expected={"answer": "Payments Team", "koids": ["b" * 32],
+                         "evidence_ids": [evidence_id(_EV)]},
+               input={"question": "What is the owner of the checkout "
+                                  "service?"},
+               query_target={"language": "aikoql",
+                             "query": 'MATCH service WHERE name == '
+                                      '"checkout" RETURN name'})
+    mh_task = {"type": "grounded_qa", "difficulty": "multi_hop",
+               "requires": []}
+    mh1 = _base(task=dict(mh_task),
+                expected={"answer": "Payments Team", "koids": ["c" * 32],
+                          "evidence_ids": [evidence_id(_EV)]},
+                input={"question": "Which team owns the gateway through "
+                                   "its group?"},
+                query_target={"language": "aikoql",
+                              "query": "TRAVERSE (a)-[:owns]->(b)"})
+    mh2 = _base(task=dict(mh_task),
+                expected={"answer": "Payments Team", "koids": ["d" * 32],
+                          "evidence_ids": [evidence_id(_EV)]},
+                input={"question": "Which team owns the ledger through "
+                                   "its group?"},
+                query_target={"language": "aikoql",
+                              "query": "TRAVERSE (a)-[:owns]->(b)"})
+    preds = [
+        {"example_id": f1["example_id"],
+         "query": 'MATCH service WHERE name == "settlement" RETURN name',
+         "compiled": True, "retrieved": ["a" * 32],
+         "answer": "Payments Team"},
+        {"example_id": f2["example_id"],
+         "query": 'MATCH service WHERE name == "checkout" RETURN name',
+         "retrieved": ["b" * 32], "answer": "Payments Team"},
+        # the multi-hop examples fail everywhere: uncompilable query,
+        # nothing retrieved, untraced answer
+        {"example_id": mh1["example_id"],
+         "query": "SELECT nope", "retrieved": [], "answer": "Wrong Team"},
+        {"example_id": mh2["example_id"],
+         "query": "SELECT nope", "retrieved": [], "answer": "Wrong Team"},
+    ]
+    out = compute_scorecard(
+        preds, _ds(tmp_path, f1, f2, mh1, mh2), split="test")
+
+    # the aggregate looks fine on factual strength alone
+    assert out["metrics"]["groundedness"]["value"] == 0.5
+    # the cells tell the truth
+    assert sorted(out["by_task"]) == ["factual", "grounded_qa"]
+    assert sorted(out["by_difficulty"]) == ["factual", "multi_hop"]
+    assert out["by_task"]["grounded_qa"]["metrics"]["groundedness"][
+        "value"] == 0.0
+    assert out["by_task"]["factual"]["metrics"]["groundedness"][
+        "value"] == 1.0
+    assert out["by_difficulty"]["multi_hop"]["metrics"]["groundedness"][
+        "value"] == 0.0
+    assert out["by_difficulty"]["multi_hop"]["metrics"][
+        "query_compile_rate"]["value"] == 0.0
+    for cell in out["by_task"].values():
+        assert set(cell["metrics"]) == set(_METRICS)
+        assert cell["example_count"] == 2
+        assert cell["missing_predictions"] == 0
+    # the None convention holds inside a cell too: the factual cell
+    # carries no unknown examples -> unknown_recall is None there
+    assert out["by_task"]["factual"]["metrics"]["unknown_recall"][
+        "value"] is None
+
+
 def test_scorecard_artifacts_are_committed():
     """The GREEN run commits at least one scorecard artifact (design law:
     no training run without a scorecard)."""
