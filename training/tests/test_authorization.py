@@ -118,6 +118,8 @@ def test_build_answer_grounds_on_the_decision_fact():
     assert build_answer(s, ctx) == {
         "answer": s.expected_answer,
         "evidence_ids": [evidence_id(_EV)],
+        "claims": [{"statement": "Policy decision: " + s.expected_answer,
+                    "evidence_ids": [evidence_id(_EV)]}],
         "labels": _VERDICT_LABELS,
     }
 

@@ -1,0 +1,8 @@
+{
+  "id": "t-22-claim-level-grounding",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_grounding.py -q",
+  "captured_at": "2026-10-04T10:11:04Z",
+  "captured_head": "4bb6b8559c7d11e1b28acf44b410a70e660734cf",
+  "exit_code": 1
+}

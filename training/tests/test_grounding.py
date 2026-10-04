@@ -63,6 +63,10 @@ def test_answer_grounds_on_evidenced_fact():
     out = build_answer(_scenario(), ctx)
     assert out == {"answer": "Payments Team",
                    "evidence_ids": [evidence_id(_EV)],
+                   "claims": [{"statement":
+                               "The settlement service is owned by "
+                               "the Payments Team",
+                               "evidence_ids": [evidence_id(_EV)]}],
                    "labels": {"grounded": True, "answerable": True,
                               "ambiguous": False, "contradictory": False}}
 
@@ -253,3 +257,125 @@ def test_live_answer_traces_to_compiled_evidence(mcp_server):
         assert out["answer"] == "Payments Team"
         ctx_ids = [evidence_id(e) for e in ctx["evidence"]]
         assert out["evidence_ids"] and all(i in ctx_ids for i in out["evidence_ids"])
+
+
+# -- T-22 RED: claim-level grounding (TDD-07) --------------------------------
+#
+# Every claim in a grounded answer carries claim -> fact -> evidence.
+# validate_grounding walks the claims and refuses on any dangling
+# claim: a statement that traces to no evidenced fact, a forged
+# evidence id, a claim without ids, a supporting fact no claim covers,
+# or a claims/evidence_ids union mismatch. The schema accepts the
+# optional expected.claims; build_answer emits one claim per
+# supporting fact for grounded answers.
+#
+# Every test below fails against the current tree: the schema rejects
+# the claims field, build_answer emits no claims, and the validator
+# ignores them entirely (a forged id validates ok).
+
+def _claim(statement="The settlement service is owned by the Payments Team",
+           evidence=_EV):
+    return {"statement": statement, "evidence_ids": [evidence_id(evidence)]}
+
+
+def _claims_example(claims, answer="Payments Team", evidence_ids=None,
+                    grounded=True):
+    if evidence_ids is None:
+        evidence_ids = [evidence_id(_EV)]
+    return {
+        "context": _context(
+            [_fact("The settlement service is owned by the Payments Team", _EV)],
+            [_EV]),
+        "expected": {"answer": answer, "koids": ["k1"],
+                     "evidence_ids": evidence_ids, "claims": claims},
+        "labels": {"grounded": grounded, "answerable": True,
+                   "ambiguous": False, "contradictory": False},
+    }
+
+
+def test_answer_emits_one_claim_per_supporting_fact():
+    ctx = _context(
+        [_fact("The settlement service is owned by the Payments Team", _EV),
+         _fact("Payments Team runs the settlement service", _EV2)],
+        [_EV, _EV2],
+    )
+    out = build_answer(_scenario(), ctx)
+    assert out["claims"] == [_claim(), _claim(
+        "Payments Team runs the settlement service", _EV2)]
+
+
+def test_answer_refusals_carry_no_claims():
+    # A refusal (unknown/ambiguity/contradiction/provenance) is not a
+    # claim decomposition.
+    ctx = _context([], [])
+    out = build_answer(
+        _scenario(answer="UNKNOWN: no record", task_type="unknown"),
+        ctx)
+    assert out is not None and "claims" not in out
+
+
+def test_validator_accepts_claim_level_grounded_example():
+    out = validate_grounding(_claims_example([_claim()]))
+    assert out == {"ok": True, "errors": []}
+
+
+def test_validator_rejects_dangling_claim():
+    out = validate_grounding(_claims_example(
+        [_claim("Settlement batches nightly")]))
+    assert not out["ok"]
+    assert any("trace" in e for e in out["errors"])
+
+
+def test_validator_rejects_forged_evidence_id():
+    out = validate_grounding(_claims_example(
+        [_claim(evidence=_EV2)]))  # _EV2 is not this fact's evidence
+    assert not out["ok"]
+    assert any("forged" in e for e in out["errors"])
+
+
+def test_validator_rejects_claim_without_evidence_ids():
+    out = validate_grounding(_claims_example(
+        [{"statement": _claim()["statement"], "evidence_ids": []}]))
+    assert not out["ok"]
+
+
+def test_validator_rejects_supporting_fact_no_claim_covers():
+    # Two supporting facts, one claim: the uncovered fact is dangling
+    # evidence the decomposition hid.
+    ex = _claims_example([_claim()])
+    ex["context"] = _context(
+        [_fact("The settlement service is owned by the Payments Team", _EV),
+         _fact("Payments Team runs the settlement service", _EV2)],
+        [_EV, _EV2])
+    ex["expected"]["evidence_ids"] = [evidence_id(_EV), evidence_id(_EV2)]
+    out = validate_grounding(ex)
+    assert not out["ok"]
+    assert any("covered" in e for e in out["errors"])
+
+
+def test_validator_rejects_claims_union_mismatch():
+    # expected.evidence_ids must equal the claims' union exactly.
+    out = validate_grounding(_claims_example([_claim()], evidence_ids=[]))
+    assert not out["ok"]
+    assert any("evidence_ids" in e for e in out["errors"])
+
+
+def test_validator_rejects_claims_on_ungrounded_example():
+    out = validate_grounding(_claims_example([_claim()], grounded=False))
+    assert not out["ok"]
+
+
+def test_validator_rejects_empty_claims_on_grounded_example():
+    # claims: [] on a grounded answer = no decomposition = dangling.
+    out = validate_grounding(_claims_example([]))
+    assert not out["ok"]
+
+
+def test_schema_accepts_claims():
+    from aikoql_training.models import validate
+    from conftest import make_example
+
+    ex = make_example(expected={"answer": "Payments Team", "koids": [],
+                                "evidence_ids": [evidence_id(_EV)],
+                                "claims": [_claim()]})
+    validate(ex)  # must not raise SchemaError
