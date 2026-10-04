@@ -621,3 +621,34 @@ false) and pip skips the same-version swap — force-reinstall the
 cu126 wheel (`--force-reinstall --no-deps`); the first CPU training
 attempt (0 steps in 20 minutes) made the GPU the only sane path.
 
+
+## 20. Inference wrapper — the chat path (T-16)
+
+The design §40 end-state: question → model (intent/query) → AIKOQL →
+context → model (grounded answer), with every refusal machine-readable.
+
+- **`src/aikoql_training/chat.py`** — `chat(question, *, generate,
+  run_query) -> record`. The two model calls go through the §19
+  prompt/parse seam; the one retrieval is a live `aikoql()` call and
+  the context statements are built from its results only — a wrapper
+  reading context from the dataset would bypass the oracle, so the
+  tests pin that the answer prompt carries the run_query statements.
+  The record: question, query, compiled, retrieved koids, statements,
+  answer, refused (answer starts with the T-09 `UNKNOWN:` prefix).
+  Refusal paths: no query produced / query failed to compile or
+  execute (the exception path) / query returned no results / the
+  model's own UNKNOWN: refusal passed through verbatim.
+- **`scripts/chat.py`** — the POC chatbot: the T-15 model (LoRA
+  adapter optional, `--device` cuda default), a live server
+  (`Agent.connect`, the wide 60 s timeout for post-seed tantivy
+  churn), one-shot `--question` or an interactive stdin loop.
+
+The deterministic test ceiling (T-07's rule): the seams are stubbed
+in unit tests — the query step prompt, the answer step prompt over
+the results-derived statements, the four refusal paths, and the
+eval-set routing (a grounded example answers, an unanswerable one
+refuses). The live smoke on the seeded corpus server closes the
+loop: a grounded question compiled, retrieved and answered
+end-to-end; an out-of-knowledge question produced a hallucinated
+query, the compile failed and the wrapper refused. RED archived as
+`t-16-chat`.

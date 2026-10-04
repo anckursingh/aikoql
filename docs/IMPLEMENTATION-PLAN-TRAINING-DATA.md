@@ -505,6 +505,27 @@ index is the fix, and the first CPU training attempt (0 steps in 20
 minutes) made the GPU the only sane path. RED archived as
 `t-15-scorecard`. GREEN: training suite 294/294.
 
+T-16 shipped 2026-10-04 — the inference wrapper (design §40
+end-state). `src/aikoql_training/chat.py` is the thin
+question → query → context → answer path, seam-for-seam over the
+validated pipeline: the two model skills run through the §40
+prompt/parse contract (`build_query_prompt` / `build_answer_prompt` /
+`parse_model_reply`) around ONE live `aikoql()` call — the context
+statements come from the query results only, so no retrieval can
+bypass the oracle. Both seams (`generate`, `run_query`) are
+injectable, which is what makes the path testable without a model;
+`scripts/chat.py` is the POC chatbot wiring the real model
+(T-15 base + LoRA adapter, `--device` cuda default), a live server
+and an interactive loop. Every refusal is fail-closed and
+machine-readable (the T-09 UNKNOWN: format): no query produced,
+query failed to compile/execute (the exception path), query returned
+no results, and the model's own UNKNOWN: refusal passes through.
+Live smoke on the seeded corpus server: a grounded question
+compiled, retrieved and answered end-to-end; an out-of-knowledge
+question hallucinated a query, the compile failed and the wrapper
+refused — the exact fail-closed behavior the RED column demands.
+RED archived as `t-16-chat`. GREEN: training suite 302/302.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
