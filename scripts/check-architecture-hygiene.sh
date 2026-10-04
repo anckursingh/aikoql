@@ -918,6 +918,18 @@ for _wf in .github/workflows/*.yml; do
       printf '%s\n' "$bad" | sed 's/^/ARCH: /' >&2
       fail=1
     fi
+    # test 7c — a training/scripts entry run with the venv python
+    # imports aikoql_training, which pytest finds via pythonpath=src
+    # but a bare script never does: the corpus sweep died at
+    # `from aikoql_training.client import ...` (run 37190350754,
+    # determinism + integration). Any job that runs such a script
+    # must install the package into the venv first.
+    if printf '%s\n' "$_block" | grep -qE '^[[:space:]]*\.venv/bin/python[[:space:]]+training/scripts/'; then
+      if ! printf '%s\n' "$_block" | grep -qE 'pip install .*-e[ ]+training'; then
+        echo "ARCH: training/scripts run without a package install: $_wf $_job" >&2
+        fail=1
+      fi
+    fi
   done
 done
 

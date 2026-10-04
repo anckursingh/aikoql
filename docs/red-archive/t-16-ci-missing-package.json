@@ -1,0 +1,8 @@
+{
+  "id": "t-16-ci-missing-package",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-04T09:08:03Z",
+  "captured_head": "88258f36d1b9d701b9590e4e694345e85302bdc7",
+  "exit_code": 1
+}
