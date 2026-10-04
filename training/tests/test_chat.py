@@ -5,8 +5,9 @@ Every test below fails against the current tree:
 the question -> query -> context -> answer path has no wrapper.
 
 The wrapper is thin and reuses the validated pipeline: the model's
-two skills through the §40 prompt/parse seam (build_query_prompt /
-build_answer_prompt / parse_model_reply) around a live AIKOQL call.
+two skills through the T-20 JSON protocol seam (build_query_prompt /
+build_answer_prompt / parse_query_reply / parse_answer_reply) around
+a live AIKOQL call.
 Both the model calls (`generate`) and the query runner (`run_query`)
 are injectable seams, so the path is tested without a model; the
 refusals use the T-09 machine-readable UNKNOWN: format, and an
@@ -17,6 +18,7 @@ that reads them from the dataset would bypass the AIKOQL step.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -26,10 +28,19 @@ from aikoql_training.chat import chat
 from aikoql_training.scenarios.answer_formats import UNKNOWN_PREFIX
 
 _QUERY = 'MATCH Cardholder WHERE name == "Alice" RETURN name'
-_QUERY_MARKER = "QUERY:"
 _STATEMENT = "Alice Chen holds card 4111"
 _RESULTS = [{"koid": "b" * 32, "statement": _STATEMENT},
             {"koid": "c" * 32}]
+
+_Q_REPLY = json.dumps({"query": _QUERY, "refusal_reason": None})
+_A_REPLY = json.dumps({"answer": "Alice Chen", "grounded": True,
+                       "claims": [{"statement": _STATEMENT,
+                                   "evidence_ids": ["e1"]}],
+                       "refusal_reason": None})
+_REFUSAL_REPLY = json.dumps(
+    {"answer": "UNKNOWN: the context lacks the account",
+     "grounded": False, "claims": [],
+     "refusal_reason": "the context lacks the account"})
 
 
 def _generate(query_reply: str, answer_reply: str):
@@ -56,7 +67,7 @@ def _run_query(results):
 
 
 def test_chat_happy_path_round_trip():
-    generate, prompts = _generate(f"QUERY: {_QUERY}\n", "Alice Chen")
+    generate, prompts = _generate(_Q_REPLY, _A_REPLY)
     run_query, queries = _run_query(_RESULTS)
     rec = chat("Who holds card 4111?", generate=generate,
                run_query=run_query)
@@ -67,9 +78,13 @@ def test_chat_happy_path_round_trip():
     assert rec["retrieved"] == ["b" * 32, "c" * 32]
     assert rec["statements"] == [_STATEMENT, "c" * 32]
     assert rec["answer"] == "Alice Chen"
+    assert rec["grounded"] is True
+    assert rec["claims"] == [{"statement": _STATEMENT,
+                              "evidence_ids": ["e1"]}]
+    assert rec["refusal_reason"] is None
     assert rec["refused"] is False
-    # the query step prompt asks for a query over the question
-    assert _QUERY_MARKER in prompts[0] and "Who holds card 4111?" in prompts[0]
+    # the query step prompt demands the JSON protocol over the question
+    assert '"query"' in prompts[0] and "Who holds card 4111?" in prompts[0]
     # the answer step prompt carries the question AND the context that
     # came from the query results, not from anywhere else
     assert "Who holds card 4111?" in prompts[1]
@@ -91,11 +106,29 @@ def test_chat_no_query_refuses():
     assert len(prompts) == 1  # the answer step never runs
 
 
+def test_chat_model_query_refusal_field():
+    """A refusal the MODEL declares, as a field: the reason is carried
+    machine-readably instead of a prose sniff."""
+    def boom(_q):
+        raise AssertionError("run_query must not be called on a refusal")
+
+    reply = json.dumps({"query": None,
+                        "refusal_reason": "no graph access"})
+    generate, prompts = _generate(reply, "x")
+    rec = chat("?", generate=generate, run_query=boom)
+
+    assert rec["refused"] is True
+    assert rec["refusal_reason"] == "no graph access"
+    assert rec["answer"].startswith(UNKNOWN_PREFIX)
+    assert rec["query"] == ""
+    assert len(prompts) == 1
+
+
 def test_chat_query_failure_refuses():
     def run_query(query):
         raise RuntimeError("compile failed")
 
-    generate, prompts = _generate(f"QUERY: {_QUERY}\n", "x")
+    generate, prompts = _generate(_Q_REPLY, "x")
     rec = chat("Who holds card 4111?", generate=generate,
                run_query=run_query)
 
@@ -107,7 +140,7 @@ def test_chat_query_failure_refuses():
 
 
 def test_chat_empty_results_refuse():
-    generate, prompts = _generate(f"QUERY: {_QUERY}\n", "x")
+    generate, prompts = _generate(_Q_REPLY, "x")
     run_query, queries = _run_query([])
     rec = chat("Who holds card 4111?", generate=generate,
                run_query=run_query)
@@ -120,24 +153,28 @@ def test_chat_empty_results_refuse():
 
 
 def test_chat_unknown_answer_passthrough():
-    generate, _ = _generate(f"QUERY: {_QUERY}\n",
-                            "UNKNOWN: the context lacks the account")
+    generate, _ = _generate(_Q_REPLY, _REFUSAL_REPLY)
     run_query, _ = _run_query(_RESULTS)
     rec = chat("Who holds card 4111?", generate=generate,
                run_query=run_query)
 
     assert rec["refused"] is True
     assert rec["answer"] == "UNKNOWN: the context lacks the account"
+    assert rec["refusal_reason"] == "the context lacks the account"
+    assert rec["grounded"] is False
+    assert rec["claims"] == []
 
 
-def test_chat_bare_answer_fallback():
-    generate, _ = _generate(f"QUERY: {_QUERY}\n", "Alice Chen")
+def test_chat_bare_prose_answer_fails_closed():
+    """T-20: a model reply that is not protocol JSON is a refusal —
+    the T-16 bare-answer fallback accepted prose; the review kills it."""
+    generate, _ = _generate(_Q_REPLY, "Alice Chen")
     run_query, _ = _run_query(_RESULTS)
     rec = chat("Who holds card 4111?", generate=generate,
                run_query=run_query)
 
-    assert rec["answer"] == "Alice Chen"
-    assert rec["refused"] is False
+    assert rec["refused"] is True
+    assert rec["answer"].startswith(UNKNOWN_PREFIX)
 
 
 def test_chat_eval_examples_route():
@@ -159,9 +196,12 @@ def test_chat_eval_examples_route():
         labels={"grounded": False, "answerable": False, "ambiguous": False,
                 "contradictory": False})
 
-    for ex, answer in ((grounded, "Alice Chen"),
-                       (unknown, "UNKNOWN: no such card")):
-        generate, prompts = _generate(f"QUERY: {_QUERY}\n", answer)
+    for ex, reply in ((grounded, _A_REPLY),
+                      (unknown, json.dumps(
+                          {"answer": "UNKNOWN: no such card",
+                           "grounded": False, "claims": [],
+                           "refusal_reason": "no such card"}))):
+        generate, prompts = _generate(_Q_REPLY, reply)
         run_query, queries = _run_query(_RESULTS)
         rec = chat(ex["input"]["question"], generate=generate,
                    run_query=run_query)

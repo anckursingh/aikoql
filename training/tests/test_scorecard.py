@@ -174,16 +174,5 @@ def test_finetune_script_targets_a_05b_class_model_with_lora():
     assert re.search(r"qwen2\.?5-0\.5b", text, re.I)
 
 
-def test_inference_parse_extracts_query_and_answer_markers():
-    from aikoql_training.inference import parse_model_reply
-    query, answer = parse_model_reply(
-        "QUERY: MATCH service RETURN name\nANSWER: Payments Team")
-    assert query == "MATCH service RETURN name"
-    assert answer == "Payments Team"
-
-
-def test_inference_parse_falls_back_to_an_answer_only_reply():
-    from aikoql_training.inference import parse_model_reply
-    query, answer = parse_model_reply("UNKNOWN: no such record\n")
-    assert query == ""
-    assert answer == "UNKNOWN: no such record"
+# (T-20: the marker-parse pins moved to tests/test_protocol.py —
+# the JSON protocol replaced the QUERY:/ANSWER: prose contract.)
