@@ -566,6 +566,17 @@ own shell, so a `cd` only poisons the block it lives in), with
 exits 0 — even with no output — so every venv-creating job was flagged
 with an empty block; fixed to capture-then-test (`[ -n "$bad" ]`).
 
+Fourth CI round (run 37190350754): unit/fuzz-estate/gate-teeth green —
+the install class is closed. determinism/integration died one step
+later, in the corpus cells: `training/scripts/generate_corpus.py` runs
+with the venv python and imports `aikoql_training`, which pytest finds
+via `pythonpath = ["src"]` but a bare script never does (the laptop
+venv had the editable install all along, the fresh runner does not).
+Fixed by `pip install -q -e training` in every Install step whose job
+runs a training/scripts entry, plus a gate tooth: arch-hygiene
+workflow test 7c requires the package install in exactly those jobs
+(RED archived as `t-16-ci-missing-package`).
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
