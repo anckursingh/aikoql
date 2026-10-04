@@ -175,3 +175,29 @@ def test_assignment_depends_only_on_split_key_and_seed(keys, seed):
         for name in ("train", "val", "test"):
             assert {e["example_id"] for e in baseline[0][name]} == {
                 e["example_id"] for e in splits[name]}
+
+# -- group union (T-19: ambiguity groups are one knowledge component) --------
+
+def test_component_ids_unions_a_group_across_components():
+    """PR9 Finding #4: two KOs sharing an anchor value (an ambiguity
+    group) are the same knowledge even with NO edge between them. The
+    group must land in ONE component or ambiguity + factual examples
+    about its members can straddle the holdout under some seed."""
+    from aikoql_training.dataset.splitter import component_ids
+    a, b, c, d = ("k0" + "0" * 30, "k1" + "0" * 30,
+                  "k2" + "0" * 30, "k3" + "0" * 30)
+    ids = component_ids(
+        [{"from": a, "rel": "DEPENDS_ON", "to": b},
+         {"from": c, "rel": "DEPENDS_ON", "to": d}],
+        groups=[(b, c)],
+    )
+    assert {ids[a], ids[b], ids[c], ids[d]} == {a}  # one root: min koid
+
+
+def test_component_ids_unions_edgeless_group_members():
+    """Group members with no edges at all still form a component: the
+    ambiguity group is knowledge even before any relation exists."""
+    from aikoql_training.dataset.splitter import component_ids
+    a, b = "a" + "0" * 31, "b" + "0" * 31
+    ids = component_ids([], groups=[(a, b)])
+    assert ids[a] == ids[b] == a

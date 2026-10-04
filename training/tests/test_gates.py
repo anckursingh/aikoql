@@ -20,6 +20,7 @@ from __future__ import annotations
 from aikoql_training.dataset.gates import validate_dataset
 from aikoql_training.dataset.splitter import assign_splits
 from aikoql_training.dataset.writer import write_dataset
+from aikoql_training.models import compute_id
 from aikoql_training.validation.grounding import evidence_id
 from conftest import make_example
 
@@ -30,17 +31,21 @@ _FIELDS = {"dataset_id": "poc-1", "seed": 7, "snapshot_id": "snap-1",
            "configuration_hash": "c" * 64, "created_at": _CREATED}
 
 
-def _ex(split_key="k", question=None, facts=None, koids=None, **overrides):
+def _ex(split_key="k", question=None, facts=None, koids=None,
+         context=None, **overrides):
     """A grounding-valid grounded_qa example."""
     if question is None:
         question = "What is the owner of the settlement service?"
     if facts is None:
         facts = [{"statement": "The owner of the settlement service "
                               "is Payments Team", "evidence": _EV}]
+    ctx = {"entities": [], "relations": [], "evidence": [_EV],
+           "facts": facts}
+    if context is not None:
+        ctx.update(context)
     return make_example(
         input={"question": question},
-        context={"entities": [], "relations": [], "evidence": [_EV],
-                 "facts": facts},
+        context=ctx,
         expected={"answer": "Payments Team", "koids": koids or [],
                   "evidence_ids": [evidence_id(_EV)]},
         split_key=split_key,
@@ -219,3 +224,81 @@ def test_scenario_match_fails_on_a_missing_koid(mcp_server, tmp_path):
     out = validate_dataset(_dataset(tmp_path, [ex]), db=host, token=token)
     assert out["gates"]["scenario_match"]["ok"] is False
     assert out["publishable"] is False
+
+
+# -- leakage dimensions (T-19: PR9 Finding #4 / TDD-10 / FZ-08) ---------------
+
+def _placed(tmp_path, examples, seed):
+    """Write each example into its RECOMPUTED home so the leakage gate
+    has no misplaced noise — the planted dimension is the only poison."""
+    splits, _ = assign_splits(examples, seed, (8, 1, 1))
+    homes = {e["example_id"]: n for n in _SPLITS for e in splits[n]}
+    write_dataset({n: [e for e in examples if homes[e["example_id"]] == n]
+                   for n in _SPLITS},
+                  str(tmp_path), **{**_FIELDS, "seed": seed})
+    return str(tmp_path)
+
+
+def test_canonical_question_crossing_the_holdout_poisons_publishability(
+        tmp_path):
+    """TDD-10: the SAME question text in two splits is the review's
+    canonical leakage — the model saw the answer in train, so the test
+    split can never measure it. The canonical tooth is HARD."""
+    # same question text from TWO scenarios (distinct entities):
+    # example_id keys on the question AND the scenario_id, so this is
+    # not a duplicate — but the model has seen the exact question in
+    # one split and the other can never measure it again.
+    a = _ex(split_key="k-1", koids=["a" * 32])
+    b = _ex(split_key="k-2", koids=["b" * 32])
+    b["source"]["scenario_id"] = "factual:policy:p-02"
+    b["example_id"] = compute_id(b)
+    seed = _apart_seed("k-1", "k-2")
+    out = validate_dataset(_placed(tmp_path, [a, b], seed))
+    assert out["publishable"] is False
+    assert out["gates"]["leakage"]["ok"] is False
+    assert out["gates"]["leakage"]["dimensions"]["canonical"] >= 1
+
+
+def test_diagnostic_dimensions_report_but_never_veto(tmp_path):
+    """Answer + entity-name overlap across splits is REPORTED, never
+    vetoed: template corpora share answers and names structurally
+    ("Payments Team" owns many services) — the review's own caveat
+    keeps these diagnostic."""
+    a = _ex(split_key="k-1",
+            context={"entities": [{"koid": "a" * 32, "name":
+                                   "settlement"}]})
+    b = _ex(split_key="k-2",
+            question="What is the owner of the checkout service?",
+            context={"entities": [{"koid": "b" * 32, "name":
+                                   "settlement"}]})
+    seed = _apart_seed("k-1", "k-2")
+    out = validate_dataset(_placed(tmp_path, [a, b], seed))
+    assert out["publishable"] is True
+    assert out["gates"]["leakage"]["ok"] is True
+    assert out["gates"]["leakage"]["dimensions"]["identifier"] >= 1
+    assert out["gates"]["leakage"]["dimensions"]["answer"] >= 1
+    assert out["gates"]["leakage"]["dimensions"]["canonical"] == 0
+
+
+def test_clean_dataset_reports_zero_leakage_dimensions(tmp_path):
+    out = validate_dataset(_clean(tmp_path))
+    assert out["gates"]["leakage"]["dimensions"] == {
+        "canonical": 0, "identifier": 0, "normalized": 0,
+        "answer": 0, "relation_pattern": 0}
+
+
+def test_leakage_dimensions_are_shuffle_invariant():
+    """FZ-08: the dimensions report is a pure function of the example
+    set — input order can never change the counts."""
+    from aikoql_training.dataset.gates import _leakage_dimensions
+    a = _ex(split_key="k-1")
+    b = _ex(split_key="k-2",
+            question="What is the owner of the checkout service?")
+    c = _ex(split_key="k-3",
+            question="Which service does settlement depend on?")
+    exs = [a, b, c]
+    splits, _ = assign_splits(exs, 7, (8, 1, 1))
+    baseline = _leakage_dimensions(splits, exs)
+    for perm in ([c, a, b], [b, c, a]):
+        splits2, _ = assign_splits(perm, 7, (8, 1, 1))
+        assert _leakage_dimensions(splits2, perm) == baseline
