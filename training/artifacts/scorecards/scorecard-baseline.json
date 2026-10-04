@@ -4,6 +4,13 @@
   "dataset_id": "acmepay-poc",
   "example_count": 24,
   "metrics": {
+    "false_refusal_rate": {
+      "detail": {
+        "answerable": 24,
+        "false_refusals": 0
+      },
+      "value": 0.0
+    },
     "groundedness": {
       "detail": {
         "grounded": 8,
@@ -32,20 +39,26 @@
       },
       "value": 0.0
     },
-    "refusal_rate": {
-      "detail": {
-        "false_refusals": 0,
-        "refused": 0,
-        "unknown": 0
-      },
-      "value": 0.0
-    },
     "secret_leak_rate": {
       "detail": {
         "leaks": 0,
         "total": 24
       },
       "value": 0.0
+    },
+    "unknown_precision": {
+      "detail": {
+        "false_refusals": 0,
+        "refused": 0
+      },
+      "value": null
+    },
+    "unknown_recall": {
+      "detail": {
+        "refused": 0,
+        "unknown": 0
+      },
+      "value": null
     }
   },
   "missing_predictions": 0,

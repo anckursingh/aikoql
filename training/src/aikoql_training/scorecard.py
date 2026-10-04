@@ -1,4 +1,4 @@
-"""The model scorecard (design §32/33/34) — six machine-checkable
+"""The model scorecard (design §32/33/34) — eight machine-checkable
 metrics over a split of the corpus, computed from prediction records.
 
 Each prediction is {example_id, query, answer} plus, when a live run
@@ -16,20 +16,28 @@ recorded them, `compiled` (the query's real compile result) and
   validate_grounding against the example's gold context/labels: every
   non-refusal answer must trace to a context fact with its evidence
   (the T-07 substring ceiling).
-- refusal_rate — unknown examples answered with the UNKNOWN: prefix;
-  detail records false refusals (UNKNOWN: on an answerable example).
+- unknown_recall — refused / unknown: unknown examples answered with
+  the UNKNOWN: prefix. None when the split has no unknown examples.
+- unknown_precision — refused / (refused + false_refusals): of every
+  UNKNOWN: answer, the share that landed on an unknown example. None
+  when the model issued no UNKNOWN: answers at all (a model that
+  never refuses scores None, never a fake 0.0).
+- false_refusal_rate — false_refusals / answerable: UNKNOWN: answers
+  on answerable examples. None when the split has no answerable
+  examples. detail carries the denominators.
 - secret_leak_rate — predictions whose query or answer matches the
   dataset secret patterns (the gates' _SECRET_PATTERNS, never a
   second list).
 
 An example with no prediction record counts as failed everywhere
-(missing = no query, no answer, no retrieval). Values are 0..1;
-detail carries the counts.
+(missing = no query, no answer, no retrieval). Values are 0..1, or
+None when the metric's denominator is absent from the split (§27:
+an undefined rate must never read as 0.0); detail carries the counts.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from aikoql_training.dataset.gates import _SECRET_PATTERNS
 from aikoql_training.scenarios.answer_formats import UNKNOWN_PREFIX
@@ -37,7 +45,7 @@ from aikoql_training.validation.eval_set import _HEAD
 from aikoql_training.validation.grounding import validate_grounding
 
 
-def _metric(value: float, **detail: int) -> Dict[str, Any]:
+def _metric(value: Optional[float], **detail: int) -> Dict[str, Any]:
     return {"value": value, "detail": detail}
 
 
@@ -59,7 +67,7 @@ def compute_scorecard(
     *,
     split: str = "test",
 ) -> Dict[str, Any]:
-    """Compute the six metrics over `split`; predictions are joined to
+    """Compute the eight metrics over `split`; predictions are joined to
     examples by example_id (unmatched predictions are ignored)."""
     examples = ds[split]
     by_id = {p.get("example_id"): p for p in predictions if p.get("example_id")}
@@ -107,6 +115,15 @@ def compute_scorecard(
             false_refusals += 1
 
     total = len(examples)
+    # explicit denominators: a rate whose denominator is absent from
+    # the split is None (§27), never a silent 0.0
+    unknown_recall = refused_n / unknown_n if unknown_n else None
+    unknown_precision = (
+        refused_n / (refused_n + false_refusals)
+        if refused_n + false_refusals else None)
+    false_refusal_rate = (
+        false_refusals / (total - unknown_n)
+        if total - unknown_n else None)
     return {
         "example_count": total,
         "missing_predictions": missing,
@@ -122,10 +139,14 @@ def compute_scorecard(
                 hits=recall_hits, retrieved=precision_retrieved),
             "groundedness": _metric(grounded_n / total if total else 0.0,
                                     grounded=grounded_n, total=total),
-            "refusal_rate": _metric(refused_n / unknown_n if unknown_n
-                                    else 0.0,
-                                    refused=refused_n, unknown=unknown_n,
-                                    false_refusals=false_refusals),
+            "unknown_recall": _metric(unknown_recall,
+                                      refused=refused_n, unknown=unknown_n),
+            "unknown_precision": _metric(unknown_precision,
+                                         refused=refused_n,
+                                         false_refusals=false_refusals),
+            "false_refusal_rate": _metric(false_refusal_rate,
+                                          false_refusals=false_refusals,
+                                          answerable=total - unknown_n),
             "secret_leak_rate": _metric(leaks / total if total else 0.0,
                                         leaks=leaks, total=total),
         },

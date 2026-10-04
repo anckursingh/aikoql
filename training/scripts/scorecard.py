@@ -1,7 +1,7 @@
 """T-15: write a model scorecard artifact (design §32).
 
 Loads a dataset split, joins the prediction records produced by
-finetune.py predict, computes the six metrics and writes the
+finetune.py predict, computes the eight metrics and writes the
 scorecard JSON under training/artifacts/scorecards/. The artifact is
 the committed evidence a training run may point at (the design law:
 the scorecard precedes any training run).
