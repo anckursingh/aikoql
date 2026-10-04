@@ -880,5 +880,25 @@ if bad=$(grep -nE '^[^[:space:]#]' .github/workflows/*.yml |
   fail=1
 fi
 
+# workflow test 7 — no bare venv binaries in CI bodies: `export
+# VIRTUAL_ENV` does NOT put .venv/bin on PATH, so a bare `maturin` /
+# `pytest` body command dies at 127 on the fresh runner while the same
+# step works on a laptop where the venv is activated. Scoped to the JOB
+# that creates the venv — release.yml's bare `maturin` runs in a job
+# with no venv, against setup-python's system interpreter, which IS on
+# PATH (training-data.yml first-run class, T-16 — run 37188359354
+# unit/determinism/integration)
+for _wf in .github/workflows/*.yml; do
+  for _job in $(grep -oE '^  [a-z][a-z0-9_-]*:' "$_wf" | sed 's/^  //; s/:$//'); do
+    _block=$(sed -n "/^  $_job:/,/^  [a-z][a-z0-9_-]*:$/p" "$_wf")
+    if ! printf '%s\n' "$_block" | grep -q 'python -m venv'; then continue; fi
+    if bad=$(printf '%s\n' "$_block" | grep -nE '^[[:space:]]+(maturin|pytest) '); then
+      echo "ARCH: bare venv binary in a venv-creating CI job:" >&2
+      echo "$bad" | sed "s|^|ARCH: $_wf $_job:|" >&2
+      fail=1
+    fi
+  done
+done
+
 if [ $fail -ne 0 ]; then exit 1; fi
 echo "architecture hygiene (storage + workflow legs) — OK"

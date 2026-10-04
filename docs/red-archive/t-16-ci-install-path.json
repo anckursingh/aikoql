@@ -1,0 +1,8 @@
+{
+  "id": "t-16-ci-install-path",
+  "pre_fix_commit": "HEAD",
+  "command": "bash scripts/check-architecture-hygiene.sh",
+  "captured_at": "2026-10-04T08:28:02Z",
+  "captured_head": "6fb65b9d70eb57184fa2a3f64e01fa96d0980f09",
+  "exit_code": 1
+}
