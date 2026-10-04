@@ -1,0 +1,301 @@
+..FFF.....FFFFFF.............FFF.                                        [100%]
+================================== FAILURES ===================================
+_____ test_fz10_query_families_must_raise[{"query": "MATCH X RETURN x"}] ______
+
+text = '{"query": "MATCH X RETURN x"}'
+
+    @pytest.mark.parametrize("text", _MUST_RAISE_QUERY)
+    def test_fz10_query_families_must_raise(text):
+        with pytest.raises(ModelOutputError):
+>           parse_query_reply(text)
+
+training\tests\test_protocol_fuzz.py:114: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+text = '{"query": "MATCH X RETURN x"}'
+
+    def parse_query_reply(text: str) -> Dict:
+        """{"query": str|null, "refusal_reason": str|null} with exactly
+        one of the two set. Returns the dict; raises ModelOutputError on
+        any deviation (fail-closed: a broken reply is a refusal upstream,
+        never a silently empty query)."""
+        obj = _json_object(text)
+        unknown = set(obj) - {"query", "refusal_reason"}
+        if unknown:
+            raise _fail(f"unknown fields in query reply: {sorted(unknown)!r}")
+>       query, reason = obj["query"], obj["refusal_reason"]
+                                      ^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'refusal_reason'
+
+training\src\aikoql_training\inference.py:100: KeyError
+_______ test_fz10_query_families_must_raise[{"refusal_reason": "nope"}] _______
+
+text = '{"refusal_reason": "nope"}'
+
+    @pytest.mark.parametrize("text", _MUST_RAISE_QUERY)
+    def test_fz10_query_families_must_raise(text):
+        with pytest.raises(ModelOutputError):
+>           parse_query_reply(text)
+
+training\tests\test_protocol_fuzz.py:114: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+text = '{"refusal_reason": "nope"}'
+
+    def parse_query_reply(text: str) -> Dict:
+        """{"query": str|null, "refusal_reason": str|null} with exactly
+        one of the two set. Returns the dict; raises ModelOutputError on
+        any deviation (fail-closed: a broken reply is a refusal upstream,
+        never a silently empty query)."""
+        obj = _json_object(text)
+        unknown = set(obj) - {"query", "refusal_reason"}
+        if unknown:
+            raise _fail(f"unknown fields in query reply: {sorted(unknown)!r}")
+>       query, reason = obj["query"], obj["refusal_reason"]
+                        ^^^^^^^^^^^^
+E       KeyError: 'query'
+
+training\src\aikoql_training\inference.py:100: KeyError
+_ test_fz10_query_families_must_raise[{"query": "A", "query": "B", "refusal_reason": null}] _
+
+text = '{"query": "A", "query": "B", "refusal_reason": null}'
+
+    @pytest.mark.parametrize("text", _MUST_RAISE_QUERY)
+    def test_fz10_query_families_must_raise(text):
+>       with pytest.raises(ModelOutputError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ModelOutputError
+
+training\tests\test_protocol_fuzz.py:113: Failed
+_ test_fz10_answer_families_must_raise[{"grounded": true, "claims": [], "refusal_reason": null}] _
+
+text = '{"grounded": true, "claims": [], "refusal_reason": null}'
+
+    @pytest.mark.parametrize("text", _MUST_RAISE_ANSWER)
+    def test_fz10_answer_families_must_raise(text):
+        with pytest.raises(ModelOutputError):
+>           parse_answer_reply(text)
+
+training\tests\test_protocol_fuzz.py:138: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+text = '{"grounded": true, "claims": [], "refusal_reason": null}'
+
+    def parse_answer_reply(text: str) -> Dict:
+        """The answer shape with refusal/grounding as fields; every
+        cross-constraint holds in BOTH directions (a refusal that claims
+        to be grounded is as broken as a grounded answer without claims).
+        Returns the dict; raises ModelOutputError on any deviation."""
+        obj = _json_object(text)
+        unknown = set(obj) - {"answer", "grounded", "claims", "refusal_reason"}
+        if unknown:
+            raise _fail(f"unknown fields in answer reply: {sorted(unknown)!r}")
+>       answer, grounded = obj["answer"], obj["grounded"]
+                           ^^^^^^^^^^^^^
+E       KeyError: 'answer'
+
+training\src\aikoql_training\inference.py:123: KeyError
+_ test_fz10_answer_families_must_raise[{"answer": "Alice", "claims": [], "refusal_reason": null}] _
+
+text = '{"answer": "Alice", "claims": [], "refusal_reason": null}'
+
+    @pytest.mark.parametrize("text", _MUST_RAISE_ANSWER)
+    def test_fz10_answer_families_must_raise(text):
+        with pytest.raises(ModelOutputError):
+>           parse_answer_reply(text)
+
+training\tests\test_protocol_fuzz.py:138: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+text = '{"answer": "Alice", "claims": [], "refusal_reason": null}'
+
+    def parse_answer_reply(text: str) -> Dict:
+        """The answer shape with refusal/grounding as fields; every
+        cross-constraint holds in BOTH directions (a refusal that claims
+        to be grounded is as broken as a grounded answer without claims).
+        Returns the dict; raises ModelOutputError on any deviation."""
+        obj = _json_object(text)
+        unknown = set(obj) - {"answer", "grounded", "claims", "refusal_reason"}
+        if unknown:
+            raise _fail(f"unknown fields in answer reply: {sorted(unknown)!r}")
+>       answer, grounded = obj["answer"], obj["grounded"]
+                                          ^^^^^^^^^^^^^^^
+E       KeyError: 'grounded'
+
+training\src\aikoql_training\inference.py:123: KeyError
+_ test_fz10_answer_families_must_raise[{"answer": "Alice", "grounded": false, "refusal_reason": null}] _
+
+text = '{"answer": "Alice", "grounded": false, "refusal_reason": null}'
+
+    @pytest.mark.parametrize("text", _MUST_RAISE_ANSWER)
+    def test_fz10_answer_families_must_raise(text):
+        with pytest.raises(ModelOutputError):
+>           parse_answer_reply(text)
+
+training\tests\test_protocol_fuzz.py:138: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+text = '{"answer": "Alice", "grounded": false, "refusal_reason": null}'
+
+    def parse_answer_reply(text: str) -> Dict:
+        """The answer shape with refusal/grounding as fields; every
+        cross-constraint holds in BOTH directions (a refusal that claims
+        to be grounded is as broken as a grounded answer without claims).
+        Returns the dict; raises ModelOutputError on any deviation."""
+        obj = _json_object(text)
+        unknown = set(obj) - {"answer", "grounded", "claims", "refusal_reason"}
+        if unknown:
+            raise _fail(f"unknown fields in answer reply: {sorted(unknown)!r}")
+        answer, grounded = obj["answer"], obj["grounded"]
+>       claims, reason = obj["claims"], obj["refusal_reason"]
+                         ^^^^^^^^^^^^^
+E       KeyError: 'claims'
+
+training\src\aikoql_training\inference.py:124: KeyError
+_ test_fz10_answer_families_must_raise[{"answer": "Alice", "grounded": false, "claims": []}] _
+
+text = '{"answer": "Alice", "grounded": false, "claims": []}'
+
+    @pytest.mark.parametrize("text", _MUST_RAISE_ANSWER)
+    def test_fz10_answer_families_must_raise(text):
+        with pytest.raises(ModelOutputError):
+>           parse_answer_reply(text)
+
+training\tests\test_protocol_fuzz.py:138: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+text = '{"answer": "Alice", "grounded": false, "claims": []}'
+
+    def parse_answer_reply(text: str) -> Dict:
+        """The answer shape with refusal/grounding as fields; every
+        cross-constraint holds in BOTH directions (a refusal that claims
+        to be grounded is as broken as a grounded answer without claims).
+        Returns the dict; raises ModelOutputError on any deviation."""
+        obj = _json_object(text)
+        unknown = set(obj) - {"answer", "grounded", "claims", "refusal_reason"}
+        if unknown:
+            raise _fail(f"unknown fields in answer reply: {sorted(unknown)!r}")
+        answer, grounded = obj["answer"], obj["grounded"]
+>       claims, reason = obj["claims"], obj["refusal_reason"]
+                                        ^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'refusal_reason'
+
+training\src\aikoql_training\inference.py:124: KeyError
+_ test_fz10_answer_families_must_raise[{"answer": "A", "answer": "B", "grounded": false, "claims": [], "refusal_reason": null}] _
+
+text = '{"answer": "A", "answer": "B", "grounded": false, "claims": [], "refusal_reason": null}'
+
+    @pytest.mark.parametrize("text", _MUST_RAISE_ANSWER)
+    def test_fz10_answer_families_must_raise(text):
+>       with pytest.raises(ModelOutputError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ModelOutputError
+
+training\tests\test_protocol_fuzz.py:137: Failed
+_ test_fz10_answer_families_must_raise[{"answer": "Alice", "grounded": true, "claims": [{"statement": "s", "statement": "t", "evidence_ids": ["e"]}], "refusal_reason": null}] _
+
+text = '{"answer": "Alice", "grounded": true, "claims": [{"statement": "s", "statement": "t", "evidence_ids": ["e"]}], "refusal_reason": null}'
+
+    @pytest.mark.parametrize("text", _MUST_RAISE_ANSWER)
+    def test_fz10_answer_families_must_raise(text):
+>       with pytest.raises(ModelOutputError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ModelOutputError
+
+training\tests\test_protocol_fuzz.py:137: Failed
+______________________ test_duplicate_fields_fail_closed ______________________
+
+    def test_duplicate_fields_fail_closed():
+>       with pytest.raises(ModelOutputError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ModelOutputError
+
+training\tests\test_protocol_fuzz.py:194: Failed
+____________________ test_deeply_nested_json_fails_closed _____________________
+
+    def test_deeply_nested_json_fails_closed():
+        # the C decoder gives up around 100k nesting (RecursionError); the
+        # parser must translate that into a typed refusal, not a crash
+        nested = '{"a": ' * 100000 + '0' + '}' * 100000
+        with pytest.raises(ModelOutputError):
+>           parse_query_reply(nested)
+
+training\tests\test_protocol_fuzz.py:204: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+training\src\aikoql_training\inference.py:96: in parse_query_reply
+    obj = _json_object(text)
+          ^^^^^^^^^^^^^^^^^^
+training\src\aikoql_training\inference.py:49: in _json_object
+    obj, _ = _DECODER.raw_decode(text, start)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <json.decoder.JSONDecoder object at 0x000001B11EBB4050>
+s = '{"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a": {"a...}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}'
+idx = 0
+
+    def raw_decode(self, s, idx=0):
+        """Decode a JSON document from ``s`` (a ``str`` beginning with
+        a JSON document) and return a 2-tuple of the Python
+        representation and the index in ``s`` where the document ended.
+    
+        This can be used to decode a JSON document from a string that may
+        have extraneous data at the end.
+    
+        """
+        try:
+>           obj, end = self.scan_once(s, idx)
+                       ^^^^^^^^^^^^^^^^^^^^^^
+E           RecursionError: Stack overflow (used 2912 kB) while decoding a JSON object from a unicode string
+
+C:\Python314\Lib\json\decoder.py:361: RecursionError
+______________ test_chat_missing_field_reply_refuses_not_crashes ______________
+
+    def test_chat_missing_field_reply_refuses_not_crashes():
+        def generate(prompt):
+            return '{"query": "MATCH X RETURN x"}'  # refusal_reason missing
+    
+        def run_query(query):
+            raise AssertionError("an unparseable reply must not execute")
+    
+>       rec = chat("?", generate=generate, run_query=run_query)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+training\tests\test_protocol_fuzz.py:216: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+training\src\aikoql_training\chat.py:63: in chat
+    reply = parse_query_reply(generate(build_query_prompt(question)))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+text = '{"query": "MATCH X RETURN x"}'
+
+    def parse_query_reply(text: str) -> Dict:
+        """{"query": str|null, "refusal_reason": str|null} with exactly
+        one of the two set. Returns the dict; raises ModelOutputError on
+        any deviation (fail-closed: a broken reply is a refusal upstream,
+        never a silently empty query)."""
+        obj = _json_object(text)
+        unknown = set(obj) - {"query", "refusal_reason"}
+        if unknown:
+            raise _fail(f"unknown fields in query reply: {sorted(unknown)!r}")
+>       query, reason = obj["query"], obj["refusal_reason"]
+                                      ^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'refusal_reason'
+
+training\src\aikoql_training\inference.py:100: KeyError
+=========================== short test summary info ===========================
+FAILED training\tests\test_protocol_fuzz.py::test_fz10_query_families_must_raise[{"query": "MATCH X RETURN x"}]
+FAILED training\tests\test_protocol_fuzz.py::test_fz10_query_families_must_raise[{"refusal_reason": "nope"}]
+FAILED training\tests\test_protocol_fuzz.py::test_fz10_query_families_must_raise[{"query": "A", "query": "B", "refusal_reason": null}]
+FAILED training\tests\test_protocol_fuzz.py::test_fz10_answer_families_must_raise[{"grounded": true, "claims": [], "refusal_reason": null}]
+FAILED training\tests\test_protocol_fuzz.py::test_fz10_answer_families_must_raise[{"answer": "Alice", "claims": [], "refusal_reason": null}]
+FAILED training\tests\test_protocol_fuzz.py::test_fz10_answer_families_must_raise[{"answer": "Alice", "grounded": false, "refusal_reason": null}]
+FAILED training\tests\test_protocol_fuzz.py::test_fz10_answer_families_must_raise[{"answer": "Alice", "grounded": false, "claims": []}]
+FAILED training\tests\test_protocol_fuzz.py::test_fz10_answer_families_must_raise[{"answer": "A", "answer": "B", "grounded": false, "claims": [], "refusal_reason": null}]
+FAILED training\tests\test_protocol_fuzz.py::test_fz10_answer_families_must_raise[{"answer": "Alice", "grounded": true, "claims": [{"statement": "s", "statement": "t", "evidence_ids": ["e"]}], "refusal_reason": null}]
+FAILED training\tests\test_protocol_fuzz.py::test_duplicate_fields_fail_closed
+FAILED training\tests\test_protocol_fuzz.py::test_deeply_nested_json_fails_closed
+FAILED training\tests\test_protocol_fuzz.py::test_chat_missing_field_reply_refuses_not_crashes
+12 failed, 21 passed in 1.66s
+EXIT=1
