@@ -15,6 +15,14 @@ T-05 recon (crates/compiler/src/parser + crates/runtime):
   comparison is fail-closed, so ints render as integers and floats as
   decimals; negative numbers and scientific notation do not lex
 
+The T-18 seam: `build_queries` is exactly `render_queries(plan_of(s))` —
+the derived plan (T-17) is the single source of truth for path,
+property and as_of; the renderer never re-walks the scenario's
+expected_path. The anchor-probe families (unknown/ambiguity/
+contradiction/authorization) have no knowledge path, so their plan
+carries no path steps and the probe reads the scenario's anchor
+triple directly.
+
 Unrepresentable input never emits a bad query: the scenario is skipped
 ([]) and the compile gate stays green.
 """
@@ -22,8 +30,9 @@ Unrepresentable input never emits a bad query: the scenario is skipped
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+from aikoql_training.plan import plan_of
 from aikoql_training.scenarios.scenario import Scenario
 
 # The lexer promotes these to tokens — never usable as idents.
@@ -116,7 +125,15 @@ def _anchored_query(scenario: Scenario, by_koid: dict) -> List[str]:
     return [q] if q is not None else []
 
 
-def build_queries(scenario: Scenario, kos: List[dict]) -> List[str]:
+def render_queries(plan: Dict[str, Any], scenario: Scenario,
+                   kos: List[dict]) -> List[str]:
+    """TEXT aikoql from the derived plan (T-18 seam).
+
+    The plan's steps drive the structured families: the path comes
+    from the traverse steps, the return property from the project
+    step, the temporal bound from plan["temporal"]. The anchor-probe
+    families have no knowledge path, so their plan is empty of path
+    steps and the probe reads the scenario's anchor triple."""
     by_koid = {k["koid"]: k for k in kos}
     if scenario.task_type in (
         "unknown", "ambiguity", "contradiction", "authorization",
@@ -129,36 +146,44 @@ def build_queries(scenario: Scenario, kos: List[dict]) -> List[str]:
     start = by_koid[scenario.koids[0]]
     type_name = start["type_name"]
 
+    project = None
+    for step in plan.get("steps", []):
+        if step.get("op") == "project" and step.get("properties"):
+            project = step["properties"][0]
+
     if scenario.task_type == "temporal":
+        as_of = (plan.get("temporal") or {}).get("as_of")
         if (
-            scenario.as_of is None
-            or scenario.as_of < 0
-            or scenario.property is None
+            as_of is None
+            or as_of < 0
+            or project is None
             or not _ident_ok(type_name)
-            or not _ident_ok(scenario.property)
+            or not _ident_ok(project)
         ):
             return []
         return [
-            f"MATCH {type_name} AS_OF {scenario.as_of}"
-            f" RETURN {scenario.property}"
+            f"MATCH {type_name} AS_OF {as_of}"
+            f" RETURN {project}"
         ]
 
     if scenario.difficulty == "factual":
-        if scenario.property is None:
+        if project is None:
             return []
-        rendered = _render(start["properties"].get(scenario.property))
+        rendered = _render(start["properties"].get(project))
         if (
             rendered is None
             or not _ident_ok(type_name)
-            or not _ident_ok(scenario.property)
+            or not _ident_ok(project)
         ):
             return []
         return [
-            f"MATCH {type_name} WHERE {scenario.property} == {rendered}"
-            f" RETURN {scenario.property}"
+            f"MATCH {type_name} WHERE {project} == {rendered}"
+            f" RETURN {project}"
         ]
 
-    hops = list(scenario.expected_path)
+    hops = [(step["from"], step["relation"], step["to"])
+            for step in plan.get("steps", [])
+            if step.get("op") == "traverse"]
     if not hops:
         return []  # no path: nothing to verify against the graph
     first = _anchor(start)
@@ -188,3 +213,11 @@ def build_queries(scenario: Scenario, kos: List[dict]) -> List[str]:
         queries.append(q)
         current = by_koid[target]
     return queries
+
+
+def build_queries(scenario: Scenario, kos: List[dict]) -> List[str]:
+    """The T-05 entry point, kept as the public name: the query text is
+    derived through the T-18 seam — plan_of first, render second — so
+    the example's query_target and its semantic_target share one
+    source of truth."""
+    return render_queries(plan_of(scenario)[3], scenario, kos)
