@@ -83,6 +83,12 @@ def _fixture_ir(kos: List[dict], edge: dict) -> Dict[str, Any]:
 def _assemble(scenario: Scenario, snap, query: str, ctx: dict,
               answer: dict, comp: dict) -> Dict[str, Any]:
     intent, entities, requirements, plan = plan_of(scenario)
+    expected = {"answer": answer["answer"], "koids": list(scenario.koids),
+                "evidence_ids": answer["evidence_ids"]}
+    if "claims" in answer:
+        # T-22: grounded answers carry the claim decomposition; refusals
+        # (unknown/ambiguity/contradiction/provenance) carry none.
+        expected["claims"] = answer["claims"]
     example = {
         "schema_version": SCHEMA_VERSION,
         "generator_version": GENERATOR_VERSION,
@@ -102,8 +108,7 @@ def _assemble(scenario: Scenario, snap, query: str, ctx: dict,
         "query_target": {"language": "aikoql", "query": query},
         "context": {"entities": ctx["entities"], "facts": ctx["facts"],
                     "relations": ctx["relations"], "evidence": ctx["evidence"]},
-        "expected": {"answer": answer["answer"], "koids": list(scenario.koids),
-                     "evidence_ids": answer["evidence_ids"]},
+        "expected": expected,
         "policy": policy_of(scenario),
         "labels": answer["labels"],
         # the knowledge COMPONENT's canonical key: the union-find root

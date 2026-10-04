@@ -74,6 +74,67 @@ def _in_context(evidence: dict, rows: List[Any]) -> bool:
     return any(isinstance(e, dict) and evidence_id(e) == key for e in rows)
 
 
+def _validate_claims(example: Dict[str, Any], errors: List[str],
+                     supporting: List[dict]) -> None:
+    """T-22 (TDD-07): the claim walk — every claim carries
+    claim -> fact -> evidence, and the decomposition is complete.
+    Any dangling claim (a statement that traces to no evidenced fact,
+    a forged evidence id, no ids at all) or hidden supporting fact is
+    a violation; the claims' evidence union must equal
+    expected.evidence_ids exactly. Level-1 grounding: the claim text
+    IS the fact statement (semantic paraphrase is the model's job,
+    never the validator's)."""
+    context = example["context"]
+    expected = example["expected"]
+    claims = expected.get("claims")
+    if not isinstance(claims, list):
+        errors.append("claims must be a list")
+        return
+    claim_ids: List[str] = []
+    seen = set()
+    for claim in claims:
+        if not isinstance(claim, dict) or set(claim) != {
+                "statement", "evidence_ids"}:
+            errors.append(f"malformed claim: {claim!r}")
+            continue
+        statement = claim["statement"]
+        ids = claim["evidence_ids"]
+        if not isinstance(statement, str) or not statement.strip():
+            errors.append("claim statement must be a non-empty string")
+            continue
+        if not isinstance(ids, list) or not ids:
+            errors.append(f"claim {statement!r} carries no evidence ids")
+            continue
+        backing = [
+            f for f in context["facts"]
+            if isinstance(f.get("statement"), str)
+            and f["statement"] == statement
+            and isinstance(f.get("evidence"), dict)
+            and _in_context(f["evidence"], context["evidence"])
+        ]
+        if not backing:
+            errors.append(
+                f"claim {statement!r} does not trace to an evidenced fact")
+            continue
+        backing_ids = {evidence_id(f["evidence"]) for f in backing}
+        for i in ids:
+            if not isinstance(i, str) or i not in backing_ids:
+                errors.append(
+                    f"claim {statement!r} cites a forged evidence id {i!r}")
+                continue
+            if i not in seen:
+                seen.add(i)
+                claim_ids.append(i)
+    for fact in supporting:
+        statement = fact.get("statement")
+        if not any(isinstance(c, dict) and c.get("statement") == statement
+                   for c in claims):
+            errors.append(
+                f"supporting fact {statement!r} is not covered by a claim")
+    if sorted(expected["evidence_ids"]) != sorted(claim_ids):
+        errors.append("evidence_ids do not trace to the claims' evidence")
+
+
 def _validate_provenance(example: Dict[str, Any]) -> dict:
     """Provenance examples (task.type == "provenance"): the answer IS a
     citation — grounding means every evidence_id traces to a REAL
@@ -239,6 +300,8 @@ def _validate_authorization(example: Dict[str, Any]) -> dict:
         errors.append(
             "evidence_ids do not trace to the supporting facts' evidence"
         )
+    if "claims" in example["expected"]:
+        _validate_claims(example, errors, supporting)
     if denied:
         m = _ANCHOR_RE.search(example["input"]["question"])
         if m:
@@ -294,7 +357,11 @@ def validate_grounding(example: Dict[str, Any]) -> dict:
             errors.append(
                 "evidence_ids do not trace to the supporting facts' evidence"
             )
+        if "claims" in expected:
+            _validate_claims(example, errors, supporting)
     else:
+        if expected.get("claims"):
+            errors.append("ungrounded example carries claims")
         if supporting:
             errors.append(
                 "labels.grounded is false but the answer is supported by "

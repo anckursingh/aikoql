@@ -64,9 +64,12 @@ _NESTED = {
 
 # Fields allowed (typed when present) but not required: the ACL pair on
 # the policy section, present exactly when authorization_required is
-# true (design §41).
+# true (design §41); the T-22 claim decomposition on grounded answers
+# ({"statement", "evidence_ids"} per claim, walked by the grounding
+# validator).
 _OPTIONAL = {
     "policy": {"subject": str, "action": str},
+    "expected": {"claims": list},
 }
 
 

@@ -37,9 +37,11 @@ _CONTRADICTED_LABELS = {"grounded": True, "answerable": True,
 def build_answer(scenario: Scenario, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Ground `scenario.expected_answer` in `context` (the adapter's
     {entities, facts, relations, evidence} shape) and return
-    {"answer", "evidence_ids", "labels"} — or None when the claim
-    cannot be fully traced (no supporting fact, or required evidence
-    absent)."""
+    {"answer", "evidence_ids", "claims", "labels"} — or None when the
+    claim cannot be fully traced (no supporting fact, or required
+    evidence absent). Grounded answers carry the T-22 claim
+    decomposition: one {"statement", "evidence_ids"} claim per
+    supporting fact; refusals carry none."""
     answer = scenario.expected_answer
     if not answer.strip():
         return None
@@ -112,6 +114,7 @@ def build_answer(scenario: Scenario, context: Dict[str, Any]) -> Optional[Dict[s
         return None
 
     ids: List[str] = []
+    claims: List[Dict[str, Any]] = []
     seen = set()
     for fact in supporting:
         ev = fact.get("evidence")
@@ -124,6 +127,11 @@ def build_answer(scenario: Scenario, context: Dict[str, Any]) -> Optional[Dict[s
         if key not in seen:
             seen.add(key)
             ids.append(key)
+        # T-22: one claim per supporting fact — the claim IS the fact
+        # statement (Level-1 grounding; semantic paraphrase is the
+        # fine-tuned model's job, never the generator's).
+        claims.append({"statement": fact["statement"],
+                       "evidence_ids": [key]})
 
-    return {"answer": answer, "evidence_ids": ids,
+    return {"answer": answer, "evidence_ids": ids, "claims": claims,
             "labels": dict(_GROUNDED_LABELS)}
