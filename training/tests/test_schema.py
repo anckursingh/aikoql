@@ -133,3 +133,48 @@ def test_embedded_example_id_must_match_content():
     example["example_id"] = "sha256:" + "f" * 64      # forged id
     with pytest.raises(SchemaError, match="example_id"):
         validate(example)
+
+
+# --- T-17 schema v2 (PR #9 review P0.2 / TDD-01): the logical
+# knowledge plan is a first-class training artifact. GREEN = models.py
+# SCHEMA_VERSION 2 whose semantic_target carries operation + intent +
+# entities + requirements + plan, and whose policy demands subject/
+# action exactly when authorization_required is true. ---
+
+
+def test_semantic_target_requires_a_plan():
+    example = make_example()
+    del example["semantic_target"]["plan"]
+    with pytest.raises(SchemaError, match="plan"):
+        validate(example)
+
+
+def test_plan_step_ops_are_closed():
+    example = make_example()
+    example["semantic_target"]["plan"]["steps"][0]["op"] = "explode"
+    with pytest.raises(SchemaError, match="explode"):
+        validate(example)
+
+
+def test_entity_roles_are_closed():
+    example = make_example()
+    example["semantic_target"]["entities"][0]["role"] = "sidekick"
+    with pytest.raises(SchemaError, match="sidekick"):
+        validate(example)
+
+
+def test_policy_authorization_demands_subject_and_action():
+    example = make_example()
+    example["policy"] = {"authorization_required": True}
+    with pytest.raises(SchemaError, match="authorization"):
+        validate(example)
+
+
+def test_context_evidence_entries_must_be_dicts():
+    example = make_example()
+    example["context"]["evidence"] = [
+        {"fact": "aikoql", "text": "MATCH (x:Service)"},
+        "not-a-dict",
+    ]
+    with pytest.raises(SchemaError, match="evidence"):
+        validate(example)
