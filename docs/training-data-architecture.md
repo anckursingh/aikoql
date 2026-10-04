@@ -692,3 +692,39 @@ candidates, never mentioning entities outside the scenario, and
 determinism across calls. The schema contract tests pin every
 closed set with a mutated example that validation must reject.
 RED archived as `t-17-schema-v2`.
+
+## 22. Plan→renderer seam (T-18)
+
+Before T-18 the plan (T-17) and the query text (T-05) were two
+independent walks of the same scenario — `plan_of` derived the path
+roles while `build_queries` re-walked `expected_path`, so the
+example's semantic plan and its query_target could drift apart. The
+seam makes the plan the single source of truth.
+
+- **`render_queries(plan, scenario, kos)`** in
+  `generators/query.py` — emits TEXT aikoql from the plan only:
+  the path comes from the plan's `traverse` steps (same-rel →
+  one DEPTH-n query, mixed-rel → the chained one-per-hop form),
+  the RETURN property from the `project` step, the temporal bound
+  from `plan["temporal"]["as_of"]`. The scenario's
+  `expected_path`/`property`/`as_of` are never re-read for the
+  structured families.
+- The anchor-probe families (unknown/ambiguity/contradiction/
+  authorization) have no knowledge path — their plan legitimately
+  carries no path steps — and the renderer emits the probe from the
+  scenario's anchor triple (`anchor_prop`/`anchor_value`/`type_name`),
+  exactly as the T-09 generators seed it. An empty plan is the
+  semantic truth for those families, not a rendering gap.
+- **`build_queries(scenario, kos)`** stays as the public entry
+  point, defined as `render_queries(plan_of(scenario)[3], ...)` —
+  so the example's query_target and its semantic_target are
+  structurally the same derivation.
+
+The seam tests pin both directions: through-the-seam rendering
+reproduces the pinned query strings for every family, and a
+hand-built plan that disagrees with the scenario (different path,
+property, or as_of) wins — the renderer follows the plan, proving
+the scenario fields are dead input for the structured families.
+A path-family plan without steps never renders a query
+(fail-closed, same as the unrepresentable-input rule). RED
+archived as `t-18-renderer`.
