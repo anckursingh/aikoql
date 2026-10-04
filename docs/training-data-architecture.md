@@ -861,3 +861,31 @@ production truth oracle).
   claims keep the answer-level trace.
 
 RED archived as `t-22-claim-level-grounding`. T-23 mutates this.
+
+## 27. Grounding mutation fuzz (T-23)
+
+PR9 FZ-07: the validator must reject every mutation of a valid
+example that breaks the claim/evidence relationship — much more
+meaningful than fuzzing JSON syntax. `training/tests/test_grounding_fuzz.py`
+holds the mutant matrix over a valid claims-carrying example, one
+row per review axis (answer, fact statement, evidence, evidence_id,
+KOID, entity name, relation, label):
+
+- **Relationship-breaking mutants all fail** — dropped or forged
+  evidence ids, evidence absent or mutated in context, swapped fact
+  statements, claims dangling or swapped onto non-supporting facts,
+  malformed/empty claim decompositions, and label flips: grounded
+  False on a traced answer; answerable False or ambiguous True on a
+  grounded answer (two new fail-closed checks in the generic branch,
+  mirroring E7/E9 at the per-example boundary).
+- **Boundary pins** — koid swaps, entity-name swaps, relation rows,
+  added non-supporting facts and duplicated claim ids keep
+  validating: those fields are the leakage/scenario-match gates'
+  job, and grounding rejecting them would double-count.
+- **Properties** — arbitrary answer mutations that remove the
+  answer's supporting evidence fail; every fact-statement mutation
+  fails (it either removes the support or dangles the claim). An
+  answer mutation that keeps support may validate: answer identity
+  is the oracle's job, not grounding's.
+
+RED archived as `t-23-grounding-mutation-fuzz`.
