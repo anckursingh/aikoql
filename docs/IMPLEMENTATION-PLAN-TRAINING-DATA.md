@@ -536,6 +536,21 @@ column-1 line inside a workflow body (RED archived as
 `t-16-ci-workflow-parse`), so the class cannot recur silently. The
 first genuinely executed run is the T-16 push that carries the fix.
 
+Second CI round (run 37188359354): the first real run failed on the
+fresh-runner install class. unit/determinism/integration died at the
+Install step with exit 127 — `export VIRTUAL_ENV` does not put
+`.venv/bin` on PATH, so the bare `maturin develop` command was never
+found (it works on a laptop only because the venv is activated);
+fuzz-estate never installed the SDK at all, so `test_scenarios.py`
+died at `from aikoql import Agent`. gate-teeth passed — the mutation
+leg only needs the pure-Python package. Fixed by calling
+`.venv/bin/maturin develop` in all four Install steps and adding the
+SDK install to fuzz-estate, plus a gate tooth: arch-hygiene workflow
+test 7 rejects a bare `maturin`/`pytest` body command inside any
+venv-creating job, scoped per job so release.yml's legitimate system-
+python `maturin build` is untouched (RED archived as
+`t-16-ci-install-path`).
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |
