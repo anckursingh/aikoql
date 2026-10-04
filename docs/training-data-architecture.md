@@ -806,3 +806,33 @@ The protocol tests pin the shapes, the prose-wrapper tolerance, and
 each cross-constraint direction; the chat tests route refusals
 through the fields. RED archived as `t-20-json-protocol`. T-21 fuzzes
 this parser.
+
+## 25. Model-output fuzz (T-21)
+
+PR9 FZ-10 / P0.5: the protocol parser must hold the property
+`invalid model output -> typed validation failure -> safe refusal`,
+never best-effort execution. `training/tests/test_protocol_fuzz.py`
+pins it on the T-20 seam:
+
+- **Arbitrary text** (hypothesis) either raises `ModelOutputError` or
+  returns a reply satisfying every protocol constraint — re-checked
+  by an invariant half, so a leaked KeyError/TypeError fails the
+  property.
+- **FZ-10 families** land exactly where the contract pins them:
+  missing fields, duplicate keys (top level AND inside claims),
+  truncated JSON, non-objects, nested values and wrong types raise;
+  code fences, prose wrappers, injection prose, delimiter-carrying
+  query strings, adversarial Unicode and large payloads parse — a
+  query string may carry JSON delimiters because the parser is a
+  JSON parser, not a marker split; extra objects after the first are
+  the documented first-object-wins semantics.
+- **Parser hardening** (inference.py): duplicate keys reject via an
+  `object_pairs_hook` (a model emitting dupes is emitting garbage,
+  not a vote); missing fields raise a typed error instead of a
+  KeyError; JSON nested past the decoder's limit (~100k) becomes a
+  typed refusal, not a RecursionError.
+- **Chat seam** — an uncompiled reply never reaches `run_query`
+  (never best-effort execution), verified by fuzz and a
+  deterministic pin.
+
+RED archived as `t-21-model-output-fuzz`.
