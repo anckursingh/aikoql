@@ -1,0 +1,39 @@
+ARCH: relative .venv path after a cd in the same run block: .github/workflows/benchmark.yml competitor-matrix
+ARCH: 
+ARCH: relative .venv path after a cd in the same run block: .github/workflows/benchmark.yml competitor-scale
+ARCH: 
+ARCH: relative .venv path after a cd in the same run block: .github/workflows/ci.yml python-sdk
+ARCH: 
+ARCH: relative .venv path after a cd in the same run block: .github/workflows/ci.yml sdk-fuzz-smoke
+ARCH: 
+ARCH: relative .venv path after a cd in the same run block: .github/workflows/release.yml tier3-scale
+ARCH: 
+ARCH: relative .venv path after a cd in the same run block: .github/workflows/release.yml tier3-matrix
+ARCH: 
+ARCH: relative .venv path after a cd in the same run block: .github/workflows/training-data.yml unit
+ARCH:         run: |
+ARCH:           python -m venv .venv
+ARCH:           .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+ARCH:           cd crates/sdk/python
+ARCH:           .venv/bin/maturin develop
+ARCH: relative .venv path after a cd in the same run block: .github/workflows/training-data.yml fuzz-estate
+ARCH:         run: |
+ARCH:           python -m venv .venv
+ARCH:           .venv/bin/pip install -q pytest hypothesis maturin
+ARCH:           cd crates/sdk/python
+ARCH:           .venv/bin/maturin develop
+ARCH: relative .venv path after a cd in the same run block: .github/workflows/training-data.yml determinism
+ARCH:         run: |
+ARCH:           python -m venv .venv
+ARCH:           .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+ARCH:           cd crates/sdk/python
+ARCH:           .venv/bin/maturin develop
+ARCH: relative .venv path after a cd in the same run block: .github/workflows/training-data.yml integration
+ARCH:         run: |
+ARCH:           python -m venv .venv
+ARCH:           .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+ARCH:           cd crates/sdk/python
+ARCH:           .venv/bin/maturin develop
+ARCH: relative .venv path after a cd in the same run block: .github/workflows/training-data.yml gate-teeth
+ARCH: 
+EXIT=1

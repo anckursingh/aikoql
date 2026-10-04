@@ -897,6 +897,26 @@ for _wf in .github/workflows/*.yml; do
       echo "$bad" | sed "s|^|ARCH: $_wf $_job:|" >&2
       fail=1
     fi
+    # test 7b — a relative .venv path stops resolving after a cd in the
+    # same run block: the maturin call sat after `cd crates/sdk/python`,
+    # so .venv/bin/maturin looked inside the crate (run 37189254003, all
+    # four Install steps, exit 127 again). Per-run-block: each `run:` is
+    # its own shell, so a cd only poisons .venv paths in the SAME block;
+    # $GITHUB_WORKSPACE-anchored paths are always fine.
+    if bad=$(printf '%s\n' "$_block" | awk '
+      function flush() { if (bad) print buf; inrun = bad = after_cd = 0; buf = "" }
+      /^      - / { flush(); next }
+      /^        run:/ { flush(); inrun = 1; buf = $0 "\n"; next }
+      inrun {
+        buf = buf $0 "\n"
+        if ($0 ~ /^[[:space:]]*cd[[:space:]]/) after_cd = 1
+        if (after_cd && $0 ~ /\.venv\// && $0 !~ /GITHUB_WORKSPACE[^[:space:]]*\.venv\//) bad = 1
+      }
+      END { flush() }'); then
+      echo "ARCH: relative .venv path after a cd in the same run block: $_wf $_job" >&2
+      printf '%s\n' "$bad" | sed 's/^/ARCH: /' >&2
+      fail=1
+    fi
   done
 done
 
