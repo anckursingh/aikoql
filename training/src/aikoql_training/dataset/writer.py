@@ -70,8 +70,13 @@ def write_dataset(
     snapshot_id: str,
     configuration_hash: str,
     created_at: str,
+    held_out_orgs: Sequence[str] = (),
 ) -> Dict[str, Any]:
-    """Write a canonical dataset; returns the manifest dict."""
+    """Write a canonical dataset; returns the manifest dict.
+
+    `held_out_orgs` (T-28) names the synthetic orgs the model must
+    never train on — recorded in the manifest so the leakage gate can
+    recompute the assignment with the same holdout declaration."""
     d = Path(dataset_dir)
     d.mkdir(parents=True, exist_ok=True)
     _sweep_stale(d)
@@ -97,6 +102,7 @@ def write_dataset(
         "created_at": created_at,
         "example_count": total,
         "splits": splits,
+        "held_out_orgs": sorted(set(held_out_orgs)),
     }
     # written LAST — publication is the manifest's visibility
     _atomic_write_text(d / _MANIFEST, json.dumps(manifest, sort_keys=True,

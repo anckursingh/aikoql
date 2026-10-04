@@ -71,6 +71,17 @@ _MUTANTS = [
      'for key in ("subject", "action", "resource"):',
      'for key in ("subject", "action"):', 1,
      "training/tests/test_schema.py"),
+    # T-28 (PR9 §26): the holdout force — an example whose org is held
+    # out hashes into val/test only (disarmed, a held-out example
+    # hashes into train and the tamper is undetectable), and the gate's
+    # manifest declaration — ignored, the recompute can never see the
+    # holdout. Both die in test_gates.py.
+    ("dataset/splitter.py",
+     'if ex.get("org") in held_out:', 'if False:', 1,
+     "training/tests/test_gates.py"),
+    ("dataset/gates.py",
+     'tuple(manifest.get("held_out_orgs") or ())', '()', 1,
+     "training/tests/test_gates.py"),
 ]
 
 _REPO = Path(__file__).resolve().parents[2]

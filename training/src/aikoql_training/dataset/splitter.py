@@ -15,6 +15,11 @@ The splitter also reports cross-holdout violations: pairs of examples
 in DIFFERENT splits that share any expected.koid leak knowledge across
 the holdout boundary (recorded, not raised — the §26 leakage gate
 counts them at dataset validation).
+
+T-28 (PR9 Finding #3): `held_out_orgs` names the synthetic orgs the
+model must never train on — an example whose `org` stamp is held out
+hashes into val/test only, so no hash bucket can put the org into
+train. Assignment stays a pure function of (split_key, org, seed).
 """
 
 from __future__ import annotations
@@ -73,16 +78,21 @@ def assign_splits(
     examples: Sequence[dict],
     seed: int,
     ratios: Sequence[int] = (8, 1, 1),
+    held_out_orgs: Sequence[str] = (),
 ) -> Tuple[Dict[str, List[dict]], List[Violation]]:
     """Assign examples to train/val/test by split_key hash buckets.
 
     `ratios` are integer weights for (train, val, test); a key hashes
-    into train with probability ratios[0]/sum, and so on.
+    into train with probability ratios[0]/sum, and so on. An example
+    whose `org` stamp is in `held_out_orgs` hashes into val/test only
+    (their relative weights) — a held-out org can never reach train.
     """
     if len(ratios) != 3 or any(w <= 0 for w in ratios):
         raise DatasetError(
             f"ratios must be three positive weights, got {ratios!r}")
+    held_out = frozenset(held_out_orgs)
     total = sum(ratios)
+    eval_total = ratios[1] + ratios[2]
     splits: Dict[str, List[dict]] = {name: [] for name in _SPLITS}
     homes: Dict[str, str] = {}
     for ex in examples:
@@ -90,11 +100,17 @@ def assign_splits(
         if not key:
             raise DatasetError(
                 f"example {ex.get('example_id', '?')} has no split_key")
-        bucket = hashlib.sha256(
-            f"{seed}:{key}".encode("utf-8")).digest()[0] % total
-        # byte 0 is uniform: train covers [0, w0), val [w0, w0+w1), test the rest
-        name = _SPLITS[0] if bucket < ratios[0] else (
-            _SPLITS[1] if bucket < ratios[0] + ratios[1] else _SPLITS[2])
+        digest = hashlib.sha256(
+            f"{seed}:{key}".encode("utf-8")).digest()[0]
+        if ex.get("org") in held_out:
+            name = _SPLITS[1] if digest % eval_total < ratios[1] \
+                else _SPLITS[2]
+        else:
+            # byte 0 is uniform: train covers [0, w0), val [w0, w0+w1),
+            # test the rest
+            bucket = digest % total
+            name = _SPLITS[0] if bucket < ratios[0] else (
+                _SPLITS[1] if bucket < ratios[0] + ratios[1] else _SPLITS[2])
         splits[name].append(ex)
         homes[ex["example_id"]] = name
 

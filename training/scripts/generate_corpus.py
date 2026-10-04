@@ -1,5 +1,5 @@
-"""T-14/T-27: the multi-domain synthetic corpus (design Phase 17,
-§35-37, P1.1).
+"""T-14/T-27/T-28: the multi-domain synthetic corpus (design Phase 17,
+§35-37, P1.1, P1.2).
 
 Seeds one KB slice per sweep seed per domain — AcmePay (payments)
 and NovaEnergy (utilities, T-27: a second org with a different
@@ -8,7 +8,10 @@ payments vocabulary) — drives every scenario family through the real
 oracle + compiler, assembles examples with component-root split keys
 (the leakage gate cannot find a cross-holdout pair), and publishes
 only a fully gated dataset: the §26 validator plus the E1-E9 eval
-set. `--reuse` regenerates from a server the corpus already seeded
+set. T-28 (PR9 Finding #3): NovaEnergy is the held-out org — its
+examples hash into val/test only, so the eval slices draw from an org
+the model never saw in train (each example carries its org stamp).
+`--reuse` regenerates from a server the corpus already seeded
 (recovery through the public surface only). A planted-secret check
 rides `cli validate` on the artifact.
 
@@ -274,6 +277,11 @@ def _seed_novaenergy(db, s: int, state: Dict[str, Any]) -> None:
 
 _DOMAINS = (_seed_acmepay, _seed_novaenergy)
 
+# T-28 (PR9 Finding #3): the orgs the model must never train on — the
+# evaluation measures generalization to an org it never saw, so the
+# held-out org's examples hash into val/test only.
+_HELD_OUT = frozenset({"novaenergy"})
+
 
 def _ko_docs(db, slice_kos, all_kos, edges, histories, skip, docs) -> None:
     """One IR document per KO: its scalar prop facts, the incident
@@ -381,15 +389,21 @@ def _conflict_docs(db, conflicts, docs) -> None:
         })
 
 
-def _auth_docs(db, scenarios, docs) -> None:
+def _auth_docs(db, scenarios, by_koid, docs) -> None:
+    # T-28: one policy doc per (principal, action, verdict, domain) —
+    # the decision lines an example compiles must never carry another
+    # org's entity names into its context (a held-out name in a train
+    # context leaks the held-out org).
     facts_by: Dict[tuple, list] = {}
     for s in scenarios:
-        key = (s.subject, s.action, s.expected_answer.startswith("ALLOWED:"))
+        domain = _domain_of(by_koid[s.koids[0]])
+        key = (s.subject, s.action,
+               s.expected_answer.startswith("ALLOWED:"), domain)
         facts_by.setdefault(key, []).append(s.expected_answer)
-    for (principal, action, allowed), answers in facts_by.items():
-        ev = _ev(f"acmepay-policy-{principal}-{action}-"
+    for (principal, action, allowed, domain), answers in facts_by.items():
+        ev = _ev(f"{domain}-policy-{principal}-{action}-"
                  f"{'allow' if allowed else 'deny'}.md", 1)
-        docs["auth"][(principal, action, allowed)] = _remember_doc(db, {
+        docs["auth"][(principal, action, allowed, domain)] = _remember_doc(db, {
             "entities": [], "relations": [],
             "facts": [_fact(f"Policy decision: {a}", ev)
                       for a in sorted(set(answers))],
@@ -446,10 +460,11 @@ def _decisions(db) -> List[Dict[str, Any]]:
     return decisions
 
 
-def _pick_doc(s, docs, min_svc):
+def _pick_doc(s, docs, min_svc, by_koid):
     if s.task_type == "authorization":
         return docs["auth"][(s.subject, s.action,
-                             s.expected_answer.startswith("ALLOWED:"))]
+                             s.expected_answer.startswith("ALLOWED:"),
+                             _domain_of(by_koid[s.koids[0]]))]
     if s.task_type == "contradiction":
         return docs["conflict"][s.koids[2]]
     if s.task_type == "ambiguity":
@@ -463,7 +478,7 @@ def _pick_doc(s, docs, min_svc):
     return docs["ko"][s.koids[0]]
 
 
-def _assemble(s, snap, query, ctx, answer, comp, conflict_koids):
+def _assemble(s, snap, query, ctx, answer, comp, conflict_koids, org):
     koids = [k for k in s.koids if k not in conflict_koids]
     intent, entities, requirements, plan = plan_of(s)
     example = {
@@ -489,6 +504,7 @@ def _assemble(s, snap, query, ctx, answer, comp, conflict_koids):
                      "evidence_ids": answer["evidence_ids"]},
         "policy": policy_of(s),
         "labels": answer["labels"],
+        "org": org,
         "split_key": ":".join(sorted({comp.get(k, k) for k in koids}))
         or s.scenario_id,
     }
@@ -507,7 +523,12 @@ def _generate(db, state, snap, docs, seen):
     gen_kos = [k for k in kos if k["koid"] not in counter_koids]
     gen_edges = [e for e in edges if e["rel"] in _RELS]
     by_koid = {k["koid"]: k for k in kos}
-    min_svc = min(k["koid"] for k in gen_kos if k["type_name"] == "service")
+    # T-28: the org-neutral examples (missing name/property) anchor on a
+    # TRAINING org's service — a held-out service would leak its entities
+    # into a train context.
+    min_svc = min(k["koid"] for k in gen_kos
+                  if k["type_name"] == "service"
+                  and _domain_of(k) not in _HELD_OUT)
 
     scenarios = []
     scenarios += factual_scenarios(gen_kos)
@@ -536,7 +557,7 @@ def _generate(db, state, snap, docs, seen):
                         if c["conflict"]["koid"] not in docs["conflict"]],
                    docs)
     _auth_docs(db, [s for s in scenarios
-                    if s.task_type == "authorization"], docs)
+                    if s.task_type == "authorization"], by_koid, docs)
 
     # ALL state edges, contradicts included: the seeded counter-claim
     # must join the claim's component or the contradiction example's
@@ -559,14 +580,15 @@ def _generate(db, state, snap, docs, seen):
             raise TrainingDataError(
                 f"oracle rejected {s.scenario_id}: {report['errors']}",
                 stage="corpus", scenario=s.scenario_id, code="ORACLE")
-        doc = _pick_doc(s, docs, min_svc)
+        doc = _pick_doc(s, docs, min_svc, by_koid)
         ctx = compile_context(db, doc, s.question, token_budget=_BUDGET)
         answer = build_answer(s, ctx)
         if answer is None:
             refused += 1
             continue
+        org = _domain_of(by_koid[s.koids[0]]) if s.koids else ""
         examples.append(_assemble(s, snap, queries[0], ctx, answer, comp,
-                                  conflict_koids))
+                                  conflict_koids, org))
         seen.add(s.scenario_id)
         if s.task_type == "grounded_qa":
             families[f"grounded_qa:{s.difficulty}"] += 1
@@ -658,20 +680,21 @@ def main(argv=None) -> int:
                 if len(examples) >= args.target:
                     break
 
-        splits, violations = assign_splits(examples, snap.seed, cfg["ratios"])
+        splits, violations = assign_splits(examples, snap.seed, cfg["ratios"],
+                                           held_out_orgs=_HELD_OUT)
         if violations:
             raise TrainingDataError(f"{len(violations)} cross-holdout pairs",
                                     stage="splits", code="LEAKAGE")
         write_dataset(splits, args.out, dataset_id=args.database_id,
                       seed=snap.seed, snapshot_id=snap.snapshot_id,
                       configuration_hash=snap.configuration_hash,
-                      created_at=snap.created_at)
+                      created_at=snap.created_at, held_out_orgs=_HELD_OUT)
         scratch = tempfile.mkdtemp(prefix="corpus-determinism-")
         try:
             write_dataset(splits, scratch, dataset_id=args.database_id,
                           seed=snap.seed, snapshot_id=snap.snapshot_id,
                           configuration_hash=snap.configuration_hash,
-                          created_at=snap.created_at)
+                          created_at=snap.created_at, held_out_orgs=_HELD_OUT)
             validation = validate_dataset(args.out, db=args.db,
                                           token=args.token,
                                           config_path=args.config,

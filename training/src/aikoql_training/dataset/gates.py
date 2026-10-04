@@ -193,8 +193,10 @@ def validate_dataset(
     #    canonical question out of two splits (T-19: PR9 Finding #4) --------
     leakage_detail = ""
     try:
+        held_out = tuple(manifest.get("held_out_orgs") or ())
         splits, violations = assign_splits(examples, manifest["seed"],
-                                           config["ratios"])
+                                           config["ratios"],
+                                           held_out_orgs=held_out)
         misplaced = 0
         for name in _SPLITS:
             home_ids = {e["example_id"] for e in splits[name]}

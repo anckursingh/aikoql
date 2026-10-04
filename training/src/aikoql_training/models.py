@@ -74,6 +74,11 @@ _OPTIONAL = {
     "expected": {"claims": list},
 }
 
+# Top-level optional fields: the T-28 org stamp — the synthetic org an
+# example's knowledge belongs to ("" when the question is org-neutral).
+# The held-out evaluation slices by it; older artifacts simply lack it.
+_TOP_OPTIONAL = {"org": str}
+
 
 def _dump(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -113,8 +118,11 @@ def validate(example: Dict[str, Any]) -> None:
         if not isinstance(example[field], typ):
             raise SchemaError(f"{field}: expected {typ.__name__}")
     for field in example:
-        if field not in _SPEC:
+        if field not in _SPEC and field not in _TOP_OPTIONAL:
             raise SchemaError(f"unknown field: {field}")
+    for field, typ in _TOP_OPTIONAL.items():
+        if field in example and not isinstance(example[field], typ):
+            raise SchemaError(f"{field}: expected {typ.__name__}")
     for section, fields in _NESTED.items():
         sub = example[section]
         for field, typ in fields.items():
