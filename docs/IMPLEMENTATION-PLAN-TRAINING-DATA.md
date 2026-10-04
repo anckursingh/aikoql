@@ -526,6 +526,16 @@ question hallucinated a query, the compile failed and the wrapper
 refused — the exact fail-closed behavior the RED column demands.
 RED archived as `t-16-chat`. GREEN: training suite 302/302.
 
+First CI round (post-push): every `training-data.yml` run died at 0 s
+with "workflow file issue" — the inline Python wait-loops inside the
+two corpus jobs sat at column 1, which ends a YAML block scalar and
+makes GitHub reject the whole file; the workflow had never parsed,
+let alone run. Fixed at the root (bodies indented under the block
+scalar) plus a gate tooth: arch-hygiene workflow test 6 rejects any
+column-1 line inside a workflow body (RED archived as
+`t-16-ci-workflow-parse`), so the class cannot recur silently. The
+first genuinely executed run is the T-16 push that carries the fix.
+
 ### Phase B — model experiments (design phases 18–19)
 
 | id | milestone | RED | GREEN |

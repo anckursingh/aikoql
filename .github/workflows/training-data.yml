@@ -76,14 +76,14 @@ jobs:
             "$RUNNER_TEMP/kb.redb" \
             --listen 127.0.0.1:18763 --tcp-token ci::admin &
           .venv/bin/python -c "
-import socket, time
-for _ in range(60):
-    try:
-        socket.create_connection(('127.0.0.1', 18763), timeout=0.5).close()
-        break
-    except OSError:
-        time.sleep(0.5)
-"
+          import socket, time
+          for _ in range(60):
+              try:
+                  socket.create_connection(('127.0.0.1', 18763), timeout=0.5).close()
+                  break
+              except OSError:
+                  time.sleep(0.5)
+          "
           .venv/bin/python training/scripts/generate_corpus.py \
             --db 127.0.0.1:18763 --token ci \
             --out "$RUNNER_TEMP/corpus" --target 40 --seeds 1 \
@@ -120,14 +120,14 @@ for _ in range(60):
             "$RUNNER_TEMP/kb10k.redb" \
             --listen 127.0.0.1:18764 --tcp-token ci::admin &
           .venv/bin/python -c "
-import socket, time
-for _ in range(60):
-    try:
-        socket.create_connection(('127.0.0.1', 18764), timeout=0.5).close()
-        break
-    except OSError:
-        time.sleep(0.5)
-"
+          import socket, time
+          for _ in range(60):
+              try:
+                  socket.create_connection(('127.0.0.1', 18764), timeout=0.5).close()
+                  break
+              except OSError:
+                  time.sleep(0.5)
+          "
           .venv/bin/python training/scripts/generate_corpus.py \
             --db 127.0.0.1:18764 --token ci \
             --out "$RUNNER_TEMP/corpus-10k" --target 10000 --seeds 16 \
