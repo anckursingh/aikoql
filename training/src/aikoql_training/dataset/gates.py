@@ -44,6 +44,58 @@ def _gate(ok: bool, status: str, count: int = 0, detail: str = "") -> dict:
     return {"ok": ok, "status": status, "count": count, "detail": detail}
 
 
+_REF = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+
+def _question_norm(q: str) -> str:
+    """The question with quoted refs masked: template corpora share the
+    normalized shape of every question STRUCTURALLY, so normalized
+    overlap is diagnostic (PR9's own caveat), never a hard tooth."""
+    return _REF.sub("<REF>", q).lower()
+
+
+def _leakage_dimensions(splits: Dict[str, List[dict]],
+                        examples: List[dict]) -> Dict[str, int]:
+    """Cross-split overlap per dimension (PR9 Finding #4).
+
+    HARD: `canonical` — the exact question text shared across splits;
+    the model saw the answer in one split, the other can no longer
+    measure it. Diagnostic: `identifier` (entity names), `normalized`
+    (question templates), `answer`, `relation_pattern` — template
+    corpora share these structurally ("Payments Team" owns many
+    services), so they are REPORTED on the gate, never vetoed.
+    """
+    dims = {k: 0 for k in ("canonical", "identifier", "normalized",
+                           "answer", "relation_pattern")}
+    homes = {e["example_id"]: n for n in _SPLITS for e in splits[n]}
+    seen: Dict[tuple, tuple] = {}  # attr -> (example_id, home)
+    for ex in examples:
+        home = homes[ex["example_id"]]
+        attrs: List[tuple] = []
+        q = ex.get("input", {}).get("question", "")
+        if q:
+            attrs += [("canonical", q), ("normalized", _question_norm(q))]
+        answer = ex.get("expected", {}).get("answer")
+        if answer is not None:
+            attrs.append(("answer", str(answer)))
+        for ent in ex.get("context", {}).get("entities", []):
+            if isinstance(ent, dict) and ent.get("name"):
+                attrs.append(("identifier", ent["name"]))
+        rels = tuple(sorted(
+            step["relation"]
+            for step in ex.get("semantic_target", {}).get("plan", {})
+                .get("steps", [])
+            if step.get("op") == "traverse" and step.get("relation")))
+        if rels:
+            attrs.append(("relation_pattern", rels))
+        for dim, value in attrs:
+            key = (dim, value)
+            owner = seen.setdefault(key, (ex["example_id"], home))
+            if owner[1] != home:
+                dims[dim] += 1
+    return dims
+
+
 def _secret_hits(examples: List[dict]) -> int:
     hits = 0
     for ex in examples:
@@ -137,7 +189,8 @@ def validate_dataset(
     else:
         gates["secret_scan"] = _gate(True, "disabled")
 
-    # -- leakage: recomputed assignment must agree AND be violation-free ------
+    # -- leakage: assignment must agree, be violation-free AND keep the -
+    #    canonical question out of two splits (T-19: PR9 Finding #4) --------
     leakage_detail = ""
     try:
         splits, violations = assign_splits(examples, manifest["seed"],
@@ -147,13 +200,19 @@ def validate_dataset(
             home_ids = {e["example_id"] for e in splits[name]}
             misplaced += sum(1 for e in got[name]
                              if e["example_id"] not in home_ids)
-        ok = misplaced == 0 and not violations
+        dims = _leakage_dimensions(splits, examples)
+        ok = misplaced == 0 and not violations and dims["canonical"] == 0
         if misplaced:
             leakage_detail = f"{misplaced} example(s) misplaced"
         elif violations:
             leakage_detail = f"{len(violations)} cross-holdout koid pair(s)"
+        elif dims["canonical"]:
+            leakage_detail = (f"{dims['canonical']} canonical question(s) "
+                              "cross the holdout")
         gates["leakage"] = _gate(ok, "pass" if ok else "fail",
-                                 misplaced + len(violations), leakage_detail)
+                                 misplaced + len(violations)
+                                 + dims["canonical"], leakage_detail)
+        gates["leakage"]["dimensions"] = dims
     except DatasetError as e:
         gates["leakage"] = _gate(False, "fail", 1, str(e))
 

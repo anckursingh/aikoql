@@ -30,7 +30,8 @@ _SPLITS = ("train", "val", "test")
 Violation = Tuple[str, str, str]
 
 
-def component_ids(edges: Sequence[dict]) -> Dict[str, str]:
+def component_ids(edges: Sequence[dict],
+                   groups: Sequence[Sequence[str]] = ()) -> Dict[str, str]:
     """Connected-component ids over `edges` (each with from/rel/to).
 
     Union-find with the root = the min koid, so a component's id is
@@ -41,6 +42,12 @@ def component_ids(edges: Sequence[dict]) -> Dict[str, str]:
     component (factual {s}, relation {s,c}, ...) share ONE key and
     can never straddle a holdout under any seed (the mixed-cardinality
     trap the leakage gate caught on the T-12 koid-set-join keys).
+
+    `groups` (T-19): koid tuples the builder declares to be ONE
+    knowledge even without an edge — ambiguity groups share an anchor
+    value, so ambiguity examples about {a, b} and factual examples
+    about a or b must share one component or they can straddle the
+    holdout (PR9 Finding #4).
     """
     parent: Dict[str, str] = {}
 
@@ -55,6 +62,10 @@ def component_ids(edges: Sequence[dict]) -> Dict[str, str]:
         a, b = find(edge["from"]), find(edge["to"])
         if a != b:
             parent[max(a, b)] = min(a, b)
+    for group in groups:
+        roots = sorted({find(k) for k in group})
+        for r in roots[1:]:  # union onto the min root, invariant intact
+            parent[r] = roots[0]
     return {k: find(k) for k in list(parent)}
 
 

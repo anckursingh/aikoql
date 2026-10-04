@@ -456,7 +456,12 @@ def _generate(db, state, snap, docs, seen):
     # must join the claim's component or the contradiction example's
     # joined key (root:counter) hashes apart from the factual example's
     # (root) while both share the claim koid — a cross-holdout leak.
-    comp = component_ids(state["edges"])
+    # Ambiguity groups (T-19) are knowledge without an edge: their
+    # members join one component so ambiguity + factual examples about
+    # the same anchor can never straddle the holdout.
+    comp = component_ids(
+        state["edges"],
+        groups=[s.koids for s in scenarios if s.task_type == "ambiguity"])
     examples, refused = [], 0
     families = Counter()
     for s in scenarios:
