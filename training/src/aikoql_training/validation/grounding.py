@@ -344,6 +344,10 @@ def validate_grounding(example: Dict[str, Any]) -> dict:
     if labels["grounded"]:
         if not answer.strip():
             errors.append("grounded example has an empty answer")
+        if not labels["answerable"]:
+            errors.append("labels.answerable is false on a grounded answer")
+        if labels["ambiguous"] or labels["contradictory"]:
+            errors.append("grounded answer cannot be ambiguous or contradictory")
         if not supporting:
             errors.append(
                 "grounding failure: answer is not grounded — it does not "
