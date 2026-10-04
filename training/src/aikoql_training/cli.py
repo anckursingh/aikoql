@@ -35,6 +35,7 @@ from aikoql_training.generators.answer import build_answer
 from aikoql_training.generators.query import build_queries
 from aikoql_training.metrics import Metrics
 from aikoql_training.models import GENERATOR_VERSION, SCHEMA_VERSION, compute_id
+from aikoql_training.plan import plan_of, policy_of
 from aikoql_training.scenarios.factual import factual_scenarios
 from aikoql_training.scenarios.relation import relation_scenarios
 from aikoql_training.scenarios.scenario import Scenario
@@ -81,6 +82,7 @@ def _fixture_ir(kos: List[dict], edge: dict) -> Dict[str, Any]:
 
 def _assemble(scenario: Scenario, snap, query: str, ctx: dict,
               answer: dict, comp: dict) -> Dict[str, Any]:
+    intent, entities, requirements, plan = plan_of(scenario)
     example = {
         "schema_version": SCHEMA_VERSION,
         "generator_version": GENERATOR_VERSION,
@@ -94,13 +96,15 @@ def _assemble(scenario: Scenario, snap, query: str, ctx: dict,
         "task": {"type": scenario.task_type,
                  "difficulty": scenario.difficulty, "requires": []},
         "input": {"question": scenario.question},
-        "semantic_target": {"operation": "query"},
+        "semantic_target": {"operation": "query", "intent": intent,
+                            "entities": entities, "requirements": requirements,
+                            "plan": plan},
         "query_target": {"language": "aikoql", "query": query},
         "context": {"entities": ctx["entities"], "facts": ctx["facts"],
                     "relations": ctx["relations"], "evidence": ctx["evidence"]},
         "expected": {"answer": answer["answer"], "koids": list(scenario.koids),
                      "evidence_ids": answer["evidence_ids"]},
-        "policy": {"authorization_required": False},
+        "policy": policy_of(scenario),
         "labels": answer["labels"],
         # the knowledge COMPONENT's canonical key: the union-find root
         # (min koid) of the component the example's koids belong to —

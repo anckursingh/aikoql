@@ -17,8 +17,8 @@ from typing import Any, Dict
 
 from aikoql_training.errors import SchemaError
 
-SCHEMA_VERSION = "1"
-GENERATOR_VERSION = "0.1.0"
+SCHEMA_VERSION = "2"
+GENERATOR_VERSION = "0.2.0"
 
 TASK_TYPES = {
     "intent", "query", "grounded_qa", "reasoning",
@@ -26,6 +26,8 @@ TASK_TYPES = {
     "ambiguity", "contradiction",
 }
 DIFFICULTIES = {"factual", "one_hop", "multi_hop", "comparison"}
+PLAN_OPS = {"resolve_entity", "traverse", "project"}
+ENTITY_ROLES = {"subject", "target", "intermediate", "candidate"}
 
 # Field spec per section: field name -> required type.
 _SPEC = {
@@ -51,12 +53,20 @@ _NESTED = {
     },
     "task": {"type": str, "difficulty": str, "requires": list},
     "input": {"question": str},
-    "semantic_target": {"operation": str},
+    "semantic_target": {"operation": str, "intent": str, "entities": list,
+                        "requirements": list, "plan": dict},
     "query_target": {"language": str, "query": str},
     "context": {"entities": list, "facts": list, "relations": list, "evidence": list},
     "expected": {"answer": str, "koids": list, "evidence_ids": list},
     "policy": {"authorization_required": bool},
     "labels": {"grounded": bool, "answerable": bool, "ambiguous": bool, "contradictory": bool},
+}
+
+# Fields allowed (typed when present) but not required: the ACL pair on
+# the policy section, present exactly when authorization_required is
+# true (design §41).
+_OPTIONAL = {
+    "policy": {"subject": str, "action": str},
 }
 
 
@@ -108,8 +118,13 @@ def validate(example: Dict[str, Any]) -> None:
             if not isinstance(sub[field], typ):
                 raise SchemaError(f"{section}.{field}: expected {typ.__name__}")
         for field in sub:
-            if field not in fields:
+            if field not in fields and field not in _OPTIONAL.get(section, {}):
                 raise SchemaError(f"unknown field: {section}.{field}")
+    for section, fields in _OPTIONAL.items():
+        sub = example[section]
+        for field, typ in fields.items():
+            if field in sub and not isinstance(sub[field], typ):
+                raise SchemaError(f"{section}.{field}: expected {typ.__name__}")
 
     if example["schema_version"] != SCHEMA_VERSION:
         raise SchemaError(
@@ -127,6 +142,65 @@ def validate(example: Dict[str, Any]) -> None:
             f"query_target.language: expected 'aikoql', got {example['query_target']['language']!r}")
     if not example["query_target"]["query"].strip():
         raise SchemaError("query_target.query: must not be empty")
+
+    # T-17 semantic target (design §41): the plan is a closed, typed
+    # contract — unknown ops/roles and untyped steps are rejected.
+    st = example["semantic_target"]
+    if st["intent"] not in TASK_TYPES:
+        raise SchemaError(
+            f"semantic_target.intent: unknown task type: {st['intent']!r}")
+    for entry in st["entities"]:
+        if not isinstance(entry, dict):
+            raise SchemaError("semantic_target.entities: entries must be objects")
+        for key in entry:
+            if key not in ("koid", "role"):
+                raise SchemaError(f"unknown field: semantic_target.entities.{key}")
+        if not isinstance(entry.get("koid"), str):
+            raise SchemaError("semantic_target.entities: entry koid must be a str")
+        if entry.get("role") not in ENTITY_ROLES:
+            raise SchemaError(
+                f"semantic_target.entities: unknown role: {entry.get('role')!r}")
+    for req in st["requirements"]:
+        if not isinstance(req, str) or not req.strip():
+            raise SchemaError(
+                "semantic_target.requirements: entries must be non-empty strings")
+    plan = st["plan"]
+    if not isinstance(plan.get("steps"), list):
+        raise SchemaError("semantic_target.plan: missing required field: steps")
+    for key in plan:
+        if key not in ("steps", "temporal"):
+            raise SchemaError(f"unknown field: semantic_target.plan.{key}")
+    if "temporal" in plan and (not isinstance(plan["temporal"], dict)
+                               or not isinstance(plan["temporal"].get("as_of"), int)):
+        raise SchemaError("semantic_target.plan.temporal: needs as_of int")
+    for step in plan["steps"]:
+        if not isinstance(step, dict):
+            raise SchemaError("semantic_target.plan.steps: entries must be objects")
+        if step.get("op") not in PLAN_OPS:
+            raise SchemaError(
+                f"semantic_target.plan.steps: unknown op: {step.get('op')!r}")
+        if step["op"] == "traverse":
+            for key in ("from", "relation", "to"):
+                if not isinstance(step.get(key), str) or not step[key].strip():
+                    raise SchemaError(
+                        f"semantic_target.plan.steps: traverse needs {key}")
+        elif step["op"] == "resolve_entity":
+            if not isinstance(step.get("koid"), str):
+                raise SchemaError("semantic_target.plan.steps: resolve_entity needs koid")
+        else:  # project
+            if not isinstance(step.get("properties"), list):
+                raise SchemaError("semantic_target.plan.steps: project needs properties")
+
+    policy = example["policy"]
+    if policy["authorization_required"]:
+        for key in ("subject", "action"):
+            if not isinstance(policy.get(key), str) or not policy[key].strip():
+                raise SchemaError(
+                    f"policy: authorization_required demands subject and action "
+                    f"(missing {key})")
+    for entry in example["context"]["evidence"]:
+        if not isinstance(entry, dict):
+            raise SchemaError("context.evidence: entries must be objects")
     try:
         _dump(example)  # a dataset is JSONL — non-serializable content is invalid
     except (TypeError, ValueError) as exc:

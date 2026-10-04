@@ -151,7 +151,8 @@ def _example(decision=None, facts=None, labels=None, policy=None, answer=None):
         expected={"answer": answer if answer is not None else s.expected_answer,
                   "koids": list(s.koids),
                   "evidence_ids": [evidence_id(_EV)]},
-        policy=policy or {"authorization_required": True},
+        policy=policy or {"authorization_required": True,
+                          "subject": s.subject, "action": s.action},
         labels=labels or _VERDICT_LABELS,
     )
 

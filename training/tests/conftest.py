@@ -17,6 +17,7 @@ import socket
 import subprocess
 import tempfile
 import time
+from copy import deepcopy as _deepcopy
 from pathlib import Path
 
 import pytest
@@ -178,9 +179,11 @@ def mcp_server_two_tokens():
         yield {"host": host, "alice": "alice-tok", "bob": "bob-tok"}
 
 
+_KOID = "a" * 32
+
 _BASE = {
     "schema_version": SCHEMA_VERSION,
-    "generator_version": "0.1.0",
+    "generator_version": "0.2.0",
     "source": {
         "database_id": "acmepay",
         "snapshot_id": "snap-1",
@@ -190,7 +193,16 @@ _BASE = {
     },
     "task": {"type": "grounded_qa", "difficulty": "factual", "requires": []},
     "input": {"question": "What is the owner of the settlement service?"},
-    "semantic_target": {"operation": "query"},
+    "semantic_target": {
+        "operation": "query",
+        "intent": "grounded_qa",
+        "entities": [{"koid": _KOID, "role": "subject"}],
+        "requirements": ["owner"],
+        "plan": {"steps": [
+            {"op": "resolve_entity", "koid": _KOID},
+            {"op": "project", "properties": ["owner"]},
+        ]},
+    },
     "query_target": {
         "language": "aikoql",
         # T-05: text string literals are double-quoted only (lexer.rs).
@@ -210,9 +222,11 @@ _BASE = {
 
 
 def make_example(**overrides):
-    """A valid example with overrides applied and a matching example_id."""
-    example = {k: (dict(v) if isinstance(v, dict) else list(v) if isinstance(v, list) else v)
-               for k, v in _BASE.items()}
+    """A valid example with overrides applied and a matching example_id.
+
+    A deep copy: tests mutate nested plan/entities structures and a
+    shallow copy shares them, poisoning _BASE for every later test."""
+    example = _deepcopy(_BASE)
     example.update(overrides)
     example["example_id"] = compute_id(example)
     return example

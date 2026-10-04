@@ -39,6 +39,7 @@ from aikoql_training.errors import TrainingDataError
 from aikoql_training.generators import build_queries
 from aikoql_training.generators.answer import build_answer
 from aikoql_training.models import GENERATOR_VERSION, SCHEMA_VERSION, compute_id
+from aikoql_training.plan import plan_of, policy_of
 from aikoql_training.scenarios.ambiguity import ambiguity_scenarios
 from aikoql_training.scenarios.authorization import authorization_scenarios
 from aikoql_training.scenarios.contradiction import contradiction_scenarios
@@ -378,6 +379,7 @@ def _pick_doc(s, docs, min_svc):
 
 def _assemble(s, snap, query, ctx, answer, comp, conflict_koids):
     koids = [k for k in s.koids if k not in conflict_koids]
+    intent, entities, requirements, plan = plan_of(s)
     example = {
         "schema_version": SCHEMA_VERSION,
         "generator_version": GENERATOR_VERSION,
@@ -391,14 +393,15 @@ def _assemble(s, snap, query, ctx, answer, comp, conflict_koids):
         "task": {"type": s.task_type, "difficulty": s.difficulty,
                  "requires": []},
         "input": {"question": s.question},
-        "semantic_target": {"operation": "query"},
+        "semantic_target": {"operation": "query", "intent": intent,
+                            "entities": entities, "requirements": requirements,
+                            "plan": plan},
         "query_target": {"language": "aikoql", "query": query},
         "context": {"entities": ctx["entities"], "facts": ctx["facts"],
                     "relations": ctx["relations"], "evidence": ctx["evidence"]},
         "expected": {"answer": answer["answer"], "koids": koids,
                      "evidence_ids": answer["evidence_ids"]},
-        "policy": {"authorization_required":
-                   s.task_type == "authorization"},
+        "policy": policy_of(s),
         "labels": answer["labels"],
         "split_key": ":".join(sorted({comp.get(k, k) for k in koids}))
         or s.scenario_id,
