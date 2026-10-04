@@ -157,6 +157,45 @@ def test_misplaced_split_poisons_the_leakage_gate(tmp_path):
     assert out["gates"]["leakage"]["ok"] is False
 
 
+# -- held-out orgs (T-28: PR9 Finding #3 / P1.2) ------------------------------
+
+def test_held_out_declaration_keeps_eval_orgs_out_of_train(tmp_path):
+    """The dataset declares its held-out orgs in the manifest; the
+    leakage gate recomputes the assignment with that declaration. An
+    honest placement passes; a held-out example recorded into train is
+    misplaced and fails the gate. The seed is chosen so the holdout
+    force is the ONLY thing keeping b out of train — a disarmed force
+    (mutation leg) agrees with the tamper and the test fails."""
+    a = _ex(split_key="k-1", org="payments")
+    b = _ex(split_key="k-2", org="utilities",
+            question="What is the owner of the checkout service?")
+    for seed in range(400):
+        plain, _ = assign_splits([b], seed, (8, 1, 1))
+        forced, _ = assign_splits([b], seed, (8, 1, 1),
+                                  held_out_orgs=("utilities",))
+        if plain["train"] and not forced["train"]:
+            break
+    else:
+        raise AssertionError("no seed where the holdout force changes b's home")
+    homes = {e["example_id"]: n for n in _SPLITS
+             for e in assign_splits([a, b], seed, (8, 1, 1),
+                                    held_out_orgs=("utilities",))[0][n]}
+    write_dataset({n: [e for e in (a, b) if homes[e["example_id"]] == n]
+                   for n in _SPLITS},
+                  str(tmp_path / "ok"), **{**_FIELDS, "seed": seed},
+                  held_out_orgs=("utilities",))
+    out = validate_dataset(str(tmp_path / "ok"))
+    assert out["publishable"] is True
+    assert out["gates"]["leakage"]["ok"] is True
+    # the tamper: the held-out example sneaks into train
+    write_dataset({"train": [a, b], "val": [], "test": []},
+                  str(tmp_path / "bad"), **{**_FIELDS, "seed": seed},
+                  held_out_orgs=("utilities",))
+    out = validate_dataset(str(tmp_path / "bad"))
+    assert out["publishable"] is False
+    assert out["gates"]["leakage"]["ok"] is False
+
+
 # -- duplicates --------------------------------------------------------------
 
 def test_duplicate_example_ids_poison_publishability(tmp_path):

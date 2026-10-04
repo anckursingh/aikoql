@@ -99,6 +99,36 @@ def test_corpus_spans_multiple_domains(mcp_server, tmp_path):
                              "acct-", "region-")) for n in names)
 
 
+def test_held_out_org_never_leaks_into_train(mcp_server, tmp_path):
+    """T-28 (P1.2 / PR9 Finding #3): the eval slices draw from an org
+    the model never saw — no train example may reference the held-out
+    org (its entities never appear in a train context), the held-out
+    org's examples reach both eval slices, and every example carries
+    the machine-readable org stamp."""
+    host, token = mcp_server
+    out, artifacts = tmp_path / "ds", tmp_path / "artifacts"
+    proc = _run(host, token, out, target=40, seeds=2, artifacts=artifacts)
+    assert proc.returncode == 0, proc.stderr
+    ds = read_dataset(str(out))
+    nova = ("plant-", "crew-", "worker-", "meter-", "zone-")
+
+    def org_of(ex):
+        names = {e["name"] for e in ex["context"]["entities"]}
+        if any(n.startswith(nova) for n in names):
+            return "novaenergy"
+        return "acmepay"
+
+    # the tooth: held-out entities never appear in a train context
+    assert all(org_of(e) != "novaenergy" for e in ds["train"])
+    # and the held-out org's examples reach both eval slices
+    assert any(org_of(e) == "novaenergy" for e in ds["val"])
+    assert any(org_of(e) == "novaenergy" for e in ds["test"])
+    # the org stamp rides on every example (optional in the schema,
+    # present on every corpus example)
+    for e in [x for n in ("train", "val", "test") for x in ds[n]]:
+        assert e["org"] in ("acmepay", "novaenergy", "")
+
+
 def test_corpus_commits_manifest_and_statistics(tmp_path, mcp_server):
     host, token = mcp_server
     out, artifacts = tmp_path / "ds", tmp_path / "artifacts"
