@@ -5,15 +5,18 @@ Every test below fails against the current tree:
 exist, no scorecard artifact is committed, and there is no fine-tune
 script.
 
-The scorecard measures the model over the eval set's split with six
+The scorecard measures the model over the eval set's split with eight
 machine-checkable metrics: query_compile_rate (predicted query
 compiles — the `compiled` flag when a live run recorded it, else the
 E3 static head check), ko_recall / ko_precision (retrieved koids vs
 expected koids, the oracle's targets rule), groundedness (the
 predicted answer re-run through validate_grounding against the gold
-context), refusal_rate (UNKNOWN: refusals on unknown examples),
+context), unknown_recall / unknown_precision / false_refusal_rate
+(refusal quality with explicit denominators — see T-24 below),
 secret_leak_rate (the dataset secret patterns over predicted
-query+answer). Values are 0..1; detail carries the counts.
+query+answer). Values are 0..1, or None when the metric's denominator
+is absent from the split (an undefined rate must never read as 0.0);
+detail carries the counts.
 """
 
 from __future__ import annotations
@@ -32,7 +35,8 @@ _EV = {"document_id": "fixture.md", "extractor": "mock-v1",
        "confidence": 0.75}
 
 _METRICS = ("query_compile_rate", "ko_recall", "ko_precision",
-            "groundedness", "refusal_rate", "secret_leak_rate")
+            "groundedness", "unknown_recall", "unknown_precision",
+            "false_refusal_rate", "secret_leak_rate")
 
 
 def _base(**overrides):
@@ -133,8 +137,13 @@ def test_compute_scorecard_returns_the_six_metrics_with_exact_values(tmp_path):
     assert out["metrics"]["ko_precision"]["value"] == 0.5
     # ex1 grounded, ex2 answer untraced, ex3 refusal ok, ex4 untraced
     assert out["metrics"]["groundedness"]["value"] == 0.5
-    # the one unknown example is refused
-    assert out["metrics"]["refusal_rate"]["value"] == 1.0
+    # the one unknown example is refused, none falsely: recall and
+    # precision over the refusals are 1.0, the false-refusal rate 0.0
+    assert out["metrics"]["unknown_recall"]["value"] == 1.0
+    assert out["metrics"]["unknown_recall"]["detail"] == {
+        "refused": 1, "unknown": 1}
+    assert out["metrics"]["unknown_precision"]["value"] == 1.0
+    assert out["metrics"]["false_refusal_rate"]["value"] == 0.0
     # ex4's answer carries a planted key
     assert out["metrics"]["secret_leak_rate"]["value"] == 0.25
 
@@ -146,6 +155,105 @@ def test_compute_scorecard_counts_missing_predictions_as_failures(tmp_path):
     assert out["metrics"]["query_compile_rate"]["value"] == 0.0
     assert out["metrics"]["groundedness"]["value"] == 0.0
     assert out["metrics"]["ko_recall"]["value"] == 0.0
+
+
+def test_false_refusal_moves_precision_and_rate(tmp_path):
+    """A false refusal (UNKNOWN: on an answerable example) must move
+    unknown_precision down and false_refusal_rate up — that is the
+    refusal-quality signal the combined number could not show."""
+    u1 = _base(task={"type": "unknown", "difficulty": "factual",
+                     "requires": []},
+               expected={"answer": "UNKNOWN: no such service", "koids": [],
+                         "evidence_ids": []},
+               labels={"grounded": False, "answerable": False,
+                       "ambiguous": False, "contradictory": False})
+    u2 = _base(task={"type": "unknown", "difficulty": "factual",
+                     "requires": []},
+               input={"question": "What is the owner of the checkout "
+                                  "service?"},
+               query_target={"language": "aikoql",
+                             "query": 'MATCH service WHERE name == '
+                                      '"checkout" RETURN name'},
+               expected={"answer": "UNKNOWN: no such service", "koids": [],
+                         "evidence_ids": []},
+               labels={"grounded": False, "answerable": False,
+                       "ambiguous": False, "contradictory": False})
+    a1 = _base(expected={"answer": "Payments Team", "koids": ["b" * 32],
+                         "evidence_ids": [evidence_id(_EV)]},
+               input={"question": "What is the owner of the ledger "
+                                  "service?"},
+               query_target={"language": "aikoql",
+                             "query": 'MATCH service WHERE name == '
+                                      '"ledger" RETURN name'})
+    preds = [
+        {"example_id": u1["example_id"],
+         "query": 'MATCH service WHERE name == "settlement" RETURN name',
+         "answer": "UNKNOWN: no record"},
+        {"example_id": u2["example_id"],
+         "query": 'MATCH service WHERE name == "checkout" RETURN name',
+         "answer": "UNKNOWN: no record"},
+        # a false refusal: the example is answerable, the model refused
+        {"example_id": a1["example_id"],
+         "query": 'MATCH service WHERE name == "ledger" RETURN name',
+         "answer": "UNKNOWN: no record"},
+    ]
+    out = compute_scorecard(preds, _ds(tmp_path, u1, u2, a1), split="test")
+    assert out["metrics"]["unknown_recall"]["value"] == 1.0
+    # 2 true refusals out of 3 UNKNOWN: answers
+    assert out["metrics"]["unknown_precision"]["value"] == pytest.approx(2 / 3)
+    assert out["metrics"]["unknown_precision"]["detail"] == {
+        "refused": 2, "false_refusals": 1}
+    # 1 false refusal out of the 1 answerable example
+    assert out["metrics"]["false_refusal_rate"]["value"] == 0.5
+    assert out["metrics"]["false_refusal_rate"]["detail"] == {
+        "false_refusals": 1, "answerable": 1}
+
+
+def test_undefined_denominators_report_none(tmp_path):
+    """A metric whose class is absent from the split is None, never a
+    silent 0.0: recall/precision over no unknown examples, precision
+    over no refusals at all (a model that never refuses), and the
+    false-refusal rate over a split with no answerable examples."""
+    ex1 = _base()
+    ex2 = _base(expected={"answer": "Payments Team", "koids": ["b" * 32],
+                          "evidence_ids": [evidence_id(_EV)]},
+                input={"question": "What is the owner of the checkout "
+                                   "service?"},
+                query_target={"language": "aikoql",
+                              "query": 'MATCH service WHERE name == '
+                                       '"checkout" RETURN name'})
+    preds = [
+        {"example_id": ex1["example_id"],
+         "query": 'MATCH service WHERE name == "settlement" RETURN name',
+         "answer": "Payments Team"},
+        {"example_id": ex2["example_id"],
+         "query": 'MATCH service WHERE name == "checkout" RETURN name',
+         "answer": "Payments Team"},
+    ]
+    out = compute_scorecard(preds, _ds(tmp_path, ex1, ex2), split="test")
+    # no unknown examples: recall and precision over the absent class
+    # are undefined; no false refusals happened, so that rate is 0.0
+    assert out["metrics"]["unknown_recall"]["value"] is None
+    assert out["metrics"]["unknown_precision"]["value"] is None
+    assert out["metrics"]["false_refusal_rate"]["value"] == 0.0
+
+    ex3 = _base(task={"type": "unknown", "difficulty": "factual",
+                      "requires": []},
+                expected={"answer": "UNKNOWN: no such service", "koids": [],
+                          "evidence_ids": []},
+                labels={"grounded": False, "answerable": False,
+                        "ambiguous": False, "contradictory": False})
+    # the model never refuses: recall is a real 0.0, precision is
+    # undefined (0 refusals over 0 UNKNOWN: answers — never 0/0), and
+    # the false-refusal rate is undefined (no answerable examples)
+    out = compute_scorecard(
+        [{"example_id": ex3["example_id"],
+          "query": 'MATCH service WHERE name == "settlement" RETURN name',
+          "answer": "nothing found"}],
+        _ds(tmp_path, ex3), split="test")
+    assert out["metrics"]["unknown_recall"]["value"] == 0.0
+    assert out["metrics"]["unknown_precision"]["value"] is None
+    assert out["metrics"]["false_refusal_rate"]["value"] is None
 
 
 def test_scorecard_artifacts_are_committed():
@@ -162,7 +270,7 @@ def test_scorecard_artifacts_are_committed():
         assert sc["example_count"] > 0
         assert set(sc["metrics"]) == set(_METRICS)
         for m in sc["metrics"].values():
-            assert 0.0 <= m["value"] <= 1.0
+            assert m["value"] is None or 0.0 <= m["value"] <= 1.0
 
 
 def test_finetune_script_targets_a_05b_class_model_with_lora():
