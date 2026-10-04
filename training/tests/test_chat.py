@@ -56,8 +56,7 @@ def _run_query(results):
 
 
 def test_chat_happy_path_round_trip():
-    generate, prompts = _generate(f"QUERY: {_QUERY}\n",
-                                  "ANSWER: Alice Chen\n")
+    generate, prompts = _generate(f"QUERY: {_QUERY}\n", "Alice Chen")
     run_query, queries = _run_query(_RESULTS)
     rec = chat("Who holds card 4111?", generate=generate,
                run_query=run_query)
@@ -82,7 +81,7 @@ def test_chat_no_query_refuses():
     def boom(_q):
         raise AssertionError("run_query must not be called without a query")
 
-    generate, prompts = _generate("I cannot help with that.", "ANSWER: x")
+    generate, prompts = _generate("I cannot help with that.", "x")
     rec = chat("?", generate=generate, run_query=boom)
 
     assert rec["refused"] is True
@@ -96,7 +95,7 @@ def test_chat_query_failure_refuses():
     def run_query(query):
         raise RuntimeError("compile failed")
 
-    generate, prompts = _generate(f"QUERY: {_QUERY}\n", "ANSWER: x")
+    generate, prompts = _generate(f"QUERY: {_QUERY}\n", "x")
     rec = chat("Who holds card 4111?", generate=generate,
                run_query=run_query)
 
@@ -108,7 +107,7 @@ def test_chat_query_failure_refuses():
 
 
 def test_chat_empty_results_refuse():
-    generate, prompts = _generate(f"QUERY: {_QUERY}\n", "ANSWER: x")
+    generate, prompts = _generate(f"QUERY: {_QUERY}\n", "x")
     run_query, queries = _run_query([])
     rec = chat("Who holds card 4111?", generate=generate,
                run_query=run_query)
@@ -160,7 +159,7 @@ def test_chat_eval_examples_route():
         labels={"grounded": False, "answerable": False, "ambiguous": False,
                 "contradictory": False})
 
-    for ex, answer in ((grounded, "ANSWER: Alice Chen"),
+    for ex, answer in ((grounded, "Alice Chen"),
                        (unknown, "UNKNOWN: no such card")):
         generate, prompts = _generate(f"QUERY: {_QUERY}\n", answer)
         run_query, queries = _run_query(_RESULTS)
