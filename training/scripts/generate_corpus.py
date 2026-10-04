@@ -51,6 +51,7 @@ from aikoql_training.scenarios.temporal import _month, temporal_scenarios
 from aikoql_training.scenarios.templates import ref_of
 from aikoql_training.scenarios.unknown import unknown_scenarios
 from aikoql_training.validation import verify_scenario
+from aikoql_training.validation.execution import verify_authorization_examples
 from aikoql_training.validation.eval_set import eval_dataset
 
 _TYPES = ("service", "team", "person", "account", "region")
@@ -592,12 +593,23 @@ def main(argv=None) -> int:
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
         eval_out = eval_dataset(read_dataset(args.out))
+        # T-25 (P0.6): re-prove the committed authorization examples
+        # against the live ACL — a verdict the kernel no longer makes,
+        # or a stale denial reason, aborts the corpus (fail-loud).
+        authorization = verify_authorization_examples(
+            db, read_dataset(args.out))
+        if not authorization["ok"]:
+            raise TrainingDataError(
+                f"live ACL disagrees with the dataset: "
+                f"{authorization['errors']}",
+                stage="authorization", code="ORACLE")
         publishable = validation["publishable"] and all(
             c["ok"] for c in eval_out.values())
         report = {"publishable": publishable,
                   "example_count": validation["example_count"],
                   "seeds": seeds_used, "families": dict(families),
                   "refused": refused, "gates": validation["gates"],
+                  "authorization": authorization,
                   "eval": eval_out}
         artifacts = Path(args.artifacts)
         artifacts.mkdir(parents=True, exist_ok=True)

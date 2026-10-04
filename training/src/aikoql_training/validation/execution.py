@@ -16,7 +16,7 @@ anchor predicate matching, the path by the traverse result.
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, Dict, List
 
 from aikoql_training.scenarios.scenario import Scenario
 
@@ -134,3 +134,39 @@ def verify_scenario(db: Any, scenario: Scenario, queries: List[str]) -> dict:
             errors.append(f"factual: anchor {scenario.koids[0]} not in results")
 
     return {"ok": not errors, "errors": errors}
+
+
+def verify_authorization_examples(db: Any, ds: Dict[str, Any]) -> dict:
+    """T-25 (PR9 P0.6): the dataset-level live-oracle leg — every
+    committed authorization example is re-proved against the kernel's
+    evaluate_policies. policy.decision must equal the live verdict and
+    a denial's policy.reason the live reason verbatim: the dataset
+    asserts what the ACL evaluates, never a stale or forged verdict.
+    Reports instead of raising; the corpus builder treats not-ok as
+    fail-loud."""
+    errors: List[str] = []
+    checked = 0
+    for name in ("train", "val", "test"):
+        for ex in ds.get(name) or []:
+            if (ex.get("task") or {}).get("type") != "authorization":
+                continue
+            checked += 1
+            policy = ex.get("policy") or {}
+            try:
+                verdict = db._backend.call_tool("evaluate_policies", {
+                    "principal": policy.get("subject"),
+                    "action": policy.get("action"),
+                    "resource_type": policy.get("resource"),
+                })
+            except Exception as e:
+                errors.append(f"{ex.get('example_id')}: evaluation failed: {e}")
+                continue
+            if bool(verdict.get("allowed")) != policy.get("decision"):
+                errors.append(
+                    f"{ex.get('example_id')}: live ACL disagrees with "
+                    f"policy.decision={policy.get('decision')!r}")
+            if not bool(verdict.get("allowed")) and (
+                    verdict.get("reason") != policy.get("reason")):
+                errors.append(
+                    f"{ex.get('example_id')}: live denial reason disagrees")
+    return {"ok": not errors, "errors": errors, "checked": checked}

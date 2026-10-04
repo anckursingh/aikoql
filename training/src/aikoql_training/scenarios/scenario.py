@@ -36,3 +36,8 @@ class Scenario:
     # T-10 authorization: the ACL principal and action of the verdict.
     subject: Optional[str] = None
     action: Optional[str] = None
+    # T-25 (P0.6): the kernel's own verdict — the live evaluate_policies
+    # decision at generation time and, for denials, the preserved
+    # reason. The dataset re-proves both against the live ACL.
+    decision: Optional[bool] = None
+    reason: Optional[str] = None

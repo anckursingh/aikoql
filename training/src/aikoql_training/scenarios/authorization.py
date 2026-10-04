@@ -91,6 +91,8 @@ def authorization_scenarios(
                     type_name=resource_type,
                     subject=principal,
                     action=action,
+                    decision=allowed,
+                    reason=reason,
                 )
             )
     return scenarios

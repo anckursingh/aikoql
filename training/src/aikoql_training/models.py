@@ -62,13 +62,15 @@ _NESTED = {
     "labels": {"grounded": bool, "answerable": bool, "ambiguous": bool, "contradictory": bool},
 }
 
-# Fields allowed (typed when present) but not required: the ACL pair on
-# the policy section, present exactly when authorization_required is
-# true (design §41); the T-22 claim decomposition on grounded answers
-# ({"statement", "evidence_ids"} per claim, walked by the grounding
-# validator).
+# Fields allowed (typed when present) but not required: the ACL tuple
+# on the policy section — subject, action, resource and the kernel's
+# verdict (decision bool + preserved reason), present exactly when
+# authorization_required is true (design §41, T-25 P0.6); the T-22
+# claim decomposition on grounded answers ({"statement", "evidence_ids"}
+# per claim, walked by the grounding validator).
 _OPTIONAL = {
-    "policy": {"subject": str, "action": str},
+    "policy": {"subject": str, "action": str, "resource": str,
+               "decision": bool, "reason": str},
     "expected": {"claims": list},
 }
 
@@ -196,11 +198,17 @@ def validate(example: Dict[str, Any]) -> None:
 
     policy = example["policy"]
     if policy["authorization_required"]:
-        for key in ("subject", "action"):
+        for key in ("subject", "action", "resource"):
             if not isinstance(policy.get(key), str) or not policy[key].strip():
                 raise SchemaError(
-                    f"policy: authorization_required demands subject and action "
-                    f"(missing {key})")
+                    f"policy: authorization_required demands subject, action "
+                    f"and resource (missing {key})")
+        if not isinstance(policy.get("decision"), bool):
+            raise SchemaError(
+                "policy: authorization_required demands decision bool")
+        if not isinstance(policy.get("reason"), str) or not policy["reason"].strip():
+            raise SchemaError(
+                "policy: authorization_required demands the kernel reason")
     for entry in example["context"]["evidence"]:
         if not isinstance(entry, dict):
             raise SchemaError("context.evidence: entries must be objects")

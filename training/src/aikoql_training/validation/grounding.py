@@ -276,6 +276,17 @@ def _validate_authorization(example: Dict[str, Any]) -> dict:
         errors.append(
             "policy.authorization_required is false on an authorization example"
         )
+    # T-25 (P0.6): the verdict prefix must agree with the recorded
+    # kernel decision, and a denial must carry the kernel reason —
+    # preserved verbatim in the answer — or the example is invalid.
+    policy = example.get("policy") or {}
+    if denied != (policy.get("decision") is False):
+        errors.append("verdict prefix disagrees with policy.decision")
+    reason = policy.get("reason")
+    if denied and (not isinstance(reason, str) or not reason.strip()):
+        errors.append("denial carries no kernel reason in policy")
+    elif denied and reason not in answer:
+        errors.append("policy.reason does not appear in the denied answer")
     if not labels["grounded"]:
         errors.append("labels.grounded is false on an authorization example")
     if not labels["answerable"]:

@@ -55,12 +55,15 @@ def plan_of(scenario: Scenario) -> Tuple[str, List[Dict[str, str]],
 
 
 def policy_of(scenario: Scenario) -> Dict[str, Any]:
-    """policy section: authorization scenarios carry the ACL principal
-    and action; everything else is authorization-free. A missing
+    """policy section: authorization scenarios carry the ACL principal,
+    action, resource type and the kernel's verdict (decision + preserved
+    reason, T-25 P0.6); everything else is authorization-free. A missing
     subject/action on an authorization scenario fails models.validate
-    (authorization_required demands both) rather than silently
-    downgrading the example."""
+    (authorization_required demands the full metadata) rather than
+    silently downgrading the example."""
     if scenario.task_type == "authorization":
         return {"authorization_required": True,
-                "subject": scenario.subject, "action": scenario.action}
+                "subject": scenario.subject, "action": scenario.action,
+                "resource": scenario.type_name,
+                "decision": scenario.decision, "reason": scenario.reason}
     return {"authorization_required": False}
