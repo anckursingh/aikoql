@@ -971,3 +971,29 @@ with no schema change.
 
 RED archived as `t-26-per-capability-scorecard`.
 
+## 31. Multi-domain corpus (T-27)
+
+PR9 P1.1 (Level 3/4 of the generator hierarchy): an AcmePay-only
+corpus cannot show schema generalization — the generators could pass
+by hardcoding the payments vocabulary. The corpus now seeds one slice
+per sweep seed per domain: AcmePay (payments) plus NovaEnergy
+(utilities), a second org over the same kernel types with a disjoint
+property schema (operator/uptime_pct/site vs owner/tier/status,
+head/specialty vs lead/focus, credit/tariff vs balance/currency,
+grid_code vs sla). Every scenario family walks the schema, so each
+domain drives factual/relation/multi-hop/ambiguity/contradiction/
+authorization questions in its own vocabulary; temporal/provenance
+stay acmepay (only acmepay seeds versioned services — the
+multi-domain tooth is schema breadth).
+
+Two cross-cutting seams: `_domain_of(ko)` discriminates a KO's domain
+by its property schema (the two schemas share no key) and prefixes
+the per-KO/group/conflict document ids; the seeding loop iterates
+`_DOMAINS`. The orgs' name vocabularies are disjoint by construction
+(plant/crew/worker/meter/zone vs svc/team/person/acct/region) — a
+shared stem would let one domain's fact text contain the other's
+anchor name, which the T-25 denial-gate's strict substring check
+would flag as a denied-object leak (the trap the RED caught).
+
+RED archived as `t-27-multi-domain`.
+
