@@ -652,3 +652,43 @@ loop: a grounded question compiled, retrieved and answered
 end-to-end; an out-of-knowledge question produced a hallucinated
 query, the compile failed and the wrapper refused. RED archived as
 `t-16-chat`.
+
+## 21. Schema v2 — structured semantic target (T-17)
+
+The PR9 TDD-01 P0.2 gap: `semantic_target` carried an opaque intent
+string and no plan, so a model could never be trained or graded on
+*how* an answer is reached. Schema v2 makes the reasoning path a
+first-class, machine-checkable structure.
+
+- **`src/aikoql_training/plan.py`** — `plan_of(scenario)` derives
+  `(intent, entities, requirements, plan)` from the scenario alone:
+  intent is the task type; entities are the koid set in scenario
+  order, each with a closed role — `subject` (the path origin),
+  `target` (the path destination), `intermediate` (every edge in
+  between), `candidate` (a member of a multi-answer set when there
+  is no path). Requirements are the sorted set of asked-for
+  properties plus every edge relation the path traverses. The plan
+  is the executable spine — `resolve_entity` for the subject, one
+  `traverse` per edge, a final `project` when a property is asked
+  for — with `temporal: {"as_of": ...}` exactly when the scenario
+  is time-bound. `policy_of(scenario)` pairs it with the policy
+  section: the ACL pair (subject, action) when the task type is
+  authorization, `authorization_required: false` otherwise.
+- **`models.py`** — the closed sets: `PLAN_OPS` (resolve_entity,
+  traverse, project), `ENTITY_ROLES` (subject, target,
+  intermediate, candidate); the plan keys close to `{steps,
+  temporal}`; an authorization-required policy must carry a
+  non-empty subject/action pair (fail-closed both directions); and
+  context evidence entries must be dicts. The validation demands
+  a plan — v2 rejects what v1 silently accepted.
+- Both assemblers (`cli.py`, `scripts/generate_corpus.py`) consume
+  the same two helpers, so the corpus and the CLI can never drift
+  on what a semantic target means.
+
+The derivation is pure — no oracle call, no I/O — so the tests pin
+it exhaustively: the four roles, requirement closure over edges and
+properties, the temporal arm, the empty/no-path shape, ambiguity
+candidates, never mentioning entities outside the scenario, and
+determinism across calls. The schema contract tests pin every
+closed set with a mutated example that validation must reject.
+RED archived as `t-17-schema-v2`.

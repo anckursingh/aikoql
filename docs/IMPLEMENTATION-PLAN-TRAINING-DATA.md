@@ -584,6 +584,24 @@ workflow test 7c requires the package install in exactly those jobs
 | T-15 | fine-tune run + scorecard (§32/33/34) | scorecard metrics absent | LoRA/FT script for a 0.5B-class open model; eval harness computes query_compile_rate, KO recall/precision, groundedness, refusal rate, secret-leak rate; results committed as artifacts |
 | T-16 | inference wrapper (§40 end-state) | question→query→context→answer path fails against the eval set | thin `chat.py`: model (intent/query) → AIKOQL → context → model (grounded answer); refusal/unknown paths; the POC chatbot |
 
+### Phase C — PR9 review gaps (P0.2/TDD-01 + the metric/coverage estate)
+
+| id | milestone | RED | GREEN |
+|---|---|---|---|
+| T-17 | schema v2: structured semantic target (P0.2/TDD-01) | intent is an opaque string, no plan anywhere | `plan_of`/`policy_of` derivations: (intent, entities, requirements, plan) with closed role/op sets, temporal as_of, policy ACL pair; assemblers share one code path |
+| T-18 | plan→renderer seam | query text built inline with plan derivation | a renderer turns the semantic plan into the query_target aikoql text; plan derivation and rendering testable apart |
+| T-19 | leakage dimensions | split_key straddles component boundaries (mixed-cardinality koid sets) | component-level split key + gate teeth over every leakage axis (entity, relation, cross-component) |
+| T-20 | structured JSON model protocol | model speaks free text, parseable only by brittle prefixes | model outputs structured JSON; schema-validated parser; refusal/grounding as fields, not prose |
+| T-21 | model-output fuzz | parser accepts garbage silently | hypothesis fuzz over the model-output parser; malformed/partial/adversarial replies fail closed |
+| T-22 | claim-level grounding | grounding checked once per answer | every claim in an answer carries claim→fact→evidence; `validate_grounding` walks claims, refuses on any dangling claim |
+| T-23 | grounding mutation fuzz | grounding validator never sees adversarial inputs | mutant/fuzz harness over grounding: dropped evidence, swapped facts, forged ids all fail closed |
+| T-24 | unknown precision/recall | UNKNOWN: refusals unmeasured | false_refusal_rate + unknown recall/precision over the unanswerable eval slice; refusal quality, not just answer quality |
+| T-25 | live-oracle authorization | authorization scenarios never run against the live server | authorization eval through the real ACL (tenant/role denial), machine-readable allow/deny |
+| T-26 | per-capability scorecard | six aggregate metrics hide capability failures | scorecard breaks the T-15 metrics down per capability (intent class, task type, difficulty) |
+| T-27 | multi-domain | AcmePay-only corpus can't show schema generalization | a second synthetic org with a different schema; generators parameterized over the domain |
+| T-28 | held-out orgs | train/test share component keys | eval slice drawn from orgs the model never saw; leakage gates hold across the new split |
+| T-29 | CI reshape | legs were accreted one failure-class at a time | final training-data.yml layout with the mutation/fuzz estates + `pip install -e training`; the full matrix green on a fresh runner |
+
 Execution order is the table order — the oracle (T-05) lands before
 probabilistic generation anywhere, exactly as the design's §38 prescribes.
 
