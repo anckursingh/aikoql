@@ -1,0 +1,30 @@
+F                                                                        [100%]
+================================== FAILURES ===================================
+_____________________ test_corpus_spans_multiple_domains ______________________
+
+mcp_server = ('127.0.0.1:62823', 'test-token')
+tmp_path = WindowsPath('C:/Users/ancku/AppData/Local/Temp/pytest-of-ancku/pytest-221/test_corpus_spans_multiple_dom0')
+
+    def test_corpus_spans_multiple_domains(mcp_server, tmp_path):
+        """T-27 (P1.1): the corpus is not AcmePay-only — a second org with
+        a different property schema seeds alongside it and the generators
+        emit grounded examples from both (schema generalization)."""
+        host, token = mcp_server
+        out, artifacts = tmp_path / "ds", tmp_path / "artifacts"
+        proc = _run(host, token, out, target=40, seeds=2, artifacts=artifacts)
+        assert proc.returncode == 0, proc.stderr
+        ds = read_dataset(str(out))
+        examples = [e for n in ("train", "val", "test") for e in ds[n]]
+        questions = " ".join(e["input"]["question"] for e in examples)
+        # the second org's schema drives real questions
+        for prop in ("operator", "uptime_pct", "site", "specialty",
+                     "credit", "tariff", "grid_code"):
+>           assert prop in questions, prop
+E           AssertionError: operator
+E           assert 'operator' in "May auditor-00 write the service whose name is svc-01-18? May auditor-00 read the account whose name is acct-01-05? M...2'? What is the name of team 'team-00-04'? What evidence supports that the owner of service 'svc-00-08' is team-00-02?"
+
+training\tests\test_corpus.py:87: AssertionError
+=========================== short test summary info ===========================
+FAILED training\tests\test_corpus.py::test_corpus_spans_multiple_domains - As...
+1 failed, 5 deselected in 34.60s
+EXIT=1

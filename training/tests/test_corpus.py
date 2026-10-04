@@ -70,6 +70,35 @@ def test_corpus_reaches_the_target_and_is_publishable(mcp_server, tmp_path):
     assert isinstance(report["authorization"]["checked"], int), report
 
 
+def test_corpus_spans_multiple_domains(mcp_server, tmp_path):
+    """T-27 (P1.1): the corpus is not AcmePay-only — a second org with
+    a different property schema seeds alongside it and the generators
+    emit grounded examples from both (schema generalization)."""
+    host, token = mcp_server
+    out, artifacts = tmp_path / "ds", tmp_path / "artifacts"
+    proc = _run(host, token, out, target=40, seeds=2, artifacts=artifacts)
+    assert proc.returncode == 0, proc.stderr
+    ds = read_dataset(str(out))
+    examples = [e for n in ("train", "val", "test") for e in ds[n]]
+    questions = " ".join(e["input"]["question"] for e in examples)
+    # the second org's schema drives real questions
+    for prop in ("operator", "uptime_pct", "site", "specialty",
+                 "credit", "tariff", "grid_code"):
+        assert prop in questions, prop
+    # the payments schema is still there
+    for prop in ("owner", "tier", "focus", "balance", "currency", "sla"):
+        assert prop in questions, prop
+    # and its entities land in real contexts — the two orgs' name
+    # vocabularies are disjoint (a shared stem would let one domain's
+    # fact text leak another's anchor into the denial gate)
+    names = {e["name"] for ex in examples
+             for e in ex["context"]["entities"]}
+    assert any(n.startswith(("plant-", "crew-", "worker-",
+                             "meter-", "zone-")) for n in names)
+    assert any(n.startswith(("svc-", "team-", "person-",
+                             "acct-", "region-")) for n in names)
+
+
 def test_corpus_commits_manifest_and_statistics(tmp_path, mcp_server):
     host, token = mcp_server
     out, artifacts = tmp_path / "ds", tmp_path / "artifacts"
