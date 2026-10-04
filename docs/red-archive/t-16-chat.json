@@ -1,0 +1,8 @@
+{
+  "id": "t-16-chat",
+  "pre_fix_commit": "HEAD",
+  "command": ".venv/Scripts/python.exe -m pytest training/tests/test_chat.py -q",
+  "captured_at": "2026-10-04T07:51:03Z",
+  "captured_head": "c82a7280375e3758dd0e6a71e138aab097e0cefe",
+  "exit_code": 2
+}
