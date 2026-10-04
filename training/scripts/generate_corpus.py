@@ -1,14 +1,16 @@
-"""T-14: the AcmePay POC corpus (design Phase 17, §35-37).
+"""T-14/T-27: the multi-domain synthetic corpus (design Phase 17,
+§35-37, P1.1).
 
-Seeds the AcmePay KB slice per sweep seed (the §35 counts: 24
-services, 6 teams, 12 persons, 8 accounts, 4 regions, 4 relation
-families, 3 versioned services, 1 seeded conflict), drives every
-scenario family through the real oracle + compiler, assembles examples
-with component-root split keys (the leakage gate cannot find a
-cross-holdout pair), and publishes only a fully gated dataset: the
-§26 validator plus the E1-E9 eval set. `--reuse` regenerates from a
-server the corpus already seeded (recovery through the public surface
-only). A planted-secret check rides `cli validate` on the artifact.
+Seeds one KB slice per sweep seed per domain — AcmePay (payments)
+and NovaEnergy (utilities, T-27: a second org with a different
+property schema so the generators must generalize, not hardcode the
+payments vocabulary) — drives every scenario family through the real
+oracle + compiler, assembles examples with component-root split keys
+(the leakage gate cannot find a cross-holdout pair), and publishes
+only a fully gated dataset: the §26 validator plus the E1-E9 eval
+set. `--reuse` regenerates from a server the corpus already seeded
+(recovery through the public surface only). A planted-secret check
+rides `cli validate` on the artifact.
 
 Exit 0 iff the dataset is publishable. The report is one JSON line on
 stdout: {publishable, example_count, seeds, families, refused, gates,
@@ -57,8 +59,23 @@ from aikoql_training.validation.eval_set import eval_dataset
 _TYPES = ("service", "team", "person", "account", "region")
 _RELS = ("OWNS", "DEPENDS_ON", "WORKS_IN", "IN")
 _FOCUS = ("payments", "settlement", "fraud", "ledger", "checkout", "billing")
+_NOVA_SPECIALTY = ("transmission", "metering", "generation",
+                   "distribution", "billing", "maintenance")
 _BUDGET = 100000
 _VERSIONED = 3
+
+# the NovaEnergy schema keys — disjoint from the payments schema
+# (name/owner/tier/status/lead/focus/role/team/balance/currency/sla),
+# so a KO's property set discriminates its domain
+_NOVA_KEYS = ("operator", "uptime_pct", "site", "head", "specialty",
+              "title", "clearance", "credit", "tariff", "grid_code")
+
+
+def _domain_of(ko: Dict[str, Any]) -> str:
+    """T-27: the domain a KO belongs to, discriminated by its property
+    schema — the two orgs share the kernel types but no property key."""
+    props = ko.get("properties") or {}
+    return "novaenergy" if any(k in props for k in _NOVA_KEYS) else "acmepay"
 
 
 def _ev(document_id: str, page: int) -> Dict[str, Any]:
@@ -105,44 +122,48 @@ def _history(db, koid: str) -> Dict[str, Any]:
     }
 
 
-def _seed_slice(db, s: int, state: Dict[str, Any]) -> None:
+def _remember_ko(db, state: Dict[str, Any], type_name: str,
+                 props: Dict[str, Any]) -> Dict[str, Any]:
+    row = db.get(db.remember(type_name, props)["koid"])
+    state["kos"].append(row)
+    return row
+
+
+def _link(db, state: Dict[str, Any], f: Dict[str, Any],
+          t: Dict[str, Any], rel: str) -> None:
+    db.relate(f["koid"], t["koid"], rel)
+    state["edges"].append({"from": f["koid"], "rel": rel, "to": t["koid"]})
+
+
+def _seed_acmepay(db, s: int, state: Dict[str, Any]) -> None:
     """One AcmePay slice: the §35 counts, the ownership/dependency
     graph, three versioned services and one seeded conflict. Every
     shared scalar value is seed-distinct — a cross-seed ambiguity group
     would join components and leak across holdouts."""
-    kos, edges = state["kos"], state["edges"]
+    kos = state["kos"]
 
-    def remember(type_name, props):
-        row = db.get(db.remember(type_name, props)["koid"])
-        kos.append(row)
-        return row
-
-    def link(f, t, rel):
-        db.relate(f["koid"], t["koid"], rel)
-        edges.append({"from": f["koid"], "rel": rel, "to": t["koid"]})
-
-    teams = [remember("team", {
+    teams = [_remember_ko(db, state, "team", {
         "name": f"team-{s:02d}-{i:02d}",
         "lead": f"person-{s:02d}-{i * 2:02d}",
         "focus": f"{_FOCUS[i]}-{s:02d}",
     }) for i in range(6)]
-    svcs = [remember("service", {
+    svcs = [_remember_ko(db, state, "service", {
         "name": f"svc-{s:02d}-{i:02d}",
         "owner": f"team-{s:02d}-{i % 6:02d}",
         "tier": s * 3 + i % 3 + 1,
         "status": ("active" if i % 2 == 0 else "beta") + f"-{s:02d}",
     }) for i in range(24)]
-    persons = [remember("person", {
+    persons = [_remember_ko(db, state, "person", {
         "name": f"person-{s:02d}-{i:02d}",
         "role": ("auditor" if i % 4 == 0 else "engineer") + f"-{s:02d}",
         "team": f"team-{s:02d}-{i % 6:02d}",
     }) for i in range(12)]
-    accounts = [remember("account", {
+    accounts = [_remember_ko(db, state, "account", {
         "name": f"acct-{s:02d}-{i:02d}",
         "balance": 1000 + s * 100 + i * 17,
         "currency": f"USD-{s:02d}-{i:02d}",
     }) for i in range(8)]
-    regions = [remember("region", {
+    regions = [_remember_ko(db, state, "region", {
         "name": f"region-{s:02d}-{i:02d}",
         "sla": f"sla-{s:02d}-{i:02d}",
     }) for i in range(4)]
@@ -168,13 +189,13 @@ def _seed_slice(db, s: int, state: Dict[str, Any]) -> None:
         state["histories"].append(_history(db, ko["koid"]))
 
     for i, svc in enumerate(svcs):
-        link(teams[i % 6], svc, "OWNS")
+        _link(db, state, teams[i % 6], svc, "OWNS")
         if i < 23:
-            link(svc, svcs[i + 1], "DEPENDS_ON")
+            _link(db, state, svc, svcs[i + 1], "DEPENDS_ON")
     for i, person in enumerate(persons):
-        link(person, teams[i % 6], "WORKS_IN")
+        _link(db, state, person, teams[i % 6], "WORKS_IN")
     for i, account in enumerate(accounts):
-        link(account, regions[i % 4], "IN")
+        _link(db, state, account, regions[i % 4], "IN")
 
     claim = db.get(svcs[10]["koid"])
     r = db._backend.call_tool("contradict", {
@@ -186,10 +207,72 @@ def _seed_slice(db, s: int, state: Dict[str, Any]) -> None:
     })
     state["counter_koids"].add(r["counter"])
     kos.append(db.get(r["counter"]))
-    edges.append({"from": r["counter"], "rel": "contradicts",
+    state["edges"].append({"from": r["counter"], "rel": "contradicts",
                   "to": claim["koid"]})
     state["conflicts"].append({"conflict": db.get(r["conflict"]),
                                "claims": [claim, db.get(r["counter"])]})
+
+
+def _seed_novaenergy(db, s: int, state: Dict[str, Any]) -> None:
+    """T-27 (P1.1): one NovaEnergy slice — a second org over the same
+    kernel types with a different property schema (operator/uptime_pct/
+    site vs owner/tier/status, head/specialty vs lead/focus,
+    credit/tariff vs balance/currency, grid_code vs sla), so every
+    generator must walk the schema instead of the payments vocabulary.
+    No versioned services: temporal/provenance stay an acmepay
+    capability — this domain's tooth is schema breadth."""
+    teams = [_remember_ko(db, state, "team", {
+        "name": f"crew-{s:02d}-{i:02d}",
+        "head": f"worker-{s:02d}-{i * 2:02d}",
+        "specialty": f"{_NOVA_SPECIALTY[i]}-{s:02d}",
+    }) for i in range(4)]
+    svcs = [_remember_ko(db, state, "service", {
+        "name": f"plant-{s:02d}-{i:02d}",
+        "operator": f"crew-{s:02d}-{i % 4:02d}",
+        "uptime_pct": s * 3 + i % 3 + 1,
+        "site": f"zone-{s:02d}-{i % 3:02d}",
+    }) for i in range(12)]
+    persons = [_remember_ko(db, state, "person", {
+        "name": f"worker-{s:02d}-{i:02d}",
+        "title": f"title-{s:02d}-{i:02d}",
+        "clearance": f"lvl-{s:02d}-{i % 4:02d}",
+    }) for i in range(6)]
+    accounts = [_remember_ko(db, state, "account", {
+        "name": f"meter-{s:02d}-{i:02d}",
+        "credit": 1000 + s * 100 + i * 17,
+        "tariff": f"t-{s:02d}-{i:02d}",
+    }) for i in range(4)]
+    regions = [_remember_ko(db, state, "region", {
+        "name": f"zone-{s:02d}-{i:02d}",
+        "grid_code": f"g-{s:02d}-{i:02d}",
+    }) for i in range(3)]
+
+    for i, svc in enumerate(svcs):
+        _link(db, state, teams[i % 4], svc, "OWNS")
+        if i < 11:
+            _link(db, state, svc, svcs[i + 1], "DEPENDS_ON")
+    for i, person in enumerate(persons):
+        _link(db, state, person, teams[i % 4], "WORKS_IN")
+    for i, account in enumerate(accounts):
+        _link(db, state, account, regions[i % 3], "IN")
+
+    claim = db.get(svcs[5]["koid"])
+    r = db._backend.call_tool("contradict", {
+        "claim": claim["koid"], "counter_type": "service",
+        "properties": {"name": claim["properties"]["name"],
+                       "operator": f"Rival Operator {s:02d}"},
+        "evidence": [{"source_artifact": "audit.md",
+                      "method": "doc_extraction", "confidence": 0.75}],
+    })
+    state["counter_koids"].add(r["counter"])
+    state["kos"].append(db.get(r["counter"]))
+    state["edges"].append({"from": r["counter"], "rel": "contradicts",
+                           "to": claim["koid"]})
+    state["conflicts"].append({"conflict": db.get(r["conflict"]),
+                               "claims": [claim, db.get(r["counter"])]})
+
+
+_DOMAINS = (_seed_acmepay, _seed_novaenergy)
 
 
 def _ko_docs(db, slice_kos, all_kos, edges, histories, skip, docs) -> None:
@@ -212,7 +295,7 @@ def _ko_docs(db, slice_kos, all_kos, edges, histories, skip, docs) -> None:
         if ko["koid"] in skip:
             continue
         name = ko["properties"].get("name")
-        ev = _ev(f"acmepay-{ko['koid'][:8]}.md", 0)
+        ev = _ev(f"{_domain_of(ko)}-{ko['koid'][:8]}.md", 0)
         facts = []
         for prop in sorted(ko["properties"]):
             value = ko["properties"][prop]
@@ -254,7 +337,8 @@ def _group_docs(db, scenarios, by_koid, docs) -> None:
             continue
         seen.add(key)
         members = [by_koid[k] for k in s.koids]
-        ev = _ev(f"acmepay-group-{members[0]['koid'][:8]}.md", 1)
+        ev = _ev(f"{_domain_of(members[0])}-group-"
+                 f"{members[0]['koid'][:8]}.md", 1)
         entities = [_entity(m["properties"]["name"], m["type_name"], ev)
                     for m in members]
         facts = []
@@ -277,7 +361,8 @@ def _group_docs(db, scenarios, by_koid, docs) -> None:
 def _conflict_docs(db, conflicts, docs) -> None:
     for entry in conflicts:
         conflict = entry["conflict"]
-        ev = _ev(f"acmepay-conflict-{conflict['koid'][:8]}.md", 1)
+        ev = _ev(f"{_domain_of(entry['claims'][0])}-conflict-"
+                 f"{conflict['koid'][:8]}.md", 1)
         entities, facts = [], []
         for c in entry["claims"]:
             name = c["properties"].get("name")
@@ -542,7 +627,8 @@ def main(argv=None) -> int:
             seeds_used = list(range(args.seeds))
         else:
             for s in range(args.seeds):
-                _seed_slice(db, s, state)
+                for seed_domain in _DOMAINS:
+                    seed_domain(db, s, state)
             seeds_used = []
         snap = capture_from_agent(db, args.database_id, config=cfg, seed=0)
 
