@@ -36,3 +36,8 @@ class SchemaError(TrainingDataError):
 
 class DatasetError(TrainingDataError):
     """A dataset on disk is missing, tampered or malformed (fail-closed)."""
+
+
+class ModelOutputError(TrainingDataError):
+    """A model reply is not valid protocol JSON (T-20, fail-closed):
+    callers treat it as a refusal, never a silent guess."""

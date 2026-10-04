@@ -1,28 +1,37 @@
-"""T-16: the inference wrapper (design §40 end-state) — the thin
-question -> query -> context -> answer path, the POC chatbot core.
+"""T-16 + T-20: the inference wrapper (design §40 end-state) — the
+thin question -> query -> context -> answer path, the POC chatbot
+core.
 
 `chat` reuses the validated pipeline seam-for-seam: the two model
-skills run through the §40 prompt/parse contract (build_query_prompt /
-build_answer_prompt / parse_model_reply) around one live AIKOQL call;
-no other retrieval exists in the path. The model (`generate`) and the
-query runner (`run_query`) are injectable so the wrapper is tested
-without a model — the POC chatbot is scripts/chat.py.
+skills run through the T-20 JSON protocol (build_query_prompt /
+build_answer_prompt / parse_query_reply / parse_answer_reply) around
+one live AIKOQL call; no other retrieval exists in the path. The
+model (`generate`) and the query runner (`run_query`) are injectable
+so the wrapper is tested without a model — the POC chatbot is
+scripts/chat.py.
 
-Refusal paths, all machine-readable (T-09):
-- the model produced no query -> UNKNOWN: no query produced;
+Refusal paths, all machine-readable (T-09 + T-20):
+- the model reply is not valid protocol JSON -> UNKNOWN: refused
+  fail-closed, never a guessed answer;
+- the model declares a refusal (refusal_reason field) -> carried
+  through as a field;
 - the query failed to compile or execute -> UNKNOWN: query failed;
-- the query returned no results -> UNKNOWN: query returned no results;
-- the model itself refuses (UNKNOWN: answer) -> passes through.
+- the query returned no results -> UNKNOWN: query returned no
+  results;
+- the model's answer reply refuses (UNKNOWN: + refusal_reason) ->
+  passes through with grounded=false and no claims.
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, List
 
+from aikoql_training.errors import ModelOutputError
 from aikoql_training.inference import (
     build_answer_prompt,
     build_query_prompt,
-    parse_model_reply,
+    parse_answer_reply,
+    parse_query_reply,
 )
 from aikoql_training.scenarios.answer_formats import UNKNOWN_PREFIX, \
     unknown_answer
@@ -38,20 +47,27 @@ def _statements(results: List[Dict[str, Any]]) -> List[str]:
 
 
 def _refusal(reason: str, question: str, query: str, compiled: bool,
-             retrieved: List[str]) -> Dict[str, Any]:
+             retrieved: List[str], refusal_reason: str = None) -> Dict[str, Any]:
     return {"question": question, "query": query, "compiled": compiled,
-            "retrieved": retrieved, "statements": [],
+            "retrieved": retrieved, "statements": [], "claims": [],
+            "grounded": False, "refusal_reason": refusal_reason,
             "answer": unknown_answer(reason), "refused": True}
 
 
 def chat(question: str, *, generate: Generate,
          run_query: RunQuery) -> Dict[str, Any]:
     """One question through the full path; the record carries the
-    query, live compile/retrieval and the final answer (refused=True
-    whenever the answer is a refusal)."""
-    query, _ = parse_model_reply(generate(build_query_prompt(question)))
-    if not query:
-        return _refusal("no query produced", question, "", False, [])
+    query, live compile/retrieval, the answer, its claims and the
+    grounding verdict (refused=True whenever the answer is a refusal)."""
+    try:
+        reply = parse_query_reply(generate(build_query_prompt(question)))
+    except ModelOutputError:
+        return _refusal("model reply was not valid protocol JSON",
+                        question, "", False, [])
+    if reply["refusal_reason"] is not None:
+        return _refusal(f"model refused: {reply['refusal_reason']}",
+                        question, "", False, [], reply["refusal_reason"])
+    query = reply["query"]
     try:
         env = run_query(query)
     except Exception:
@@ -63,12 +79,20 @@ def chat(question: str, *, generate: Generate,
         return _refusal("query returned no results", question, query,
                         True, retrieved)
     statements = _statements(results)
-    a_reply = generate(build_answer_prompt(question, statements))
-    _, answer = parse_model_reply(a_reply)
-    if not answer:
-        # ponytail: same fallback as finetune predict — a bare reply
-        # with no markers is the whole answer
-        answer = a_reply.strip()
+    try:
+        answer = parse_answer_reply(
+            generate(build_answer_prompt(question, statements)))
+    except ModelOutputError:
+        return _refusal("model answer was not valid protocol JSON",
+                        question, query, True, retrieved)
+    if answer["refusal_reason"] is not None:
+        return {"question": question, "query": query, "compiled": True,
+                "retrieved": retrieved, "statements": statements,
+                "claims": [], "grounded": False,
+                "refusal_reason": answer["refusal_reason"],
+                "answer": answer["answer"], "refused": True}
     return {"question": question, "query": query, "compiled": True,
             "retrieved": retrieved, "statements": statements,
-            "answer": answer, "refused": answer.startswith(UNKNOWN_PREFIX)}
+            "claims": answer["claims"], "grounded": answer["grounded"],
+            "refusal_reason": None, "answer": answer["answer"],
+            "refused": False}

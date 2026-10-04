@@ -2,9 +2,10 @@
 (design Phase 18/19, §32/33/34).
 
 `train` instruction-tunes Qwen2.5-0.5B-Instruct on the corpus split
-with two skills per example — question -> AikoQL query (QUERY: marker)
-and question + context -> grounded answer / UNKNOWN: refusal — LoRA
-over all linear layers (peft), completion-only labels. The design law
+with two skills per example — question -> AikoQL query and question +
+context -> grounded answer / UNKNOWN: refusal, both completions in the
+T-20 JSON protocol (query / answer+claims+refusal_reason fields) —
+LoRA over all linear layers (peft), completion-only labels. The design law
 (plan §3, line 64) is enforced: training refuses to start until a
 scorecard artifact exists (run a baseline first — no training run
 without one).
@@ -31,11 +32,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from aikoql_training.dataset.writer import read_dataset
+from aikoql_training.errors import ModelOutputError
 from aikoql_training.inference import (
     build_answer_prompt,
     build_query_prompt,
-    parse_model_reply,
+    parse_answer_reply,
+    parse_query_reply,
 )
+from aikoql_training.scenarios.answer_formats import UNKNOWN_PREFIX
+from aikoql_training.validation.grounding import evidence_id
 
 MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"  # the RED pin: a 0.5B-class open model
 _SCORECARDS = Path(__file__).parents[1] / "artifacts" / "scorecards"
@@ -55,16 +60,43 @@ def _statements(ex: Dict[str, Any]) -> List[str]:
             if isinstance(f.get("statement"), str)]
 
 
+def _claims(ex: Dict[str, Any]) -> List[dict]:
+    """Grounding claims for a non-refusal completion: one per context
+    fact with its evidence id (T-20: grounding is a FIELD, not prose)."""
+    out = []
+    for f in (ex.get("context") or {}).get("facts") or []:
+        statement = f.get("statement")
+        if not isinstance(statement, str):
+            continue
+        ev = f.get("evidence")
+        out.append({"statement": statement,
+                    "evidence_ids": ([evidence_id(ev)]
+                                     if isinstance(ev, dict) else [])})
+    return out
+
+
+def _answer_completion(ex: Dict[str, Any]) -> str:
+    """The answer-step completion: refusal or grounded, as fields."""
+    answer = str((ex.get("expected") or {}).get("answer") or "")
+    if answer.startswith(UNKNOWN_PREFIX):
+        reason = answer[len(UNKNOWN_PREFIX):].strip() or "no answer"
+        return json.dumps({"answer": answer, "grounded": False,
+                           "claims": [], "refusal_reason": reason})
+    return json.dumps({"answer": answer, "grounded": True,
+                       "claims": _claims(ex), "refusal_reason": None})
+
+
 def _rows(examples: List[dict], max_rows: int) -> List[Tuple[str, str]]:
     """Two skill rows per example: (prompt, completion)."""
     rows: List[Tuple[str, str]] = []
     for ex in examples:
         question = str((ex.get("input") or {}).get("question") or "")
         query = str((ex.get("query_target") or {}).get("query") or "")
-        answer = str((ex.get("expected") or {}).get("answer") or "")
-        rows.append((build_query_prompt(question), f"QUERY: {query}\n"))
+        rows.append((build_query_prompt(question),
+                     json.dumps({"query": query,
+                                 "refusal_reason": None})))
         rows.append((build_answer_prompt(question, _statements(ex)),
-                     f"{answer}\n"))
+                     _answer_completion(ex)))
     return rows[:max_rows] if max_rows else rows
 
 
@@ -212,10 +244,14 @@ def predict(args) -> int:
     live = args.db is not None
     predictions: List[dict] = []
     for e, q_reply, a_reply in zip(examples, query_replies, answer_replies):
-        query, _ = parse_model_reply(q_reply)
-        _, answer = parse_model_reply(a_reply)
-        if not answer:
-            answer = a_reply.strip()
+        try:  # fail-closed: an unparseable reply predicts nothing
+            query = parse_query_reply(q_reply)["query"] or ""
+        except ModelOutputError:
+            query = ""
+        try:
+            answer = parse_answer_reply(a_reply)["answer"]
+        except ModelOutputError:
+            answer = ""
         pred: Dict[str, Any] = {"example_id": e["example_id"],
                                 "query": query, "answer": answer}
         predictions.append(pred)
