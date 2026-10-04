@@ -574,14 +574,14 @@ as code, not just prose. `scripts/finetune.py train` calls
 
 - **`src/aikoql_training/scorecard.py`** — `compute_scorecard(predictions,
   ds, split)` joins prediction records to examples by example_id and
-  computes six metrics (each `{value, detail}` with counts):
+  computes eight metrics (each `{value, detail}` with counts; §28):
   query_compile_rate (the live `compiled` flag when recorded, else
   the E3 static head check), ko_recall / ko_precision (oracle
   targets rule: TRAVERSE never returns the source KO, so multi-koid
   examples check `koids[1:]`), groundedness (predicted answer re-run
   through `validate_grounding` as a pseudo-example — the T-07
-  deterministic ceiling), refusal_rate (UNKNOWN: prefix on unknown
-  examples; detail counts false refusals), secret_leak_rate
+  deterministic ceiling), unknown_recall / unknown_precision /
+  false_refusal_rate (the refusal trio), secret_leak_rate
   (gates' `_SECRET_PATTERNS` over query+answer — one list, never a
   second). Missing predictions fail every metric.
 - **`src/aikoql_training/inference.py`** — the §40 prompt/parse
@@ -603,7 +603,7 @@ as code, not just prose. `scripts/finetune.py train` calls
   `compiled`/`retrieved` per example.
 - **`scripts/scorecard.py`** — joins dataset + predictions.jsonl
   into a committed artifact (`model_id`, `model_class`, adapter,
-  dataset_id, seed, split, git revision, created_at + the six
+  dataset_id, seed, split, git revision, created_at + the eight
   metrics).
 
 **One-slice corpora can land train-only.** Split assignment hashes
@@ -889,3 +889,33 @@ KOID, entity name, relation, label):
   is the oracle's job, not grounding's.
 
 RED archived as `t-23-grounding-mutation-fuzz`.
+
+## 28. Unknown precision/recall — refusal metrics (T-24)
+
+PR9 Finding #6 ("Unknown / Refusal Is Under-Tested"): the scorecard's
+single `refusal_rate` could not show refusal *quality* — a model that
+answers unknown examples with a refusal but also refuses answerable
+ones scored the same as a model that refuses nothing. The combined
+number is replaced by a refusal trio, each with an explicit
+denominator (detail carries the counts) and `None` when its
+denominator is absent from the split (§27: an undefined rate never
+reads as 0.0):
+
+- **unknown_recall** — refused / unknown: unknown examples answered
+  with the `UNKNOWN:` prefix. None when the split has no unknown
+  examples.
+- **unknown_precision** — refused / (refused + false_refusals): of
+  every `UNKNOWN:` answer, the share that landed on an unknown
+  example. None when the model issued no `UNKNOWN:` answers at all —
+  a model that never refuses scores None, never a fake 0.0.
+- **false_refusal_rate** — false_refusals / answerable: `UNKNOWN:`
+  answers on answerable examples (the false-refusal damage). None
+  when the split has no answerable examples.
+
+The committed T-15 artifacts migrate in place: their refusal detail
+counts (unknown=0) become unknown_recall/unknown_precision `null`
+and a defined false_refusal_rate 0.0; the artifact test accepts
+`None` alongside the 0..1 range.
+
+RED archived as `t-24-unknown-precision-recall`.
+
