@@ -1293,3 +1293,30 @@ is readable by that session (the RED: ACCESS_DENIED), and the
 fill-if-absent half proves an explicit op subject survives injection
 (still denied to the session — it is a different principal's KO).
 RED archived as `f2-batch-session-identity`.
+
+## 42. AS_OF must honor valid-time closure — F12 (T-38)
+
+The eval's F12 break: a post-supersede AS_OF slice returned both
+generations (kb=[1, 2], oracle=[2]). AS_OF reconstruction was
+transaction-time only — `get_as_of` picked the version committed at or
+before the slice instant and stopped there; the superseded gen-1's
+`valid_to` (stamped at the supersession instant by the kernel) was
+never consulted.
+
+Fix: `get_as_of` filters the reconstructed KO on valid-time closure —
+a KO whose `valid_to` is at or before the slice instant is not part of
+that transaction-time world. Interval semantics are the model's own
+half-open `[valid_from, valid_to)`: `valid_to == at` means the interval
+has already closed, so the boundary slice excludes the superseded
+generation too. The kernel is the single choke point — the runtime's
+`TemporalOp::AsOf` arm routes every scanned KO through `get_as_of`, so
+the aikoql `AS_OF` clause, the MCP tool, and every SDK surface inherit
+the fix. `valid_from` is deliberately out of scope here (a future fact
+committed before its asserted validity start still reconstructs at the
+commit time it existed); F7 revisits the successor's `valid_from`
+stamping separately.
+
+Pins: `as_of_slice_hides_a_superseded_generation` — the pre-supersede
+slice still sees gen-1, the post-supersede slice and the closure-instant
+slice do not. RED archived as `f12-asof-valid-to`.
+
