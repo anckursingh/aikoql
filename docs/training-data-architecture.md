@@ -1025,3 +1025,50 @@ declaration ignored — each dies in test_gates.
 
 RED archived as `t-28-held-out-orgs`.
 
+
+## 33. CI reshape — installed package + nightly sweeps (T-29)
+
+PR9 §33/§34. Two changes, one principle: the CI matrix must exercise
+the shipped artifact, not the source tree.
+
+**The package is the execution path (§34).** The pytest
+`pythonpath=src` config made every CI unit run pass against the
+source tree instead of an installed package — a packaging break
+would stay invisible until a bare script died at import. The config
+is gone; every training-data.yml leg installs
+`pip install -e training` into its venv, and the tests (run without
+any path smuggling) exercise the installed copy. Production entry
+points follow: `chat.py` no longer prescribes
+`PYTHONPATH=training/src` and `benchmark_dataset.py` no longer
+injects the source path into its subprocess — the installed package
+is the execution path everywhere outside the tests themselves (test
+fixtures may still point subprocesses at `training/src`; that is
+test infrastructure, explicitly tolerated by the review). The
+mutation leg keeps its `-o pythonpath=` flag as a defensive no-op:
+if a pytest path config ever reappears, it cannot shadow the mutant
+trees.
+
+**Nightly cells leave the PR matrix (§33).** The 10K corpus sweep
+was bolted onto the integration leg, making every training push pay
+the 90-minute corpus budget. It now lives in a `nightly` leg gated
+on `github.event_name == 'schedule' || 'workflow_dispatch'` (push
+and PR runs skip it; a manual dispatch runs it deliberately), and
+the workflow declares a weekly cron. The integration leg keeps the
+full suite including the corpus contract. The fuzz-estate leg now
+runs the whole fuzz estate (schema, scenario, protocol and
+grounding fuzz files), not the two files it accreted with. The
+leakage and security gates stay inside the unit leg by design —
+they are unit validators (test_gates.py runs all eleven §5 gates,
+secret scan included), and splitting one file's tests across legs
+by `-k` selection would be more fragile than the coverage it buys.
+Benchmark-at-corpus-scale is not wired (the nightly list's
+benchmark cell); the laptop-scale benchmark test rides the unit
+leg, and the 10K cells are the corpus sweep itself.
+
+The hygiene script pins all of it: workflow test 33 fails while the
+pyproject pytest section carries a path smuggling word or any
+training-data leg lacks the package install; workflow test 34 fails
+while the integration leg carries the 10K sweep, no nightly leg or
+schedule trigger exists, the nightly leg is unguarded, or the
+fuzz-estate leg drops a fuzz file. RED archived as
+`t-29-ci-reshape`.
