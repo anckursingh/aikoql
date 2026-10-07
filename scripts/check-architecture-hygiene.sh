@@ -959,6 +959,42 @@ else
   done < "$TBOUND"
 fi
 
+# workflow test 36 — test_training_pypi_publish (T-31): aikoql-training
+# ships as its OWN PyPI project (not folded into the maturin aikoql
+# wheel — release coupling + build-system friction) through the same
+# OIDC trusted publishing the aikoql job uses: a release.yml job
+# carrying id-token: write and the pypa publish action. The package
+# metadata must be complete before the first upload — PyPI rejects a
+# project without readme/license/urls at publish time, not at PR time.
+if [ -f "$REL" ] && ! grep -q '^  training-pypi-publish:' "$REL"; then
+  echo "ARCH: release.yml lacks the training-pypi-publish job (T-31)" >&2
+  fail=1
+fi
+if [ -f "$REL" ]; then
+  _tpblock=$(sed -n '/^  training-pypi-publish:/,/^  [a-z][a-z0-9_-]*:$/p' "$REL")
+  if ! printf '%s\n' "$_tpblock" | grep -q 'pypa/gh-action-pypi-publish'; then
+    echo "ARCH: training-pypi-publish lacks the trusted-publisher action (T-31)" >&2
+    fail=1
+  fi
+  if ! printf '%s\n' "$_tpblock" | grep -q 'id-token: write'; then
+    echo "ARCH: training-pypi-publish lacks the OIDC id-token permission (T-31)" >&2
+    fail=1
+  fi
+fi
+if [ ! -f training/README.md ]; then
+  echo "ARCH: training/README.md missing — PyPI rejects a readme-less upload (T-31)" >&2
+  fail=1
+fi
+if [ ! -f training/LICENSE ]; then
+  echo "ARCH: training/LICENSE missing — the license metadata must ship the file (T-31)" >&2
+  fail=1
+fi
+if [ -f training/pyproject.toml ]; then
+  grep -q '^readme = "README.md"' training/pyproject.toml || { echo "ARCH: training pyproject lacks the readme reference (T-31)" >&2; fail=1; }
+  grep -q '^license = ' training/pyproject.toml || { echo "ARCH: training pyproject lacks the license reference (T-31)" >&2; fail=1; }
+  grep -q '^\[project.urls\]' training/pyproject.toml || { echo "ARCH: training pyproject lacks project urls (T-31)" >&2; fail=1; }
+fi
+
 # workflow test 6 — no column-1 body lines: a block-scalar body at
 # column 1 (embedded code, heredoc leftovers) silently ends the scalar
 # and GitHub rejects the whole workflow file — every run dies at 0s
