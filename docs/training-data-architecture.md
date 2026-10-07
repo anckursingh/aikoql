@@ -1272,3 +1272,24 @@ pre-existing `cpl004` Traversal sibling; the cert plan-shape pins
 (Q_H1/H1) stay green unchanged, proving the compiler contract did not
 move. RED archived as `t-36-similar-projection`.
 
+
+## 41. Batch ops must inherit the session identity — F2 (T-37)
+
+The eval's F2 break: `tool_batch` operations that carry no explicit
+`subject` land as `mcp-agent`, so a session creating a KO through a batch
+then reading it hits ACCESS_DENIED — the server denies its own submitter
+access to the very object it just wrote. The dispatcher injected session
+identity into the top-level `tools/call` args only; the `operations[]`
+entries were passed through untouched and defaulted in `subject_of`.
+
+Fix: the identity injection recurses into the `operations` array. Both
+trust modes keep their semantics — stdio fills-if-absent (an op with its
+own subject keeps it), TCP overrides (a batch op cannot smuggle a
+subject or tenant either). One shared `fill_identity` walk serves both,
+so the two injection paths cannot drift.
+
+Pins: `batch_ops_inherit_session_identity` — a session-created batch KO
+is readable by that session (the RED: ACCESS_DENIED), and the
+fill-if-absent half proves an explicit op subject survives injection
+(still denied to the session — it is a different principal's KO).
+RED archived as `f2-batch-session-identity`.
