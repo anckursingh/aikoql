@@ -3214,6 +3214,9 @@ pub enum KError {
     Cancelled,
     IndexLagExceeded,
     JobRejected(String),
+    /// Device-eval N4: the operation is correct but the store is not ready
+    /// to answer it yet — retry later (e.g. semantic catch-up running).
+    Retryable(String),
     Store(String),
     Codec(String),
 }
@@ -3251,6 +3254,7 @@ impl fmt::Display for KError {
             KError::Cancelled => write!(f, "CANCELLED"),
             KError::IndexLagExceeded => write!(f, "INDEX_LAG_EXCEEDED"),
             KError::JobRejected(m) => write!(f, "JOB_REJECTED: {}", m),
+            KError::Retryable(m) => write!(f, "RETRYABLE: {}", m),
             KError::Store(m) => write!(f, "STORE: {}", m),
             KError::Codec(m) => write!(f, "CODEC: {}", m),
         }

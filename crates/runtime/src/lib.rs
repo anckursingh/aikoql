@@ -589,6 +589,18 @@ impl Interpreter {
                         ))
                     })
                     .collect();
+                if scored.is_empty() && !kos.is_empty() {
+                    // Device-eval N4: the query vector embedded but no KO in
+                    // scope carries one — the semantic catch-up is still
+                    // running (or the population was never enriched). Fail
+                    // closed: fused text-side scores would masquerade as
+                    // vector results. Retry once health reports ready.
+                    return Err(KError::Retryable(
+                        "semantic enrichment not ready: no KO in scope carries \
+                         an embedding — retry after semantic.state == \"ready\""
+                            .into(),
+                    ));
+                }
                 scored.sort_by(|a, b| {
                     b.1.partial_cmp(&a.1)
                         // justified: NaN score ties deterministically
@@ -1727,6 +1739,100 @@ mod tests {
                 );
             }
             _ => panic!("expected Scored from AnnSearch with provider"),
+        }
+    }
+
+    // ---- N4 (device-eval): USING EMBEDDING must not silently degrade ----
+
+    fn ann_plan(query: &str) -> IrPlan {
+        IrPlan::new(vec![
+            IrOp::Scan {
+                type_name: "note".into(),
+                subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
+            },
+            IrOp::AnnSearch {
+                vector: vec![],
+                query_text: Some(query.into()),
+                embedding_model: None,
+                k: 5,
+            },
+        ])
+    }
+
+    fn mk_with_provider() -> Kernel {
+        use aikoql_semantic::provider::MockEmbeddingProvider;
+        let clock = Arc::new(ManualClock::new(20_000));
+        Kernel::open(Arc::new(MemoryEngine::new()), clock, 0xCAFE)
+            .unwrap()
+            .with_embedding_provider(Arc::new(MockEmbeddingProvider::with_dim(3)))
+    }
+
+    fn unenriched_note(k: &Kernel, alice: &Subject, body: &str) {
+        let mut p = PropertyMap::new();
+        p.insert("body".into(), Value::Text(body.into()));
+        create_ko(k, alice, "note", p, None);
+    }
+
+    #[test]
+    fn ann_search_errors_when_no_ko_in_scope_has_an_embedding() {
+        // N4: the query vector embeds fine (provider attached) but every KO
+        // in scope lacks an embedding — the catch-up window. Text-side
+        // scores would silently masquerade as vector results, so the query
+        // must fail retryable instead.
+        let k = mk_with_provider();
+        let alice = Subject::new("alice");
+        unenriched_note(&k, &alice, "cats are great");
+        unenriched_note(&k, &alice, "unrelated fish");
+
+        match Interpreter::execute(&k, &ann_plan("cats")) {
+            Err(KError::Retryable(_)) => {}
+            other => panic!("expected Retryable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ann_search_readiness_sweep() {
+        // Matrix pin over population shapes — the guard fires exactly when
+        // the vector side has nothing to answer from, and never otherwise.
+        let alice = Subject::new("alice");
+
+        // (provider, enriched, expected): Err = Retryable, Ok = non-empty Scored.
+        let cases: Vec<(bool, usize, bool)> = vec![
+            (true, 0, true),   // catch-up window: fail closed
+            (true, 1, false),  // partial: embedded subset answers
+            (true, 2, false),  // ready: full vector answer
+            (false, 0, false), // no provider: Jaccard degrade (pre-existing pin)
+            (false, 2, false), // no provider: Jaccard degrade
+        ];
+
+        for (i, (provider, enriched, expect_err)) in cases.into_iter().enumerate() {
+            let k = if provider { mk_with_provider() } else { mk() };
+            for n in 0..2 {
+                let mut p = PropertyMap::new();
+                p.insert("body".into(), Value::Text(format!("note {n}")));
+                let sem = if n < enriched {
+                    Some(SemanticBlock {
+                        embedding: Some(vec![0.1; 3]),
+                        embedding_model: None,
+                        summary: None,
+                        confidence: None,
+                        source: None,
+                    })
+                } else {
+                    None
+                };
+                create_ko(&k, &alice, "note", p, sem);
+            }
+            let result = Interpreter::execute(&k, &ann_plan("note 0"));
+            match (result, expect_err) {
+                (Err(KError::Retryable(_)), true) => {}
+                (Ok(RowSet::Scored(s)), false) => {
+                    assert!(!s.is_empty(), "case {i}: degraded to empty");
+                }
+                other => panic!("case {i}: expected err={expect_err}, got {other:?}"),
+            }
         }
     }
 

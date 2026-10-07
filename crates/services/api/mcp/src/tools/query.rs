@@ -116,7 +116,6 @@ pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
                 }))
             })).collect::<Vec<_>>()
         })),
-        _ => Ok(json!({"results": []})),
     }
 }
 
@@ -176,7 +175,6 @@ pub(crate) fn execute_stream_query(
                 "properties": ro.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
             }))
         })).collect(),
-        _ => vec![],
     };
 
     const CHUNK_SIZE: usize = 100;
