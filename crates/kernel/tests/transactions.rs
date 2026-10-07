@@ -473,6 +473,136 @@ fn supersede_with_superseded_by_rejects_dead_successor() {
     assert_eq!(old_ko.valid_to(), None);
 }
 
+// ---- semantic enrichment (device-eval N2/N3) --------------------------------
+
+/// Simulate the semantic engine's catch-up write (enrich_one): a
+/// remember-update carrying ONLY `properties` + `semantic`. The update must
+/// not destroy caller-created edges (N2) and must keep the audit chain
+/// provable across a supersede pair (N3).
+#[test]
+fn enrichment_update_preserves_caller_edges_and_prove_chain() {
+    let (k, clock, _store) = mk_kernel();
+    let old = assert_k(&k, "alice", "env", 1, "source_code");
+    let peer = assert_k(&k, "alice", "env", 5, "source_code");
+
+    // Caller-created edge, written the way `relate` writes it: an update
+    // restating the head's edges plus the new one.
+    let head = k.get(Subject::new("alice"), &old).unwrap();
+    let mut rr = RememberRequest::update(Subject::new("alice"), old, head.metadata.clone());
+    rr.properties = head.properties.clone();
+    rr.relationships = vec![RelationshipRef {
+        rel_type: "has_link".into(),
+        target: peer,
+        direction: Direction::Outbound,
+    }];
+    k.remember(rr).unwrap();
+
+    clock.tick(1);
+    let mut sr = SupersedeRequest::new(Subject::new("alice"), old, "fact");
+    sr.properties.insert("env".into(), Value::Int(2));
+    sr.evidence = vec![ev("new-observation")];
+    let res = k.supersede(sr).unwrap();
+
+    // Semantic catch-up rewrites every KO lacking a semantic block, exactly
+    // like enrich_one post-fix: attach_semantic touches ONLY the semantic
+    // field (pre-fix it was a remember-update carrying properties+semantic,
+    // which replaced the caller's edges wholesale — the RED for this test).
+    let eng = Subject::with_roles("semantic-engine", &["admin"]);
+    for koid in [old, peer, res.new] {
+        let h = k.get(eng.clone(), &koid).unwrap();
+        if h.semantic.is_some() {
+            continue;
+        }
+        k.attach_semantic(
+            eng.clone(),
+            koid,
+            SemanticBlock {
+                embedding_model: Some("mock".into()),
+                embedding: Some(vec![0.1, 0.2]),
+                confidence: Some(0.9),
+                source: Some("semantic-engine".into()),
+                summary: None,
+            },
+            Some(h.version),
+        )
+        .unwrap();
+    }
+
+    // N2: the caller-created edge survives enrichment.
+    let old_after = k.get(Subject::new("alice"), &old).unwrap();
+    assert!(
+        old_after
+            .relationships
+            .iter()
+            .any(|r| r.rel_type == "has_link" && r.target == peer),
+        "N2: semantic enrichment must not wipe caller-created edges"
+    );
+    assert_eq!(
+        k.outbound_edges(&old, Some("has_link")).unwrap(),
+        vec![("has_link".to_string(), peer)],
+        "N2: the graph index must keep serving the edge"
+    );
+
+    // N3: the audit chain over the superseded claim stays provable.
+    let proof = k.prove(Subject::new("alice"), &old).unwrap();
+    assert!(
+        proof.chain_valid,
+        "N3: prove chain broke after enrichment ({} events)",
+        proof.events
+    );
+}
+
+/// Boundary sweep over the attach_semantic trust surface: missing KOID,
+/// stale version, ACL denial, idempotent re-attach, and the upgrade path.
+#[test]
+fn attach_semantic_boundary_sweep() {
+    let (k, _clock, _store) = mk_kernel();
+    let a = assert_k(&k, "alice", "env", 1, "source_code");
+    let eng = Subject::with_roles("semantic-engine", &["admin"]);
+    let block = |model: &str| SemanticBlock {
+        embedding_model: Some(model.into()),
+        embedding: Some(vec![0.5]),
+        confidence: Some(0.5),
+        source: Some("semantic-engine".into()),
+        summary: None,
+    };
+
+    // Missing KOID -> NotFound.
+    assert!(matches!(
+        k.attach_semantic(
+            eng.clone(),
+            KOID::from_bytes([9u8; KOID_LEN]),
+            block("m"),
+            None
+        ),
+        Err(KError::NotFound(_))
+    ));
+
+    // Stale expected_version -> VersionConflict.
+    assert!(matches!(
+        k.attach_semantic(eng.clone(), a, block("m"), Some(0)),
+        Err(KError::VersionConflict { .. })
+    ));
+
+    // A principal outside the ACL cannot enrich someone else's KO.
+    assert!(matches!(
+        k.attach_semantic(Subject::new("mallory"), a, block("m"), None),
+        Err(KError::AccessDenied { .. })
+    ));
+
+    // Idempotent re-attach: the identical block is a no-op; a different
+    // model upgrades exactly one version.
+    let before = k.get(eng.clone(), &a).unwrap().version;
+    let r = k.attach_semantic(eng.clone(), a, block("m"), None).unwrap();
+    assert_eq!(r.version, before + 1);
+    let r2 = k.attach_semantic(eng.clone(), a, block("m"), None).unwrap();
+    assert_eq!(r2.version, r.version, "identical re-attach must not churn");
+    let r3 = k
+        .attach_semantic(eng.clone(), a, block("m2"), None)
+        .unwrap();
+    assert_eq!(r3.version, r.version + 1);
+}
+
 // ---- merge -----------------------------------------------------------------
 
 #[test]

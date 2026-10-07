@@ -1514,6 +1514,65 @@ impl Kernel {
         self.remember_trusted(req)
     }
 
+    /// Attach a semantic block to an existing KO, mutating ONLY the semantic
+    /// field (device-eval N2). Enrichment must never ride the remember-update
+    /// path: a caller that does not restate its edges has them replaced
+    /// wholesale there (remember() semantics), which silently destroyed the
+    /// relationship graph when the semantic engine's catch-up rewrote the KB.
+    /// Re-attaching the identical block is a no-op so catch-up restarts do
+    /// not churn versions.
+    pub fn attach_semantic(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: KOID,
+        semantic: SemanticBlock,
+        expected_version: Option<u64>,
+    ) -> KResult<Remembered> {
+        let ctx = ctx.into();
+        let mut pipe = self.pipe.lock().unwrap();
+        let head = self.head_object(&koid)?.ok_or(KError::NotFound(koid))?;
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &head, Action::Write)?;
+        let cur_v = head.version;
+        let expected = expected_version.unwrap_or(cur_v);
+        if expected != cur_v {
+            return Err(KError::VersionConflict {
+                koid,
+                expected,
+                found: cur_v,
+            });
+        }
+        if head.semantic.as_ref() == Some(&semantic) {
+            return Ok(Remembered {
+                koid,
+                version: cur_v,
+                commit_ts: head.commit_ts,
+            });
+        }
+        let mut ko = head.clone();
+        ko.version = cur_v + 1;
+        ko.semantic = Some(semantic);
+        // prev_rels = the head's own edges: unchanged, so the relationship
+        // index sees no removals and the graph survives byte-for-byte.
+        let (commit_ts, _seq) = self.commit_version(
+            &mut pipe,
+            ko,
+            EventKind::ClaimAsserted,
+            Origin::SemanticEnrichment,
+            &ctx.subject.name,
+            Some("semantic enrichment".into()),
+            None,
+            Some(&head.relationships),
+        )?;
+        Ok(Remembered {
+            koid,
+            version: cur_v + 1,
+            commit_ts,
+        })
+    }
+
     /// Declarative retention (G13 / RET-CHAT-001): commit through the normal
     /// write path with an automatic expiry horizon. The kernel computes
     /// `valid_to = clock_now() + retention_ms` from its own clock, so callers
@@ -3487,6 +3546,14 @@ impl Kernel {
     }
 
     pub fn prove(&self, ctx: impl Into<KnowledgeContext>, claim: &KOID) -> KResult<Proof> {
+        // Device-eval N3: the walk scans the event rows snapshot-less and then
+        // compares the chain tail against journal_head — a concurrent append
+        // between the two used to report chain_valid=false on an untampered
+        // chain (the semantic engine's catch-up writes continuously). Hold the
+        // pipe lock so writers block and the walk sees a quiescent journal.
+        // ponytail: writers stall for the full scan (ms at KB scale); shard
+        // the pipe if prove ever sits on a hot path.
+        let _pipe = self.pipe.lock().unwrap();
         let ctx = ctx.into();
         let head = match self.head_object(claim) {
             Ok(Some(h)) => h,

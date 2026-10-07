@@ -318,11 +318,11 @@ fn as_of_reads_the_version_committed_at_that_instant() {
 #[test]
 fn as_of_sees_versions_committed_within_the_same_millisecond() {
     let (k, _clock, _store) = mk_kernel(); // ManualClock frozen at 10_000
-    // A warmup commit occupies the HLC counter slot 0 of millis 10_000;
-    // the version under test commits in the SAME wall-clock millisecond,
-    // so its packed timestamp carries counter bits (10_000<<16 | c>0).
-    // trace() reports that to clients as wall-clock 10_000 — AS_OF 10_000
-    // must still return the version: the instant spans the millisecond.
+                                           // A warmup commit occupies the HLC counter slot 0 of millis 10_000;
+                                           // the version under test commits in the SAME wall-clock millisecond,
+                                           // so its packed timestamp carries counter bits (10_000<<16 | c>0).
+                                           // trace() reports that to clients as wall-clock 10_000 — AS_OF 10_000
+                                           // must still return the version: the instant spans the millisecond.
     fact(&k, "alice", "warmup", 0);
     let id = fact(&k, "alice", "a", 1);
     let ko = k

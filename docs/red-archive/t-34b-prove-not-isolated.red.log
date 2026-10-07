@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.07s
+     Running tests\prove_isolation.rs (target\debug\deps\prove_isolation-35efcc2bde9aa4a2.exe)
+
+running 1 test
+test prove_stays_valid_while_a_writer_appends ... FAILED
+
+failures:
+
+---- prove_stays_valid_while_a_writer_appends stdout ----
+
+thread 'prove_stays_valid_while_a_writer_appends' (60296) panicked at crates\kernel\tests\prove_isolation.rs:88:5:
+prove raced the concurrent writer (34 events) — the journal was untampered, the walk must be quiescent-safe
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    prove_stays_valid_while_a_writer_appends
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p aikoql-kernel --test prove_isolation`
+EXIT=101

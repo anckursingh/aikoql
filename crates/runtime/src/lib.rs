@@ -1351,9 +1351,21 @@ mod tests {
             Interpreter::execute(&k, &plan).unwrap().object_count()
         };
 
-        assert_eq!(run(Predicate::eq("ts", Value::Int(1))), 2, "Float 1.0 == Int 1");
-        assert_eq!(run(Predicate::lt("ts", Value::Int(2))), 2, "Float 1.0 < Int 2");
-        assert_eq!(run(Predicate::gte("ts", Value::Int(2))), 2, "Float 2.0/2.5 >= Int 2");
+        assert_eq!(
+            run(Predicate::eq("ts", Value::Int(1))),
+            2,
+            "Float 1.0 == Int 1"
+        );
+        assert_eq!(
+            run(Predicate::lt("ts", Value::Int(2))),
+            2,
+            "Float 1.0 < Int 2"
+        );
+        assert_eq!(
+            run(Predicate::gte("ts", Value::Int(2))),
+            2,
+            "Float 2.0/2.5 >= Int 2"
+        );
         assert_eq!(
             run(Predicate::eq("ts", Value::Float(1.0))),
             2,
