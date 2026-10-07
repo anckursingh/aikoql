@@ -1120,3 +1120,29 @@ permission) and the three metadata teeth. RED archived as
 aikoql-training, repo anckursingh/aikoql, workflow release.yml) is a
 manual one-time step.
 
+## 36. Query-layer breaks — numeric promotion + Grouped tool rows (T-32)
+
+DI-006 re-verification against a repo build surfaced two query-layer
+breaks the estate missed, both at the seam between the runtime and the
+tool surface. (1) Numeric predicates read empty on Float-stored
+properties: JSON floats remembered through the MCP tool land as
+`Value::Float`, while integral query literals arrive as `Value::Int`;
+the runtime `compare_values` returned `None` on the mixed pair and
+`Eq` used derived `PartialEq`, so every numeric predicate failed
+closed on the type boundary. `compare_values` now promotes Int/Float
+(the same rule the kernel helper always applied) and Eq/Neq route
+through `values_equal` — derived equality stays for the shapes
+comparison does not order (List/Map/Bytes), and Neq is exactly the
+negation of Eq on every pair. (2) GROUP BY returned empty through the
+MCP `aikoql` tool: the interpreter computed `RowSet::Grouped`
+correctly, but both tool conversion matches dropped it via a
+catch-all empty arm; the streaming and non-stream paths now convert
+Traversal/Grouped/Joined rows the way http/shell already did. Why the
+estate missed both: runtime tests call `Interpreter::execute`
+directly and never crossed the MCP `RowSet`-to-JSON conversion, and
+no filter test paired an Int literal with a Float-stored property —
+the exact shapes the remembered-data flow produces. The regression
+tests live at both layers now (runtime promotion pin + tool-layer
+grouped-row pin). RED archived as `t-32a-numeric-promotion` and
+`t-32b-grouped-tool`.
+
