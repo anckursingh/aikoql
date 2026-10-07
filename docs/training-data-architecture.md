@@ -1099,3 +1099,24 @@ plant-tests prove each anchor fires on a real violation before the
 plants are removed. A future dependency on a private module dies in
 the gate, not in a user's environment. RED archived as
 `t-30-import-boundary`.
+
+## 35. PyPI publish wiring (T-31)
+
+The training package ships as its own PyPI project (`aikoql-training`),
+not folded into the maturin-built `aikoql` wheel — release coupling and
+build-system friction, two versioning clocks for one artifact. The
+package metadata is complete (readme, Apache license file, classifiers,
+project urls) because PyPI rejects incomplete metadata at upload time,
+not at PR time. `release.yml` gains `training-pypi-publish`, the OIDC
+trusted-publishing twin of the SDK's `pypi-publish` job — but the
+version truth is `training/pyproject.toml`, not the aikoql tag: the two
+projects version independently, and a training release is a plain
+re-dispatch (the skip guard turns an already-published version into a
+no-op, the rescue-over-an-existing-cut pattern). The job install-checks
+the exact wheel before upload — the §33 principle, CI exercises the
+shipped artifact. Workflow test 36 pins the job (action + OIDC
+permission) and the three metadata teeth. RED archived as
+`t-31-pypi-publish`. The PyPI-side pending publisher (project
+aikoql-training, repo anckursingh/aikoql, workflow release.yml) is a
+manual one-time step.
+
