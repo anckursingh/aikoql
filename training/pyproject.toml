@@ -16,5 +16,6 @@ aikoql-training = "aikoql_training.cli:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# T-29 (PR9 §34): the package is installed (`pip install -e training`)
+# and tests exercise the installed copy — no source-path smuggling.
 testpaths = ["tests"]

@@ -17,9 +17,6 @@ import subprocess
 import sys
 import time
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SRC = os.path.join(_ROOT, "src")
-
 
 def _size(path):
     total = 0
@@ -37,15 +34,15 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args(argv)
 
-    env = dict(os.environ)
-    env["PYTHONPATH"] = _SRC + os.pathsep + env.get("PYTHONPATH", "")
+    # T-29 (PR9 §34): the installed package is the execution path — no
+    # PYTHONPATH smuggling of training/src into the subprocess.
     metrics_path = os.path.join(args.out, "metrics.json")
     start = time.monotonic()
     proc = subprocess.run(
         [sys.executable, "-m", "aikoql_training.cli", "generate",
          "--db", args.db, "--token", args.token, "--out", args.out,
          "--seed", str(args.seed), "--metrics", metrics_path],
-        env=env, capture_output=True, text=True)
+        capture_output=True, text=True)
     wall = time.monotonic() - start
     if proc.returncode != 0:
         print(proc.stderr, file=sys.stderr)

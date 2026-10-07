@@ -107,9 +107,10 @@ def _killed(src: Path, tests: str) -> bool:
     env["PYTHONPATH"] = str(src) + os.pathsep + env.get("PYTHONPATH", "")
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", str(_REPO / tests), "-q",
-         # training/pyproject.toml sets pythonpath=["src"], which pytest
-         # force-inserts at sys.path[0] ahead of this PYTHONPATH — clear
-         # it or every mutant tree runs the unmutated validator.
+         # T-29 (PR9 §34): the package is installed, but if a future
+         # pyproject pytest pythonpath ever shadows this env's mutant
+         # tree again, the flag force-clears it — the unmutated
+         # validator must never serve a mutant's test run.
          "-o", "pythonpath="],
         cwd=_REPO, env=env, capture_output=True, text=True,
         timeout=600,

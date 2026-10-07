@@ -10,6 +10,11 @@ on:
       - "training/**"
       - ".github/workflows/training-data.yml"
   workflow_dispatch:
+  # T-29 (PR9 §33): the 10K corpus sweep rides the weekly schedule,
+  # not every training push (its PR-time budget now belongs to the
+  # nightly leg below).
+  schedule:
+    - cron: "17 3 * * 0"
 
 jobs:
   unit:
@@ -24,6 +29,7 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+          .venv/bin/pip install -q -e training
           cd crates/sdk/python
           "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
       - name: Unit suite (no corpus, no mutation leg)
@@ -44,12 +50,15 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip install -q pytest hypothesis maturin
+          .venv/bin/pip install -q -e training
           cd crates/sdk/python
           "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
-      - name: Hypothesis estates
+      - name: Hypothesis estates (the whole fuzz estate)
         run: |
           .venv/bin/python -m pytest training/tests/test_schema_fuzz.py \
-            training/tests/test_scenarios.py -q
+            training/tests/test_scenarios.py \
+            training/tests/test_protocol_fuzz.py \
+            training/tests/test_grounding_fuzz.py -q
 
   determinism:
     runs-on: ubuntu-latest
@@ -114,6 +123,29 @@ jobs:
         run: |
           .venv/bin/python -m pytest training/tests -q \
             --ignore=training/tests/test_mutation_leg.py
+
+  # T-29 (PR9 §33): the 10K corpus sweep is a nightly cell — schedule
+  # or a deliberate manual dispatch only, never a push/PR gate.
+  nightly:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the server
+        run: cargo build --bin aikoql-mcp
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q maturin pytest hypothesis pyyaml
+          .venv/bin/pip install -q -e training
+          cd crates/sdk/python
+          "$GITHUB_WORKSPACE/.venv/bin/maturin" develop
       - name: 10K corpus sweep
         run: |
           printf '[rate_limit]\nenabled = false\n' > "$RUNNER_TEMP/rate.toml"

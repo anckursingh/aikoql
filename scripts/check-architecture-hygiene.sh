@@ -838,11 +838,13 @@ if ! grep -q 'def validate_tiers' scripts/artifact_schema.py; then
 fi
 
 # workflow test 32 — test_training_data_estate (T-14, training plan §6):
-# training-data.yml is the dataset engine's CI owner — five legs by name
-# (unit / fuzz-estate / determinism / integration / gate-teeth), path-gated
-# on training/** so the 10K-corpus budget rides only training changes.
-# gate-teeth runs the mutation leg: a mutant that survives is a toothless
-# gate, and determinism rides generate_corpus.py regeneration.
+# training-data.yml is the dataset engine's CI owner — five PR legs by
+# name (unit / fuzz-estate / determinism / integration / gate-teeth)
+# plus the T-29 nightly leg, path-gated on training/** so the 10K-corpus
+# budget rides only the schedule (tests 33/34 pin the packaging and the
+# nightly split). gate-teeth runs the mutation leg: a mutant that
+# survives is a toothless gate, and determinism rides generate_corpus.py
+# regeneration.
 TRAIN=.github/workflows/training-data.yml
 if [ ! -f "$TRAIN" ]; then
   echo "ARCH: training-data.yml missing (T-14, training plan §6)" >&2
@@ -983,11 +985,11 @@ for _wf in .github/workflows/*.yml; do
       fail=1
     fi
     # test 7c — a training/scripts entry run with the venv python
-    # imports aikoql_training, which pytest finds via pythonpath=src
-    # but a bare script never does: the corpus sweep died at
-    # `from aikoql_training.client import ...` (run 37190350754,
-    # determinism + integration). Any job that runs such a script
-    # must install the package into the venv first.
+    # must find the installed package (T-29 killed the pytest
+    # pythonpath=src hack, so a bare script dies at import without
+    # it): the corpus sweep died at `from aikoql_training.client
+    # import ...` (run 37190350754, determinism + integration). Any
+    # job that runs such a script must install the package first.
     if printf '%s\n' "$_block" | grep -qE '^[[:space:]]*\.venv/bin/python[[:space:]]+training/scripts/'; then
       if ! printf '%s\n' "$_block" | grep -qE 'pip install .*-e[ ]+training'; then
         echo "ARCH: training/scripts run without a package install: $_wf $_job" >&2

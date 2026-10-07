@@ -1,7 +1,7 @@
 """T-16: the POC chatbot — chat() wired to the real model and a live
 AikoQL server (design §40 end-state).
 
-Run: PYTHONPATH=training/src python training/scripts/chat.py \
+Run (after `pip install -e training`): python training/scripts/chat.py \
        --db 127.0.0.1:61146 --token acme [--adapter dir] [--question "..."]
 No --question: an interactive loop, one line per question, EOF/quit to
 exit. The model is the T-15 LoRA base (adapter optional); the query
