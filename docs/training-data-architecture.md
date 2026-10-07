@@ -1146,3 +1146,35 @@ tests live at both layers now (runtime promotion pin + tool-layer
 grouped-row pin). RED archived as `t-32a-numeric-promotion` and
 `t-32b-grouped-tool`.
 
+## 37. AS_OF counter inclusivity — same-millis commits (T-33)
+
+PR #9 CI failed corpus generation since Oct 4 with a `StopIteration`
+in `generate_corpus.py::_history`: the per-version snapshot re-reads
+each version through `MATCH service AS_OF (commit_ts >> 16) RETURN *`
+and the target koid was absent from the results. Root cause sits in
+the packed-HLC round-trip, not the generator: the HLC packs
+`(millis << 16) | counter`, and a commit that shares its millisecond
+with a sibling carries counter bits. `get_as_of` packed the snapshot
+at `millis << 16` (counter 0), so the MVCC predecessor walk —
+`obj_key(koid, snap)` as the seek key — skipped that version's key
+entirely; for a first version there is nothing older to fall back to,
+the AS_OF row was dropped and the generator crashed. Same-millis
+commits are a timing race: CI runners hit it routinely (the Oct 4
+run failed both the determinism and integration legs), the laptop
+did not — which is exactly why the estate passed locally.
+
+`get_as_of` now fills the counter to `0xFFFF`: `AS_OF T` selects the
+newest version committed at any point during wall-clock millis T,
+matching the docstring contract ("packs to the HLC layout
+`millis << 16 | counter`") and making the trace()/AS_OF round-trip
+hold for every version a client can ever be told about. The
+deterministic pin is a kernel test, not a timing gamble:
+`as_of_sees_versions_committed_within_the_same_millisecond` runs on a
+frozen `ManualClock` — a warmup commit occupies counter slot 0, the
+version under test commits with counter bits, and `AS_OF` at that
+millis must still return it. The live temporal wire test
+(`test_temporal.py`) had the same latent race in a silent form (two
+back-to-back remembers whose v2 snapshot could read v1's properties);
+the kernel fix closes that too. RED archived as
+`t-33-asof-counter-inclusive`.
+
