@@ -1,0 +1,8 @@
+{
+  "id": "t-32a-numeric-promotion",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-runtime --lib filter_numeric_predicates_promote_int_float",
+  "captured_at": "2026-10-07T13:53:25Z",
+  "captured_head": "45704188c40cbb5bcc8207fc79d1e5496ffe289c",
+  "exit_code": 101
+}

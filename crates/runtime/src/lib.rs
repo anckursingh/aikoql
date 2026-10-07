@@ -34,9 +34,24 @@ fn compare_values(a: Option<&Value>, b: Option<&Value>) -> Option<Ordering> {
     match (a, b) {
         (Value::Int(ai), Value::Int(bi)) => ai.partial_cmp(bi),
         (Value::Float(af), Value::Float(bf)) => af.partial_cmp(bf),
+        // T-32: promote across the Int/Float boundary (same rule as the
+        // kernel's compare_values) — JSON floats stored via remember vs
+        // integral query literals must compare, not fail closed on type.
+        (Value::Int(ai), Value::Float(bf)) => (*ai as f64).partial_cmp(bf),
+        (Value::Float(af), Value::Int(bi)) => af.partial_cmp(&(*bi as f64)),
         (Value::Text(at), Value::Text(bt)) => Some(at.cmp(bt)),
         (Value::Bool(ab), Value::Bool(bb)) => Some(ab.cmp(bb)),
         _ => None, // type mismatch
+    }
+}
+
+/// Equality with the same numeric promotion as `compare_values`; falls back
+/// to derived `PartialEq` for shapes comparison does not order (List, Map,
+/// Bytes). Keeps Neq the exact negation of Eq on every pair.
+fn values_equal(a: Option<&Value>, b: Option<&Value>) -> bool {
+    match compare_values(a, b) {
+        Some(o) => o == Ordering::Equal,
+        None => a == b,
     }
 }
 
@@ -53,8 +68,8 @@ pub(crate) fn row_matches(ko: &KnowledgeObject, predicates: &[Predicate]) -> boo
     predicates.iter().all(|p| {
         let val = ko.properties.get(&p.property);
         match p.op {
-            PredOp::Eq => val == Some(&p.value),
-            PredOp::Neq => val != Some(&p.value),
+            PredOp::Eq => values_equal(val, Some(&p.value)),
+            PredOp::Neq => !values_equal(val, Some(&p.value)),
             PredOp::Gt => compare_values(val, Some(&p.value)) == Some(Ordering::Greater),
             PredOp::Lt => compare_values(val, Some(&p.value)) == Some(Ordering::Less),
             PredOp::Gte => matches!(
@@ -1298,6 +1313,52 @@ mod tests {
         ]);
         let r = Interpreter::execute(&k, &plan).unwrap();
         assert_eq!(r.object_count(), 2);
+    }
+
+    #[test]
+    fn filter_numeric_predicates_promote_int_float() {
+        // T-32 (DI-006 re-verification): JSON floats land as Value::Float via
+        // remember, integral query literals arrive as Value::Int — numeric
+        // predicates must promote across the boundary, not fail closed on it.
+        let k = mk();
+        let alice = Subject::new("alice");
+
+        let mut props = PropertyMap::new();
+        props.insert("ts".into(), Value::Float(1.0));
+        create_ko(&k, &alice, "event", props, None);
+        let mut props = PropertyMap::new();
+        props.insert("ts".into(), Value::Float(2.0));
+        create_ko(&k, &alice, "event", props, None);
+        let mut props = PropertyMap::new();
+        props.insert("ts".into(), Value::Float(2.5));
+        create_ko(&k, &alice, "event", props, None);
+        let mut props = PropertyMap::new();
+        props.insert("ts".into(), Value::Int(1));
+        create_ko(&k, &alice, "event", props, None);
+
+        let run = |pred: Predicate| {
+            let plan = IrPlan::new(vec![
+                IrOp::Scan {
+                    type_name: "event".into(),
+                    subject: "alice".into(),
+                    roles: vec![],
+                    tenant: None,
+                },
+                IrOp::Filter {
+                    predicates: vec![pred],
+                },
+            ]);
+            Interpreter::execute(&k, &plan).unwrap().object_count()
+        };
+
+        assert_eq!(run(Predicate::eq("ts", Value::Int(1))), 2, "Float 1.0 == Int 1");
+        assert_eq!(run(Predicate::lt("ts", Value::Int(2))), 2, "Float 1.0 < Int 2");
+        assert_eq!(run(Predicate::gte("ts", Value::Int(2))), 2, "Float 2.0/2.5 >= Int 2");
+        assert_eq!(
+            run(Predicate::eq("ts", Value::Float(1.0))),
+            2,
+            "Int 1 == Float 1.0"
+        );
     }
 
     #[test]

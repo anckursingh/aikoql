@@ -86,6 +86,36 @@ pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
                 "version": ver
             })).collect::<Vec<_>>()
         })),
+        aikoql_runtime::RowSet::Traversal(hits) => Ok(json!({
+            "results": hits.iter().map(|(koid, rt, depth)| json!({
+                "koid": koid.to_hex(),
+                "rel_type": rt,
+                "depth": depth
+            })).collect::<Vec<_>>()
+        })),
+        // T-32: group rows carry properties only (no KO identity) — the tool
+        // must surface them, not empty out.
+        aikoql_runtime::RowSet::Grouped(groups) => Ok(json!({
+            "results": groups.iter().map(|g| json!({
+                "properties": g.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+            })).collect::<Vec<_>>()
+        })),
+        // T-32: one row per join pair — left object plus the right match
+        // (or null on an unmatched LEFT row).
+        aikoql_runtime::RowSet::Joined(pairs) => Ok(json!({
+            "results": pairs.iter().map(|(l, r)| json!({
+                "koid": l.koid.to_hex(),
+                "type_name": l.metadata.type_name,
+                "version": l.version,
+                "properties": l.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
+                "joined": r.as_ref().map(|ro| json!({
+                    "koid": ro.koid.to_hex(),
+                    "type_name": ro.metadata.type_name,
+                    "version": ro.version,
+                    "properties": ro.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+                }))
+            })).collect::<Vec<_>>()
+        })),
         _ => Ok(json!({"results": []})),
     }
 }
@@ -121,6 +151,30 @@ pub(crate) fn execute_stream_query(
             "score": score,
             "type_name": tn,
             "version": ver
+        })).collect(),
+        aikoql_runtime::RowSet::Traversal(hits) => hits.iter().map(|(koid, rt, depth)| json!({
+            "koid": koid.to_hex(),
+            "rel_type": rt,
+            "depth": depth
+        })).collect(),
+        // T-32 (DI-006 re-verification): group rows carry properties only
+        // (no KO identity) — the tool must surface them, not empty out.
+        aikoql_runtime::RowSet::Grouped(groups) => groups.iter().map(|g| json!({
+            "properties": g.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+        })).collect(),
+        // T-32: one row per join pair — left object plus the right match
+        // (or null on an unmatched LEFT row).
+        aikoql_runtime::RowSet::Joined(pairs) => pairs.iter().map(|(l, r)| json!({
+            "koid": l.koid.to_hex(),
+            "type_name": l.metadata.type_name,
+            "version": l.version,
+            "properties": l.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>(),
+            "joined": r.as_ref().map(|ro| json!({
+                "koid": ro.koid.to_hex(),
+                "type_name": ro.metadata.type_name,
+                "version": ro.version,
+                "properties": ro.properties.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect::<serde_json::Map<_,_>>()
+            }))
         })).collect(),
         _ => vec![],
     };
@@ -438,6 +492,62 @@ mod tests {
             std::thread::sleep(timeout);
             Ok(())
         }
+    }
+
+    /// T-32 (DI-006 re-verification): the interpreter computes GROUP BY
+    /// correctly, but the tool layer dropped RowSet::Grouped to an empty
+    /// result — both tool paths must surface group rows.
+    #[test]
+    fn aikoql_group_by_surfaces_grouped_rows() {
+        let k = Kernel::open(
+            Arc::new(MemoryEngine::new()),
+            Arc::new(ManualClock::new(10_000)),
+            0xBEEF,
+        )
+        .unwrap();
+        for (name, dept) in [("a", "eng"), ("b", "eng"), ("c", "sales")] {
+            let mut props = PropertyMap::new();
+            props.insert("name".into(), Value::Text(name.into()));
+            props.insert("dept".into(), Value::Text(dept.into()));
+            k.remember(RememberRequest {
+                context: subject_of(&json!({"subject": "alice"})).into(),
+                koid: None,
+                expected_version: Some(0),
+                idempotency_key: None,
+                metadata: Metadata {
+                    type_name: "Scratch".into(),
+                    tenant: None,
+                    schema_version: 1,
+                    tags: vec![],
+                },
+                properties: props,
+                semantic: None,
+                relationships: vec![],
+                security: None,
+                extensions: ExtensionMap::new(),
+                origin: Origin::Human,
+                note: None,
+                referential_policy: ReferentialPolicy::default(),
+            })
+            .unwrap();
+        }
+
+        let q = "MATCH Scratch GROUP BY dept, COUNT(*) RETURN *";
+        // Streaming tool path (MRFC-0040 #5).
+        let (chunks, _sid) = execute_stream_query(&k, q, "alice", &[], None).unwrap();
+        let rows: Vec<J> = chunks
+            .into_iter()
+            .flat_map(|c| c.as_array().cloned().unwrap_or_default())
+            .collect();
+        assert_eq!(rows.len(), 2, "two dept groups, not an empty result");
+
+        // Non-stream tool path.
+        let res = tool_aikoql(&k, &json!({"query": q, "subject": "alice"})).unwrap();
+        assert_eq!(
+            res["results"].as_array().map(|a| a.len()),
+            Some(2),
+            "non-stream tool surfaces groups too"
+        );
     }
 
     /// P5-M27 (IDX-P1-02) — RED: the default find_similar blocks ~2s behind
