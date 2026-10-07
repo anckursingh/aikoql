@@ -1246,3 +1246,29 @@ answers exactly the embedded KO; all-unembedded answers empty),
 `ann_search_readiness_sweep` matrix (provider × enriched → Retryable
 exactly when a provider ran and nothing was enriched) in the runtime.
 RED archived as `t-35-embedding-degrade`.
+
+## 40. Similarity legs must project fields — N1 (T-36)
+
+The eval's N1 break: `SIMILAR TO "payments" RETURN body` errored with
+"Project requires Object input". The similarity legs (`SIMILAR TO`,
+`USING EMBEDDING`) compute scores and emit `RowSet::Scored`, but the
+runtime's `Project` arm only accepted `Objects` (and `Traversal` via the
+§63 load-then-project path). The compiler deliberately keeps the scored
+shape through to the plan output (RETURN * over a similarity leg means
+the scored rows, and the cert plan-shape pins Q_H1/H1 depend on that),
+so the fix is runtime-only: `Project` gains a `Scored` branch that loads
+the KO each row refers to — the same `kernel.get` walk the `Traversal`
+branch already performs — and then projects fields over the loaded KOs
+exactly as it does for `Objects`.
+
+Ceiling, by design: projection over a similarity leg drops the scores —
+the projected output is `Objects`, so `RETURN body` answers the KOs, not
+the scored rows; callers that need both must run the leg twice or
+project on the raw result. The scored shape itself is untouched.
+
+Pins: `cpl005_projection_applied_after_similarity` (SIMILAR TO leg,
+RETURN body — the KO bodies come back, not the error) alongside the
+pre-existing `cpl004` Traversal sibling; the cert plan-shape pins
+(Q_H1/H1) stay green unchanged, proving the compiler contract did not
+move. RED archived as `t-36-similar-projection`.
+
