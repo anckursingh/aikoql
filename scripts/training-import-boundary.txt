@@ -1,0 +1,18 @@
+# Training import boundary (T-30, PR9 §35) — one deny anchor per
+# line, each applied as grep -E over training/src and training/scripts
+# .py files by check-architecture-hygiene.sh workflow test 35. Blank
+# lines and #-comments are ignored. Allowed by absence: the bare
+# `import aikoql` and `from aikoql import <public name>` top level —
+# the documented public API. Fail-closed by design: a new dependency
+# on a private module dies here, not in a user deployment.
+
+# deeper than the documented top level — SDK submodules, adapters,
+# checkpointer, the native bindings (private retrieval/compiler impls)
+^[[:space:]]*(import|from)[[:space:]]+aikoql\.
+
+# underscore-private names pulled through the top level (_aikoql,
+# _mnemosyne native modules)
+^[[:space:]]*from[[:space:]]+aikoql[[:space:]]+import[[:space:]][^#]*_[a-z]
+
+# storage engine bindings — never the engine, only the SDK
+^[[:space:]]*(import|from)[[:space:]]+(redb|rocksdb|rocksdict)([[:space:]]|$|\.)
