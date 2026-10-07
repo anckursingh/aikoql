@@ -25,6 +25,17 @@ pub(crate) fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Resul
 
     let ir = get_ir_for_koid(k, args, db_path)?;
 
+    // v0.3 K5: append matched agent experiences — prior runs the caller is
+    // allowed to read, gated by reuse conditions and ranked by confidence.
+    // Bounded by `limit`; the IR budget governs the core package.
+    //
+    // Read FIRST: the temporal snapshot is taken at call start. The semantic
+    // leg below can take seconds on a cold/uninstalled model load, and a
+    // fresh short-TTL experience must not expire behind it.
+    let experiences = k
+        .match_experiences(subject_of(args), task, 5)
+        .map_err(|e| e.to_string())?;
+
     // Semantic scores: embed the task and score every stored entity
     // embedding against it. Falls back to lexical-only when no provider
     // is wired or the snapshot predates embedding support. semantic_ran
@@ -50,12 +61,6 @@ pub(crate) fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Resul
     );
     let mut md = aikoql_ingestion::render_context_markdown(&pkg);
 
-    // v0.3 K5: append matched agent experiences — prior runs the caller is
-    // allowed to read, gated by reuse conditions and ranked by confidence.
-    // Bounded by `limit`; the IR budget governs the core package.
-    let experiences = k
-        .match_experiences(subject_of(args), task, 5)
-        .map_err(|e| e.to_string())?;
     let mut experience_json = Vec::new();
     if !experiences.is_empty() {
         let mut section = String::from("\n## Previous Agent Experience\n\n");

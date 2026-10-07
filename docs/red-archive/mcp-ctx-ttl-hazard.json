@@ -1,0 +1,8 @@
+{
+  "id": "mcp-ctx-ttl-hazard",
+  "pre_fix_commit": "HEAD",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world ctx_differential_scenarios -- --exact",
+  "captured_at": "2026-10-07T19:18:16Z",
+  "captured_head": "554ff5d705b18c49428ac48117cfe5d7de65e619",
+  "exit_code": 101
+}

@@ -90,8 +90,17 @@ impl McpClient {
         };
         eprintln!("Using binary: {}", bin.display());
         let mut cmd = Command::new(&bin);
+        // Pin the harness to the no-provider mode its assertions assume
+        // (CTX-001 pins semantic:false): an installed local model would
+        // start background enrichment, and its version bumps race
+        // CTX-003's pinned update. An empty model dir is deterministically
+        // unavailable on every machine.
+        let model_dir = tmp_db("ctx-model");
+        std::fs::create_dir_all(&model_dir).expect("create empty model dir");
         cmd.arg("serve")
             .arg(db_path)
+            .arg("--model-dir")
+            .arg(&model_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit()); // crash output lands in CI logs, not /dev/null

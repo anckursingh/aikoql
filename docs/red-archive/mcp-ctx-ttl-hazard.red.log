@@ -1,0 +1,57 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.35s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+[2m2026-10-07T19:18:23.275400Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-07T19:18:23.275556Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-ctx-23060 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-07T19:18:23.276624Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-07T19:18:23.281312Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-07T19:18:23.341838Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 3
+[2m2026-10-07T19:18:23.341920Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 3
+[2m2026-10-07T19:18:23.342043Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-07T19:18:23.342411Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-07T19:18:23.342637Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-07T19:18:26.318228Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-07T19:18:26.372585Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 8
+[2m2026-10-07T19:18:26.372969Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 8
+[2m2026-10-07T19:18:26.373562Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-07T19:18:26.373884Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-07T19:18:26.373940Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-07T19:18:35.716726Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-07T19:18:35.756125Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Prepared commit 13
+[2m2026-10-07T19:18:35.756267Z[0m [32m INFO[0m [2mtantivy::indexer::prepared_commit[0m[2m:[0m committing 13
+[2m2026-10-07T19:18:35.756910Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-07T19:18:35.757090Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m Running garbage collection
+[2m2026-10-07T19:18:35.757125Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Garbage collect
+[2m2026-10-07T19:18:35.757352Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "50c8a404500a454e813069a164a0d6f4.pos"
+[2m2026-10-07T19:18:35.757398Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "50c8a404500a454e813069a164a0d6f4.fast"
+[2m2026-10-07T19:18:35.757437Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "50c8a404500a454e813069a164a0d6f4.13.del"
+[2m2026-10-07T19:18:35.757476Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "50c8a404500a454e813069a164a0d6f4.store"
+[2m2026-10-07T19:18:35.757513Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "50c8a404500a454e813069a164a0d6f4.term"
+[2m2026-10-07T19:18:35.757552Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "50c8a404500a454e813069a164a0d6f4.idx"
+[2m2026-10-07T19:18:35.757673Z[0m [32m INFO[0m [2mtantivy::directory::managed_directory[0m[2m:[0m Deleted "50c8a404500a454e813069a164a0d6f4.fieldnorm"
+test ctx_differential_scenarios ... FAILED
+
+failures:
+
+---- ctx_differential_scenarios stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 'ctx_differential_scenarios' (39140) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:1162:5:
+t0: the fresh experience must be in the context: {"context_markdown":"## Relevant Components\n\n- **PaymentService** (Struct): processes payments\n- **Ledger** (Struct): payment ledger\n\n## Relevant Facts & Rules\n\n- payments flow through Stripe\n\n","package":{"entities":[{"name":"PaymentService","type_hint":"Struct","score":1.0449999570846558,"mentions":["processes payments"],"document_id":null,"justification":"name matches task keywords (score: 0.3), 1 mentions"},{"name":"Ledger","type_hint":"Struct","score":0.16500000655651093,"mentions":["payment ledger"],"document_id":null,"justification":"mentions match task: payment ledger"}],"facts":[{"statement":"payments flow through Stripe","entities":[],"score":1.0,"justification":"statement matches task keywords (score: 1.0)","evidence":{"document_id":null,"page":null,"source":null,"extractor":"unknown","model":null,"confidence":0.0}}],"relations":[],"estimated_tokens":44,"trimmed":false,"status":"healthy"},"koid":"01a117cd752d0000000000000000a9c9","task":"process payments refund","token_budget":2000,"semantic":false,"experiences":[]}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    ctx_differential_scenarios
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 18.82s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101
