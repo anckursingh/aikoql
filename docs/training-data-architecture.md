@@ -1215,3 +1215,34 @@ race is made deterministic, not timed — `prove_isolation.rs` wraps the
 engine in a `SlowScanEngine` whose `ke/` scans sleep 50 ms while a writer
 appends every millisecond, which without the lock fails every run. RED
 archived as `t-34-enrichment-wipes-edges` and `t-34b-prove-not-isolated`.
+
+## 39. Enrichment catch-up must not degrade vector queries — N4 (T-35)
+
+The eval's degraded case: `USING EMBEDDING` against a KB whose semantic
+catch-up had not finished returned hits for every KO with scores that had
+no vector meaning. Root cause was two layers deep:
+
+- **Kernel (the silent lie).** The coordinator's slim vector leg scored
+  every head without an embedding at 0.0 — during the catch-up window a
+  vector query "matched" the whole store. Fix: the leg skips unembedded
+  KOs. A KO without an embedding has no vector score; only embedded KOs
+  can answer a vector query, and the caller sees an honest empty instead
+  of fabricated zero-score hits.
+- **Runtime (the silent text fallback).** The delegate's brute-force path
+  returned an empty vector side and the hybrid fusion then masqueraded as
+  a text-only answer. Fix: when the query vector embedded (the provider
+  ran) but no in-scope KO carries an embedding, the arm fails closed with
+  `KError::Retryable` — enrichment is not ready, retry once
+  `semantic.state == "ready"`.
+
+Ceiling, by design: a hybrid query (BM25 + USING EMBEDDING) during the
+window also fails Retryable rather than answering from the text side
+alone — fail-closed beats silent partial. The kernel's honest empty is
+the truth; the runtime guard is the contract.
+
+Pins: `ann006_unembedded_kos_never_score_as_zero_hits` (mixed population
+answers exactly the embedded KO; all-unembedded answers empty),
+`ann_search_errors_when_no_ko_in_scope_has_an_embedding` and the
+`ann_search_readiness_sweep` matrix (provider × enriched → Retryable
+exactly when a provider ran and nothing was enriched) in the runtime.
+RED archived as `t-35-embedding-degrade`.
