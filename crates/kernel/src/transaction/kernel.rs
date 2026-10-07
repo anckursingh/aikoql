@@ -3052,6 +3052,13 @@ impl Kernel {
         let Some(ko) = self.object_at(koid, snap)? else {
             return Ok(None);
         };
+        // F12: AS_OF must honor valid-time closure — a KO whose validity
+        // ended at/before the slice instant (e.g. superseded) is not part
+        // of that transaction-time world. Half-open [valid_from, valid_to):
+        // valid_to == at means the interval has already closed.
+        if ko.valid_to().map(|t| t <= at_millis).unwrap_or(false) {
+            return Ok(None);
+        }
         self.auth
             .read()
             .unwrap()

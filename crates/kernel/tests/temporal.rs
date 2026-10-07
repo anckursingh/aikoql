@@ -234,6 +234,42 @@ fn supersede_without_successor_still_ends_validity() {
 }
 
 #[test]
+fn as_of_slice_hides_a_superseded_generation() {
+    // F12: AS_OF reconstruction is transaction-time only — a superseded
+    // gen-1 has valid_to stamped at the supersession instant but still
+    // leaks into later slices.
+    let (k, clock, _store) = mk_kernel();
+    let gen1 = fact(&k, "alice", "msg", 1); // committed at 10_000
+    clock.set(20_000);
+    let gen2 = fact(&k, "alice", "msg", 2); // successor committed at 20_000
+    k.admin_transition_epistemic(
+        Subject::new("alice"),
+        &gen1,
+        EpistemicStatus::Superseded,
+        Origin::System,
+        Some(gen2),
+        None,
+        Some("replaced by successor".into()),
+    )
+    .unwrap();
+    // Pre-supersede slices still see gen1: it was valid then.
+    assert!(k
+        .get_as_of(Subject::new("alice"), &gen1, 10_000)
+        .unwrap()
+        .is_some());
+    // Post-supersede slices must not — valid_to == 20_000 closed the
+    // interval, and half-open semantics mean the slice AT the closure
+    // instant is already post-validity.
+    for at in [20_000, 20_001] {
+        let leaked = k.get_as_of(Subject::new("alice"), &gen1, at).unwrap();
+        assert!(
+            leaked.is_none(),
+            "superseded gen-1 leaked into the AS_OF slice at {at}: {leaked:?}"
+        );
+    }
+}
+
+#[test]
 fn superseded_by_requires_a_superseded_transition() {
     let (k, _clock, _store) = mk_kernel();
     let a = fact(&k, "alice", "msg", 1);
