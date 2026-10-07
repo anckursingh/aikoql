@@ -1072,3 +1072,30 @@ while the integration leg carries the 10K sweep, no nightly leg or
 schedule trigger exists, the nightly leg is unguarded, or the
 fuzz-estate leg drops a fuzz file. RED archived as
 `t-29-ci-reshape`.
+
+## 34. Architecture hygiene — training import boundary (T-30)
+
+PR9 §35. The training package sits on the SDK's public surface only;
+a dependency on private internals is architectural drift that no test
+catches until it breaks in a user deployment. The boundary is now
+deny-listed, not just convention: `scripts/training-import-boundary.txt`
+holds one grep-`-E` anchor per forbidden import shape, and workflow
+test 35 scans `training/src` + `training/scripts` `.py` files against
+every anchor — any hit fails the architecture gate.
+
+Three anchors cover the whole private surface:
+
+- `aikoql.<sub>` — deeper than the documented top level (SDK
+  submodules, adapters, checkpointer, native bindings);
+- underscore-private names pulled through the top level
+  (`_aikoql`, `_mnemosyne` native modules);
+- storage engine bindings (`redb`, `rocksdb`, `rocksdict`) — training
+  data talks to the engine only through the SDK.
+
+Allowed by absence: the bare `import aikoql` and `from aikoql import
+<public name>` top level. The scan is fail-closed by design — the
+absence-of-guard RED (boundary file missing) is archived first, then
+plant-tests prove each anchor fires on a real violation before the
+plants are removed. A future dependency on a private module dies in
+the gate, not in a user's environment. RED archived as
+`t-30-import-boundary`.
