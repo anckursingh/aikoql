@@ -8,6 +8,24 @@ version = "0.1.0"
 description = "Training Data Engine for AikoQL — deterministic, validated training/evaluation dataset generation"
 requires-python = ">=3.9"
 dependencies = ["aikoql>=0.2.1"]  # T-02: the installed SDK is the only AIKOQL boundary
+# T-31: complete metadata — PyPI rejects readme/license-less uploads
+# at publish time, not at PR time (hygiene test 36 pins all three).
+readme = "README.md"
+license = { file = "LICENSE" }
+keywords = ["aikoql", "training-data", "dataset-generation", "evaluation", "grounded-answers", "knowledge-graph"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/anckursingh/aikoql"
+Repository = "https://github.com/anckursingh/aikoql"
+Documentation = "https://github.com/anckursingh/aikoql/tree/main/docs"
 
 [project.scripts]
 aikoql-training = "aikoql_training.cli:main"
