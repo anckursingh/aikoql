@@ -1561,3 +1561,56 @@ fn p3m3_bkp005_backup_restore_route_by_backend() {
     );
     drop(c);
 }
+
+#[test]
+fn batch_ops_inherit_session_identity() {
+    // F2: batch ops without an explicit subject land as mcp-agent and the
+    // submitting session then hits ACCESS_DENIED on its own KO.
+    let db = tmp_db("batch-ident");
+    let mut c = McpClient::start(&db);
+    c.session_init("device-identity-eval", "acme");
+    let batch = c.call(
+        "batch",
+        &json!({
+            "operations": [{
+                "op": "remember",
+                "type_name": "device",
+                "properties": {"device_id": "d1", "farm": "f07"},
+                "idempotency_key": "batch-ident-d1"
+            }]
+        }),
+    );
+    let koid = batch["results"][0]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let got = c.call("get", &json!({"koid": &koid}));
+    assert_eq!(
+        got["koid"],
+        json!(koid),
+        "batch op must inherit the submitting session's identity: {got}"
+    );
+
+    // Fill-if-absent, not override: an op with its own subject keeps it.
+    let batch2 = c.call(
+        "batch",
+        &json!({
+            "operations": [{
+                "op": "remember",
+                "type_name": "device",
+                "subject": "another-agent",
+                "properties": {"device_id": "d2"}
+            }]
+        }),
+    );
+    let koid2 = batch2["results"][0]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let got2 = c.call_raw("get", &json!({"koid": &koid2}));
+    let text2 = got2["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        got2["result"]["isError"] == true && text2.contains("ACCESS_DENIED"),
+        "an explicit op subject must survive injection: {got2}"
+    );
+}
