@@ -233,7 +233,7 @@ knowledge document; each re-stamp commit below is reconciled via
 the A8 `reconcile` tool against that document.
 
 - knowledge document KOID: `01a0ecc867810000000000000000a9c9`
-- reconciled re-stamp commits: 160 (first c786db5, last 7577e94)
+- reconciled re-stamp commits: 161 (first ca56add, last 7577e94)
 - trace answers: `R3-003->finding: R3-003 | R3-005->re-stamping`
 
 The trace pins the requirement leg (the finding is found by query).
@@ -253,5 +253,5 @@ follow-up, not this milestone.
 | R3-005 | 01a0ecc867570000000000000000a9c9 | FIXED | closed |
 | R2-008 | 01a0ecc8676e0000000000000000a9c9 | CLOSED | closed |
 
-compiled-head: 35bc7f915e3a72358a4dc1c4b3fa80416810af97
+compiled-head: f0781bd1a8c8236126f2718fe8ef6f002c15eb6e
 <!-- DOGFOOD-COMPILED-END -->
