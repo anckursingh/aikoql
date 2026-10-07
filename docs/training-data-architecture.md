@@ -1178,3 +1178,40 @@ back-to-back remembers whose v2 snapshot could read v1's properties);
 the kernel fix closes that too. RED archived as
 `t-33-asof-counter-inclusive`.
 
+
+## 38. Semantic-enrichment write path — N2/N3 (T-34)
+
+The device-identity eval (aikoql-issues.md, repo build at ebe7389) found
+two bugs on the same write path, both invisible to the estate:
+
+- **N2 — enrichment wipes caller edges.** `enrich_one` wrote back through
+  `RememberRequest::update` carrying only `properties` + `semantic`.
+  `remember_locked`'s update path replaces the edge set wholesale
+  (kernel-managed SUPERSEDES/DERIVED_FROM/CONTRADICTS carried forward,
+  caller edges restated-or-deleted), so the serve-start catch-up silently
+  destroyed every `relate`-created edge in the KB. The estate missed it
+  because no test ever ran enrichment against a KO that already carried
+  caller edges. Fix per the issue's option 1: a dedicated
+  `attach_semantic` kernel path that mutates ONLY the semantic field —
+  commit carries `prev_rels = head.relationships`, so the relationship
+  index sees no removals; identical re-attach is a no-op (restarts do not
+  churn versions). The enricher never enters the edge-replacement path at
+  all, so the class of bug is closed rather than patched.
+
+- **N3 — prove vs. the enricher's appends.** `prove` walked `scan_events`
+  (a snapshot-less KV scan) and then compared the chain tail against
+  `journal_head` read separately — an append between the two made an
+  untampered chain report `chain_valid: false` with the same event count.
+  The eval's "superseded claims fail, live ones pass" was timing: the
+  superseded claim sat earlier in the scan, buying the enricher more
+  append windows. Fix: `prove` holds the pipe lock (every writer routes
+  through it), so the walk sees a quiescent journal; point-in-time at the
+  cost of writers stalling for the scan (ms at KB scale).
+
+Pins: `enrichment_update_preserves_caller_edges_and_prove_chain` (edges
+survive catch-up, prove stays valid) and `attach_semantic_boundary_sweep`
+(NotFound/VersionConflict/AccessDenied/no-op) in the kernel tests; the N3
+race is made deterministic, not timed — `prove_isolation.rs` wraps the
+engine in a `SlowScanEngine` whose `ke/` scans sleep 50 ms while a writer
+appends every millisecond, which without the lock fails every run. RED
+archived as `t-34-enrichment-wipes-edges` and `t-34b-prove-not-isolated`.
