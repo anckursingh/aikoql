@@ -14,6 +14,7 @@ pub enum ErrorCode {
     ValidationError,
     RateLimited,
     Timeout,
+    Retryable,
     Internal,
     NotAProgram,
     CompileError,
@@ -28,6 +29,7 @@ impl ErrorCode {
             ErrorCode::ValidationError => "VALIDATION_ERROR",
             ErrorCode::RateLimited => "RATE_LIMITED",
             ErrorCode::Timeout => "TIMEOUT",
+            ErrorCode::Retryable => "RETRYABLE",
             ErrorCode::Internal => "INTERNAL",
             ErrorCode::NotAProgram => "NOT_A_PROGRAM",
             ErrorCode::CompileError => "COMPILE_ERROR",
@@ -37,7 +39,10 @@ impl ErrorCode {
     pub fn retryable(&self) -> bool {
         matches!(
             self,
-            ErrorCode::Timeout | ErrorCode::RateLimited | ErrorCode::VersionConflict
+            ErrorCode::Timeout
+                | ErrorCode::RateLimited
+                | ErrorCode::VersionConflict
+                | ErrorCode::Retryable
         )
     }
 
@@ -49,6 +54,7 @@ impl ErrorCode {
             ErrorCode::ValidationError => "Check the parameter types and required fields. Use tools/list for schemas",
             ErrorCode::RateLimited => "Wait and retry with exponential backoff",
             ErrorCode::Timeout => "The operation timed out. Retry with a smaller batch or narrower query",
+            ErrorCode::Retryable => "The knowledge store is still catching up. Retry the query shortly",
             ErrorCode::Internal => "An unexpected error occurred. Report this if it persists",
             ErrorCode::NotAProgram => "The KOID references an object that is not a program. Use list_programs to find valid programs",
             ErrorCode::CompileError => "The aikoql query has a syntax error. Check the query and retry",
@@ -88,6 +94,8 @@ impl ErrorCode {
             || lower.contains("aikoql1")
         {
             ErrorCode::CompileError
+        } else if lower.contains("retryable") {
+            ErrorCode::Retryable
         } else {
             ErrorCode::Internal
         }
