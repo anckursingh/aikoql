@@ -2973,8 +2973,11 @@ impl Kernel {
 
     /// Point-in-time (transaction-time) read: the version this kernel had
     /// committed as of wall-clock `at_millis`. Packs to the HLC layout
-    /// (`millis << 16 | counter`) so the MVCC `<= snap` comparison selects
-    /// the newest version committed at or before that instant; `Ok(None)`
+    /// (`millis << 16 | counter`) with the counter filled to 0xFFFF, so
+    /// the MVCC `<= snap` comparison selects the newest version committed
+    /// at ANY point during that wall-clock millisecond — a version whose
+    /// packed timestamp carries counter bits (a same-millis sibling commit)
+    /// is still "at" that instant, and trace()/AS_OF round-trips; `Ok(None)`
     /// when the KO did not exist (or was not yet committed) by then.
     pub fn get_as_of(
         &self,
@@ -2983,7 +2986,10 @@ impl Kernel {
         at_millis: u64,
     ) -> KResult<Option<KnowledgeObject>> {
         let ctx = ctx.into();
-        let snap = at_millis.checked_shl(16).unwrap_or(u64::MAX);
+        let snap = at_millis
+            .checked_shl(16)
+            .map(|s| s | 0xFFFF)
+            .unwrap_or(u64::MAX);
         let Some(ko) = self.object_at(koid, snap)? else {
             return Ok(None);
         };

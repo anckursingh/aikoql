@@ -316,6 +316,23 @@ fn as_of_reads_the_version_committed_at_that_instant() {
 }
 
 #[test]
+fn as_of_sees_versions_committed_within_the_same_millisecond() {
+    let (k, _clock, _store) = mk_kernel(); // ManualClock frozen at 10_000
+    // A warmup commit occupies the HLC counter slot 0 of millis 10_000;
+    // the version under test commits in the SAME wall-clock millisecond,
+    // so its packed timestamp carries counter bits (10_000<<16 | c>0).
+    // trace() reports that to clients as wall-clock 10_000 — AS_OF 10_000
+    // must still return the version: the instant spans the millisecond.
+    fact(&k, "alice", "warmup", 0);
+    let id = fact(&k, "alice", "a", 1);
+    let ko = k
+        .get_as_of(Subject::new("alice"), &id, 10_000)
+        .unwrap()
+        .expect("version committed during ms 10_000 must be visible at AS_OF 10_000");
+    assert_eq!(ko.properties.get("a"), Some(&Value::Int(1)));
+}
+
+#[test]
 fn history_enumerates_all_versions_in_commit_order() {
     let (k, clock, _store) = mk_kernel();
     let id = fact(&k, "alice", "a", 1);
