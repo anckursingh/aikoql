@@ -767,6 +767,21 @@ impl Interpreter {
                         }
                         out
                     }
+                    // Device-eval N1: similarity legs (SIMILAR TO / USING
+                    // EMBEDDING) produce Scored rows — projection loads the
+                    // KO each row refers to, so RETURN <field> works over
+                    // both paths.
+                    RowSet::Scored(s) => {
+                        let subj = self
+                            .cached_subject
+                            .clone()
+                            .unwrap_or_else(|| Subject::new("system"));
+                        let mut out = Vec::with_capacity(s.len());
+                        for (koid, ..) in &s {
+                            out.push(kernel.get(KnowledgeContext::new(subj.clone()), koid)?);
+                        }
+                        out
+                    }
                     _ => return Err(KError::InvalidQuery("Project requires Object input".into())),
                 };
                 if fields.contains(&"*".to_string()) {
