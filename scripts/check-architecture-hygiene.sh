@@ -869,6 +869,70 @@ if [ -f "$TRAIN" ] && \
   fail=1
 fi
 
+# workflow test 33 — test_training_packaging (T-29, PR9 §34): the
+# training package is installed, not smuggled in — the pytest
+# pythonpath=src hack in pyproject.toml makes CI tests pass against
+# the source tree instead of the installed package, and any job that
+# runs pytest or a training/scripts entry without
+# `pip install -e training` rides the hack instead of the product.
+if [ -f training/pyproject.toml ] && \
+   grep -qE '^\[tool\.pytest' training/pyproject.toml && \
+   sed -n '/^\[tool\.pytest/,/^\[/p' training/pyproject.toml | grep -q 'pythonpath'; then
+  echo "ARCH: training/pyproject.toml still sets pytest pythonpath=src (PR9 §34)" >&2
+  fail=1
+fi
+if [ -f "$TRAIN" ]; then
+  for _tjob in $(grep -oE '^  [a-z][a-z0-9_-]*:' "$TRAIN" | sed 's/^  //; s/:$//'); do
+    _tblock=$(sed -n "/^  $_tjob:/,/^  [a-z][a-z0-9_-]*:$/p" "$TRAIN")
+    if ! printf '%s\n' "$_tblock" | grep -q 'runs-on:'; then continue; fi
+    if ! printf '%s\n' "$_tblock" | grep -qE 'pip install .*training'; then
+      echo "ARCH: training-data.yml job $_tjob has no pip install -e training (PR9 §34)" >&2
+      fail=1
+    fi
+  done
+fi
+
+# workflow test 34 — test_training_nightly (T-29, PR9 §33): the 10K
+# corpus sweep is a nightly cell, not a PR gate — the integration leg
+# must not carry `--target 10000`, a `nightly` job owns it (plus the
+# artifact upload), guarded by github.event_name so push/PR runs skip
+# it, and the workflow declares a schedule trigger. The fuzz-estate
+# leg runs the WHOLE fuzz estate, not the two files it accreted with.
+if [ -f "$TRAIN" ] && \
+   sed -n '/^  integration:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q -- '--target 10000'; then
+  echo "ARCH: the integration leg still carries the 10K sweep (PR9 §33)" >&2
+  fail=1
+fi
+if [ -f "$TRAIN" ]; then
+  if ! grep -q '^  nightly:' "$TRAIN"; then
+    echo "ARCH: training-data.yml lost the nightly leg (PR9 §33)" >&2
+    fail=1
+  fi
+  _nblock=$(sed -n '/^  nightly:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN")
+  if ! printf '%s\n' "$_nblock" | grep -q -- '--target 10000'; then
+    echo "ARCH: the nightly leg lost the 10K corpus sweep (PR9 §33)" >&2
+    fail=1
+  fi
+  if ! printf '%s\n' "$_nblock" | grep -q 'upload-artifact'; then
+    echo "ARCH: the nightly leg lost the corpus artifact upload (PR9 §33)" >&2
+    fail=1
+  fi
+  if ! printf '%s\n' "$_nblock" | grep -q 'event_name'; then
+    echo "ARCH: the nightly leg is not event-guarded (PR9 §33)" >&2
+    fail=1
+  fi
+  if ! sed -n '/^on:/,/^jobs:/p' "$TRAIN" | grep -q '^  schedule:'; then
+    echo "ARCH: training-data.yml declares no schedule trigger (PR9 §33)" >&2
+    fail=1
+  fi
+  for _fz in test_protocol_fuzz.py test_grounding_fuzz.py; do
+    if ! sed -n '/^  fuzz-estate:/,/^  [a-z][a-z0-9_-]*:$/p' "$TRAIN" | grep -q "$_fz"; then
+      echo "ARCH: the fuzz-estate leg does not run $_fz (PR9 §33)" >&2
+      fail=1
+    fi
+  done
+fi
+
 # workflow test 6 — no column-1 body lines: a block-scalar body at
 # column 1 (embedded code, heredoc leftovers) silently ends the scalar
 # and GitHub rejects the whole workflow file — every run dies at 0s
