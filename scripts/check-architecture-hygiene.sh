@@ -935,6 +935,30 @@ if [ -f "$TRAIN" ]; then
   done
 fi
 
+# workflow test 35 — test_training_import_boundary (T-30, PR9 §35):
+# training code may import only the documented public APIs — the bare
+# `aikoql` top level and `from aikoql import <public name>`; every
+# deeper import (SDK submodules, the native _aikoql module, storage
+# bindings) is private implementation. The boundary file
+# scripts/training-import-boundary.txt is the deny anchor list; the
+# scan fails on any hit, so architectural drift through a private
+# retrieval/compiler import dies here, not in a user deployment.
+TBOUND=scripts/training-import-boundary.txt
+if [ ! -f "$TBOUND" ]; then
+  echo "ARCH: training import boundary file missing (PR9 §35)" >&2
+  fail=1
+else
+  while IFS= read -r _anchor || [ -n "$_anchor" ]; do
+    case "$_anchor" in ''|'#'*) continue ;; esac
+    if _hits=$(grep -rnE "$_anchor" training/src training/scripts \
+               --include='*.py' 2>/dev/null); then
+      echo "ARCH: forbidden training import (PR9 §35, anchor: $_anchor):" >&2
+      echo "$_hits" | sed 's/^/ARCH: /' >&2
+      fail=1
+    fi
+  done < "$TBOUND"
+fi
+
 # workflow test 6 — no column-1 body lines: a block-scalar body at
 # column 1 (embedded code, heredoc leftovers) silently ends the scalar
 # and GitHub rejects the whole workflow file — every run dies at 0s
