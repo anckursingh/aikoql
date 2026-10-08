@@ -41,6 +41,31 @@ fn tmp_db(suffix: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// The local model store for F13's end-to-end pin: `AIKOQL_TEST_MODEL_DIR`
+/// wins, else the platform default (~/.aikoql/models). Returns the models
+/// ROOT (the serve joins the model slug itself) when all-MiniLM-L6-v2 is
+/// installed there; `None` when the pin must skip.
+fn installed_models_root() -> Option<String> {
+    let root = if let Ok(dir) = std::env::var("AIKOQL_TEST_MODEL_DIR") {
+        std::path::PathBuf::from(dir)
+    } else {
+        let home = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from)?;
+        home.join(".aikoql").join("models")
+    };
+    if root
+        .join(aikoql_semantic::provider::model_slug(
+            aikoql_semantic::provider::DEFAULT_MODEL_ID,
+        ))
+        .is_dir()
+    {
+        Some(root.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
 struct McpClient {
     child: Child,
     stdin: std::process::ChildStdin,
@@ -50,6 +75,23 @@ struct McpClient {
 
 impl McpClient {
     fn start(db_path: &str) -> Self {
+        // Pin the harness to the no-provider mode its assertions assume
+        // (CTX-001 pins semantic:false): an installed local model would
+        // start background enrichment, and its version bumps race
+        // CTX-003's pinned update. An empty model dir is deterministically
+        // unavailable on every machine.
+        let model_dir = tmp_db("ctx-model");
+        std::fs::create_dir_all(&model_dir).expect("create empty model dir");
+        Self::start_inner(db_path, Some(&model_dir))
+    }
+
+    /// Serve against a real model store so background enrichment runs
+    /// (F13 pin: the restart's catch-up must enrich, not destroy).
+    fn start_with_model_dir(db_path: &str, model_dir: &str) -> Self {
+        Self::start_inner(db_path, Some(model_dir))
+    }
+
+    fn start_inner(db_path: &str, model_dir: Option<&str>) -> Self {
         // Find binary relative to workspace root.
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -90,18 +132,11 @@ impl McpClient {
         };
         eprintln!("Using binary: {}", bin.display());
         let mut cmd = Command::new(&bin);
-        // Pin the harness to the no-provider mode its assertions assume
-        // (CTX-001 pins semantic:false): an installed local model would
-        // start background enrichment, and its version bumps race
-        // CTX-003's pinned update. An empty model dir is deterministically
-        // unavailable on every machine.
-        let model_dir = tmp_db("ctx-model");
-        std::fs::create_dir_all(&model_dir).expect("create empty model dir");
-        cmd.arg("serve")
-            .arg(db_path)
-            .arg("--model-dir")
-            .arg(&model_dir)
-            .stdin(Stdio::piped())
+        cmd.arg("serve").arg(db_path);
+        if let Some(dir) = model_dir {
+            cmd.arg("--model-dir").arg(dir);
+        }
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit()); // crash output lands in CI logs, not /dev/null
         let mut child = cmd.spawn().expect("start MCP server");
@@ -1612,5 +1647,155 @@ fn batch_ops_inherit_session_identity() {
     assert!(
         got2["result"]["isError"] == true && text2.contains("ACCESS_DENIED"),
         "an explicit op subject must survive injection: {got2}"
+    );
+}
+
+#[test]
+fn replay_relate_through_batch_is_version_idempotent() {
+    // F13: re-applying an identical relate on replay re-versions the source
+    // (device-eval DI-002: 14 d2 edges re-versioned — koid stable, edge set
+    // unchanged, version bumped).
+    let db = tmp_db("relate-replay");
+    let mut c = McpClient::start(&db);
+    c.session_init("device-identity-eval", "acme");
+
+    let mk = |idem: &str, dev: &str| {
+        json!({
+            "op": "remember",
+            "type_name": "device",
+            "properties": {"device_id": dev},
+            "idempotency_key": idem
+        })
+    };
+    let b1 = c.call(
+        "batch",
+        &json!({"operations": [mk("f13-d1", "d1"), mk("f13-d2", "d2")]}),
+    );
+    let d1 = b1["results"][0]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let d2 = b1["results"][1]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let rel = json!({"op": "relate", "from": &d1, "to": &d2, "rel_type": "linked_to"});
+
+    let first = c.call("batch", &json!({"operations": [rel.clone()]}));
+    let v_first = first["results"][0]["result"]["version"].as_u64().unwrap();
+
+    // Replay: the same remember ops (idempotency keys) + the same relate.
+    let replay = c.call(
+        "batch",
+        &json!({"operations": [mk("f13-d1", "d1"), mk("f13-d2", "d2"), rel]}),
+    );
+    let v_replay = replay["results"][2]["result"]["version"].as_u64().unwrap();
+    assert_eq!(
+        v_replay, v_first,
+        "an identical relate replayed through batch must not re-version the source"
+    );
+    let head = c.call("get", &json!({"koid": &d1}));
+    assert_eq!(
+        head["version"],
+        json!(v_first),
+        "the source head must stay at the first relate's version"
+    );
+}
+
+#[test]
+fn serve_restart_catchup_preserves_edges_for_relate_replay() {
+    // F13 end-to-end (the device-eval DI-002 pipeline): run1 remembers and
+    // relates, run2 restarts the serve — the start-up catch-up enriches
+    // every KO, and pre-T-34 enrichment rode the remember-update path,
+    // wiping caller edges between the relate and its replay. The replay
+    // relate then missed the no-op guard and re-versioned the source.
+    // Needs the local embedding model; skips where none is installed.
+    let Some(models_root) = installed_models_root() else {
+        eprintln!("[SKIP] no local embedding model (run `aikoql model install`)");
+        return;
+    };
+    let db = tmp_db("relate-restart");
+    let mk = |idem: &str, dev: &str| {
+        json!({
+            "op": "remember",
+            "type_name": "device",
+            "properties": {"device_id": dev},
+            "idempotency_key": idem
+        })
+    };
+    // Serve A: no enrichment provider (empty model dir) — remember + relate.
+    let (d1, rel) = {
+        let mut a = McpClient::start(&db);
+        a.session_init("device-identity-eval", "acme");
+        let b1 = a.call(
+            "batch",
+            &json!({"operations": [mk("f13e-d1", "d1"), mk("f13e-d2", "d2")]}),
+        );
+        let d1 = b1["results"][0]["result"]["koid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let d2 = b1["results"][1]["result"]["koid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let rel = json!({"op": "relate", "from": &d1, "to": &d2, "rel_type": "linked_to"});
+        a.call("batch", &json!({"operations": [rel.clone()]}));
+        let head = a.call("get", &json!({"koid": &d1}));
+        assert_eq!(
+            head["relationships"].as_array().map(|r| r.len()),
+            Some(1),
+            "serve A must record the relate edge before the restart"
+        );
+        (d1, rel)
+    }; // drop serve A: child killed and waited, the db dir survives
+
+    // Serve B: real model store — start-up catch-up enriches both devices.
+    let mut b = McpClient::start_with_model_dir(&db, &models_root);
+    b.session_init("device-identity-eval", "acme");
+
+    // PRR-3: the enrichment worker flips health to "ready" only after the
+    // catch-up scan completes.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    loop {
+        let h = b.call("health", &json!({}));
+        let state = h["semantic"]["state"].as_str().unwrap_or("initializing");
+        if state == "ready" {
+            break;
+        }
+        if state == "unavailable" {
+            panic!("enrichment unavailable: {}", h["semantic"]["detail"]);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "catch-up enrichment never reached ready"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+
+    // Wipe tooth: enrichment must not have destroyed the caller edge.
+    let head = b.call("get", &json!({"koid": &d1}));
+    assert!(
+        !head["relationships"].as_array().unwrap().is_empty(),
+        "catch-up enrichment wiped the caller-created edge"
+    );
+    let v_head = head["version"].as_u64().unwrap();
+
+    // Replay: the same remember ops (idempotency keys) + the same relate.
+    let replay = b.call(
+        "batch",
+        &json!({"operations": [mk("f13e-d1", "d1"), mk("f13e-d2", "d2"), rel]}),
+    );
+    assert_eq!(
+        replay["results"][2]["result"]["version"].as_u64().unwrap(),
+        v_head,
+        "the replayed relate must no-op after restart catch-up enrichment"
+    );
+    let after = b.call("get", &json!({"koid": &d1}));
+    assert_eq!(after["version"].as_u64().unwrap(), v_head);
+    assert_eq!(
+        after["relationships"].as_array().map(|r| r.len()),
+        Some(1),
+        "the edge set must survive enrichment and replay unchanged"
     );
 }
