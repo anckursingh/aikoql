@@ -2159,3 +2159,35 @@ fn compile_context_skips_semantic_embed_without_stored_embeddings() {
         "no stored embeddings → no embed, no score: {ctx}"
     );
 }
+
+// ── T-45: the default rate limit serves a batch ingest phase ──
+// The device eval throttles at 115 and takes ~130 batch calls per
+// dataset phase against a default-configured server — the 120/min
+// cap denied the tail of every phase. A legitimate batch phase from
+// one principal must fit the default budget.
+
+#[test]
+fn default_rate_limit_serves_a_batch_ingest_phase() {
+    let db = tmp_db("rl-batch");
+    let mut c = McpClient::start(&db);
+    c.session_init("alice", "acme");
+    let started = std::time::Instant::now();
+    for i in 0..130 {
+        let doc = c.call(
+            "remember",
+            &json!({
+                "subject": "alice", "type_name": "note", "tenant": "acme",
+                "properties": {"body": format!("batch note {i}")},
+                "origin": "system"
+            }),
+        );
+        assert!(
+            doc["koid"].is_string(),
+            "remember #{i} must not trip the default rate limit: {doc}"
+        );
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(50),
+        "the batch phase straddled a window rollover — the pin proves nothing"
+    );
+}

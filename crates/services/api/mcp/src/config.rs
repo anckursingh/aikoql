@@ -264,7 +264,11 @@ pub(crate) fn load(
         log_level: "info".into(),
         log_format: "text".into(),
         rate_enabled: true,
-        rate_max_calls_per_minute: 120,
+        // T-45: 120 denied the tail of a legitimate batch phase (~130
+        // tool calls per dataset slice at the device eval's 115/min
+        // throttle). 300 fits a phase with headroom; [rate_limit]
+        // max_calls_per_minute stays the knob for anything stricter.
+        rate_max_calls_per_minute: 300,
         encryption: RuntimeEncryption {
             key_path: "./aikoql.key".into(),
             ..Default::default()

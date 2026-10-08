@@ -93,8 +93,8 @@ def _serve(tcp_tokens):
     os.close(fd)
     os.unlink(db)  # non-existent path -> serve auto-creates aikoql-v2
 
-    # PRR-4: the 120 calls/min default throttles corpus generation
-    # (~150 tool calls per seed slice) — test servers disable it.
+    # T-45: keep corpus seeding (~150 tool calls per slice) clear of the
+    # 300 calls/min default budget — test servers disable the limiter.
     fd, cfg = tempfile.mkstemp(prefix=_PREFIX, suffix=".toml")
     os.close(fd)
     with open(cfg, "w", encoding="utf-8") as f:
