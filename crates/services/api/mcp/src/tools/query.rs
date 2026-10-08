@@ -436,7 +436,8 @@ pub(crate) fn tool_provenance(k: &Kernel, args: &J) -> Result<J, String> {
         for evt in &trace.events {
             md.push_str(&format!(
                 "- `{:?}` @ seq={} commit_ts={}\n",
-                evt.kind, evt.seq,
+                evt.kind,
+                evt.seq,
                 commit_ts_millis(evt.commit_ts)
             ));
         }

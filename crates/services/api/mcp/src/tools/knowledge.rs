@@ -271,7 +271,9 @@ pub(crate) fn tool_forget(k: &Kernel, args: &J) -> Result<J, String> {
             args.get("note").and_then(|n| n.as_str()).map(String::from),
         )
         .map_err(|e| e.to_string())?;
-    Ok(json!({"koid": f.koid.to_hex(), "version": f.version, "commit_ts": commit_ts_millis(f.commit_ts)}))
+    Ok(
+        json!({"koid": f.koid.to_hex(), "version": f.version, "commit_ts": commit_ts_millis(f.commit_ts)}),
+    )
 }
 
 pub(crate) fn tool_evolve(k: &Kernel, args: &J) -> Result<J, String> {

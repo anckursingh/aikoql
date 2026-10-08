@@ -1877,10 +1877,13 @@ fn tool_boundary_emits_plain_epoch_millis_commit_ts() {
             .as_millis() as u64
     };
     let before = now_ms();
-    let res = c.call("remember", &json!({
-        "subject": "admin", "type_name": "Device", "tenant": "acme",
-        "properties": {"mac": "aa:bb:cc:dd:ee:ff"}
-    }));
+    let res = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "Device", "tenant": "acme",
+            "properties": {"mac": "aa:bb:cc:dd:ee:ff"}
+        }),
+    );
     let after = now_ms();
     let koid = res["koid"].as_str().unwrap().to_string();
     let ts = res["commit_ts"]
@@ -1892,9 +1895,7 @@ fn tool_boundary_emits_plain_epoch_millis_commit_ts() {
          window (before={before}, after={after}, ts={ts})"
     );
     let got = c.call("get", &json!({"koid": koid}));
-    let gts = got["commit_ts"]
-        .as_u64()
-        .expect("get must carry commit_ts");
+    let gts = got["commit_ts"].as_u64().expect("get must carry commit_ts");
     assert!(
         gts >= before && gts <= after + 60_000,
         "get commit_ts must be plain epoch millis inside the commit window \
