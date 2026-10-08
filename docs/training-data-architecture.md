@@ -1554,4 +1554,36 @@ moment the lexical contract flips. RED archived as
 `t46-plain-similar-to-lexical-default-undocumented` (exit 1 — the doc
 grep found no §5.1).
 
+## 51. Supersede is one commit instant — device-eval residual 1 (T-47)
+
+The closing eval flagged that supersede writes two journal events
+(successor `Created`, predecessor Superseded) roughly one wall-clock
+instant apart — an `AS_OF` slice between them shows both generations
+of the same link, which is why the eval needed the `commit_ts + 2000`
+headroom.
+
+The kernel now pins one HLC instant for the whole composition:
+`Pipeline.pair_pin` is armed by `supersede()` before the composition
+runs and cleared before the pipe lock releases. While armed,
+`commit_version` reuses the pinned instant instead of allocating, and
+the transition's `valid_to` close time is the pin's millis
+(`ts >> 16`) — so the successor's `Created` event and the
+predecessor's Superseded close land at the same instant, and no
+`AS_OF` slice can observe the successor before the predecessor is
+closed. The dependent sweep stamps at the same instant.
+
+One trap: the pinned section must never write a second version of the
+SAME KO — two versions at one (koid, commit_ts) collide under MVCC.
+The superseded_by evidence append (which re-remembers `req.old`) is
+therefore deliberately outside the pin and gets its own commit
+instant.
+
+Pin: `supersede_is_atomic_at_the_successors_instant` (runtime) drives
+a `TickingClock` whose every `millis()` call advances — a frozen
+`ManualClock` would hide the tear — and asserts that at the
+successor's own commit instant the superseded generation already reads
+absent, and one tick earlier the successor is absent while the old
+generation still reads present. RED archived as
+`t47-supersede-atomic-pair` (exit 101).
+
 
