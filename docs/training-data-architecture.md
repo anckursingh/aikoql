@@ -1404,3 +1404,27 @@ global/organization_policy, asserted → session/source_code (inheritance
 mirrors whatever the replaced claim carried, it never hardcodes
 global). RED archived as `f11-supersede-scope-authority-asymmetry`
 (exit 101, `Some(Session)` vs `Some(Global)`).
+
+## 46. GROUP BY count aggregates are verified-shipped, not broken — MINOR-1 (T-42)
+
+The device eval reported "no GROUP BY count aggregate": `MATCH Employee
+GROUP BY dept, COUNT(*) RETURN *` produced nothing. The aggregate
+pipeline — lexer `Token::Count`, parser `parse_group_by`/`parse_agg_call`
+(COUNT(*) = field None), `IrOp::Aggregate`, the runtime executor
+(`count` for COUNT(*), `func(field)` otherwise; COUNT(*) counts every
+row, COUNT(field) counts non-null; empty input → one count=0 row) — has
+executed since P5-M2. The eval's binary predated T-32: the MCP tool
+layer then ended in a catch-all `_ => vec![]` that silently dropped
+`RowSet::Grouped` rows, so aggregates computed fine and vanished at the
+boundary. T-32's Grouped arm shipped the fix; T-42 lands the missing
+end-to-end pin instead of a redundant fix.
+
+Pin: `query_group_by_count_aggregate_surfaces_through_tool` drives the
+aikoql tool exactly as the eval does — `MATCH Employee GROUP BY dept,
+COUNT(*) RETURN *` returns both dept groups with `properties.count` 2/1,
+and the global `GROUP BY COUNT(*)` returns one row with count 3. RED
+replay: reverting `tools/query.rs` to its pre-T-32 state (commit
+`af273d5^`) reproduces the eval symptom — 0 grouped rows
+(`t42-group-by-count-dropped-at-tool`, exit 101). The estate previously
+had zero aggregate coverage in the MCP test layer; the compiler/runtime
+path alone was pinned, the tool conversion was not.
