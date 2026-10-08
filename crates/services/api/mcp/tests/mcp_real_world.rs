@@ -1799,3 +1799,62 @@ fn serve_restart_catchup_preserves_edges_for_relate_replay() {
         "the edge set must survive enrichment and replay unchanged"
     );
 }
+
+#[test]
+fn query_group_by_count_aggregate_surfaces_through_tool() {
+    // device-eval MINOR-1: "no GROUP BY count aggregate" — the eval's
+    // binary predated T-32 and dropped Grouped rows at the tool layer, so
+    // COUNT(*) looked absent. The compiler/runtime has executed the
+    // aggregate since P5-M2 (count = every row, count(field) = non-null);
+    // this pins the end-to-end tool path the eval drives.
+    let db = tmp_db("cnt");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+    c.session_init("admin", "acme");
+
+    for (name, dept, salary) in [
+        ("Alice Chen", "Engineering", 165_000),
+        ("Bob Ortiz", "Engineering", 152_000),
+        ("Carol Wu", "Sales", 131_000),
+    ] {
+        let _ = c.call(
+            "remember",
+            &json!({
+                "subject": "admin", "type_name": "Employee", "tenant": "acme",
+                "properties": {"name": name, "dept": dept, "salary": salary}
+            }),
+        );
+    }
+
+    // GROUP BY <key>, COUNT(*) — the mixed key/aggregate list.
+    let res = c.call(
+        "aikoql",
+        &json!({"query": "MATCH Employee GROUP BY dept, COUNT(*) RETURN *"}),
+    );
+    let rows = res["results"]
+        .as_array()
+        .expect("grouped rows must surface through the tool");
+    assert_eq!(rows.len(), 2, "two dept groups, got {rows:?}");
+    let eng = rows
+        .iter()
+        .find(|r| r["properties"]["dept"] == "Engineering")
+        .unwrap_or_else(|| panic!("Engineering group missing: {rows:?}"));
+    let sales = rows
+        .iter()
+        .find(|r| r["properties"]["dept"] == "Sales")
+        .unwrap_or_else(|| panic!("Sales group missing: {rows:?}"));
+    assert_eq!(
+        eng["properties"]["count"], json!(2),
+        "COUNT(*) must count every row in the group"
+    );
+    assert_eq!(sales["properties"]["count"], json!(1));
+
+    // Global aggregate (no keys): one row over the whole match set.
+    let res = c.call(
+        "aikoql",
+        &json!({"query": "MATCH Employee GROUP BY COUNT(*) RETURN *"}),
+    );
+    let rows = res["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "one global group, got {rows:?}");
+    assert_eq!(rows[0]["properties"]["count"], json!(3));
+}
