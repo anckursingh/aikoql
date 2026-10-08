@@ -1347,4 +1347,40 @@ asserted start lands on the successor, and the fallback half proves an
 unasserted supersession still stamps commit time. RED archived as
 `f7-successor-valid-from`.
 
+## 44. Relate replay idempotence is the enrichment write path — F13 (T-40)
+
+The eval's F13 break: replaying an identical relate through `tool_batch`
+re-versioned the source — koid stable, edge set unchanged, version
+bumped (DI-002: 14 d2 edges). The graph engine's identical-edge no-op
+guard (`GraphEngine::relate` returns the head version when the edge
+already exists) was always correct. What it missed was the edge set:
+the eval's KB head carried **zero payload relationships** while the
+relationship index still served DI-003 fanout — the edges had been
+wiped, and the replay relate "re-added" them with a version bump.
+
+The wipe is N2 (T-34, `a8ed67c`): pre-fix `enrich_one` rode
+`RememberRequest::update` with only properties + semantic, and the
+update path replaces the relationship set wholesale. Serve-start
+catch-up enrichment therefore destroyed every caller-created edge
+between run1's relate and run2's replay — the eval's binary predates
+the T-34 fix, which replaced that path with `attach_semantic` (mutates
+ONLY the semantic field; the commit carries `prev_rels =
+head.relationships`). F13 is thus N2 downstream: no new production
+code. T-40's deliverable is the end-to-end pin the estate lacked.
+
+Pins: `serve_restart_catchup_preserves_edges_for_relate_replay` — the
+eval pipeline verbatim: serve A (no enrichment provider) remembers and
+relates; serve B restarts on the same KB with the local model, and the
+PRR-3 catch-up flips health to `ready` only after the scan; the pin
+asserts the edge survives enrichment, then replays the batch
+(remember ops with the same idempotency keys + the relate) and asserts
+the version and edge set are unchanged. `replay_relate_through_batch_is_version_idempotent`
+covers the same tooth without a model. The restart pin needs the local
+embedding model — it skips (`[SKIP]`) where none is installed and
+takes `AIKOQL_TEST_MODEL_DIR` to override the store; a model that is
+installed but broken fails the pin loudly (health reports
+`unavailable`). RED archived as `f13-restart-enrichment-wipes-edges`
+(exit 101, the wipe tooth: "catch-up enrichment wiped the
+caller-created edge").
+
 
