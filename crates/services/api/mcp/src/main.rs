@@ -329,6 +329,16 @@ fn main() {
                 } else {
                     match aikoql_semantic::provider::CandleEmbedding::from_local(&candle_dir) {
                         Ok(p) => {
+                            // Test park hook (P5-M11 pattern): arm the Nth
+                            // embed to hold the model lock — deterministic
+                            // contention for the bounded compile_context pin.
+                            let p = match std::env::var("AIKOQL_EMBED_PARK_AT")
+                                .ok()
+                                .and_then(|v| v.parse::<usize>().ok())
+                            {
+                                Some(n) => p.with_park_at(n),
+                                None => p,
+                            };
                             set_semantic_status(
                                 "initializing",
                                 "local model loaded; background enrichment running",

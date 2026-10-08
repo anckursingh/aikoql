@@ -24,7 +24,6 @@ pub(crate) fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Resul
         .unwrap_or(2000) as usize;
 
     let ir = get_ir_for_koid(k, args, db_path)?;
-
     // v0.3 K5: append matched agent experiences — prior runs the caller is
     // allowed to read, gated by reuse conditions and ranked by confidence.
     // Bounded by `limit`; the IR budget governs the core package.
@@ -35,18 +34,35 @@ pub(crate) fn tool_compile_context(k: &Kernel, args: &J, db_path: &str) -> Resul
     let experiences = k
         .match_experiences(subject_of(args), task, 5)
         .map_err(|e| e.to_string())?;
-
     // Semantic scores: embed the task and score every stored entity
     // embedding against it. Falls back to lexical-only when no provider
     // is wired or the snapshot predates embedding support. semantic_ran
     // makes the fallback detectable in the response (§36: a disabled
     // index must not be silently absorbed).
-    let (semantic, semantic_ran) = match k.embed_text(task, None) {
-        Ok(task_emb) if !task_emb.is_empty() => match semantic_scores(k, args, &task_emb) {
-            Some(scores) => (Some(scores), true),
-            None => (None, false),
-        },
-        _ => (None, false),
+    //
+    // T-44: only snapshots carrying entity_embeddings have anything to
+    // score the task against — remember'd snapshots during catch-up never
+    // do (ingest alone writes them). Skip the embed otherwise: a scalar-CPU
+    // forward pass (~seconds) inside the caller's socket budget is pure
+    // waste (device-eval: embed ran, scored nothing, client timed out).
+    let semantic_possible = KOID::from_hex(hex)
+        .ok()
+        .and_then(|koid| k.get(KnowledgeContext::from(subject_of(args)), &koid).ok())
+        .and_then(|ko| match ko.properties.get("entity_embeddings") {
+            Some(Value::Text(t)) if !t.is_empty() => Some(()),
+            _ => None,
+        })
+        .is_some();
+    let (semantic, semantic_ran) = if semantic_possible {
+        match k.embed_text(task, None) {
+            Ok(task_emb) if !task_emb.is_empty() => match semantic_scores(k, args, &task_emb) {
+                Some(scores) => (Some(scores), true),
+                None => (None, false),
+            },
+            _ => (None, false),
+        }
+    } else {
+        (None, false)
     };
 
     // Compile context package — cached per (task, budget, knowledge hash,

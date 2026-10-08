@@ -163,7 +163,24 @@ impl SchedulerJob for SemanticEngine {
                                 provider: provider.clone(),
                                 inner: inner.clone(),
                             };
-                            if engine.enrich_one(&k, &ko).is_ok() {
+                            // T-44: a query's embed can hold the model for one
+                            // forward pass (try_lock fail-fast). Retry in place
+                            // — a dropped event silently leaves the KO
+                            // unenriched forever.
+                            let mut enriched = false;
+                            for _ in 0..40 {
+                                match engine.enrich_one(&k, &ko) {
+                                    Ok(()) => {
+                                        enriched = true;
+                                        break;
+                                    }
+                                    Err(KError::Retryable(_)) => {
+                                        std::thread::sleep(Duration::from_millis(250));
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                            if enriched {
                                 inner.water.store(ke.seq, Ordering::Relaxed);
                             }
                         }
