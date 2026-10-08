@@ -246,7 +246,9 @@ server:
 
 1. **trace `commit_ts` is the PACKED HLC** (`kernel.rs` `Hlc::now`:
    `(millis << 16) | counter`) — decode with `commit_ts >> 16` before
-   feeding AS_OF, which wants plain epoch millis.
+   feeding AS_OF, which wants plain epoch millis. (Since T-43 the MCP
+   boundary itself emits plain epoch millis — §47 — and consumers no
+   longer shift.)
 2. **Evidence confidence is f32** — the kernel stores `Evidence`
    confidence as f32, so 0.9 round-trips as 0.8999999761581421 and
    breaks canonical evidence identity; fixtures use f32-exact values
@@ -1150,7 +1152,9 @@ grouped-row pin). RED archived as `t-32a-numeric-promotion` and
 
 PR #9 CI failed corpus generation since Oct 4 with a `StopIteration`
 in `generate_corpus.py::_history`: the per-version snapshot re-reads
-each version through `MATCH service AS_OF (commit_ts >> 16) RETURN *`
+each version through `MATCH service AS_OF (commit_ts) RETURN *` (the
+generator shifted `>> 16` before T-43; the boundary now emits plain
+millis, §47)
 and the target koid was absent from the results. Root cause sits in
 the packed-HLC round-trip, not the generator: the HLC packs
 `(millis << 16) | counter`, and a commit that shares its millisecond
@@ -1428,3 +1432,33 @@ replay: reverting `tools/query.rs` to its pre-T-32 state (commit
 (`t42-group-by-count-dropped-at-tool`, exit 101). The estate previously
 had zero aggregate coverage in the MCP test layer; the compiler/runtime
 path alone was pinned, the tool conversion was not.
+
+## 47. commit_ts at the boundary is plain epoch millis — MINOR-2 (T-43)
+
+The HLC packs `epoch_ms << 16 | counter` (kernel-internal ordering
+guarantee), and until T-43 every tool response emitted that packed
+value: a client doing AS_OF/validity math had to shift right 16 — and
+the shift leaked the kernel's clock encoding into every consumer (the
+training pipeline carried `ms(v) = v["commit_ts"] >> 16` in two
+places). The boundary now decodes once: `commit_ts_millis` (helpers.rs)
+wraps every MCP response site — all knowledge-tool responses,
+`ko_json`/`ke_json` (the get/events shapes), trace versions +
+event_refs + the provenance text, txn results, the audit report, the
+REST create endpoint, and ingest status. The counter never crosses the
+API; kernel-internal math (memory TTL expiry) keeps using the packed
+value.
+
+Consumers updated in the same milestone: `generate_corpus.py` and
+`test_temporal.py` pass `v["commit_ts"]` straight into AS_OF (the
+comment flipping from "trace returns the PACKED HLC" to "plain epoch
+millis since T-43"). SDKs are pure pass-through serializers — no
+change.
+
+Pin: `tool_boundary_emits_plain_epoch_millis_commit_ts` — remember and
+get responses must land inside the wall-clock window bracketing the
+call (the packed hybrid is ~65k× larger and fails the window
+instantly). RED archived as `t43-commit-ts-hybrid-leaks-through-tool`
+(exit 101, ts=117405026041331712 vs window 1791458527241..). Note:
+training live tests that hang in `compile_context` predate T-43 (the
+corpus probe fails identically at the pre-T-43 head) — a separate
+regression, not this milestone.
