@@ -1528,4 +1528,30 @@ batch must finish within 50s of the first call). RED archived as
 `t45-default-rate-limit-blocks-batch-phase` (exit 101, call 121
 denied).
 
+## 50. Plain SIMILAR TO is lexical by default — MINOR-4 (T-46)
+
+The eval report asked either to default plain `SIMILAR TO` to hybrid
+(RRF) or to document loudly. A hybrid default would re-rank every
+historical result set — the plan's backward-compat promise keeps plain
+`SIMILAR TO` deterministic Jaccard text matching, and Stage-5
+cost-based hybrid planning is deferred post-1.0. So this is the
+document-loudly branch.
+
+MRFC-0010 §5.1 now pins the four modes: plain = lexical Jaccard (the
+deterministic default, embeddings ignored even when present); `SCORE
+BM25` = Tantivy BM25 with the Jaccard fallback; `USING EMBEDDING` =
+vector; both = hybrid fusion via `FUSE` (RRF or Weighted). Semantic
+similarity requires the explicit `USING EMBEDDING` clause, and asking
+for it without embeddings in the store fails retryable rather than
+silently answering text-side (device-eval N4, arch §39).
+
+Pin: `plain_similar_to_stays_lexical_when_embeddings_exist` plants two
+stored notes — A text-matches the query but carries a distant stored
+vector, B has zero text overlap but carries a vector equal to the
+query — and asserts the plain `SIMILAR TO` plan ranks A first. A
+vector or hybrid default would rank B first, so the pin fails the
+moment the lexical contract flips. RED archived as
+`t46-plain-similar-to-lexical-default-undocumented` (exit 1 — the doc
+grep found no §5.1).
+
 
