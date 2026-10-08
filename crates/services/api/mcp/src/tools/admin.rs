@@ -1,6 +1,7 @@
 //! MCP tool implementations — extracted from main.rs (R7 modularization).
 //! No behavior changes.
 
+use crate::helpers::commit_ts_millis;
 use crate::{json, Kernel, LifecycleState, Ordering, Subject, ACTIVE_CONNECTIONS, J, SERVER_START};
 
 // ---------------------------------------------------------------------------
@@ -322,7 +323,7 @@ pub(crate) fn tool_audit_report(k: &Kernel) -> Result<J, String> {
     let by_state: Vec<J> = heads
         .iter()
         .map(|(koid, v, ts, state)| {
-            json!({"koid": koid.to_hex(), "version": v, "commit_ts": ts, "state": state.to_string()})
+            json!({"koid": koid.to_hex(), "version": v, "commit_ts": commit_ts_millis(*ts), "state": state.to_string()})
         })
         .collect();
     let events = k.journal().map_err(|e| e.to_string())?;

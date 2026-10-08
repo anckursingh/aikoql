@@ -52,7 +52,7 @@ pub(crate) fn tool_aikoql(k: &Kernel, args: &J) -> Result<J, String> {
             })
             .map_err(|e| e.to_string())?;
         return Ok(
-            json!({"koid": r.koid.to_hex(), "version": r.version, "commit_ts": r.commit_ts}),
+            json!({"koid": r.koid.to_hex(), "version": r.version, "commit_ts": commit_ts_millis(r.commit_ts)}),
         );
     }
 
@@ -348,7 +348,7 @@ pub(crate) fn tool_trace(k: &Kernel, args: &J) -> Result<J, String> {
         "koid": lin.koid.to_hex(),
         "versions": lin.versions.iter().map(|v| json!({
             "version": v.version,
-            "commit_ts": v.commit_ts,
+            "commit_ts": commit_ts_millis(v.commit_ts),
             "state": v.state.to_string()
         })).collect::<Vec<_>>(),
         "events": lin.events.iter().map(ke_json).collect::<Vec<_>>(),
@@ -395,7 +395,7 @@ pub(crate) fn tool_explain(k: &Kernel, args: &J) -> Result<J, String> {
         "confidence": ex.confidence,
         "verified": ex.verified,
         "evidence": ex.evidence.iter().map(|(t, id)| json!({"rel_type": t, "target": id.to_hex()})).collect::<Vec<_>>(),
-        "event_refs": ex.event_refs.iter().map(|e| json!({"seq": e.seq, "commit_ts": e.commit_ts})).collect::<Vec<_>>()
+        "event_refs": ex.event_refs.iter().map(|e| json!({"seq": e.seq, "commit_ts": commit_ts_millis(e.commit_ts)})).collect::<Vec<_>>()
     }))
 }
 
@@ -436,7 +436,8 @@ pub(crate) fn tool_provenance(k: &Kernel, args: &J) -> Result<J, String> {
         for evt in &trace.events {
             md.push_str(&format!(
                 "- `{:?}` @ seq={} commit_ts={}\n",
-                evt.kind, evt.seq, evt.commit_ts
+                evt.kind, evt.seq,
+                commit_ts_millis(evt.commit_ts)
             ));
         }
     }

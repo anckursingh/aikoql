@@ -34,7 +34,7 @@ pub(crate) fn tool_relate(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 
@@ -186,7 +186,7 @@ pub(crate) fn tool_remember(k: &Kernel, args: &J) -> Result<J, String> {
     let mut resp = json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     });
     if embed_requested {
         resp["embed"] = json!({
@@ -271,7 +271,7 @@ pub(crate) fn tool_forget(k: &Kernel, args: &J) -> Result<J, String> {
             args.get("note").and_then(|n| n.as_str()).map(String::from),
         )
         .map_err(|e| e.to_string())?;
-    Ok(json!({"koid": f.koid.to_hex(), "version": f.version, "commit_ts": f.commit_ts}))
+    Ok(json!({"koid": f.koid.to_hex(), "version": f.version, "commit_ts": commit_ts_millis(f.commit_ts)}))
 }
 
 pub(crate) fn tool_evolve(k: &Kernel, args: &J) -> Result<J, String> {
@@ -288,7 +288,7 @@ pub(crate) fn tool_evolve(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": e.koid.to_hex(),
         "version": e.version,
-        "commit_ts": e.commit_ts,
+        "commit_ts": commit_ts_millis(e.commit_ts),
         "state": e.state.to_string()
     }))
 }
@@ -343,7 +343,7 @@ pub(crate) fn tool_derive(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 
@@ -373,7 +373,7 @@ pub(crate) fn tool_observe(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 
@@ -395,7 +395,7 @@ pub(crate) fn tool_assert_knowledge(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 
@@ -411,7 +411,7 @@ pub(crate) fn tool_verify_knowledge(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts,
+        "commit_ts": commit_ts_millis(r.commit_ts),
         "status": r.status.as_str(),
         "confirmations": r.confirmations,
         "last_verified": r.last_verified
@@ -537,7 +537,7 @@ pub(crate) fn tool_merge(k: &Kernel, args: &J) -> Result<J, String> {
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 
@@ -720,7 +720,7 @@ pub(crate) fn tool_record_experience(k: &Kernel, args: &J) -> Result<J, String> 
     Ok(json!({
         "koid": r.koid.to_hex(),
         "version": r.version,
-        "commit_ts": r.commit_ts
+        "commit_ts": commit_ts_millis(r.commit_ts)
     }))
 }
 

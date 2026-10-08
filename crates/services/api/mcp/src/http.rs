@@ -566,7 +566,7 @@ pub(crate) fn aikoql_endpoint(
             })
             .map_err(|e| e.to_string())?;
         return Ok(
-            json!({"created": r.koid.to_hex(), "version": r.version, "commit_ts": r.commit_ts})
+            json!({"created": r.koid.to_hex(), "version": r.version, "commit_ts": commit_ts_millis(r.commit_ts)})
                 .to_string(),
         );
     }

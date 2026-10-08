@@ -253,10 +253,10 @@ def test_live_temporal_versions_over_the_wire(mcp_server):
         versions = db._backend.trace(koid)["versions"]
         assert len(versions) == 2
 
-        # trace's commit_ts is the PACKED HLC ((millis << 16) | counter,
-        # kernel.rs); the AS_OF grammar wants plain epoch millis
+        # trace's commit_ts is plain epoch millis since T-43 (the MCP
+        # boundary decodes the packed HLC); AS_OF takes millis directly
         def ms(v):
-            return v["commit_ts"] >> 16
+            return v["commit_ts"]
 
         def snapshot(commit_ts):
             rows = db.aikoql(

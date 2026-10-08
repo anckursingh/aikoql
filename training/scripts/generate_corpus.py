@@ -105,12 +105,13 @@ def _remember_doc(db, ir: Dict[str, Any]) -> str:
 
 
 def _history(db, koid: str) -> Dict[str, Any]:
-    """The T-08 live shape: trace versions with the packed HLC decoded
-    (>> 16) and each version's snapshot re-read through AS_OF."""
+    """The T-08 live shape: trace versions with the commit_ts the MCP
+    boundary emits (plain epoch millis since T-43) and each version's
+    snapshot re-read through AS_OF."""
     versions = db._backend.trace(koid)["versions"]
 
     def ms(v):
-        return v["commit_ts"] >> 16
+        return v["commit_ts"]
 
     def snapshot(commit_ts):
         rows = db.aikoql(
