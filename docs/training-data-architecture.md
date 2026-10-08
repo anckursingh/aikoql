@@ -1462,3 +1462,47 @@ instantly). RED archived as `t43-commit-ts-hybrid-leaks-through-tool`
 training live tests that hang in `compile_context` predate T-43 (the
 corpus probe fails identically at the pre-T-43 head) — a separate
 regression, not this milestone.
+
+## 48. compile_context never queues behind the enrichment worker — T-44
+
+Fourteen training live tests hang in `compile_context`, and the root
+cause is a latency race, not a correctness bug: on a laptop, one
+miniLM-L6-v2 CPU forward pass takes ~3s, and the enrichment worker
+holds the model mutex for one forward per stored KO during catch-up. A
+compile request arriving mid-catch-up spent ~3s queueing on the mutex
+plus ~3s in its own forward — past the training client's 5s socket
+timeout, so the client hung while the server eventually answered.
+Worse, the embed was pure waste: `entity_embeddings` is written only by
+the ingest path, so remembered snapshots (the corpus shape) have
+nothing to score the task against — the leg ran and returned
+`semantic_ran=false` anyway.
+
+The fix is two guards plus one retry:
+
+- **Skip the embed when scoring is impossible.** Before embedding the
+  task, the tool checks the snapshot for a non-empty `entity_embeddings`
+  property; absent it, the semantic leg degrades to lexical with no
+  forward pass at all (the cache in `semantic_scores` makes the check
+  sufficient: an entry exists only for snapshots that had the
+  property).
+- **Fail fast on contention.** `CandleEmbedding::embed` `try_lock`s
+  the model and returns `KError::Retryable("embedding model busy")` on
+  a held lock; `tool_compile_context`'s existing fallback arm turns
+  that into `semantic_ran=false` instead of queueing.
+- **The worker retries in place.** The enrichment live loop no longer
+  drops an event whose `enrich_one` hit Retryable (the reverse race: a
+  query's forward holds the lock for ~3s) — it retries every 250ms for
+  up to 10s, so a concurrent query can no longer silently starve a KO
+  of its enrichment.
+
+Pins (MCP real-world, skip-gated on an installed local model like
+F13): a park hook (`AIKOQL_EMBED_PARK_AT`/`_MARKER`) makes the
+worker's Nth embed hold the model lock deterministically —
+`compile_context_stays_bounded_while_enrichment_holds_the_model` (park
+during the snapshot's own enrichment, bounded 2s response, lexical
+package survives), `compile_context_fails_fast_when_model_busy_with_stored_embeddings`
+(second embed parked, snapshot with embeddings, embed fails fast) and
+`compile_context_skips_semantic_embed_without_stored_embeddings`
+(unparked, bounded 1s, guard-A tooth). RED archived as
+`t44-compile-context-latency` (exit 101, all three bounds exceeded).
+
