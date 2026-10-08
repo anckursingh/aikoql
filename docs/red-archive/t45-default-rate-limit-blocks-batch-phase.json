@@ -1,0 +1,8 @@
+{
+  "id": "t45-default-rate-limit-blocks-batch-phase",
+  "pre_fix_commit": "69ee77b",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world default_rate_limit_serves_a_batch_ingest_phase",
+  "captured_at": "2026-10-08T13:09:49Z",
+  "captured_head": "def932ebee9a16699fc35d88d9f22aa219581a5e",
+  "exit_code": 101
+}
