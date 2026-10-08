@@ -1686,6 +1686,75 @@ mod tests {
     }
 
     #[test]
+    fn plain_similar_to_stays_lexical_when_embeddings_exist() {
+        let k = mk();
+        let alice = Subject::new("alice");
+
+        // A: text-matches the query, but its stored vector is far from it.
+        let mut pa = PropertyMap::new();
+        pa.insert("body".into(), Value::Text("cats are wonderful".into()));
+        let koid_a = create_ko(
+            &k,
+            &alice,
+            "note",
+            pa,
+            Some(SemanticBlock {
+                embedding: Some(vec![0.1; 128]),
+                embedding_model: Some("test-model".into()),
+                summary: Some("about cats".into()),
+                confidence: None,
+                source: None,
+            }),
+        );
+
+        // B: zero text overlap, but its stored vector equals the query
+        // vector — a hybrid/vector default would rank B first.
+        let mut pb = PropertyMap::new();
+        pb.insert("body".into(), Value::Text("unrelated fish".into()));
+        let _koid_b = create_ko(
+            &k,
+            &alice,
+            "note",
+            pb,
+            Some(SemanticBlock {
+                embedding: Some(vec![0.5; 128]),
+                embedding_model: Some("test-model".into()),
+                summary: Some("about fish".into()),
+                confidence: None,
+                source: None,
+            }),
+        );
+
+        // Plain SIMILAR TO (no USING EMBEDDING) is lexical by contract —
+        // deterministic Jaccard, embeddings ignored even when present.
+        let plan = IrPlan::new(vec![
+            IrOp::Scan {
+                type_name: "note".into(),
+                subject: "alice".into(),
+                roles: vec![],
+                tenant: None,
+            },
+            IrOp::TextSearch {
+                query: "cats are great".into(),
+                k: 5,
+                scoring: None,
+            },
+        ]);
+
+        let result = Interpreter::execute(&k, &plan).unwrap();
+        match result {
+            RowSet::Scored(scored) => {
+                assert!(!scored.is_empty(), "plain SIMILAR TO should return results");
+                assert_eq!(
+                    scored[0].0, koid_a,
+                    "plain SIMILAR TO must rank by text (Jaccard), not by stored vectors"
+                );
+            }
+            _ => panic!("expected Scored"),
+        }
+    }
+
+    #[test]
     fn ann_search_with_provider_uses_real_embedding() {
         use aikoql_semantic::provider::MockEmbeddingProvider;
         use std::sync::Arc;
