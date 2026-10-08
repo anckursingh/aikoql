@@ -223,6 +223,10 @@ pub struct SupersedeRequest {
     /// old claim (it backs the supersession decision), and the dependent
     /// sweep runs. The successor must exist, be readable, and be current.
     pub superseded_by: Option<KOID>,
+    /// Asserted validity start of the successor (the observation/evidence
+    /// instant). When set, a fresh successor's valid_from is this instant;
+    /// when absent, it falls back to commit time (F7).
+    pub observed_at_ms: Option<u64>,
 }
 
 impl SupersedeRequest {
@@ -240,6 +244,7 @@ impl SupersedeRequest {
             reason: None,
             note: None,
             superseded_by: None,
+            observed_at_ms: None,
         }
     }
 }
@@ -1005,7 +1010,10 @@ impl Kernel {
                 );
                 ext.insert(
                     KnowledgeObject::EXT_VALID_FROM.into(),
-                    Value::Int(at as i64),
+                    // F7: the successor asserts validity from the observed
+                    // instant when the caller provides one — commit time is
+                    // only the fallback.
+                    Value::Int(req.observed_at_ms.unwrap_or(at) as i64),
                 );
                 self.remember_locked(
                     &mut pipe,

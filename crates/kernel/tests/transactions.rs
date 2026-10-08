@@ -388,6 +388,38 @@ fn supersede_transitions_old_and_stamps_dependents() {
 }
 
 #[test]
+fn supersede_stamps_successor_valid_from_from_asserted_start() {
+    // F7: the successor's valid_from is the commit instant, not the
+    // asserted validity start the supersession carries.
+    let (k, clock, _store) = mk_kernel();
+    let a = assert_k(&k, "alice", "env", 1, "source_code");
+    clock.set(20_000);
+    let mut sr = SupersedeRequest::new(Subject::new("alice"), a, "fact");
+    sr.properties.insert("env".into(), Value::Int(2));
+    sr.evidence = vec![ev("device-scan-at-15k")];
+    sr.observed_at_ms = Some(15_000);
+    sr.reason = Some("re-observed".into());
+    let res = k.supersede(sr).unwrap();
+    let new = k.get(Subject::new("alice"), &res.new).unwrap();
+    // The successor asserts the state observed at T=15_000 — the
+    // supersession commits at 20_000, but the successor's validity must
+    // start at the asserted instant.
+    assert_eq!(
+        new.valid_from(),
+        Some(15_000),
+        "successor valid_from must be the asserted validity start"
+    );
+    // Fallback: without an asserted start, commit time (as before).
+    let b = assert_k(&k, "alice", "env", 3, "source_code");
+    let mut sr2 = SupersedeRequest::new(Subject::new("alice"), b, "fact");
+    sr2.properties.insert("env".into(), Value::Int(4));
+    sr2.evidence = vec![ev("run-2")];
+    let res2 = k.supersede(sr2).unwrap();
+    let new2 = k.get(Subject::new("alice"), &res2.new).unwrap();
+    assert_eq!(new2.valid_from(), Some(20_000));
+}
+
+#[test]
 fn supersede_rejects_already_superseded() {
     let (k, _clock, _store) = mk_kernel();
     let a = assert_k(&k, "alice", "env", 1, "source_code");

@@ -471,6 +471,7 @@ pub(crate) fn tool_supersede(k: &Kernel, args: &J) -> Result<J, String> {
     req.superseded_by = superseded_by;
     req.properties = parse_properties(args)?;
     req.evidence = parse_evidence(args)?;
+    req.observed_at_ms = args.get("observed_at_ms").and_then(|v| v.as_u64());
     req.reason = args
         .get("reason")
         .and_then(|r| r.as_str())
