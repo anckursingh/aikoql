@@ -604,6 +604,11 @@ pub use crate::knowledge::notify::{EventFilter, SubscriptionRecord};
 pub(crate) struct Pipeline {
     seq: u64,
     audit: [u8; 32],
+    /// T-47 atomic-pair pin: while set, every commit in this pipe reuses the
+    /// pinned instant so a composite op's events share one commit time.
+    /// Armed and cleared by the wrapping op before the lock releases —
+    /// never observable outside it.
+    pair_pin: Option<u64>,
 }
 
 pub struct Kernel {
@@ -717,7 +722,11 @@ impl Kernel {
             clock,
             hlc: Arc::new(Hlc::starting_at(last_ts)),
             idgen: Arc::new(Mutex::new(IdGen::new(id_seed))),
-            pipe: Arc::new(Mutex::new(Pipeline { seq, audit })),
+            pipe: Arc::new(Mutex::new(Pipeline {
+                seq,
+                audit,
+                pair_pin: None,
+            })),
             events: Arc::new(Mutex::new(events)),
             auth: Arc::new(RwLock::new(auth)),
             indexes: Arc::new(RwLock::new(Some(IndexCoordinator::new()))),
@@ -1370,7 +1379,11 @@ impl Kernel {
         prev_rels: Option<&[RelationshipRef]>,
     ) -> KResult<(u64, u64)> {
         ko.validate()?;
-        let commit_ts = self.hlc.now(self.clock.as_ref());
+        // T-47: a composite op may pin one instant for all its events —
+        // the pin is armed only around that op's own commits.
+        let commit_ts = pipe
+            .pair_pin
+            .unwrap_or_else(|| self.hlc.now(self.clock.as_ref()));
         let seq = pipe.seq + 1;
         ko.commit_ts = commit_ts;
         ko.event_refs.push(EventRef {
@@ -2773,7 +2786,12 @@ impl Kernel {
                 found: cur_v,
             });
         }
-        let at = self.clock.millis();
+        // T-47: under an atomic-pair pin the close instant is the pair's
+        // instant, not the wall clock — successor and supersession share it.
+        let at = pipe
+            .pair_pin
+            .map(|ts| ts >> 16)
+            .unwrap_or_else(|| self.clock.millis());
         let mut ko = head.clone();
         ko.version = cur_v + 1;
         ko.set_epistemic_status(to);

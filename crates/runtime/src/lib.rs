@@ -1189,12 +1189,33 @@ mod tests {
     use super::*;
     use aikoql_kernel::{
         Clock, DeriveRequest, Evidence, EvidenceMethod, ManualClock, MemoryEngine, Metadata,
-        RememberRequest, SemanticBlock,
+        RememberRequest, SemanticBlock, SupersedeRequest,
     };
     use std::sync::Arc;
 
     fn mk() -> Kernel {
         let clock = Arc::new(ManualClock::new(20_000));
+        Kernel::open(Arc::new(MemoryEngine::new()), clock, 0xCAFE).unwrap()
+    }
+
+    /// Auto-advancing clock: models the real wall clock moving between the
+    /// two events of one supersede call (unlike ManualClock, which freezes
+    /// and would hide the tear the pin must catch).
+    struct TickingClock {
+        now: std::sync::Mutex<u64>,
+    }
+    impl Clock for TickingClock {
+        fn millis(&self) -> u64 {
+            let mut n = self.now.lock().unwrap();
+            *n += 1;
+            *n
+        }
+    }
+
+    fn mk_ticking() -> Kernel {
+        let clock = Arc::new(TickingClock {
+            now: std::sync::Mutex::new(20_000),
+        });
         Kernel::open(Arc::new(MemoryEngine::new()), clock, 0xCAFE).unwrap()
     }
 
@@ -1752,6 +1773,53 @@ mod tests {
             }
             _ => panic!("expected Scored"),
         }
+    }
+
+    #[test]
+    fn supersede_is_atomic_at_the_successors_instant() {
+        let k = mk_ticking();
+        let alice = Subject::new("alice");
+
+        let mut p1 = PropertyMap::new();
+        p1.insert("generation".into(), Value::Int(1));
+        let old = create_ko(&k, &alice, "identity_link", p1, None);
+
+        let mut p2 = PropertyMap::new();
+        p2.insert("generation".into(), Value::Int(2));
+        let res = k
+            .supersede(SupersedeRequest {
+                context: (&alice).into(),
+                old,
+                type_name: "identity_link".into(),
+                properties: p2,
+                evidence: vec![Evidence {
+                    source_artifact: "datasets/d1/links.csv".into(),
+                    location: Some("lnk_d11".into()),
+                    revision: None,
+                    method: EvidenceMethod::RuntimeObservation,
+                    confidence: 0.99,
+                }],
+                reason: None,
+                note: None,
+                superseded_by: None,
+                observed_at_ms: Some(20_000),
+            })
+            .unwrap();
+
+        // The successor's own commit instant is the pivot: at that instant
+        // the predecessor must already be closed — no AS_OF slice may show
+        // both generations of the same link (device-eval residual 1).
+        let at = k.get(&alice, &res.new).unwrap().commit_ts >> 16;
+        assert!(
+            k.get_as_of(&alice, &res.old, at).unwrap().is_none(),
+            "superseded generation still visible at the successor's instant"
+        );
+        assert!(k.get_as_of(&alice, &res.new, at).unwrap().is_some());
+
+        // One tick before: the old world only — the successor's Created
+        // event must not precede its own instant.
+        assert!(k.get_as_of(&alice, &res.old, at - 1).unwrap().is_some());
+        assert!(k.get_as_of(&alice, &res.new, at - 1).unwrap().is_none());
     }
 
     #[test]

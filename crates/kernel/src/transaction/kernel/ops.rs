@@ -978,6 +978,58 @@ impl Kernel {
         require_evidence(&req.evidence)?;
         let ctx = req.context.clone();
         let mut pipe = self.pipe.lock().unwrap();
+        // T-47: pin one HLC instant for the whole composition — the
+        // successor's Created event and the predecessor's Superseded
+        // transition share a commit time, so no AS_OF slice can show both
+        // generations of the same link (device-eval residual 1).
+        pipe.pair_pin = Some(self.snapshot_now());
+        let result = self.supersede_composition(&ctx, &req, &mut pipe);
+        pipe.pair_pin = None;
+        let result = result?;
+        // superseded_by path: the evidence backs the supersession decision
+        // itself — append it to the old claim so it is never silently dropped
+        // (review P0-1: evidence cannot disappear on a semantic op). Runs
+        // OUTSIDE the pinned instant: a second version of the old KO at the
+        // pair's commit_ts would collide with the transition under MVCC.
+        if req.superseded_by.is_some() {
+            let reason = req
+                .reason
+                .clone()
+                .unwrap_or_else(|| format!("superseded by {}", result.new.to_hex()));
+            let new_head = self
+                .head_object(&req.old)?
+                .ok_or(KError::NotFound(req.old))?;
+            let mut extensions = new_head.extensions.clone();
+            append_evidence(&mut extensions, &req.evidence);
+            let rr = RememberRequest {
+                context: ctx.clone(),
+                koid: Some(req.old),
+                expected_version: Some(new_head.version),
+                idempotency_key: None,
+                metadata: new_head.metadata.clone(),
+                properties: new_head.properties.clone(),
+                semantic: None,
+                relationships: new_head.relationships.clone(),
+                security: None,
+                extensions,
+                origin: Origin::System,
+                note: Some(reason),
+                referential_policy: ReferentialPolicy::default(),
+            };
+            self.remember_locked(&mut pipe, &rr)?;
+        }
+        Ok(result)
+    }
+
+    /// supersede() with the atomic-pair pin armed and the pipe lock held:
+    /// fresh-successor creation (or named-successor validation) +
+    /// supersession transition + dependent sweep, all at one commit instant.
+    fn supersede_composition(
+        &self,
+        ctx: &KnowledgeContext,
+        req: &SupersedeRequest,
+        pipe: &mut Pipeline,
+    ) -> KResult<SupersedeResult> {
         let old = self
             .head_object(&req.old)?
             .ok_or(KError::NotFound(req.old))?;
@@ -994,7 +1046,7 @@ impl Kernel {
         // fresh generation created right here.
         let successor = match req.superseded_by {
             Some(s) => {
-                self.validate_successor(&ctx, s)?;
+                self.validate_successor(ctx, s)?;
                 s
             }
             None => {
@@ -1026,25 +1078,25 @@ impl Kernel {
                     }
                 }
                 self.remember_locked(
-                    &mut pipe,
+                    pipe,
                     &RememberRequest {
                         context: ctx.clone(),
                         koid: None,
                         expected_version: Some(0),
                         idempotency_key: None,
                         metadata: Metadata {
-                            type_name: req.type_name,
+                            type_name: req.type_name.clone(),
                             tenant: ctx.tenant.clone(),
                             schema_version: 1,
                             tags: vec![],
                         },
-                        properties: req.properties,
+                        properties: req.properties.clone(),
                         semantic: None,
                         relationships: vec![],
                         security: None,
                         extensions: ext,
                         origin: Origin::Agent(ctx.subject.name.clone()),
-                        note: req.note,
+                        note: req.note.clone(),
                         referential_policy: ReferentialPolicy::default(),
                     },
                 )?
@@ -1056,45 +1108,19 @@ impl Kernel {
             .clone()
             .unwrap_or_else(|| format!("superseded by {}", successor.to_hex()));
         self.transition_epistemic_locked(
-            &mut pipe,
-            &ctx,
+            pipe,
+            ctx,
             &req.old,
             EpistemicStatus::Superseded,
             Origin::Agent(ctx.subject.name.clone()),
             Some(successor),
             Some(old.version),
-            Some(reason.clone()),
+            Some(reason),
         )?;
-        // superseded_by path: the evidence backs the supersession decision
-        // itself — append it to the old claim so it is never silently dropped
-        // (review P0-1: evidence cannot disappear on a semantic op).
-        if req.superseded_by.is_some() {
-            let new_head = self
-                .head_object(&req.old)?
-                .ok_or(KError::NotFound(req.old))?;
-            let mut extensions = new_head.extensions.clone();
-            append_evidence(&mut extensions, &req.evidence);
-            let rr = RememberRequest {
-                context: ctx.clone(),
-                koid: Some(req.old),
-                expected_version: Some(new_head.version),
-                idempotency_key: None,
-                metadata: new_head.metadata.clone(),
-                properties: new_head.properties.clone(),
-                semantic: None,
-                relationships: new_head.relationships.clone(),
-                security: None,
-                extensions,
-                origin: Origin::System,
-                note: Some(reason.clone()),
-                referential_policy: ReferentialPolicy::default(),
-            };
-            self.remember_locked(&mut pipe, &rr)?;
-        }
         let roots = self.outbound_edges(&req.old, Some(DERIVED_FROM))?;
         let sweep = self.invalidate_dependents_locked(
-            &mut pipe,
-            &ctx,
+            pipe,
+            ctx,
             roots,
             &format!("premise {} was superseded", req.old.to_hex()),
         )?;
@@ -1775,7 +1801,10 @@ impl Kernel {
         roots: Vec<(String, KOID)>,
         reason: &str,
     ) -> KResult<SweepOutcome> {
-        let at = self.clock_now();
+        let at = pipe
+            .pair_pin
+            .map(|ts| ts >> 16)
+            .unwrap_or_else(|| self.clock_now());
         // Phase 1 — collect: discover the full dependent closure WITHOUT
         // mutating anything (review P1-7: never mutate while discovering the
         // dependency graph). Cycle-safe via the visited set; duplicate edges
