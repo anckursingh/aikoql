@@ -1844,7 +1844,8 @@ fn query_group_by_count_aggregate_surfaces_through_tool() {
         .find(|r| r["properties"]["dept"] == "Sales")
         .unwrap_or_else(|| panic!("Sales group missing: {rows:?}"));
     assert_eq!(
-        eng["properties"]["count"], json!(2),
+        eng["properties"]["count"],
+        json!(2),
         "COUNT(*) must count every row in the group"
     );
     assert_eq!(sales["properties"]["count"], json!(1));
