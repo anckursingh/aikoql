@@ -1506,3 +1506,26 @@ package survives), `compile_context_fails_fast_when_model_busy_with_stored_embed
 (unparked, bounded 1s, guard-A tooth). RED archived as
 `t44-compile-context-latency` (exit 101, all three bounds exceeded).
 
+## 49. The default rate budget serves a batch ingest phase — MINOR-3 (T-45)
+
+The device eval runs a default-configured binary, throttles at 115
+calls/min, and takes ~130 batch tool calls per dataset phase — so the
+120/min default denied the tail of every phase. The `[rate_limit]`
+TOML section (`enabled`, `max_calls_per_minute`) has existed since
+PRR-4, but the eval never carried a config file, and a default that
+fails a legitimate batch phase is the wrong default.
+
+The default budget rises to 300 calls/min — one phase plus headroom —
+while `max_calls_per_minute` remains the knob for anything stricter
+(the REST surface shares the value). Test servers that seed large
+corpora still disable the limiter outright (belt-and-braces; a 150-KO
+seed slice would crowd the default budget).
+
+Pin: `default_rate_limit_serves_a_batch_ingest_phase` — 130 remembers
+through a default-config stdio server must all land inside one 60s
+window, guarded against a window rollover making the pin vacuous (the
+batch must finish within 50s of the first call). RED archived as
+`t45-default-rate-limit-blocks-batch-phase` (exit 101, call 121
+denied).
+
+
