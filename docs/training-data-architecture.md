@@ -1384,3 +1384,23 @@ installed but broken fails the pin loudly (health reports
 caller-created edge").
 
 
+## 45. Supersede generations inherit scope/authority — F11 (T-41)
+
+`observe` KOs land scope `global` / authority `organization_policy`
+(Origin::System defaults); a fresh `supersede` generation landed scope
+`session` / authority `agent_derived` (Origin::Agent defaults) — the
+successor of a globally visible observed claim was invisible to every
+cross-session consumer of the superseded link. A generation replaces
+its claim, so it must be visible wherever the claim was: the supersede
+fresh-generation arm now copies the replaced KO's `scope` and
+`authority` extensions onto the successor before commit; the
+Origin::Agent creation defaults apply only when the replaced KO carries
+none (a pre-v0.3 KO). The caller cannot narrow the boundary — the
+kernel derives it from the claim being replaced, never from the
+request.
+
+Pins: `supersede_generation_inherits_scope_and_authority` — observed →
+global/organization_policy, asserted → session/source_code (inheritance
+mirrors whatever the replaced claim carried, it never hardcodes
+global). RED archived as `f11-supersede-scope-authority-asymmetry`
+(exit 101, `Some(Session)` vs `Some(Global)`).
