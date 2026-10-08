@@ -1320,3 +1320,31 @@ Pins: `as_of_slice_hides_a_superseded_generation` — the pre-supersede
 slice still sees gen-1, the post-supersede slice and the closure-instant
 slice do not. RED archived as `f12-asof-valid-to`.
 
+## 43. Superseded successors must start at the asserted instant — F7 (T-39)
+
+The eval's F7 break: a fresh supersede successor's `valid_from` was the
+commit instant, not the asserted validity start (D0: `lnk_d11` gen-2
+`valid_from` = commit ts, not observed_at T2). DI-004 works around
+temporal windows with a payload-side `observed_at_ms` — the kernel never
+carried the asserted instant at all.
+
+Fix: `SupersedeRequest` gains `observed_at_ms: Option<u64>` (MCP
+`supersede` tool arg of the same name). When set, a fresh successor's
+`EXT_VALID_FROM` is the asserted instant; commit time is only the
+fallback when the caller provides none (existing behavior, unchanged).
+The `superseded_by` path is untouched — the named successor was already
+asserted with its own validity.
+
+Ceiling, by design: the old generation's `valid_to` still closes at the
+supersession instant, so when `observed_at_ms <` commit time the two
+generations' valid intervals overlap in `[observed_at_ms,
+supersession)` — the issue scopes the fix to the successor's stamp; a
+window query over the overlap sees both generations and should filter
+on the asserted instant itself (as DI-004 does).
+
+Pins: `supersede_stamps_successor_valid_from_from_asserted_start` — the
+asserted start lands on the successor, and the fallback half proves an
+unasserted supersession still stamps commit time. RED archived as
+`f7-successor-valid-from`.
+
+
