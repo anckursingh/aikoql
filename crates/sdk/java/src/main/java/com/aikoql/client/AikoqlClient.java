@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;

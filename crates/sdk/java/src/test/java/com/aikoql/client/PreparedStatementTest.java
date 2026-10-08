@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 // The §3.6 prepared-statement legs: the ports of the Go suite's
 // prepared_test.go — empty-query refusal, exact binding validation

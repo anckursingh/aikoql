@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 // frame cap is covered by the §18 fault matrix instead (readLine is not a
 // pure function here).
 public class FuzzEstatePinTest {
-    private static final String DIR = "src/test/java/io/aikoql/client/";
+    private static final String DIR = "src/test/java/com/aikoql/client/";
 
     @Test
     public void theSevenJazzerTargetsExist() throws IOException {

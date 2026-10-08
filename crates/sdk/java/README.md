@@ -3,8 +3,8 @@
 The first-party Java client for the [aikoql](https://github.com/anckursingh/aikoql) knowledge database: the canonical Database API (remember, get, query, traverse, hybrid search, context compile, prepare/execute) over the MCP transport. Zero runtime dependencies, hand-rolled JSON, JDK 17+.
 
 ```java
-import io.aikoql.client.AikoqlClient;
-import io.aikoql.client.Connection;
+import com.aikoql.client.AikoqlClient;
+import com.aikoql.client.Connection;
 
 Connection conn = AikoqlClient.dial("127.0.0.1:9090", "s3cret");
 ResultSet rows = conn.query("MATCH person RETURN *");

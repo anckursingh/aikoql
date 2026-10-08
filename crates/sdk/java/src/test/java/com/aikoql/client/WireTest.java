@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 // The wire-layer legs: ports of the TS suite's wire.test.ts (the Rust
 // client's scripted-server suite). Each test drives a fake server through

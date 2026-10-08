@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -16,6 +16,15 @@ import org.junit.jupiter.api.Test;
 // MIN_SERVER_VERSION contract constant (the literal drifted from pom.xml
 // on every bump until someone remembered to edit the class).
 class VersionIdentityTest {
+
+    @Test
+    void publicPackageMatchesVerifiedMavenNamespace() {
+        assertEquals(
+                "com.aikoql.client",
+                AikoqlClient.class.getPackageName(),
+                "the Maven coordinates com.aikoql:aikoql-client are Sonatype-verified; "
+                        + "the Java package must match the reversed-domain namespace");
+    }
 
     @Test
     void versionComesFromTheBuildArtifact() throws Exception {

@@ -129,6 +129,6 @@ case "$LANGUAGE" in
     [[ "$VECTORS_J" = /* || "$VECTORS_J" = [A-Za-z]:* ]] || VECTORS_J="$ROOT/$VECTORS_J"
     [[ "$PROTOCOL_J" = /* || "$PROTOCOL_J" = [A-Za-z]:* ]] || PROTOCOL_J="$ROOT/$PROTOCOL_J"
     mvn -q -DskipTests compile
-    exec java -cp target/classes io.aikoql.client.SdkConformance \
+    exec java -cp target/classes com.aikoql.client.SdkConformance \
       --bin "$JBIN" --vectors "$VECTORS_J" --protocol "$PROTOCOL_J" --token "$TOKEN" ;;
 esac

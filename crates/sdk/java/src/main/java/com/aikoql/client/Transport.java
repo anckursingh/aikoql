@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 import java.io.BufferedReader;
 import java.io.IOException;

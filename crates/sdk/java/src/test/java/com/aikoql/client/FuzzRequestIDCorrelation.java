@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 // §14 L3: the frozen §3.3 correlation rules restated independently —
 // smaller ids skip, larger ids are PROTOCOL_ERROR, equal ids match (the

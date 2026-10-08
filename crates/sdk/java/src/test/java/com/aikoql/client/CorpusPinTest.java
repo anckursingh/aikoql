@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 // The §16 pin: the cross-language golden corpus spec exists at
 // sdk-fuzz-corpus/corpus.json and this SDK's column holds for every case.

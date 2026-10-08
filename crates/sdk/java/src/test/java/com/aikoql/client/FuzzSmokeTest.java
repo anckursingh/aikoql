@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;

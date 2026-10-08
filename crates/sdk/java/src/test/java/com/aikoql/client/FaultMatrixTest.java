@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 // D-16 fault matrix (line wire): the §18 fault proxy sits between the SDK
 // and a real server and mangles the newline-delimited JSON-RPC wire (§7 of

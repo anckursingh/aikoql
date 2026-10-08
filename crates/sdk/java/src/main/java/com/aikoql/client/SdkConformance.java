@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 // The Java adapter for the shared conformance runner (D-14, §7/§23). It
 // executes the language-neutral vectors from tests/sdk-conformance/ (the
@@ -11,7 +11,7 @@ package io.aikoql.client;
 // Run through scripts/sdk-conformance.sh, or directly:
 //
 //   mvn -q -DskipTests compile && java -cp target/classes \
-//       io.aikoql.client.SdkConformance --bin <aikoql-mcp> \
+//       com.aikoql.client.SdkConformance --bin <aikoql-mcp> \
 //       --vectors <dir> --protocol <dir> --token <token>
 
 import java.io.IOException;

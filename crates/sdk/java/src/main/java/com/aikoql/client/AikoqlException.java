@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 // The SDK's one classified exception (the repo's classified-error idiom):
 // every protocol error keeps the frozen SDK-012 fields

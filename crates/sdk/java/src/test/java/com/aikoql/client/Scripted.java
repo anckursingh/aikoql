@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 // The shared scripted-server helper for the wire and prepared tests — the
 // port of the TS tests/helpers.ts scripted/respond/toolResult (the Rust

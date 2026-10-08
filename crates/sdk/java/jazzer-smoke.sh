@@ -31,5 +31,5 @@ for target in FuzzParseRPCResponse FuzzParseMcpError FuzzDecodeToolEnvelope \
         FuzzDecodeStreamNotify FuzzVersionParser FuzzRequestIDCorrelation \
         FuzzErrorMapping; do
     java -cp "$CP" com.code_intelligence.jazzer.Jazzer \
-        --target_class="io.aikoql.client.$target" -max_total_time="$SECONDS_PER"
+        --target_class="com.aikoql.client.$target" -max_total_time="$SECONDS_PER"
 done

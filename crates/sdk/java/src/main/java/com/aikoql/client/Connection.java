@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 import java.security.SecureRandom;
 import java.util.HexFormat;

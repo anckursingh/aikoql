@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 // D-14: the shared conformance runner, java arm (§7, §23). This test pins
 // only the CLI contract — the vectors carry the semantics. Mirrors

@@ -1,4 +1,4 @@
-package io.aikoql.client;
+package com.aikoql.client;
 
 // The AbortSignal stand-in: the abort path races the response read, and the
 // transport registers its wake-up here (register-then-recheck is atomic
