@@ -185,7 +185,7 @@ evidence = "w2_conc_005_concurrent_overlapping_temporal_updates_keep_one_head"
 
 [[claim]]
 file = "crates/kernel/tests/transactions.rs"
-line = 792
+line = 836
 text = "// B appears exactly once and is stamped exactly once (one version bump)."
 evidence = "sweep_collapses_duplicate_edges_to_one_stamp"
 

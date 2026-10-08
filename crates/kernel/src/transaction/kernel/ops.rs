@@ -1015,6 +1015,16 @@ impl Kernel {
                     // only the fallback.
                     Value::Int(req.observed_at_ms.unwrap_or(at) as i64),
                 );
+                // F11: the generation replaces the claim, so it must be
+                // visible wherever the claim was. Inherit scope/authority —
+                // the Origin::Agent defaults (session / agent_derived) would
+                // hide the successor from every cross-session consumer of
+                // the superseded link.
+                for key in ["scope", "authority"] {
+                    if let Some(v) = old.extensions.get(key) {
+                        ext.insert(key.into(), v.clone());
+                    }
+                }
                 self.remember_locked(
                     &mut pipe,
                     &RememberRequest {

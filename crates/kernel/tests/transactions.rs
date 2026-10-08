@@ -420,6 +420,50 @@ fn supersede_stamps_successor_valid_from_from_asserted_start() {
 }
 
 #[test]
+fn supersede_generation_inherits_scope_and_authority() {
+    // F11: the generation replaces the claim — it must be visible wherever
+    // the claim was. The successor inherits the replaced KO's scope and
+    // authority instead of landing at the Origin::Agent defaults
+    // (session / agent_derived), which would hide it from every
+    // cross-session consumer of the superseded link.
+    let (k, clock, _store) = mk_kernel();
+
+    // Observed claim: global / organization_policy.
+    let mut obs = ObservationRequest::new(Subject::new("alice"), "fact");
+    obs.properties.insert("env".into(), Value::Int(1));
+    obs.evidence = vec![ev("device-scan")];
+    let a = k.observe(obs).unwrap().koid;
+    clock.tick(1);
+    let mut sr = SupersedeRequest::new(Subject::new("alice"), a, "fact");
+    sr.properties.insert("env".into(), Value::Int(2));
+    sr.evidence = vec![ev("rescan")];
+    sr.reason = Some("re-observed".into());
+    let res = k.supersede(sr).unwrap();
+    let new = k.get(Subject::new("alice"), &res.new).unwrap();
+    assert_eq!(
+        new.scope(),
+        Some(Scope::Global),
+        "successor of an observed claim must keep the global scope"
+    );
+    assert_eq!(
+        new.authority(),
+        Some(Authority::OrganizationPolicy),
+        "successor of an observed claim must keep organization_policy authority"
+    );
+
+    // Asserted claim: session / source_code — the inheritance mirrors
+    // whatever the replaced claim carried, it never hardcodes global.
+    let b = assert_k(&k, "alice", "env", 3, "source_code");
+    let mut sr2 = SupersedeRequest::new(Subject::new("alice"), b, "fact");
+    sr2.properties.insert("env".into(), Value::Int(4));
+    sr2.evidence = vec![ev("run-2")];
+    let res2 = k.supersede(sr2).unwrap();
+    let new2 = k.get(Subject::new("alice"), &res2.new).unwrap();
+    assert_eq!(new2.scope(), Some(Scope::Session));
+    assert_eq!(new2.authority(), Some(Authority::SourceCode));
+}
+
+#[test]
 fn supersede_rejects_already_superseded() {
     let (k, _clock, _store) = mk_kernel();
     let a = assert_k(&k, "alice", "env", 1, "source_code");
