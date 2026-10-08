@@ -1586,4 +1586,30 @@ absent, and one tick earlier the successor is absent while the old
 generation still reads present. RED archived as
 `t47-supersede-atomic-pair` (exit 101).
 
+## 52. The Java package matches the Maven namespace — T-48
+
+The D-14 Java SDK shipped with package `io.aikoql.client` under a
+decision recorded when the groupId was still io.aikoql. When the
+groupId moved to `com.aikoql:aikoql-client` (2026-10-03 — the
+Sonatype-verified reversed-domain namespace for aikoql.com), the Java
+package did not move with it: publishing would have claimed an
+io.aikoql namespace backed by a domain nobody owns.
+
+T-48 unifies them. The 30 sources move from
+`src/{main,test}/java/io/aikoql/client/` to `com/aikoql/client/`
+with package declarations and imports rewritten. Two places hide the
+old path from the dotted-pattern sed: the filtered resource
+`version.properties` (read package-relative by the build-version pin,
+so its `src/main/resources/io/aikoql/client/` directory moves too)
+and `FuzzEstatePinTest`'s hardcoded DIR literal — slash-separated
+path strings never match an `io\.aikoql` pattern. The GREEN run, not
+the sed, exposed both; the resource move is part of the fix, the
+path literal got its own edit.
+
+Pin: `publicPackageMatchesVerifiedMavenNamespace` asserts
+`AikoqlClient.class.getPackageName()` equals `com.aikoql.client`.
+RED archived as `t48-java-namespace-com-aikoql` (exit 1). GREEN:
+`mvn test` 39/39, BUILD SUCCESS.
+
+
 
