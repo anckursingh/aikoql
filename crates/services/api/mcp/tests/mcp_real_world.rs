@@ -2387,3 +2387,96 @@ fn supersede_retract_leaves_no_shell_successor() {
 
     let _ = std::fs::remove_dir_all(&db);
 }
+
+// T-53 (POC-3 Stage C HIGH): plain MATCH answers with current truth only —
+// a supersede chain of a device key must leave exactly ONE row (the final
+// generation) in the head; every closed generation stays out. History stays
+// reachable through AS_OF (T-38), never through the default read.
+#[test]
+fn superseded_generations_stay_out_of_plain_match() {
+    let db = tmp_db("t53sc");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let mut old = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "dev_053", "value": "v1"}
+        }),
+    )["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Four supersede hops => five generations of the same key. gen3's commit
+    // instant is captured for the AS_OF history assertion.
+    let mut mid_ts: u64 = 0;
+    for gen in 2..=5u32 {
+        let sup = c.call(
+            "supersede",
+            &json!({
+                "subject": "admin", "old": &old, "type_name": "device",
+                "properties": {"key": "dev_053", "value": format!("v{gen}")},
+                "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+            }),
+        );
+        old = sup["new"].as_str().unwrap().to_string();
+        if gen == 3 {
+            let got = c.call("get", &json!({"subject": "admin", "koid": &old}));
+            mid_ts = got["commit_ts"].as_u64().unwrap();
+        }
+    }
+    assert!(mid_ts > 0, "gen3 commit instant must be captured");
+
+    // The head: exactly the final generation, nothing else.
+    let m = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_053\" RETURN *"
+        }),
+    );
+    let rows = m["results"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "plain MATCH must show only the current generation: {m}"
+    );
+    assert_eq!(rows[0]["properties"]["value"], json!("v5"));
+
+    // The AS_OF slice at the head agrees (T-38): one row, the successor.
+    let head = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_053\" AS_OF 4102444800000 RETURN *"
+        }),
+    );
+    let hrows = head["results"].as_array().unwrap();
+    assert_eq!(
+        hrows.len(),
+        1,
+        "AS_OF at the head must show one row, not the chain: {head}"
+    );
+    assert_eq!(hrows[0]["properties"]["value"], json!("v5"));
+
+    // History preserved: at gen3's commit instant the row was v3 — and the
+    // closed generations behind it stay out of that slice too.
+    let hist = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!("MATCH device WHERE key == \"dev_053\" AS_OF {mid_ts} RETURN *")
+        }),
+    );
+    let hists = hist["results"].as_array().unwrap();
+    assert_eq!(
+        hists.len(),
+        1,
+        "AS_OF at gen3's instant must show exactly the v3 generation: {hist}"
+    );
+    assert_eq!(hists[0]["properties"]["value"], json!("v3"));
+
+    let _ = std::fs::remove_dir_all(&db);
+}
