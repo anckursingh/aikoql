@@ -1736,6 +1736,77 @@ fn p3m3_bkp005_backup_restore_route_by_backend() {
 }
 
 #[test]
+fn p3_006_backup_tools_accept_list_backups_name() {
+    // P3-006: `backup` returns the path, `list_backups` returns entry
+    // names — but verify_backup/restore accepted only the path, so a
+    // listed name failed with "not a valid backup: os error 3". Both
+    // tools must accept the listed name too (resolved next to the db).
+    let db = tmp_db("p3-006");
+    let _ = std::fs::remove_dir_all(&db);
+
+    let mut c = McpClient::start(&db);
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note", "tenant": "acme",
+            "properties": {"body": "p3-006 name dialect", "memo": "p3-006"}
+        }),
+    );
+    let koid = note["koid"].as_str().unwrap().to_string();
+
+    let backup = c.call("backup", &json!({"subject": "admin"}));
+    assert_eq!(backup["verified"], true, "backup must verify: {backup}");
+    let backup_dir = backup["backup"].as_str().unwrap().to_string();
+
+    // The listed NAME, not the path — the POC's exact failing dialect.
+    let list = c.call("list_backups", &json!({"subject": "admin"}));
+    let name = list["backups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["name"].as_str())
+        .find(|n| backup_dir.ends_with(*n))
+        .expect("backup must be listed")
+        .to_string();
+
+    let v = c.call(
+        "verify_backup",
+        &json!({"subject": "admin", "backup": &name}),
+    );
+    assert_eq!(
+        v["verified"], true,
+        "verify_backup must accept the listed name: {v}"
+    );
+
+    // destroy → fresh server → restore BY NAME → restart → knowledge back.
+    drop(c);
+    let mut removed = false;
+    for _ in 0..20 {
+        if std::fs::remove_dir_all(&db).is_ok() {
+            removed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    assert!(removed, "destroy: db dir must be removable");
+
+    let mut c = McpClient::start(&db);
+    let restored = c.call("restore", &json!({"subject": "admin", "backup": &name}));
+    assert_eq!(
+        restored["restored"], true,
+        "restore must accept the listed name: {restored}"
+    );
+    drop(c);
+    let mut c = McpClient::start(&db);
+    let fetched = c.call("get", &json!({"koid": &koid, "subject": "admin"}));
+    assert_eq!(
+        fetched["properties"]["body"], "p3-006 name dialect",
+        "restored knowledge must read back: {fetched}"
+    );
+    drop(c);
+}
+
+#[test]
 fn batch_ops_inherit_session_identity() {
     // F2: batch ops without an explicit subject land as mcp-agent and the
     // submitting session then hits ACCESS_DENIED on its own KO.
