@@ -1086,7 +1086,11 @@ impl Kernel {
                         idempotency_key: None,
                         metadata: Metadata {
                             type_name: req.type_name.clone(),
-                            tenant: ctx.tenant.clone(),
+                            // B3-4 (POC-3): the generation replaces the
+                            // claim, so it must stay inside the claim's
+                            // tenant. An untenanted successor is shared
+                            // (ACL R9) and escapes the row's confinement.
+                            tenant: old.metadata.tenant.clone().or_else(|| ctx.tenant.clone()),
                             schema_version: 1,
                             tags: vec![],
                         },

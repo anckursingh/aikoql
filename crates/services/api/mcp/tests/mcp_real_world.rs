@@ -2231,3 +2231,50 @@ fn supersede_honors_extensions_valid_from() {
 
     let _ = std::fs::remove_dir_all(&db);
 }
+
+// T-50 (POC-3 B3-4): a supersede successor must inherit the replaced row's
+// tenant. The successor generation replaces the claim — an untenanted
+// successor is shared (ACL R9: untenanted objects stay visible), so the row
+// escapes tenant_a's confinement and leaks into every other tenant's scans.
+#[test]
+fn supersede_successor_inherits_tenant() {
+    let db = tmp_db("t50tn");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    let old = note["koid"].as_str().unwrap().to_string();
+
+    let sup = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &old, "type_name": "device",
+            "properties": {"key": "d1", "value": "v2"},
+            "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+        }),
+    );
+    assert!(sup["new"].is_string(), "successor must exist: {sup}");
+
+    // A foreign tenant must not see the successor (pre-fix: untenanted
+    // successors are shared, escaping tenant_a's confinement).
+    let leak = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_b",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        leak["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "tenant_b must not see tenant_a's successor: {leak}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
