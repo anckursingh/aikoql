@@ -336,11 +336,11 @@ fn route_inner(
         }
         ("POST", "/api/v1/restore") => {
             need_auth()?;
-            tool_restore(&args(), admin)
+            tool_restore(&args(), admin, db_path)
         }
         ("POST", "/api/v1/verify-backup") => {
             need_auth()?;
-            tool_verify_backup(&args())
+            tool_verify_backup(&args(), db_path)
         }
         ("POST", "/api/v1/eval/recall") => {
             need_auth()?;

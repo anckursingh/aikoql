@@ -148,23 +148,39 @@ fn snapshot_marker_in(dir: &std::path::Path) -> Option<std::path::PathBuf> {
         .map(|e| e.path())
 }
 
-pub(crate) fn tool_verify_backup(args: &J) -> Result<J, String> {
-    let backup = args
+/// P3-006: the backup tools spoke different dialects — `backup` returns the
+/// path, `list_backups` returns entry names. Accept both: a bare name (a
+/// single path component that is not an existing directory) resolves next to
+/// the db file, the same directory `list_backups` scans.
+fn resolve_backup_arg(backup: &str, db_path: &str) -> std::path::PathBuf {
+    let p = std::path::Path::new(backup);
+    if p.is_dir() || p.components().count() > 1 {
+        p.to_path_buf()
+    } else {
+        std::path::Path::new(db_path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(backup)
+    }
+}
+
+pub(crate) fn tool_verify_backup(args: &J, db_path: &str) -> Result<J, String> {
+    let backup_arg = args
         .get("backup")
         .and_then(|b| b.as_str())
         .ok_or("missing argument: backup")?;
-    let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
+    let backup = resolve_backup_arg(backup_arg, db_path);
+    let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup.display()))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
     let expected_seq = meta["journal_seq"].as_u64().unwrap_or(0);
     let expected_objects = meta["object_count"].as_u64().unwrap_or(0) as usize;
     // P3-M3: a v2-native backup verifies through its marker (decode +
     // checksum) — the only backup format post-S-02.
-    let marker = snapshot_marker_in(std::path::Path::new(backup))
-        .ok_or("not a v2-native backup: no SNAPSHOT marker")?;
+    let marker = snapshot_marker_in(&backup).ok_or("not a v2-native backup: no SNAPSHOT marker")?;
     let ok = aikoql_storage_v2::snapshot::SnapshotMarker::read(&marker).is_ok();
     Ok(json!({
-        "backup": backup,
+        "backup": backup.display().to_string(),
         "verified": ok,
         "expected_journal_seq": expected_seq,
         "expected_objects": expected_objects,
@@ -262,23 +278,22 @@ pub(crate) fn tool_backup(
 pub(crate) fn tool_restore(
     args: &J,
     admin: Option<&dyn aikoql_storage_v2::engine::StorageAdminApi>,
+    db_path: &str,
 ) -> Result<J, String> {
-    let backup = args
+    let backup_arg = args
         .get("backup")
         .and_then(|b| b.as_str())
         .ok_or("missing argument: backup")?;
-    let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup))
+    let backup = resolve_backup_arg(backup_arg, db_path);
+    let meta_str = std::fs::read_to_string(format!("{}/meta.json", backup.display()))
         .map_err(|e| format!("not a valid backup: {}", e))?;
     let meta: J = serde_json::from_str(&meta_str).map_err(|e| format!("bad meta: {}", e))?;
     // P3-M3 §60: the engine-native path — verify, materialize, swap rows in
     // one frame. A v2-native backup (marker present) is the only backup
     // format post-S-02.
     let admin = admin.ok_or("storage admin unavailable on this backend")?;
-    snapshot_marker_in(std::path::Path::new(backup))
-        .ok_or("not a v2-native backup: no SNAPSHOT marker")?;
-    let info = admin
-        .restore_from(std::path::Path::new(backup))
-        .map_err(|e| e.to_string())?;
+    snapshot_marker_in(&backup).ok_or("not a v2-native backup: no SNAPSHOT marker")?;
+    let info = admin.restore_from(&backup).map_err(|e| e.to_string())?;
     let pitr_seq = meta.get("journal_seq").and_then(|v| v.as_u64());
     let pitr_ts = meta.get("timestamp").and_then(|v| v.as_u64());
     Ok(json!({
