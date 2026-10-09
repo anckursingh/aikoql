@@ -1690,3 +1690,29 @@ retracts a device and asserts the MATCH head is empty;
 asserts the None result, closed validity, no SUPERSEDES edge, appended
 evidence, and both conflict rejections. RED archived as `T-51`
 (exit 101 — the shell successor koid was created).
+
+## 56. Idempotency keys are namespaced by the write's tenant — T-52
+
+POC-3 P3-009 (HIGH): the idempotency key namespace was global. A tenant_b
+`remember` carrying tenant_a's key replayed tenant_a's commit — tenant_b
+received tenant_a's koid (which then read ACCESS_DENIED on every follow-up)
+and its own write silently vanished.
+
+The fix namespaces the stored key by the write's `metadata.tenant`:
+`idem_scope` composes `tenant\u{0}key`, so the replay namespace of a scoped
+write can never collide with another tenant's. Tenant-less writes
+(ingest-dir, catalog) keep the bare global namespace. The write path is a
+single choke — `remember_locked` scopes both the replay lookup and the key
+passed to `commit_version`/`put_idem`. Every tenant-aware resolver is scoped
+the same way: `resolve_idempotency_scoped(tenant, key)` backs the split
+replay (ops.rs), `get_by_idem`, and `execute_program`'s execution-record
+replay; the unscoped `resolve_idempotency` now resolves the global namespace
+only. Same-tenant retry stays exact-once by construction.
+
+Pins: `t06g_idempotency_key_is_tenant_scoped` (conformance) asserts the same
+key under two tenants yields two distinct koids with both versions
+persisted, and that a same-tenant retry replays; the MCP pin
+`idempotency_key_is_tenant_scoped` asserts tenant_b receives its own koid,
+`MATCH device` under tenant_b returns exactly its v2 row, and a tenant_a
+retry still replays the original. RED archived as `T-52` (exit 101 — both
+tenants received the same koid).
