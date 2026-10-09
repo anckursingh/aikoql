@@ -298,13 +298,14 @@ fn w2_prop_001_random_ko_lifecycle_all_invariants_hold() {
             req.properties = props(seq);
             req.evidence = vec![ev()];
             let res = k.supersede(req).unwrap();
+            let new = res.new.expect("fresh successor");
             let old = m.kos.get_mut(&koid).unwrap();
             old.version += 1;
             old.superseded = true;
-            old.rels.push(("supersedes".into(), res.new));
-            m.keys.push(res.new);
+            old.rels.push(("supersedes".into(), new));
+            m.keys.push(new);
             m.kos.insert(
-                res.new,
+                new,
                 MKo {
                     version: 1,
                     props: props(seq),
@@ -599,13 +600,14 @@ fn w2_prop_003_random_temporal_ops_keep_temporal_invariants() {
             seq += 1;
             // clean rejection is a valid outcome; state must be unchanged
             if let Ok(res) = k.supersede(req) {
+                let new = res.new.expect("fresh successor");
                 let old = m.kos.get_mut(&koid).unwrap();
                 old.version += 1;
                 old.superseded = true;
-                old.rels.push(("supersedes".into(), res.new));
-                m.keys.push(res.new);
+                old.rels.push(("supersedes".into(), new));
+                m.keys.push(new);
                 m.kos.insert(
-                    res.new,
+                    new,
                     MKo {
                         version: 1,
                         props: sprops,

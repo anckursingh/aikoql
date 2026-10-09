@@ -2278,3 +2278,52 @@ fn supersede_successor_inherits_tenant() {
 
     let _ = std::fs::remove_dir_all(&db);
 }
+
+// T-51 (POC-3 B3-3): `retract: true` ends validity without creating a shell
+// successor. The G-002 workaround shape (supersede with no properties)
+// created an empty v1 row — properties {} — visible in every MATCH head and
+// AS_OF slice; a retracted device link must leave nothing behind.
+#[test]
+fn supersede_retract_leaves_no_shell_successor() {
+    let db = tmp_db("t51rt");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    let old = note["koid"].as_str().unwrap().to_string();
+
+    let r = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &old, "type_name": "device",
+            "retract": true,
+            "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+        }),
+    );
+    assert_eq!(
+        r["new"],
+        json!(null),
+        "retraction must not create a shell: {r}"
+    );
+
+    let m = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        m["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "no shell row may remain in MATCH head: {m}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}

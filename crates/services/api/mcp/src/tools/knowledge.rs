@@ -471,6 +471,10 @@ pub(crate) fn tool_supersede(k: &Kernel, args: &J) -> Result<J, String> {
         type_name,
     );
     req.superseded_by = superseded_by;
+    req.retract = args
+        .get("retract")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     req.properties = parse_properties(args)?;
     req.evidence = parse_evidence(args)?;
     req.observed_at_ms = args
@@ -492,7 +496,8 @@ pub(crate) fn tool_supersede(k: &Kernel, args: &J) -> Result<J, String> {
     let r = k.supersede(req).map_err(|e| e.to_string())?;
     Ok(json!({
         "old": r.old.to_hex(),
-        "new": r.new.to_hex(),
+        // B3-3: null for a retraction — no successor was created.
+        "new": r.new.map(|k| k.to_hex()),
         "invalidated_dependents": r
             .invalidated_dependents
             .iter()

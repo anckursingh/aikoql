@@ -227,6 +227,13 @@ pub struct SupersedeRequest {
     /// instant). When set, a fresh successor's valid_from is this instant;
     /// when absent, it falls back to commit time (F7).
     pub observed_at_ms: Option<u64>,
+    /// B3-3 (POC-3): end validity WITHOUT a successor. The old claim is
+    /// stamped Superseded + valid_to=now with no SUPERSEDES edge, the
+    /// evidence is appended to the old claim, and the dependent sweep runs —
+    /// no new KO is created (the G-002 workaround shape used to leave an
+    /// empty shell row). Mutually exclusive with `superseded_by` and with
+    /// non-empty `properties`.
+    pub retract: bool,
 }
 
 impl SupersedeRequest {
@@ -245,6 +252,7 @@ impl SupersedeRequest {
             note: None,
             superseded_by: None,
             observed_at_ms: None,
+            retract: false,
         }
     }
 }
@@ -252,7 +260,8 @@ impl SupersedeRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SupersedeResult {
     pub old: KOID,
-    pub new: KOID,
+    /// The successor generation; None for a retraction (no successor exists).
+    pub new: Option<KOID>,
     /// Derived dependents stamped invalidated (stale) by the sweep.
     pub invalidated_dependents: Vec<KOID>,
     /// False when any dependent stamp failed (see `failed`, review P1-5).
@@ -976,6 +985,19 @@ impl Kernel {
     /// transition + dependent sweep under one lock.
     pub fn supersede(&self, req: SupersedeRequest) -> KResult<SupersedeResult> {
         require_evidence(&req.evidence)?;
+        // B3-3: retraction is its own shape — it can neither name a successor
+        // nor carry the properties a fresh successor would need (dropping
+        // them silently is how the shell-row bug class starts).
+        if req.retract && req.superseded_by.is_some() {
+            return Err(KError::InvalidObject(
+                "retract cannot name a successor".into(),
+            ));
+        }
+        if req.retract && !req.properties.is_empty() {
+            return Err(KError::InvalidObject(
+                "retract takes no successor properties".into(),
+            ));
+        }
         let ctx = req.context.clone();
         let mut pipe = self.pipe.lock().unwrap();
         // T-47: pin one HLC instant for the whole composition — the
@@ -986,16 +1008,17 @@ impl Kernel {
         let result = self.supersede_composition(&ctx, &req, &mut pipe);
         pipe.pair_pin = None;
         let result = result?;
-        // superseded_by path: the evidence backs the supersession decision
-        // itself — append it to the old claim so it is never silently dropped
-        // (review P0-1: evidence cannot disappear on a semantic op). Runs
-        // OUTSIDE the pinned instant: a second version of the old KO at the
-        // pair's commit_ts would collide with the transition under MVCC.
-        if req.superseded_by.is_some() {
-            let reason = req
-                .reason
-                .clone()
-                .unwrap_or_else(|| format!("superseded by {}", result.new.to_hex()));
+        // superseded_by / retract paths: the evidence backs the supersession
+        // decision itself — append it to the old claim so it is never
+        // silently dropped (review P0-1: evidence cannot disappear on a
+        // semantic op). Runs OUTSIDE the pinned instant: a second version of
+        // the old KO at the pair's commit_ts would collide with the
+        // transition under MVCC.
+        if req.superseded_by.is_some() || req.retract {
+            let reason = req.reason.clone().unwrap_or_else(|| match result.new {
+                Some(s) => format!("superseded by {}", s.to_hex()),
+                None => "retracted".into(),
+            });
             let new_head = self
                 .head_object(&req.old)?
                 .ok_or(KError::NotFound(req.old))?;
@@ -1042,13 +1065,16 @@ impl Kernel {
                 "already superseded — supersede the successor instead".into(),
             ));
         }
-        // Successor: an existing KO named by the caller (superseded_by) or a
-        // fresh generation created right here.
-        let successor = match req.superseded_by {
+        // Successor: an existing KO named by the caller (superseded_by), a
+        // fresh generation created right here, or None — B3-3 retraction
+        // ends validity without creating any KO (the old G-002 workaround
+        // shape left an empty shell row behind).
+        let successor: Option<KOID> = match req.superseded_by {
             Some(s) => {
                 self.validate_successor(ctx, s)?;
-                s
+                Some(s)
             }
+            None if req.retract => None,
             None => {
                 let at = self.clock_now();
                 let mut ext = ExtensionMap::new();
@@ -1105,19 +1131,20 @@ impl Kernel {
                     },
                 )?
                 .koid
+                .into()
             }
         };
-        let reason = req
-            .reason
-            .clone()
-            .unwrap_or_else(|| format!("superseded by {}", successor.to_hex()));
+        let reason = req.reason.clone().unwrap_or_else(|| match successor {
+            Some(s) => format!("superseded by {}", s.to_hex()),
+            None => "retracted".into(),
+        });
         self.transition_epistemic_locked(
             pipe,
             ctx,
             &req.old,
             EpistemicStatus::Superseded,
             Origin::Agent(ctx.subject.name.clone()),
-            Some(successor),
+            successor,
             Some(old.version),
             Some(reason),
         )?;

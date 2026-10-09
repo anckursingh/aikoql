@@ -368,11 +368,11 @@ fn supersede_transitions_old_and_stamps_dependents() {
     assert_eq!(old.properties.get("env"), Some(&Value::Int(1)));
     assert_eq!(
         k.outbound_edges(&a, Some(SUPERSEDES)).unwrap(),
-        vec![("supersedes".to_string(), res.new)]
+        vec![("supersedes".to_string(), res.new.unwrap())]
     );
 
     // New: current, evidenced, asserted.
-    let new = k.get(Subject::new("alice"), &res.new).unwrap();
+    let new = k.get(Subject::new("alice"), &res.new.unwrap()).unwrap();
     assert_eq!(new.epistemic_status(), EpistemicStatus::Asserted);
     assert_eq!(new.properties.get("env"), Some(&Value::Int(2)));
     assert_eq!(new.valid_to(), None);
@@ -400,7 +400,7 @@ fn supersede_stamps_successor_valid_from_from_asserted_start() {
     sr.observed_at_ms = Some(15_000);
     sr.reason = Some("re-observed".into());
     let res = k.supersede(sr).unwrap();
-    let new = k.get(Subject::new("alice"), &res.new).unwrap();
+    let new = k.get(Subject::new("alice"), &res.new.unwrap()).unwrap();
     // The successor asserts the state observed at T=15_000 — the
     // supersession commits at 20_000, but the successor's validity must
     // start at the asserted instant.
@@ -415,7 +415,7 @@ fn supersede_stamps_successor_valid_from_from_asserted_start() {
     sr2.properties.insert("env".into(), Value::Int(4));
     sr2.evidence = vec![ev("run-2")];
     let res2 = k.supersede(sr2).unwrap();
-    let new2 = k.get(Subject::new("alice"), &res2.new).unwrap();
+    let new2 = k.get(Subject::new("alice"), &res2.new.unwrap()).unwrap();
     assert_eq!(new2.valid_from(), Some(20_000));
 }
 
@@ -439,7 +439,7 @@ fn supersede_generation_inherits_scope_and_authority() {
     sr.evidence = vec![ev("rescan")];
     sr.reason = Some("re-observed".into());
     let res = k.supersede(sr).unwrap();
-    let new = k.get(Subject::new("alice"), &res.new).unwrap();
+    let new = k.get(Subject::new("alice"), &res.new.unwrap()).unwrap();
     assert_eq!(
         new.scope(),
         Some(Scope::Global),
@@ -458,7 +458,7 @@ fn supersede_generation_inherits_scope_and_authority() {
     sr2.properties.insert("env".into(), Value::Int(4));
     sr2.evidence = vec![ev("run-2")];
     let res2 = k.supersede(sr2).unwrap();
-    let new2 = k.get(Subject::new("alice"), &res2.new).unwrap();
+    let new2 = k.get(Subject::new("alice"), &res2.new.unwrap()).unwrap();
     assert_eq!(new2.scope(), Some(Scope::Session));
     assert_eq!(new2.authority(), Some(Authority::SourceCode));
 }
@@ -497,7 +497,7 @@ fn supersede_with_superseded_by_links_existing_successor() {
     let res = k.supersede(sr).unwrap();
 
     // No new generation is minted — the named successor IS the result.
-    assert_eq!(res.new, successor);
+    assert_eq!(res.new, Some(successor));
     let successor_ko = k.get(Subject::new("alice"), &successor).unwrap();
     assert_eq!(successor_ko.version, 1);
     assert_eq!(successor_ko.epistemic_status(), EpistemicStatus::Asserted);
@@ -549,6 +549,63 @@ fn supersede_with_superseded_by_rejects_dead_successor() {
     assert_eq!(old_ko.valid_to(), None);
 }
 
+// B3-3 (POC-3): retraction ends validity WITHOUT a successor — no shell row,
+// no SUPERSEDES edge, the evidence still lands on the old claim (evidence
+// cannot disappear on a semantic op), and the conflicting shapes are
+// rejected instead of silently dropping fields.
+#[test]
+fn supersede_retract_ends_validity_without_a_successor() {
+    let (k, _clock, _store) = mk_kernel();
+    let old = assert_k(&k, "alice", "env", 1, "source_code");
+
+    let mut sr = SupersedeRequest::new(Subject::new("alice"), old, "fact");
+    sr.retract = true;
+    sr.evidence = vec![ev("dangling-link-review")];
+    sr.reason = Some("link no longer exists".into());
+    let res = k.supersede(sr).unwrap();
+
+    assert_eq!(res.new, None, "retraction mints no successor (shell)");
+    let old_ko = k.get(Subject::new("alice"), &old).unwrap();
+    assert_eq!(old_ko.epistemic_status(), EpistemicStatus::Superseded);
+    assert!(old_ko.valid_to().is_some(), "validity must close");
+    assert!(
+        k.outbound_edges(&old, Some(SUPERSEDES)).unwrap().is_empty(),
+        "no SUPERSEDES edge without a successor"
+    );
+    // The retraction evidence is appended, never dropped.
+    match old_ko.extensions.get(KnowledgeObject::EXT_EVIDENCE) {
+        Some(Value::List(l)) => assert!(
+            l.iter().any(|v| match v {
+                Value::Map(m) =>
+                    m.get("source_artifact") == Some(&Value::Text("dangling-link-review".into())),
+                _ => false,
+            }),
+            "retraction evidence must land on the old claim, got {l:?}"
+        ),
+        other => panic!("expected evidence list, got {other:?}"),
+    }
+
+    // Conflicting shapes are rejected up front.
+    let successor = assert_k(&k, "alice", "env", 9, "source_code");
+    let mut bad = SupersedeRequest::new(Subject::new("alice"), old, "fact");
+    bad.retract = true;
+    bad.superseded_by = Some(successor);
+    bad.evidence = vec![ev("x")];
+    assert!(matches!(
+        k.supersede(bad).unwrap_err(),
+        KError::InvalidObject(_)
+    ));
+
+    let mut bad2 = SupersedeRequest::new(Subject::new("alice"), old, "fact");
+    bad2.retract = true;
+    bad2.properties.insert("env".into(), Value::Int(2));
+    bad2.evidence = vec![ev("x")];
+    assert!(matches!(
+        k.supersede(bad2).unwrap_err(),
+        KError::InvalidObject(_)
+    ));
+}
+
 // ---- semantic enrichment (device-eval N2/N3) --------------------------------
 
 /// Simulate the semantic engine's catch-up write (enrich_one): a
@@ -584,7 +641,7 @@ fn enrichment_update_preserves_caller_edges_and_prove_chain() {
     // field (pre-fix it was a remember-update carrying properties+semantic,
     // which replaced the caller's edges wholesale — the RED for this test).
     let eng = Subject::with_roles("semantic-engine", &["admin"]);
-    for koid in [old, peer, res.new] {
+    for koid in [old, peer, res.new.unwrap()] {
         let h = k.get(eng.clone(), &koid).unwrap();
         if h.semantic.is_some() {
             continue;
@@ -1335,7 +1392,7 @@ fn knowledge_continuity_kafka_to_rabbitmq() {
     sr.evidence = vec![ev("deployment-observed")];
     sr.reason = Some("migrated to rabbitmq".into());
     let sres = k.supersede(sr).unwrap();
-    assert_eq!(sres.new, counter);
+    assert_eq!(sres.new, Some(counter));
 
     // 8. Derived knowledge depending on Kafka is invalidated (swept).
     assert_eq!(sres.invalidated_dependents, vec![derived]);

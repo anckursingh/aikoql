@@ -1803,23 +1803,27 @@ mod tests {
                 note: None,
                 superseded_by: None,
                 observed_at_ms: Some(20_000),
+                retract: false,
             })
             .unwrap();
 
         // The successor's own commit instant is the pivot: at that instant
         // the predecessor must already be closed — no AS_OF slice may show
         // both generations of the same link (device-eval residual 1).
-        let at = k.get(&alice, &res.new).unwrap().commit_ts >> 16;
+        let new = res
+            .new
+            .expect("fresh-successor supersede returns a successor");
+        let at = k.get(&alice, &new).unwrap().commit_ts >> 16;
         assert!(
             k.get_as_of(&alice, &res.old, at).unwrap().is_none(),
             "superseded generation still visible at the successor's instant"
         );
-        assert!(k.get_as_of(&alice, &res.new, at).unwrap().is_some());
+        assert!(k.get_as_of(&alice, &new, at).unwrap().is_some());
 
         // One tick before: the old world only — the successor's Created
         // event must not precede its own instant.
         assert!(k.get_as_of(&alice, &res.old, at - 1).unwrap().is_some());
-        assert!(k.get_as_of(&alice, &res.new, at - 1).unwrap().is_none());
+        assert!(k.get_as_of(&alice, &new, at - 1).unwrap().is_none());
     }
 
     #[test]
