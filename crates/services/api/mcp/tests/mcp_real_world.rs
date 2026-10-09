@@ -2480,3 +2480,88 @@ fn superseded_generations_stay_out_of_plain_match() {
 
     let _ = std::fs::remove_dir_all(&db);
 }
+
+// T-54 (POC-3 Stage B3-2 HIGH): superseded predecessors stay visible in
+// BETWEEN windows. The predecessor closes at the wall supersession instant
+// (~1.79e12) while the eval's valid-time windows are event-time, so the
+// stale row overlaps every later window. Acceptance: BETWEEN retires the
+// superseded generation — the window after the correction returns exactly
+// the corrected row — while AS_OF history stays reconstructable.
+#[test]
+fn between_windows_retire_superseded_generations() {
+    let db = tmp_db("t54bt");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let first = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "extensions": {"valid_from": 5000u64},
+            "properties": {"key": "dev_b2", "value": "old"}
+        }),
+    );
+    let old = first["koid"].as_str().unwrap().to_string();
+    let gen1_ts = first["commit_ts"].as_u64().unwrap();
+
+    let sup = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &old, "type_name": "device",
+            "extensions": {"valid_from": 5050u64},
+            "properties": {"key": "dev_b2", "value": "new"},
+            "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+        }),
+    );
+    assert!(sup["new"].is_string(), "successor must exist: {sup}");
+
+    // The window after the correction: exactly the corrected row. Pre-fix
+    // the predecessor's wall valid_to overlaps every event-time window.
+    let after = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_b2\" BETWEEN 6000 AND 9000 RETURN *"
+        }),
+    );
+    let rows = after["results"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the window after the correction must hold only the corrected row: {after}"
+    );
+    assert_eq!(rows[0]["properties"]["value"], json!("new"));
+
+    // The window before the correction event: nothing is valid there.
+    let before = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device WHERE key == \"dev_b2\" BETWEEN 0 AND 4000 RETURN *"
+        }),
+    );
+    assert_eq!(
+        before["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "nothing was valid before the first ingest: {before}"
+    );
+
+    // History preserved: AS_OF at the first commit instant still shows the
+    // old generation (the filter is scan-level, storage is untouched).
+    let past = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": format!("MATCH device WHERE key == \"dev_b2\" AS_OF {gen1_ts} RETURN *")
+        }),
+    );
+    let pasts = past["results"].as_array().unwrap();
+    assert_eq!(
+        pasts.len(),
+        1,
+        "AS_OF at the first commit must still show the old generation: {past}"
+    );
+    assert_eq!(pasts[0]["properties"]["value"], json!("old"));
+
+    let _ = std::fs::remove_dir_all(&db);
+}

@@ -1,0 +1,36 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (test "mcp_real_world") generated 1 warning
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.81s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+[2m2026-10-09T17:51:33.487603Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-09T17:51:33.487723Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-t54bt-70372 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-09T17:51:33.488412Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-09T17:51:33.492572Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+test between_windows_retire_superseded_generations ... FAILED
+
+failures:
+
+---- between_windows_retire_superseded_generations stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 'between_windows_retire_superseded_generations' (74548) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:2528:5:
+assertion `left == right` failed: the window after the correction must hold only the corrected row: {"results":[{"koid":"01a121caae700000000000000000a9c9","type_name":"device","version":2,"properties":{"key":"dev_b2","value":"old"},"extensions":{"authority":"agent_derived","epistemic_history":[{"at":1791568293492,"by":"admin","from":"asserted","reason":"superseded by 01a121caae740000000000000000a9c9","to":"superseded"}],"epistemic_status":"superseded","scope":"session","valid_from":5000,"valid_to":1791568293492}},{"koid":"01a121caae740000000000000000a9c9","type_name":"device","version":1,"properties":{"key":"dev_b2","value":"new"},"extensions":{"authority":"agent_derived","epistemic_status":"asserted","evidence":[{"confidence":0.800000011920929,"method":"runtime_observation","source_artifact":"probe"}],"scope":"session","valid_from":5050}}]}
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    between_windows_retire_superseded_generations
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101
