@@ -1,0 +1,8 @@
+{
+  "id": "T-58",
+  "pre_fix_commit": "HEAD",
+  "command": "bash -c cargo test -p aikoql-mcp --test mcp_real_world t58_asof_journal_domain_slices_between_applies",
+  "captured_at": "2026-10-09T20:19:05Z",
+  "captured_head": "d01dcbde564c5fa746534de6522c6dceb83de396",
+  "exit_code": 101
+}

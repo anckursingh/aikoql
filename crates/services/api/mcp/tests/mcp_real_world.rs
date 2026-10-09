@@ -1982,6 +1982,127 @@ fn t57_ordered_replay_through_batch_converges() {
 }
 
 #[test]
+fn t58_asof_journal_domain_slices_between_applies() {
+    // P3-008 LOW: AS_OF accepted only real wall-clock millis, so a client
+    // replaying a synthetic corpus synthesizes wall markers (sleep loops,
+    // collision footgun). AS_OF JOURNAL <n> makes the journal seq the
+    // client-clock domain: health()["journal_seq"] after each apply is an
+    // exact per-apply marker — no sleeps, no marker synthesis, restart-safe
+    // (the ke/ event journal persists seq -> commit_ts).
+    let db = tmp_db("t58-asof-journal");
+    let mut c = McpClient::start(&db);
+    c.session_init("device-identity-eval", "acme");
+    let ev = json!([{"source_artifact": "t58-pin", "method": "human_provided"}]);
+    fn journal_seq(c: &mut McpClient) -> u64 {
+        c.call("health", &json!({}))["journal_seq"]
+            .as_u64()
+            .expect("health must expose the journal seq")
+    }
+
+    // Apply 1: the original row. Apply 2: the correction. Apply 3: the
+    // retraction. The journal seq captured after each apply is the marker.
+    let a1 = c.call(
+        "remember",
+        &json!({"type_name": "device",
+                "properties": {"device_id": "dev9", "value": "v0"},
+                "evidence": ev}),
+    );
+    assert!(a1["koid"].is_string(), "apply 1 must land: {a1}");
+    let s1 = journal_seq(&mut c);
+    let a2 = c.call(
+        "supersede",
+        &json!({"old": a1["koid"], "type_name": "device",
+                "properties": {"device_id": "dev9", "value": "v0b"},
+                "evidence": ev, "reason": "t58 correction"}),
+    );
+    assert!(a2["new"].is_string(), "apply 2 must land: {a2}");
+    let s2 = journal_seq(&mut c);
+    // Apply 3: the retraction — targets the current generation (the
+    // correction's successor), the way a corpus replay would; retracting the
+    // original is refused ("already superseded — supersede the successor").
+    let a3 = c.call(
+        "supersede",
+        &json!({"old": a2["new"], "type_name": "device",
+                "retract": true, "evidence": ev, "reason": "t58 retraction"}),
+    );
+    assert!(
+        a3["new"].is_null() && a3["old"].is_string(),
+        "apply 3 must land: {a3}"
+    );
+    let s3 = journal_seq(&mut c);
+    assert!(
+        s1 < s2 && s2 < s3,
+        "the journal seq must advance strictly per apply: {s1} < {s2} < {s3}"
+    );
+
+    let proj = |resp: &J| -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = resp["results"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|r| {
+                        (
+                            r["properties"]["device_id"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string(),
+                            r["properties"]["value"].as_str().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+
+    // The slices are journal-seq domain: no wall marker is captured anywhere.
+    let at_s1 = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF JOURNAL {s1} RETURN *")}),
+    );
+    assert_eq!(
+        proj(&at_s1),
+        vec![("dev9".into(), "v0".into())],
+        "AS_OF JOURNAL s1 must show the pre-correction value: {at_s1}"
+    );
+    let at_s2 = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF JOURNAL {s2} RETURN *")}),
+    );
+    assert_eq!(
+        proj(&at_s2),
+        vec![("dev9".into(), "v0b".into())],
+        "AS_OF JOURNAL s2 must show the corrected value: {at_s2}"
+    );
+    let at_s3 = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF JOURNAL {s3} RETURN *")}),
+    );
+    assert_eq!(
+        proj(&at_s3),
+        vec![],
+        "AS_OF JOURNAL s3 must hide the retracted row: {at_s3}"
+    );
+    // 0 = before the first event (empty); beyond the head = the current
+    // state (the retracted row is gone from it too).
+    let at_0 = c.call(
+        "aikoql",
+        &json!({"query": "MATCH device AS_OF JOURNAL 0 RETURN *"}),
+    );
+    assert_eq!(proj(&at_0), vec![], "AS_OF JOURNAL 0 must be empty: {at_0}");
+    let at_big = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF JOURNAL {} RETURN *", s3 + 1000)}),
+    );
+    assert_eq!(
+        proj(&at_big),
+        vec![],
+        "AS_OF JOURNAL beyond the head must equal the current state: {at_big}"
+    );
+}
+
+#[test]
 fn serve_restart_catchup_preserves_edges_for_relate_replay() {
     // F13 end-to-end (the device-eval DI-002 pipeline): run1 remembers and
     // relates, run2 restarts the serve — the start-up catch-up enriches
