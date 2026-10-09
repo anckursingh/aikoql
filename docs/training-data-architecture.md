@@ -1967,3 +1967,29 @@ stderr-captured client does session_init, `take()`s its stdin handle
 trace lines. RED archived as `T-59` (exit 101 — "missing loop-end
 reason": the loop-end logging was absent, so a clean exit left no
 trace).
+
+## 64. `remember` accepts a top-level `valid_from` — T-60 (POC-3 MINOR)
+
+`tool_remember` read `valid_from` only from `extensions`, while
+`observe`/`assert_knowledge` read the top-level arg — so a top-level
+`valid_from` on `remember` succeeded and silently dropped the validity
+claim (the row landed with no `valid_from` extension). The kernel side
+needed nothing: `EXT_VALID_FROM` is deliberately absent from
+KERNEL_MANAGED_EXTENSIONS — callers declare their own claim's temporal
+start — and the create path already validates the effective interval
+(`valid_from <= valid_to`, inversion rejected; negative values are not
+a validity claim). The gap was purely the tool boundary.
+
+`tool_remember` now maps a top-level `valid_from` into the same
+extension the kernel reads, when the extension is absent. When BOTH
+spellings are given, the extension wins — the T-49 precedence, kept
+uniform so the explicit protocol surface (v0.3 K1 extensions) always
+outranks the convenience spelling. The remember inputSchema declares
+the arg, so MCP clients see the surface instead of discovering it by
+probe.
+
+Pin `t60_remember_accepts_top_level_valid_from` (mcp_real_world): a
+top-level `valid_from` lands in the row's `extensions.valid_from`
+exactly as asserted, and a both-spellings remember keeps the
+extension's value. RED archived as `T-60` (exit 101 — the row landed
+with no `valid_from` extension, the exact POC shape).
