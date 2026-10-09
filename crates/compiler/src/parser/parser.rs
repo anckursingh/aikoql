@@ -49,6 +49,7 @@ fn token_name(t: &Token) -> String {
         Token::Commit => "COMMIT".into(),
         Token::Explain => "EXPLAIN".into(),
         Token::AsOf => "AS_OF".into(),
+        Token::Journal => "JOURNAL".into(),
         Token::Between => "BETWEEN".into(),
         Token::Historical => "HISTORICAL".into(),
         Token::Epistemic => "EPISTEMIC".into(),
@@ -310,11 +311,17 @@ impl Parser {
     }
 
     /// v0.3 K2: `AS_OF <time>` | `BETWEEN <time> AND <time>` | `HISTORICAL`.
+    /// T-58 (P3-008 LOW): `AS_OF JOURNAL <n>` — the journal-seq clock domain.
     fn parse_temporal_clause(&mut self) -> Result<TemporalClause, ParseError> {
         match self.current {
             Token::AsOf => {
                 self.advance();
-                Ok(TemporalClause::AsOf(self.parse_time_millis()?))
+                if let Token::Journal = &self.current {
+                    self.advance();
+                    Ok(TemporalClause::AsOfJournal(self.parse_time_millis()?))
+                } else {
+                    Ok(TemporalClause::AsOf(self.parse_time_millis()?))
+                }
             }
             Token::Between => {
                 self.advance();

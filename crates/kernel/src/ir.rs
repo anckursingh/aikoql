@@ -96,9 +96,13 @@ pub enum FuseMode {
 /// MVCC reconstruction of the versions the kernel had committed. `Between`
 /// is valid time — rows whose [valid_from, valid_to) interval overlaps the
 /// half-open [from, to) window (timeless facts overlap any window).
+/// T-58 (P3-008 LOW): `AsOfJournal(n)` is the journal-seq clock domain —
+/// the ke/ event at seq n pins the exact commit_ts of the nth apply, so a
+/// corpus replay slices between applies without synthesizing wall markers.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum TemporalOp {
     AsOf(u64),
+    AsOfJournal(u64),
     Between { from: u64, to: u64 },
     Historical,
 }

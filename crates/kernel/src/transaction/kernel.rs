@@ -3116,6 +3116,44 @@ impl Kernel {
         Ok(Some(ko))
     }
 
+    /// T-58 (P3-008 LOW): the journal-seq clock domain. The ke/ event at
+    /// seq `n` pins the exact packed commit instant of the nth apply —
+    /// `object_at` at that instant reconstructs the state a client reading
+    /// health()["journal_seq"] right after the apply saw, with no wall-clock
+    /// marker synthesis (no sleep loops, no collision footgun) and
+    /// restart-safe (ke/ persists seq -> commit_ts). Seq 0 names the empty
+    /// world before the first apply; a seq beyond the journal head names
+    /// the current state.
+    pub fn get_as_of_journal(
+        &self,
+        ctx: impl Into<KnowledgeContext>,
+        koid: &KOID,
+        n: u64,
+    ) -> KResult<Option<KnowledgeObject>> {
+        let ctx = ctx.into();
+        if n == 0 {
+            return Ok(None);
+        }
+        let (snap, wall) = match self.repo.get_event(n)? {
+            Some(ev) => (ev.commit_ts, ev.commit_ts >> 16),
+            None if self.repo.journal_head()?.is_some() => (u64::MAX, self.snapshot_now() >> 16),
+            None => return Ok(None),
+        };
+        let Some(ko) = self.object_at(koid, snap)? else {
+            return Ok(None);
+        };
+        // F12, the same half-open rule as get_as_of: a row whose validity
+        // ended at/before the slice instant is not part of that world.
+        if ko.valid_to().map(|t| t <= wall).unwrap_or(false) {
+            return Ok(None);
+        }
+        self.auth
+            .read()
+            .unwrap()
+            .authorize(&ctx.subject, &ko, Action::Read)?;
+        Ok(Some(ko))
+    }
+
     /// All committed versions of `koid` in ascending commit order —
     /// historical reconstruction for the `HISTORICAL` query operator.
     /// Tombstone (Deleted) versions are skipped; each version is

@@ -665,6 +665,21 @@ impl Interpreter {
                         }
                         out
                     }
+                    // T-58 (P3-008 LOW): journal-seq clock domain — the ke/
+                    // event at seq `n` pins the exact commit instant of the
+                    // nth apply, so a corpus replay slices between applies
+                    // without synthesizing wall markers.
+                    TemporalOp::AsOfJournal(n) => {
+                        let mut out = Vec::new();
+                        for ko in &kos {
+                            if let Some(v) = kernel.get_as_of_journal(&subj, &ko.koid, *n)? {
+                                if v.lifecycle.state != LifecycleState::Deleted {
+                                    out.push(v);
+                                }
+                            }
+                        }
+                        out
+                    }
                     // Valid-time overlap with [from, to): half-open. None
                     // bounds are unbounded (None valid_from = -inf, None
                     // valid_to = +inf) — `0` is NOT the semantic representation
@@ -1823,6 +1838,8 @@ mod tests {
                 superseded_by: None,
                 observed_at_ms: Some(20_000),
                 retract: false,
+                // T-57: added to SupersedeRequest after this pin was written.
+                idempotency_key: None,
             })
             .unwrap();
 
