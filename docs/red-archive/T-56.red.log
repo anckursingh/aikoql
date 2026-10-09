@@ -1,0 +1,87 @@
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.63s
+     Running tests\cli_contract.rs (target\debug\deps\cli_contract-ac64147b0b15b24c.exe)
+
+running 1 test
+test cl05_help_documents_rate_cap ... FAILED
+
+failures:
+
+---- cl05_help_documents_rate_cap stdout ----
+
+thread 'cl05_help_documents_rate_cap' (75484) panicked at crates\services\api\mcp\tests\cli_contract.rs:579:13:
+help must document the rate cap (missing "300 calls"): aikoql — Knowledge Database Suite
+
+Usage: aikoql-mcp <COMMAND> [OPTIONS]
+
+Commands:
+  shell [DB]             Interactive aikoql shell (REPL)
+  serve [OPTIONS] [DB]   Start MCP server (default: stdio mode)
+  backup [DB]            Create a verified backup
+  restore BACKUP [DB]    Restore from a backup
+  audit [DB]             Print encryption compliance report
+  keygen [PATH]          Generate an encryption master key
+  status [DB]            Health, metrics, and ABI version of a knowledge base
+  query <AIKOQL> [DB]    Run one aikoql statement (CREATE/MATCH/...)
+  explain <KOID> [DB]    Explain an object (provenance + evidence)
+  index [DB]             Storage/index statistics
+  schema [DB]            List types in the knowledge base
+  import <SOURCE> [ARGS]  Import from DB (postgres, pgvector, sqlite, mongodb, neo4j)
+  ingest-dir [PATH] [DB] [--parallel] [--incremental] [--model-dir DIR] Ingest directory into knowledge base
+  report [PATH]          Print knowledge report for directory
+  model install [MODEL]  Install an embedding model into the local store (offline use)
+  hash-password PASSWORD Print an argon2id hash for [auth].users (aikoql.toml)
+
+Server options (serve mode):
+  --listen ADDR          TCP listen address (e.g., 127.0.0.1:9090; empty host = loopback)
+  --native-port ADDR     D-15 framed native protocol listener (loopback-only; requires --tcp-token)
+  --tcp-token SPEC       TCP auth: TOKEN[:TENANT[:ROLE1,ROLE2]] (repeatable, required with --listen)
+                         (dev-only: tokens hit the process list — set AIKOQL_TCP_TOKEN or
+                         AIKOQL_TCP_TOKEN_FILE in production instead; env replaces flags)
+  --metrics-addr ADDR    HTTP metrics + health endpoint (e.g., 127.0.0.1:9091)
+  --embedding-provider P  Embedding provider: "candle" (default), "http", or "ollama"
+  --embedding-base-url U  OpenAI-compatible base URL (default: http://localhost:11434)
+  --embedding-model M     Model name (default: nomic-embed-text)
+  --embedding-api-key K   API key for remote endpoints (omit for Ollama)
+  --model-dir DIR         Local embedding model store (default: ~/.aikoql/models)
+  --config PATH           TOML config file (auto: ./aikoql.toml, then /etc/aikoql/aikoql.toml)
+
+Precedence: defaults < aikoql.toml < env (AIKOQL_*) < CLI flags.
+HTTP auth: [auth] users/session_ttl_seconds in aikoql.toml (argon2id hashes);
+  AIKOQL_ADMIN_PASSWORD bootstraps an admin when no users are configured.
+  The HTTP/metrics surface is loopback-only unless allow_remote_http = true
+  (arming it requires configured credentials).
+
+Examples:
+  aikoql-mcp shell                           # Interactive shell
+  aikoql-mcp shell :memory:                  # In-memory shell
+  aikoql-mcp serve                           # Stdio MCP server
+  aikoql-mcp serve --listen :9090 --tcp-token s3cret:acme:admin ./kb
+  aikoql-mcp serve --listen :9090 --tcp-token s3cret:acme:admin --metrics-addr :9091 ./kb
+  aikoql-mcp backup ./kb                # Create backup
+  aikoql-mcp restore kb.backup.12345    # Restore backup
+  aikoql-mcp audit                           # Compliance report
+  aikoql-mcp keygen ./master.key             # Generate key
+  aikoql-mcp import 'host=localhost db=mydb'   # Import from PostgreSQL
+  aikoql-mcp ingest-dir                        # Ingest CWD (sequential)
+  aikoql-mcp ingest-dir ~/my-project            # Ingest specific path
+  aikoql-mcp ingest-dir . --parallel            # Parallel ingestion
+  aikoql-mcp ingest-dir . --incremental         # Incremental (git-tracked)
+  aikoql-mcp report                            # Report on CWD
+  aikoql-mcp report ~/my-project                # Report on specific path
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cl05_help_documents_rate_cap
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test cli_contract`
+EXIT=101
