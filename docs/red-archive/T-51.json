@@ -1,0 +1,8 @@
+{
+  "id": "T-51",
+  "pre_fix_commit": "7259a65",
+  "command": "cargo test -p aikoql-mcp --test mcp_real_world supersede_retract_leaves_no_shell_successor",
+  "captured_at": "2026-10-09T15:29:55Z",
+  "captured_head": "7259a6550a9ca7fd4ca0cb3068d883278bb67f8c",
+  "exit_code": 101
+}
