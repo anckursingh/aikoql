@@ -9,7 +9,7 @@
 //! ponytail: one comprehensive test that validates the entire surface.
 
 use serde_json::{json, Value as J};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 
 use aikoql_ingestion::{EntityCandidate, Evidence, FactCandidate, KnowledgeIr, RelationCandidate};
@@ -68,9 +68,12 @@ fn installed_models_root() -> Option<String> {
 
 struct McpClient {
     child: Child,
-    stdin: std::process::ChildStdin,
+    // Option so a pin can take() the handle to close the pipe (T-59).
+    stdin: Option<std::process::ChildStdin>,
     // Option so `call_bounded` can move the reader onto its deadline thread.
     reader: Option<BufReader<std::process::ChildStdout>>,
+    // T-59: Some only for spawns that capture stderr (shutdown-path pins).
+    stderr: Option<std::process::ChildStderr>,
     next_id: u64,
 }
 
@@ -83,21 +86,33 @@ impl McpClient {
         // unavailable on every machine.
         let model_dir = tmp_db("ctx-model");
         std::fs::create_dir_all(&model_dir).expect("create empty model dir");
-        Self::start_inner(db_path, Some(&model_dir), &[])
+        Self::start_inner(db_path, Some(&model_dir), &[], false)
     }
 
     /// Serve against a real model store so background enrichment runs
     /// (F13 pin: the restart's catch-up must enrich, not destroy).
     fn start_with_model_dir(db_path: &str, model_dir: &str) -> Self {
-        Self::start_inner(db_path, Some(model_dir), &[])
+        Self::start_inner(db_path, Some(model_dir), &[], false)
     }
 
     /// Same, with extra env for the child (T-44 park pins).
     fn start_with_model_dir_env(db_path: &str, model_dir: &str, envs: &[(&str, &str)]) -> Self {
-        Self::start_inner(db_path, Some(model_dir), envs)
+        Self::start_inner(db_path, Some(model_dir), envs, false)
     }
 
-    fn start_inner(db_path: &str, model_dir: Option<&str>, envs: &[(&str, &str)]) -> Self {
+    /// T-59: piped stderr so the shutdown-path logs are assertable.
+    fn start_capture_stderr(db_path: &str) -> Self {
+        let model_dir = tmp_db("ctx-model");
+        std::fs::create_dir_all(&model_dir).expect("create empty model dir");
+        Self::start_inner(db_path, Some(&model_dir), &[], true)
+    }
+
+    fn start_inner(
+        db_path: &str,
+        model_dir: Option<&str>,
+        envs: &[(&str, &str)],
+        capture_stderr: bool,
+    ) -> Self {
         // Find binary relative to workspace root.
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -147,17 +162,23 @@ impl McpClient {
         }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()); // crash output lands in CI logs, not /dev/null
+            .stderr(if capture_stderr {
+                Stdio::piped()
+            } else {
+                Stdio::inherit() // crash output lands in CI logs, not /dev/null
+            });
         let mut child = cmd.spawn().expect("start MCP server");
 
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take();
         let reader = BufReader::new(stdout);
 
         McpClient {
             child,
-            stdin,
+            stdin: Some(stdin),
             reader: Some(reader),
+            stderr,
             next_id: 1,
         }
     }
@@ -175,8 +196,12 @@ impl McpClient {
             }
         });
         let line = serde_json::to_string(&req).unwrap() + "\n";
-        self.stdin.write_all(line.as_bytes()).unwrap();
-        self.stdin.flush().unwrap();
+        self.stdin
+            .as_mut()
+            .unwrap()
+            .write_all(line.as_bytes())
+            .unwrap();
+        self.stdin.as_mut().unwrap().flush().unwrap();
 
         let mut response = String::new();
         self.reader
@@ -209,9 +234,11 @@ impl McpClient {
             "params": {"name": tool, "arguments": args}
         });
         self.stdin
+            .as_mut()
+            .unwrap()
             .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
             .unwrap();
-        self.stdin.flush().unwrap();
+        self.stdin.as_mut().unwrap().flush().unwrap();
         let mut reader = self
             .reader
             .take()
@@ -251,9 +278,11 @@ impl McpClient {
             "params": {"name": tool, "arguments": args}
         });
         self.stdin
+            .as_mut()
+            .unwrap()
             .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
             .unwrap();
-        self.stdin.flush().unwrap();
+        self.stdin.as_mut().unwrap().flush().unwrap();
         let mut response = String::new();
         self.reader
             .as_mut()
@@ -273,9 +302,11 @@ impl McpClient {
             "params": {"agent_id": agent_id, "tenant": tenant}
         });
         self.stdin
+            .as_mut()
+            .unwrap()
             .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
             .unwrap();
-        self.stdin.flush().unwrap();
+        self.stdin.as_mut().unwrap().flush().unwrap();
         let mut response = String::new();
         self.reader
             .as_mut()
@@ -308,9 +339,11 @@ impl McpClient {
             "params": params
         });
         self.stdin
+            .as_mut()
+            .unwrap()
             .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
             .unwrap();
-        self.stdin.flush().unwrap();
+        self.stdin.as_mut().unwrap().flush().unwrap();
         let mut response = String::new();
         self.reader
             .as_mut()
@@ -1407,9 +1440,11 @@ fn mcp_ping_and_tools_list() {
     // Ping
     let mut req = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
     c.stdin
+        .as_mut()
+        .unwrap()
         .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
         .unwrap();
-    c.stdin.flush().unwrap();
+    c.stdin.as_mut().unwrap().flush().unwrap();
     let mut resp = String::new();
     c.reader.as_mut().unwrap().read_line(&mut resp).unwrap();
     let v: J = serde_json::from_str(&resp).unwrap();
@@ -1418,9 +1453,11 @@ fn mcp_ping_and_tools_list() {
     // Tools list
     req = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"});
     c.stdin
+        .as_mut()
+        .unwrap()
         .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
         .unwrap();
-    c.stdin.flush().unwrap();
+    c.stdin.as_mut().unwrap().flush().unwrap();
     resp.clear();
     c.reader.as_mut().unwrap().read_line(&mut resp).unwrap();
     let v: J = serde_json::from_str(&resp).unwrap();
@@ -3052,6 +3089,54 @@ fn foreign_access_denied_is_not_internal() {
             "a permission denial is not retryable ({tool}): {r}"
         );
     }
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+/// T-59 (POC-3 P3-010 LOW): the stdio shutdown hand-off is observable.
+/// The POC saw a rapid close->respawn exit 0 mid-call with no trace; the
+/// loop-end reason + checkpoint trace below turn any recurrence into a
+/// diagnosable one. Pin: closing stdin (EOF, the driver's close signal)
+/// ends the loop with a logged reason, logs the shutdown checkpoint, and
+/// the process exits 0.
+#[test]
+fn t59_stdio_shutdown_handoff_is_observable() {
+    let db = tmp_db("t59-shutdown");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start_capture_stderr(&db);
+    c.session_init("t59-agent", "tenant_a");
+
+    // EOF: take() drops the stdin handle — the graceful-close signal.
+    c.stdin.take();
+
+    // Bounded wait for the graceful shutdown (checkpoint included).
+    let mut status = None;
+    for _ in 0..600 {
+        match c.child.try_wait().expect("poll child") {
+            Some(s) => {
+                status = Some(s);
+                break;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+    let status = status.expect("server did not exit after stdin EOF");
+    assert!(status.success(), "clean exit expected, got {status:?}");
+
+    let mut err = String::new();
+    c.stderr
+        .as_mut()
+        .expect("stderr captured")
+        .read_to_string(&mut err)
+        .expect("read stderr");
+    assert!(
+        err.contains("stdio loop ended: eof"),
+        "missing loop-end reason; stderr: {err}"
+    );
+    assert!(
+        err.contains("shutdown maintainer checkpoint done"),
+        "missing checkpoint trace; stderr: {err}"
+    );
 
     let _ = std::fs::remove_dir_all(&db);
 }
