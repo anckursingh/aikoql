@@ -1742,3 +1742,29 @@ v3 — history preserved, the chain invisible. RED archived as `T-53`
 generations in the exact POC row shape). The queued reopen-visibility probe
 (an abrupt-close respawn serving 0 rows on MATCH) does not reproduce on a
 fresh KB and stays open pending POC-side repro details.
+
+## 58. BETWEEN windows retire generations that have a successor — T-54 (POC B3-2)
+
+POC-3 Stage B3-2 (HIGH): superseded predecessors stayed visible in
+`BETWEEN` windows. The device stream superseded `cora`/`corb` with
+`extensions.valid_from`-anchored successors, then `BETWEEN 0 AND 100000`
+still answered with the stale generations. The predecessor's valid_to is
+the WALL supersession instant (~1.79e12), so the stale row's valid-time
+span overlaps every event-time window the eval queries.
+
+The discriminator is the outbound SUPERSEDES edge, not the epistemic
+status: the edge is created only by supersede-with-successor (kernel
+`transition_epistemic_locked`), while kernel-managed valid-time closure
+(the runtime fixture's `fact_with_open_validity`, reason "test fixture:
+close validity") and T-51 retractions both stamp Superseded with NO edge
+and must stay visible in BETWEEN — a status-only filter would have hidden
+legitimate valid-time closure.
+
+The runtime Between arm now skips rows that are Superseded AND carry an
+outbound SUPERSEDES edge, then applies the unchanged half-open [from, to)
+overlap. History stays AS_OF-reconstructable — the scan-level filter never
+touches storage. Pin: `between_windows_retire_superseded_generations`
+(MCP real-world) — a superseded device link answers exactly the successor
+in an event-time window, 0 rows before its valid_from, and `AS_OF` at the
+predecessor's commit instant still reconstructs the old value. RED archived
+as `T-54` (exit 101 — the window returned both generations).
