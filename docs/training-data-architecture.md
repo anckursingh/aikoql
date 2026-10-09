@@ -1613,3 +1613,25 @@ RED archived as `t48-java-namespace-com-aikoql` (exit 1). GREEN:
 
 
 
+
+## 53. Supersede honors extensions.valid_from — T-49
+
+POC-3 Stage B3-1 (HIGH): the device stream back-dates every
+correction with `extensions.valid_from = event_time` — the observed
+instant, up to 7200 s in the past. `tool_supersede` read only the
+`observed_at_ms` argument and never mapped the extension, so each
+successor asserted validity from the commit instant. A corrected
+reading thereby appears *in the future* relative to the device
+timeline, and AS_OF reconstruction picks the wrong generation for
+every slice between event_time and the correction's arrival.
+
+T-49 maps `extensions.valid_from` → `observed_at_ms` when the
+explicit argument is absent, exactly as remember consumes the same
+extension. The kernel's F7 semantics are untouched: commit time
+remains the fallback, and the existing `valid_from >= 0` guard still
+rejects negative stamps.
+
+Pin: `supersede_honors_extensions_valid_from` supersedes a note with
+`extensions.valid_from = 1_700_000_000_000` and asserts the
+successor's get returns exactly that instant. RED archived as `T-49`
+(exit 101 — successor stamped 1791556921768, the commit instant).
