@@ -1993,3 +1993,29 @@ top-level `valid_from` lands in the row's `extensions.valid_from`
 exactly as asserted, and a both-spellings remember keeps the
 extension's value. RED archived as `T-60` (exit 101 — the row landed
 with no `valid_from` extension, the exact POC shape).
+
+## 65. Temporal literals documented + pinned — T-61 (POC-3 MINOR/doc)
+
+The POC flagged that the literal surface of the temporal clauses was
+undocumented: the eval fed `BETWEEN` an ISO instant with fractional
+seconds and an offset (`"2026-10-09T05:15:32.488000+00:00"`) and got
+`AIKOQL1011` by surprise. The behavior itself was already correct and
+deliberate: the compiler accepts exactly two spellings — epoch-millis
+integers and strict ISO instants (UTC) — and rejects everything else
+at parse time rather than guessing a timezone or rounding a fraction
+(parsed via `parse_time_millis`/`iso_to_millis`; years 1970–9999,
+days_in_month validated, no fractional seconds, no offsets/suffixes).
+
+The gap was the doc: the accepted/rejected table appeared nowhere a
+client reads, and the accepted spellings had no end-to-end pin (only
+the rejections were pinned). MRFC-0010 §5.2 "Temporal Literals
+(AS_OF / BETWEEN)" now carries the two-spelling table, the deliberate
+rejections, and the recommendation to use epoch-millis integers —
+the only spelling computable without a date library.
+
+Pin `parse_time_millis_t61_literal_surface` (compiler): the three
+accepted spellings parse through `parse_match` to the exact instants
+(AS_OF + BETWEEN), and the POC's exact shapes reject — the
+fractional+offset form, offset alone, and the fractional+offset form
+inside BETWEEN. RED archived as `T-61` (exit 101 — doc grep for the
+§5.2 heading was absent).
