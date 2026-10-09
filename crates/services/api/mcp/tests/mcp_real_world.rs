@@ -1804,6 +1804,184 @@ fn replay_relate_through_batch_is_version_idempotent() {
 }
 
 #[test]
+fn t57_ordered_replay_through_batch_converges() {
+    // P3-008 MEDIUM: the P3-007 corpus shape (ingest -> correct -> retract,
+    // per-op idempotency keys, per-op tenant stamps, retracts targeting a
+    // prior op's returned koid) must replay through the batch tool and
+    // converge — a full re-send of the same batches is a no-op, and the
+    // AS_OF slices re-check against the expected corpus timeline.
+    let db = tmp_db("t57-replay");
+    let mut c = McpClient::start(&db);
+    c.session_init("device-identity-eval", "acme");
+    let now_ms = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    };
+    let t_pre = now_ms();
+    let ev = json!([{"source_artifact": "t57-pin", "method": "human_provided"}]);
+
+    // Batch A: two ingests (one tenant-stamped per-op) + an in-batch
+    // correction targeting $1.koid — the handle of the first op. MVCC picks
+    // versions by commit_ts, so the oracle slices are the markers BETWEEN
+    // batches (nothing exists before batch A commits).
+    let mk_batch_a = || {
+        json!({
+            "operations": [
+                {"op": "remember", "type_name": "device",
+                 "properties": {"device_id": "dev0", "value": "v0"},
+                 "extensions": {"valid_from": t_pre - 60_000},
+                 "idempotency_key": "t57-s1-0"},
+                {"op": "remember", "type_name": "device",
+                 "tenant": "other",
+                 "properties": {"device_id": "dev1", "value": "v1"},
+                 "extensions": {"valid_from": t_pre - 60_000},
+                 "idempotency_key": "t57-s1-1"},
+                {"op": "supersede", "old": "$1.koid", "type_name": "device",
+                 "properties": {"device_id": "dev0", "value": "v0b"},
+                 "evidence": ev, "idempotency_key": "t57-c1",
+                 "reason": "corpus correction t57-c1"}
+            ]
+        })
+    };
+    let batch_a = c.call("batch", &mk_batch_a());
+    for (i, r) in batch_a["results"].as_array().unwrap().iter().enumerate() {
+        assert!(
+            r["ok"] == true,
+            "batch A op {i} must apply through the bulk path: {batch_a}"
+        );
+    }
+    let koid0 = batch_a["results"][0]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let koid1 = batch_a["results"][1]["result"]["koid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let new0 = batch_a["results"][2]["result"]["new"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        batch_a["results"][2]["result"]["old"],
+        json!(koid0),
+        "$1.koid must resolve to the first op's returned handle: {batch_a}"
+    );
+
+    let t_mid = now_ms();
+    // Batch B must commit in a strictly later millisecond than t_mid: the
+    // retraction stamps valid_to = its own commit ms, and F12's half-open
+    // [valid_from, valid_to) interval hides the row at valid_to itself — a
+    // same-ms retract would make AS_OF t_mid (correctly) empty. Wait out
+    // the millisecond so the slice is unambiguously pre-retraction.
+    while now_ms() <= t_mid {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // Batch B: the corpus retraction — targets a handle batch A returned.
+    let mk_batch_b = || {
+        json!({
+            "operations": [
+                {"op": "supersede", "old": koid1, "type_name": "device",
+                 "retract": true, "tenant": "other", "evidence": ev,
+                 "idempotency_key": "t57-r1", "reason": "corpus retraction t57-r1"}
+            ]
+        })
+    };
+    let batch_b = c.call("batch", &mk_batch_b());
+    assert!(
+        batch_b["results"][0]["ok"] == true,
+        "retract must ride batch: {batch_b}"
+    );
+    assert!(
+        batch_b["results"][0]["result"]["new"].is_null(),
+        "a retraction has no successor: {batch_b}"
+    );
+    let t_post = now_ms();
+
+    // Replay both batches: per-op idempotency keys make the re-send a no-op.
+    let replay_a = c.call("batch", &mk_batch_a());
+    for (i, r) in replay_a["results"].as_array().unwrap().iter().enumerate() {
+        assert!(
+            r["ok"] == true,
+            "batch A replay op {i} must converge, not error: {replay_a}"
+        );
+    }
+    assert_eq!(replay_a["results"][0]["result"]["koid"], json!(koid0));
+    assert_eq!(replay_a["results"][2]["result"]["new"], json!(new0));
+    let replay_b = c.call("batch", &mk_batch_b());
+    assert!(
+        replay_b["results"][0]["ok"] == true,
+        "a replayed retraction must converge via its idempotency key: {replay_b}"
+    );
+
+    // Context oracle: the AS_OF slices + heads must match the corpus timeline.
+    let proj = |resp: &J| -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = resp["results"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|r| {
+                        (
+                            r["properties"]["device_id"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string(),
+                            r["properties"]["value"].as_str().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let mid = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF {t_mid} RETURN *")}),
+    );
+    assert_eq!(
+        proj(&mid),
+        vec![("dev0".into(), "v0b".into())],
+        "AS_OF t_mid must show the corrected value (batch A landed before t_mid): {mid}"
+    );
+    let mid_other = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF {t_mid} RETURN *"), "tenant": "other"}),
+    );
+    assert_eq!(
+        proj(&mid_other),
+        vec![("dev1".into(), "v1".into())],
+        "AS_OF t_mid under the per-op tenant must show dev1 before its retraction: {mid_other}"
+    );
+    let post_other = c.call(
+        "aikoql",
+        &json!({"query": format!("MATCH device AS_OF {t_post} RETURN *"), "tenant": "other"}),
+    );
+    assert_eq!(
+        proj(&post_other),
+        vec![],
+        "AS_OF t_post must hide the retracted row: {post_other}"
+    );
+    let head = c.call("aikoql", &json!({"query": "MATCH device RETURN *"}));
+    assert_eq!(
+        proj(&head),
+        vec![("dev0".into(), "v0b".into())],
+        "head must show the corrected value only: {head}"
+    );
+    let head_other = c.call(
+        "aikoql",
+        &json!({"query": "MATCH device RETURN *", "tenant": "other"}),
+    );
+    assert_eq!(
+        proj(&head_other),
+        vec![],
+        "head under the other tenant must hide the retracted row: {head_other}"
+    );
+}
+
+#[test]
 fn serve_restart_catchup_preserves_edges_for_relate_replay() {
     // F13 end-to-end (the device-eval DI-002 pipeline): run1 remembers and
     // relates, run2 restarts the serve — the start-up catch-up enriches
