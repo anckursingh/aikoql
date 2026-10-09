@@ -2116,7 +2116,7 @@ fn compile_context_fails_fast_when_model_busy_with_stored_embeddings() {
         std::time::Duration::from_secs(2),
     );
     assert!(
-        ctx["package"]["entities"].as_array().unwrap().len() > 0,
+        !ctx["package"]["entities"].as_array().unwrap().is_empty(),
         "the lexical package must survive the busy model: {ctx}"
     );
     assert_eq!(
@@ -2190,4 +2190,44 @@ fn default_rate_limit_serves_a_batch_ingest_phase() {
         started.elapsed() < std::time::Duration::from_secs(50),
         "the batch phase straddled a window rollover — the pin proves nothing"
     );
+}
+
+// T-49 (POC-3 B3-1): supersede must read `extensions.valid_from` for the
+// successor exactly as remember does — commit time is only the fallback.
+// The device stream back-dates corrections by event_time; stamping the
+// commit instant instead makes the successor assert validity in the future
+// and breaks AS_OF reconstruction of the device timeline.
+#[test]
+fn supersede_honors_extensions_valid_from() {
+    let db = tmp_db("t49vf");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "note",
+            "properties": {"body": "v1"}
+        }),
+    );
+    let old = note["koid"].as_str().unwrap().to_string();
+
+    let sup = c.call(
+        "supersede",
+        &json!({
+            "subject": "admin", "old": &old, "type_name": "note",
+            "properties": {"body": "v2"},
+            "extensions": {"valid_from": 1_700_000_000_000u64},
+            "evidence": [{"source_artifact": "probe", "method": "runtime_observation"}]
+        }),
+    );
+    let new = sup["new"].as_str().unwrap().to_string();
+
+    let got = c.call("get", &json!({"koid": &new, "subject": "admin"}));
+    assert_eq!(
+        got["extensions"]["valid_from"], 1_700_000_000_000u64,
+        "successor valid_from must honor extensions.valid_from, got: {got}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
 }
