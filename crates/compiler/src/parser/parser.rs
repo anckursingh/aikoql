@@ -1198,6 +1198,48 @@ mod tests {
             .is_err());
     }
 
+    // T-61 (POC-3 MINOR/doc): the temporal literal surface — epoch millis
+    // integers and strict ISO "YYYY-MM-DD" / "YYYY-MM-DDTHH:MM:SS" (UTC) are
+    // the only accepted spellings (MRFC-0010 §5.2). The POC hit the rejected
+    // shape (fractional seconds + offset) and found it undocumented; the
+    // behavior itself is pinned here so the doc can never drift past it.
+    #[test]
+    fn parse_time_millis_t61_literal_surface() {
+        assert_eq!(
+            parse_match("MATCH X AS_OF 1791582896539 RETURN *").temporal,
+            Some(TemporalClause::AsOf(1_791_582_896_539)),
+        );
+        assert_eq!(
+            parse_match("MATCH X AS_OF \"2026-10-09\" RETURN *").temporal,
+            Some(TemporalClause::AsOf(iso_to_millis("2026-10-09").unwrap())),
+        );
+        assert_eq!(
+            parse_match("MATCH X AS_OF \"2026-10-09T05:15:32\" RETURN *").temporal,
+            Some(TemporalClause::AsOf(
+                iso_to_millis("2026-10-09T05:15:32").unwrap()
+            )),
+        );
+        assert_eq!(
+            parse_match("MATCH X BETWEEN 1791582896000 AND 1791582896539 RETURN *").temporal,
+            Some(TemporalClause::Between {
+                from: 1_791_582_896_000,
+                to: 1_791_582_896_539,
+            }),
+        );
+        // Rejected: the POC's exact shape (fractional + offset), offset alone.
+        for bad in [
+            "MATCH X AS_OF \"2026-10-09T05:15:32.488000+00:00\" RETURN *",
+            "MATCH X AS_OF \"2026-10-09T05:15:32+00:00\" RETURN *",
+            "MATCH X BETWEEN \"2026-10-09T05:15:32.488000+00:00\" AND 1791582896539 RETURN *",
+        ] {
+            assert!(
+                Parser::new(bad).parse_statement().is_err(),
+                "expected rejection: {}",
+                bad
+            );
+        }
+    }
+
     #[test]
     fn iso_to_millis_known_dates() {
         assert_eq!(iso_to_millis("1970-01-01"), Some(0));
