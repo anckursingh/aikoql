@@ -1658,3 +1658,35 @@ Pin: `supersede_successor_inherits_tenant` remembers a device in
 tenant_a, supersedes it, and asserts a tenant_b-scoped
 `MATCH device RETURN *` sees 0 rows. RED archived as `T-50`
 (exit 101 — tenant_b saw the successor v2 row).
+
+## 55. Supersede retraction ends validity without a successor — T-51
+
+POC-3 Stage B3-3 (MEDIUM-HIGH): retraction was inexpressible on the
+MCP surface. The G-002 workaround — supersede with no properties —
+minted an empty shell KO (`properties: {}`, open validity, wall-clock
+`valid_from`) that every plain MATCH head and AS_OF slice returned
+(s5: `as_of(6600)` answered `(None, None)` instead of `[]`). The
+kernel's None-successor transition existed only as
+`admin_transition_epistemic`, which lacks the supersede pipeline's
+evidence append and dependent sweep, so routing the tool there would
+have traded the shell for two silent gaps.
+
+Fix: `SupersedeRequest.retract` + `SupersedeResult.new: Option<KOID>`.
+Retraction rides the same composition as a fresh supersede — pair-pin,
+auth, version guard, Superseded + valid_to at the pair instant, no
+SUPERSEDES edge, dependent sweep — and then appends the evidence to
+the old claim (evidence cannot disappear on a semantic op). The
+conflicting shapes are rejected up front: `retract` with
+`superseded_by`, and `retract` with non-empty `properties`. The tool
+arg is `"retract": true`; the `new` field renders null. The
+Option-typed result rippled through the fresh-successor expectations
+in runtime/transactions/qa2_prop/ingestion tests, each pinned with an
+`.unwrap()`/`.expect("fresh successor")` — a retraction there would
+now fail loudly instead of minting a phantom.
+
+Pins: `supersede_retract_leaves_no_shell_successor` (mcp_real_world)
+retracts a device and asserts the MATCH head is empty;
+`supersede_retract_ends_validity_without_a_successor` (transactions)
+asserts the None result, closed validity, no SUPERSEDES edge, appended
+evidence, and both conflict rejections. RED archived as `T-51`
+(exit 101 — the shell successor koid was created).
