@@ -1874,3 +1874,47 @@ stamps `valid_to` at its own commit ms and F12's half-open
 [valid_from, valid_to) hides the row at that instant, so a same-ms
 retract would make the slice (correctly) empty. RED archived as `T-57`
 (exit 101 — "unknown batch op: supersede").
+
+## 62. AS_OF JOURNAL — the journal-seq clock domain — T-58 (POC-3 P3-008)
+
+P3-008 (LOW): `AS_OF` accepts only wall-clock millis, so a client
+replaying a synthetic corpus must synthesize wall markers — a
+strictly-increasing marker plus a monotonicity sleep loop, with
+collision and drift as the footguns. The transaction journal seq is
+already monotonic and exact per apply (health()["journal_seq"] after
+each apply), and the persisted `ke/` event journal maps seq →
+commit_ts, so the fix is pure plumbing plus one kernel resolver — no
+new storage, restart-safe by construction.
+
+The chain: the lexer gains a `JOURNAL` keyword; `parse_temporal_clause`
+peeks it after `AS_OF` and produces `TemporalClause::AsOfJournal(n)`;
+the compiler maps that to `TemporalOp::AsOfJournal(n)`; the runtime
+gains an `AsOfJournal` arm; the kernel gains `get_as_of_journal(ctx,
+koid, n)`:
+
+- the `ke/` event at seq n pins the EXACT packed commit instant of the
+  nth apply — the snap is `ev.commit_ts` itself, with no 0xFFFF
+  counter fill (filling would admit a later same-millis sibling commit;
+  the event IS the apply);
+- the version is reconstructed via `object_at(koid, snap)` and gated
+  by the same F12 half-open rule as `get_as_of`: `valid_to <= wall`
+  hides the row, where wall = `ev.commit_ts >> 16` — so the retraction
+  event's own seq shows the row already gone;
+- Read authz applies as in every temporal read;
+- seq 0 names the empty world before the first apply (`None`); a seq
+  beyond the journal head names the current state (u64::MAX snap, now
+  wall) — the "fast-forward to the end" slice.
+
+Pair-pinned compositions collapse into their instant: the successor-
+creation and supersession events share a commit_ts (T-47), so both
+seqs slice identically — the domain reinforces the atomic-pair
+invariant instead of fighting it.
+
+Pin: `t58_asof_journal_domain_slices_between_applies` (mcp_real_world)
+— remember/correct/retract a device row; the journal seq captured
+after each apply advances strictly (2 < 4 < 5); `AS_OF JOURNAL s1`
+returns the original v0, s2 the corrected v0b, s3 the empty
+post-retraction world, 0 the empty world, and a beyond-head seq the
+current state. No wall marker is captured anywhere in the pin. RED
+archived as `T-58` (exit 101 — "AIKOQL1011: expected time (epoch
+millis or ISO string), got 'JOURNAL'").

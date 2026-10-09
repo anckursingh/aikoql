@@ -148,9 +148,15 @@ P0-2). The BETWEEN filter is Option-driven on both sides.
 **T3. AS_OF/HISTORICAL = transaction time; BETWEEN = valid time.**
 `MATCH` defaults to valid-at-now; `AS_OF`/`HISTORICAL` reconstruct committed
 transaction-time versions; `BETWEEN` filters valid-time overlap.
+`AS_OF JOURNAL <n>` (T-58, P3-008 LOW) is the same transaction-time world
+addressed in the journal-seq clock domain — the `ke/` event at seq n pins
+the exact commit instant of the nth apply, so a corpus replay slices
+between applies without synthesizing wall markers (seq 0 = the empty
+world; beyond-head = current state).
 - Enforced at: `crates/runtime/src/lib.rs` (query filter dispatch).
 - Verified: `mcp_stdio.rs` k2, `scripts/e2e-k2-temporal.js`,
-  `scripts/e2e-dogfood.js` Q2/Q3.
+  `scripts/e2e-dogfood.js` Q2/Q3,
+  `mcp_real_world.rs::t58_asof_journal_domain_slices_between_applies`.
 
 ## Derivation
 
