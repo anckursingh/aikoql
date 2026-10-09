@@ -3027,6 +3027,53 @@ fn t32_untenanted_objects_visible_to_scoped_subjects() {
     assert_eq!(k.scan_by_type(&acme(), "fact").unwrap().len(), 1);
 }
 
+// T-55 (POC-3 P3-009 MEDIUM): a tenant-less subject's READ fails open —
+// the R9 check only fired when BOTH sides carry a tenant, so an unscoped
+// subject read every tenant's rows. Tenant-less reads are confined to
+// shared (untenanted) rows; only an admin role reads unscoped across
+// tenants. Ownership alone does not bypass.
+#[test]
+fn t33_unscoped_subject_sees_only_shared_rows() {
+    let k = mk().0;
+
+    // alice (unscoped) owns a tenant-scoped row and a shared row.
+    let mut r = RememberRequest::create(alice(), meta_tenant("fact", "acme"));
+    r.properties
+        .insert("who".into(), Value::Text("scoped".into()));
+    let scoped = k.remember(r).unwrap().koid;
+    let shared = k
+        .remember(RememberRequest::create(alice(), meta("fact")))
+        .unwrap()
+        .koid;
+
+    // Unscoped READ sees only the shared row — even though alice owns both.
+    let seen = k.scan_by_type(&alice(), "fact").unwrap();
+    assert_eq!(
+        seen.len(),
+        1,
+        "unscoped read must be confined to shared rows"
+    );
+    assert_eq!(seen[0].koid, shared);
+
+    // Point read on the tenant-scoped row is denied outright.
+    assert!(matches!(
+        k.get(alice(), &scoped),
+        Err(KError::AccessDenied { .. })
+    ));
+
+    // The scoped subject still reads it — the tenant pin is the door.
+    assert!(k.get(acme(), &scoped).is_ok());
+    assert_eq!(k.scan_by_type(&acme(), "fact").unwrap().len(), 2);
+
+    // An unscoped admin keeps the pre-R9 global read (t30's shape).
+    assert_eq!(
+        k.scan_by_type(&Subject::with_roles("root", &["admin"]), "fact")
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
 // §30/31 — multi-agent scenario: two agents share organization knowledge
 // (untenanted + ACL grant) while agent-private memory stays confined.
 #[test]

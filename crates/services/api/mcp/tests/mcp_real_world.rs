@@ -284,6 +284,41 @@ impl McpClient {
             .unwrap();
         serde_json::from_str(&response).unwrap()
     }
+
+    /// Session with NO tenant pin — the P3-009 fail-open shape.
+    fn session_init_unscoped(&mut self, agent_id: &str) -> J {
+        self.session_init_params(&json!({"agent_id": agent_id}))
+    }
+
+    /// Unscoped session with an explicit admin role — the global read channel.
+    fn session_init_unscoped_admin(&mut self, agent_id: &str) -> J {
+        self.session_init_params(&json!({"agent_id": agent_id, "roles": ["admin"]}))
+    }
+
+    /// Raw session/init passthrough (for boundary-rejection pins).
+    fn session_init_with(&mut self, agent_id: &str, tenant: &str) -> J {
+        self.session_init_params(&json!({"agent_id": agent_id, "tenant": tenant}))
+    }
+
+    fn session_init_params(&mut self, params: &J) -> J {
+        let id = self.next_id;
+        self.next_id += 1;
+        let req = json!({
+            "jsonrpc": "2.0", "id": id, "method": "session/init",
+            "params": params
+        });
+        self.stdin
+            .write_all((serde_json::to_string(&req).unwrap() + "\n").as_bytes())
+            .unwrap();
+        self.stdin.flush().unwrap();
+        let mut response = String::new();
+        self.reader
+            .as_mut()
+            .unwrap()
+            .read_line(&mut response)
+            .unwrap();
+        serde_json::from_str(&response).unwrap()
+    }
 }
 
 impl Drop for McpClient {
@@ -2562,6 +2597,162 @@ fn between_windows_retire_superseded_generations() {
         "AS_OF at the first commit must still show the old generation: {past}"
     );
     assert_eq!(pasts[0]["properties"]["value"], json!("old"));
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-55 (POC-3 P3-009 MEDIUM): a session pinned with no tenant sees ALL
+// tenants' rows — the read side fails OPEN when the client forgets the
+// tenant pin. A tenant-less session must see nothing tenant-scoped; only an
+// explicit admin role may read unscoped.
+#[test]
+fn tenantless_session_sees_nothing_scoped() {
+    let db = tmp_db("t55ns");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    // Two tenants, one row each, owned by different writers.
+    let _a = c.call(
+        "remember",
+        &json!({
+            "subject": "writer-a", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    let _b = c.call(
+        "remember",
+        &json!({
+            "subject": "writer-b", "type_name": "device", "tenant": "tenant_b",
+            "properties": {"key": "d2", "value": "v2"}
+        }),
+    );
+
+    // An unscoped session (no tenant pin) must fail closed: 0 rows, not
+    // the cross-tenant head (POC F3 shape).
+    let _init = c.session_init_unscoped("plain-agent");
+    let m = c.call(
+        "aikoql",
+        &json!({
+            "subject": "plain-agent",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        m["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "tenant-less session must see nothing tenant-scoped: {m}"
+    );
+
+    // Even an unscoped OWNER stays confined — ownership does not bypass the
+    // tenant pin; the pin is the only door for an unscoped principal.
+    let _init = c.session_init_unscoped("writer-a");
+    let m = c.call(
+        "aikoql",
+        &json!({
+            "subject": "writer-a",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        m["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        0,
+        "unscoped owner must not read own tenant-scoped rows: {m}"
+    );
+
+    // The explicit global channel still works: an admin-role unscoped
+    // subject reads across tenants.
+    let _init = c.session_init_unscoped_admin("global-admin");
+    let m = c.call(
+        "aikoql",
+        &json!({
+            "subject": "global-admin",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    assert_eq!(
+        m["results"].as_array().map(|a| a.len()).unwrap_or(0),
+        2,
+        "admin-role unscoped subject is the explicit global read channel: {m}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-55 (POC-3 P3-009 P2c LOW): `tenant: ""` is accepted silently and the row
+// lands in an invisible "" namespace. The tool boundary must reject a
+// present-but-empty tenant instead of storing a black-hole row.
+#[test]
+fn remember_rejects_empty_tenant() {
+    let db = tmp_db("t55et");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let r = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    assert_eq!(
+        r["ok"],
+        json!(false),
+        "empty tenant must be rejected at the boundary: {r}"
+    );
+    assert_eq!(
+        r["error"]["code"],
+        json!("VALIDATION_ERROR"),
+        "empty tenant rejection carries a validation code: {r}"
+    );
+
+    // And the same shape on the session pin.
+    let i = c.session_init_with("admin", "");
+    assert_eq!(i["error"]["code"], json!(-32602));
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
+// T-55 (POC-3 P3-009 P5 LOW): ACL denials surface as INTERNAL with an
+// "unexpected error" suggestion — clients cannot tell a permission denial
+// from a server fault. A cross-tenant denial must carry ACCESS_DENIED,
+// retryable=false, and an access-oriented suggestion.
+#[test]
+fn foreign_access_denied_is_not_internal() {
+    let db = tmp_db("t55ad");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let note = c.call(
+        "remember",
+        &json!({
+            "subject": "writer-a", "type_name": "device", "tenant": "tenant_a",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    let koid = note["koid"].as_str().unwrap().to_string();
+
+    // Foreign session: tenant_b cannot read tenant_a's object.
+    let _init = c.session_init("reader-b", "tenant_b");
+    for tool in ["get", "explain", "prove", "trace"] {
+        let args = match tool {
+            "explain" => json!({"subject": "reader-b", "koid": &koid}),
+            "prove" => json!({"subject": "reader-b", "koid": &koid}),
+            "trace" => json!({"subject": "reader-b", "koid": &koid}),
+            _ => json!({"subject": "reader-b", "koid": &koid}),
+        };
+        let r = c.call(tool, &args);
+        assert_eq!(r["ok"], json!(false), "foreign {tool} must be denied: {r}");
+        assert_eq!(
+            r["error"]["code"],
+            json!("ACCESS_DENIED"),
+            "denial must classify ACCESS_DENIED, not INTERNAL ({tool}): {r}"
+        );
+        assert_eq!(
+            r["error"]["retryable"],
+            json!(false),
+            "a permission denial is not retryable ({tool}): {r}"
+        );
+    }
 
     let _ = std::fs::remove_dir_all(&db);
 }
