@@ -3140,3 +3140,51 @@ fn t59_stdio_shutdown_handoff_is_observable() {
 
     let _ = std::fs::remove_dir_all(&db);
 }
+
+// T-60 (POC-3 MINOR): `remember` silently dropped a top-level `valid_from`
+// (the observe/assert_knowledge spelling) — the row landed with no
+// valid-time claim. Pin: the top-level arg lands in the row's valid_from
+// extension; when BOTH spellings are given, the extension wins (the T-49
+// precedence).
+#[test]
+fn t60_remember_accepts_top_level_valid_from() {
+    let db = tmp_db("t60-valid-from");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let t0 = 1_600_000_000_000u64;
+    let r = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device",
+            "properties": {"device_id": "t60_top", "v": "top"},
+            "valid_from": t0,
+        }),
+    );
+    let koid = r["koid"].as_str().unwrap().to_string();
+    let got = c.call("get", &json!({"koid": koid, "subject": "admin"}));
+    assert_eq!(
+        got["extensions"]["valid_from"], t0,
+        "top-level valid_from must land in the row's valid-time extension: {got}"
+    );
+
+    // Precedence: the extension wins when both spellings are given.
+    let r2 = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device",
+            "properties": {"device_id": "t60_both", "v": "both"},
+            "valid_from": t0,
+            "extensions": {"valid_from": t0 + 5_000},
+        }),
+    );
+    let koid2 = r2["koid"].as_str().unwrap().to_string();
+    let got2 = c.call("get", &json!({"koid": koid2, "subject": "admin"}));
+    assert_eq!(
+        got2["extensions"]["valid_from"],
+        t0 + 5_000,
+        "extensions.valid_from must win over the top-level spelling: {got2}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
