@@ -299,7 +299,10 @@ pub(crate) fn tool_execute_program(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(|v| v.as_str())
         .map(|id| format!("execute-program-{hex}-{id}"));
     if let Some(key) = idem_key.as_deref() {
-        if let Some((rec_koid, _, _)) = k.resolve_idempotency(key).map_err(|e| e.to_string())? {
+        if let Some((rec_koid, _, _)) = k
+            .resolve_idempotency_scoped(subject.tenant.as_deref(), key)
+            .map_err(|e| e.to_string())?
+        {
             let rec = k
                 .get(KnowledgeContext::from(subject.clone()), &rec_koid)
                 .map_err(|e| e.to_string())?;

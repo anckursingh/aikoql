@@ -1232,7 +1232,9 @@ impl Kernel {
         let ctx = req.context.clone();
         // Exact-once replay: the idempotency key is stored by side B's create.
         if let Some(key) = &req.idempotency_key {
-            if let Some((b_koid, b_version, _)) = self.resolve_idempotency(key)? {
+            if let Some((b_koid, b_version, _)) =
+                self.resolve_idempotency_scoped(ctx.tenant.as_deref(), key)?
+            {
                 let a_version = self
                     .head_object(&req.subject)?
                     .ok_or(KError::NotFound(req.subject))?

@@ -669,7 +669,7 @@ pub(crate) fn tool_get_by_idem(k: &Kernel, args: &J) -> Result<J, String> {
         .and_then(|v| v.as_str())
         .ok_or("missing argument: key")?;
     match k
-        .resolve_idempotency(key)
+        .resolve_idempotency_scoped(subject_of(args).tenant.as_deref(), key)
         .map_err(|e| format!("idempotency lookup: {e}"))?
     {
         Some((koid, _, _)) => {

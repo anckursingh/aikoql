@@ -134,6 +134,18 @@ impl Hlc {
 }
 
 // ---------------------------------------------------------------------------
+// Idempotency key namespacing (T-52, POC P3-009): the replay key is scoped
+// by the write's tenant so tenant_b can never replay tenant_a's commit.
+// Tenant-less writes (ingest-dir, catalog) keep the bare global namespace.
+// ---------------------------------------------------------------------------
+fn idem_scope(tenant: Option<&str>, key: &str) -> String {
+    match tenant.filter(|t| !t.is_empty()) {
+        Some(t) => format!("{}\u{0}{}", t, key),
+        None => key.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Audit-chain preimage: covers every field an attacker might flip.
 // ---------------------------------------------------------------------------
 fn audit_hash_of(
@@ -1647,8 +1659,14 @@ impl Kernel {
         pipe: &mut Pipeline,
         req: &RememberRequest,
     ) -> KResult<Remembered> {
-        if let Some(k) = &req.idempotency_key {
-            if let Some((koid, version, commit_ts)) = self.repo.get_idem(k)? {
+        // T-52 (POC P3-009): the replay key is namespaced by the write's
+        // tenant — a foreign tenant must not receive this commit's koid.
+        let scoped_idem: Option<String> = req
+            .idempotency_key
+            .as_deref()
+            .map(|k| idem_scope(req.metadata.tenant.as_deref(), k));
+        if let Some(scoped) = &scoped_idem {
+            if let Some((koid, version, commit_ts)) = self.repo.get_idem(scoped)? {
                 return Ok(Remembered {
                     koid,
                     version,
@@ -2067,7 +2085,7 @@ impl Kernel {
             req.origin.clone(),
             &req.context.subject.name,
             req.note.clone(),
-            req.idempotency_key.as_deref(),
+            scoped_idem.as_deref(),
             head.as_ref().map(|h| h.relationships.as_slice()),
         )?;
         if is_auth_meta {
@@ -2957,8 +2975,22 @@ impl Kernel {
     /// `remember` with an existing idempotency key replays the old write
     /// without storing anything, so an updater must resolve the key first and
     /// remember with an explicit `koid` instead.
+    ///
+    /// Resolves in the global namespace (tenant-less writes). Tenant-scoped
+    /// callers must use [`Self::resolve_idempotency_scoped`] with the tenant
+    /// the write carried — the two namespaces never collide (POC P3-009).
     pub fn resolve_idempotency(&self, key: &str) -> KResult<Option<(KOID, u64, u64)>> {
-        self.repo.get_idem(key)
+        self.resolve_idempotency_scoped(None, key)
+    }
+
+    /// Tenant-scoped idempotency resolution (T-52). The scope must match the
+    /// `metadata.tenant` of the write that stored the key.
+    pub fn resolve_idempotency_scoped(
+        &self,
+        tenant: Option<&str>,
+        key: &str,
+    ) -> KResult<Option<(KOID, u64, u64)>> {
+        self.repo.get_idem(&idem_scope(tenant, key))
     }
 
     pub fn get(&self, ctx: impl Into<KnowledgeContext>, koid: &KOID) -> KResult<KnowledgeObject> {
