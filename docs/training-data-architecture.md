@@ -1808,3 +1808,25 @@ admin-role sees 2; empty-tenant remember and session_init are rejected;
 get/explain/prove/trace across tenants report ACCESS_DENIED with
 retryable false). RED archived as `T-55` (exit 101 — kernel 1 + MCP 3
 pins failed).
+
+## 60. The serve help documents the rate cap — T-56 (POC-3 P3-005)
+
+P3-005 (MEDIUM): the server-side rate cap failed a burst at call ~300
+with -32000 ("rate limit exceeded (max 300 calls/min)") and nothing in
+`aikoql-mcp --help` or `serve --help` mentioned the cap or any way to
+tune it — the knob existed only in config internals, and the root sample
+`aikoql.toml` still carried the pre-T-45 value (120) while the shipped
+default is 300.
+
+`print_usage` gains a "Limits:" block: MCP tool calls are rate-limited
+per principal (subject or session identity), 300 calls per 60s window
+by default, tuned with `[rate_limit]` in aikoql.toml (`enabled`,
+`max_calls_per_minute`); for large bulk loads the help points at
+`import <SOURCE>` / `ingest-dir` instead of paced MCP writes. The root
+sample `aikoql.toml` pins `max_calls_per_minute = 300` with a T-45 note
+(the T-45 default raise had never propagated into the sample).
+
+Pin: `cl05_help_documents_rate_cap` (cli_contract) — both `--help` and
+`serve --help` carry "300 calls", "per principal",
+"max_calls_per_minute", and "[rate_limit]". RED archived as `T-56`
+(exit 101 — "300 calls" missing from the help).
