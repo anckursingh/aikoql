@@ -668,14 +668,33 @@ impl Interpreter {
                     // Valid-time overlap with [from, to): half-open. None
                     // bounds are unbounded (None valid_from = -inf, None
                     // valid_to = +inf) — `0` is NOT the semantic representation
-                    // of the unbounded past (review P0-2).
-                    TemporalOp::Between { from, to } => kos
-                        .into_iter()
-                        .filter(|ko| {
-                            ko.valid_from().map(|vf| vf < *to).unwrap_or(true)
+                    // of the unbounded past (review P0-2). T-54 (POC B3-2):
+                    // a generation retired BY A SUCCESSOR is excluded — its
+                    // wall-time valid_to (~1.79e12) overlaps every event-time
+                    // window the eval queries, so BETWEEN would keep
+                    // answering with the stale value. The discriminator is
+                    // the outbound SUPERSEDES edge (created only by
+                    // supersede-with-successor): kernel-managed valid-time
+                    // closure (no edge) and T-51 retractions stay visible.
+                    // History stays AS_OF-reconstructable; scan-level only.
+                    TemporalOp::Between { from, to } => {
+                        let mut out = Vec::new();
+                        for ko in kos {
+                            if ko.epistemic_status() == EpistemicStatus::Superseded
+                                && !kernel
+                                    .outbound_edges(&ko.koid, Some(SUPERSEDES))?
+                                    .is_empty()
+                            {
+                                continue;
+                            }
+                            if ko.valid_from().map(|vf| vf < *to).unwrap_or(true)
                                 && ko.valid_to().map(|t| t > *from).unwrap_or(true)
-                        })
-                        .collect(),
+                            {
+                                out.push(ko);
+                            }
+                        }
+                        out
+                    }
                     // Historical reconstruction: every committed version of
                     // every scanned KOID, ascending commit order.
                     TemporalOp::Historical => {
