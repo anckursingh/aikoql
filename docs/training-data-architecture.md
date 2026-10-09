@@ -1635,3 +1635,26 @@ Pin: `supersede_honors_extensions_valid_from` supersedes a note with
 `extensions.valid_from = 1_700_000_000_000` and asserts the
 successor's get returns exactly that instant. RED archived as `T-49`
 (exit 101 — successor stamped 1791556921768, the commit instant).
+
+## 54. Supersede successors inherit the replaced row's tenant — T-50
+
+POC-3 Stage B3-4 (HIGH): the device stream corrects rows inside
+tenant_a, but the supersede successor is created untenanted. The
+kernel's successor-create path stamped `tenant: ctx.tenant.clone()`,
+and the MCP layer never sets the context tenant — only `remember`
+maps the tenant ARG into `metadata.tenant`. The ACL's R9 tenant
+confinement rule denies mismatches but treats untenanted objects as
+shared, so the successor escaped tenant_a's confinement and showed up
+in every other tenant's scans: a cross-tenant leak of device
+identities.
+
+Fix: the successor's metadata tenant is `old.metadata.tenant` with
+`ctx.tenant` only as the fallback. The generation replaces the claim,
+so it must stay inside the claim's tenant — the same reasoning as
+F11's scope/authority inheritance. Kernel-side only; the F7
+`observed_at_ms` stamping is untouched.
+
+Pin: `supersede_successor_inherits_tenant` remembers a device in
+tenant_a, supersedes it, and asserts a tenant_b-scoped
+`MATCH device RETURN *` sees 0 rows. RED archived as `T-50`
+(exit 101 — tenant_b saw the successor v2 row).
