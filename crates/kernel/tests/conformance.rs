@@ -225,6 +225,25 @@ fn t06f_resolve_idempotency_then_update_replaces_content() {
     assert_eq!(ko.properties.get("body"), Some(&Value::Text("new".into())));
 }
 
+#[test]
+fn t06g_idempotency_key_is_tenant_scoped() {
+    let (k, _c) = mk();
+    let mut r_a = RememberRequest::create(alice(), meta_tenant("device", "tenant-a"));
+    r_a.idempotency_key = Some("twin".into());
+    let a = k.remember(r_a.clone()).unwrap();
+
+    // Same key under a different tenant is an independent write, not a
+    // replay of tenant-a's commit (POC P3-009 probe P6).
+    let mut r_b = RememberRequest::create(alice(), meta_tenant("device", "tenant-b"));
+    r_b.idempotency_key = Some("twin".into());
+    let b = k.remember(r_b).unwrap();
+    assert_ne!(a.koid, b.koid, "idempotency must not replay across tenants");
+    assert_eq!(b.version, 1, "tenant-b's write must persist, not vanish");
+
+    // Same-tenant retry stays exact-once.
+    assert_eq!(k.remember(r_a).unwrap(), a);
+}
+
 // ---------------------------------------------------------------------------
 // referential integrity (MRFC-0001 §7)
 // ---------------------------------------------------------------------------

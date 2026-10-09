@@ -2279,6 +2279,66 @@ fn supersede_successor_inherits_tenant() {
     let _ = std::fs::remove_dir_all(&db);
 }
 
+// T-52 (POC-3 P3-009 HIGH): the idempotency key namespace was global, so a
+// tenant_b remember with tenant_a's key replayed tenant_a's commit — tenant_b
+// received the foreign koid and its own write silently vanished. Acceptance:
+// same key, two tenants => two distinct KOs, both writes persisted.
+#[test]
+fn idempotency_key_is_tenant_scoped() {
+    let db = tmp_db("t52id");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let a = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "idempotency_key": "p9-twin",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    let koid_a = a["koid"].as_str().unwrap().to_string();
+
+    let b = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_b",
+            "idempotency_key": "p9-twin",
+            "properties": {"key": "d1", "value": "v2"}
+        }),
+    );
+    assert_ne!(
+        b["koid"].as_str().unwrap(),
+        koid_a.as_str(),
+        "tenant_b must not receive tenant_a's koid on replay: {b}"
+    );
+
+    // Both writes persisted — tenant_b's value is v2, not silently dropped.
+    let match_b = c.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_b",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    let rows = match_b["results"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "tenant_b's write must persist: {match_b}");
+    assert_eq!(rows[0]["properties"]["value"], json!("v2"));
+
+    // Same-tenant retry stays exact-once.
+    let a2 = c.call(
+        "remember",
+        &json!({
+            "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+            "idempotency_key": "p9-twin",
+            "properties": {"key": "d1", "value": "v1"}
+        }),
+    );
+    assert_eq!(a2["koid"].as_str().unwrap(), koid_a.as_str());
+
+    let _ = std::fs::remove_dir_all(&db);
+}
+
 // T-51 (POC-3 B3-3): `retract: true` ends validity without creating a shell
 // successor. The G-002 workaround shape (supersede with no properties)
 // created an empty v1 row — properties {} — visible in every MATCH head and
