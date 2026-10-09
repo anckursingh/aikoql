@@ -1768,3 +1768,43 @@ touches storage. Pin: `between_windows_retire_superseded_generations`
 in an event-time window, 0 rows before its valid_from, and `AS_OF` at the
 predecessor's commit instant still reconstructs the old value. RED archived
 as `T-54` (exit 101 — the window returned both generations).
+
+## 59. Tenant gaps fail closed — T-55 (POC-3 P3-009 remainder)
+
+The three remaining P3-009 findings after T-52 (HIGH idempotency
+namespace):
+
+- MEDIUM — a session with no tenant saw EVERY tenant's rows. R9 only
+  compared tenants when both were set; `subject.tenant == None` skipped
+  the pin and the default-open path admitted every head. The fix is a
+  Read-only fail-closed rule in `authorize_parts`: an unscoped subject
+  reading a tenanted row is denied unless it carries an explicit admin
+  role (direct or inherited — `subject.is_admin()` or
+  `effective_principals` containing "admin"). Ownership alone does NOT
+  bypass, because the unscoped agent can be the row owner — the POC
+  threat itself. Writes are untouched: the tool write path self-scopes
+  the subject from the tenant arg, and the kernel tests that create
+  tenanted rows with unscoped subjects are Write-actions.
+- LOW P2c — `tenant: ""` was accepted and the row landed in an invisible
+  "" namespace (every R9 tenant pin fails on the empty string, and no
+  scoped reader can resolve it). `reject_empty_tenant` rejects a
+  present-but-empty/non-string tenant at the boundary: `tool_session_init`
+  (Err → -32602) and `tool_remember` (Err → VALIDATION_ERROR; remember
+  covers tool_batch ops, which resolve through tool_remember).
+- LOW P5 — foreign-row denials surfaced as `error.code: INTERNAL`
+  ("unexpected error"). The KError Display writes `ACCESS_DENIED: ...`
+  with an underscore; `classify()` only matched "access denied" with a
+  space. classify() now matches `access_denied` too → ACCESS_DENIED code,
+  retryable=false, access suggestion (no new code — the variant already
+  existed).
+
+Pins: `t33_unscoped_subject_sees_only_shared_rows` (kernel conformance —
+an owner-unscoped scan sees ONLY the shared row, the point-read on the
+scoped row is AccessDenied, an admin-role subject sees both) plus
+`tenantless_session_sees_nothing_scoped`,
+`remember_rejects_empty_tenant`, and `foreign_access_denied_is_not_internal`
+(MCP real-world — unscoped MATCH returns 0 rows even for the row owner,
+admin-role sees 2; empty-tenant remember and session_init are rejected;
+get/explain/prove/trace across tenants report ACCESS_DENIED with
+retryable false). RED archived as `T-55` (exit 101 — kernel 1 + MCP 3
+pins failed).
