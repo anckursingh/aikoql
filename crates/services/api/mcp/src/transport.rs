@@ -371,7 +371,10 @@ pub(crate) fn run_stdio(
     for line in stdin.lock().lines() {
         let line = match line {
             Ok(l) => l,
-            Err(_) => break,
+            Err(e) => {
+                info!("stdio loop ended: read error: {e}");
+                break;
+            }
         };
         if line.trim().is_empty() {
             continue;
@@ -402,9 +405,11 @@ pub(crate) fn run_stdio(
         // P5-M11: a shutdown ack ends the stdio loop too — the client's
         // stdin close (EOF) then exits the process cleanly.
         if SHUTDOWN_FLAG.load(Ordering::Relaxed) {
+            info!("stdio loop ended: shutdown flag");
             break;
         }
     }
+    info!("stdio loop ended: eof");
 }
 
 #[cfg(test)]

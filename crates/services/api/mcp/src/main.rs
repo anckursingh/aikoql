@@ -620,10 +620,34 @@ fn main() {
         // P5-M22 (P1-15): stdio mode returns at stdin EOF — checkpoint the
         // maintainer before the process exits. TCP mode never returns, so
         // it has no shutdown-time checkpoint yet (honest ledger).
-        if let Some(m) = server_ctx.db.maintainer.lock().unwrap().as_ref() {
+        //
+        // T-59 (P3-010): the maintainer is attached from a spawned thread
+        // (see the serve setup above) — a close->rapid-EOF shutdown can
+        // read the slot before the attach lands and skip the checkpoint.
+        // Wait for the attach (bounded) so the hand-off is deterministic.
+        let maintainer = {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let m = server_ctx.db.maintainer.lock().unwrap().clone();
+                if m.is_some() {
+                    break m;
+                }
+                if std::time::Instant::now() >= deadline {
+                    warn!("shutdown: maintainer not attached within 5s — skipping checkpoint");
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        if let Some(m) = maintainer {
+            let t0 = std::time::Instant::now();
             if let Err(e) = m.checkpoint(&kernel, &ckpt_dir) {
                 warn!("maintainer checkpoint failed: {e}");
             }
+            info!(
+                elapsed_ms = t0.elapsed().as_millis() as u64,
+                "shutdown maintainer checkpoint done"
+            );
         }
     }
 }
