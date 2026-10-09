@@ -1,0 +1,71 @@
+warning: unreachable statement
+   --> crates\storage\aikoql-v2\src\db.rs:725:13
+    |
+724 |               return Ok(());
+    |               ------------- any code following this expression is unreachable
+725 | /             match op {
+726 | |                 Op::Put(k, v) => active.apply(k, seq, Some(v)),
+727 | |                 Op::Delete(k) => active.apply(k, seq, None),
+...   |
+775 | |             }
+    | |_____________^ unreachable statement
+    |
+    = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `seq`
+   --> crates\storage\aikoql-v2\src\db.rs:723:60
+    |
+723 |         let (consumed, wal_end) = replay_reader(&mut wal, |seq, op| {
+    |                                                            ^^^ help: if this is intentional, prefix it with an underscore: `_seq`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `op`
+   --> crates\storage\aikoql-v2\src\db.rs:723:65
+    |
+723 |         let (consumed, wal_end) = replay_reader(&mut wal, |seq, op| {
+    |                                                                 ^^ help: if this is intentional, prefix it with an underscore: `_op`
+
+warning: `aikoql-storage-v2` (lib) generated 3 warnings (run `cargo fix --lib -p aikoql-storage-v2` to apply 2 suggestions)
+   Compiling aikoql-mcp v0.2.2 (E:\dreams\Mnemosyne\crates\services\api\mcp)
+warning: linker stdout: LINK : warning LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs; use /NODEFAULTLIB:library
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `aikoql-mcp` (bin "aikoql-mcp") generated 1 warning
+warning: `aikoql-mcp` (test "mcp_real_world") generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.89s
+     Running tests\mcp_real_world.rs (target\debug\deps\mcp_real_world-a34193127c083714.exe)
+
+running 1 test
+[2m2026-10-09T23:13:59.941573Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-09T23:13:59.942009Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-t63rc-62280 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-09T23:13:59.943599Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+[2m2026-10-09T23:13:59.951526Z[0m [32m INFO[0m [2mtantivy::indexer::index_writer[0m[2m:[0m Preparing commit
+[2m2026-10-09T23:14:00.075405Z[0m [32m INFO[0m [2maikoql_mcp[0m[2m:[0m no ontology KO found — using empty registry
+[2m2026-10-09T23:14:00.075558Z[0m [32m INFO[0m [2maikoql_mcp::transport[0m[2m:[0m aikoql-mcp ready [3mdb[0m[2m=[0mC:\Users\ancku\AppData\Local\Temp\mcp-t63rc-62280 [3mprotocol[0m[2m=[0m"2024-11-05"
+waiting for an MCP client on stdin/stdout (connect one, e.g. `claude mcp add aikoql -- aikoql-mcp serve <db>`; for an interactive prompt run: aikoql-mcp shell)
+[2m2026-10-09T23:14:00.076326Z[0m [32m INFO[0m [2mtantivy::indexer::segment_updater[0m[2m:[0m save metas
+test abrupt_close_respawn_serves_committed_rows ... FAILED
+
+failures:
+
+---- abrupt_close_respawn_serves_committed_rows stdout ----
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+Using binary: E:\dreams\Mnemosyne\target/debug\aikoql-mcp.exe
+
+thread 'abrupt_close_respawn_serves_committed_rows' (28804) panicked at crates\services\api\mcp\tests\mcp_real_world.rs:3316:5:
+assertion `left == right` failed: a respawned MATCH must serve every committed row: {"results":[]}
+  left: 0
+ right: 12
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    abrupt_close_respawn_serves_committed_rows
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 31 filtered out; finished in 3.19s
+
+error: test failed, to rerun pass `-p aikoql-mcp --test mcp_real_world`
+EXIT=101

@@ -3259,3 +3259,74 @@ fn t60_remember_accepts_top_level_valid_from() {
 
     let _ = std::fs::remove_dir_all(&db);
 }
+
+// T-63 (reopen-visibility anomaly): during T-53 pin work an abrupt-close
+// respawn served 0 rows on MATCH once, and it did not reproduce on a fresh
+// KB. POC-side hammering (poc3/.stagee-work/probe_reopen_visibility.py,
+// 64 cycles: plain kills, full-burst kills right after acked remembers, and
+// mid-burst torn-WAL kills) found no repro on the current kernel — this pin
+// locks the contract at the surface where the anomaly was observed: every
+// row acked by `remember` must be visible to MATCH after the server dies
+// WITHOUT the stdio EOF handoff (Drop's child.kill() is exactly that) and
+// a fresh server respawns on the same db.
+#[test]
+fn abrupt_close_respawn_serves_committed_rows() {
+    let db = tmp_db("t63rc");
+    let _ = std::fs::remove_dir_all(&db);
+    let mut c = McpClient::start(&db);
+
+    let mut koids = Vec::new();
+    for i in 0..12 {
+        let r = c.call(
+            "remember",
+            &json!({
+                "subject": "admin", "type_name": "device", "tenant": "tenant_a",
+                "properties": {"key": format!("dev_{i}"), "value": format!("v{i}")}
+            }),
+        );
+        koids.push(r["koid"].as_str().unwrap().to_string());
+    }
+    // A supersede chain over one key — the exact T-53 context the anomaly
+    // came from. The head must be the successor, not the whole chain.
+    let mut old = koids[0].clone();
+    for gen in 2..=4 {
+        let sup = c.call(
+            "supersede",
+            &json!({
+                "subject": "admin", "old": old, "type_name": "device",
+                "properties": {"key": "dev_000", "value": format!("v{gen}")},
+                "evidence": [{"source_artifact": "pin", "method": "runtime_observation"}]
+            }),
+        );
+        old = sup["new"].as_str().unwrap().to_string();
+    }
+
+    // Abrupt close (Drop kills the child, no stdin EOF) and an immediate
+    // respawn on the SAME db — no cleanup between the two serves.
+    drop(c);
+    let mut c2 = McpClient::start(&db);
+    let m = c2.call(
+        "aikoql",
+        &json!({
+            "subject": "admin", "tenant": "tenant_a",
+            "query": "MATCH device RETURN *"
+        }),
+    );
+    let rows = m["results"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        12,
+        "a respawned MATCH must serve every committed row: {m}"
+    );
+    let dev0 = rows
+        .iter()
+        .find(|r| r["properties"]["key"] == json!("dev_000"))
+        .expect("dev_000 head must be present");
+    assert_eq!(
+        dev0["properties"]["value"],
+        json!("v4"),
+        "the superseded chain must stay invisible after the respawn: {m}"
+    );
+
+    let _ = std::fs::remove_dir_all(&db);
+}
