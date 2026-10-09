@@ -1830,3 +1830,47 @@ Pin: `cl05_help_documents_rate_cap` (cli_contract) — both `--help` and
 `serve --help` carry "300 calls", "per principal",
 "max_calls_per_minute", and "[rate_limit]". RED archived as `T-56`
 (exit 101 — "300 calls" missing from the help).
+
+## 61. Batch carries the whole corpus replay — T-57 (POC-3 P3-008)
+
+P3-008 (MEDIUM): the P3-007 replay arm drove 1284 paced MCP round trips
+(302.5s against 3.5s for PostgreSQL). The `batch` tool already carries
+multiple remembers, but an ordered corpus replay needs three things per
+op that were never validated in batch form: per-op idempotency keys (a
+re-send must converge, not error), per-op koid returns (a retraction
+targets the koid of a specific prior op — batch A returns it, batch B
+names it as `$N.koid`), and per-op tenant stamps. The missing piece was
+`supersede` itself: batch had no dispatch arm for the one op shape that
+retracts prior ops, and the kernel supersede path had no idempotency
+resolution at all — a replayed correction/retraction trips the "already
+superseded" guard instead of converging.
+
+`tool_batch` gains the `supersede` arm, and the result-capture loop
+treats a supersede's `new` (successor koid) as the next `$N.koid`
+handle — a retraction returns `new: null` and contributes nothing.
+`SupersedeRequest` gains `idempotency_key`, resolved at the top of
+`supersede_composition` — after authz (a replay must still prove the
+right to have applied the op), before the already-superseded guard —
+and scoped by the row's own tenant (the T-52 rule: the key namespaces
+by the write's tenant, and the write's tenant is the row's). The
+idempotency row doubles as the completion marker: it is stored only
+AFTER the whole composition (transition + dependent sweep + evidence)
+lands, so a crash mid-supersede degrades to today's refusal semantics,
+never a half-done replay. The stored cell discriminates the outcome by
+version — 0 = retraction (cell is the old KOID), ≥1 = successor (cell
+is the new KOID) — and `old` is the caller's own argument on replay,
+so the outcome reconstructs without a graph walk; sweep details are
+omitted on replay (the sweep ran at the first apply).
+
+Pin: `t57_ordered_replay_through_batch_converges` (mcp_real_world) — a
+two-batch device corpus: batch A remembers dev0 and dev1 (per-op
+tenant "other", per-op keys) and corrects dev0 via `$1.koid`; batch B
+retracts dev1 via batch A's returned handle. Both batches replay to
+the same koids, and the context oracle holds — `AS_OF t_mid` shows
+dev0's corrected value under acme and dev1's pre-retraction value
+under "other", `AS_OF t_post` and the head hide the retracted row. The
+pin waits out the `t_mid` millisecond before batch B: the retraction
+stamps `valid_to` at its own commit ms and F12's half-open
+[valid_from, valid_to) hides the row at that instant, so a same-ms
+retract would make the slice (correctly) empty. RED archived as `T-57`
+(exit 101 — "unknown batch op: supersede").
